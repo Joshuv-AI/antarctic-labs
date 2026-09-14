@@ -1,893 +1,731 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 
-const ASSETS = {
-  mountain: "/assets/models/mountains/chalaadi.fbx",
-  sky: "/assets/hdr/daysky-8k-hdr-4k.jpg",
-  iceColor: "/assets/textures/ice/ice-color.png",
-  iceNormal: "/assets/textures/ice/ice-normal.jpg",
-  iceRoughness: "/assets/textures/ice/ice-roughness.png",
-  rockColor: "/assets/textures/rock/rock-color.png",
-  rockNormal: "/assets/textures/rock/rock-normal.png",
-  rockRoughness: "/assets/textures/rock/rock-roughness.png",
-};
-
-const clamp = (value, min, max) =>
-  Math.min(Math.max(value, min), max);
-
-const lerp = (a, b, t) =>
-  a + (b - a) * t;
-
-const smoothstep = (edge0, edge1, value) => {
-  const t = clamp(
-    (value - edge0) / (edge1 - edge0),
-    0,
-    1,
-  );
-
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const lerp = (a, b, t) => a + (b - a) * t;
+const smoothstep = (edge0, edge1, x) => {
+  const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
   return t * t * (3 - 2 * t);
 };
 
-const disposeMaterial = (
-  material,
-  disposedMaterials,
-) => {
-  if (!material || disposedMaterials.has(material)) {
-    return;
-  }
+function seededRandom(seed) {
+  let value = seed >>> 0;
 
-  disposedMaterials.add(material);
-
-  const textureKeys = [
-    "map",
-    "normalMap",
-    "roughnessMap",
-    "metalnessMap",
-    "aoMap",
-    "alphaMap",
-    "emissiveMap",
-    "bumpMap",
-    "displacementMap",
-    "envMap",
-  ];
-
-  for (const key of textureKeys) {
-    const texture = material[key];
-
-    if (texture?.isTexture) {
-      texture.dispose();
-    }
-  }
-
-  material.dispose();
-};
-
-const disposeObject = (
-  object,
-  disposedMaterials,
-) => {
-  if (!object) return;
-
-  object.traverse((child) => {
-    if (child.geometry) {
-      child.geometry.dispose();
-    }
-
-    if (child.material) {
-      if (Array.isArray(child.material)) {
-        child.material.forEach((material) =>
-          disposeMaterial(
-            material,
-            disposedMaterials,
-          ),
-        );
-      } else {
-        disposeMaterial(
-          child.material,
-          disposedMaterials,
-        );
-      }
-    }
-  });
-};
-
-const createGradientTexture = () => {
-  const canvas = document.createElement("canvas");
-
-  canvas.width = 4;
-  canvas.height = 512;
-
-  const context = canvas.getContext("2d");
-
-  if (!context) return null;
-
-  const gradient = context.createLinearGradient(
-    0,
-    0,
-    0,
-    canvas.height,
-  );
-
-  gradient.addColorStop(0, "#030a12");
-  gradient.addColorStop(0.18, "#071521");
-  gradient.addColorStop(0.42, "#102938");
-  gradient.addColorStop(0.62, "#173847");
-  gradient.addColorStop(0.8, "#0a1c27");
-  gradient.addColorStop(1, "#02070b");
-
-  context.fillStyle = gradient;
-  context.fillRect(
-    0,
-    0,
-    canvas.width,
-    canvas.height,
-  );
-
-  const texture = new THREE.CanvasTexture(
-    canvas,
-  );
-
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.needsUpdate = true;
-
-  return texture;
-};
-
-const createGlowTexture = () => {
-  const canvas = document.createElement("canvas");
-
-  canvas.width = 256;
-  canvas.height = 256;
-
-  const context = canvas.getContext("2d");
-
-  if (!context) return null;
-
-  const gradient = context.createRadialGradient(
-    128,
-    128,
-    0,
-    128,
-    128,
-    128,
-  );
-
-  gradient.addColorStop(
-    0,
-    "rgba(215,245,255,1)",
-  );
-
-  gradient.addColorStop(
-    0.16,
-    "rgba(170,225,235,0.8)",
-  );
-
-  gradient.addColorStop(
-    0.42,
-    "rgba(100,180,195,0.22)",
-  );
-
-  gradient.addColorStop(
-    1,
-    "rgba(80,150,170,0)",
-  );
-
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, 256, 256);
-
-  const texture = new THREE.CanvasTexture(
-    canvas,
-  );
-
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.needsUpdate = true;
-
-  return texture;
-};
-
-const createStars = (
-  count,
-  radius,
-  spread,
-  seed = 1,
-) => {
-  const positions = new Float32Array(
-    count * 3,
-  );
-
-  let state = seed;
-
-  const random = () => {
-    state =
-      (state * 1664525 + 1013904223) %
-      4294967296;
-
-    return state / 4294967296;
+  return () => {
+    value += 0x6d2b79f5;
+    let t = value;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
 
-  for (let i = 0; i < count; i += 1) {
-    const theta =
-      random() * Math.PI * 2;
-
-    const phi = Math.acos(
-      lerp(-0.18, 0.72, random()),
-    );
-
-    const distance =
-      radius + random() * spread;
-
-    positions[i * 3] =
-      Math.sin(phi) *
-      Math.cos(theta) *
-      distance;
-
-    positions[i * 3 + 1] =
-      Math.cos(phi) * distance;
-
-    positions[i * 3 + 2] =
-      Math.sin(phi) *
-      Math.sin(theta) *
-      distance;
-  }
-
-  const geometry =
-    new THREE.BufferGeometry();
-
-  geometry.setAttribute(
-    "position",
-    new THREE.BufferAttribute(
-      positions,
-      3,
-    ),
-  );
-
-  const material =
-    new THREE.PointsMaterial({
-      color: 0xdcecf1,
-      size: 0.72,
-      transparent: true,
-      opacity: 0.62,
-      depthWrite: false,
-      blending:
-        THREE.AdditiveBlending,
-      sizeAttenuation: true,
-    });
-
-  return new THREE.Points(
-    geometry,
-    material,
-  );
-};
-
-const createSnow = (
+function createMountainLayer({
   count,
-  spread,
-  height,
   depth,
-  seed = 11,
-) => {
-  const positions = new Float32Array(
-    count * 3,
-  );
-
-  let state = seed;
-
-  const random = () => {
-    state =
-      (state * 1664525 + 1013904223) %
-      4294967296;
-
-    return state / 4294967296;
-  };
+  width,
+  baseY,
+  height,
+  color,
+  seed,
+  opacity = 1,
+  jaggedness = 1,
+}) {
+  const random = seededRandom(seed);
+  const group = new THREE.Group();
 
   for (let i = 0; i < count; i += 1) {
-    positions[i * 3] =
-      (random() - 0.5) * spread;
+    const mountainWidth = lerp(width * 0.65, width * 1.45, random());
+    const mountainHeight =
+      height * lerp(0.65, 1.25, random()) * jaggedness;
 
-    positions[i * 3 + 1] =
-      random() * height - 7;
+    const geometry = new THREE.ConeGeometry(
+      mountainWidth,
+      mountainHeight,
+      Math.floor(lerp(5, 9, random())),
+      1,
+    );
 
-    positions[i * 3 + 2] =
-      -random() * depth;
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: opacity < 1,
+      opacity,
+      depthWrite: opacity > 0.75,
+      flatShading: true,
+    });
+
+    const mountain = new THREE.Mesh(geometry, material);
+
+    mountain.position.set(
+      (random() - 0.5) * width * 2.4,
+      baseY + mountainHeight * 0.5,
+      -depth + (random() - 0.5) * 18,
+    );
+
+    mountain.rotation.y = random() * Math.PI;
+    mountain.rotation.z = (random() - 0.5) * 0.08;
+
+    group.add(mountain);
+
+    // Snow cap.
+    if (random() > 0.2) {
+      const capHeight = mountainHeight * lerp(0.08, 0.18, random());
+      const capGeometry = new THREE.ConeGeometry(
+        mountainWidth * lerp(0.2, 0.42, random()),
+        capHeight,
+        5,
+        1,
+      );
+
+      const capMaterial = new THREE.MeshBasicMaterial({
+        color: 0xe8f2f2,
+        transparent: opacity < 1,
+        opacity: opacity * 0.72,
+        depthWrite: false,
+        flatShading: true,
+      });
+
+      const cap = new THREE.Mesh(capGeometry, capMaterial);
+
+      cap.position.copy(mountain.position);
+      cap.position.y += mountainHeight * 0.46;
+      cap.rotation.y = mountain.rotation.y;
+
+      group.add(cap);
+    }
   }
 
-  const geometry =
-    new THREE.BufferGeometry();
+  return group;
+}
+
+function createStarField(count, radius, seed = 42) {
+  const random = seededRandom(seed);
+  const positions = new Float32Array(count * 3);
+  const sizes = new Float32Array(count);
+
+  for (let i = 0; i < count; i += 1) {
+    const i3 = i * 3;
+
+    const theta = random() * Math.PI * 2;
+    const phi = Math.acos(lerp(0.05, 0.85, random()));
+
+    positions[i3] = Math.sin(phi) * Math.cos(theta) * radius;
+    positions[i3 + 1] = Math.cos(phi) * radius * 0.75;
+    positions[i3 + 2] = Math.sin(phi) * Math.sin(theta) * radius;
+
+    sizes[i] = lerp(0.35, 1.6, random());
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(positions, 3),
+  );
+  geometry.setAttribute(
+    "aSize",
+    new THREE.BufferAttribute(sizes, 1),
+  );
+
+  const material = new THREE.PointsMaterial({
+    color: 0xdceef2,
+    size: 0.65,
+    transparent: true,
+    opacity: 0.72,
+    sizeAttenuation: true,
+    depthWrite: false,
+  });
+
+  return new THREE.Points(geometry, material);
+}
+
+function createSnowField(count, width, depth, seed = 17) {
+  const random = seededRandom(seed);
+  const positions = new Float32Array(count * 3);
+
+  for (let i = 0; i < count; i += 1) {
+    const i3 = i * 3;
+
+    positions[i3] = (random() - 0.5) * width;
+    positions[i3 + 1] = lerp(-1, 30, random());
+    positions[i3 + 2] = -random() * depth;
+  }
+
+  const geometry = new THREE.BufferGeometry();
 
   geometry.setAttribute(
     "position",
-    new THREE.BufferAttribute(
-      positions,
-      3,
-    ),
+    new THREE.BufferAttribute(positions, 3),
   );
 
-  const material =
-    new THREE.PointsMaterial({
-      color: 0xcfe7ec,
-      size: 0.045,
-      transparent: true,
-      opacity: 0.22,
-      depthWrite: false,
-      blending:
-        THREE.AdditiveBlending,
-      sizeAttenuation: true,
-    });
+  const material = new THREE.PointsMaterial({
+    color: 0xe9f6f7,
+    size: 0.045,
+    transparent: true,
+    opacity: 0.34,
+    depthWrite: false,
+    sizeAttenuation: true,
+  });
 
-  return new THREE.Points(
-    geometry,
-    material,
-  );
-};
+  return new THREE.Points(geometry, material);
+}
 
-const createAurora = ({
-  radius,
-  height,
-  width,
-  segments,
-  color,
-  opacity,
-  phase,
-}) => {
-  const positions = new Float32Array(
-    (segments + 1) * 3,
-  );
+function createIceberg(seed = 91) {
+  const random = seededRandom(seed);
+  const group = new THREE.Group();
 
-  for (
-    let i = 0;
-    i <= segments;
-    i += 1
-  ) {
-    const t = i / segments;
+  const baseGeometry = new THREE.IcosahedronGeometry(1, 1);
 
-    const angle = lerp(
-      -1.35,
-      1.35,
-      t,
+  const baseMaterial = new THREE.MeshStandardMaterial({
+    color: 0x9fbec2,
+    roughness: 0.3,
+    metalness: 0.04,
+    flatShading: true,
+  });
+
+  const count = 10;
+
+  for (let i = 0; i < count; i += 1) {
+    const iceberg = new THREE.Mesh(
+      baseGeometry.clone(),
+      baseMaterial.clone(),
     );
+
+    const scale = lerp(0.8, 2.8, random());
+
+    iceberg.scale.set(
+      scale * lerp(0.65, 1.35, random()),
+      scale * lerp(0.8, 1.9, random()),
+      scale * lerp(0.65, 1.2, random()),
+    );
+
+    iceberg.position.set(
+      (random() - 0.5) * 38,
+      -0.15 + random() * 0.35,
+      -lerp(2, 18, random()),
+    );
+
+    iceberg.rotation.set(
+      random() * 0.25,
+      random() * Math.PI,
+      random() * 0.2,
+    );
+
+    group.add(iceberg);
+
+    if (random() > 0.3) {
+      const snowGeometry = new THREE.IcosahedronGeometry(1, 1);
+
+      const snow = new THREE.Mesh(
+        snowGeometry,
+        new THREE.MeshStandardMaterial({
+          color: 0xe9f5f5,
+          roughness: 0.7,
+          metalness: 0,
+          flatShading: true,
+          transparent: true,
+          opacity: 0.82,
+        }),
+      );
+
+      snow.scale.copy(iceberg.scale);
+      snow.scale.multiplyScalar(0.52);
+
+      snow.position.copy(iceberg.position);
+      snow.position.y += iceberg.scale.y * 0.58;
+
+      snow.rotation.copy(iceberg.rotation);
+
+      group.add(snow);
+    }
+  }
+
+  return group;
+}
+
+function createAuroraRibbon({
+  width = 32,
+  segments = 90,
+  amplitude = 2.2,
+  height = 18,
+  depth = -22,
+  phase = 0,
+  color = 0x6fded0,
+  opacity = 0.2,
+}) {
+  const geometry = new THREE.BufferGeometry();
+  const positions = new Float32Array(segments * 2 * 3);
+  const colors = new Float32Array(segments * 2 * 3);
+
+  const baseColor = new THREE.Color(color);
+  const secondary = new THREE.Color(0x739cff);
+
+  for (let i = 0; i < segments; i += 1) {
+    const t = i / (segments - 1);
+    const x = (t - 0.5) * width;
 
     const wave =
-      Math.sin(
-        t * Math.PI * 3.0 +
-          phase,
-      ) *
-        1.55 +
-      Math.sin(
-        t * Math.PI * 6.5 +
-          phase * 0.8,
-      ) *
-        0.65;
+      Math.sin(t * Math.PI * 2.8 + phase) * amplitude +
+      Math.sin(t * Math.PI * 6.1 + phase * 1.7) *
+        amplitude *
+        0.32;
 
-    const x =
-      Math.sin(angle) *
-      radius;
-
-    const z =
-      Math.cos(angle) *
-      radius;
-
-    positions[i * 3] = x;
-
-    positions[i * 3 + 1] =
+    const lowerY =
       height +
       wave +
-      Math.sin(t * Math.PI) *
-        width;
+      Math.sin(t * Math.PI * 1.4 + phase) * 1.2;
 
-    positions[i * 3 + 2] = z;
+    const upperY = lowerY + 1.9;
+
+    const i6 = i * 6;
+
+    positions[i6] = x;
+    positions[i6 + 1] = lowerY;
+    positions[i6 + 2] = depth;
+
+    positions[i6 + 3] = x;
+    positions[i6 + 4] = upperY;
+    positions[i6 + 5] = depth - 0.15;
+
+    const mix = 0.35 + 0.65 * Math.sin(t * Math.PI);
+
+    const lowerColor = baseColor.clone().lerp(secondary, mix * 0.42);
+    const upperColor = baseColor.clone().lerp(secondary, (1 - mix) * 0.52);
+
+    colors[i6] = lowerColor.r;
+    colors[i6 + 1] = lowerColor.g;
+    colors[i6 + 2] = lowerColor.b;
+
+    colors[i6 + 3] = upperColor.r;
+    colors[i6 + 4] = upperColor.g;
+    colors[i6 + 5] = upperColor.b;
   }
 
-  const geometry =
-    new THREE.BufferGeometry();
+  const indices = [];
+
+  for (let i = 0; i < segments - 1; i += 1) {
+    const a = i * 2;
+    const b = a + 1;
+    const c = a + 2;
+    const d = a + 3;
+
+    indices.push(a, c, b);
+    indices.push(b, c, d);
+  }
 
   geometry.setAttribute(
     "position",
-    new THREE.BufferAttribute(
-      positions,
-      3,
-    ),
+    new THREE.BufferAttribute(positions, 3),
   );
-
-  const material =
-    new THREE.LineBasicMaterial({
-      color,
-      transparent: true,
-      opacity,
-      blending:
-        THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-
-  return new THREE.Line(
-    geometry,
-    material,
+  geometry.setAttribute(
+    "color",
+    new THREE.BufferAttribute(colors, 3),
   );
-};
-
-const createIceberg = ({
-  textures,
-  mobile,
-  ownedMaterials,
-}) => {
-  const geometry =
-    new THREE.IcosahedronGeometry(
-      mobile ? 5.1 : 6.7,
-      mobile ? 2 : 3,
-    );
-
-  const position =
-    geometry.attributes.position;
-
-  for (
-    let i = 0;
-    i < position.count;
-    i += 1
-  ) {
-    const x = position.getX(i);
-    const y = position.getY(i);
-    const z = position.getZ(i);
-
-    const distortion =
-      Math.sin(x * 1.7) *
-        0.24 +
-      Math.cos(z * 1.4) *
-        0.2 +
-      Math.sin(
-        (x + z) * 1.05,
-      ) *
-        0.15;
-
-    position.setX(
-      i,
-      x + distortion * 0.48,
-    );
-
-    position.setY(
-      i,
-      y *
-        (1.06 +
-          distortion * 0.07),
-    );
-
-    position.setZ(
-      i,
-      z + distortion * 0.4,
-    );
-  }
-
+  geometry.setIndex(indices);
   geometry.computeVertexNormals();
 
-  const material =
-    new THREE.MeshPhysicalMaterial({
-      color: 0xb9dce5,
-      roughness: 0.24,
-      metalness: 0.01,
-      transmission: mobile
-        ? 0.04
-        : 0.11,
-      thickness: 1.5,
-      transparent: true,
-      opacity: 0.94,
-      envMapIntensity: 1.05,
-      map:
-        textures.iceColor ||
-        null,
-      normalMap:
-        textures.iceNormal ||
-        null,
-      normalScale:
-        new THREE.Vector2(
-          0.4,
-          0.4,
-        ),
-    });
+  const material = new THREE.MeshBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
 
-  ownedMaterials.add(material);
+  return new THREE.Mesh(geometry, material);
+}
 
-  const iceberg =
-    new THREE.Mesh(
-      geometry,
-      material,
-    );
-
-  iceberg.position.set(
-    7.6,
-    -5.9,
-    -10.5,
+function createWater({
+  width = 90,
+  depth = 70,
+  segmentsX = 80,
+  segmentsZ = 60,
+}) {
+  const geometry = new THREE.PlaneGeometry(
+    width,
+    depth,
+    segmentsX,
+    segmentsZ,
   );
 
-  iceberg.rotation.set(
-    -0.16,
-    -0.5,
-    0.1,
-  );
+  geometry.rotateX(-Math.PI / 2);
 
-  return iceberg;
-};
+  const positions = geometry.attributes.position;
 
-const createIceShelf = ({
-  textures,
-  mobile,
-  ownedMaterials,
-}) => {
-  const geometry =
-    new THREE.CylinderGeometry(
-      mobile ? 8 : 11,
-      mobile ? 10 : 14,
-      3.4,
-      mobile ? 24 : 38,
-      4,
-    );
+  for (let i = 0; i < positions.count; i += 1) {
+    const x = positions.getX(i);
+    const z = positions.getZ(i);
 
-  const material =
-    new THREE.MeshStandardMaterial({
-      color: 0x9dbfc9,
-      roughness: 0.7,
-      metalness: 0.01,
-      map:
-        textures.iceColor ||
-        null,
-      normalMap:
-        textures.iceNormal ||
-        null,
-      roughnessMap:
-        textures.iceRoughness ||
-        null,
-      normalScale:
-        new THREE.Vector2(
-          0.62,
-          0.62,
-        ),
-    });
+    const wave =
+      Math.sin(x * 0.12 + z * 0.08) * 0.07 +
+      Math.sin(x * 0.035 - z * 0.16) * 0.09 +
+      Math.sin(x * 0.21 + z * 0.025) * 0.025;
 
-  ownedMaterials.add(material);
-
-  const shelf =
-    new THREE.Mesh(
-      geometry,
-      material,
-    );
-
-  shelf.position.set(
-    0,
-    -8.8,
-    -14,
-  );
-
-  shelf.scale.set(
-    1.4,
-    0.42,
-    1.25,
-  );
-
-  return shelf;
-};
-
-const createWater = ({
-  mobile,
-  ownedMaterials,
-}) => {
-  const geometry =
-    new THREE.PlaneGeometry(
-      mobile ? 78 : 115,
-      mobile ? 78 : 115,
-      mobile ? 20 : 38,
-      mobile ? 20 : 38,
-    );
-
-  const position =
-    geometry.attributes.position;
-
-  for (
-    let i = 0;
-    i < position.count;
-    i += 1
-  ) {
-    const x = position.getX(i);
-    const z = position.getY(i);
-
-    position.setZ(
-      i,
-      Math.sin(x * 0.075) *
-        0.2 +
-        Math.cos(z * 0.09) *
-          0.14,
-    );
+    positions.setY(i, wave);
   }
 
+  positions.needsUpdate = true;
   geometry.computeVertexNormals();
 
-  const material =
-    new THREE.MeshStandardMaterial({
-      color: 0x06151d,
-      roughness: 0.32,
-      metalness: 0.34,
-      transparent: true,
-      opacity: 0.9,
-    });
+  const material = new THREE.MeshPhysicalMaterial({
+    color: 0x07151c,
+    roughness: 0.18,
+    metalness: 0.42,
+    clearcoat: 0.75,
+    clearcoatRoughness: 0.18,
+    transparent: true,
+    opacity: 0.96,
+  });
 
-  ownedMaterials.add(material);
-
-  const water =
-    new THREE.Mesh(
-      geometry,
-      material,
-    );
-
-  water.rotation.x =
-    -Math.PI / 2;
-
-  water.position.y = -7.2;
-  water.position.z = -8;
+  const water = new THREE.Mesh(geometry, material);
+  water.position.y = -1.05;
 
   return water;
-};
+}
 
-const createDistantRidge = ({
-  mobile,
-  ownedMaterials,
-}) => {
-  const geometry =
-    new THREE.ConeGeometry(
-      mobile ? 8 : 11,
-      mobile ? 17 : 22,
-      mobile ? 7 : 9,
-    );
+function createIceShelf() {
+  const group = new THREE.Group();
 
-  const material =
-    new THREE.MeshStandardMaterial({
-      color: 0x203842,
-      roughness: 0.98,
-      metalness: 0,
-      transparent: true,
-      opacity: 0.72,
-    });
+  const shelfGeometry = new THREE.BoxGeometry(70, 2.4, 18, 10, 2, 8);
 
-  ownedMaterials.add(material);
-
-  const ridge =
-    new THREE.Mesh(
-      geometry,
-      material,
-    );
-
-  ridge.scale.set(
-    2.4,
-    1,
-    0.72,
-  );
-
-  ridge.position.set(
-    -13,
-    -4.8,
-    -38,
-  );
-
-  ridge.rotation.z = -0.12;
-
-  return ridge;
-};
-
-const applyMountainMaterials = ({
-  root,
-  textures,
-  mobile,
-  ownedMaterials,
-}) => {
-  root.traverse((child) => {
-    if (!child.isMesh) return;
-
-    child.castShadow = false;
-    child.receiveShadow = false;
-
-    const sourceMaterial =
-      Array.isArray(child.material)
-        ? child.material[0]
-        : child.material;
-
-    const sourceColor =
-      sourceMaterial?.color?.clone() ||
-      new THREE.Color(0x71868d);
-
-    const material =
-      new THREE.MeshStandardMaterial({
-        color:
-          sourceColor.multiplyScalar(
-            0.7,
-          ),
-        map:
-          textures.rockColor ||
-          null,
-        normalMap:
-          textures.rockNormal ||
-          null,
-        roughnessMap:
-          textures.rockRoughness ||
-          null,
-        roughness: 0.86,
-        metalness: 0.015,
-      });
-
-    material.normalScale.set(
-      mobile ? 0.34 : 0.5,
-      mobile ? 0.34 : 0.5,
-    );
-
-    ownedMaterials.add(material);
-
-    child.material = material;
+  const shelfMaterial = new THREE.MeshStandardMaterial({
+    color: 0xc3d9dc,
+    roughness: 0.62,
+    metalness: 0,
+    flatShading: true,
   });
-};
 
-const loadTexture = (
-  loader,
-  url,
-  colorSpace = null,
-) =>
-  new Promise(
-    (resolve, reject) => {
-      loader.load(
-        url,
-        (texture) => {
-          if (colorSpace) {
-            texture.colorSpace =
-              colorSpace;
-          }
+  const shelf = new THREE.Mesh(shelfGeometry, shelfMaterial);
+  shelf.position.set(0, 0.15, -19);
 
-          texture.anisotropy = 1;
+  group.add(shelf);
 
-          resolve(texture);
-        },
-        undefined,
-        reject,
-      );
-    },
-  );
+  const crackMaterial = new THREE.MeshBasicMaterial({
+    color: 0x557b82,
+    transparent: true,
+    opacity: 0.55,
+  });
 
-const loadOptionalTexture = (
-  loader,
-  url,
-  colorSpace = null,
-) =>
-  loadTexture(
-    loader,
-    url,
-    colorSpace,
-  ).catch(() => null);
+  for (let i = 0; i < 13; i += 1) {
+    const crack = new THREE.Mesh(
+      new THREE.BoxGeometry(
+        lerp(0.03, 0.11, Math.random()),
+        0.04,
+        lerp(1.5, 5, Math.random()),
+      ),
+      crackMaterial,
+    );
+
+    crack.position.set(
+      (Math.random() - 0.5) * 58,
+      1.37,
+      -19 + (Math.random() - 0.5) * 12,
+    );
+
+    crack.rotation.y = (Math.random() - 0.5) * 0.8;
+
+    group.add(crack);
+  }
+
+  return group;
+}
+
+function createHorizonGlow() {
+  const geometry = new THREE.PlaneGeometry(70, 18);
+
+  const material = new THREE.MeshBasicMaterial({
+    color: 0x5a9ea4,
+    transparent: true,
+    opacity: 0.13,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+
+  const glow = new THREE.Mesh(geometry, material);
+
+  glow.position.set(0, 2.6, -30);
+
+  return glow;
+}
+
+function createMoon() {
+  const group = new THREE.Group();
+
+  const geometry = new THREE.CircleGeometry(2.8, 64);
+
+  const material = new THREE.MeshBasicMaterial({
+    color: 0xe9f4ef,
+    transparent: true,
+    opacity: 0.95,
+  });
+
+  const moon = new THREE.Mesh(geometry, material);
+
+  group.add(moon);
+
+  const haloGeometry = new THREE.CircleGeometry(5.4, 64);
+
+  const haloMaterial = new THREE.MeshBasicMaterial({
+    color: 0xa7d6d3,
+    transparent: true,
+    opacity: 0.055,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+
+  const halo = new THREE.Mesh(haloGeometry, haloMaterial);
+
+  halo.position.z = 0.12;
+
+  group.add(halo);
+
+  group.position.set(13, 13, -34);
+
+  return group;
+}
+
+function createFogCurtain() {
+  const geometry = new THREE.PlaneGeometry(75, 25);
+
+  const material = new THREE.MeshBasicMaterial({
+    color: 0x496e73,
+    transparent: true,
+    opacity: 0.025,
+    depthWrite: false,
+  });
+
+  const curtain = new THREE.Mesh(geometry, material);
+
+  curtain.position.set(0, 4, -13);
+
+  return curtain;
+}
 
 export default function PolarScene() {
-  const containerRef =
-    useRef(null);
+  const mountRef = useRef(null);
 
   useEffect(() => {
-    const container =
-      containerRef.current;
+    const mount = mountRef.current;
 
-    if (!container) {
-      return undefined;
-    }
+    if (!mount) return undefined;
 
-    const prefersReducedMotion =
-      window.matchMedia(
-        "(prefers-reduced-motion: reduce)",
-      ).matches;
+    const isMobile =
+      window.matchMedia("(max-width: 760px)").matches;
 
-    const finePointer =
-      window.matchMedia(
-        "(pointer: fine)",
-      ).matches;
+    const reducedMotion =
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    const mobile =
-      window.matchMedia(
-        "(max-width: 760px)",
-      ).matches ||
-      !finePointer;
+    const scene = new THREE.Scene();
 
-    const lowPower =
-      mobile ||
-      window.matchMedia(
-        "(max-width: 900px)",
-      ).matches;
+    scene.background = new THREE.Color(0x050c12);
 
-    const scene =
-      new THREE.Scene();
-
-    const camera =
-      new THREE.PerspectiveCamera(
-        mobile ? 44 : 39,
-        1,
-        0.1,
-        180,
-      );
-
-    camera.position.set(
-      mobile ? 0 : 0.7,
-      mobile ? 1.1 : 1.7,
-      mobile ? 24.5 : 28,
+    scene.fog = new THREE.FogExp2(
+      new THREE.Color(0x071219),
+      isMobile ? 0.014 : 0.011,
     );
 
-    const renderer =
-      new THREE.WebGLRenderer({
-        antialias: !lowPower,
-        alpha: true,
-        powerPreference:
-          "high-performance",
-        preserveDrawingBuffer:
-          false,
-      });
+    const camera = new THREE.PerspectiveCamera(
+      isMobile ? 58 : 52,
+      1,
+      0.1,
+      160,
+    );
+
+    camera.position.set(0, 4.2, 10);
+    camera.rotation.order = "YXZ";
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: !isMobile,
+      alpha: false,
+      powerPreference: "high-performance",
+      precision: isMobile ? "mediump" : "highp",
+    });
 
     renderer.setPixelRatio(
-      Math.min(
-        window.devicePixelRatio || 1,
-        mobile ? 1.2 : 1.55,
-      ),
+      Math.min(window.devicePixelRatio || 1, isMobile ? 1.35 : 1.8),
     );
 
-    renderer.outputColorSpace =
-      THREE.SRGBColorSpace;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.08;
 
-    renderer.toneMapping =
-      THREE.ACESFilmicToneMapping;
+    renderer.domElement.style.display = "block";
+    renderer.domElement.style.width = "100%";
+    renderer.domElement.style.height = "100%";
 
-    renderer.toneMappingExposure =
-      mobile ? 0.88 : 1.04;
+    mount.appendChild(renderer.domElement);
 
-    renderer.domElement.setAttribute(
-      "aria-hidden",
-      "true",
+    const environment = new THREE.Group();
+    scene.add(environment);
+
+    /*
+     * WORLD
+     */
+
+    const stars = createStarField(
+      isMobile ? 700 : 1450,
+      80,
+      42,
     );
 
-    renderer.domElement.style.display =
-      "block";
+    environment.add(stars);
 
-    renderer.domElement.style.width =
-      "100%";
+    const farMountains = createMountainLayer({
+      count: isMobile ? 13 : 20,
+      depth: 47,
+      width: 65,
+      baseY: -0.4,
+      height: 13,
+      color: 0x101f27,
+      seed: 11,
+      opacity: 0.8,
+      jaggedness: 0.92,
+    });
 
-    renderer.domElement.style.height =
-      "100%";
+    environment.add(farMountains);
 
-    container.appendChild(
-      renderer.domElement,
+    const middleMountains = createMountainLayer({
+      count: isMobile ? 10 : 16,
+      depth: 35,
+      width: 52,
+      baseY: -0.55,
+      height: 18,
+      color: 0x0a171e,
+      seed: 27,
+      opacity: 0.96,
+      jaggedness: 1.05,
+    });
+
+    environment.add(middleMountains);
+
+    const nearMountains = createMountainLayer({
+      count: isMobile ? 7 : 11,
+      depth: 23,
+      width: 43,
+      baseY: -0.7,
+      height: 23,
+      color: 0x071218,
+      seed: 64,
+      opacity: 1,
+      jaggedness: 1.18,
+    });
+
+    environment.add(nearMountains);
+
+    const moon = createMoon();
+    environment.add(moon);
+
+    const horizonGlow = createHorizonGlow();
+    environment.add(horizonGlow);
+
+    const auroraGroup = new THREE.Group();
+
+    const auroraOne = createAuroraRibbon({
+      width: 48,
+      amplitude: 2.7,
+      height: 17,
+      depth: -28,
+      phase: 0.4,
+      color: 0x62d7c5,
+      opacity: 0.19,
+    });
+
+    const auroraTwo = createAuroraRibbon({
+      width: 56,
+      amplitude: 2.1,
+      height: 20,
+      depth: -31,
+      phase: 2.2,
+      color: 0x6f91e8,
+      opacity: 0.12,
+    });
+
+    const auroraThree = createAuroraRibbon({
+      width: 42,
+      amplitude: 1.7,
+      height: 14.5,
+      depth: -26,
+      phase: 4.1,
+      color: 0x4fc9a9,
+      opacity: 0.095,
+    });
+
+    auroraGroup.add(
+      auroraOne,
+      auroraTwo,
+      auroraThree,
     );
 
-    const world =
-      new THREE.Group();
+    environment.add(auroraGroup);
 
-    scene.add(world);
+    const water = createWater({
+      width: 90,
+      depth: 75,
+      segmentsX: isMobile ? 45 : 80,
+      segmentsZ: isMobile ? 35 : 60,
+    });
 
-    const environment =
-      new THREE.Group();
+    environment.add(water);
 
-    world.add(environment);
+    const shelf = createIceShelf();
+    environment.add(shelf);
 
-    const distant =
-      new THREE.Group();
+    const icebergs = createIceberg();
+    environment.add(icebergs);
 
-    world.add(distant);
+    const snow = createSnowField(
+      isMobile ? 700 : 1450,
+      65,
+      58,
+      17,
+    );
 
-    const foreground =
-      new THREE.Group();
+    environment.add(snow);
 
-    world.add(foreground);
+    const fogCurtain = createFogCurtain();
+    environment.add(fogCurtain);
 
-    const atmosphere =
-      new THREE.Group();
+    /*
+     * LIGHTING
+     */
 
-    world.add(atmosphere);
+    const ambient = new THREE.HemisphereLight(
+      0x7fa4aa,
+      0x02060a,
+      0.72,
+    );
 
-    const ownedMaterials =
-      new Set();
+    scene.add(ambient);
 
-    const ownedTextures =
-      new Set();
+    const moonLight = new THREE.DirectionalLight(
+      0xb9d9d8,
+      1.75,
+    );
 
-    let destroyed = false;
-    let active =
-      document.visibilityState ===
-      "visible";
+    moonLight.position.set(12, 18, -24);
 
-    let contextLost = false;
+    scene.add(moonLight);
+
+    const coldFill = new THREE.DirectionalLight(
+      0x426c9c,
+      0.45,
+    );
+
+    coldFill.position.set(-20, 8, 14);
+
+    scene.add(coldFill);
+
+    /*
+     * ATMOSPHERE
+     */
+
+    const worldColor = new THREE.Color(0x07131b);
+    const horizonColor = new THREE.Color(0x17343a);
+    const originalBackground = new THREE.Color(0x050c12);
+
+    /*
+     * INTERACTION
+     */
 
     let scrollTarget = 0;
     let scrollCurrent = 0;
@@ -898,915 +736,391 @@ export default function PolarScene() {
     let pointerCurrentX = 0;
     let pointerCurrentY = 0;
 
-    const clock =
-      new THREE.Clock();
-
-    const gradientTexture =
-      createGradientTexture();
-
-    if (gradientTexture) {
-      ownedTextures.add(
-        gradientTexture,
-      );
-
-      scene.background =
-        gradientTexture;
-    }
-
-    scene.fog =
-      new THREE.FogExp2(
-        0x07141c,
-        mobile ? 0.024 : 0.018,
-      );
-
-    const ambient =
-      new THREE.HemisphereLight(
-        0xa8d0dc,
-        0x02070a,
-        mobile ? 1.12 : 1.32,
-      );
-
-    scene.add(ambient);
-
-    const moon =
-      new THREE.DirectionalLight(
-        0xd9f1ff,
-        mobile ? 1.55 : 2.1,
-      );
-
-    moon.position.set(
-      -16,
-      22,
-      10,
-    );
-
-    scene.add(moon);
-
-    const horizonLight =
-      new THREE.PointLight(
-        0x73b8c9,
-        mobile ? 5 : 7,
-        48,
-        2,
-      );
-
-    horizonLight.position.set(
-      -8,
-      2,
-      -26,
-    );
-
-    scene.add(
-      horizonLight,
-    );
-
-    const auroraLight =
-      new THREE.PointLight(
-        0x75a99c,
-        mobile ? 1.4 : 2.5,
-        62,
-        2,
-      );
-
-    auroraLight.position.set(
-      13,
-      11,
-      -31,
-    );
-
-    scene.add(
-      auroraLight,
-    );
-
-    const glowTexture =
-      createGlowTexture();
-
-    if (glowTexture) {
-      ownedTextures.add(
-        glowTexture,
-      );
-
-      const glowMaterial =
-        new THREE.SpriteMaterial({
-          map: glowTexture,
-          color: 0x8cc7d4,
-          transparent: true,
-          opacity: mobile
-            ? 0.2
-            : 0.26,
-          depthWrite: false,
-          blending:
-            THREE.AdditiveBlending,
-        });
-
-      ownedMaterials.add(
-        glowMaterial,
-      );
-
-      const glow =
-        new THREE.Sprite(
-          glowMaterial,
-        );
-
-      glow.scale.set(
-        mobile ? 25 : 34,
-        mobile ? 25 : 34,
-        1,
-      );
-
-      glow.position.set(
-        -9,
-        3,
-        -34,
-      );
-
-      atmosphere.add(glow);
-    }
-
-    const starCount =
-      mobile ? 130 : 420;
-
-    const stars =
-      createStars(
-        starCount,
-        55,
-        32,
-        mobile ? 17 : 43,
-      );
-
-    stars.position.y = 5;
-
-    atmosphere.add(stars);
-
-    const snow =
-      createSnow(
-        mobile ? 150 : 340,
-        mobile ? 48 : 74,
-        mobile ? 22 : 30,
-        mobile ? 48 : 66,
-        mobile ? 31 : 71,
-      );
-
-    atmosphere.add(snow);
-
-    const auroraCount =
-      mobile ? 3 : 6;
-
-    for (
-      let i = 0;
-      i < auroraCount;
-      i += 1
-    ) {
-      const ribbon =
-        createAurora({
-          radius:
-            22 +
-            i * 2.4,
-          height:
-            10 +
-            i * 1.7,
-          width:
-            1.4 +
-            i * 0.1,
-          segments:
-            mobile ? 30 : 58,
-          color:
-            i % 2 === 0
-              ? 0x8bbdae
-              : 0x759eb1,
-          opacity:
-            mobile ? 0.075 : 0.095,
-          phase:
-            i * 1.65,
-        });
-
-      ribbon.rotation.y =
-        i * 0.38;
-
-      atmosphere.add(
-        ribbon,
-      );
-    }
-
-    const ridge =
-      createDistantRidge({
-        mobile,
-        ownedMaterials,
-      });
-
-    distant.add(ridge);
-
-    const ridgeTwo =
-      createDistantRidge({
-        mobile,
-        ownedMaterials,
-      });
-
-    ridgeTwo.position.set(
-      18,
-      -6,
-      -47,
-    );
-
-    ridgeTwo.scale.set(
-      1.8,
-      0.82,
-      0.58,
-    );
-
-    distant.add(ridgeTwo);
-
-    const textureLoader =
-      new THREE.TextureLoader();
-
-    const fbxLoader =
-      new FBXLoader();
-
-    const textures = {
-      iceColor: null,
-      iceNormal: null,
-      iceRoughness: null,
-      rockColor: null,
-      rockNormal: null,
-      rockRoughness: null,
-    };
-
-    const setupAssets =
-      async () => {
-        try {
-          const [
-            iceColor,
-            iceNormal,
-            iceRoughness,
-            rockColor,
-            rockNormal,
-            rockRoughness,
-          ] =
-            await Promise.all([
-              loadOptionalTexture(
-                textureLoader,
-                ASSETS.iceColor,
-                THREE.SRGBColorSpace,
-              ),
-              loadOptionalTexture(
-                textureLoader,
-                ASSETS.iceNormal,
-              ),
-              loadOptionalTexture(
-                textureLoader,
-                ASSETS.iceRoughness,
-              ),
-              loadOptionalTexture(
-                textureLoader,
-                ASSETS.rockColor,
-                THREE.SRGBColorSpace,
-              ),
-              loadOptionalTexture(
-                textureLoader,
-                ASSETS.rockNormal,
-              ),
-              loadOptionalTexture(
-                textureLoader,
-                ASSETS.rockRoughness,
-              ),
-            ]);
-
-          if (destroyed) {
-            [
-              iceColor,
-              iceNormal,
-              iceRoughness,
-              rockColor,
-              rockNormal,
-              rockRoughness,
-            ].forEach(
-              (texture) =>
-                texture?.dispose(),
-            );
-
-            return;
-          }
-
-          textures.iceColor =
-            iceColor;
-
-          textures.iceNormal =
-            iceNormal;
-
-          textures.iceRoughness =
-            iceRoughness;
-
-          textures.rockColor =
-            rockColor;
-
-          textures.rockNormal =
-            rockNormal;
-
-          textures.rockRoughness =
-            rockRoughness;
-
-          Object.values(
-            textures,
-          ).forEach(
-            (texture) => {
-              if (texture) {
-                ownedTextures.add(
-                  texture,
-                );
-              }
-            },
-          );
-
-          const iceberg =
-            createIceberg({
-              textures,
-              mobile,
-              ownedMaterials,
-            });
-
-          foreground.add(
-            iceberg,
-          );
-
-          const shelf =
-            createIceShelf({
-              textures,
-              mobile,
-              ownedMaterials,
-            });
-
-          foreground.add(
-            shelf,
-          );
-
-          const water =
-            createWater({
-              mobile,
-              ownedMaterials,
-            });
-
-          foreground.add(
-            water,
-          );
-
-          try {
-            const mountain =
-              await new Promise(
-                (
-                  resolve,
-                  reject,
-                ) => {
-                  fbxLoader.load(
-                    ASSETS.mountain,
-                    resolve,
-                    undefined,
-                    reject,
-                  );
-                },
-              );
-
-            if (destroyed) {
-              disposeObject(
-                mountain,
-                ownedMaterials,
-              );
-
-              return;
-            }
-
-            mountain.scale.setScalar(
-              mobile
-                ? 0.024
-                : 0.031,
-            );
-
-            mountain.position.set(
-              mobile ? -2.2 : -5.4,
-              mobile ? -6.25 : -6.7,
-              -22,
-            );
-
-            mountain.rotation.y =
-              mobile
-                ? 0.32
-                : 0.47;
-
-            applyMountainMaterials({
-              root: mountain,
-              textures,
-              mobile,
-              ownedMaterials,
-            });
-
-            environment.add(
-              mountain,
-            );
-          } catch {
-            // Procedural ridge remains.
-          }
-        } catch {
-          // Procedural environment remains usable.
-        }
-      };
-
-    const resize = () => {
-      if (destroyed) return;
-
-      const width =
-        Math.max(
-          container.clientWidth,
-          1,
-        );
-
-      const height =
-        Math.max(
-          container.clientHeight,
-          1,
-        );
-
-      camera.aspect =
-        width / height;
-
-      camera.updateProjectionMatrix();
-
-      renderer.setSize(
-        width,
-        height,
-        false,
-      );
-    };
-
-    const handleScroll = () => {
+    let frame = 0;
+    let disposed = false;
+    let visible = true;
+
+    const onScroll = () => {
       const maxScroll =
-        document.documentElement
-          .scrollHeight -
+        document.documentElement.scrollHeight -
         window.innerHeight;
 
       scrollTarget =
         maxScroll > 0
-          ? clamp(
-              window.scrollY /
-                maxScroll,
-              0,
-              1,
-            )
+          ? clamp(window.scrollY / maxScroll, 0, 1)
           : 0;
     };
 
-    const handlePointerMove =
-      (event) => {
-        if (!finePointer) {
-          return;
-        }
+    const onPointerMove = (event) => {
+      if (isMobile) return;
 
-        pointerTargetX =
-          (event.clientX /
-            window.innerWidth -
-            0.5) *
-          2;
+      pointerTargetX =
+        (event.clientX / window.innerWidth - 0.5) * 2;
 
-        pointerTargetY =
-          (event.clientY /
-            window.innerHeight -
-            0.5) *
-          2;
-      };
+      pointerTargetY =
+        (event.clientY / window.innerHeight - 0.5) * 2;
+    };
 
-    const handlePointerLeave =
-      () => {
-        pointerTargetX = 0;
-        pointerTargetY = 0;
-      };
+    const onVisibilityChange = () => {
+      visible = !document.hidden;
+    };
 
-    const handleVisibility =
-      () => {
-        active =
-          document.visibilityState ===
-          "visible";
+    const onResize = () => {
+      const width = mount.clientWidth || window.innerWidth;
+      const height =
+        mount.clientHeight || window.innerHeight;
 
-        if (active) {
-          clock.start();
-        }
-      };
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
 
-    const handleContextLost =
-      (event) => {
-        event.preventDefault();
-        contextLost = true;
-      };
+      renderer.setSize(width, height, false);
+    };
 
-    const handleContextRestored =
-      () => {
-        contextLost = false;
-        resize();
-      };
+    const onContextLost = (event) => {
+      event.preventDefault();
+    };
+
+    const onContextRestored = () => {
+      onResize();
+    };
+
+    window.addEventListener("scroll", onScroll, {
+      passive: true,
+    });
+
+    window.addEventListener("pointermove", onPointerMove, {
+      passive: true,
+    });
+
+    document.addEventListener(
+      "visibilitychange",
+      onVisibilityChange,
+    );
+
+    window.addEventListener("resize", onResize);
 
     renderer.domElement.addEventListener(
       "webglcontextlost",
-      handleContextLost,
+      onContextLost,
       false,
     );
 
     renderer.domElement.addEventListener(
       "webglcontextrestored",
-      handleContextRestored,
+      onContextRestored,
       false,
     );
 
-    window.addEventListener(
-      "resize",
-      resize,
-      { passive: true },
-    );
+    onResize();
+    onScroll();
 
-    window.addEventListener(
-      "scroll",
-      handleScroll,
-      { passive: true },
-    );
+    /*
+     * ANIMATION
+     */
 
-    window.addEventListener(
-      "pointermove",
-      handlePointerMove,
-      { passive: true },
-    );
-
-    window.addEventListener(
-      "pointerleave",
-      handlePointerLeave,
-      { passive: true },
-    );
-
-    document.addEventListener(
-      "visibilitychange",
-      handleVisibility,
-    );
-
-    resize();
-    handleScroll();
-
-    setupAssets();
-
-    let animationFrame = 0;
+    const clock = new THREE.Clock();
 
     const animate = () => {
-      if (destroyed) return;
+      if (disposed) return;
 
-      animationFrame =
-        requestAnimationFrame(
-          animate,
-        );
+      frame = requestAnimationFrame(animate);
 
-      if (
-        !active ||
-        contextLost
-      ) {
-        return;
-      }
+      if (!visible) return;
 
-      const elapsed =
-        clock.getElapsedTime();
+      const elapsed = clock.getElapsedTime();
 
-      const motionScale =
-        prefersReducedMotion
-          ? 0.12
-          : 1;
+      const motionStrength = reducedMotion ? 0.12 : 1;
 
-      scrollCurrent =
+      scrollCurrent = THREE.MathUtils.damp(
+        scrollCurrent,
+        scrollTarget,
+        3.2,
+        1 / 60,
+      );
+
+      pointerCurrentX = THREE.MathUtils.damp(
+        pointerCurrentX,
+        pointerTargetX,
+        4,
+        1 / 60,
+      );
+
+      pointerCurrentY = THREE.MathUtils.damp(
+        pointerCurrentY,
+        pointerTargetY,
+        4,
+        1 / 60,
+      );
+
+      /*
+       * The scene doesn't simply rotate.
+       * The camera actually travels through the landscape.
+       */
+
+      const travel = scrollCurrent;
+
+      const cameraZ = lerp(10, -18, travel);
+
+      const cameraY =
         lerp(
-          scrollCurrent,
-          scrollTarget,
-          0.038,
-        );
+          4.2,
+          5.8,
+          smoothstep(0, 1, travel),
+        ) +
+        Math.sin(elapsed * 0.16) *
+          0.08 *
+          motionStrength;
 
-      pointerCurrentX =
-        lerp(
-          pointerCurrentX,
-          pointerTargetX,
-          0.035,
-        );
+      const cameraX =
+        pointerCurrentX * 1.1 +
+        Math.sin(travel * Math.PI * 1.6) * 1.4;
 
-      pointerCurrentY =
-        lerp(
-          pointerCurrentY,
-          pointerTargetY,
-          0.035,
-        );
+      camera.position.x = THREE.MathUtils.damp(
+        camera.position.x,
+        cameraX,
+        3.4,
+        1 / 60,
+      );
 
-      const arrival =
-        smoothstep(
-          0,
-          0.25,
-          scrollCurrent,
-        );
+      camera.position.y = THREE.MathUtils.damp(
+        camera.position.y,
+        cameraY,
+        3.4,
+        1 / 60,
+      );
 
-      const deeper =
-        smoothstep(
-          0.18,
-          0.7,
-          scrollCurrent,
-        );
+      camera.position.z = THREE.MathUtils.damp(
+        camera.position.z,
+        cameraZ,
+        3.4,
+        1 / 60,
+      );
 
-      const horizon =
-        smoothstep(
-          0.62,
-          1,
-          scrollCurrent,
-        );
+      /*
+       * Camera pitch changes as the visitor descends.
+       */
 
-      const descent =
-        smoothstep(
-          0,
-          1,
-          scrollCurrent,
-        );
+      const pitch =
+        lerp(-0.035, 0.085, travel) +
+        pointerCurrentY * 0.018;
 
-      world.rotation.y =
-        lerp(
-          world.rotation.y,
-          pointerCurrentX *
-            0.02 *
-            motionScale,
-          0.045,
-        );
+      const yaw =
+        pointerCurrentX * 0.018 +
+        Math.sin(elapsed * 0.11) *
+          0.003 *
+          motionStrength;
 
-      world.rotation.x =
-        lerp(
-          world.rotation.x,
-          pointerCurrentY *
-            -0.014 *
-            motionScale,
-          0.045,
-        );
+      camera.rotation.x = pitch;
+      camera.rotation.y = yaw;
 
-      camera.position.x =
-        lerp(
-          camera.position.x,
-          pointerCurrentX *
-            (mobile
-              ? 0.32
-              : 0.72),
-          0.04,
-        );
+      /*
+       * Layered parallax.
+       */
 
-      camera.position.y =
-        lerp(
-          camera.position.y,
-          (mobile
-            ? 1.1
-            : 1.7) +
-            pointerCurrentY *
-              (mobile
-                ? -0.2
-                : -0.38),
-          0.04,
-        );
+      farMountains.position.x =
+        pointerCurrentX * 0.35 +
+        Math.sin(elapsed * 0.04) * 0.08;
 
-      camera.position.z =
-        lerp(
-          camera.position.z,
-          (mobile
-            ? 24.5
-            : 28) -
-            descent *
-              (mobile
-                ? 3.8
-                : 5.8),
-          0.032,
-        );
+      farMountains.position.y =
+        Math.sin(elapsed * 0.045) * 0.025;
 
-      camera.rotation.x =
-        lerp(
-          camera.rotation.x,
-          pointerCurrentY *
-            -0.009,
-          0.04,
-        );
+      middleMountains.position.x =
+        pointerCurrentX * 0.65;
 
-      environment.position.y =
-        arrival * 1.1;
+      middleMountains.position.y =
+        Math.sin(elapsed * 0.05) * 0.035;
 
-      environment.position.z =
-        arrival * 3.8;
+      nearMountains.position.x =
+        pointerCurrentX * 1.05;
 
-      environment.rotation.y =
-        Math.sin(
-          elapsed * 0.035,
-        ) *
-        0.006 *
-        motionScale;
+      /*
+       * Aurora moves independently from the mountains.
+       */
 
-      distant.position.y =
-        deeper * 0.85;
+      auroraGroup.position.x =
+        Math.sin(elapsed * 0.075) * 1.7 +
+        pointerCurrentX * 0.8;
 
-      distant.position.z =
-        deeper * 4.5;
+      auroraGroup.position.y =
+        Math.sin(elapsed * 0.11) * 0.45;
 
-      atmosphere.position.y =
-        deeper * 2.5;
+      auroraGroup.rotation.z =
+        Math.sin(elapsed * 0.06) *
+        0.012;
 
-      atmosphere.position.z =
-        deeper * 5.5;
+      auroraOne.material.opacity =
+        0.17 +
+        Math.sin(elapsed * 0.21) * 0.025;
 
-      atmosphere.rotation.y =
-        elapsed *
-        0.004 *
-        motionScale;
+      auroraTwo.material.opacity =
+        0.105 +
+        Math.sin(elapsed * 0.16 + 1.5) * 0.02;
 
-      stars.rotation.y =
-        elapsed *
-        0.0022 *
-        motionScale;
+      auroraThree.material.opacity =
+        0.085 +
+        Math.sin(elapsed * 0.25 + 2.2) * 0.02;
+
+      /*
+       * Moon slowly slides relative to the camera.
+       */
+
+      moon.position.x =
+        13 +
+        pointerCurrentX * 0.8;
+
+      moon.position.y =
+        13 +
+        Math.sin(elapsed * 0.04) * 0.08;
+
+      /*
+       * Foreground ice reacts subtly to movement.
+       */
+
+      icebergs.position.x =
+        pointerCurrentX * 0.55;
+
+      icebergs.rotation.y =
+        Math.sin(elapsed * 0.035) *
+        0.012;
+
+      /*
+       * Water breathes.
+       */
+
+      water.rotation.z =
+        Math.sin(elapsed * 0.08) *
+        0.0015;
+
+      water.position.x =
+        Math.sin(elapsed * 0.055) *
+        0.035;
+
+      /*
+       * Snow drifts across the camera path.
+       */
 
       snow.rotation.y =
-        Math.sin(
-          elapsed * 0.08,
-        ) *
-        0.035 *
-        motionScale;
+        elapsed * 0.006 * motionStrength;
 
       snow.position.x =
-        Math.sin(
-          elapsed * 0.13,
-        ) *
-        0.55 *
-        motionScale;
+        Math.sin(elapsed * 0.09) *
+        0.65;
 
       snow.position.y =
-        Math.cos(
-          elapsed * 0.09,
-        ) *
-        0.3 *
-        motionScale;
+        Math.sin(elapsed * 0.12) *
+        0.12;
 
-      stars.material.opacity =
-        lerp(
-          0.42,
-          0.82,
-          horizon,
-        );
+      /*
+       * Environmental color shifts as the visitor travels.
+       */
 
-      horizonLight.intensity =
-        lerp(
-          mobile ? 4.6 : 6,
-          mobile ? 8 : 11,
-          deeper,
-        );
+      const horizonMix =
+        smoothstep(0.08, 0.82, travel);
 
-      auroraLight.intensity =
-        lerp(
-          mobile ? 1.1 : 1.8,
-          mobile ? 2 : 3.4,
-          horizon,
-        );
-
-      moon.intensity =
-        lerp(
-          mobile ? 1.45 : 1.95,
-          mobile ? 1.8 : 2.35,
-          horizon,
-        );
-
-      for (
-        let i = 0;
-        i <
-        atmosphere.children.length;
-        i += 1
-      ) {
-        const child =
-          atmosphere.children[i];
-
-        if (
-          child.isLine
-        ) {
-          child.material.opacity =
-            lerp(
-              mobile
-                ? 0.055
-                : 0.07,
-              mobile
-                ? 0.11
-                : 0.15,
-              horizon,
-            );
-
-          child.position.y =
-            Math.sin(
-              elapsed * 0.12 +
-                i,
-            ) *
-            0.22 *
-            motionScale;
-        }
-      }
-
-      for (
-        const child of foreground.children
-      ) {
-        if (
-          child.isMesh &&
-          child.geometry?.type ===
-            "IcosahedronGeometry"
-        ) {
-          child.rotation.y =
-            elapsed *
-            0.014 *
-            motionScale;
-
-          child.rotation.x =
-            Math.sin(
-              elapsed * 0.15,
-            ) *
-            0.024 *
-            motionScale;
-        }
-      }
-
-      renderer.render(
-        scene,
-        camera,
+      scene.background.copy(
+        originalBackground,
       );
+
+      scene.background.lerp(
+        worldColor,
+        horizonMix * 0.35,
+      );
+
+      horizonGlow.material.opacity =
+        0.08 +
+        horizonMix * 0.085 +
+        Math.sin(elapsed * 0.17) * 0.008;
+
+      fogCurtain.material.opacity =
+        0.018 +
+        horizonMix * 0.018;
+
+      /*
+       * Slight exposure evolution.
+       */
+
+      renderer.toneMappingExposure =
+        1.04 +
+        horizonMix * 0.09;
+
+      renderer.render(scene, camera);
     };
 
     animate();
 
     return () => {
-      destroyed = true;
+      disposed = true;
 
-      cancelAnimationFrame(
-        animationFrame,
-      );
+      cancelAnimationFrame(frame);
 
-      window.removeEventListener(
-        "resize",
-        resize,
-      );
-
-      window.removeEventListener(
-        "scroll",
-        handleScroll,
-      );
-
+      window.removeEventListener("scroll", onScroll);
       window.removeEventListener(
         "pointermove",
-        handlePointerMove,
+        onPointerMove,
       );
-
-      window.removeEventListener(
-        "pointerleave",
-        handlePointerLeave,
-      );
-
       document.removeEventListener(
         "visibilitychange",
-        handleVisibility,
+        onVisibilityChange,
       );
+      window.removeEventListener("resize", onResize);
 
       renderer.domElement.removeEventListener(
         "webglcontextlost",
-        handleContextLost,
+        onContextLost,
       );
 
       renderer.domElement.removeEventListener(
         "webglcontextrestored",
-        handleContextRestored,
+        onContextRestored,
       );
 
-      disposeObject(
-        world,
-        ownedMaterials,
-      );
+      scene.traverse((object) => {
+        if (object.geometry) {
+          object.geometry.dispose();
+        }
 
-      for (
-        const texture of ownedTextures
-      ) {
-        texture.dispose();
-      }
+        if (object.material) {
+          const materials = Array.isArray(object.material)
+            ? object.material
+            : [object.material];
 
-      ownedMaterials.clear();
-      ownedTextures.clear();
+          materials.forEach((material) => {
+            if (material.map) material.map.dispose();
+            if (material.normalMap) {
+              material.normalMap.dispose();
+            }
+            if (material.roughnessMap) {
+              material.roughnessMap.dispose();
+            }
+            if (material.metalnessMap) {
+              material.metalnessMap.dispose();
+            }
 
-      scene.clear();
+            material.dispose();
+          });
+        }
+      });
 
       renderer.dispose();
 
-      if (
-        renderer.domElement
-          .parentNode ===
-        container
-      ) {
-        container.removeChild(
-          renderer.domElement,
-        );
+      if (renderer.domElement.parentNode === mount) {
+        mount.removeChild(renderer.domElement);
       }
     };
   }, []);
 
   return (
     <div
-      ref={containerRef}
-      className="polar-scene"
+      ref={mountRef}
       aria-hidden="true"
+      style={{
+        position: "absolute",
+        inset: 0,
+        width: "100%",
+        height: "100%",
+        overflow: "hidden",
+        pointerEvents: "none",
+      }}
     />
   );
 }
