@@ -129,16 +129,16 @@ function IceScene() {
     const texLoader = new THREE.TextureLoader();
     const snowColor = texLoader.load('/assets/textures/snow/snow-color.png');
     snowColor.colorSpace = THREE.SRGBColorSpace;
-    const snowNormal = texLoader.load('/assets/textures/snow/snow-normal.png');
+    const snowNormal = texLoader.load('/assets/textures/snow/snow-normal.jpg');
     const snowRough  = texLoader.load('/assets/textures/snow/snow-roughness.png');
     const iceColor = texLoader.load('/assets/textures/ice/ice-color.png');
     iceColor.colorSpace = THREE.SRGBColorSpace;
-    const iceNormal = texLoader.load('/assets/textures/ice/ice-normal.png');
-    const iceRough  = texLoader.load('/assets/textures/ice/ice-roughness.png');
+    const iceNormal = texLoader.load('/assets/textures/ice/ice-normal.jpg');
+    const iceRough  = texLoader.load('/assets/textures/ice/ice-roughness.jpg');
     const rockColor = texLoader.load('/assets/textures/rock/rock-color.png');
     rockColor.colorSpace = THREE.SRGBColorSpace;
-    const rockNormal = texLoader.load('/assets/textures/rock/rock-normal.png');
-    const rockRough  = texLoader.load('/assets/textures/rock/rock-roughness.png');
+    const rockNormal = texLoader.load('/assets/textures/rock/rock-normal.jpg');
+    const rockRough  = texLoader.load('/assets/textures/rock/rock-roughness.jpg');
 
     // Procedural iceberg centerpieces (shelved per Josh's call).
     const iceMaterial = new THREE.MeshPhysicalMaterial({
@@ -191,15 +191,6 @@ function IceScene() {
       });
     }
 
-    fbxLoader.load('/assets/models/mountains/single-mountain-snow.fbx', (obj) => {
-      obj.scale.setScalar(2.4);
-      obj.position.set(-4.5, -2.6, -3.2);
-      obj.rotation.set(0, 0.4, 0);
-      applyTexturePack(obj, { color: snowColor, normal: snowNormal, rough: snowRough });
-      world.add(obj);
-      trackedObjects.push(obj);
-    });
-
     fbxLoader.load('/assets/models/mountains/chalaadi.fbx', (obj) => {
       obj.scale.setScalar(0.022); // Chalaadi is a large landscape — bring it down
       obj.position.set(-2.0, -3.0, -8.0);
@@ -209,11 +200,22 @@ function IceScene() {
       trackedObjects.push(obj);
     });
 
+    // Note: single-mountain-snow.fbx (62 MiB) was the second mountain asset but is
+    // shelved — it exceeded Cloudflare Pages' 25 MiB per-asset limit, and the R2
+    // hosting path was blocked by TLS handshake failures from this machine
+    // (see standing_intent 'cloudflare-r2-access-blocked'). Chalaadi alone provides
+    // the mountain range visual. To re-enable, host single-mountain-snow.fbx on R2
+    // (or move to Git LFS / GitHub Releases) and update the loader URL.
+
     // === HDRI ENVIRONMENT ===
     // Provides realistic reflections on the procedural iceberg (and on
     // any future PBR models with metallicness). Loaded async; scene.environment
     // is set once it arrives.
-    rgbeLoader.load('/assets/hdr/daysky-8k-hdr.exr', (hdrTexture) => {
+    // Use the smaller 4K JPG variant of the HDRI (was 52 MiB EXR -> 0.3 MiB JPG).
+    // This is the tonemapped version — works fine as a static background but won't
+    // give true HDR reflections. For true HDR, host the EXR on R2 and load via
+    // RGBELoader from the URL (see standing_intent 'cloudflare-r2-access-blocked').
+    rgbeLoader.load('/assets/hdr/daysky-8k-hdr-4k.jpg', (hdrTexture) => {
       hdrTexture.mapping = THREE.EquirectangularReflectionMapping;
       scene.environment = hdrTexture;
       trackedObjects.push(hdrTexture);
