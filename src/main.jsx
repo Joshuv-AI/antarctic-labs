@@ -1,11 +1,18 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import * as THREE from "three";
+import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
+import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import "./styles.css";
 
 gsap.registerPlugin(ScrollTrigger);
+
+// Shared loader instances — loaders are stateless except for internal caches,
+// so we can keep them as module-level singletons.
+const fbxLoader = new FBXLoader();
+const rgbeLoader = new RGBELoader();
 
 const content = {
   brand: "ANTARCTIC LABS",
@@ -101,17 +108,39 @@ function IceScene() {
     const scene = new THREE.Scene();
     scene.fog = new THREE.FogExp2(0x071018, 0.045);
 
-    const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.1, 100);
+    const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.1, 200);
     camera.position.set(0, 1.5, 9);
 
-    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, powerPreference: "high-performance" });
+    const renderer = new THREE.WebGLRenderer({
+      canvas, alpha: true, antialias: true, powerPreference: "high-performance"
+    });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 1.65));
     renderer.setSize(innerWidth, innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 0.9;
 
     const world = new THREE.Group();
     scene.add(world);
 
+    // === TEXTURES ===
+    // Real PBR sets — color/normal/roughness (+ optional AO/displacement).
+    // Loaded once on mount; reused across all loaded models.
+    const texLoader = new THREE.TextureLoader();
+    const snowColor = texLoader.load('/assets/textures/snow/snow-color.png');
+    snowColor.colorSpace = THREE.SRGBColorSpace;
+    const snowNormal = texLoader.load('/assets/textures/snow/snow-normal.png');
+    const snowRough  = texLoader.load('/assets/textures/snow/snow-roughness.png');
+    const iceColor = texLoader.load('/assets/textures/ice/ice-color.png');
+    iceColor.colorSpace = THREE.SRGBColorSpace;
+    const iceNormal = texLoader.load('/assets/textures/ice/ice-normal.png');
+    const iceRough  = texLoader.load('/assets/textures/ice/ice-roughness.png');
+    const rockColor = texLoader.load('/assets/textures/rock/rock-color.png');
+    rockColor.colorSpace = THREE.SRGBColorSpace;
+    const rockNormal = texLoader.load('/assets/textures/rock/rock-normal.png');
+    const rockRough  = texLoader.load('/assets/textures/rock/rock-roughness.png');
+
+    // Procedural iceberg centerpieces (shelved per Josh's call).
     const iceMaterial = new THREE.MeshPhysicalMaterial({
       color: 0xaed2df,
       roughness: 0.15,
@@ -137,36 +166,60 @@ function IceScene() {
     icebergWire.rotation.copy(iceberg.rotation);
     world.add(icebergWire);
 
-    const mountainMaterial = new THREE.MeshStandardMaterial({
-      color: 0xb9d5de,
-      roughness: 0.92,
-      metalness: 0,
-      flatShading: true,
-      transparent: true,
-      opacity: 0.72
+    // === FBX MODELS ===
+    // Real mountain geometry — replaces the procedural cone ridge.
+    // FBXLoader is async; we kick off both loads in parallel and add them
+    // to the world as they arrive. Materials get our PBR textures applied.
+    const trackedObjects = []; // for cleanup on unmount
+
+    function applyTexturePack(root, maps) {
+      // Recursively walk the loaded FBX scene graph; for each mesh whose
+      // material is a MeshStandardMaterial or MeshPhysicalMaterial, swap
+      // in our PBR textures. Falls back gracefully if a model has slots
+      // we don't cover.
+      root.traverse((obj) => {
+        if (!obj.isMesh) return;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        mats.forEach((mat) => {
+          if (!mat || (!mat.isMeshStandardMaterial && !mat.isMeshPhysicalMaterial)) return;
+          if (maps.color)  { mat.map  = maps.color;  mat.needsUpdate = true; }
+          if (maps.normal){ mat.normalMap = maps.normal; mat.needsUpdate = true; }
+          if (maps.rough) { mat.roughnessMap = maps.rough; mat.needsUpdate = true; }
+          // Bump envmap intensity so the HDRI reflection is visible
+          mat.envMapIntensity = mat.envMapIntensity ?? 0.6;
+        });
+      });
+    }
+
+    fbxLoader.load('/assets/models/mountains/single-mountain-snow.fbx', (obj) => {
+      obj.scale.setScalar(2.4);
+      obj.position.set(-4.5, -2.6, -3.2);
+      obj.rotation.set(0, 0.4, 0);
+      applyTexturePack(obj, { color: snowColor, normal: snowNormal, rough: snowRough });
+      world.add(obj);
+      trackedObjects.push(obj);
     });
 
-    const ridge = new THREE.Group();
-    for (let i = 0; i < 8; i++) {
-      const h = 1.6 + (i % 4) * 0.42;
-      const m = new THREE.Mesh(new THREE.ConeGeometry(1.2 + (i % 3) * 0.25, h, 6), mountainMaterial);
-      m.position.set(-5.6 + i * 1.55, -2.15 + h * 0.22, -2.5 - (i % 3) * 0.8);
-      m.rotation.y = i * 0.65;
-      m.scale.x = 1.2 + (i % 2) * 0.25;
-      ridge.add(m);
+    fbxLoader.load('/assets/models/mountains/chalaadi.fbx', (obj) => {
+      obj.scale.setScalar(0.022); // Chalaadi is a large landscape — bring it down
+      obj.position.set(-2.0, -3.0, -8.0);
+      obj.rotation.set(0, -0.2, 0);
+      applyTexturePack(obj, { color: rockColor, normal: rockNormal, rough: rockRough });
+      world.add(obj);
+      trackedObjects.push(obj);
+    });
 
-      const snow = new THREE.Mesh(
-        new THREE.ConeGeometry(0.72 + (i % 3) * 0.15, h * 0.45, 6),
-        new THREE.MeshBasicMaterial({ color: 0xeaf5f8, transparent: true, opacity: 0.48 })
-      );
-      snow.position.copy(m.position);
-      snow.position.y += h * 0.34;
-      snow.scale.set(0.75, 0.85, 0.75);
-      snow.rotation.y = m.rotation.y + 0.2;
-      ridge.add(snow);
-    }
-    world.add(ridge);
+    // === HDRI ENVIRONMENT ===
+    // Provides realistic reflections on the procedural iceberg (and on
+    // any future PBR models with metallicness). Loaded async; scene.environment
+    // is set once it arrives.
+    rgbeLoader.load('/assets/hdr/daysky-8k-hdr.exr', (hdrTexture) => {
+      hdrTexture.mapping = THREE.EquirectangularReflectionMapping;
+      scene.environment = hdrTexture;
+      trackedObjects.push(hdrTexture);
+    });
 
+    // === STARS + AURORA + WATER (kept from original) ===
     const water = new THREE.Mesh(
       new THREE.PlaneGeometry(34, 24, 1, 1),
       new THREE.MeshBasicMaterial({ color: 0x07151d, transparent: true, opacity: 0.72 })
@@ -197,7 +250,6 @@ function IceScene() {
       new THREE.LineBasicMaterial({ color: 0x9ec7bc, transparent: true, opacity: 0.12 }),
       new THREE.LineBasicMaterial({ color: 0x9eacd0, transparent: true, opacity: 0.09 })
     ];
-
     for (let j = 0; j < 3; j++) {
       const points = [];
       for (let i = 0; i < 90; i++) {
@@ -211,6 +263,10 @@ function IceScene() {
     }
     scene.add(aurora);
 
+    // === LIGHTS ===
+    // Hemisphere + key + rim light the procedural geometry and any model
+    // that arrives before the HDRI. Once the HDRI is loaded, these become
+    // supplementary; the HDRI is what makes materials actually PBR-correct.
     scene.add(new THREE.HemisphereLight(0xb8d7e2, 0x061018, 1.4));
     const key = new THREE.DirectionalLight(0xffffff, 2.2);
     key.position.set(-5, 6, 8);
@@ -219,6 +275,7 @@ function IceScene() {
     rim.position.set(4, 0, 3);
     scene.add(rim);
 
+    // === INTERACTION ===
     const pointer = { x: 0, y: 0, tx: 0, ty: 0 };
     const onMove = (e) => {
       pointer.tx = (e.clientX / innerWidth - 0.5) * 0.9;
@@ -226,6 +283,7 @@ function IceScene() {
     };
     window.addEventListener("pointermove", onMove);
 
+    // === RENDER LOOP ===
     const clock = new THREE.Clock();
     let raf;
     const tick = () => {
@@ -236,10 +294,9 @@ function IceScene() {
       iceberg.rotation.y += 0.0008;
       iceberg.rotation.x = -0.22 + Math.sin(t * 0.22) * 0.025;
       iceberg.position.y = 0.55 + Math.sin(t * 0.38) * 0.08;
-
       icebergWire.rotation.copy(iceberg.rotation);
       icebergWire.position.copy(iceberg.position);
-      ridge.position.x = Math.sin(t * 0.08) * 0.05;
+
       stars.rotation.y = t * 0.004;
       aurora.position.x = Math.sin(t * 0.12) * 0.12;
       aurora.rotation.z = Math.sin(t * 0.08) * 0.015;
@@ -252,10 +309,12 @@ function IceScene() {
     };
     tick();
 
+    // === RESIZE + CLEANUP ===
     const resize = () => {
       camera.aspect = innerWidth / innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(innerWidth, innerHeight);
+      renderer.setPixelRatio(Math.min(devicePixelRatio, 1.65));
     };
     addEventListener("resize", resize);
 
@@ -263,22 +322,28 @@ function IceScene() {
       cancelAnimationFrame(raf);
       removeEventListener("pointermove", onMove);
       removeEventListener("resize", resize);
-      renderer.dispose();
-      starGeometry.dispose();
+
+      // Walk world + tracked async objects; release GPU resources.
+      const disposeObject = (obj) => {
+        if (!obj) return;
+        obj.traverse?.((child) => {
+          child.geometry?.dispose?.();
+          const mats = Array.isArray(child.material) ? child.material : [child.material];
+          mats.forEach((m) => m?.dispose?.());
+        });
+        if (obj.dispose) obj.dispose();
+      };
+      disposeObject(world);
+      trackedObjects.forEach(disposeObject);
+      disposeObject(starGeometry);
       stars.material.dispose();
-      iceberg.geometry.dispose();
-      icebergWire.geometry.dispose();
-      water.geometry.dispose();
-      iceMaterial.dispose();
-      mountainMaterial.dispose();
-      ridge.traverse((obj) => {
-        if (obj.geometry) obj.geometry.dispose();
-        if (obj.material && obj.material !== mountainMaterial) obj.material.dispose();
-      });
-      aurora.traverse((obj) => {
-        if (obj.geometry) obj.geometry.dispose();
-      });
+      disposeObject(aurora);
       auroraMaterials.forEach((m) => m.dispose());
+
+      renderer.dispose();
+      scene.environment?.dispose?.();
+      [snowColor, snowNormal, snowRough, iceColor, iceNormal, iceRough,
+       rockColor, rockNormal, rockRough].forEach((t) => t.dispose());
     };
   }, []);
 
