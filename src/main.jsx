@@ -5,16 +5,13 @@ import React, {
   useState,
 } from "react";
 import { createRoot } from "react-dom/client";
-import { gsap } from "gsap";
+import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
+
 import PolarScene from "./scenes/PolarScene";
 import "./styles.css";
 
 gsap.registerPlugin(ScrollTrigger);
-
-/* -------------------------------------------------------------------------- */
-/* SITE CONFIGURATION                                                         */
-/* -------------------------------------------------------------------------- */
 
 const SITE = {
   brand: "ANTARCTIC LABS",
@@ -25,211 +22,125 @@ const SITE = {
   version: "FIELD SYSTEM / 01",
 };
 
-const ROUTES = [
-  "/",
-  "/project-01",
-  "/project-02",
-  "/about",
-];
-
-/*
- * These are intentionally structured as data rather than scattered through
- * the components. Real projects can replace the current field notes without
- * changing the page architecture.
- */
 const PROJECTS = [
   {
-    number: "01",
-    slug: "/project-01",
+    id: "01",
+    slug: "project-01",
     title: "AI OPERATIONS SYSTEM",
-    shortTitle: "AI Operations",
-    type: "AI / AUTOMATION",
-    status: "FIELD NOTE / BUILD",
+    category: "AI / AUTOMATION",
+    type: "FIELD NOTE / BUILD",
     year: "2026",
+    index: "01",
+    signal: "INTELLIGENCE / ORCHESTRATION",
     description:
-      "An intelligent operational layer designed to turn repetitive digital work into a coordinated system of agents, tools, and human checkpoints.",
-    summary:
-      "Research the terrain. Design the system. Automate the repeatable. Keep the human where judgment matters.",
-    tags: [
-      "AGENTS",
-      "AUTOMATION",
-      "ORCHESTRATION",
-      "OPERATIONS",
-    ],
-    sections: [
-      {
-        label: "THE BRIEF",
-        title: "FROM TASKS TO SYSTEMS.",
-        body:
-          "The interesting problem is rarely a single automation. It is the chain around it: inputs, decisions, tools, verification, exceptions, and handoff.",
-      },
-      {
-        label: "THE TERRAIN",
-        title: "MAP THE WORK BEFORE AUTOMATING IT.",
-        body:
-          "Good automation begins with understanding what actually happens. The system has to know where information comes from, what can change, what requires judgment, and what must never happen without permission.",
-      },
-      {
-        label: "THE SYSTEM",
-        title: "AGENTS WITH BOUNDARIES.",
-        body:
-          "The architecture separates discovery, execution, verification, and delivery so each part can be tested without turning the whole system into a black box.",
-      },
-    ],
+      "A systems-oriented automation environment designed to turn fragmented operations into a coordinated machine.",
+    brief:
+      "The objective was not to add another interface. It was to create a reliable operating layer between information, decisions, tools, and execution.",
+    terrain:
+      "Messy inputs. Repetitive decisions. Multiple tools. Human attention consumed by work that should have become infrastructure.",
+    system:
+      "A modular orchestration layer connecting structured workflows, AI reasoning, automation, browser interaction, and persistent operational state.",
+    build:
+      "Architecture / AI workflows / automation / browser systems / operational tooling",
+    result:
+      "A clearer path from signal to action, with the system carrying more of the repetitive operational load.",
+    stack:
+      "AI / AUTOMATION / BROWSER SYSTEMS / APIs / WORKFLOW ORCHESTRATION",
   },
   {
-    number: "02",
-    slug: "/project-02",
+    id: "02",
+    slug: "project-02",
     title: "DIGITAL TERRITORY",
-    shortTitle: "Digital Territory",
-    type: "SOFTWARE / EXPERIENCE",
-    status: "FIELD NOTE / EXPERIMENT",
+    category: "SOFTWARE / EXPERIENCE",
+    type: "FIELD NOTE / EXPERIMENT",
     year: "2026",
+    index: "02",
+    signal: "INTERFACE / ENVIRONMENT",
     description:
-      "An interactive digital environment exploring how interface, motion, information, and physical metaphor can become one coherent experience.",
-    summary:
-      "A website does not have to behave like a stack of pages. It can behave like a place.",
-    tags: [
-      "INTERACTION",
-      "WEBGL",
-      "INTERFACE",
-      "EXPERIMENTAL",
-    ],
-    sections: [
-      {
-        label: "THE BRIEF",
-        title: "MAKE THE INTERFACE FEEL LIKE A PLACE.",
-        body:
-          "The objective is not decoration. The environment should help establish context, hierarchy, rhythm, and memory while the interface remains useful.",
-      },
-      {
-        label: "THE TERRAIN",
-        title: "SPACE BECOMES INFORMATION.",
-        body:
-          "Movement, depth, scale, atmosphere, and typography can communicate relationships that would otherwise require another layer of interface chrome.",
-      },
-      {
-        label: "THE SYSTEM",
-        title: "MOTION WITH A JOB TO DO.",
-        body:
-          "Animation is treated as navigation and emphasis rather than spectacle. Every transition should either orient, reveal, connect, or reward exploration.",
-      },
-    ],
+      "An experimental digital environment exploring how software can feel like a place rather than a collection of screens.",
+    brief:
+      "The challenge was to build an experience with enough structure to communicate clearly without losing the sense of exploration.",
+    terrain:
+      "Traditional layouts. Predictable interaction patterns. A digital surface that needed to become something more spatial.",
+    system:
+      "A responsive visual system combining procedural environments, motion, typography, interaction, and narrative pacing.",
+    build:
+      "Creative development / Three.js / React / GSAP / interaction design",
+    result:
+      "A digital environment where the interface and the world around it operate as one system.",
+    stack:
+      "REACT / THREE.JS / GSAP / WEBGL / INTERACTION",
   },
 ];
-
-/* -------------------------------------------------------------------------- */
-/* CAPABILITIES                                                               */
-/* -------------------------------------------------------------------------- */
 
 const CAPABILITIES = [
   {
     number: "01",
     title: "AI SYSTEMS",
-    short:
-      "Agents, intelligent workflows, APIs, orchestration.",
-    detail:
-      "AI systems designed around useful outcomes rather than novelty: agents, tool use, structured workflows, context, verification, and controlled execution.",
+    text:
+      "Reasoning layers, agents, knowledge workflows, and intelligent interfaces designed around actual operations.",
   },
   {
     number: "02",
     title: "AUTOMATION",
-    short:
-      "Browser automation, data pipelines, operational systems.",
-    detail:
-      "Automation that connects the messy parts of real work: browsers, APIs, documents, data, notifications, handoffs, and repeatable operations.",
+    text:
+      "Connected workflows that reduce repetitive work and move information from signal to execution.",
   },
   {
     number: "03",
     title: "SOFTWARE",
-    short:
-      "Web applications, interfaces, internal tools, integrations.",
-    detail:
-      "Purpose-built software that turns a defined process into a usable product, from interface architecture through integrations and deployment.",
+    text:
+      "Interfaces and applications built with a bias toward clarity, reliability, and useful complexity.",
   },
   {
     number: "04",
     title: "EXPERIMENTAL",
-    short:
-      "Interactive experiences, creative technology, prototypes.",
-    detail:
-      "Interactive systems where technology itself becomes part of the experience: spatial interfaces, generative environments, prototypes, and unusual digital products.",
+    text:
+      "Web experiences that use motion, 3D, interaction, and unconventional systems when they serve the idea.",
   },
 ];
 
-/* -------------------------------------------------------------------------- */
-/* ROUTING                                                                    */
-/* -------------------------------------------------------------------------- */
-
 function normalizePath(pathname) {
-  if (!pathname || pathname === "/") {
-    return "/";
-  }
+  if (!pathname) return "/";
 
-  const clean = pathname.replace(/\/+$/, "");
+  const clean = pathname
+    .replace(/\/+/g, "/")
+    .replace(/\/$/, "");
 
-  return ROUTES.includes(clean) ? clean : "/404";
+  return clean || "/";
 }
 
-function pathLabel(path) {
-  if (path === "/") {
-    return "ANTARCTIC LABS";
+function getRoute() {
+  return normalizePath(window.location.pathname);
+}
+
+function navigate(path) {
+  if (normalizePath(window.location.pathname) === path) {
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+    return;
   }
 
-  if (path === "/404") {
-    return "404 / TERRITORY NOT FOUND";
-  }
+  window.history.pushState({}, "", path);
 
-  const project = PROJECTS.find(
-    (item) => item.slug === path,
+  window.dispatchEvent(
+    new PopStateEvent("popstate"),
   );
 
-  if (project) {
-    return `${project.number} / ${project.shortTitle}`;
-  }
-
-  if (path === "/about") {
-    return "ABOUT / THE STUDIO";
-  }
-
-  return path
-    .replace(/^\//, "")
-    .replaceAll("-", " ")
-    .toUpperCase();
+  window.scrollTo({
+    top: 0,
+    behavior: "auto",
+  });
 }
 
 function useRoute() {
-  const [path, setPath] = useState(() =>
-    normalizePath(window.location.pathname),
-  );
-
-  const navigate = (destination) => {
-    const next = normalizePath(destination);
-
-    if (next === path) {
-      return;
-    }
-
-    window.history.pushState({}, "", next);
-    setPath(next);
-    window.scrollTo({
-      top: 0,
-      left: 0,
-      behavior: "auto",
-    });
-  };
+  const [route, setRoute] = useState(getRoute);
 
   useEffect(() => {
     const handlePopState = () => {
-      setPath(
-        normalizePath(window.location.pathname),
-      );
-
-      window.scrollTo({
-        top: 0,
-        left: 0,
-        behavior: "auto",
-      });
+      setRoute(getRoute());
     };
 
     window.addEventListener(
@@ -245,580 +156,523 @@ function useRoute() {
     };
   }, []);
 
-  return {
-    path,
-    navigate,
-  };
+  return route;
 }
 
-/* -------------------------------------------------------------------------- */
-/* APP                                                                         */
-/* -------------------------------------------------------------------------- */
-
-function App() {
-  const { path, navigate } = useRoute();
-
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [transitioning, setTransitioning] =
-    useState(false);
-
-  const transitionTimer = useRef(null);
-
-  useEffect(() => {
-    document.body.style.overflow = menuOpen
-      ? "hidden"
-      : "";
-
-    return () => {
-      document.body.style.overflow = "";
-    };
-  }, [menuOpen]);
-
-  useEffect(() => {
-    const handleKeyDown = (event) => {
-      if (event.key === "Escape") {
-        setMenuOpen(false);
-      }
-    };
-
-    window.addEventListener(
-      "keydown",
-      handleKeyDown,
-    );
-
-    return () => {
-      window.removeEventListener(
-        "keydown",
-        handleKeyDown,
-      );
-    };
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (transitionTimer.current) {
-        window.clearTimeout(
-          transitionTimer.current,
-        );
-      }
-    };
-  }, []);
-
-  const go = (destination) => {
-    const next = normalizePath(destination);
-
-    if (
-      next === path ||
-      transitioning
-    ) {
-      return;
-    }
-
-    setMenuOpen(false);
-    setTransitioning(true);
-
-    transitionTimer.current =
-      window.setTimeout(() => {
-        navigate(next);
-
-        transitionTimer.current =
-          window.setTimeout(() => {
-            setTransitioning(false);
-          }, 160);
-      }, 460);
-  };
-
-  return (
-    <>
-      <PolarScene />
-
-      <SiteHeader
-        onMenu={() => setMenuOpen(true)}
-        go={go}
-      />
-
-      <PageCurtain
-        active={transitioning}
-        label={pathLabel(path)}
-      />
-
-      <main className="page-shell">
-        {path === "/" && <Home go={go} />}
-
-        {path === "/project-01" && (
-          <ProjectPage
-            project={PROJECTS[0]}
-            go={go}
-          />
-        )}
-
-        {path === "/project-02" && (
-          <ProjectPage
-            project={PROJECTS[1]}
-            go={go}
-          />
-        )}
-
-        {path === "/about" && (
-          <About go={go} />
-        )}
-
-        {path === "/404" && (
-          <NotFound go={go} />
-        )}
-      </main>
-
-      <Menu
-        open={menuOpen}
-        close={() => setMenuOpen(false)}
-        go={go}
-      />
-    </>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* HEADER                                                                      */
-/* -------------------------------------------------------------------------- */
-
-function SiteHeader({ onMenu, go }) {
-  return (
-    <header className="site-header">
-      <button
-        className="brand"
-        type="button"
-        onClick={() => go("/")}
-        aria-label="Antarctic Labs home"
-      >
-        <span
-          className="brand-mark"
-          aria-hidden="true"
-        >
-          +
-        </span>
-
-        <span>{SITE.brand}</span>
-      </button>
-
-      <div className="header-right">
-        <span className="availability">
-          <i aria-hidden="true" />
-          {SITE.availability}
-        </span>
-
-        <button
-          className="menu-button"
-          type="button"
-          onClick={onMenu}
-          aria-label="Open navigation menu"
-          aria-haspopup="dialog"
-        >
-          <span>MENU</span>
-
-          <span
-            className="menu-lines"
-            aria-hidden="true"
-          >
-            <b />
-            <b />
-          </span>
-        </button>
-      </div>
-    </header>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* PAGE TRANSITION                                                             */
-/* -------------------------------------------------------------------------- */
-
-function PageCurtain({ active, label }) {
-  return (
-    <div
-      className={`page-curtain${
-        active ? " is-active" : ""
-      }`}
-      aria-hidden="true"
-    >
-      <div className="curtain-glow" />
-
-      <span>{label}</span>
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* HOME                                                                        */
-/* -------------------------------------------------------------------------- */
-
-function Home({ go }) {
+function usePageEntrance(dependencies = []) {
   const rootRef = useRef(null);
 
   useLayoutEffect(() => {
     const root = rootRef.current;
 
-    if (!root) {
-      return undefined;
-    }
-
-    const reduceMotion =
-      window.matchMedia(
-        "(prefers-reduced-motion: reduce)",
-      ).matches;
-
-    if (reduceMotion) {
-      return undefined;
-    }
+    if (!root) return undefined;
 
     const context = gsap.context(() => {
-      const heroLines =
-        gsap.utils.toArray(
-          ".hero-line",
+      const revealItems = root.querySelectorAll(
+        "[data-reveal]",
+      );
+
+      if (revealItems.length) {
+        gsap.fromTo(
+          revealItems,
+          {
+            y: 34,
+            opacity: 0,
+          },
+          {
+            y: 0,
+            opacity: 1,
+            duration: 1.15,
+            stagger: 0.055,
+            ease: "power3.out",
+            clearProps: "transform",
+          },
         );
+      }
 
-      gsap.fromTo(
-        heroLines,
-        {
-          yPercent: 115,
-          opacity: 0,
-        },
-        {
-          yPercent: 0,
-          opacity: 1,
-          duration: 1.2,
-          stagger: 0.075,
-          ease: "power4.out",
-          delay: 0.1,
-        },
+      const lines = root.querySelectorAll(
+        "[data-line]",
       );
 
-      gsap.fromTo(
-        ".hero-kicker, .hero-bottom",
-        {
-          y: 20,
-          opacity: 0,
-        },
-        {
-          y: 0,
-          opacity: 1,
-          duration: 0.9,
-          stagger: 0.08,
-          ease: "power3.out",
-          delay: 0.48,
-        },
+      lines.forEach((line) => {
+        gsap.fromTo(
+          line,
+          {
+            yPercent: 105,
+          },
+          {
+            yPercent: 0,
+            duration: 1.05,
+            ease: "power4.out",
+            delay: 0.08,
+          },
+        );
+      });
+
+      const sectionItems = root.querySelectorAll(
+        "[data-scroll-reveal]",
       );
 
-      gsap.utils
-        .toArray(".reveal-up")
-        .forEach((element) => {
-          gsap.fromTo(
-            element,
-            {
-              y: 38,
-              opacity: 0,
+      sectionItems.forEach((item) => {
+        gsap.fromTo(
+          item,
+          {
+            y: 45,
+            opacity: 0,
+          },
+          {
+            y: 0,
+            opacity: 1,
+            duration: 1.1,
+            ease: "power3.out",
+            scrollTrigger: {
+              trigger: item,
+              start: "top 84%",
+              once: true,
             },
-            {
-              y: 0,
-              opacity: 1,
-              duration: 0.9,
-              ease: "power3.out",
-              scrollTrigger: {
-                trigger: element,
-                start: "top 84%",
-                once: true,
-              },
-            },
-          );
-        });
+          },
+        );
+      });
     }, root);
 
+    return () => context.revert();
+  }, dependencies);
+
+  return rootRef;
+}
+
+function useScrollAtmosphere() {
+  useEffect(() => {
+    let raf = 0;
+    let current = 0;
+    let target = 0;
+
+    const handleScroll = () => {
+      target = window.scrollY;
+    };
+
+    const update = () => {
+      current +=
+        (target - current) * 0.08;
+
+      document.documentElement.style.setProperty(
+        "--scroll-progress",
+        String(current),
+      );
+
+      raf = requestAnimationFrame(update);
+    };
+
+    window.addEventListener(
+      "scroll",
+      handleScroll,
+      { passive: true },
+    );
+
+    raf = requestAnimationFrame(update);
+
     return () => {
-      context.revert();
+      window.removeEventListener(
+        "scroll",
+        handleScroll,
+      );
+
+      cancelAnimationFrame(raf);
     };
   }, []);
+}
+
+function Brand({ onNavigate }) {
+  return (
+    <button
+      type="button"
+      className="brand"
+      onClick={() => onNavigate("/")}
+      aria-label="Antarctic Labs home"
+    >
+      <span className="brand-mark">
+        <span className="brand-mark-line" />
+        <span className="brand-mark-line" />
+        <span className="brand-mark-line" />
+      </span>
+
+      <span className="brand-copy">
+        <span>{SITE.brand}</span>
+        <small>{SITE.version}</small>
+      </span>
+    </button>
+  );
+}
+
+function MenuTrigger({
+  open,
+  onClick,
+}) {
+  return (
+    <button
+      type="button"
+      className={`menu-trigger ${
+        open ? "is-open" : ""
+      }`}
+      onClick={onClick}
+      aria-label={
+        open
+          ? "Close navigation"
+          : "Open navigation"
+      }
+      aria-expanded={open}
+    >
+      <span className="menu-trigger-label">
+        {open ? "CLOSE" : "MENU"}
+      </span>
+
+      <span className="menu-trigger-icon">
+        <span />
+        <span />
+      </span>
+    </button>
+  );
+}
+
+function Header({
+  menuOpen,
+  setMenuOpen,
+  onNavigate,
+}) {
+  return (
+    <header className="site-header">
+      <Brand onNavigate={onNavigate} />
+
+      <div className="header-meta">
+        <span>{SITE.location}</span>
+        <span className="header-dot" />
+        <span>{SITE.availability}</span>
+      </div>
+
+      <MenuTrigger
+        open={menuOpen}
+        onClick={() =>
+          setMenuOpen((value) => !value)
+        }
+      />
+    </header>
+  );
+}
+
+function Menu({
+  open,
+  onNavigate,
+}) {
+  const menuRef = useRef(null);
+
+  useLayoutEffect(() => {
+    if (!menuRef.current) return undefined;
+
+    const context = gsap.context(() => {
+      if (open) {
+        gsap.to(
+          menuRef.current,
+          {
+            autoAlpha: 1,
+            pointerEvents: "auto",
+            duration: 0.55,
+            ease: "power3.out",
+          },
+        );
+
+        gsap.fromTo(
+          menuRef.current.querySelectorAll(
+            "[data-menu-item]",
+          ),
+          {
+            y: 40,
+            opacity: 0,
+          },
+          {
+            y: 0,
+            opacity: 1,
+            duration: 0.7,
+            stagger: 0.06,
+            delay: 0.1,
+            ease: "power3.out",
+          },
+        );
+      } else {
+        gsap.to(
+          menuRef.current,
+          {
+            autoAlpha: 0,
+            pointerEvents: "none",
+            duration: 0.4,
+            ease: "power2.inOut",
+          },
+        );
+      }
+    }, menuRef);
+
+    return () => context.revert();
+  }, [open]);
+
+  const handleNavigate = (path) => {
+    onNavigate(path);
+  };
 
   return (
-    <div ref={rootRef}>
-      {/* ------------------------------------------------------------------ */}
-      {/* ARRIVAL                                                            */}
-      {/* ------------------------------------------------------------------ */}
-
-      <section className="section hero">
-        <div
-          className="hero-orb"
-          aria-hidden="true"
-        />
-
-        <div className="hero-copy">
-          <div className="hero-kicker">
-            <span>
-              {SITE.location}
-            </span>
-
-            <span>
-              {SITE.version}
-            </span>
-          </div>
-
-          <h1>
-            <span className="hero-line-wrap">
-              <span className="hero-line">
-                BUILD
-              </span>
-            </span>
-
-            <span className="hero-line-wrap">
-              <span className="hero-line">
-                THE
-              </span>
-            </span>
-
-            <span className="hero-line-wrap">
-              <span className="hero-line">
-                SYSTEM
-                <span
-                  style={{
-                    color:
-                      "var(--cyan)",
-                  }}
-                >
-                  .
-                </span>
-              </span>
-            </span>
-          </h1>
-
-          <div className="hero-bottom">
-            <p>
-              Intelligent systems,
-              automation, software,
-              and digital experiences
-              built for the terrain ahead.
-            </p>
-
-            <div className="scroll-cue">
-              <span>
-                DESCEND TO EXPLORE
-              </span>
-
-              <b aria-hidden="true">
-                ↓
-              </b>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* ------------------------------------------------------------------ */}
-      {/* POINT OF VIEW                                                      */}
-      {/* ------------------------------------------------------------------ */}
-
-      <section className="section manifesto">
-        <div className="section-index reveal-up">
-          01 / POINT OF VIEW
+    <aside
+      ref={menuRef}
+      className="menu-overlay"
+      aria-hidden={!open}
+    >
+      <div className="menu-overlay-inner">
+        <div className="menu-kicker">
+          <span>ANTARCTIC LABS</span>
+          <span>FIELD SYSTEM / 01</span>
         </div>
 
-        <div className="manifesto-text reveal-up">
-          <p className="display-copy">
-            We build{" "}
-            <em>
-              useful machines
-            </em>{" "}
-            for territory that
-            doesn&apos;t exist yet.
-          </p>
-
-          <p className="body-copy">
-            Antarctic Labs is an
-            independent digital
-            studio focused on the
-            space between difficult
-            problems and working
-            systems.
-          </p>
-        </div>
-      </section>
-
-      {/* ------------------------------------------------------------------ */}
-      {/* SYSTEMS                                                             */}
-      {/* ------------------------------------------------------------------ */}
-
-      <section className="section capabilities">
-        <div className="section-index reveal-up">
-          02 / SYSTEMS
-        </div>
-
-        <div className="capability-list">
-          {CAPABILITIES.map(
-            (capability) => (
-              <div
-                className="cap-row reveal-up"
-                key={capability.number}
-              >
-                <span>
-                  {capability.number}
-                </span>
-
-                <h3>
-                  {capability.title}
-                </h3>
-
-                <p>
-                  {capability.short}
-                </p>
-
-                <i aria-hidden="true">
-                  ↗
-                </i>
-              </div>
-            ),
-          )}
-        </div>
-      </section>
-
-      {/* ------------------------------------------------------------------ */}
-      {/* EXPEDITIONS                                                         */}
-      {/* ------------------------------------------------------------------ */}
-
-      <section className="section projects">
-        <div className="section-head reveal-up">
-          <span>
-            SELECTED EXPEDITIONS
-          </span>
-
-          <span>
-            {String(
-              PROJECTS.length,
-            ).padStart(2, "0")}{" "}
-            RECORDS
-          </span>
-        </div>
-
-        <div className="project-stack">
-          {PROJECTS.map(
-            (project, index) => (
-              <ProjectCard
-                key={project.number}
-                project={project}
-                index={index}
-                onOpen={() =>
-                  go(project.slug)
-                }
-              />
-            ),
-          )}
-        </div>
-      </section>
-
-      {/* ------------------------------------------------------------------ */}
-      {/* PHILOSOPHY                                                          */}
-      {/* ------------------------------------------------------------------ */}
-
-      <section className="section statement">
-        <div
-          className="statement-orbit"
-          aria-hidden="true"
-        />
-
-        <div>
-          <div className="section-index reveal-up">
-            03 / THE NEXT TERRITORY
-          </div>
-
-          <h2 className="reveal-up">
-            USEFUL
-            <br />
-            <em>
-              MACHINES.
-            </em>
-          </h2>
-
-          <p className="statement-copy reveal-up">
-            Technology is only
-            interesting when it
-            changes what becomes
-            possible.
-          </p>
+        <nav className="menu-nav">
+          <button
+            type="button"
+            data-menu-item
+            onClick={() => handleNavigate("/")}
+          >
+            <span>01</span>
+            <strong>HOME</strong>
+            <em>ARRIVAL</em>
+          </button>
 
           <button
-            className="text-link reveal-up"
             type="button"
+            data-menu-item
             onClick={() =>
-              go("/about")
+              handleNavigate("/project-01")
             }
           >
-            ENTER THE STUDIO
-            <span aria-hidden="true">
-              →
-            </span>
+            <span>02</span>
+            <strong>PROJECTS</strong>
+            <em>EXPEDITIONS</em>
           </button>
-        </div>
-      </section>
 
-      {/* ------------------------------------------------------------------ */}
-      {/* CONTACT                                                             */}
-      {/* ------------------------------------------------------------------ */}
+          <button
+            type="button"
+            data-menu-item
+            onClick={() =>
+              handleNavigate("/about")
+            }
+          >
+            <span>03</span>
+            <strong>ABOUT</strong>
+            <em>POSITION</em>
+          </button>
+        </nav>
 
-      <section className="section contact-cta">
-        <div className="section-index">
-          START A BUILD
-        </div>
+        <div className="menu-footer">
+          <span>INDEPENDENT / REMOTE</span>
 
-        <h2>
-          LET&apos;S
-          <br />
-          <em>
-            MAKE IT.
-          </em>
-        </h2>
-
-        <a
-          className="contact-button"
-          href={`mailto:${SITE.email}`}
-        >
-          <span>
+          <a
+            href={`mailto:${SITE.email}`}
+            data-menu-item
+          >
             {SITE.email}
-          </span>
+          </a>
+        </div>
+      </div>
+    </aside>
+  );
+}
 
-          <b aria-hidden="true">
-            ↗
-          </b>
-        </a>
-      </section>
-
-      <SiteFooter go={go} />
+function SectionKicker({
+  number,
+  label,
+  light = false,
+}) {
+  return (
+    <div
+      className={`section-kicker ${
+        light ? "section-kicker-light" : ""
+      }`}
+    >
+      <span>{number}</span>
+      <span>{label}</span>
     </div>
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* PROJECT CARD                                                               */
-/* -------------------------------------------------------------------------- */
+function HomeHero({
+  onNavigate,
+}) {
+  return (
+    <section className="hero">
+      <div className="hero-inner">
+        <div
+          className="hero-meta"
+          data-reveal
+        >
+          <span>INDEPENDENT DIGITAL STUDIO</span>
+          <span>EST. 2026</span>
+        </div>
 
-function ProjectCard({
+        <div className="hero-title-wrap">
+          <div className="hero-title-mask">
+            <h1
+              className="hero-title"
+              data-line
+            >
+              BUILD
+            </h1>
+          </div>
+
+          <div className="hero-title-mask">
+            <h1
+              className="hero-title hero-title-offset"
+              data-line
+            >
+              THE SYSTEM.
+            </h1>
+          </div>
+        </div>
+
+        <div
+          className="hero-bottom"
+          data-reveal
+        >
+          <p className="hero-intro">
+            AI systems, automation, software,
+            and experimental digital experiences
+            for people building beyond the obvious.
+          </p>
+
+          <button
+            type="button"
+            className="hero-cta"
+            onClick={() =>
+              onNavigate("/project-01")
+            }
+          >
+            <span>ENTER THE FIELD</span>
+            <span className="arrow">↘</span>
+          </button>
+        </div>
+
+        <div
+          className="hero-scroll"
+          data-reveal
+        >
+          <span>SCROLL TO DESCEND</span>
+          <span className="hero-scroll-line" />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Manifesto() {
+  return (
+    <section className="manifesto section-dark">
+      <div className="section-shell">
+        <SectionKicker
+          number="01"
+          label="POSITION"
+          light
+        />
+
+        <div className="manifesto-grid">
+          <div className="manifesto-label">
+            <span>FIELD NOTE</span>
+            <span>WHY WE BUILD</span>
+          </div>
+
+          <h2
+            className="manifesto-title"
+            data-scroll-reveal
+          >
+            We build useful machines
+            for territory that doesn't
+            exist yet.
+          </h2>
+
+          <div
+            className="manifesto-copy"
+            data-scroll-reveal
+          >
+            <p>
+              Antarctic Labs is an independent
+              digital studio focused on turning
+              difficult ideas into working systems.
+            </p>
+
+            <p>
+              The work sits between intelligence,
+              software, automation, and experience.
+              The goal is simple: make something
+              useful enough to survive contact with
+              the real world.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SystemsSection() {
+  return (
+    <section className="systems section-light">
+      <div className="section-shell">
+        <SectionKicker
+          number="02"
+          label="CAPABILITIES"
+        />
+
+        <div className="section-heading-row">
+          <h2 data-scroll-reveal>
+            THE
+            <br />
+            SYSTEM.
+          </h2>
+
+          <p data-scroll-reveal>
+            Four disciplines. One operating
+            principle: build what makes the
+            work better.
+          </p>
+        </div>
+
+        <div className="capability-list">
+          {CAPABILITIES.map((capability) => (
+            <article
+              className="capability-row"
+              key={capability.number}
+              data-scroll-reveal
+            >
+              <span className="capability-number">
+                {capability.number}
+              </span>
+
+              <h3>{capability.title}</h3>
+
+              <p>{capability.text}</p>
+
+              <span className="capability-arrow">
+                ↗
+              </span>
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ExpeditionCard({
   project,
-  index,
-  onOpen,
+  onNavigate,
 }) {
   const cardRef = useRef(null);
 
-  const handlePointerMove = (
-    event,
-  ) => {
-    const element =
-      cardRef.current;
+  const handlePointerMove = (event) => {
+    const card = cardRef.current;
 
-    if (!element) {
-      return;
-    }
-
-    if (
-      window.matchMedia(
-        "(prefers-reduced-motion: reduce)",
-      ).matches
-    ) {
-      return;
-    }
+    if (!card) return;
 
     if (
       window.matchMedia(
@@ -828,848 +682,862 @@ function ProjectCard({
       return;
     }
 
-    const rect =
-      element.getBoundingClientRect();
+    const rect = card.getBoundingClientRect();
 
     const x =
-      (event.clientX -
-        rect.left) /
-        rect.width -
+      (event.clientX - rect.left) /
+      rect.width -
       0.5;
 
     const y =
-      (event.clientY -
-        rect.top) /
-        rect.height -
+      (event.clientY - rect.top) /
+      rect.height -
       0.5;
 
-    element.style.setProperty(
-      "--rx",
-      `${y * -2.2}deg`,
-    );
-
-    element.style.setProperty(
-      "--ry",
-      `${x * 2.2}deg`,
-    );
-
-    element.style.setProperty(
-      "--mx",
-      `${x * 14}px`,
-    );
-
-    element.style.setProperty(
-      "--my",
-      `${y * 10}px`,
-    );
+    gsap.to(card, {
+      rotateX: -y * 3.2,
+      rotateY: x * 4,
+      duration: 0.45,
+      ease: "power2.out",
+      overwrite: true,
+    });
   };
 
-  const resetPointer = () => {
-    const element =
-      cardRef.current;
+  const handlePointerLeave = () => {
+    if (!cardRef.current) return;
 
-    if (!element) {
-      return;
-    }
-
-    element.style.setProperty(
-      "--rx",
-      "0deg",
-    );
-
-    element.style.setProperty(
-      "--ry",
-      "0deg",
-    );
-
-    element.style.setProperty(
-      "--mx",
-      "0px",
-    );
-
-    element.style.setProperty(
-      "--my",
-      "0px",
-    );
+    gsap.to(cardRef.current, {
+      rotateX: 0,
+      rotateY: 0,
+      duration: 0.65,
+      ease: "power3.out",
+    });
   };
 
   return (
-    <button
+    <article
       ref={cardRef}
-      type="button"
-      className="project-card reveal-up"
-      onClick={onOpen}
-      onPointerMove={
-        handlePointerMove
-      }
-      onPointerLeave={
-        resetPointer
-      }
-      aria-label={`Open ${project.title}`}
+      className="expedition-card"
+      onPointerMove={handlePointerMove}
+      onPointerLeave={handlePointerLeave}
+      data-scroll-reveal
     >
-      <div
-        className={`project-art ${
-          index === 1
-            ? "art-2"
-            : ""
-        }`}
-      >
-        <div className="art-aurora" />
-        <div className="art-glow" />
-
-        <div className="art-mountain back" />
-        <div className="art-mountain front" />
-
-        <div className="art-sheen" />
-
-        <span className="art-code">
-          {project.type}
-        </span>
-
-        <span className="art-location">
-          {SITE.brand} /{" "}
-          {project.status}
-        </span>
-
-        <span className="art-enter">
-          OPEN FIELD RECORD →
-        </span>
+      <div className="expedition-card-top">
+        <span>{project.index}</span>
+        <span>{project.year}</span>
       </div>
 
-      <div className="project-meta">
-        <span className="project-num">
-          {project.number}
-        </span>
+      <div className="expedition-visual">
+        <div className="expedition-grid" />
 
-        <div>
-          <small>
-            {project.type}
-          </small>
-
-          <h3>
-            {project.title}
-          </h3>
+        <div className="expedition-orbit">
+          <span />
+          <span />
+          <span />
         </div>
 
-        <span className="project-arrow">
-          ↗
+        <div className="expedition-signal">
+          <span />
+          <span />
+          <span />
+        </div>
+
+        <span className="expedition-visual-label">
+          {project.signal}
         </span>
       </div>
-    </button>
+
+      <div className="expedition-card-body">
+        <div className="expedition-card-meta">
+          <span>{project.category}</span>
+          <span>{project.type}</span>
+        </div>
+
+        <h3>{project.title}</h3>
+
+        <p>{project.description}</p>
+
+        <button
+          type="button"
+          className="text-link"
+          onClick={() =>
+            onNavigate(
+              `/${project.slug}`,
+            )
+          }
+        >
+          <span>OPEN FIELD NOTE</span>
+          <span>↗</span>
+        </button>
+      </div>
+    </article>
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* PROJECT PAGE                                                               */
-/* -------------------------------------------------------------------------- */
-
-function ProjectPage({
-  project,
-  go,
+function Expeditions({
+  onNavigate,
 }) {
-  const rootRef = useRef(null);
-
-  useLayoutEffect(() => {
-    const root =
-      rootRef.current;
-
-    if (!root) {
-      return undefined;
-    }
-
-    const reduceMotion =
-      window.matchMedia(
-        "(prefers-reduced-motion: reduce)",
-      ).matches;
-
-    if (reduceMotion) {
-      return undefined;
-    }
-
-    const context = gsap.context(
-      () => {
-        gsap.fromTo(
-          ".project-hero-line",
-          {
-            yPercent: 105,
-            opacity: 0,
-          },
-          {
-            yPercent: 0,
-            opacity: 1,
-            duration: 1.1,
-            stagger: 0.08,
-            ease: "power4.out",
-          },
-        );
-
-        gsap.utils
-          .toArray(".reveal-up")
-          .forEach(
-            (element) => {
-              gsap.fromTo(
-                element,
-                {
-                  y: 35,
-                  opacity: 0,
-                },
-                {
-                  y: 0,
-                  opacity: 1,
-                  duration: 0.8,
-                  ease: "power3.out",
-                  scrollTrigger: {
-                    trigger: element,
-                    start: "top 84%",
-                    once: true,
-                  },
-                },
-              );
-            },
-          );
-      },
-      root,
-    );
-
-    return () => {
-      context.revert();
-    };
-  }, [project]);
-
   return (
-    <div
-      ref={rootRef}
-      className="project-page"
-    >
-      <section className="section project-hero">
-        <div className="section-index">
-          FIELD RECORD /{" "}
-          {project.number}
-        </div>
+    <section className="expeditions section-light">
+      <div className="section-shell">
+        <SectionKicker
+          number="03"
+          label="SELECTED WORK"
+        />
 
-        <div className="project-hero-copy">
-          <div className="project-kicker">
-            <span>
-              {project.type}
-            </span>
-
-            <span>
-              {project.year}
-            </span>
-          </div>
-
-          <h1>
-            <span className="hero-line-wrap">
-              <span className="project-hero-line">
-                {project.title.split(
-                  " ",
-                )[0]}
-              </span>
-            </span>
-
-            <span className="hero-line-wrap">
-              <span className="project-hero-line">
-                {project.title
-                  .split(" ")
-                  .slice(1)
-                  .join(" ")}
-                <span
-                  style={{
-                    color:
-                      "var(--cyan)",
-                  }}
-                >
-                  .
-                </span>
-              </span>
-            </span>
-          </h1>
-
-          <p className="project-lead">
-            {project.description}
-          </p>
-        </div>
-
-        <div className="project-hero-meta">
-          <span>
-            {project.status}
-          </span>
-
-          <span>
-            SCROLL TO DESCEND ↓
-          </span>
-        </div>
-      </section>
-
-      <section className="section project-summary">
-        <div className="section-index reveal-up">
-          THE SIGNAL
-        </div>
-
-        <div className="project-summary-content">
-          <p className="display-copy reveal-up">
-            {project.summary}
-          </p>
-
-          <div className="project-tags reveal-up">
-            {project.tags.map(
-              (tag) => (
-                <span key={tag}>
-                  {tag}
-                </span>
-              ),
-            )}
-          </div>
-        </div>
-      </section>
-
-      {project.sections.map(
-        (section, index) => (
-          <section
-            className={`section project-detail project-detail-${index + 1}`}
-            key={section.label}
-          >
-            <div className="section-index reveal-up">
-              {String(
-                index + 1,
-              ).padStart(2, "0")}{" "}
-              / {section.label}
-            </div>
-
-            <div className="project-detail-grid">
-              <h2 className="reveal-up">
-                {section.title}
-              </h2>
-
-              <p className="body-copy reveal-up">
-                {section.body}
-              </p>
-            </div>
-          </section>
-        ),
-      )}
-
-      <section className="section project-next">
-        <div className="section-index">
-          NEXT RECORD
-        </div>
-
-        <button
-          className="next-project-button"
-          type="button"
-          onClick={() => {
-            const next =
-              project.number === "01"
-                ? PROJECTS[1]
-                : PROJECTS[0];
-
-            go(next.slug);
-          }}
-        >
-          <span>
-            {project.number ===
-            "01"
-              ? PROJECTS[1].number
-              : PROJECTS[0].number}
-          </span>
-
-          <strong>
-            {project.number ===
-            "01"
-              ? PROJECTS[1].shortTitle
-              : PROJECTS[0].shortTitle}
-          </strong>
-
-          <b aria-hidden="true">
-            →
-          </b>
-        </button>
-      </section>
-
-      <section className="section contact-cta">
-        <div className="section-index">
-          START A BUILD
-        </div>
-
-        <h2>
-          BUILD
-          <br />
-          <em>
-            SOMETHING
+        <div className="section-heading-row">
+          <h2 data-scroll-reveal>
+            SELECTED
             <br />
-            USEFUL.
-          </em>
-        </h2>
+            EXPEDITIONS.
+          </h2>
 
-        <a
-          className="contact-button"
-          href={`mailto:${SITE.email}`}
-        >
-          <span>
-            {SITE.email}
-          </span>
-
-          <b aria-hidden="true">
-            ↗
-          </b>
-        </a>
-      </section>
-
-      <SiteFooter go={go} />
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* ABOUT                                                                      */
-/* -------------------------------------------------------------------------- */
-
-function About({ go }) {
-  const rootRef = useRef(null);
-
-  useLayoutEffect(() => {
-    const root =
-      rootRef.current;
-
-    if (!root) {
-      return undefined;
-    }
-
-    const reduceMotion =
-      window.matchMedia(
-        "(prefers-reduced-motion: reduce)",
-      ).matches;
-
-    if (reduceMotion) {
-      return undefined;
-    }
-
-    const context = gsap.context(
-      () => {
-        gsap.fromTo(
-          ".about-title-line",
-          {
-            yPercent: 105,
-            opacity: 0,
-          },
-          {
-            yPercent: 0,
-            opacity: 1,
-            duration: 1.05,
-            stagger: 0.08,
-            ease: "power4.out",
-          },
-        );
-
-        gsap.utils
-          .toArray(".reveal-up")
-          .forEach(
-            (element) => {
-              gsap.fromTo(
-                element,
-                {
-                  y: 35,
-                  opacity: 0,
-                },
-                {
-                  y: 0,
-                  opacity: 1,
-                  duration: 0.8,
-                  ease: "power3.out",
-                  scrollTrigger: {
-                    trigger: element,
-                    start: "top 84%",
-                    once: true,
-                  },
-                },
-              );
-            },
-          );
-      },
-      root,
-    );
-
-    return () => {
-      context.revert();
-    };
-  }, []);
-
-  return (
-    <div
-      ref={rootRef}
-      className="about-page"
-    >
-      <section className="section about-hero">
-        <div className="section-index">
-          ABOUT / {SITE.brand}
-        </div>
-
-        <h1>
-          <span className="hero-line-wrap">
-            <span className="about-title-line">
-              BUILDING
-            </span>
-          </span>
-
-          <span className="hero-line-wrap">
-            <span className="about-title-line">
-              BEYOND
-            </span>
-          </span>
-
-          <span className="hero-line-wrap">
-            <span className="about-title-line">
-              THE MAP
-              <span
-                style={{
-                  color:
-                    "var(--cyan)",
-                }}
-              >
-                .
-              </span>
-            </span>
-          </span>
-        </h1>
-      </section>
-
-      <section className="section about-statement">
-        <div className="section-index reveal-up">
-          THE STUDIO
-        </div>
-
-        <div className="about-statement-grid">
-          <p className="display-copy reveal-up">
-            Antarctic Labs is a
-            small, independent
-            studio for building
-            ambitious digital
-            systems.
+          <p data-scroll-reveal>
+            A small field record of systems,
+            experiments, and environments.
           </p>
-
-          <div className="about-copy">
-            <p className="body-copy reveal-up">
-              We work across AI,
-              automation, software,
-              and experimental
-              interfaces.
-            </p>
-
-            <p className="body-copy reveal-up">
-              The common thread
-              is simple: start with
-              the problem, understand
-              the terrain, then build
-              the smallest system
-              capable of changing it.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section className="section about-principles">
-        <div className="section-index reveal-up">
-          HOW WE BUILD
         </div>
 
-        <div className="principle-list">
-          <div className="principle reveal-up">
-            <span>01</span>
-            <h2>
-              UNDERSTAND
-            </h2>
-            <p>
-              Before automation,
-              understand the actual
-              work.
-            </p>
-          </div>
-
-          <div className="principle reveal-up">
-            <span>02</span>
-            <h2>
-              SIMPLIFY
-            </h2>
-            <p>
-              Remove unnecessary
-              complexity before adding
-              technology.
-            </p>
-          </div>
-
-          <div className="principle reveal-up">
-            <span>03</span>
-            <h2>
-              BUILD
-            </h2>
-            <p>
-              Turn the model into a
-              reliable working system.
-            </p>
-          </div>
-
-          <div className="principle reveal-up">
-            <span>04</span>
-            <h2>
-              VERIFY
-            </h2>
-            <p>
-              A system is not finished
-              because it runs. It is
-              finished when it works.
-            </p>
-          </div>
+        <div className="expedition-list">
+          {PROJECTS.map((project) => (
+            <ExpeditionCard
+              key={project.id}
+              project={project}
+              onNavigate={onNavigate}
+            />
+          ))}
         </div>
-      </section>
-
-      <section className="section about-capabilities">
-        <div className="section-index">
-          CURRENT TERRITORY
-        </div>
-
-        <div className="capability-list">
-          {CAPABILITIES.map(
-            (capability) => (
-              <div
-                className="cap-row reveal-up"
-                key={capability.number}
-              >
-                <span>
-                  {capability.number}
-                </span>
-
-                <h3>
-                  {capability.title}
-                </h3>
-
-                <p>
-                  {capability.detail}
-                </p>
-
-                <i aria-hidden="true">
-                  ↗
-                </i>
-              </div>
-            ),
-          )}
-        </div>
-      </section>
-
-      <section className="section about-contact">
-        <div className="section-index">
-          OPEN CHANNEL
-        </div>
-
-        <h2>
-          HAVE A
-          <br />
-          <em>
-            TERRAIN?
-          </em>
-        </h2>
-
-        <a
-          className="contact-button"
-          href={`mailto:${SITE.email}`}
-        >
-          <span>
-            {SITE.email}
-          </span>
-
-          <b aria-hidden="true">
-            ↗
-          </b>
-        </a>
-      </section>
-
-      <SiteFooter go={go} />
-    </div>
+      </div>
+    </section>
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* MENU                                                                       */
-/* -------------------------------------------------------------------------- */
-
-function Menu({
-  open,
-  close,
-  go,
-}) {
-  if (!open) {
-    return null;
-  }
-
+function Statement() {
   return (
-    <aside
-      className="menu-panel"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Navigation"
-    >
-      <div className="menu-panel-top">
-        <span>
-          {SITE.brand}
-        </span>
+    <section className="statement section-dark">
+      <div className="section-shell">
+        <SectionKicker
+          number="04"
+          label="PRINCIPLE"
+          light
+        />
 
-        <button
-          type="button"
-          className="menu-close"
-          onClick={close}
-          aria-label="Close navigation"
-        >
-          CLOSE
-          <span aria-hidden="true">
-            ×
-          </span>
-        </button>
+        <div className="statement-wrap">
+          <h2 data-scroll-reveal>
+            USEFUL
+            <br />
+            MACHINES.
+          </h2>
+
+          <div
+            className="statement-bottom"
+            data-scroll-reveal
+          >
+            <span>
+              COMPLEXITY SHOULD
+              <br />
+              SERVE THE OUTCOME.
+            </span>
+
+            <span>
+              NOT THE OTHER
+              <br />
+              WAY AROUND.
+            </span>
+          </div>
+        </div>
       </div>
-
-      <nav className="menu-nav">
-        <button
-          type="button"
-          onClick={() => go("/")}
-        >
-          <span>00</span>
-          <strong>HOME</strong>
-          <i aria-hidden="true">
-            →
-          </i>
-        </button>
-
-        <button
-          type="button"
-          onClick={() =>
-            go("/project-01")
-          }
-        >
-          <span>01</span>
-          <strong>
-            AI OPERATIONS
-          </strong>
-          <i aria-hidden="true">
-            →
-          </i>
-        </button>
-
-        <button
-          type="button"
-          onClick={() =>
-            go("/project-02")
-          }
-        >
-          <span>02</span>
-          <strong>
-            DIGITAL TERRITORY
-          </strong>
-          <i aria-hidden="true">
-            →
-          </i>
-        </button>
-
-        <button
-          type="button"
-          onClick={() =>
-            go("/about")
-          }
-        >
-          <span>03</span>
-          <strong>ABOUT</strong>
-          <i aria-hidden="true">
-            →
-          </i>
-        </button>
-      </nav>
-
-      <div className="menu-panel-bottom">
-        <span>
-          {SITE.location}
-        </span>
-
-        <a
-          href={`mailto:${SITE.email}`}
-        >
-          {SITE.email}
-        </a>
-      </div>
-    </aside>
+    </section>
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* FOOTER                                                                     */
-/* -------------------------------------------------------------------------- */
+function Contact() {
+  return (
+    <section className="contact section-light">
+      <div className="section-shell">
+        <SectionKicker
+          number="05"
+          label="CONTACT"
+        />
 
-function SiteFooter({ go }) {
+        <div className="contact-grid">
+          <div>
+            <h2 data-scroll-reveal>
+              HAVE A
+              <br />
+              TERRITORY
+              <br />
+              TO EXPLORE?
+            </h2>
+          </div>
+
+          <div
+            className="contact-side"
+            data-scroll-reveal
+          >
+            <p>
+              If the problem is interesting,
+              the system can probably be built.
+            </p>
+
+            <a
+              className="contact-email"
+              href={`mailto:${SITE.email}`}
+            >
+              {SITE.email}
+              <span>↗</span>
+            </a>
+
+            <div className="contact-details">
+              <span>{SITE.location}</span>
+              <span>{SITE.availability}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Footer({
+  onNavigate,
+}) {
   return (
     <footer className="site-footer">
-      <div>
+      <div className="footer-top">
+        <button
+          type="button"
+          className="footer-brand"
+          onClick={() => onNavigate("/")}
+        >
+          ANTARCTIC
+          <br />
+          LABS.
+        </button>
+
+        <div className="footer-links">
+          <button
+            type="button"
+            onClick={() =>
+              onNavigate("/project-01")
+            }
+          >
+            PROJECTS
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              onNavigate("/about")
+            }
+          >
+            ABOUT
+          </button>
+
+          <a
+            href={`mailto:${SITE.email}`}
+          >
+            CONTACT
+          </a>
+        </div>
+      </div>
+
+      <div className="footer-bottom">
         <span>
+          © {new Date().getFullYear()}{" "}
           {SITE.brand}
         </span>
 
         <span>
           {SITE.version}
         </span>
-      </div>
-
-      <div>
-        <button
-          type="button"
-          onClick={() => go("/")}
-        >
-          BACK TO TOP ↑
-        </button>
 
         <span>
-          © {new Date().getFullYear()}
+          INDEPENDENT / REMOTE
         </span>
       </div>
     </footer>
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* 404                                                                        */
-/* -------------------------------------------------------------------------- */
+function Home({
+  onNavigate,
+}) {
+  const rootRef = usePageEntrance([]);
 
-function NotFound({ go }) {
   return (
-    <div className="not-found">
-      <div className="section-index">
-        404 / UNMAPPED TERRITORY
-      </div>
+    <main
+      ref={rootRef}
+      className="page home-page"
+    >
+      <HomeHero
+        onNavigate={onNavigate}
+      />
 
-      <h1>
-        NOTHING
-        <br />
-        <em>
-          HERE.
-        </em>
-      </h1>
+      <Manifesto />
 
-      <p>
-        The route you requested
-        does not exist.
-      </p>
+      <SystemsSection />
 
-      <button
-        className="text-link"
-        type="button"
-        onClick={() => go("/")}
-      >
-        RETURN TO BASE
-        <span aria-hidden="true">
-          →
-        </span>
-      </button>
-    </div>
+      <Expeditions
+        onNavigate={onNavigate}
+      />
+
+      <Statement />
+
+      <Contact />
+
+      <Footer
+        onNavigate={onNavigate}
+      />
+    </main>
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* MOUNT                                                                      */
-/* -------------------------------------------------------------------------- */
+function ProjectHero({
+  project,
+}) {
+  return (
+    <section className="project-hero section-dark">
+      <div className="section-shell">
+        <div className="project-hero-meta">
+          <span>{project.id}</span>
+          <span>{project.year}</span>
+          <span>{project.category}</span>
+        </div>
+
+        <div className="project-hero-title">
+          <div className="hero-title-mask">
+            <h1 data-line>
+              {project.title}
+            </h1>
+          </div>
+        </div>
+
+        <div className="project-hero-bottom">
+          <span>{project.type}</span>
+
+          <p data-reveal>
+            {project.description}
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ProjectFieldBlock({
+  label,
+  title,
+  text,
+  index,
+}) {
+  return (
+    <section
+      className="project-field-block section-light"
+      data-scroll-reveal
+    >
+      <div className="section-shell">
+        <div className="project-field-grid">
+          <div className="project-field-index">
+            <span>{index}</span>
+            <span>{label}</span>
+          </div>
+
+          <div className="project-field-content">
+            <h2>{title}</h2>
+            <p>{text}</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ProjectPage({
+  project,
+  onNavigate,
+}) {
+  const rootRef = usePageEntrance([
+    project.slug,
+  ]);
+
+  return (
+    <main
+      ref={rootRef}
+      className="page project-page"
+    >
+      <ProjectHero project={project} />
+
+      <ProjectFieldBlock
+        index="01"
+        label="BRIEF"
+        title="THE QUESTION"
+        text={project.brief}
+      />
+
+      <ProjectFieldBlock
+        index="02"
+        label="TERRAIN"
+        title="THE TERRAIN"
+        text={project.terrain}
+      />
+
+      <ProjectFieldBlock
+        index="03"
+        label="SYSTEM"
+        title="THE SYSTEM"
+        text={project.system}
+      />
+
+      <ProjectFieldBlock
+        index="04"
+        label="BUILD"
+        title="THE BUILD"
+        text={project.build}
+      />
+
+      <ProjectFieldBlock
+        index="05"
+        label="RESULT"
+        title="THE RESULT"
+        text={project.result}
+      />
+
+      <section className="project-stack section-dark">
+        <div className="section-shell">
+          <SectionKicker
+            number="06"
+            label="STACK"
+            light
+          />
+
+          <div className="project-stack-content">
+            <h2 data-scroll-reveal>
+              BUILT
+              <br />
+              TO MOVE.
+            </h2>
+
+            <p data-scroll-reveal>
+              {project.stack}
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section className="project-next section-light">
+        <div className="section-shell">
+          <div className="project-next-inner">
+            <span>NEXT EXPEDITION</span>
+
+            <button
+              type="button"
+              onClick={() => {
+                const next =
+                  PROJECTS.find(
+                    (item) =>
+                      item.slug !==
+                      project.slug,
+                  );
+
+                if (next) {
+                  onNavigate(
+                    `/${next.slug}`,
+                  );
+                } else {
+                  onNavigate("/");
+                }
+              }}
+            >
+              <strong>
+                {PROJECTS.find(
+                  (item) =>
+                    item.slug !==
+                    project.slug,
+                )?.title ||
+                  "RETURN HOME"}
+              </strong>
+
+              <span>↗</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <Footer
+        onNavigate={onNavigate}
+      />
+    </main>
+  );
+}
+
+function About() {
+  const rootRef = usePageEntrance([]);
+
+  return (
+    <main
+      ref={rootRef}
+      className="page about-page"
+    >
+      <section className="about-hero section-dark">
+        <div className="section-shell">
+          <div className="about-meta">
+            <span>03 / POSITION</span>
+            <span>{SITE.version}</span>
+          </div>
+
+          <div className="about-title">
+            <div className="hero-title-mask">
+              <h1 data-line>
+                BUILDING
+              </h1>
+            </div>
+
+            <div className="hero-title-mask">
+              <h1 data-line>
+                BEYOND
+              </h1>
+            </div>
+
+            <div className="hero-title-mask">
+              <h1 data-line>
+                THE MAP.
+              </h1>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="about-manifesto section-light">
+        <div className="section-shell">
+          <SectionKicker
+            number="01"
+            label="THE STUDIO"
+          />
+
+          <div className="about-grid">
+            <h2 data-scroll-reveal>
+              SMALL BY DESIGN.
+              <br />
+              SERIOUS BY DEFAULT.
+            </h2>
+
+            <div
+              className="about-copy"
+              data-scroll-reveal
+            >
+              <p>
+                Antarctic Labs is an independent
+                digital studio working across AI,
+                automation, software, and
+                experimental web experiences.
+              </p>
+
+              <p>
+                The studio exists for problems
+                where the obvious solution is not
+                good enough.
+              </p>
+
+              <p>
+                Instead of starting with a
+                predefined stack, the work starts
+                with the terrain: what needs to
+                happen, what is getting in the way,
+                and what should exist when the
+                work is finished.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="about-principles section-dark">
+        <div className="section-shell">
+          <SectionKicker
+            number="02"
+            label="PRINCIPLES"
+            light
+          />
+
+          <div className="principle-list">
+            <div
+              className="principle"
+              data-scroll-reveal
+            >
+              <span>01</span>
+              <h3>MAKE IT USEFUL.</h3>
+              <p>
+                Technology earns its place by
+                improving the outcome.
+              </p>
+            </div>
+
+            <div
+              className="principle"
+              data-scroll-reveal
+            >
+              <span>02</span>
+              <h3>REMOVE THE NOISE.</h3>
+              <p>
+                Complexity is acceptable.
+                Unnecessary complexity is not.
+              </p>
+            </div>
+
+            <div
+              className="principle"
+              data-scroll-reveal
+            >
+              <span>03</span>
+              <h3>BUILD FOR CONTACT.</h3>
+              <p>
+                Systems should survive real
+                people, real constraints, and
+                real use.
+              </p>
+            </div>
+
+            <div
+              className="principle"
+              data-scroll-reveal
+            >
+              <span>04</span>
+              <h3>LEAVE ROOM TO EXPLORE.</h3>
+              <p>
+                The best work often begins where
+                the specification ends.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="about-contact section-light">
+        <div className="section-shell">
+          <div className="about-contact-inner">
+            <span>AVAILABLE FOR SELECT BUILDS</span>
+
+            <a
+              href={`mailto:${SITE.email}`}
+            >
+              START A CONVERSATION
+              <span>↗</span>
+            </a>
+          </div>
+        </div>
+      </section>
+
+      <Footer
+        onNavigate={(path) => {
+          window.history.pushState(
+            {},
+            "",
+            path,
+          );
+
+          window.dispatchEvent(
+            new PopStateEvent("popstate"),
+          );
+
+          window.scrollTo({
+            top: 0,
+            behavior: "auto",
+          });
+        }}
+      />
+    </main>
+  );
+}
+
+function NotFound({
+  onNavigate,
+}) {
+  const rootRef = usePageEntrance([]);
+
+  return (
+    <main
+      ref={rootRef}
+      className="page not-found-page section-dark"
+    >
+      <div className="section-shell">
+        <SectionKicker
+          number="404"
+          label="UNKNOWN TERRITORY"
+          light
+        />
+
+        <div className="not-found-content">
+          <h1 data-scroll-reveal>
+            LOST
+            <br />
+            IN THE
+            <br />
+            FIELD.
+          </h1>
+
+          <p data-scroll-reveal>
+            This coordinate does not exist.
+            Return to known territory.
+          </p>
+
+          <button
+            type="button"
+            className="text-link text-link-light"
+            onClick={() => onNavigate("/")}
+          >
+            <span>RETURN HOME</span>
+            <span>↗</span>
+          </button>
+        </div>
+      </div>
+
+      <Footer
+        onNavigate={onNavigate}
+      />
+    </main>
+  );
+}
+
+function PageCurtain({
+  visible,
+}) {
+  const curtainRef = useRef(null);
+
+  useEffect(() => {
+    if (!curtainRef.current) return;
+
+    if (visible) {
+      gsap.to(curtainRef.current, {
+        yPercent: 0,
+        duration: 0.5,
+        ease: "power3.inOut",
+      });
+    } else {
+      gsap.to(curtainRef.current, {
+        yPercent: -100,
+        duration: 0.75,
+        delay: 0.05,
+        ease: "power4.inOut",
+      });
+    }
+  }, [visible]);
+
+  return (
+    <div
+      ref={curtainRef}
+      className="page-curtain"
+      aria-hidden="true"
+    />
+  );
+}
+
+function App() {
+  const route = useRoute();
+  const [menuOpen, setMenuOpen] =
+    useState(false);
+
+  useScrollAtmosphere();
+
+  useEffect(() => {
+    setMenuOpen(false);
+
+    const refresh = window.setTimeout(() => {
+      ScrollTrigger.refresh();
+    }, 80);
+
+    return () => {
+      window.clearTimeout(refresh);
+    };
+  }, [route]);
+
+  const handleNavigate = (path) => {
+    setMenuOpen(false);
+
+    const normalized =
+      normalizePath(path);
+
+    if (
+      normalizePath(
+        window.location.pathname,
+      ) === normalized
+    ) {
+      window.scrollTo({
+        top: 0,
+        behavior: "smooth",
+      });
+      return;
+    }
+
+    window.history.pushState(
+      {},
+      "",
+      normalized,
+    );
+
+    window.dispatchEvent(
+      new PopStateEvent("popstate"),
+    );
+
+    window.scrollTo({
+      top: 0,
+      behavior: "auto",
+    });
+  };
+
+  let content;
+
+  if (route === "/") {
+    content = (
+      <Home
+        onNavigate={handleNavigate}
+      />
+    );
+  } else if (route === "/project-01") {
+    content = (
+      <ProjectPage
+        project={PROJECTS[0]}
+        onNavigate={handleNavigate}
+      />
+    );
+  } else if (route === "/project-02") {
+    content = (
+      <ProjectPage
+        project={PROJECTS[1]}
+        onNavigate={handleNavigate}
+      />
+    );
+  } else if (route === "/about") {
+    content = <About />;
+  } else {
+    content = (
+      <NotFound
+        onNavigate={handleNavigate}
+      />
+    );
+  }
+
+  return (
+    <>
+      <PolarScene />
+
+      <Header
+        menuOpen={menuOpen}
+        setMenuOpen={setMenuOpen}
+        onNavigate={handleNavigate}
+      />
+
+      <Menu
+        open={menuOpen}
+        onNavigate={handleNavigate}
+      />
+
+      <PageCurtain visible={false} />
+
+      {content}
+    </>
+  );
+}
 
 createRoot(
   document.getElementById("root"),
