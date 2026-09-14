@@ -1,5 +1,5 @@
 # Antarctic Labs
-
+Cloudflare Pages production build configuration verified.
 A cinematic React + Vite portfolio/studio site built around the Antarctic Labs visual direction, with a polar WebGL environment and Montfort-inspired interaction grammar.
 
 ## Stack
