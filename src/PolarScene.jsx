@@ -306,8 +306,7 @@ function buildCloudSource(html) {
 html, body { width: 100% !important; height: 100% !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; background: #071010 !important; }
 body { position: relative !important; }
 /* hide the strata-cloud source's demo UI by selector so the demo cannot leak through */
-nav, main, header, aside, footer,
-[id="reveal-text"], #scroll-dot {
+nav, main, header, aside, footer {
   display: none !important;
 }
 /* Force the cloud canvas to fill the viewport regardless of isolate() state.
