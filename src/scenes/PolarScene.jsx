@@ -1,1841 +1,1126 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 
-const ASSETS = {
-  mountain: "/assets/models/mountains/chalaadi.fbx",
-
-  sky: "/assets/hdr/daysky-8k-hdr-4k.jpg",
-
-  iceColor: "/assets/textures/ice/ice-color.png",
-  iceNormal: "/assets/textures/ice/ice-normal.jpg",
-  iceRoughness: "/assets/textures/ice/ice-roughness.png",
-
-  rockColor: "/assets/textures/rock/rock-color.png",
-  rockNormal: "/assets/textures/rock/rock-normal.png",
-  rockRoughness: "/assets/textures/rock/rock-roughness.png",
-
-  snowColor: "/assets/textures/snow/snow-color.png",
-  snowNormal: "/assets/textures/snow/snow-normal.png",
-  snowRoughness: "/assets/textures/snow/snow-roughness.png",
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const lerp = (a, b, t) => a + (b - a) * t;
+const smoothstep = (edge0, edge1, x) => {
+  const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
 };
 
-const isMobile = () => window.innerWidth < 760;
+function seededRandom(seed) {
+  let value = seed >>> 0;
 
-const prefersReducedMotion = () =>
-  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-function disposeMaterial(material) {
-  if (!material) return;
-
-  const materials = Array.isArray(material)
-    ? material
-    : [material];
-
-  materials.forEach((mat) => {
-    Object.keys(mat).forEach((key) => {
-      const value = mat[key];
-
-      if (value?.isTexture) {
-        value.dispose();
-      }
-    });
-
-    mat.dispose?.();
-  });
+  return () => {
+    value += 0x6d2b79f5;
+    let t = value;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
-function disposeObject(object) {
-  if (!object) return;
-
-  object.traverse((child) => {
-    child.geometry?.dispose();
-
-    if (child.material) {
-      disposeMaterial(child.material);
-    }
-  });
-}
-
-function createGradientTexture() {
-  const canvas = document.createElement("canvas");
-
-  canvas.width = 4;
-  canvas.height = 1024;
-
-  const context = canvas.getContext("2d");
-
-  const gradient = context.createLinearGradient(
-    0,
-    0,
-    0,
-    canvas.height,
-  );
-
-  gradient.addColorStop(0, "#02070c");
-  gradient.addColorStop(0.3, "#041019");
-  gradient.addColorStop(0.54, "#081b25");
-  gradient.addColorStop(0.72, "#12323b");
-  gradient.addColorStop(0.86, "#0a1a22");
-  gradient.addColorStop(1, "#02090d");
-
-  context.fillStyle = gradient;
-  context.fillRect(
-    0,
-    0,
-    canvas.width,
-    canvas.height,
-  );
-
-  const texture = new THREE.CanvasTexture(canvas);
-
-  texture.colorSpace = THREE.SRGBColorSpace;
-
-  return texture;
-}
-
-function createRadialTexture({
-  size = 512,
-  center = "rgba(220,245,255,0.9)",
-  middle = "rgba(220,245,255,0.25)",
-  edge = "rgba(220,245,255,0)",
-} = {}) {
-  const canvas = document.createElement("canvas");
-
-  canvas.width = size;
-  canvas.height = size;
-
-  const context = canvas.getContext("2d");
-
-  const gradient = context.createRadialGradient(
-    size / 2,
-    size / 2,
-    0,
-    size / 2,
-    size / 2,
-    size / 2,
-  );
-
-  gradient.addColorStop(0, center);
-  gradient.addColorStop(0.34, middle);
-  gradient.addColorStop(1, edge);
-
-  context.fillStyle = gradient;
-  context.fillRect(
-    0,
-    0,
-    size,
-    size,
-  );
-
-  return new THREE.CanvasTexture(canvas);
-}
-
-function loadTexture(
-  loader,
-  url,
-  {
-    colorSpace = true,
-    repeat = 1,
-  } = {},
-) {
-  return new Promise((resolve) => {
-    loader.load(
-      url,
-      (texture) => {
-        if (colorSpace) {
-          texture.colorSpace =
-            THREE.SRGBColorSpace;
-        }
-
-        texture.wrapS =
-          THREE.RepeatWrapping;
-
-        texture.wrapT =
-          THREE.RepeatWrapping;
-
-        texture.repeat.set(
-          repeat,
-          repeat,
-        );
-
-        resolve(texture);
-      },
-      undefined,
-      () => resolve(null),
-    );
-  });
-}
-
-function createStars(scene) {
-  const count = isMobile() ? 360 : 820;
-
-  const positions = new Float32Array(
-    count * 3,
-  );
+function createMountainLayer({
+  count,
+  depth,
+  width,
+  baseY,
+  height,
+  color,
+  seed,
+  opacity = 1,
+  jaggedness = 1,
+}) {
+  const random = seededRandom(seed);
+  const group = new THREE.Group();
 
   for (let i = 0; i < count; i += 1) {
-    const radius =
-      32 + Math.random() * 62;
-
-    const angle =
-      Math.random() * Math.PI * 2;
-
-    positions[i * 3] =
-      Math.cos(angle) * radius;
-
-    positions[i * 3 + 1] =
-      6 + Math.random() * 26;
-
-    positions[i * 3 + 2] =
-      -14 - Math.random() * 90;
-  }
-
-  const geometry =
-    new THREE.BufferGeometry();
-
-  geometry.setAttribute(
-    "position",
-    new THREE.BufferAttribute(
-      positions,
-      3,
-    ),
-  );
-
-  const material =
-    new THREE.PointsMaterial({
-      color: 0xdff7ff,
-      size: isMobile()
-        ? 0.04
-        : 0.065,
-      transparent: true,
-      opacity: 0.68,
-      depthWrite: false,
-    });
-
-  const points =
-    new THREE.Points(
-      geometry,
-      material,
-    );
-
-  scene.add(points);
-
-  return points;
-}
-
-function createSnow(scene) {
-  const count = isMobile()
-    ? 260
-    : 540;
-
-  const positions =
-    new Float32Array(
-      count * 3,
-    );
-
-  const velocities =
-    new Float32Array(count);
-
-  for (let i = 0; i < count; i += 1) {
-    positions[i * 3] =
-      (Math.random() - 0.5) * 42;
-
-    positions[i * 3 + 1] =
-      Math.random() * 23;
-
-    positions[i * 3 + 2] =
-      -4 - Math.random() * 52;
-
-    velocities[i] =
-      0.012 + Math.random() * 0.028;
-  }
-
-  const geometry =
-    new THREE.BufferGeometry();
-
-  geometry.setAttribute(
-    "position",
-    new THREE.BufferAttribute(
-      positions,
-      3,
-    ),
-  );
-
-  const material =
-    new THREE.PointsMaterial({
-      color: 0xeaf9ff,
-      size: isMobile()
-        ? 0.035
-        : 0.055,
-      transparent: true,
-      opacity: 0.3,
-      depthWrite: false,
-    });
-
-  const points =
-    new THREE.Points(
-      geometry,
-      material,
-    );
-
-  points.userData.velocities =
-    velocities;
-
-  scene.add(points);
-
-  return points;
-}
-
-function createMoon(scene) {
-  const group =
-    new THREE.Group();
-
-  group.position.set(
-    4.8,
-    8.3,
-    -47,
-  );
-
-  const glowTexture =
-    createRadialTexture({
-      size: 512,
-      center:
-        "rgba(225,246,255,0.82)",
-      middle:
-        "rgba(205,239,250,0.24)",
-      edge:
-        "rgba(205,239,250,0)",
-    });
-
-  const glow =
-    new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: glowTexture,
-        transparent: true,
-        depthWrite: false,
-        blending:
-          THREE.AdditiveBlending,
-      }),
-    );
-
-  glow.scale.set(
-    8,
-    8,
-    1,
-  );
-
-  group.add(glow);
-
-  const moon =
-    new THREE.Mesh(
-      new THREE.SphereGeometry(
-        1.3,
-        32,
-        32,
-      ),
-      new THREE.MeshBasicMaterial({
-        color: 0xd9e9ed,
-      }),
-    );
-
-  group.add(moon);
-
-  scene.add(group);
-
-  return group;
-}
-
-function createMountainLayer(
-  scene,
-  {
-    z,
-    width,
-    height,
-    color,
-    opacity,
-    count = 10,
-  },
-) {
-  const group =
-    new THREE.Group();
-
-  for (
-    let i = 0;
-    i < count;
-    i += 1
-  ) {
-    const mountainWidth =
-      width *
-      (0.14 + Math.random() * 0.2);
-
+    const mountainWidth = lerp(width * 0.65, width * 1.45, random());
     const mountainHeight =
-      height *
-      (0.4 + Math.random() * 0.65);
+      height * lerp(0.65, 1.25, random()) * jaggedness;
 
-    const geometry =
-      new THREE.ConeGeometry(
-        mountainWidth,
-        mountainHeight,
-        6,
+    const geometry = new THREE.ConeGeometry(
+      mountainWidth,
+      mountainHeight,
+      Math.floor(lerp(5, 9, random())),
+      1,
+    );
+
+    const material = new THREE.MeshBasicMaterial({
+      color,
+      transparent: opacity < 1,
+      opacity,
+      depthWrite: opacity > 0.75,
+      flatShading: true,
+    });
+
+    const mountain = new THREE.Mesh(geometry, material);
+
+    mountain.position.set(
+      (random() - 0.5) * width * 2.4,
+      baseY + mountainHeight * 0.5,
+      -depth + (random() - 0.5) * 18,
+    );
+
+    mountain.rotation.y = random() * Math.PI;
+    mountain.rotation.z = (random() - 0.5) * 0.08;
+
+    group.add(mountain);
+
+    // Snow cap.
+    if (random() > 0.2) {
+      const capHeight = mountainHeight * lerp(0.08, 0.18, random());
+      const capGeometry = new THREE.ConeGeometry(
+        mountainWidth * lerp(0.2, 0.42, random()),
+        capHeight,
+        5,
         1,
       );
 
-    const material =
-      new THREE.MeshStandardMaterial({
-        color,
-        roughness: 1,
-        metalness: 0,
-        transparent:
-          opacity < 1,
-        opacity,
+      const capMaterial = new THREE.MeshBasicMaterial({
+        color: 0xe8f2f2,
+        transparent: opacity < 1,
+        opacity: opacity * 0.72,
+        depthWrite: false,
         flatShading: true,
       });
 
-    const mesh =
-      new THREE.Mesh(
-        geometry,
-        material,
-      );
+      const cap = new THREE.Mesh(capGeometry, capMaterial);
 
-    mesh.position.set(
-      (i / (count - 1) - 0.5) *
-        width +
-        (Math.random() - 0.5) * 4,
+      cap.position.copy(mountain.position);
+      cap.position.y += mountainHeight * 0.46;
+      cap.rotation.y = mountain.rotation.y;
 
-      mountainHeight * 0.5 -
-        0.8,
-
-      z +
-        (Math.random() - 0.5) * 4,
-    );
-
-    mesh.rotation.z =
-      (Math.random() - 0.5) *
-      0.06;
-
-    group.add(mesh);
-  }
-
-  scene.add(group);
-
-  return group;
-}
-
-function createAurora(scene) {
-  const group =
-    new THREE.Group();
-
-  group.position.z = -29;
-
-  const colors = [
-    0x61ffd5,
-    0x7ee7ff,
-    0x8bffb4,
-    0x63b9ff,
-  ];
-
-  for (
-    let i = 0;
-    i < 7;
-    i += 1
-  ) {
-    const points = [];
-
-    for (
-      let j = 0;
-      j <= 16;
-      j += 1
-    ) {
-      const x =
-        -20 +
-        (j / 16) * 40;
-
-      const y =
-        5.2 +
-        i * 0.5 +
-        Math.sin(
-          j * 0.72 +
-            i * 1.17,
-        ) *
-          (0.72 + i * 0.07);
-
-      const z =
-        Math.cos(
-          j * 0.44 + i,
-        ) * 1.3;
-
-      points.push(
-        new THREE.Vector3(
-          x,
-          y,
-          z,
-        ),
-      );
+      group.add(cap);
     }
-
-    const curve =
-      new THREE.CatmullRomCurve3(
-        points,
-      );
-
-    const geometry =
-      new THREE.TubeGeometry(
-        curve,
-        72,
-        0.07 + i * 0.018,
-        5,
-        false,
-      );
-
-    const material =
-      new THREE.MeshBasicMaterial({
-        color:
-          colors[
-            i % colors.length
-          ],
-        transparent: true,
-        opacity:
-          0.15 - i * 0.012,
-        blending:
-          THREE.AdditiveBlending,
-        depthWrite: false,
-      });
-
-    group.add(
-      new THREE.Mesh(
-        geometry,
-        material,
-      ),
-    );
   }
-
-  scene.add(group);
 
   return group;
 }
 
-function createMist(scene) {
-  const group =
-    new THREE.Group();
+function createStarField(count, radius, seed = 42) {
+  const random = seededRandom(seed);
+  const positions = new Float32Array(count * 3);
+  const sizes = new Float32Array(count);
 
-  const texture =
-    createRadialTexture({
-      size: 512,
-      center:
-        "rgba(195,232,238,0.38)",
-      middle:
-        "rgba(195,232,238,0.11)",
-      edge:
-        "rgba(195,232,238,0)",
-    });
+  for (let i = 0; i < count; i += 1) {
+    const i3 = i * 3;
 
-  const layers = [
-    {
-      x: -10,
-      y: 1.5,
-      z: -10,
-      width: 18,
-      height: 6,
-    },
-    {
-      x: 9,
-      y: 0.8,
-      z: -18,
-      width: 22,
-      height: 7,
-    },
-    {
-      x: -2,
-      y: 2.8,
-      z: -30,
-      width: 30,
-      height: 10,
-    },
-  ];
+    const theta = random() * Math.PI * 2;
+    const phi = Math.acos(lerp(0.05, 0.85, random()));
 
-  layers.forEach(
-    (
-      layer,
-      index,
-    ) => {
-      const sprite =
-        new THREE.Sprite(
-          new THREE.SpriteMaterial({
-            map: texture,
-            transparent: true,
-            opacity:
-              0.085 +
-              index * 0.025,
-            depthWrite: false,
-          }),
-        );
+    positions[i3] = Math.sin(phi) * Math.cos(theta) * radius;
+    positions[i3 + 1] = Math.cos(phi) * radius * 0.75;
+    positions[i3 + 2] = Math.sin(phi) * Math.sin(theta) * radius;
 
-      sprite.position.set(
-        layer.x,
-        layer.y,
-        layer.z,
-      );
+    sizes[i] = lerp(0.35, 1.6, random());
+  }
 
-      sprite.scale.set(
-        layer.width,
-        layer.height,
-        1,
-      );
-
-      sprite.userData.baseX =
-        layer.x;
-
-      sprite.userData.baseY =
-        layer.y;
-
-      sprite.userData.index =
-        index;
-
-      group.add(sprite);
-    },
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(positions, 3),
+  );
+  geometry.setAttribute(
+    "aSize",
+    new THREE.BufferAttribute(sizes, 1),
   );
 
-  scene.add(group);
+  const material = new THREE.PointsMaterial({
+    color: 0xdceef2,
+    size: 0.65,
+    transparent: true,
+    opacity: 0.72,
+    sizeAttenuation: true,
+    depthWrite: false,
+  });
+
+  return new THREE.Points(geometry, material);
+}
+
+function createSnowField(count, width, depth, seed = 17) {
+  const random = seededRandom(seed);
+  const positions = new Float32Array(count * 3);
+
+  for (let i = 0; i < count; i += 1) {
+    const i3 = i * 3;
+
+    positions[i3] = (random() - 0.5) * width;
+    positions[i3 + 1] = lerp(-1, 30, random());
+    positions[i3 + 2] = -random() * depth;
+  }
+
+  const geometry = new THREE.BufferGeometry();
+
+  geometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(positions, 3),
+  );
+
+  const material = new THREE.PointsMaterial({
+    color: 0xe9f6f7,
+    size: 0.045,
+    transparent: true,
+    opacity: 0.34,
+    depthWrite: false,
+    sizeAttenuation: true,
+  });
+
+  return new THREE.Points(geometry, material);
+}
+
+function createIceberg(seed = 91) {
+  const random = seededRandom(seed);
+  const group = new THREE.Group();
+
+  const baseGeometry = new THREE.IcosahedronGeometry(1, 1);
+
+  const baseMaterial = new THREE.MeshStandardMaterial({
+    color: 0x9fbec2,
+    roughness: 0.3,
+    metalness: 0.04,
+    flatShading: true,
+  });
+
+  const count = 10;
+
+  for (let i = 0; i < count; i += 1) {
+    const iceberg = new THREE.Mesh(
+      baseGeometry.clone(),
+      baseMaterial.clone(),
+    );
+
+    const scale = lerp(0.8, 2.8, random());
+
+    iceberg.scale.set(
+      scale * lerp(0.65, 1.35, random()),
+      scale * lerp(0.8, 1.9, random()),
+      scale * lerp(0.65, 1.2, random()),
+    );
+
+    iceberg.position.set(
+      (random() - 0.5) * 38,
+      -0.15 + random() * 0.35,
+      -lerp(2, 18, random()),
+    );
+
+    iceberg.rotation.set(
+      random() * 0.25,
+      random() * Math.PI,
+      random() * 0.2,
+    );
+
+    group.add(iceberg);
+
+    if (random() > 0.3) {
+      const snowGeometry = new THREE.IcosahedronGeometry(1, 1);
+
+      const snow = new THREE.Mesh(
+        snowGeometry,
+        new THREE.MeshStandardMaterial({
+          color: 0xe9f5f5,
+          roughness: 0.7,
+          metalness: 0,
+          flatShading: true,
+          transparent: true,
+          opacity: 0.82,
+        }),
+      );
+
+      snow.scale.copy(iceberg.scale);
+      snow.scale.multiplyScalar(0.52);
+
+      snow.position.copy(iceberg.position);
+      snow.position.y += iceberg.scale.y * 0.58;
+
+      snow.rotation.copy(iceberg.rotation);
+
+      group.add(snow);
+    }
+  }
 
   return group;
 }
 
-function createWater(scene) {
-  const geometry =
-    new THREE.PlaneGeometry(
-      58,
-      68,
-      isMobile() ? 24 : 48,
-      isMobile() ? 28 : 58,
-    );
+function createAuroraRibbon({
+  width = 32,
+  segments = 90,
+  amplitude = 2.2,
+  height = 18,
+  depth = -22,
+  phase = 0,
+  color = 0x6fded0,
+  opacity = 0.2,
+}) {
+  const geometry = new THREE.BufferGeometry();
+  const positions = new Float32Array(segments * 2 * 3);
+  const colors = new Float32Array(segments * 2 * 3);
 
-  geometry.rotateX(
-    -Math.PI / 2,
-  );
+  const baseColor = new THREE.Color(color);
+  const secondary = new THREE.Color(0x739cff);
 
-  const positions =
-    geometry.attributes.position;
+  for (let i = 0; i < segments; i += 1) {
+    const t = i / (segments - 1);
+    const x = (t - 0.5) * width;
 
-  for (
-    let i = 0;
-    i < positions.count;
-    i += 1
-  ) {
-    const x =
-      positions.getX(i);
+    const wave =
+      Math.sin(t * Math.PI * 2.8 + phase) * amplitude +
+      Math.sin(t * Math.PI * 6.1 + phase * 1.7) *
+        amplitude *
+        0.32;
 
-    const z =
-      positions.getZ(i);
+    const lowerY =
+      height +
+      wave +
+      Math.sin(t * Math.PI * 1.4 + phase) * 1.2;
 
-    positions.setY(
-      i,
-      Math.sin(
-        x * 0.24 +
-          z * 0.12,
-      ) *
-        0.035 +
-        Math.sin(z * 0.43) *
-          0.025,
-    );
+    const upperY = lowerY + 1.9;
+
+    const i6 = i * 6;
+
+    positions[i6] = x;
+    positions[i6 + 1] = lowerY;
+    positions[i6 + 2] = depth;
+
+    positions[i6 + 3] = x;
+    positions[i6 + 4] = upperY;
+    positions[i6 + 5] = depth - 0.15;
+
+    const mix = 0.35 + 0.65 * Math.sin(t * Math.PI);
+
+    const lowerColor = baseColor.clone().lerp(secondary, mix * 0.42);
+    const upperColor = baseColor.clone().lerp(secondary, (1 - mix) * 0.52);
+
+    colors[i6] = lowerColor.r;
+    colors[i6 + 1] = lowerColor.g;
+    colors[i6 + 2] = lowerColor.b;
+
+    colors[i6 + 3] = upperColor.r;
+    colors[i6 + 4] = upperColor.g;
+    colors[i6 + 5] = upperColor.b;
   }
 
+  const indices = [];
+
+  for (let i = 0; i < segments - 1; i += 1) {
+    const a = i * 2;
+    const b = a + 1;
+    const c = a + 2;
+    const d = a + 3;
+
+    indices.push(a, c, b);
+    indices.push(b, c, d);
+  }
+
+  geometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(positions, 3),
+  );
+  geometry.setAttribute(
+    "color",
+    new THREE.BufferAttribute(colors, 3),
+  );
+  geometry.setIndex(indices);
   geometry.computeVertexNormals();
 
-  const material =
-    new THREE.MeshStandardMaterial({
-      color: 0x07151c,
-      roughness: 0.16,
-      metalness: 0.58,
-    });
+  const material = new THREE.MeshBasicMaterial({
+    vertexColors: true,
+    transparent: true,
+    opacity,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
 
-  const water =
-    new THREE.Mesh(
-      geometry,
-      material,
-    );
+  return new THREE.Mesh(geometry, material);
+}
 
-  water.position.set(
-    0,
-    -2.35,
-    -17,
+function createWater({
+  width = 90,
+  depth = 70,
+  segmentsX = 80,
+  segmentsZ = 60,
+}) {
+  const geometry = new THREE.PlaneGeometry(
+    width,
+    depth,
+    segmentsX,
+    segmentsZ,
   );
 
-  scene.add(water);
+  geometry.rotateX(-Math.PI / 2);
+
+  const positions = geometry.attributes.position;
+
+  for (let i = 0; i < positions.count; i += 1) {
+    const x = positions.getX(i);
+    const z = positions.getZ(i);
+
+    const wave =
+      Math.sin(x * 0.12 + z * 0.08) * 0.07 +
+      Math.sin(x * 0.035 - z * 0.16) * 0.09 +
+      Math.sin(x * 0.21 + z * 0.025) * 0.025;
+
+    positions.setY(i, wave);
+  }
+
+  positions.needsUpdate = true;
+  geometry.computeVertexNormals();
+
+  const material = new THREE.MeshPhysicalMaterial({
+    color: 0x07151c,
+    roughness: 0.18,
+    metalness: 0.42,
+    clearcoat: 0.75,
+    clearcoatRoughness: 0.18,
+    transparent: true,
+    opacity: 0.96,
+  });
+
+  const water = new THREE.Mesh(geometry, material);
+  water.position.y = -1.05;
 
   return water;
 }
 
-function createIceShelf(
-  scene,
-  textures,
-) {
-  const group =
-    new THREE.Group();
+function createIceShelf() {
+  const group = new THREE.Group();
 
-  group.position.set(
-    0,
-    -1.5,
-    -13,
-  );
+  const shelfGeometry = new THREE.BoxGeometry(70, 2.4, 18, 10, 2, 8);
 
-  const material =
-    new THREE.MeshStandardMaterial({
-      color: 0xb9dce2,
-      roughness: 0.72,
-      metalness: 0.04,
-      map: textures.color || null,
-      normalMap:
-        textures.normal || null,
-      roughnessMap:
-        textures.roughness || null,
-    });
+  const shelfMaterial = new THREE.MeshStandardMaterial({
+    color: 0xc3d9dc,
+    roughness: 0.62,
+    metalness: 0,
+    flatShading: true,
+  });
 
-  const geometry =
-    new THREE.BoxGeometry(
-      42,
-      1.7,
-      10,
-      24,
-      3,
-      16,
-    );
-
-  const positions =
-    geometry.attributes.position;
-
-  for (
-    let i = 0;
-    i < positions.count;
-    i += 1
-  ) {
-    const x =
-      positions.getX(i);
-
-    const z =
-      positions.getZ(i);
-
-    const y =
-      positions.getY(i);
-
-    if (y > 0.1) {
-      positions.setY(
-        i,
-        y +
-          Math.sin(x * 0.25) *
-            0.16 +
-          Math.cos(z * 0.5) *
-            0.1,
-      );
-    }
-  }
-
-  geometry.computeVertexNormals();
-
-  const shelf =
-    new THREE.Mesh(
-      geometry,
-      material,
-    );
-
-  shelf.receiveShadow = true;
+  const shelf = new THREE.Mesh(shelfGeometry, shelfMaterial);
+  shelf.position.set(0, 0.15, -19);
 
   group.add(shelf);
 
-  for (
-    let i = 0;
-    i < 12;
-    i += 1
-  ) {
-    const width =
-      1.2 +
-      Math.random() * 2.8;
+  const crackMaterial = new THREE.MeshBasicMaterial({
+    color: 0x557b82,
+    transparent: true,
+    opacity: 0.55,
+  });
 
-    const height =
-      1.8 +
-      Math.random() * 3.8;
-
-    const block =
-      new THREE.Mesh(
-        new THREE.CylinderGeometry(
-          width,
-          width * 1.25,
-          height,
-          6,
-        ),
-        material,
-      );
-
-    block.position.set(
-      -19 +
-        Math.random() * 38,
-      height / 2 - 0.3,
-      -4 +
-        Math.random() * 7,
+  for (let i = 0; i < 13; i += 1) {
+    const crack = new THREE.Mesh(
+      new THREE.BoxGeometry(
+        lerp(0.03, 0.11, Math.random()),
+        0.04,
+        lerp(1.5, 5, Math.random()),
+      ),
+      crackMaterial,
     );
 
-    block.rotation.y =
-      Math.random() *
-      Math.PI;
+    crack.position.set(
+      (Math.random() - 0.5) * 58,
+      1.37,
+      -19 + (Math.random() - 0.5) * 12,
+    );
 
-    group.add(block);
+    crack.rotation.y = (Math.random() - 0.5) * 0.8;
+
+    group.add(crack);
   }
-
-  scene.add(group);
 
   return group;
 }
 
-function createForegroundIce(
-  scene,
-  textures,
-) {
-  const group =
-    new THREE.Group();
+function createHorizonGlow() {
+  const geometry = new THREE.PlaneGeometry(70, 18);
 
-  group.position.z = -2;
+  const material = new THREE.MeshBasicMaterial({
+    color: 0x5a9ea4,
+    transparent: true,
+    opacity: 0.13,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
 
-  const material =
-    new THREE.MeshStandardMaterial({
-      color: 0xc9edf1,
-      roughness: 0.52,
-      metalness: 0.02,
-      map: textures.color || null,
-      normalMap:
-        textures.normal || null,
-      roughnessMap:
-        textures.roughness || null,
-    });
+  const glow = new THREE.Mesh(geometry, material);
 
-  const count = isMobile()
-    ? 11
-    : 18;
+  glow.position.set(0, 2.6, -30);
 
-  for (
-    let i = 0;
-    i < count;
-    i += 1
-  ) {
-    const width =
-      0.45 +
-      Math.random() * 1.4;
+  return glow;
+}
 
-    const height =
-      1.2 +
-      Math.random() * 5.2;
+function createMoon() {
+  const group = new THREE.Group();
 
-    const mesh =
-      new THREE.Mesh(
-        new THREE.ConeGeometry(
-          width,
-          height,
-          6,
-        ),
-        material,
-      );
+  const geometry = new THREE.CircleGeometry(2.8, 64);
 
-    mesh.position.set(
-      (Math.random() - 0.5) *
-        31,
+  const material = new THREE.MeshBasicMaterial({
+    color: 0xe9f4ef,
+    transparent: true,
+    opacity: 0.95,
+  });
 
-      height / 2 - 1.2,
+  const moon = new THREE.Mesh(geometry, material);
 
-      -Math.random() * 10,
-    );
+  group.add(moon);
 
-    mesh.rotation.set(
-      (Math.random() - 0.5) *
-        0.14,
+  const haloGeometry = new THREE.CircleGeometry(5.4, 64);
 
-      Math.random() *
-        Math.PI,
+  const haloMaterial = new THREE.MeshBasicMaterial({
+    color: 0xa7d6d3,
+    transparent: true,
+    opacity: 0.055,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
 
-      (Math.random() - 0.5) *
-        0.12,
-    );
+  const halo = new THREE.Mesh(haloGeometry, haloMaterial);
 
-    group.add(mesh);
-  }
+  halo.position.z = 0.12;
 
-  scene.add(group);
+  group.add(halo);
+
+  group.position.set(13, 13, -34);
 
   return group;
 }
 
-function createHorizonGlow(scene) {
-  const texture =
-    createRadialTexture({
-      size: 512,
-      center:
-        "rgba(101,224,230,0.22)",
-      middle:
-        "rgba(81,190,204,0.08)",
-      edge:
-        "rgba(81,190,204,0)",
-    });
+function createFogCurtain() {
+  const geometry = new THREE.PlaneGeometry(75, 25);
 
-  const sprite =
-    new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: texture,
-        transparent: true,
-        depthWrite: false,
-        blending:
-          THREE.AdditiveBlending,
-      }),
-    );
+  const material = new THREE.MeshBasicMaterial({
+    color: 0x496e73,
+    transparent: true,
+    opacity: 0.025,
+    depthWrite: false,
+  });
 
-  sprite.position.set(
-    0,
-    0.5,
-    -32,
-  );
+  const curtain = new THREE.Mesh(geometry, material);
 
-  sprite.scale.set(
-    32,
-    11,
-    1,
-  );
+  curtain.position.set(0, 4, -13);
 
-  scene.add(sprite);
-
-  return sprite;
+  return curtain;
 }
 
 export default function PolarScene() {
-  const containerRef =
-    useRef(null);
+  const mountRef = useRef(null);
 
   useEffect(() => {
-    const container =
-      containerRef.current;
+    const mount = mountRef.current;
 
-    if (!container) {
-      return undefined;
-    }
+    if (!mount) return undefined;
 
-    let destroyed = false;
-    let animationFrame = 0;
-    let resizeObserver;
+    const isMobile =
+      window.matchMedia("(max-width: 760px)").matches;
 
-    const mobile = isMobile();
-    const reduced =
-      prefersReducedMotion();
+    const reducedMotion =
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    const scene =
-      new THREE.Scene();
+    const scene = new THREE.Scene();
 
-    const background =
-      createGradientTexture();
+    scene.background = new THREE.Color(0x050c12);
 
-    scene.background =
-      background;
-
-    scene.fog =
-      new THREE.FogExp2(
-        0x091922,
-        mobile
-          ? 0.021
-          : 0.016,
-      );
-
-    const camera =
-      new THREE.PerspectiveCamera(
-        47,
-        1,
-        0.1,
-        120,
-      );
-
-    camera.position.set(
-      0,
-      1.7,
-      8.5,
+    scene.fog = new THREE.FogExp2(
+      new THREE.Color(0x071219),
+      isMobile ? 0.014 : 0.011,
     );
 
-    const renderer =
-      new THREE.WebGLRenderer({
-        antialias: !mobile,
-        alpha: true,
-        powerPreference:
-          "high-performance",
-      });
+    const camera = new THREE.PerspectiveCamera(
+      isMobile ? 58 : 52,
+      1,
+      0.1,
+      160,
+    );
+
+    camera.position.set(0, 4.2, 10);
+    camera.rotation.order = "YXZ";
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: !isMobile,
+      alpha: false,
+      powerPreference: "high-performance",
+      precision: isMobile ? "mediump" : "highp",
+    });
 
     renderer.setPixelRatio(
-      Math.min(
-        window.devicePixelRatio ||
-          1,
-        mobile
-          ? 1.25
-          : 1.7,
-      ),
+      Math.min(window.devicePixelRatio || 1, isMobile ? 1.35 : 1.8),
     );
 
-    renderer.setSize(
-      window.innerWidth,
-      window.innerHeight,
-      false,
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.08;
+
+    renderer.domElement.style.display = "block";
+    renderer.domElement.style.width = "100%";
+    renderer.domElement.style.height = "100%";
+
+    mount.appendChild(renderer.domElement);
+
+    const environment = new THREE.Group();
+    scene.add(environment);
+
+    /*
+     * WORLD
+     */
+
+    const stars = createStarField(
+      isMobile ? 700 : 1450,
+      80,
+      42,
     );
 
-    renderer.outputColorSpace =
-      THREE.SRGBColorSpace;
+    environment.add(stars);
 
-    renderer.toneMapping =
-      THREE.ACESFilmicToneMapping;
+    const farMountains = createMountainLayer({
+      count: isMobile ? 13 : 20,
+      depth: 47,
+      width: 65,
+      baseY: -0.4,
+      height: 13,
+      color: 0x101f27,
+      seed: 11,
+      opacity: 0.8,
+      jaggedness: 0.92,
+    });
 
-    renderer.toneMappingExposure =
-      0.82;
+    environment.add(farMountains);
 
-    renderer.shadowMap.enabled =
-      !mobile;
+    const middleMountains = createMountainLayer({
+      count: isMobile ? 10 : 16,
+      depth: 35,
+      width: 52,
+      baseY: -0.55,
+      height: 18,
+      color: 0x0a171e,
+      seed: 27,
+      opacity: 0.96,
+      jaggedness: 1.05,
+    });
 
-    renderer.shadowMap.type =
-      THREE.PCFSoftShadowMap;
+    environment.add(middleMountains);
 
-    renderer.domElement.setAttribute(
-      "aria-hidden",
-      "true",
+    const nearMountains = createMountainLayer({
+      count: isMobile ? 7 : 11,
+      depth: 23,
+      width: 43,
+      baseY: -0.7,
+      height: 23,
+      color: 0x071218,
+      seed: 64,
+      opacity: 1,
+      jaggedness: 1.18,
+    });
+
+    environment.add(nearMountains);
+
+    const moon = createMoon();
+    environment.add(moon);
+
+    const horizonGlow = createHorizonGlow();
+    environment.add(horizonGlow);
+
+    const auroraGroup = new THREE.Group();
+
+    const auroraOne = createAuroraRibbon({
+      width: 48,
+      amplitude: 2.7,
+      height: 17,
+      depth: -28,
+      phase: 0.4,
+      color: 0x62d7c5,
+      opacity: 0.19,
+    });
+
+    const auroraTwo = createAuroraRibbon({
+      width: 56,
+      amplitude: 2.1,
+      height: 20,
+      depth: -31,
+      phase: 2.2,
+      color: 0x6f91e8,
+      opacity: 0.12,
+    });
+
+    const auroraThree = createAuroraRibbon({
+      width: 42,
+      amplitude: 1.7,
+      height: 14.5,
+      depth: -26,
+      phase: 4.1,
+      color: 0x4fc9a9,
+      opacity: 0.095,
+    });
+
+    auroraGroup.add(
+      auroraOne,
+      auroraTwo,
+      auroraThree,
     );
 
-    renderer.domElement.style.width =
-      "100%";
+    environment.add(auroraGroup);
 
-    renderer.domElement.style.height =
-      "100%";
+    const water = createWater({
+      width: 90,
+      depth: 75,
+      segmentsX: isMobile ? 45 : 80,
+      segmentsZ: isMobile ? 35 : 60,
+    });
 
-    container.appendChild(
-      renderer.domElement,
+    environment.add(water);
+
+    const shelf = createIceShelf();
+    environment.add(shelf);
+
+    const icebergs = createIceberg();
+    environment.add(icebergs);
+
+    const snow = createSnowField(
+      isMobile ? 700 : 1450,
+      65,
+      58,
+      17,
     );
 
-    const hemisphere =
-      new THREE.HemisphereLight(
-        0xbdefff,
-        0x071018,
-        1.15,
-      );
+    environment.add(snow);
 
-    scene.add(hemisphere);
+    const fogCurtain = createFogCurtain();
+    environment.add(fogCurtain);
 
-    const moonLight =
-      new THREE.DirectionalLight(
-        0xcbefff,
-        2.1,
-      );
+    /*
+     * LIGHTING
+     */
 
-    moonLight.position.set(
-      6,
-      13,
-      -25,
+    const ambient = new THREE.HemisphereLight(
+      0x7fa4aa,
+      0x02060a,
+      0.72,
     );
 
-    moonLight.castShadow =
-      !mobile;
+    scene.add(ambient);
+
+    const moonLight = new THREE.DirectionalLight(
+      0xb9d9d8,
+      1.75,
+    );
+
+    moonLight.position.set(12, 18, -24);
 
     scene.add(moonLight);
 
-    const horizonLight =
-      new THREE.PointLight(
-        0x5bd8e7,
-        3.2,
-        35,
-        2,
-      );
-
-    horizonLight.position.set(
-      0,
-      1.5,
-      -20,
+    const coldFill = new THREE.DirectionalLight(
+      0x426c9c,
+      0.45,
     );
 
-    scene.add(horizonLight);
+    coldFill.position.set(-20, 8, 14);
 
-    const stars =
-      createStars(scene);
+    scene.add(coldFill);
 
-    const snow =
-      createSnow(scene);
+    /*
+     * ATMOSPHERE
+     */
 
-    const moon =
-      createMoon(scene);
+    const worldColor = new THREE.Color(0x07131b);
+    const horizonColor = new THREE.Color(0x17343a);
+    const originalBackground = new THREE.Color(0x050c12);
 
-    const farMountains =
-      createMountainLayer(
-        scene,
-        {
-          z: -52,
-          width: 48,
-          height: 11,
-          color: 0x0d242d,
-          opacity: 0.95,
-        },
-      );
+    /*
+     * INTERACTION
+     */
 
-    const midMountains =
-      createMountainLayer(
-        scene,
-        {
-          z: -39,
-          width: 43,
-          height: 10,
-          color: 0x102e38,
-          opacity: 0.9,
-        },
-      );
+    let scrollTarget = 0;
+    let scrollCurrent = 0;
 
-    const nearMountains =
-      createMountainLayer(
-        scene,
-        {
-          z: -27,
-          width: 38,
-          height: 8.5,
-          color: 0x163843,
-          opacity: 0.82,
-        },
-      );
+    let pointerTargetX = 0;
+    let pointerTargetY = 0;
 
-    const aurora =
-      createAurora(scene);
+    let pointerCurrentX = 0;
+    let pointerCurrentY = 0;
 
-    const mist =
-      createMist(scene);
-
-    const horizonGlow =
-      createHorizonGlow(scene);
-
-    const water =
-      createWater(scene);
-
-    let iceShelf;
-    let foregroundIce;
-    let mountainAsset;
-    let skyPlane;
-
-    const textureLoader =
-      new THREE.TextureLoader();
-
-    Promise.all([
-      loadTexture(
-        textureLoader,
-        ASSETS.iceColor,
-      ),
-      loadTexture(
-        textureLoader,
-        ASSETS.iceNormal,
-        {
-          colorSpace: false,
-        },
-      ),
-      loadTexture(
-        textureLoader,
-        ASSETS.iceRoughness,
-        {
-          colorSpace: false,
-        },
-      ),
-    ]).then(
-      ([
-        iceColor,
-        iceNormal,
-        iceRoughness,
-      ]) => {
-        if (destroyed) {
-          iceColor?.dispose();
-          iceNormal?.dispose();
-          iceRoughness?.dispose();
-          return;
-        }
-
-        const textures = {
-          color: iceColor,
-          normal: iceNormal,
-          roughness:
-            iceRoughness,
-        };
-
-        iceShelf =
-          createIceShelf(
-            scene,
-            textures,
-          );
-
-        foregroundIce =
-          createForegroundIce(
-            scene,
-            textures,
-          );
-      },
-    );
-
-    textureLoader.load(
-      ASSETS.sky,
-      (skyTexture) => {
-        if (destroyed) {
-          skyTexture.dispose();
-          return;
-        }
-
-        skyTexture.colorSpace =
-          THREE.SRGBColorSpace;
-
-        const material =
-          new THREE.MeshBasicMaterial({
-            map: skyTexture,
-            color: 0x36525a,
-            transparent: true,
-            opacity: 0.085,
-            depthWrite: false,
-            fog: false,
-          });
-
-        skyPlane =
-          new THREE.Mesh(
-            new THREE.PlaneGeometry(
-              82,
-              41,
-            ),
-            material,
-          );
-
-        skyPlane.position.set(
-          0,
-          10,
-          -72,
-        );
-
-        scene.add(skyPlane);
-      },
-      undefined,
-      () => {},
-    );
-
-    const fbxLoader =
-      new FBXLoader();
-
-    fbxLoader.load(
-      ASSETS.mountain,
-      (asset) => {
-        if (destroyed) {
-          disposeObject(asset);
-          return;
-        }
-
-        const originalBox =
-          new THREE.Box3().setFromObject(
-            asset,
-          );
-
-        const originalSize =
-          originalBox.getSize(
-            new THREE.Vector3(),
-          );
-
-        const maxDimension =
-          Math.max(
-            originalSize.x,
-            originalSize.y,
-            originalSize.z,
-          ) || 1;
-
-        asset.scale.setScalar(
-          10 / maxDimension,
-        );
-
-        const normalizedBox =
-          new THREE.Box3().setFromObject(
-            asset,
-          );
-
-        const center =
-          normalizedBox.getCenter(
-            new THREE.Vector3(),
-          );
-
-        asset.position.sub(
-          center,
-        );
-
-        asset.position.y +=
-          1.15;
-
-        asset.position.x =
-          -1.5;
-
-        asset.position.z =
-          -22;
-
-        asset.traverse(
-          (child) => {
-            if (!child.isMesh) {
-              return;
-            }
-
-            child.castShadow =
-              !mobile;
-
-            child.receiveShadow =
-              !mobile;
-
-            if (!child.material) {
-              return;
-            }
-
-            const materials =
-              Array.isArray(
-                child.material,
-              )
-                ? child.material
-                : [child.material];
-
-            materials.forEach(
-              (material) => {
-                if (material.color) {
-                  material.color.lerp(
-                    new THREE.Color(
-                      0x9dbbc1,
-                    ),
-                    0.38,
-                  );
-                }
-
-                if (
-                  "roughness" in
-                  material
-                ) {
-                  material.roughness =
-                    Math.max(
-                      material.roughness ||
-                        0.8,
-                      0.72,
-                    );
-                }
-              },
-            );
-          },
-        );
-
-        mountainAsset =
-          asset;
-
-        scene.add(asset);
-      },
-      undefined,
-      () => {},
-    );
-
-    const pointer = {
-      x: 0,
-      y: 0,
-    };
-
-    const pointerTarget = {
-      x: 0,
-      y: 0,
-    };
-
-    const handlePointerMove =
-      (event) => {
-        pointerTarget.x =
-          (event.clientX /
-            window.innerWidth -
-            0.5) *
-          2;
-
-        pointerTarget.y =
-          (event.clientY /
-            window.innerHeight -
-            0.5) *
-          2;
-      };
-
-    window.addEventListener(
-      "pointermove",
-      handlePointerMove,
-      {
-        passive: true,
-      },
-    );
-
-    let scrollTarget =
-      window.scrollY;
-
-    let scrollCurrent =
-      scrollTarget;
-
-    const handleScroll =
-      () => {
-        scrollTarget =
-          window.scrollY;
-      };
-
-    window.addEventListener(
-      "scroll",
-      handleScroll,
-      {
-        passive: true,
-      },
-    );
-
-    const resize = () => {
-      const width =
-        window.innerWidth;
-
-      const height =
-        window.innerHeight;
-
-      camera.aspect =
-        width / height;
-
-      camera.updateProjectionMatrix();
-
-      renderer.setPixelRatio(
-        Math.min(
-          window.devicePixelRatio ||
-            1,
-          isMobile()
-            ? 1.25
-            : 1.7,
-        ),
-      );
-
-      renderer.setSize(
-        width,
-        height,
-        false,
-      );
-    };
-
-    window.addEventListener(
-      "resize",
-      resize,
-    );
-
-    resizeObserver =
-      new ResizeObserver(
-        resize,
-      );
-
-    resizeObserver.observe(
-      container,
-    );
-
+    let frame = 0;
+    let disposed = false;
     let visible = true;
 
-    const handleVisibility =
-      () => {
-        visible =
-          !document.hidden;
-      };
+    const onScroll = () => {
+      const maxScroll =
+        document.documentElement.scrollHeight -
+        window.innerHeight;
+
+      scrollTarget =
+        maxScroll > 0
+          ? clamp(window.scrollY / maxScroll, 0, 1)
+          : 0;
+    };
+
+    const onPointerMove = (event) => {
+      if (isMobile) return;
+
+      pointerTargetX =
+        (event.clientX / window.innerWidth - 0.5) * 2;
+
+      pointerTargetY =
+        (event.clientY / window.innerHeight - 0.5) * 2;
+    };
+
+    const onVisibilityChange = () => {
+      visible = !document.hidden;
+    };
+
+    const onResize = () => {
+      const width = mount.clientWidth || window.innerWidth;
+      const height =
+        mount.clientHeight || window.innerHeight;
+
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+
+      renderer.setSize(width, height, false);
+    };
+
+    const onContextLost = (event) => {
+      event.preventDefault();
+    };
+
+    const onContextRestored = () => {
+      onResize();
+    };
+
+    window.addEventListener("scroll", onScroll, {
+      passive: true,
+    });
+
+    window.addEventListener("pointermove", onPointerMove, {
+      passive: true,
+    });
 
     document.addEventListener(
       "visibilitychange",
-      handleVisibility,
+      onVisibilityChange,
     );
 
-    const handleContextLost =
-      (event) => {
-        event.preventDefault();
-      };
-
-    const handleContextRestored =
-      () => {
-        resize();
-      };
+    window.addEventListener("resize", onResize);
 
     renderer.domElement.addEventListener(
       "webglcontextlost",
-      handleContextLost,
+      onContextLost,
       false,
     );
 
     renderer.domElement.addEventListener(
       "webglcontextrestored",
-      handleContextRestored,
+      onContextRestored,
       false,
     );
 
-    const clock =
-      new THREE.Clock();
+    onResize();
+    onScroll();
+
+    /*
+     * ANIMATION
+     */
+
+    const clock = new THREE.Clock();
 
     const animate = () => {
-      if (destroyed) {
-        return;
-      }
+      if (disposed) return;
 
-      animationFrame =
-        requestAnimationFrame(
-          animate,
-        );
+      frame = requestAnimationFrame(animate);
 
-      if (!visible) {
-        return;
-      }
+      if (!visible) return;
 
-      const elapsed =
-        clock.getElapsedTime();
+      const elapsed = clock.getElapsedTime();
 
-      const motion =
-        reduced ? 0 : 1;
+      const motionStrength = reducedMotion ? 0.12 : 1;
 
-      scrollCurrent +=
-        (scrollTarget -
-          scrollCurrent) *
-        0.055;
+      scrollCurrent = THREE.MathUtils.damp(
+        scrollCurrent,
+        scrollTarget,
+        3.2,
+        1 / 60,
+      );
 
-      const maxScroll =
-        Math.max(
-          1,
-          document.documentElement
-            .scrollHeight -
-            window.innerHeight,
-        );
+      pointerCurrentX = THREE.MathUtils.damp(
+        pointerCurrentX,
+        pointerTargetX,
+        4,
+        1 / 60,
+      );
 
-      const progress =
-        Math.min(
-          1,
-          Math.max(
-            0,
-            scrollCurrent /
-              maxScroll,
-          ),
-        );
-
-      pointer.x +=
-        (pointerTarget.x -
-          pointer.x) *
-        0.045;
-
-      pointer.y +=
-        (pointerTarget.y -
-          pointer.y) *
-        0.045;
+      pointerCurrentY = THREE.MathUtils.damp(
+        pointerCurrentY,
+        pointerTargetY,
+        4,
+        1 / 60,
+      );
 
       /*
-       * CAMERA JOURNEY
-       *
-       * The scene is not simply a background.
-       * As the page descends, the camera physically
-       * moves deeper into the environment.
+       * The scene doesn't simply rotate.
+       * The camera actually travels through the landscape.
        */
 
-      camera.position.z =
-        8.5 -
-        progress * 23;
+      const travel = scrollCurrent;
 
-      camera.position.y =
-        1.65 +
-        progress * 0.8 +
-        pointer.y * -0.28;
+      const cameraZ = lerp(10, -18, travel);
 
-      camera.position.x =
-        pointer.x * 0.72;
+      const cameraY =
+        lerp(
+          4.2,
+          5.8,
+          smoothstep(0, 1, travel),
+        ) +
+        Math.sin(elapsed * 0.16) *
+          0.08 *
+          motionStrength;
 
-      camera.rotation.y =
-        pointer.x * -0.018;
+      const cameraX =
+        pointerCurrentX * 1.1 +
+        Math.sin(travel * Math.PI * 1.6) * 1.4;
 
-      camera.rotation.x =
-        pointer.y * 0.012;
+      camera.position.x = THREE.MathUtils.damp(
+        camera.position.x,
+        cameraX,
+        3.4,
+        1 / 60,
+      );
+
+      camera.position.y = THREE.MathUtils.damp(
+        camera.position.y,
+        cameraY,
+        3.4,
+        1 / 60,
+      );
+
+      camera.position.z = THREE.MathUtils.damp(
+        camera.position.z,
+        cameraZ,
+        3.4,
+        1 / 60,
+      );
 
       /*
-       * AURORA
+       * Camera pitch changes as the visitor descends.
        */
 
-      aurora.position.x =
-        pointer.x * -0.8;
+      const pitch =
+        lerp(-0.035, 0.085, travel) +
+        pointerCurrentY * 0.018;
 
-      aurora.position.y =
-        Math.sin(
-          elapsed * 0.12,
-        ) *
-        0.18 *
-        motion;
+      const yaw =
+        pointerCurrentX * 0.018 +
+        Math.sin(elapsed * 0.11) *
+          0.003 *
+          motionStrength;
 
-      aurora.rotation.z =
-        Math.sin(
-          elapsed * 0.08,
-        ) *
-        0.018 *
-        motion;
+      camera.rotation.x = pitch;
+      camera.rotation.y = yaw;
 
       /*
-       * MOON
+       * Layered parallax.
+       */
+
+      farMountains.position.x =
+        pointerCurrentX * 0.35 +
+        Math.sin(elapsed * 0.04) * 0.08;
+
+      farMountains.position.y =
+        Math.sin(elapsed * 0.045) * 0.025;
+
+      middleMountains.position.x =
+        pointerCurrentX * 0.65;
+
+      middleMountains.position.y =
+        Math.sin(elapsed * 0.05) * 0.035;
+
+      nearMountains.position.x =
+        pointerCurrentX * 1.05;
+
+      /*
+       * Aurora moves independently from the mountains.
+       */
+
+      auroraGroup.position.x =
+        Math.sin(elapsed * 0.075) * 1.7 +
+        pointerCurrentX * 0.8;
+
+      auroraGroup.position.y =
+        Math.sin(elapsed * 0.11) * 0.45;
+
+      auroraGroup.rotation.z =
+        Math.sin(elapsed * 0.06) *
+        0.012;
+
+      auroraOne.material.opacity =
+        0.17 +
+        Math.sin(elapsed * 0.21) * 0.025;
+
+      auroraTwo.material.opacity =
+        0.105 +
+        Math.sin(elapsed * 0.16 + 1.5) * 0.02;
+
+      auroraThree.material.opacity =
+        0.085 +
+        Math.sin(elapsed * 0.25 + 2.2) * 0.02;
+
+      /*
+       * Moon slowly slides relative to the camera.
        */
 
       moon.position.x =
-        4.8 +
-        pointer.x * 0.7;
+        13 +
+        pointerCurrentX * 0.8;
 
       moon.position.y =
-        8.3 +
-        pointer.y * -0.35;
+        13 +
+        Math.sin(elapsed * 0.04) * 0.08;
 
       /*
-       * MOUNTAIN PARALLAX
+       * Foreground ice reacts subtly to movement.
        */
 
-      [
-        farMountains,
-        midMountains,
-        nearMountains,
-      ].forEach(
-        (layer, index) => {
-          layer.position.x =
-            pointer.x *
-            (0.15 +
-              index * 0.14);
+      icebergs.position.x =
+        pointerCurrentX * 0.55;
 
-          layer.position.y =
-            Math.sin(
-              elapsed *
-                (0.08 +
-                  index * 0.02),
-            ) *
-            0.035 *
-            motion;
-        },
-      );
+      icebergs.rotation.y =
+        Math.sin(elapsed * 0.035) *
+        0.012;
 
       /*
-       * MIST / CLOUD TRANSITION
+       * Water breathes.
        */
 
-      mist.children.forEach(
-        (sprite, index) => {
-          sprite.position.x =
-            sprite.userData.baseX +
-            Math.sin(
-              elapsed * 0.055 +
-                index,
-            ) *
-              1.4 *
-              motion +
-            pointer.x *
-              (index % 2
-                ? -1.2
-                : 1.2);
-
-          sprite.position.y =
-            sprite.userData.baseY +
-            Math.sin(
-              elapsed * 0.08 +
-                index,
-            ) *
-              0.15 *
-              motion;
-        },
-      );
-
-      /*
-       * HORIZON
-       */
-
-      horizonGlow.material.opacity =
-        0.18 +
-        Math.sin(
-          elapsed * 0.12,
-        ) *
-          0.025 *
-          motion;
-
-      /*
-       * EXISTING SKY ASSET
-       */
-
-      if (skyPlane) {
-        skyPlane.position.x =
-          pointer.x * -1.6;
-
-        skyPlane.position.y =
-          10 +
-          pointer.y * -0.5;
-      }
-
-      /*
-       * EXISTING MOUNTAIN ASSET
-       */
-
-      if (mountainAsset) {
-        mountainAsset.position.x =
-          -1.5 +
-          pointer.x * 0.3;
-
-        mountainAsset.rotation.y =
-          Math.sin(
-            elapsed * 0.045,
-          ) *
-          0.008 *
-          motion;
-      }
-
-      /*
-       * ICE
-       */
-
-      if (foregroundIce) {
-        foregroundIce.rotation.y =
-          pointer.x * 0.01;
-      }
-
-      if (iceShelf) {
-        iceShelf.position.x =
-          Math.sin(
-            elapsed * 0.04,
-          ) *
-          0.08 *
-          motion;
-      }
-
-      /*
-       * WATER
-       */
+      water.rotation.z =
+        Math.sin(elapsed * 0.08) *
+        0.0015;
 
       water.position.x =
-        pointer.x * -0.12;
-
-      const waterScale =
-        1 +
-        Math.sin(
-          elapsed * 0.2,
-        ) *
-          0.002 *
-          motion;
-
-      water.scale.set(
-        waterScale,
-        1,
-        waterScale,
-      );
+        Math.sin(elapsed * 0.055) *
+        0.035;
 
       /*
-       * STARS
+       * Snow drifts across the camera path.
        */
 
-      stars.material.opacity =
-        0.56 +
-        Math.sin(
-          elapsed * 0.35,
-        ) *
-          0.08 *
-          motion;
+      snow.rotation.y =
+        elapsed * 0.006 * motionStrength;
+
+      snow.position.x =
+        Math.sin(elapsed * 0.09) *
+        0.65;
+
+      snow.position.y =
+        Math.sin(elapsed * 0.12) *
+        0.12;
 
       /*
-       * SNOW
+       * Environmental color shifts as the visitor travels.
        */
 
-      const snowPositions =
-        snow.geometry.attributes
-          .position.array;
+      const horizonMix =
+        smoothstep(0.08, 0.82, travel);
 
-      const velocities =
-        snow.userData
-          .velocities;
-
-      for (
-        let i = 0;
-        i < velocities.length;
-        i += 1
-      ) {
-        const index =
-          i * 3;
-
-        snowPositions[
-          index + 1
-        ] -=
-          velocities[i] *
-          motion;
-
-        snowPositions[index] +=
-          Math.sin(
-            elapsed * 0.22 +
-              i,
-          ) *
-          0.0007 *
-          motion;
-
-        if (
-          snowPositions[
-            index + 1
-          ] < -2
-        ) {
-          snowPositions[
-            index + 1
-          ] =
-            18 +
-            Math.random() * 8;
-
-          snowPositions[index] =
-            (Math.random() -
-              0.5) *
-            42;
-        }
-      }
-
-      snow.geometry.attributes.position.needsUpdate =
-        true;
-
-      renderer.render(
-        scene,
-        camera,
+      scene.background.copy(
+        originalBackground,
       );
+
+      scene.background.lerp(
+        worldColor,
+        horizonMix * 0.35,
+      );
+
+      horizonGlow.material.opacity =
+        0.08 +
+        horizonMix * 0.085 +
+        Math.sin(elapsed * 0.17) * 0.008;
+
+      fogCurtain.material.opacity =
+        0.018 +
+        horizonMix * 0.018;
+
+      /*
+       * Slight exposure evolution.
+       */
+
+      renderer.toneMappingExposure =
+        1.04 +
+        horizonMix * 0.09;
+
+      renderer.render(scene, camera);
     };
-
-    resize();
 
     animate();
 
     return () => {
-      destroyed = true;
+      disposed = true;
 
-      cancelAnimationFrame(
-        animationFrame,
-      );
+      cancelAnimationFrame(frame);
 
+      window.removeEventListener("scroll", onScroll);
       window.removeEventListener(
         "pointermove",
-        handlePointerMove,
+        onPointerMove,
       );
-
-      window.removeEventListener(
-        "scroll",
-        handleScroll,
-      );
-
-      window.removeEventListener(
-        "resize",
-        resize,
-      );
-
       document.removeEventListener(
         "visibilitychange",
-        handleVisibility,
+        onVisibilityChange,
       );
-
-      resizeObserver?.disconnect();
+      window.removeEventListener("resize", onResize);
 
       renderer.domElement.removeEventListener(
         "webglcontextlost",
-        handleContextLost,
+        onContextLost,
       );
 
       renderer.domElement.removeEventListener(
         "webglcontextrestored",
-        handleContextRestored,
+        onContextRestored,
       );
 
-      disposeObject(scene);
+      scene.traverse((object) => {
+        if (object.geometry) {
+          object.geometry.dispose();
+        }
 
-      scene.background?.dispose?.();
+        if (object.material) {
+          const materials = Array.isArray(object.material)
+            ? object.material
+            : [object.material];
+
+          materials.forEach((material) => {
+            if (material.map) material.map.dispose();
+            if (material.normalMap) {
+              material.normalMap.dispose();
+            }
+            if (material.roughnessMap) {
+              material.roughnessMap.dispose();
+            }
+            if (material.metalnessMap) {
+              material.metalnessMap.dispose();
+            }
+
+            material.dispose();
+          });
+        }
+      });
 
       renderer.dispose();
 
-      renderer.domElement.remove();
+      if (renderer.domElement.parentNode === mount) {
+        mount.removeChild(renderer.domElement);
+      }
     };
   }, []);
 
   return (
     <div
-      ref={containerRef}
+      ref={mountRef}
       aria-hidden="true"
+      style={{
+        position: "absolute",
+        inset: 0,
+        width: "100%",
+        height: "100%",
+        overflow: "hidden",
+        pointerEvents: "none",
+      }}
     />
   );
 }
