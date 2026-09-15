@@ -1,963 +1,889 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 const ASSETS = {
   sky: "/assets/hdr/daysky-8k-hdr-4k.jpg",
-  mountain: "/assets/models/mountains/chalaadi.fbx",
 
-  iceColor: "/assets/textures/ice/ice-color.png",
-  iceNormal: "/assets/textures/ice/ice-normal.jpg",
-  iceRoughness: "/assets/textures/ice/ice-roughness.png",
+  // Reserved production slot for Aura_Borealis_.blend.
+  // The optimized GLB will eventually be exported here.
+  heroMountain:
+    "/assets/models/mountains/single-mountain-snow.glb",
 
-  iceAccent: "/assets/textures/ice/ice-004-color.png",
+  secondaryMountain:
+    "/assets/models/mountains/chalaadi.fbx",
 
-  snowColor: "/assets/textures/snow/snow-color.png",
-  snowRoughness: "/assets/textures/snow/snow-roughness.png",
+  ice: {
+    color: "/assets/textures/ice/ice-color.png",
+    normal: "/assets/textures/ice/ice-normal.jpg",
+    roughness: "/assets/textures/ice/ice-roughness.png",
+    displacement:
+      "/assets/textures/ice/ice-displacement.png",
+  },
 
-  rockColor: "/assets/textures/rock/rock-color.png",
-  rockNormal: "/assets/textures/rock/rock-normal.png",
-  rockRoughness: "/assets/textures/rock/rock-roughness.png",
+  snow: {
+    color: "/assets/textures/snow/snow-color.png",
+    normal: "/assets/textures/snow/snow-normal.png",
+    roughness: "/assets/textures/snow/snow-roughness.png",
+  },
+
+  rock: {
+    color: "/assets/textures/rock/rock-color.png",
+    normal: "/assets/textures/rock/rock-normal.png",
+    roughness: "/assets/textures/rock/rock-roughness.png",
+  },
 };
 
-const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+const MOBILE_BREAKPOINT = 760;
 
-function disposeMaterial(material) {
-  if (!material) return;
-
-  for (const key of Object.keys(material)) {
-    const value = material[key];
-
-    if (value && value.isTexture) {
-      value.dispose();
-    }
-  }
-
-  material.dispose();
+function getIsMobile() {
+  return (
+    typeof window !== "undefined" &&
+    window.innerWidth <= MOBILE_BREAKPOINT
+  );
 }
 
-function disposeObject(object) {
-  object.traverse((child) => {
-    if (child.geometry) {
-      child.geometry.dispose();
-    }
-
-    if (child.material) {
-      if (Array.isArray(child.material)) {
-        child.material.forEach(disposeMaterial);
-      } else {
-        disposeMaterial(child.material);
-      }
-    }
-  });
+function getReducedMotion() {
+  return (
+    typeof window !== "undefined" &&
+    window.matchMedia?.(
+      "(prefers-reduced-motion: reduce)"
+    ).matches
+  );
 }
 
-function loadTexture(
-  loader,
-  url,
-  {
-    colorSpace = THREE.NoColorSpace,
-    repeat = true,
-    anisotropy = 4,
-  } = {}
-) {
-  return new Promise((resolve, reject) => {
-    loader.load(
-      url,
-      (texture) => {
-        texture.colorSpace = colorSpace;
-        texture.anisotropy = anisotropy;
-
-        if (repeat) {
-          texture.wrapS = THREE.RepeatWrapping;
-          texture.wrapT = THREE.RepeatWrapping;
-        }
-
-        resolve(texture);
-      },
-      undefined,
-      reject
-    );
-  });
-}
-
-function canvasTexture(width, height, draw) {
-  const canvas = document.createElement("canvas");
-
-  canvas.width = width;
-  canvas.height = height;
-
-  const context = canvas.getContext("2d");
-
-  draw(context, width, height);
-
-  const texture = new THREE.CanvasTexture(canvas);
+function configureColorTexture(texture) {
+  if (!texture) return;
 
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.anisotropy = 4;
+}
+
+function configureDataTexture(texture) {
+  if (!texture) return;
+
+  texture.colorSpace = THREE.NoColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.anisotropy = 4;
+}
+
+function createNoiseTexture(size = 96) {
+  const data = new Uint8Array(size * size);
+
+  for (let i = 0; i < data.length; i += 1) {
+    const x = i % size;
+    const y = Math.floor(i / size);
+
+    const value =
+      128 +
+      Math.sin(x * 0.13) * 28 +
+      Math.sin(y * 0.071) * 24 +
+      Math.sin((x + y) * 0.031) * 18 +
+      (Math.random() - 0.5) * 28;
+
+    data[i] = Math.max(
+      0,
+      Math.min(255, value)
+    );
+  }
+
+  const texture = new THREE.DataTexture(
+    data,
+    size,
+    size,
+    THREE.RedFormat
+  );
+
+  texture.colorSpace =
+    THREE.NoColorSpace;
+  texture.wrapS =
+    THREE.RepeatWrapping;
+  texture.wrapT =
+    THREE.RepeatWrapping;
   texture.needsUpdate = true;
 
   return texture;
 }
 
-function createStarTexture() {
-  return canvasTexture(256, 256, (ctx, width, height) => {
-    const gradient = ctx.createRadialGradient(
-      width / 2,
-      height / 2,
-      0,
-      width / 2,
-      height / 2,
-      width / 2
-    );
-
-    gradient.addColorStop(0, "rgba(255,255,255,1)");
-    gradient.addColorStop(0.08, "rgba(235,250,255,.95)");
-    gradient.addColorStop(0.24, "rgba(180,225,240,.35)");
-    gradient.addColorStop(1, "rgba(255,255,255,0)");
-
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, width, height);
-  });
-}
-
-function createAuroraTexture() {
-  return canvasTexture(1600, 700, (ctx, width, height) => {
-    ctx.clearRect(0, 0, width, height);
-
-    const glow = ctx.createLinearGradient(0, 0, width, 0);
-
-    glow.addColorStop(0, "rgba(50,220,205,0)");
-    glow.addColorStop(0.2, "rgba(60,220,205,.08)");
-    glow.addColorStop(0.38, "rgba(110,240,220,.22)");
-    glow.addColorStop(0.52, "rgba(80,205,240,.18)");
-    glow.addColorStop(0.7, "rgba(100,225,210,.10)");
-    glow.addColorStop(1, "rgba(50,220,205,0)");
-
-    ctx.fillStyle = glow;
-    ctx.fillRect(0, 0, width, height);
-
-    for (let layer = 0; layer < 10; layer += 1) {
-      const baseY = height * (0.18 + layer * 0.065);
-
-      ctx.beginPath();
-
-      for (let x = -20; x <= width + 20; x += 12) {
-        const wave =
-          Math.sin(x * 0.0052 + layer * 0.82) * 28 +
-          Math.sin(x * 0.011 + layer * 0.37) * 13 +
-          Math.sin(x * 0.0021 + layer) * 22;
-
-        const y = baseY + wave;
-
-        if (x === -20) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
-        }
-      }
-
-      for (let x = width + 20; x >= -20; x -= 12) {
-        const wave =
-          Math.sin(x * 0.0052 + layer * 0.82) * 28 +
-          Math.sin(x * 0.011 + layer * 0.37) * 13 +
-          Math.sin(x * 0.0021 + layer) * 22;
-
-        ctx.lineTo(x, baseY + wave + 95);
-      }
-
-      ctx.closePath();
-
-      ctx.fillStyle = `rgba(
-        ${72 + layer * 2},
-        ${215 + layer * 2},
-        ${205 + layer * 3},
-        ${0.018 + layer * 0.004}
-      )`;
-
-      ctx.fill();
-    }
-  });
-}
-
-function createAtmosphereTexture() {
-  return canvasTexture(1600, 700, (ctx, width, height) => {
-    const gradient = ctx.createLinearGradient(0, 0, 0, height);
-
-    gradient.addColorStop(0, "rgba(190,235,245,0)");
-    gradient.addColorStop(0.32, "rgba(170,225,238,.025)");
-    gradient.addColorStop(0.62, "rgba(150,210,228,.10)");
-    gradient.addColorStop(0.82, "rgba(170,225,238,.18)");
-    gradient.addColorStop(1, "rgba(210,240,245,.32)");
-
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, width, height);
-
-    const glow = ctx.createRadialGradient(
-      width / 2,
-      height * 0.82,
-      0,
-      width / 2,
-      height * 0.82,
-      width * 0.62
-    );
-
-    glow.addColorStop(0, "rgba(200,235,245,.20)");
-    glow.addColorStop(0.35, "rgba(150,210,228,.08)");
-    glow.addColorStop(1, "rgba(100,160,190,0)");
-
-    ctx.fillStyle = glow;
-    ctx.fillRect(0, 0, width, height);
-  });
-}
-
-function createStars(count, mobile) {
-  const geometry = new THREE.BufferGeometry();
-
-  const positions = new Float32Array(count * 3);
-  const sizes = new Float32Array(count);
-
-  for (let i = 0; i < count; i += 1) {
-    const radius = 62 + Math.random() * 55;
-
-    const theta = Math.random() * Math.PI * 2;
-
-    const phi =
-      Math.random() * Math.PI * (mobile ? 0.30 : 0.38);
-
-    const x = Math.cos(theta) * Math.sin(phi) * radius;
-
-    const y =
-      Math.cos(phi) * radius +
-      4 +
-      Math.random() * 6;
-
-    const z =
-      Math.sin(theta) * Math.sin(phi) * radius -
-      24;
-
-    positions[i * 3] = x;
-    positions[i * 3 + 1] = y;
-    positions[i * 3 + 2] = z;
-
-    sizes[i] =
-      0.35 +
-      Math.random() *
-        (mobile ? 0.42 : 0.85);
-  }
-
-  geometry.setAttribute(
-    "position",
-    new THREE.BufferAttribute(positions, 3)
-  );
-
-  geometry.setAttribute(
-    "aSize",
-    new THREE.BufferAttribute(sizes, 1)
-  );
-
-  const material = new THREE.PointsMaterial({
-    color: new THREE.Color("#dff4fa"),
-    size: mobile ? 0.11 : 0.145,
-    transparent: true,
-    opacity: 0.74,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-    map: createStarTexture(),
-  });
-
-  return new THREE.Points(geometry, material);
-}
-
-function createAurora() {
-  const group = new THREE.Group();
-
-  const texture = createAuroraTexture();
-
-  const layers = [
-    {
-      width: 94,
-      height: 30,
-      y: 22,
-      z: -70,
-      opacity: 0.32,
-      rotation: -0.035,
-      scaleX: 1,
-    },
-    {
-      width: 82,
-      height: 26,
-      y: 26,
-      z: -64,
-      opacity: 0.23,
-      rotation: 0.028,
-      scaleX: 1.12,
-    },
-    {
-      width: 70,
-      height: 22,
-      y: 30,
-      z: -59,
-      opacity: 0.16,
-      rotation: -0.045,
-      scaleX: 1.24,
-    },
-  ];
-
-  layers.forEach((layer, index) => {
-    const geometry = new THREE.PlaneGeometry(
-      layer.width,
-      layer.height
-    );
-
-    const material = new THREE.MeshBasicMaterial({
-      map: texture,
-      transparent: true,
-      opacity: layer.opacity,
-      depthWrite: false,
-      depthTest: false,
-      blending: THREE.AdditiveBlending,
-      side: THREE.DoubleSide,
-    });
-
-    const mesh = new THREE.Mesh(
-      geometry,
-      material
-    );
-
-    mesh.position.set(
-      0,
-      layer.y,
-      layer.z
-    );
-
-    mesh.rotation.z = layer.rotation;
-
-    mesh.scale.x = layer.scaleX;
-
-    mesh.userData.auroraIndex = index;
-
-    group.add(mesh);
-  });
-
-  return group;
-}
-
-function createDistantRidge() {
-  const group = new THREE.Group();
-
-  const material = new THREE.MeshBasicMaterial({
-    color: new THREE.Color("#6c8996"),
-    transparent: true,
-    opacity: 0.34,
-    depthWrite: false,
-  });
-
-  const profiles = [
-    {
-      x: -34,
-      z: -47,
-      scale: 1.4,
-      height: 13,
-    },
-    {
-      x: -19,
-      z: -50,
-      scale: 1.15,
-      height: 10,
-    },
-    {
-      x: -4,
-      z: -48,
-      scale: 1.3,
-      height: 14,
-    },
-    {
-      x: 12,
-      z: -51,
-      scale: 1.1,
-      height: 11,
-    },
-    {
-      x: 27,
-      z: -48,
-      scale: 1.4,
-      height: 15,
-    },
-    {
-      x: 43,
-      z: -46,
-      scale: 1.1,
-      height: 12,
-    },
-  ];
-
-  profiles.forEach((peak, index) => {
-    const geometry = new THREE.ConeGeometry(
-      7.5 * peak.scale,
-      peak.height,
-      5
-    );
-
-    const mesh = new THREE.Mesh(
-      geometry,
-      material.clone()
-    );
-
-    mesh.position.set(
-      peak.x,
-      -0.4 + index * 0.03,
-      peak.z
-    );
-
-    mesh.rotation.y =
-      Math.random() * Math.PI;
-
-    mesh.scale.z = 0.65;
-
-    group.add(mesh);
-  });
-
-  return group;
-}
-
-function createSecondaryRidge() {
-  const group = new THREE.Group();
-
-  const material = new THREE.MeshBasicMaterial({
-    color: new THREE.Color("#94aeb8"),
-    transparent: true,
-    opacity: 0.18,
-    depthWrite: false,
-  });
-
-  const peaks = [
-    [-38, -38, 9],
-    [-26, -41, 12],
-    [-13, -39, 7],
-    [0, -42, 11],
-    [15, -40, 8],
-    [28, -42, 12],
-    [40, -38, 8],
-  ];
-
-  peaks.forEach(([x, z, height]) => {
-    const geometry = new THREE.ConeGeometry(
-      6.5,
-      height,
-      5
-    );
-
-    const mesh = new THREE.Mesh(
-      geometry,
-      material.clone()
-    );
-
-    mesh.position.set(
-      x,
-      -1.2,
-      z
-    );
-
-    mesh.scale.z = 0.6;
-
-    group.add(mesh);
-  });
-
-  return group;
-}
-
-function normalizeMountain(model) {
-  const originalBox = new THREE.Box3()
-    .setFromObject(model);
-
-  const originalSize =
-    originalBox.getSize(
-      new THREE.Vector3()
-    );
-
-  const targetHeight = 25;
-
-  const scale =
-    targetHeight /
-    Math.max(originalSize.y, 0.001);
-
-  model.scale.setScalar(scale);
-
-  const box = new THREE.Box3()
-    .setFromObject(model);
-
-  const center =
-    box.getCenter(
-      new THREE.Vector3()
-    );
-
-  model.position.x -= center.x;
-  model.position.z -= center.z;
-  model.position.y -= box.min.y;
-
-  return model;
-}
-
-function preserveOrStyleMountain(model, textures, mobile) {
-  model.traverse((child) => {
-    if (!child.isMesh) return;
-
-    child.castShadow = false;
-    child.receiveShadow = true;
-
-    /*
-     * Keep the original FBX material whenever possible.
-     *
-     * This is intentional:
-     * the previous scene replaced the mountain material
-     * wholesale with an ice texture, which can make a good
-     * model look like a generic textured blob.
-     */
-
-    if (!child.material) {
-      child.material =
-        new THREE.MeshStandardMaterial({
-          map: textures.iceColor,
-          normalMap: mobile
-            ? null
-            : textures.iceNormal,
-          roughnessMap:
-            textures.iceRoughness,
-          roughness: 0.82,
-          metalness: 0,
-          color: new THREE.Color(
-            "#dcebf0"
-          ),
-          envMapIntensity: 0.55,
-        });
-    } else {
-      const materials = Array.isArray(
-        child.material
-      )
-        ? child.material
-        : [child.material];
-
-      materials.forEach((material) => {
-        if (!material) return;
-
-        material.roughness =
-          material.roughness ??
-          0.82;
-
-        material.metalness =
-          material.metalness ??
-          0;
-
-        if (
-          material.color &&
-          material.color.r === 1 &&
-          material.color.g === 1 &&
-          material.color.b === 1
-        ) {
-          material.color.set(
-            "#dcebf0"
-          );
-        }
-
-        if (
-          material.isMeshStandardMaterial ||
-          material.isMeshPhysicalMaterial
-        ) {
-          material.envMapIntensity =
-            0.5;
-        }
-      });
-    }
-  });
-
-  return model;
-}
-
-function createIceShelf(
-  textures,
+function createStars(
+  count,
+  radius,
+  spread,
   mobile
 ) {
-  const geometry =
-    new THREE.PlaneGeometry(
-      105,
-      92,
-      mobile ? 28 : 56,
-      mobile ? 28 : 56
-    );
+  const actualCount = mobile
+    ? Math.floor(count * 0.34)
+    : count;
 
-  const position =
-    geometry.attributes.position;
+  const positions =
+    new Float32Array(
+      actualCount * 3
+    );
 
   for (
     let i = 0;
-    i < position.count;
+    i < actualCount;
     i += 1
   ) {
-    const x = position.getX(i);
-    const z = position.getY(i);
+    const angle =
+      Math.random() *
+      Math.PI *
+      2;
 
-    const edge =
-      Math.max(
-        0,
-        Math.abs(x) - 34
-      ) / 18;
+    const distance =
+      radius +
+      Math.random() * spread;
 
-    const roughness =
-      Math.sin(x * 0.22) * 0.18 +
-      Math.sin(z * 0.16) * 0.12;
+    positions[i * 3] =
+      Math.cos(angle) *
+      distance;
 
-    const y =
-      roughness -
-      edge * edge * 0.9;
+    positions[i * 3 + 1] =
+      32 +
+      Math.random() * 125;
 
-    position.setZ(i, y);
+    positions[i * 3 + 2] =
+      Math.sin(angle) *
+      distance;
   }
 
-  geometry.computeVertexNormals();
+  const geometry =
+    new THREE.BufferGeometry();
+
+  geometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(
+      positions,
+      3
+    )
+  );
 
   const material =
-    new THREE.MeshStandardMaterial({
-      map: textures.iceColor,
-      normalMap: mobile
-        ? null
-        : textures.iceNormal,
-      roughnessMap:
-        textures.iceRoughness,
-      color: new THREE.Color(
-        "#d9edf1"
-      ),
-      roughness: 0.76,
-      metalness: 0.015,
-      envMapIntensity: 0.42,
+    new THREE.PointsMaterial({
+      color: 0xdceef3,
+      size: mobile ? 0.18 : 0.24,
+      sizeAttenuation: true,
+      transparent: true,
+      opacity: mobile ? 0.28 : 0.42,
+      depthWrite: false,
     });
 
-  const mesh =
-    new THREE.Mesh(
-      geometry,
-      material
-    );
-
-  mesh.rotation.x =
-    -Math.PI / 2;
-
-  mesh.position.set(
-    0,
-    -4.5,
-    -18
+  return new THREE.Points(
+    geometry,
+    material
   );
-
-  return mesh;
-}
-
-function createForegroundIce(
-  textures,
-  mobile
-) {
-  const group =
-    new THREE.Group();
-
-  const formations = [
-    {
-      x: -18,
-      y: -3.4,
-      z: 5,
-      sx: 10,
-      sy: 2.7,
-      sz: 7,
-      rot: -0.12,
-    },
-    {
-      x: -8,
-      y: -3.8,
-      z: 12,
-      sx: 8,
-      sy: 3.2,
-      sz: 6,
-      rot: 0.08,
-    },
-    {
-      x: 11,
-      y: -3.55,
-      z: 8,
-      sx: 12,
-      sy: 3.0,
-      sz: 7,
-      rot: -0.04,
-    },
-    {
-      x: 22,
-      y: -3.3,
-      z: 2,
-      sx: 9,
-      sy: 2.6,
-      sz: 6,
-      rot: 0.11,
-    },
-    {
-      x: 3,
-      y: -4,
-      z: 17,
-      sx: 17,
-      sy: 3.4,
-      sz: 9,
-      rot: 0,
-    },
-  ];
-
-  formations.forEach(
-    (formation, index) => {
-      const geometry =
-        new THREE.IcosahedronGeometry(
-          1,
-          mobile ? 1 : 2
-        );
-
-      const material =
-        new THREE.MeshStandardMaterial(
-          {
-            map:
-              index % 2 === 0
-                ? textures.iceAccent
-                : textures.iceColor,
-            normalMap:
-              mobile
-                ? null
-                : textures.iceNormal,
-            roughnessMap:
-              textures.iceRoughness,
-            color: new THREE.Color(
-              index % 2 === 0
-                ? "#c9e4eb"
-                : "#dceef2"
-            ),
-            roughness: 0.7,
-            metalness: 0.015,
-            envMapIntensity: 0.5,
-          }
-        );
-
-      const mesh =
-        new THREE.Mesh(
-          geometry,
-          material
-        );
-
-      mesh.scale.set(
-        formation.sx,
-        formation.sy,
-        formation.sz
-      );
-
-      mesh.position.set(
-        formation.x,
-        formation.y,
-        formation.z
-      );
-
-      mesh.rotation.set(
-        0.05,
-        index * 0.55,
-        formation.rot
-      );
-
-      mesh.userData.baseY =
-        formation.y;
-
-      mesh.userData.index =
-        index;
-
-      group.add(mesh);
-    }
-  );
-
-  return group;
 }
 
 function createWater() {
   const geometry =
     new THREE.PlaneGeometry(
-      140,
-      120,
-      40,
-      40
+      1800,
+      1800,
+      28,
+      28
     );
 
-  const position =
-    geometry.attributes.position;
+  geometry.rotateX(
+    -Math.PI / 2
+  );
 
-  for (
-    let i = 0;
-    i < position.count;
-    i += 1
+  geometry.translate(
+    0,
+    -17,
+    -360
+  );
+
+  const material =
+    new THREE.MeshStandardMaterial({
+      color: 0x071218,
+      roughness: 0.27,
+      metalness: 0.2,
+      transparent: true,
+      opacity: 0.9,
+    });
+
+  return new THREE.Mesh(
+    geometry,
+    material
+  );
+}
+
+function createIceFloor(
+  textures,
+  mobile
+) {
+  const geometry =
+    new THREE.PlaneGeometry(
+      920,
+      1280,
+      mobile ? 60 : 115,
+      mobile ? 60 : 115
+    );
+
+  geometry.rotateX(
+    -Math.PI / 2
+  );
+
+  geometry.translate(
+    0,
+    -10.5,
+    -105
+  );
+
+  const material =
+    new THREE.MeshStandardMaterial({
+      map:
+        textures.color || null,
+      normalMap:
+        textures.normal || null,
+      roughnessMap:
+        textures.roughness || null,
+      displacementMap:
+        mobile
+          ? null
+          : textures.displacement ||
+            null,
+
+      color: 0xddebf0,
+      roughness: 0.7,
+      metalness: 0.025,
+
+      displacementScale: mobile
+        ? 0
+        : 1.25,
+
+      displacementBias: mobile
+        ? 0
+        : -0.18,
+    });
+
+  const mesh =
+    new THREE.Mesh(
+      geometry,
+      material
+    );
+
+  mesh.receiveShadow = true;
+
+  return mesh;
+}
+
+function createSnowField(
+  textures,
+  mobile
+) {
+  const geometry =
+    new THREE.PlaneGeometry(
+      640,
+      680,
+      mobile ? 32 : 64,
+      mobile ? 32 : 64
+    );
+
+  geometry.rotateX(
+    -Math.PI / 2
+  );
+
+  geometry.translate(
+    0,
+    -8.65,
+    -215
+  );
+
+  const material =
+    new THREE.MeshStandardMaterial({
+      map:
+        textures.color || null,
+      normalMap:
+        textures.normal || null,
+      roughnessMap:
+        textures.roughness || null,
+
+      color: 0xe5eff2,
+      roughness: 0.77,
+      metalness: 0.012,
+
+      transparent: true,
+      opacity: 0.83,
+    });
+
+  return new THREE.Mesh(
+    geometry,
+    material
+  );
+}
+
+function createRockShelf(
+  textures
+) {
+  const geometry =
+    new THREE.BoxGeometry(
+      320,
+      30,
+      190,
+      12,
+      4,
+      12
+    );
+
+  geometry.translate(
+    0,
+    -17,
+    -420
+  );
+
+  const material =
+    new THREE.MeshStandardMaterial({
+      map:
+        textures.color || null,
+      normalMap:
+        textures.normal || null,
+      roughnessMap:
+        textures.roughness || null,
+
+      color: 0x59656d,
+      roughness: 0.88,
+      metalness: 0.02,
+    });
+
+  return new THREE.Mesh(
+    geometry,
+    material
+  );
+}
+
+function createCloudVolume({
+  width,
+  height,
+  depth,
+  opacity,
+  color,
+  speed,
+  mobile,
+}) {
+  const geometry =
+    new THREE.SphereGeometry(
+      1,
+      mobile ? 14 : 22,
+      mobile ? 9 : 14
+    );
+
+  geometry.scale(
+    width,
+    height,
+    depth
+  );
+
+  const noise =
+    createNoiseTexture(
+      mobile ? 64 : 96
+    );
+
+  const material =
+    new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: {
+          value: 0,
+        },
+
+        uOpacity: {
+          value: opacity,
+        },
+
+        uColor: {
+          value:
+            new THREE.Color(color),
+        },
+
+        uNoise: {
+          value: noise,
+        },
+
+        uSpeed: {
+          value: speed,
+        },
+      },
+
+      vertexShader: `
+        varying vec3 vWorldPosition;
+        varying vec3 vNormal;
+
+        void main() {
+          vec4 worldPosition =
+            modelMatrix *
+            vec4(position, 1.0);
+
+          vWorldPosition =
+            worldPosition.xyz;
+
+          vNormal =
+            normalize(
+              mat3(modelMatrix) *
+              normal
+            );
+
+          gl_Position =
+            projectionMatrix *
+            viewMatrix *
+            worldPosition;
+        }
+      `,
+
+      fragmentShader: `
+        uniform float uTime;
+        uniform float uOpacity;
+        uniform vec3 uColor;
+        uniform sampler2D uNoise;
+        uniform float uSpeed;
+
+        varying vec3 vWorldPosition;
+        varying vec3 vNormal;
+
+        float hash(vec3 p) {
+          p =
+            fract(
+              p * 0.3183099 +
+              0.1
+            );
+
+          p *= 17.0;
+
+          return fract(
+            p.x *
+            p.y *
+            p.z *
+            (p.x + p.y + p.z)
+          );
+        }
+
+        float noise3(vec3 p) {
+          vec3 i = floor(p);
+          vec3 f = fract(p);
+
+          f =
+            f *
+            f *
+            (3.0 - 2.0 * f);
+
+          float n000 =
+            hash(i);
+
+          float n100 =
+            hash(
+              i +
+              vec3(
+                1.0,
+                0.0,
+                0.0
+              )
+            );
+
+          float n010 =
+            hash(
+              i +
+              vec3(
+                0.0,
+                1.0,
+                0.0
+              )
+            );
+
+          float n110 =
+            hash(
+              i +
+              vec3(
+                1.0,
+                1.0,
+                0.0
+              )
+            );
+
+          float n001 =
+            hash(
+              i +
+              vec3(
+                0.0,
+                0.0,
+                1.0
+              )
+            );
+
+          float n101 =
+            hash(
+              i +
+              vec3(
+                1.0,
+                0.0,
+                1.0
+              )
+            );
+
+          float n011 =
+            hash(
+              i +
+              vec3(
+                0.0,
+                1.0,
+                1.0
+              )
+            );
+
+          float n111 =
+            hash(
+              i +
+              vec3(
+                1.0,
+                1.0,
+                1.0
+              )
+            );
+
+          float x00 =
+            mix(
+              n000,
+              n100,
+              f.x
+            );
+
+          float x10 =
+            mix(
+              n010,
+              n110,
+              f.x
+            );
+
+          float x01 =
+            mix(
+              n001,
+              n101,
+              f.x
+            );
+
+          float x11 =
+            mix(
+              n011,
+              n111,
+              f.x
+            );
+
+          float y0 =
+            mix(
+              x00,
+              x10,
+              f.y
+            );
+
+          float y1 =
+            mix(
+              x01,
+              x11,
+              f.y
+            );
+
+          return mix(
+            y0,
+            y1,
+            f.z
+          );
+        }
+
+        void main() {
+          vec3 p =
+            vWorldPosition *
+            0.0105;
+
+          p.x +=
+            uTime *
+            uSpeed *
+            0.02;
+
+          p.z +=
+            sin(
+              uTime *
+              0.08
+            ) *
+            0.05;
+
+          float largeNoise =
+            noise3(p);
+
+          float detailNoise =
+            noise3(
+              p * 2.25
+            );
+
+          float densityNoise =
+            largeNoise * 0.7 +
+            detailNoise * 0.3;
+
+          float vertical =
+            smoothstep(
+              -0.85,
+              0.38,
+              vNormal.y
+            );
+
+          float edge =
+            pow(
+              max(
+                0.0,
+                1.0 -
+                abs(
+                  dot(
+                    normalize(
+                      vNormal
+                    ),
+                    vec3(
+                      0.0,
+                      1.0,
+                      0.0
+                    )
+                  )
+                )
+              ),
+              0.72
+            );
+
+          float density =
+            smoothstep(
+              0.41,
+              0.75,
+              densityNoise
+            );
+
+          float alpha =
+            density *
+            (0.32 + edge * 0.68) *
+            vertical *
+            uOpacity;
+
+          if (
+            alpha < 0.012
+          ) {
+            discard;
+          }
+
+          gl_FragColor =
+            vec4(
+              uColor,
+              alpha
+            );
+        }
+      `,
+
+      transparent: true,
+      depthWrite: false,
+      depthTest: true,
+      side: THREE.DoubleSide,
+    });
+
+  const mesh =
+    new THREE.Mesh(
+      geometry,
+      material
+    );
+
+  mesh.frustumCulled = false;
+
+  return mesh;
+}
+
+function configureImportedObject(
+  object,
+  environmentIntensity
+) {
+  object.traverse(
+    (child) => {
+      if (!child.isMesh) {
+        return;
+      }
+
+      child.castShadow = false;
+      child.receiveShadow = true;
+
+      const materials =
+        Array.isArray(
+          child.material
+        )
+          ? child.material
+          : [child.material];
+
+      materials.forEach(
+        (material) => {
+          if (!material) {
+            return;
+          }
+
+          if (material.map) {
+            material.map.colorSpace =
+              THREE.SRGBColorSpace;
+          }
+
+          if (
+            material.emissiveMap
+          ) {
+            material.emissiveMap.colorSpace =
+              THREE.SRGBColorSpace;
+          }
+
+          if (
+            material.normalMap
+          ) {
+            material.normalMap.colorSpace =
+              THREE.NoColorSpace;
+          }
+
+          if (
+            material.roughnessMap
+          ) {
+            material.roughnessMap.colorSpace =
+              THREE.NoColorSpace;
+          }
+
+          if (
+            material.metalnessMap
+          ) {
+            material.metalnessMap.colorSpace =
+              THREE.NoColorSpace;
+          }
+
+          if (material.aoMap) {
+            material.aoMap.colorSpace =
+              THREE.NoColorSpace;
+          }
+
+          if (
+            material.displacementMap
+          ) {
+            material.displacementMap.colorSpace =
+              THREE.NoColorSpace;
+          }
+
+          if (
+            material.envMapIntensity !==
+            undefined
+          ) {
+            material.envMapIntensity =
+              environmentIntensity;
+          }
+        }
+      );
+    }
+  );
+}
+
+function fitObjectToHeight(
+  object,
+  targetHeight
+) {
+  const box =
+    new THREE.Box3().setFromObject(
+      object
+    );
+
+  const size =
+    new THREE.Vector3();
+
+  box.getSize(size);
+
+  if (
+    !Number.isFinite(size.y) ||
+    size.y <= 0
   ) {
-    const x = position.getX(i);
-    const z = position.getY(i);
-
-    const wave =
-      Math.sin(x * 0.18) *
-        0.055 +
-      Math.sin(z * 0.13) *
-        0.04 +
-      Math.sin(
-        (x + z) * 0.09
-      ) *
-        0.035;
-
-    position.setZ(
-      i,
-      wave
-    );
+    return;
   }
 
-  geometry.computeVertexNormals();
+  const scale =
+    targetHeight / size.y;
 
-  const material =
-    new THREE.MeshStandardMaterial(
-      {
-        color:
-          new THREE.Color(
-            "#07151d"
-          ),
-        roughness: 0.28,
-        metalness: 0.58,
-        transparent: true,
-        opacity: 0.93,
-        envMapIntensity: 0.5,
-      }
-    );
-
-  const mesh =
-    new THREE.Mesh(
-      geometry,
-      material
-    );
-
-  mesh.rotation.x =
-    -Math.PI / 2;
-
-  mesh.position.set(
-    0,
-    -5.45,
-    18
+  object.scale.multiplyScalar(
+    scale
   );
-
-  return mesh;
 }
 
-function createAtmosphereLayer() {
-  const geometry =
-    new THREE.PlaneGeometry(
-      125,
-      62
-    );
+function disposeMaterial(
+  material,
+  disposedTextures
+) {
+  if (!material) {
+    return;
+  }
 
-  const texture =
-    createAtmosphereTexture();
+  const textureKeys = [
+    "map",
+    "normalMap",
+    "roughnessMap",
+    "metalnessMap",
+    "aoMap",
+    "displacementMap",
+    "emissiveMap",
+    "alphaMap",
+    "bumpMap",
+    "specularMap",
+    "envMap",
+  ];
 
-  const material =
-    new THREE.MeshBasicMaterial(
-      {
-        map: texture,
-        transparent: true,
-        opacity: 0.82,
-        depthWrite: false,
-        depthTest: false,
-        blending:
-          THREE.NormalBlending,
-        side:
-          THREE.DoubleSide,
+  textureKeys.forEach(
+    (key) => {
+      const texture =
+        material[key];
+
+      if (
+        texture &&
+        !disposedTextures.has(
+          texture.uuid
+        )
+      ) {
+        texture.dispose();
+
+        disposedTextures.add(
+          texture.uuid
+        );
       }
-    );
-
-  const mesh =
-    new THREE.Mesh(
-      geometry,
-      material
-    );
-
-  mesh.position.set(
-    0,
-    5,
-    -34
+    }
   );
 
-  return mesh;
+  material.dispose();
 }
 
-function createHorizonGlow() {
-  const texture =
-    canvasTexture(
-      1200,
-      500,
-      (ctx, width, height) => {
-        const gradient =
-          ctx.createRadialGradient(
-            width / 2,
-            height * 0.72,
-            0,
-            width / 2,
-            height * 0.72,
-            width * 0.62
-          );
+function disposeObject(
+  object,
+  disposedTextures
+) {
+  object.traverse(
+    (child) => {
+      if (child.geometry) {
+        child.geometry.dispose();
+      }
 
-        gradient.addColorStop(
-          0,
-          "rgba(180,230,240,.17)"
+      if (!child.material) {
+        return;
+      }
+
+      if (
+        Array.isArray(
+          child.material
+        )
+      ) {
+        child.material.forEach(
+          (material) =>
+            disposeMaterial(
+              material,
+              disposedTextures
+            )
         );
-
-        gradient.addColorStop(
-          0.35,
-          "rgba(110,190,215,.08)"
-        );
-
-        gradient.addColorStop(
-          1,
-          "rgba(60,120,160,0)"
-        );
-
-        ctx.fillStyle =
-          gradient;
-
-        ctx.fillRect(
-          0,
-          0,
-          width,
-          height
+      } else {
+        disposeMaterial(
+          child.material,
+          disposedTextures
         );
       }
-    );
-
-  const geometry =
-    new THREE.PlaneGeometry(
-      110,
-      40
-    );
-
-  const material =
-    new THREE.MeshBasicMaterial(
-      {
-        map: texture,
-        transparent: true,
-        opacity: 0.7,
-        depthWrite: false,
-        blending:
-          THREE.AdditiveBlending,
-      }
-    );
-
-  const mesh =
-    new THREE.Mesh(
-      geometry,
-      material
-    );
-
-  mesh.position.set(
-    0,
-    1,
-    -31
+    }
   );
-
-  return mesh;
 }
 
 export default function PolarScene() {
@@ -972,66 +898,58 @@ export default function PolarScene() {
       return undefined;
     }
 
-    let destroyed = false;
+    const mobile =
+      getIsMobile();
 
     const reducedMotion =
-      window.matchMedia(
-        "(prefers-reduced-motion: reduce)"
-      ).matches;
+      getReducedMotion();
 
-    const mobile =
-      window.matchMedia(
-        "(max-width: 768px)"
-      ).matches ||
-      window.matchMedia(
-        "(pointer: coarse)"
-      ).matches;
+    let destroyed = false;
+    let animationFrame = 0;
 
     const scene =
       new THREE.Scene();
 
+    scene.background =
+      new THREE.Color(
+        0x071018
+      );
+
+    scene.fog =
+      new THREE.FogExp2(
+        0x071018,
+        mobile
+          ? 0.00305
+          : 0.00225
+      );
+
     const camera =
       new THREE.PerspectiveCamera(
-        mobile ? 49 : 44,
-        window.innerWidth /
-          window.innerHeight,
+        mobile ? 49 : 43,
+        1,
         0.1,
-        260
+        2200
       );
 
     camera.position.set(
       0,
-      6.8,
-      24
+      mobile ? 24 : 29,
+      78
     );
 
     camera.lookAt(
       0,
-      7,
-      -25
+      8,
+      -160
     );
 
     const renderer =
-      new THREE.WebGLRenderer(
-        {
-          antialias: !mobile,
-          alpha: false,
-          powerPreference:
-            "high-performance",
-        }
-      );
-
-    renderer.setPixelRatio(
-      Math.min(
-        window.devicePixelRatio,
-        mobile ? 1.35 : 1.75
-      )
-    );
-
-    renderer.setSize(
-      window.innerWidth,
-      window.innerHeight
-    );
+      new THREE.WebGLRenderer({
+        antialias: !mobile,
+        alpha: false,
+        powerPreference:
+          "high-performance",
+      });
 
     renderer.outputColorSpace =
       THREE.SRGBColorSpace;
@@ -1040,418 +958,683 @@ export default function PolarScene() {
       THREE.ACESFilmicToneMapping;
 
     renderer.toneMappingExposure =
-      mobile ? 0.92 : 1.02;
+      mobile ? 0.92 : 1.0;
 
-    renderer.shadowMap.enabled =
-      false;
+    renderer.setPixelRatio(
+      Math.min(
+        window.devicePixelRatio ||
+          1,
+        mobile ? 1.35 : 1.8
+      )
+    );
+
+    renderer.domElement.setAttribute(
+      "aria-hidden",
+      "true"
+    );
+
+    renderer.domElement.style.display =
+      "block";
+
+    renderer.domElement.style.width =
+      "100%";
+
+    renderer.domElement.style.height =
+      "100%";
 
     mount.appendChild(
       renderer.domElement
     );
 
-    const clock =
-      new THREE.Clock();
-
-    const textureLoader =
-      new THREE.TextureLoader();
-
-    const fbxLoader =
-      new FBXLoader();
-
     const ambient =
       new THREE.HemisphereLight(
-        new THREE.Color(
-          "#d5edf3"
-        ),
-        new THREE.Color(
-          "#071017"
-        ),
-        1.15
+        0xcfe4ec,
+        0x071014,
+        mobile ? 1.08 : 1.28
       );
 
     scene.add(ambient);
 
-    const moonLight =
+    const keyLight =
       new THREE.DirectionalLight(
-        new THREE.Color(
-          "#d9f1ff"
-        ),
-        1.65
+        0xe9f5f8,
+        mobile ? 1.15 : 1.45
       );
 
-    moonLight.position.set(
-      -28,
-      32,
-      16
+    keyLight.position.set(
+      -180,
+      260,
+      150
     );
 
-    scene.add(moonLight);
+    scene.add(keyLight);
 
-    const cyanFill =
-      new THREE.PointLight(
-        new THREE.Color(
-          "#75d7d4"
-        ),
-        1.1,
-        75
+    const blueFill =
+      new THREE.DirectionalLight(
+        0x78c7db,
+        mobile ? 0.24 : 0.36
       );
 
-    cyanFill.position.set(
-      0,
-      8,
-      -18
+    blueFill.position.set(
+      210,
+      120,
+      -280
     );
 
-    scene.add(cyanFill);
+    scene.add(blueFill);
 
     const world =
       new THREE.Group();
 
+    world.name =
+      "ANTARCTIC_WORLD";
+
     scene.add(world);
 
-    let skyTexture = null;
-    let mountain = null;
+    const atmosphere =
+      new THREE.Group();
 
-    let stars = null;
-    let aurora = null;
-    let distantRidge = null;
-    let secondaryRidge = null;
-    let atmosphere = null;
-    let horizonGlow = null;
-    let iceShelf = null;
-    let foregroundIce = null;
-    let water = null;
+    atmosphere.name =
+      "ATMOSPHERE";
 
-    const pointer = {
-      x: 0,
-      y: 0,
-    };
+    world.add(atmosphere);
 
-    const targetPointer = {
-      x: 0,
-      y: 0,
-    };
+    const mountains =
+      new THREE.Group();
 
-    const onPointerMove =
-      (event) => {
-        targetPointer.x =
-          (event.clientX /
-            window.innerWidth -
-            0.5) *
-          2;
+    mountains.name =
+      "MOUNTAINS";
 
-        targetPointer.y =
-          (event.clientY /
-            window.innerHeight -
-            0.5) *
-          2;
-      };
+    world.add(mountains);
 
-    window.addEventListener(
-      "pointermove",
-      onPointerMove,
-      { passive: true }
+    const terrain =
+      new THREE.Group();
+
+    terrain.name =
+      "TERRAIN";
+
+    world.add(terrain);
+
+    const clouds =
+      new THREE.Group();
+
+    clouds.name =
+      "CLOUD_SYSTEM";
+
+    atmosphere.add(clouds);
+
+    const water =
+      createWater();
+
+    terrain.add(water);
+
+    const stars =
+      createStars(
+        mobile ? 520 : 1200,
+        220,
+        560,
+        mobile
+      );
+
+    atmosphere.add(stars);
+
+    /*
+      Mountain-base cloud:
+      low, broad, restrained.
+    */
+
+    const baseMist =
+      createCloudVolume({
+        width: 330,
+        height: 46,
+        depth: 260,
+        opacity: mobile
+          ? 0.25
+          : 0.34,
+        color: 0xd9e7eb,
+        speed: 0.65,
+        mobile,
+      });
+
+    baseMist.position.set(
+      0,
+      13,
+      -305
     );
 
-    const loadEverything =
-      async () => {
-        try {
-          const [
-            loadedSky,
-            iceColor,
-            iceNormal,
-            iceRoughness,
-            iceAccent,
-            snowColor,
-            snowRoughness,
-            rockColor,
-            rockNormal,
-            rockRoughness,
-          ] = await Promise.all([
-            loadTexture(
-              textureLoader,
-              ASSETS.sky,
-              {
-                colorSpace:
-                  THREE.SRGBColorSpace,
-                repeat: false,
-                anisotropy: 2,
+    clouds.add(baseMist);
+
+    /*
+      Deep transition volume:
+      this is the major visibility transition.
+    */
+
+    const deepCloud =
+      createCloudVolume({
+        width: 440,
+        height: 132,
+        depth: 360,
+        opacity: mobile
+          ? 0.39
+          : 0.53,
+        color: 0xd3e1e6,
+        speed: 1.05,
+        mobile,
+      });
+
+    deepCloud.position.set(
+      0,
+      21,
+      -515
+    );
+
+    clouds.add(deepCloud);
+
+    /*
+      Foreground mist:
+      gives the camera something to travel through
+      without becoming a permanent white overlay.
+    */
+
+    const foregroundMist =
+      createCloudVolume({
+        width: 540,
+        height: 40,
+        depth: 250,
+        opacity: mobile
+          ? 0.16
+          : 0.24,
+        color: 0xc4d8df,
+        speed: 0.4,
+        mobile,
+      });
+
+    foregroundMist.position.set(
+      0,
+      -2,
+      -175
+    );
+
+    clouds.add(
+      foregroundMist
+    );
+
+    const textureLoader =
+      new THREE.TextureLoader();
+
+    const loadedTextures = [];
+
+    const loadTexture =
+      (url, type) =>
+        new Promise(
+          (resolve) => {
+            textureLoader.load(
+              url,
+              (texture) => {
+                if (
+                  type ===
+                  "color"
+                ) {
+                  configureColorTexture(
+                    texture
+                  );
+                } else {
+                  configureDataTexture(
+                    texture
+                  );
+                }
+
+                loadedTextures.push(
+                  texture
+                );
+
+                resolve(
+                  texture
+                );
+              },
+              undefined,
+              () => {
+                resolve(null);
               }
-            ),
-
-            loadTexture(
-              textureLoader,
-              ASSETS.iceColor,
-              {
-                colorSpace:
-                  THREE.SRGBColorSpace,
-              }
-            ),
-
-            loadTexture(
-              textureLoader,
-              ASSETS.iceNormal
-            ),
-
-            loadTexture(
-              textureLoader,
-              ASSETS.iceRoughness
-            ),
-
-            loadTexture(
-              textureLoader,
-              ASSETS.iceAccent,
-              {
-                colorSpace:
-                  THREE.SRGBColorSpace,
-              }
-            ),
-
-            loadTexture(
-              textureLoader,
-              ASSETS.snowColor,
-              {
-                colorSpace:
-                  THREE.SRGBColorSpace,
-              }
-            ),
-
-            loadTexture(
-              textureLoader,
-              ASSETS.snowRoughness
-            ),
-
-            loadTexture(
-              textureLoader,
-              ASSETS.rockColor,
-              {
-                colorSpace:
-                  THREE.SRGBColorSpace,
-              }
-            ),
-
-            loadTexture(
-              textureLoader,
-              ASSETS.rockNormal
-            ),
-
-            loadTexture(
-              textureLoader,
-              ASSETS.rockRoughness
-            ),
-          ]);
-
-          if (destroyed) {
-            return;
+            );
           }
+        );
 
-          skyTexture =
-            loadedSky;
+    /*
+      Load the sky first because it supplies
+      the visual world and environment lighting.
+    */
 
-          /*
-           * The actual sky asset is now the
-           * physical background of the world.
-           */
-          skyTexture.mapping =
-            THREE.EquirectangularReflectionMapping;
-
-          scene.background =
-            skyTexture;
-
-          scene.environment =
-            skyTexture;
-
-          const textures = {
-            iceColor,
-            iceNormal,
-            iceRoughness,
-            iceAccent,
-            snowColor,
-            snowRoughness,
-            rockColor,
-            rockNormal,
-            rockRoughness,
-          };
-
-          /*
-           * ENVIRONMENT ORDER
-           *
-           * Far sky
-           * ↓
-           * stars
-           * ↓
-           * aurora
-           * ↓
-           * distant ridge
-           * ↓
-           * secondary ridge
-           * ↓
-           * hero mountain
-           * ↓
-           * atmospheric veil
-           * ↓
-           * ice shelf
-           * ↓
-           * foreground ice
-           * ↓
-           * water
-           */
-
-          stars = createStars(
-            mobile ? 180 : 430,
-            mobile
+    const loadEnvironment =
+      async () => {
+        const sky =
+          await loadTexture(
+            ASSETS.sky,
+            "color"
           );
 
-          world.add(stars);
+        if (
+          destroyed ||
+          !sky
+        ) {
+          return;
+        }
 
-          aurora =
-            createAurora();
+        sky.mapping =
+          THREE.EquirectangularReflectionMapping;
 
-          world.add(aurora);
+        scene.background =
+          sky;
 
-          distantRidge =
-            createDistantRidge();
-
-          world.add(
-            distantRidge
+        const pmrem =
+          new THREE.PMREMGenerator(
+            renderer
           );
 
-          secondaryRidge =
-            createSecondaryRidge();
+        pmrem.compileEquirectangularShader();
 
-          world.add(
-            secondaryRidge
+        const environment =
+          pmrem.fromEquirectangular(
+            sky
+          ).texture;
+
+        scene.environment =
+          environment;
+
+        pmrem.dispose();
+      };
+
+    loadEnvironment();
+
+    /*
+      Terrain textures are intentionally loaded
+      separately so a missing optional map does
+      not prevent the rest of the world rendering.
+    */
+
+    const loadTerrain =
+      async () => {
+        const iceColor =
+          await loadTexture(
+            ASSETS.ice.color,
+            "color"
           );
 
-          horizonGlow =
-            createHorizonGlow();
-
-          world.add(
-            horizonGlow
+        const iceNormal =
+          await loadTexture(
+            ASSETS.ice.normal,
+            "data"
           );
 
-          atmosphere =
-            createAtmosphereLayer();
-
-          world.add(
-            atmosphere
+        const iceRoughness =
+          await loadTexture(
+            ASSETS.ice.roughness,
+            "data"
           );
 
-          iceShelf =
-            createIceShelf(
-              textures,
-              mobile
-            );
-
-          world.add(
-            iceShelf
-          );
-
-          foregroundIce =
-            createForegroundIce(
-              textures,
-              mobile
-            );
-
-          world.add(
-            foregroundIce
-          );
-
-          water =
-            createWater();
-
-          world.add(water);
-
-          /*
-           * Load the real mountain model.
-           */
-          fbxLoader.load(
-            ASSETS.mountain,
-            (loadedModel) => {
-              if (destroyed) {
-                disposeObject(
-                  loadedModel
-                );
-                return;
-              }
-
-              mountain =
-                normalizeMountain(
-                  loadedModel
-                );
-
-              mountain =
-                preserveOrStyleMountain(
-                  mountain,
-                  textures,
-                  mobile
-                );
-
-              mountain.position.set(
-                0,
-                -3.95,
-                -27
+        const iceDisplacement =
+          mobile
+            ? null
+            : await loadTexture(
+                ASSETS.ice.displacement,
+                "data"
               );
 
-              mountain.rotation.y =
-                Math.PI * 0.08;
+        if (
+          destroyed
+        ) {
+          return;
+        }
 
-              /*
-               * Push the hero mountain
-               * behind the atmospheric layer
-               * but in front of the distant ridge.
-               */
-              world.add(mountain);
+        terrain.add(
+          createIceFloor(
+            {
+              color: iceColor,
+              normal: iceNormal,
+              roughness:
+                iceRoughness,
+              displacement:
+                iceDisplacement,
             },
-            undefined,
-            () => {
-              /*
-               * The rest of the environment
-               * intentionally remains functional
-               * even if the FBX fails.
-               */
-            }
+            mobile
+          )
+        );
+
+        const snowColor =
+          await loadTexture(
+            ASSETS.snow.color,
+            "color"
           );
-        } catch (error) {
-          /*
-           * Keep the procedural environment
-           * alive if one optional asset fails.
-           */
-          console.warn(
-            "Antarctic environment asset load issue:",
-            error
+
+        const snowNormal =
+          await loadTexture(
+            ASSETS.snow.normal,
+            "data"
+          );
+
+        const snowRoughness =
+          await loadTexture(
+            ASSETS.snow.roughness,
+            "data"
+          );
+
+        if (
+          !destroyed
+        ) {
+          terrain.add(
+            createSnowField(
+              {
+                color:
+                  snowColor,
+                normal:
+                  snowNormal,
+                roughness:
+                  snowRoughness,
+              },
+              mobile
+            )
+          );
+        }
+
+        const rockColor =
+          await loadTexture(
+            ASSETS.rock.color,
+            "color"
+          );
+
+        const rockNormal =
+          await loadTexture(
+            ASSETS.rock.normal,
+            "data"
+          );
+
+        const rockRoughness =
+          await loadTexture(
+            ASSETS.rock.roughness,
+            "data"
+          );
+
+        if (
+          !destroyed
+        ) {
+          terrain.add(
+            createRockShelf(
+              {
+                color:
+                  rockColor,
+                normal:
+                  rockNormal,
+                roughness:
+                  rockRoughness,
+              }
+            )
           );
         }
       };
 
-    loadEverything();
+    loadTerrain();
+
+    /*
+      Secondary mountain.
+      This is the mountain we already have.
+    */
+
+    let secondaryMountain =
+      null;
+
+    const fbxLoader =
+      new FBXLoader();
+
+    fbxLoader.load(
+      ASSETS.secondaryMountain,
+      (object) => {
+        if (destroyed) {
+          disposeObject(
+            object,
+            new Set()
+          );
+
+          return;
+        }
+
+        secondaryMountain =
+          object;
+
+        configureImportedObject(
+          object,
+          mobile ? 0.72 : 0.9
+        );
+
+        fitObjectToHeight(
+          object,
+          mobile ? 150 : 180
+        );
+
+        object.position.set(
+          0,
+          -9,
+          -405
+        );
+
+        object.rotation.y =
+          Math.PI * 0.08;
+
+        object.traverse(
+          (child) => {
+            if (
+              !child.isMesh ||
+              !child.material
+            ) {
+              return;
+            }
+
+            const materials =
+              Array.isArray(
+                child.material
+              )
+                ? child.material
+                : [child.material];
+
+            materials.forEach(
+              (material) => {
+                if (
+                  material.color
+                ) {
+                  material.color.multiplyScalar(
+                    0.88
+                  );
+                }
+              }
+            );
+          }
+        );
+
+        mountains.add(
+          object
+        );
+      },
+      undefined,
+      () => {
+        /*
+          Optional enhancement.
+          The scene does not depend on the FBX
+          successfully loading.
+        */
+      }
+    );
+
+    /*
+      HERO MOUNTAIN
+
+      This file does not exist yet.
+
+      Once Aura_Borealis_.blend is converted to
+      the optimized GLB at this path, the scene
+      automatically picks it up.
+
+      Nothing else in the architecture needs
+      to change.
+    */
+
+    let heroMountain =
+      null;
+
+    const gltfLoader =
+      new GLTFLoader();
+
+    gltfLoader.load(
+      ASSETS.heroMountain,
+      (gltf) => {
+        if (destroyed) {
+          disposeObject(
+            gltf.scene,
+            new Set()
+          );
+
+          return;
+        }
+
+        heroMountain =
+          gltf.scene;
+
+        configureImportedObject(
+          heroMountain,
+          mobile ? 0.82 : 1.0
+        );
+
+        fitObjectToHeight(
+          heroMountain,
+          mobile ? 128 : 150
+        );
+
+        heroMountain.position.set(
+          0,
+          -4,
+          -255
+        );
+
+        heroMountain.traverse(
+          (child) => {
+            if (
+              !child.isMesh ||
+              !child.material
+            ) {
+              return;
+            }
+
+            const materials =
+              Array.isArray(
+                child.material
+              )
+                ? child.material
+                : [child.material];
+
+            materials.forEach(
+              (material) => {
+                if (
+                  material.emissive
+                ) {
+                  material.emissiveIntensity =
+                    Math.min(
+                      material.emissiveIntensity ||
+                        1,
+                      1.35
+                    );
+                }
+              }
+            );
+          }
+        );
+
+        mountains.add(
+          heroMountain
+        );
+      },
+      undefined,
+      () => {
+        /*
+          Expected until the future GLB is installed.
+          No procedural fake mountain is substituted.
+        */
+      }
+    );
+
+    let scrollTarget = 0;
+    let scrollCurrent = 0;
+
+    const updateScroll =
+      () => {
+        const range =
+          Math.max(
+            1,
+            document.documentElement
+              .scrollHeight -
+              window.innerHeight
+          );
+
+        scrollTarget =
+          THREE.MathUtils.clamp(
+            window.scrollY / range,
+            0,
+            1
+          );
+      };
+
+    updateScroll();
+
+    window.addEventListener(
+      "scroll",
+      updateScroll,
+      {
+        passive: true,
+      }
+    );
 
     const resize =
       () => {
-        camera.aspect =
-          window.innerWidth /
+        const width =
+          mount.clientWidth ||
+          window.innerWidth;
+
+        const height =
+          mount.clientHeight ||
           window.innerHeight;
+
+        camera.aspect =
+          width / height;
 
         camera.updateProjectionMatrix();
 
-        renderer.setSize(
-          window.innerWidth,
-          window.innerHeight
-        );
-
         renderer.setPixelRatio(
           Math.min(
-            window.devicePixelRatio,
-            mobile ? 1.35 : 1.75
+            window.devicePixelRatio ||
+              1,
+            width <=
+              MOBILE_BREAKPOINT
+              ? 1.35
+              : 1.8
           )
+        );
+
+        renderer.setSize(
+          width,
+          height,
+          false
         );
       };
 
     window.addEventListener(
       "resize",
       resize,
-      { passive: true }
+      {
+        passive: true,
+      }
     );
+
+    resize();
+
+    const clock =
+      new THREE.Clock();
 
     const render =
       () => {
@@ -1462,258 +1645,367 @@ export default function PolarScene() {
         const elapsed =
           clock.getElapsedTime();
 
-        pointer.x +=
-          (targetPointer.x -
-            pointer.x) *
-          0.035;
-
-        pointer.y +=
-          (targetPointer.y -
-            pointer.y) *
-          0.035;
-
-        const drift =
+        const motion =
           reducedMotion
-            ? 0
-            : elapsed;
+            ? 0.12
+            : 1;
+
+        scrollCurrent +=
+          (
+            scrollTarget -
+            scrollCurrent
+          ) *
+          (
+            reducedMotion
+              ? 0.085
+              : 0.055
+          );
+
+        const t =
+          scrollCurrent;
 
         /*
-         * CAMERA
-         *
-         * The camera is deliberately
-         * above the water line and looking
-         * through the environment.
-         */
-        const cameraTargetX =
-          pointer.x *
-          (mobile ? 0.9 : 1.55);
+          THE ANTARCTIC JOURNEY
 
-        const cameraTargetY =
-          6.8 -
-          pointer.y *
-            (mobile ? 0.42 : 0.7);
+          0.00 — arrival
+          0.25 — descent
+          0.50 — atmospheric passage
+          0.72 — terrain / expedition
+          1.00 — horizon
+        */
 
-        camera.position.x +=
-          (cameraTargetX -
-            camera.position.x) *
-          0.025;
+        const descent =
+          THREE.MathUtils.smoothstep(
+            t,
+            0,
+            0.82
+          );
 
-        camera.position.y +=
-          (cameraTargetY -
-            camera.position.y) *
-          0.025;
+        const cameraY =
+          THREE.MathUtils.lerp(
+            mobile ? 24 : 29,
+            mobile ? -2 : -4,
+            descent
+          );
 
-        camera.position.z +=
-          (24 -
-            camera.position.z) *
-          0.02;
+        const cameraZ =
+          THREE.MathUtils.lerp(
+            78,
+            -170,
+            descent
+          );
+
+        const cameraX =
+          Math.sin(
+            elapsed *
+              0.075 *
+              motion
+          ) *
+          (
+            mobile
+              ? 1.1
+              : 2.6
+          );
+
+        camera.position.x =
+          cameraX;
+
+        camera.position.y =
+          cameraY;
+
+        camera.position.z =
+          cameraZ;
+
+        const lookTarget =
+          new THREE.Vector3(
+            cameraX * 0.16,
+            THREE.MathUtils.lerp(
+              9,
+              4,
+              descent
+            ),
+            THREE.MathUtils.lerp(
+              -165,
+              -310,
+              descent
+            )
+          );
 
         camera.lookAt(
-          pointer.x * 1.2,
-          6.4 -
-            pointer.y * 0.25,
-          -25
+          lookTarget
         );
 
         /*
-         * Aurora movement.
-         */
-        if (aurora) {
-          aurora.children.forEach(
-            (layer, index) => {
-              layer.position.x =
-                Math.sin(
-                  drift * 0.045 +
-                    index * 1.4
-                ) *
-                2.2;
+          Hero mountain parallax.
+        */
 
-              layer.position.y =
-                layer.userData
-                  ?.baseY ??
-                layer.position.y;
+        if (
+          heroMountain
+        ) {
+          const heroTravel =
+            THREE.MathUtils.smoothstep(
+              t,
+              0.02,
+              0.72
+            );
 
-              layer.rotation.z +=
-                Math.sin(
-                  drift * 0.035 +
-                    index
-                ) *
-                0.00004;
-            }
-          );
-        }
+          heroMountain.position.y =
+            -4 -
+            heroTravel * 7;
 
-        /*
-         * Atmospheric breathing.
-         */
-        if (atmosphere) {
-          atmosphere.material.opacity =
-            0.72 +
+          heroMountain.position.x =
             Math.sin(
-              drift * 0.07
+              elapsed *
+                0.055 *
+                motion
+            ) * 1.5;
+
+          heroMountain.rotation.y =
+            Math.sin(
+              elapsed *
+                0.035 *
+                motion
             ) *
-              0.035;
+            0.004;
         }
 
         /*
-         * Foreground ice has tiny
-         * environmental movement.
-         */
-        if (foregroundIce) {
-          foregroundIce.children.forEach(
-            (mesh, index) => {
-              const baseY =
-                mesh.userData
-                  .baseY ??
-                mesh.position.y;
+          Distant mountain movement.
+        */
 
-              mesh.position.y =
-                baseY +
-                Math.sin(
-                  drift * 0.18 +
-                    index * 1.7
-                ) *
-                  0.025;
-            }
-          );
-        }
+        if (
+          secondaryMountain
+        ) {
+          secondaryMountain.position.z =
+            -405 +
+            t * 82;
 
-        /*
-         * Distant terrain gets extremely
-         * subtle parallax.
-         */
-        if (distantRidge) {
-          distantRidge.position.x +=
-            (
-              pointer.x * -0.45 -
-              distantRidge.position.x
-            ) *
-            0.008;
-        }
+          secondaryMountain.position.y =
+            -9 +
+            t * 4.5;
 
-        if (secondaryRidge) {
-          secondaryRidge.position.x +=
-            (
-              pointer.x * -0.8 -
-              secondaryRidge.position.x
-            ) *
-            0.01;
-        }
-
-        if (stars) {
-          stars.rotation.y =
-            drift * 0.0015;
-
-          stars.position.x +=
-            (
-              pointer.x * -0.35 -
-              stars.position.x
-            ) *
-            0.008;
-
-          stars.position.y +=
-            (
-              pointer.y * -0.12 -
-              stars.position.y
-            ) *
-            0.008;
-        }
-
-        if (mountain) {
-          mountain.rotation.y =
+          secondaryMountain.rotation.y =
             Math.PI * 0.08 +
-            pointer.x * 0.008;
-
-          mountain.position.x +=
-            (
-              pointer.x * -0.18 -
-              mountain.position.x
+            Math.sin(
+              elapsed *
+                0.024 *
+                motion
             ) *
-            0.01;
+            0.004;
         }
+
+        /*
+          Cloud volumes physically move through
+          the camera's world rather than sitting
+          as a screen-space overlay.
+        */
+
+        const cloudTravel =
+          t * 310;
+
+        baseMist.position.z =
+          -305 +
+          cloudTravel * 0.32;
+
+        deepCloud.position.z =
+          -515 +
+          cloudTravel * 0.9;
+
+        foregroundMist.position.z =
+          -175 +
+          cloudTravel * 0.42;
+
+        const transition =
+          THREE.MathUtils.smoothstep(
+            t,
+            0.2,
+            0.62
+          );
+
+        const release =
+          1 -
+          THREE.MathUtils.smoothstep(
+            t,
+            0.72,
+            1
+          );
+
+        const cloudIntensity =
+          transition *
+          (
+            0.75 +
+            release * 0.25
+          );
+
+        [
+          baseMist,
+          deepCloud,
+          foregroundMist,
+        ].forEach(
+          (cloud) => {
+            if (
+              cloud.material
+                ?.uniforms
+            ) {
+              cloud.material.uniforms.uTime.value =
+                elapsed * motion;
+            }
+          }
+        );
+
+        baseMist.material.uniforms.uOpacity.value =
+          (
+            mobile
+              ? 0.24
+              : 0.33
+          ) +
+          cloudIntensity *
+          (
+            mobile
+              ? 0.08
+              : 0.12
+          );
+
+        deepCloud.material.uniforms.uOpacity.value =
+          (
+            mobile
+              ? 0.31
+              : 0.43
+          ) +
+          cloudIntensity *
+          (
+            mobile
+              ? 0.22
+              : 0.3
+          );
+
+        foregroundMist.material.uniforms.uOpacity.value =
+          (
+            mobile
+              ? 0.13
+              : 0.2
+          ) +
+          cloudIntensity *
+          (
+            mobile
+              ? 0.07
+              : 0.1
+          );
+
+        /*
+          Global atmosphere follows the cloud passage.
+        */
+
+        scene.fog.density =
+          THREE.MathUtils.lerp(
+            mobile
+              ? 0.00305
+              : 0.00225,
+            mobile
+              ? 0.0054
+              : 0.0041,
+            cloudIntensity * 0.62
+          );
+
+        /*
+          Very restrained world motion.
+        */
+
+        stars.rotation.y =
+          elapsed *
+          0.0012 *
+          motion;
+
+        world.position.x =
+          Math.sin(
+            elapsed *
+              0.018 *
+              motion
+          ) *
+          0.65;
 
         renderer.render(
           scene,
           camera
         );
 
-        requestAnimationFrame(
-          render
-        );
+        animationFrame =
+          requestAnimationFrame(
+            render
+          );
       };
 
-    render();
+    animationFrame =
+      requestAnimationFrame(
+        render
+      );
 
     return () => {
       destroyed = true;
+
+      cancelAnimationFrame(
+        animationFrame
+      );
+
+      window.removeEventListener(
+        "scroll",
+        updateScroll
+      );
 
       window.removeEventListener(
         "resize",
         resize
       );
 
-      window.removeEventListener(
-        "pointermove",
-        onPointerMove
+      const disposedTextures =
+        new Set();
+
+      scene.traverse(
+        (object) => {
+          if (object.geometry) {
+            object.geometry.dispose();
+          }
+
+          if (
+            object.material
+          ) {
+            if (
+              Array.isArray(
+                object.material
+              )
+            ) {
+              object.material.forEach(
+                (material) =>
+                  disposeMaterial(
+                    material,
+                    disposedTextures
+                  )
+              );
+            } else {
+              disposeMaterial(
+                object.material,
+                disposedTextures
+              );
+            }
+          }
+        }
       );
 
-      if (skyTexture) {
-        skyTexture.dispose();
-      }
+      loadedTextures.forEach(
+        (texture) => {
+          if (
+            !disposedTextures.has(
+              texture.uuid
+            )
+          ) {
+            texture.dispose();
 
-      if (stars) {
-        disposeObject(stars);
-      }
-
-      if (aurora) {
-        disposeObject(aurora);
-      }
-
-      if (distantRidge) {
-        disposeObject(
-          distantRidge
-        );
-      }
-
-      if (secondaryRidge) {
-        disposeObject(
-          secondaryRidge
-        );
-      }
-
-      if (atmosphere) {
-        disposeObject(
-          atmosphere
-        );
-      }
-
-      if (horizonGlow) {
-        disposeObject(
-          horizonGlow
-        );
-      }
-
-      if (iceShelf) {
-        disposeObject(
-          iceShelf
-        );
-      }
-
-      if (foregroundIce) {
-        disposeObject(
-          foregroundIce
-        );
-      }
-
-      if (water) {
-        disposeObject(water);
-      }
-
-      if (mountain) {
-        disposeObject(
-          mountain
-        );
-      }
+            disposedTextures.add(
+              texture.uuid
+            );
+          }
+        }
+      );
 
       renderer.dispose();
 
@@ -1731,14 +2023,8 @@ export default function PolarScene() {
   return (
     <div
       ref={mountRef}
+      className="polar-scene"
       aria-hidden="true"
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 0,
-        pointerEvents: "none",
-        overflow: "hidden",
-      }}
     />
   );
 }
