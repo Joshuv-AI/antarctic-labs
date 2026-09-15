@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";  
   
 import elementalMarksSource from "./sources/elemental-marks.html?raw";  
-  
 export const ELEMENT_VARIANTS = ["water", "lightning", "fire"] as const;  
   
 export type ElementVariant = (typeof ELEMENT_VARIANTS)[number];  
@@ -277,7 +276,7 @@ main { display: block; }
     );  
 }  
   
-export function ElementsBackground({  
+export default function ElementsBackground({  
   variant = ELEMENTS_DEFAULTS.variant,  
   speed = ELEMENTS_DEFAULTS.speed,  
   size = ELEMENTS_DEFAULTS.size,  
