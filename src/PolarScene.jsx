@@ -486,7 +486,7 @@ function CloudField({ opacity, paused }) {
         width: "100%",
         height: "100%",
         border: 0,
-        background: "#071010",
+        background: "transparent",
         opacity: clamp(opacity, 0.05, 1),
       }}
     />
