@@ -337,6 +337,30 @@ body[data-threeui-ready] > [data-threeui-role] { visibility: visible !important;
   ]).replace(/</g, "\\u003c");
   const controlScript = `<script data-threeui-controls>
 (function () {
+  /* no-op GSAP stub. The strata-cloud source's inline <script> uses
+     gsap.registerPlugin(ScrollTrigger) and gsap.to(...) for the demo
+     overlay's word-reveal animation. GSAP is loaded from a CDN script
+     tag in the source's <head>, which the parent page's CSP blocks.
+     Without gsap, the first gsap.registerPlugin(...) call throws
+     ReferenceError and the rest of the inline script (including the
+     WebGL init at line 225) never runs, leaving the canvas blank.
+     This stub makes every gsap.* and ScrollTrigger.* call a no-op
+     so the script proceeds past the demo-overlay setup and reaches
+     canvas.getContext('webgl'). */
+  var noopTimeline = { to: function() { return noopTimeline; }, from: function() { return noopTimeline; }, fromTo: function() { return noopTimeline; }, set: function() { return noopTimeline; }, stagger: function() { return noopTimeline; }, killTweensOf: function() {}, kill: function() {} };
+  var noopPlugin = function() {};
+  noopPlugin.refresh = function() {};
+  var noopGsapFn = function() { return noopTimeline; };
+  noopGsapFn.to = function() { return noopTimeline; };
+  noopGsapFn.from = function() { return noopTimeline; };
+  noopGsapFn.fromTo = function() { return noopTimeline; };
+  noopGsapFn.set = function() { return noopTimeline; };
+  noopGsapFn.registerPlugin = function() {};
+  noopGsapFn.timeline = function() { return noopTimeline; };
+  noopGsapFn.context = noopGsapFn;
+  if (typeof window.gsap === 'undefined') window.gsap = noopGsapFn;
+  if (typeof window.ScrollTrigger === 'undefined') window.ScrollTrigger = noopPlugin;
+
   var controls = ${controlsJson};
   window.__SF_CONTROLS = controls;
   var origin = performance.now();
