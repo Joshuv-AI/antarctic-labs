@@ -2,54 +2,15 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
-
-/*
-  ANTARCTIC LABS
-  PolarScene
-  ------------------------------------------------------------
-  The physical world behind the interface.
-
-  World stack:
-
-  REAL SKY
-      ↓
-  OPTIONAL HERO MOUNTAIN / AURORA GLB
-      ↓
-  REAL CHALAADI DISTANCE
-      ↓
-  MOUNTAIN CLOUD
-      ↓
-  DEEP TRANSITION CLOUD
-      ↓
-  ATMOSPHERIC FOG
-      ↓
-  REAL SNOW
-      ↓
-  REAL ICE
-      ↓
-  REAL ROCK
-      ↓
-  DARK WATER
-      ↓
-  CAMERA
-
-  The hero GLB is intentionally optional. When the future
-  Aura_Borealis_.blend is converted to:
-
-    /assets/models/mountains/single-mountain-snow.glb
-
-  the scene will automatically attempt to load it.
-
-  If it is not present, the scene remains fully functional.
-*/
 
 const ASSETS = {
   sky: "/assets/hdr/daysky-8k-hdr-4k.jpg",
 
-  heroMountain: "/assets/models/mountains/single-mountain-snow.glb",
+  hero:
+    "/assets/models/mountains/single-mountain-snow.glb",
 
-  distanceMountain: "/assets/models/mountains/chalaadi.fbx",
+  distance:
+    "/assets/models/mountains/chalaadi.fbx",
 
   ice: {
     color: "/assets/ice/ice-color.png",
@@ -73,1355 +34,1494 @@ const ASSETS = {
   },
 };
 
-const isMobileDevice = () =>
-  typeof window !== "undefined" &&
-  (window.matchMedia("(max-width: 900px)").matches ||
-    window.matchMedia("(pointer: coarse)").matches);
+const MOBILE_QUERY =
+  "(max-width: 800px), (pointer: coarse)";
 
-const clamp01 = (value) => Math.min(1, Math.max(0, value));
+function clamp01(value) {
+  return Math.min(1, Math.max(0, value));
+}
 
-const smoothstep = (edge0, edge1, value) => {
-  const x = clamp01((value - edge0) / (edge1 - edge0));
-  return x * x * (3 - 2 * x);
-};
+function smoothstep(edge0, edge1, value) {
+  const t = clamp01(
+    (value - edge0) / (edge1 - edge0)
+  );
 
-const damp = (current, target, lambda, delta) => {
-  return THREE.MathUtils.lerp(
+  return t * t * (3 - 2 * t);
+}
+
+function damp(current, target, lambda, delta) {
+  return THREE.MathUtils.damp(
     current,
     target,
-    1 - Math.exp(-lambda * delta),
+    lambda,
+    delta
   );
-};
+}
 
-const disposeMaterial = (material, textureSet) => {
-  if (!material) return;
+function disposeMaterial(material, textures) {
+  if (!material) {
+    return;
+  }
 
-  const materials = Array.isArray(material) ? material : [material];
+  const materials = Array.isArray(material)
+    ? material
+    : [material];
 
-  materials.forEach((mat) => {
-    if (!mat) return;
+  materials.forEach((entry) => {
+    if (!entry) {
+      return;
+    }
 
-    Object.keys(mat).forEach((key) => {
-      const value = mat[key];
+    Object.keys(entry).forEach((key) => {
+      const value = entry[key];
 
       if (
         value &&
-        value.isTexture &&
-        textureSet &&
-        !textureSet.has(value)
+        value.isTexture
       ) {
-        value.dispose();
+        textures.add(value);
       }
     });
 
-    mat.dispose();
+    entry.dispose();
   });
-};
+}
 
-const disposeObject = (object, textureSet = new Set()) => {
+function disposeObject(object, textures) {
   object.traverse((child) => {
     if (child.geometry) {
       child.geometry.dispose();
     }
 
     if (child.material) {
-      const materials = Array.isArray(child.material)
-        ? child.material
-        : [child.material];
-
-      materials.forEach((material) => {
-        if (!material) return;
-
-        Object.values(material).forEach((value) => {
-          if (value && value.isTexture) {
-            textureSet.add(value);
-          }
-        });
-
-        disposeMaterial(material, textureSet);
-      });
+      disposeMaterial(
+        child.material,
+        textures
+      );
     }
   });
-};
+}
 
-/* -------------------------------------------------------------------------- */
-/* CLOUD SHADER                                                               */
-/* -------------------------------------------------------------------------- */
+function setTextureRepeat(
+  texture,
+  repeatX,
+  repeatY = repeatX
+) {
+  texture.wrapS =
+    THREE.RepeatWrapping;
+  texture.wrapT =
+    THREE.RepeatWrapping;
 
-const CLOUD_VERTEX = `
-  varying vec3 vWorldPosition;
-  varying vec2 vUv;
-  varying float vHeight;
+  texture.repeat.set(
+    repeatX,
+    repeatY
+  );
+}
 
-  uniform float uTime;
-  uniform float uWind;
-  uniform float uScale;
+function createNoiseTexture() {
+  const size = 128;
+  const canvas =
+    document.createElement("canvas");
 
-  void main() {
-    vUv = uv;
+  canvas.width = size;
+  canvas.height = size;
 
-    vec3 transformed = position;
+  const context =
+    canvas.getContext("2d");
 
-    float waveA =
-      sin((position.x + uTime * uWind) * 0.42) *
-      0.55;
-
-    float waveB =
-      sin((position.z - uTime * uWind * 0.72) * 0.31) *
-      0.42;
-
-    float waveC =
-      sin((position.x + position.z + uTime * uWind * 0.38) * 0.17) *
-      0.25;
-
-    transformed.y += (waveA + waveB + waveC) * uScale;
-
-    vec4 worldPosition =
-      modelMatrix *
-      vec4(transformed, 1.0);
-
-    vWorldPosition = worldPosition.xyz;
-
-    vHeight = transformed.y;
-
-    gl_Position =
-      projectionMatrix *
-      viewMatrix *
-      worldPosition;
-  }
-`;
-
-const CLOUD_FRAGMENT = `
-  precision highp float;
-
-  varying vec3 vWorldPosition;
-  varying vec2 vUv;
-  varying float vHeight;
-
-  uniform float uTime;
-  uniform float uDensity;
-  uniform float uOpacity;
-  uniform float uWind;
-  uniform vec3 uColor;
-  uniform vec3 uLightColor;
-
-  float hash(vec2 p) {
-    p = fract(p * vec2(123.34, 456.21));
-    p += dot(p, p + 45.32);
-    return fract(p.x * p.y);
-  }
-
-  float noise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-
-    f = f * f * (3.0 - 2.0 * f);
-
-    float a = hash(i);
-    float b = hash(i + vec2(1.0, 0.0));
-    float c = hash(i + vec2(0.0, 1.0));
-    float d = hash(i + vec2(1.0, 1.0));
-
-    return mix(
-      mix(a, b, f.x),
-      mix(c, d, f.x),
-      f.y
+  const imageData =
+    context.createImageData(
+      size,
+      size
     );
-  }
 
-  float fbm(vec2 p) {
-    float value = 0.0;
-    float amplitude = 0.5;
-
-    for (int i = 0; i < 5; i++) {
-      value += noise(p) * amplitude;
-      p *= 2.03;
-      amplitude *= 0.5;
-    }
-
-    return value;
-  }
-
-  void main() {
-    vec2 windOffset =
-      vec2(
-        uTime * uWind * 0.018,
-        -uTime * uWind * 0.009
+  for (
+    let index = 0;
+    index < imageData.data.length;
+    index += 4
+  ) {
+    const value =
+      Math.floor(
+        Math.random() * 256
       );
 
-    vec2 p = vUv * 4.2 + windOffset;
+    imageData.data[index] =
+      value;
 
-    float broad = fbm(p * 0.65);
-    float detail = fbm(p * 2.0 + 17.4);
+    imageData.data[index + 1] =
+      value;
 
-    float cloudShape =
-      smoothstep(
-        0.30,
-        0.72,
-        broad * 0.78 + detail * 0.22
-      );
+    imageData.data[index + 2] =
+      value;
 
-    float edgeFadeX =
-      smoothstep(0.0, 0.14, vUv.x) *
-      smoothstep(1.0, 0.86, vUv.x);
-
-    float edgeFadeY =
-      smoothstep(0.0, 0.18, vUv.y) *
-      smoothstep(1.0, 0.82, vUv.y);
-
-    float verticalShape =
-      smoothstep(0.0, 0.18, vUv.y) *
-      smoothstep(1.0, 0.68, vUv.y);
-
-    float density =
-      cloudShape *
-      edgeFadeX *
-      edgeFadeY *
-      verticalShape *
-      uDensity;
-
-    float lightNoise =
-      fbm(p * 0.42 + vec2(8.0, -4.0));
-
-    vec3 finalColor =
-      mix(
-        uColor,
-        uLightColor,
-        smoothstep(0.35, 0.9, lightNoise)
-      );
-
-    float alpha =
-      density *
-      uOpacity;
-
-    if (alpha < 0.012) {
-      discard;
-    }
-
-    gl_FragColor =
-      vec4(finalColor, alpha);
+    imageData.data[index + 3] =
+      255;
   }
-`;
 
-function createCloudLayer({
-  width,
-  depth,
-  height,
-  y,
-  opacity,
-  density,
-  color,
-  lightColor,
-  wind,
-  scale,
-}) {
-  const geometry = new THREE.PlaneGeometry(
-    width,
-    depth,
-    32,
-    32,
+  context.putImageData(
+    imageData,
+    0,
+    0
   );
 
-  geometry.rotateX(-Math.PI / 2);
+  const texture =
+    new THREE.CanvasTexture(
+      canvas
+    );
 
-  const material = new THREE.ShaderMaterial({
+  texture.wrapS =
+    THREE.RepeatWrapping;
+
+  texture.wrapT =
+    THREE.RepeatWrapping;
+
+  texture.minFilter =
+    THREE.LinearFilter;
+
+  texture.magFilter =
+    THREE.LinearFilter;
+
+  return texture;
+}
+
+function createCloudMaterial(
+  noiseTexture,
+  mobile
+) {
+  const vertexShader = `
+    varying vec3 vWorldPosition;
+    varying vec2 vUv;
+
+    void main() {
+      vUv = uv;
+
+      vec4 worldPosition =
+        modelMatrix * vec4(position, 1.0);
+
+      vWorldPosition =
+        worldPosition.xyz;
+
+      gl_Position =
+        projectionMatrix *
+        viewMatrix *
+        worldPosition;
+    }
+  `;
+
+  const fragmentShader = `
+    uniform sampler2D uNoise;
+    uniform float uTime;
+    uniform float uDensity;
+    uniform float uOpacity;
+    uniform float uScale;
+    uniform vec3 uColor;
+
+    varying vec3 vWorldPosition;
+    varying vec2 vUv;
+
+    float hash(vec2 p) {
+      return fract(
+        sin(
+          dot(
+            p,
+            vec2(
+              127.1,
+              311.7
+            )
+          )
+        ) *
+        43758.5453123
+      );
+    }
+
+    float noise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+
+      f =
+        f *
+        f *
+        (3.0 - 2.0 * f);
+
+      return mix(
+        mix(
+          hash(i),
+          hash(i + vec2(1.0, 0.0)),
+          f.x
+        ),
+        mix(
+          hash(i + vec2(0.0, 1.0)),
+          hash(i + vec2(1.0, 1.0)),
+          f.x
+        ),
+        f.y
+      );
+    }
+
+    float fbm(vec2 p) {
+      float value = 0.0;
+      float amplitude = 0.5;
+
+      for (
+        int i = 0;
+        i < ${mobile ? 3 : 5};
+        i++
+      ) {
+        value +=
+          noise(p) *
+          amplitude;
+
+        p =
+          p * 2.03 +
+          vec2(17.3, 9.7);
+
+        amplitude *= 0.5;
+      }
+
+      return value;
+    }
+
+    void main() {
+      vec2 drift =
+        vec2(
+          uTime * 0.006,
+          uTime * 0.002
+        );
+
+      vec2 uv =
+        vUv *
+        uScale +
+        drift;
+
+      float large =
+        fbm(uv);
+
+      float detail =
+        fbm(
+          uv * 2.7 +
+          vec2(4.1, 7.3)
+        );
+
+      float cloud =
+        mix(
+          large,
+          detail,
+          0.28
+        );
+
+      cloud =
+        smoothstep(
+          0.42,
+          0.72,
+          cloud
+        );
+
+      float edge =
+        smoothstep(
+          0.0,
+          0.18,
+          vUv.x
+        ) *
+        smoothstep(
+          1.0,
+          0.82,
+          vUv.x
+        );
+
+      float vertical =
+        smoothstep(
+          0.0,
+          0.25,
+          vUv.y
+        ) *
+        smoothstep(
+          1.0,
+          0.72,
+          vUv.y
+        );
+
+      float alpha =
+        cloud *
+        edge *
+        vertical *
+        uDensity *
+        uOpacity;
+
+      if (alpha < 0.008) {
+        discard;
+      }
+
+      float lighting =
+        0.78 +
+        cloud * 0.22;
+
+      vec3 finalColor =
+        uColor *
+        lighting;
+
+      gl_FragColor =
+        vec4(
+          finalColor,
+          alpha
+        );
+    }
+  `;
+
+  return new THREE.ShaderMaterial({
+    vertexShader,
+    fragmentShader,
+
     uniforms: {
-      uTime: { value: 0 },
-      uDensity: { value: density },
-      uOpacity: { value: opacity },
-      uWind: { value: wind },
-      uScale: { value: scale },
-      uColor: {
-        value: new THREE.Color(color),
+      uNoise: {
+        value: noiseTexture,
       },
-      uLightColor: {
-        value: new THREE.Color(lightColor),
+
+      uTime: {
+        value: 0,
+      },
+
+      uDensity: {
+        value: 0.58,
+      },
+
+      uOpacity: {
+        value: 0.72,
+      },
+
+      uScale: {
+        value: mobile
+          ? 2.8
+          : 4.2,
+      },
+
+      uColor: {
+        value:
+          new THREE.Color(
+            "#d8e9ed"
+          ),
       },
     },
-
-    vertexShader: CLOUD_VERTEX,
-    fragmentShader: CLOUD_FRAGMENT,
 
     transparent: true,
     depthWrite: false,
     depthTest: true,
 
-    side: THREE.DoubleSide,
-    blending: THREE.NormalBlending,
+    side:
+      THREE.DoubleSide,
+
+    blending:
+      THREE.NormalBlending,
   });
+}
 
-  const mesh = new THREE.Mesh(geometry, material);
+function createCloudLayer({
+  width,
+  height,
+  depth,
+  y,
+  z,
+  material,
+}) {
+  const geometry =
+    new THREE.BoxGeometry(
+      width,
+      height,
+      depth,
+      1,
+      1,
+      1
+    );
 
-  mesh.position.y = y;
-  mesh.position.z = -height;
+  const mesh =
+    new THREE.Mesh(
+      geometry,
+      material
+    );
+
+  mesh.position.set(
+    0,
+    y,
+    z
+  );
 
   return mesh;
 }
 
-/* -------------------------------------------------------------------------- */
-/* POLAR SCENE                                                                */
-/* -------------------------------------------------------------------------- */
+function createTerrainMaterial(
+  textures,
+  {
+    color,
+    normal,
+    roughness,
+    displacement,
+    scale = 1,
+  }
+) {
+  const material =
+    new THREE.MeshStandardMaterial({
+      map: color || null,
+      normalMap: normal || null,
+      roughnessMap:
+        roughness || null,
 
-export default function PolarScene() {
-  const hostRef = useRef(null);
+      displacementMap:
+        displacement || null,
 
-  useEffect(() => {
-    const host = hostRef.current;
+      displacementScale:
+        displacement
+          ? 0.035
+          : 0,
 
-    if (!host) return undefined;
+      displacementBias:
+        displacement
+          ? -0.012
+          : 0,
 
-    let disposed = false;
-    let animationFrame = 0;
+      roughness: 0.88,
+      metalness: 0.02,
 
-    const mobile = isMobileDevice();
-
-    /* ---------------------------------------------------------------------- */
-    /* RENDERER                                                               */
-    /* ---------------------------------------------------------------------- */
-
-    const renderer = new THREE.WebGLRenderer({
-      antialias: !mobile,
-      alpha: true,
-      powerPreference: "high-performance",
-      logarithmicDepthBuffer: false,
+      color: "#ffffff",
     });
 
-    renderer.setPixelRatio(
-      Math.min(
-        window.devicePixelRatio || 1,
-        mobile ? 1.35 : 1.8,
-      ),
-    );
+  if (color) {
+    color.colorSpace =
+      THREE.SRGBColorSpace;
+  }
 
-    renderer.setSize(
-      window.innerWidth,
-      window.innerHeight,
-      false,
-    );
+  if (normal) {
+    normal.colorSpace =
+      THREE.NoColorSpace;
+  }
 
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
+  if (roughness) {
+    roughness.colorSpace =
+      THREE.NoColorSpace;
+  }
 
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = mobile ? 0.86 : 0.94;
+  if (displacement) {
+    displacement.colorSpace =
+      THREE.NoColorSpace;
+  }
 
-    renderer.shadowMap.enabled = !mobile;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  [
+    color,
+    normal,
+    roughness,
+    displacement,
+  ]
+    .filter(Boolean)
+    .forEach((texture) => {
+      setTextureRepeat(
+        texture,
+        scale
+      );
 
-    renderer.domElement.setAttribute(
-      "aria-hidden",
-      "true",
-    );
+      textures.add(texture);
+    });
 
-    renderer.domElement.style.display = "block";
-    renderer.domElement.style.width = "100%";
-    renderer.domElement.style.height = "100%";
-    renderer.domElement.style.pointerEvents = "none";
+  return material;
+}
 
-    host.appendChild(renderer.domElement);
+export default function PolarScene() {
+  const hostRef =
+    useRef(null);
 
-    /* ---------------------------------------------------------------------- */
-    /* SCENE                                                                  */
-    /* ---------------------------------------------------------------------- */
+  useEffect(() => {
+    const host =
+      hostRef.current;
 
-    const scene = new THREE.Scene();
+    if (!host) {
+      return undefined;
+    }
 
-    scene.background = new THREE.Color("#071018");
+    let destroyed = false;
 
-    scene.fog = new THREE.FogExp2(
-      new THREE.Color("#9db7c5"),
-      mobile ? 0.00082 : 0.00067,
-    );
+    const mobile =
+      window.matchMedia(
+        MOBILE_QUERY
+      ).matches;
 
-    /* ---------------------------------------------------------------------- */
-    /* CAMERA                                                                 */
-    /* ---------------------------------------------------------------------- */
+    const reducedMotion =
+      window.matchMedia(
+        "(prefers-reduced-motion: reduce)"
+      ).matches;
 
-    const camera = new THREE.PerspectiveCamera(
-      mobile ? 46 : 42,
-      window.innerWidth / window.innerHeight,
-      0.1,
-      18000,
-    );
+    const textureSet =
+      new Set();
+
+    const scene =
+      new THREE.Scene();
+
+    scene.background =
+      new THREE.Color(
+        "#071018"
+      );
+
+    scene.fog =
+      new THREE.FogExp2(
+        "#08151c",
+        mobile
+          ? 0.0065
+          : 0.0046
+      );
+
+    const camera =
+      new THREE.PerspectiveCamera(
+        mobile ? 48 : 43,
+        1,
+        0.1,
+        500
+      );
 
     camera.position.set(
       0,
-      mobile ? 8 : 7,
-      mobile ? 42 : 38,
+      mobile ? 5.5 : 6.5,
+      mobile ? 28 : 31
     );
 
-    camera.rotation.order = "YXZ";
+    const renderer =
+      new THREE.WebGLRenderer({
+        antialias:
+          !mobile,
+        alpha: true,
+        powerPreference:
+          "high-performance",
+      });
 
-    /* ---------------------------------------------------------------------- */
-    /* LIGHTING                                                               */
-    /* ---------------------------------------------------------------------- */
-
-    const hemisphereLight = new THREE.HemisphereLight(
-      new THREE.Color("#dbeaf0"),
-      new THREE.Color("#071018"),
-      mobile ? 1.15 : 1.35,
+    renderer.setPixelRatio(
+      Math.min(
+        window.devicePixelRatio ||
+          1,
+        mobile ? 1.35 : 1.8
+      )
     );
 
-    scene.add(hemisphereLight);
-
-    const keyLight = new THREE.DirectionalLight(
-      new THREE.Color("#e7f5ff"),
-      mobile ? 1.15 : 1.45,
+    renderer.setSize(
+      host.clientWidth ||
+        window.innerWidth,
+      host.clientHeight ||
+        window.innerHeight,
+      false
     );
+
+    renderer.outputColorSpace =
+      THREE.SRGBColorSpace;
+
+    renderer.toneMapping =
+      THREE.ACESFilmicToneMapping;
+
+    renderer.toneMappingExposure =
+      0.92;
+
+    renderer.shadowMap.enabled =
+      !mobile;
+
+    renderer.shadowMap.type =
+      THREE.PCFSoftShadowMap;
+
+    host.appendChild(
+      renderer.domElement
+    );
+
+    const ambient =
+      new THREE.HemisphereLight(
+        "#d9f4ff",
+        "#071017",
+        mobile
+          ? 1.05
+          : 1.25
+      );
+
+    scene.add(ambient);
+
+    const keyLight =
+      new THREE.DirectionalLight(
+        "#e9f8ff",
+        mobile
+          ? 1.7
+          : 2.2
+      );
 
     keyLight.position.set(
-      -900,
-      1300,
-      900,
+      -18,
+      28,
+      12
     );
 
-    keyLight.castShadow = !mobile;
+    keyLight.castShadow =
+      !mobile;
 
     if (!mobile) {
       keyLight.shadow.mapSize.set(
         1024,
-        1024,
+        1024
       );
 
-      keyLight.shadow.camera.near = 50;
-      keyLight.shadow.camera.far = 4000;
+      keyLight.shadow.camera.near =
+        1;
 
-      keyLight.shadow.camera.left = -1800;
-      keyLight.shadow.camera.right = 1800;
-      keyLight.shadow.camera.top = 1800;
-      keyLight.shadow.camera.bottom = -1800;
+      keyLight.shadow.camera.far =
+        100;
+
+      keyLight.shadow.camera.left =
+        -35;
+
+      keyLight.shadow.camera.right =
+        35;
+
+      keyLight.shadow.camera.top =
+        35;
+
+      keyLight.shadow.camera.bottom =
+        -35;
     }
 
     scene.add(keyLight);
 
-    const coldFill = new THREE.DirectionalLight(
-      new THREE.Color("#8ebbd1"),
-      mobile ? 0.42 : 0.55,
+    const rimLight =
+      new THREE.DirectionalLight(
+        "#7ddde4",
+        0.72
+      );
+
+    rimLight.position.set(
+      22,
+      10,
+      -24
     );
 
-    coldFill.position.set(
-      1000,
-      420,
-      -1400,
+    scene.add(rimLight);
+
+    const world =
+      new THREE.Group();
+
+    scene.add(world);
+
+    const distanceGroup =
+      new THREE.Group();
+
+    const heroGroup =
+      new THREE.Group();
+
+    const terrainGroup =
+      new THREE.Group();
+
+    const cloudGroup =
+      new THREE.Group();
+
+    const atmosphereGroup =
+      new THREE.Group();
+
+    const starGroup =
+      new THREE.Group();
+
+    world.add(
+      distanceGroup,
+      heroGroup,
+      terrainGroup,
+      cloudGroup,
+      atmosphereGroup,
+      starGroup
     );
 
-    scene.add(coldFill);
+    /*
+      ----------------------------------------------------------
+      SKY
+      ----------------------------------------------------------
+    */
 
-    /* ---------------------------------------------------------------------- */
-    /* TEXTURES                                                               */
-    /* ---------------------------------------------------------------------- */
+    const textureLoader =
+      new THREE.TextureLoader();
 
-    const textureLoader = new THREE.TextureLoader();
-    const loadingTextures = new Set();
+    const gltfLoader =
+      new GLTFLoader();
 
-    const loadTexture = (url) =>
-      new Promise((resolve) => {
-        textureLoader.load(
-          url,
-          (texture) => {
-            if (disposed) {
-              texture.dispose();
-              resolve(null);
-              return;
-            }
+    const fbxLoader =
+      new FBXLoader();
 
-            texture.colorSpace = THREE.NoColorSpace;
+    let environmentMap =
+      null;
 
-            loadingTextures.add(texture);
+    const pmrem =
+      new THREE.PMREMGenerator(
+        renderer
+      );
 
-            resolve(texture);
-          },
-          undefined,
-          () => {
-            resolve(null);
-          },
-        );
-      });
+    pmrem.compileEquirectangularShader();
 
-    const loadColorTexture = (url) =>
-      new Promise((resolve) => {
-        textureLoader.load(
-          url,
-          (texture) => {
-            if (disposed) {
-              texture.dispose();
-              resolve(null);
-              return;
-            }
+    textureLoader.load(
+      ASSETS.sky,
+      (texture) => {
+        if (destroyed) {
+          texture.dispose();
+          return;
+        }
 
-            texture.colorSpace =
-              THREE.SRGBColorSpace;
-
-            loadingTextures.add(texture);
-
-            resolve(texture);
-          },
-          undefined,
-          () => {
-            resolve(null);
-          },
-        );
-      });
-
-    /* ---------------------------------------------------------------------- */
-    /* SKY                                                                    */
-    /* ---------------------------------------------------------------------- */
-
-    let skyMesh = null;
-    let environmentMap = null;
-
-    const loadSky = async () => {
-      try {
-        const texture = await loadColorTexture(
-          ASSETS.sky,
-        );
-
-        if (!texture || disposed) return;
+        texture.colorSpace =
+          THREE.SRGBColorSpace;
 
         texture.mapping =
           THREE.EquirectangularReflectionMapping;
 
-        texture.wrapS = THREE.RepeatWrapping;
-        texture.wrapT = THREE.ClampToEdgeWrapping;
+        scene.background =
+          texture;
 
-        /*
-          The supplied sky is an LDR tonemapped JPEG.
-          It works both as a visible background and as an
-          approximate environment source.
-        */
-
-        scene.background = texture;
-
-        const pmrem = new THREE.PMREMGenerator(
-          renderer,
-        );
-
-        pmrem.compileEquirectangularShader();
+        const generated =
+          pmrem.fromEquirectangular(
+            texture
+          );
 
         environmentMap =
-          pmrem.fromEquirectangular(texture)
-            .texture;
+          generated.texture;
 
-        scene.environment = environmentMap;
+        scene.environment =
+          environmentMap;
 
+        generated.dispose();
         pmrem.dispose();
-      } catch {
-        // Keep the dark polar fallback background.
-      }
-    };
 
-    loadSky();
-
-    /* ---------------------------------------------------------------------- */
-    /* WORLD GROUPS                                                           */
-    /* ---------------------------------------------------------------------- */
-
-    const world = new THREE.Group();
-    world.name = "AntarcticWorld";
-
-    const heroGroup = new THREE.Group();
-    heroGroup.name = "HeroMountain";
-
-    const distanceGroup = new THREE.Group();
-    distanceGroup.name = "DistanceMountain";
-
-    const terrainGroup = new THREE.Group();
-    terrainGroup.name = "Terrain";
-
-    const cloudGroup = new THREE.Group();
-    cloudGroup.name = "CloudSystem";
-
-    const atmosphereGroup = new THREE.Group();
-    atmosphereGroup.name = "Atmosphere";
-
-    world.add(
-      heroGroup,
-      distanceGroup,
-      terrainGroup,
-      cloudGroup,
-      atmosphereGroup,
-    );
-
-    scene.add(world);
-
-    /* ---------------------------------------------------------------------- */
-    /* HERO MOUNTAIN / AURORA GLB                                             */
-    /* ---------------------------------------------------------------------- */
-
-    const gltfLoader = new GLTFLoader();
-
-    const loadHeroMountain = () => {
-      gltfLoader.load(
-        ASSETS.heroMountain,
-        (gltf) => {
-          if (disposed) {
-            disposeObject(gltf.scene);
-            return;
-          }
-
-          const model = gltf.scene;
-
-          model.name = "HeroMountainOptional";
-
-          /*
-            The exact transform is intentionally conservative.
-            The exported GLB should preserve its own modeling
-            scale and hierarchy. We normalize only the broad
-            footprint so the asset behaves consistently.
-          */
-
-          const box = new THREE.Box3().setFromObject(
-            model,
-          );
-
-          const size = box.getSize(
-            new THREE.Vector3(),
-          );
-
-          if (size.y > 0) {
-            const desiredHeight = mobile
-              ? 115
-              : 150;
-
-            const scale =
-              desiredHeight / size.y;
-
-            model.scale.multiplyScalar(scale);
-          }
-
-          const normalizedBox =
-            new THREE.Box3().setFromObject(model);
-
-          const center =
-            normalizedBox.getCenter(
-              new THREE.Vector3(),
-            );
-
-          model.position.x -= center.x;
-          model.position.z -= center.z;
-
-          model.position.y -=
-            normalizedBox.min.y;
-
-          model.position.y += mobile
-            ? -2
-            : 0;
-
-          model.position.z = -115;
-
-          model.traverse((child) => {
-            if (!child.isMesh) return;
-
-            child.frustumCulled = true;
-
-            if (child.material) {
-              const materials =
-                Array.isArray(child.material)
-                  ? child.material
-                  : [child.material];
-
-              materials.forEach((material) => {
-                material.envMapIntensity =
-                  0.75;
-
-                material.needsUpdate = true;
-              });
-            }
-
-            if (!mobile) {
-              child.castShadow = true;
-              child.receiveShadow = true;
-            }
-          });
-
-          heroGroup.add(model);
-        },
-        undefined,
-        () => {
-          /*
-            Expected during the current build because the
-            Aura_Borealis_.blend source has not yet been
-            converted into the runtime GLB.
-
-            This is intentionally a silent optional asset.
-          */
-        },
-      );
-    };
-
-    loadHeroMountain();
-
-    /* ---------------------------------------------------------------------- */
-    /* DISTANCE MOUNTAIN                                                      */
-    /* ---------------------------------------------------------------------- */
-
-    const fbxLoader = new FBXLoader();
-
-    fbxLoader.load(
-      ASSETS.distanceMountain,
-      (model) => {
-        if (disposed) {
-          disposeObject(model);
-          return;
-        }
-
-        model.name = "ChalaadiDistance";
-
-        const box = new THREE.Box3().setFromObject(
-          model,
+        textureSet.add(
+          texture
         );
-
-        const size = box.getSize(
-          new THREE.Vector3(),
-        );
-
-        if (size.y > 0) {
-          const targetHeight = mobile
-            ? 125
-            : 165;
-
-          const scale =
-            targetHeight / size.y;
-
-          model.scale.multiplyScalar(scale);
-        }
-
-        const normalizedBox =
-          new THREE.Box3().setFromObject(model);
-
-        const center =
-          normalizedBox.getCenter(
-            new THREE.Vector3(),
-          );
-
-        model.position.x -= center.x;
-        model.position.z -= center.z;
-
-        model.position.y -=
-          normalizedBox.min.y;
-
-        model.position.z = -275;
-
-        model.traverse((child) => {
-          if (!child.isMesh) return;
-
-          child.frustumCulled = true;
-
-          if (child.material) {
-            const materials =
-              Array.isArray(child.material)
-                ? child.material
-                : [child.material];
-
-            materials.forEach((material) => {
-              material.color.multiplyScalar(
-                0.82,
-              );
-
-              material.roughness =
-                Math.max(
-                  material.roughness ?? 0.8,
-                  0.72,
-                );
-
-              material.envMapIntensity =
-                0.5;
-
-              material.needsUpdate = true;
-            });
-          }
-        });
-
-        distanceGroup.add(model);
       },
       undefined,
       () => {
-        // Distance mountain is allowed to fail gracefully.
-      },
+        if (!destroyed) {
+          scene.background =
+            new THREE.Color(
+              "#071018"
+            );
+        }
+      }
     );
 
-    /* ---------------------------------------------------------------------- */
-    /* ICE TERRAIN                                                            */
-    /* ---------------------------------------------------------------------- */
+    /*
+      ----------------------------------------------------------
+      REAL TERRAIN MATERIALS
+      ----------------------------------------------------------
+    */
 
-    const createIceTerrain = async () => {
-      const [
-        color,
-        normal,
-        roughness,
-        displacement,
-      ] = await Promise.all([
-        loadColorTexture(ASSETS.ice.color),
-        loadTexture(ASSETS.ice.normal),
-        loadTexture(ASSETS.ice.roughness),
-        loadTexture(ASSETS.ice.displacement),
-      ]);
+    const loadColor =
+      (path) =>
+        new Promise(
+          (resolve) => {
+            textureLoader.load(
+              path,
+              (texture) => {
+                texture.colorSpace =
+                  THREE.SRGBColorSpace;
 
-      if (disposed) return;
+                textureSet.add(
+                  texture
+                );
 
-      const geometry =
-        new THREE.PlaneGeometry(
-          mobile ? 900 : 1150,
-          mobile ? 1600 : 1900,
-          mobile ? 100 : 150,
-          mobile ? 150 : 190,
+                resolve(texture);
+              },
+              undefined,
+              () => resolve(null)
+            );
+          }
         );
 
-      geometry.rotateX(-Math.PI / 2);
+    const loadData =
+      (path) =>
+        new Promise(
+          (resolve) => {
+            textureLoader.load(
+              path,
+              (texture) => {
+                texture.colorSpace =
+                  THREE.NoColorSpace;
 
-      if (displacement) {
-        const position =
-          geometry.attributes.position;
+                textureSet.add(
+                  texture
+                );
 
-        const displacementScale =
-          mobile ? 0.85 : 1.25;
+                resolve(texture);
+              },
+              undefined,
+              () => resolve(null)
+            );
+          }
+        );
 
-        for (
-          let i = 0;
-          i < position.count;
-          i += 1
+    Promise.all([
+      loadColor(
+        ASSETS.ice.color
+      ),
+      loadData(
+        ASSETS.ice.normal
+      ),
+      loadData(
+        ASSETS.ice.roughness
+      ),
+      loadData(
+        ASSETS.ice.displacement
+      ),
+
+      loadColor(
+        ASSETS.snow.color
+      ),
+      loadData(
+        ASSETS.snow.normal
+      ),
+      loadData(
+        ASSETS.snow.roughness
+      ),
+      loadData(
+        ASSETS.snow.ao
+      ),
+
+      loadColor(
+        ASSETS.rock.color
+      ),
+      loadData(
+        ASSETS.rock.normal
+      ),
+      loadData(
+        ASSETS.rock.roughness
+      ),
+      loadData(
+        ASSETS.rock.ao
+      ),
+    ]).then(
+      ([
+        iceColor,
+        iceNormal,
+        iceRoughness,
+        iceDisplacement,
+
+        snowColor,
+        snowNormal,
+        snowRoughness,
+        snowAO,
+
+        rockColor,
+        rockNormal,
+        rockRoughness,
+        rockAO,
+      ]) => {
+        if (destroyed) {
+          return;
+        }
+
+        /*
+          ICE FIELD
+        */
+
+        const iceGeometry =
+          new THREE.PlaneGeometry(
+            150,
+            150,
+            mobile
+              ? 48
+              : 82,
+            mobile
+              ? 48
+              : 82
+          );
+
+        iceGeometry.rotateX(
+          -Math.PI / 2
+        );
+
+        const iceMaterial =
+          createTerrainMaterial(
+            textureSet,
+            {
+              color: iceColor,
+              normal: iceNormal,
+              roughness:
+                iceRoughness,
+              displacement:
+                iceDisplacement,
+              scale: 7,
+            }
+          );
+
+        iceMaterial.roughness =
+          0.76;
+
+        iceMaterial.metalness =
+          0.04;
+
+        const ice =
+          new THREE.Mesh(
+            iceGeometry,
+            iceMaterial
+          );
+
+        ice.position.y =
+          -1.7;
+
+        ice.position.z =
+          -10;
+
+        ice.receiveShadow =
+          !mobile;
+
+        terrainGroup.add(
+          ice
+        );
+
+        /*
+          SNOW FIELD
+        */
+
+        const snowGeometry =
+          new THREE.PlaneGeometry(
+            115,
+            72,
+            mobile
+              ? 34
+              : 60,
+            mobile
+              ? 26
+              : 44
+          );
+
+        snowGeometry.rotateX(
+          -Math.PI / 2
+        );
+
+        const snowMaterial =
+          createTerrainMaterial(
+            textureSet,
+            {
+              color: snowColor,
+              normal: snowNormal,
+              roughness:
+                snowRoughness,
+              scale: 5.2,
+            }
+          );
+
+        snowMaterial.roughness =
+          0.94;
+
+        if (snowAO) {
+          snowMaterial.aoMap =
+            snowAO;
+          snowMaterial.aoMapIntensity =
+            0.42;
+        }
+
+        const snow =
+          new THREE.Mesh(
+            snowGeometry,
+            snowMaterial
+          );
+
+        snow.position.set(
+          0,
+          -1.52,
+          -17
+        );
+
+        snow.receiveShadow =
+          !mobile;
+
+        terrainGroup.add(
+          snow
+        );
+
+        /*
+          ROCK OUTCROPS
+        */
+
+        const rockMaterial =
+          createTerrainMaterial(
+            textureSet,
+            {
+              color: rockColor,
+              normal: rockNormal,
+              roughness:
+                rockRoughness,
+              scale: 1.8,
+            }
+          );
+
+        rockMaterial.roughness =
+          0.92;
+
+        if (rockAO) {
+          rockMaterial.aoMap =
+            rockAO;
+          rockMaterial.aoMapIntensity =
+            0.55;
+        }
+
+        const rockGeometry =
+          new THREE.IcosahedronGeometry(
+            1,
+            mobile ? 1 : 2
+          );
+
+        const rockPositions = [
+          [-17, -0.35, 4, 3.6],
+          [16, -0.55, 1, 4.2],
+          [-10, -0.7, -13, 2.8],
+          [11, -0.8, -20, 3.4],
+          [-21, -0.9, -26, 4.8],
+          [20, -0.85, -31, 4.5],
+        ];
+
+        rockPositions.forEach(
+          ([x, y, z, scale], index) => {
+            const rock =
+              new THREE.Mesh(
+                rockGeometry.clone(),
+                rockMaterial.clone()
+              );
+
+            rock.position.set(
+              x,
+              y,
+              z
+            );
+
+            rock.scale.set(
+              scale,
+              scale *
+                (0.55 +
+                  (index % 3) *
+                    0.12),
+              scale *
+                (0.78 +
+                  (index % 2) *
+                    0.18)
+            );
+
+            rock.rotation.set(
+              index * 0.31,
+              index * 0.67,
+              index * 0.19
+            );
+
+            rock.castShadow =
+              !mobile;
+
+            rock.receiveShadow =
+              !mobile;
+
+            terrainGroup.add(
+              rock
+            );
+          }
+        );
+      }
+    );
+
+    /*
+      ----------------------------------------------------------
+      DISTANCE MOUNTAIN — REAL FBX
+      ----------------------------------------------------------
+    */
+
+    fbxLoader.load(
+      ASSETS.distance,
+      (mountain) => {
+        if (destroyed) {
+          disposeObject(
+            mountain,
+            textureSet
+          );
+
+          return;
+        }
+
+        mountain.traverse(
+          (child) => {
+            if (!child.isMesh) {
+              return;
+            }
+
+            child.castShadow =
+              !mobile;
+
+            child.receiveShadow =
+              !mobile;
+
+            if (
+              child.material
+            ) {
+              const materials =
+                Array.isArray(
+                  child.material
+                )
+                  ? child.material
+                  : [child.material];
+
+              materials.forEach(
+                (material) => {
+                  material.side =
+                    THREE.FrontSide;
+
+                  material.roughness =
+                    0.9;
+
+                  material.metalness =
+                    0.0;
+                }
+              );
+            }
+          }
+        );
+
+        const box =
+          new THREE.Box3().setFromObject(
+            mountain
+          );
+
+        const size =
+          new THREE.Vector3();
+
+        box.getSize(size);
+
+        const maxDimension =
+          Math.max(
+            size.x,
+            size.y,
+            size.z
+          );
+
+        if (
+          Number.isFinite(
+            maxDimension
+          ) &&
+          maxDimension > 0
         ) {
-          const x = position.getX(i);
-          const z = position.getZ(i);
+          const scale =
+            31 /
+            maxDimension;
 
-          const broad =
-            Math.sin(x * 0.013) *
-            Math.cos(z * 0.009);
-
-          const fine =
-            Math.sin(x * 0.046 + z * 0.027) *
-            0.28;
-
-          position.setY(
-            i,
-            (broad * 0.75 + fine) *
-              displacementScale,
+          mountain.scale.setScalar(
+            scale
           );
         }
 
-        position.needsUpdate = true;
-        geometry.computeVertexNormals();
+        const scaledBox =
+          new THREE.Box3().setFromObject(
+            mountain
+          );
+
+        const center =
+          new THREE.Vector3();
+
+        scaledBox.getCenter(
+          center
+        );
+
+        mountain.position.x -=
+          center.x;
+
+        mountain.position.y -=
+          scaledBox.min.y;
+
+        mountain.position.y -=
+          1.4;
+
+        mountain.position.z =
+          -48;
+
+        mountain.rotation.y =
+          Math.PI * 0.035;
+
+        distanceGroup.add(
+          mountain
+        );
+      },
+      undefined,
+      () => {
+        // The scene intentionally
+        // continues without the
+        // distance mountain.
       }
-
-      const material =
-        new THREE.MeshStandardMaterial({
-          color: new THREE.Color("#b9d3df"),
-
-          map: color || null,
-
-          normalMap: normal || null,
-
-          roughnessMap: roughness || null,
-
-          roughness: 0.74,
-
-          metalness: 0.025,
-
-          envMapIntensity: 0.72,
-
-          displacementMap: null,
-
-          displacementScale: 0,
-
-          side: THREE.DoubleSide,
-        });
-
-      const mesh = new THREE.Mesh(
-        geometry,
-        material,
-      );
-
-      mesh.name = "RealIceTerrain";
-
-      mesh.position.y = -2;
-      mesh.position.z = -130;
-
-      mesh.receiveShadow = !mobile;
-      mesh.castShadow = false;
-
-      terrainGroup.add(mesh);
-    };
-
-    createIceTerrain();
-
-    /* ---------------------------------------------------------------------- */
-    /* SNOW PATCH                                                             */
-    /* ---------------------------------------------------------------------- */
-
-    const createSnowField = async () => {
-      const [
-        color,
-        normal,
-        roughness,
-        ao,
-      ] = await Promise.all([
-        loadColorTexture(ASSETS.snow.color),
-        loadTexture(ASSETS.snow.normal),
-        loadTexture(ASSETS.snow.roughness),
-        loadTexture(ASSETS.snow.ao),
-      ]);
-
-      if (disposed) return;
-
-      const geometry =
-        new THREE.PlaneGeometry(
-          mobile ? 600 : 760,
-          mobile ? 920 : 1150,
-          mobile ? 70 : 100,
-          mobile ? 90 : 125,
-        );
-
-      geometry.rotateX(-Math.PI / 2);
-
-      const material =
-        new THREE.MeshStandardMaterial({
-          color: new THREE.Color("#dbeaf0"),
-
-          map: color || null,
-
-          normalMap: normal || null,
-
-          roughnessMap: roughness || null,
-
-          aoMap: ao || null,
-
-          roughness: 0.88,
-
-          metalness: 0,
-
-          envMapIntensity: 0.45,
-
-          side: THREE.DoubleSide,
-        });
-
-      const mesh = new THREE.Mesh(
-        geometry,
-        material,
-      );
-
-      mesh.name = "RealSnowField";
-
-      mesh.position.y = 0.35;
-      mesh.position.z = -112;
-
-      mesh.rotation.y = 0.08;
-
-      mesh.receiveShadow = !mobile;
-
-      terrainGroup.add(mesh);
-    };
-
-    createSnowField();
-
-    /* ---------------------------------------------------------------------- */
-    /* ROCK OUTCROP                                                           */
-    /* ---------------------------------------------------------------------- */
-
-    const createRockOutcrop = async () => {
-      const [
-        color,
-        normal,
-        roughness,
-        ao,
-      ] = await Promise.all([
-        loadColorTexture(ASSETS.rock.color),
-        loadTexture(ASSETS.rock.normal),
-        loadTexture(ASSETS.rock.roughness),
-        loadTexture(ASSETS.rock.ao),
-      ]);
-
-      if (disposed) return;
-
-      const geometry =
-        new THREE.DodecahedronGeometry(
-          mobile ? 19 : 24,
-          2,
-        );
-
-      const material =
-        new THREE.MeshStandardMaterial({
-          color: new THREE.Color("#34434b"),
-
-          map: color || null,
-
-          normalMap: normal || null,
-
-          roughnessMap: roughness || null,
-
-          aoMap: ao || null,
-
-          roughness: 0.92,
-
-          metalness: 0.02,
-
-          envMapIntensity: 0.34,
-        });
-
-      const rockA = new THREE.Mesh(
-        geometry,
-        material,
-      );
-
-      rockA.name = "RealRockOutcrop";
-
-      rockA.position.set(
-        mobile ? -46 : -72,
-        5,
-        -28,
-      );
-
-      rockA.scale.set(
-        1.7,
-        0.9,
-        1.15,
-      );
-
-      rockA.rotation.set(
-        0.15,
-        -0.48,
-        0.08,
-      );
-
-      rockA.castShadow = !mobile;
-      rockA.receiveShadow = !mobile;
-
-      terrainGroup.add(rockA);
-
-      const rockB =
-        new THREE.Mesh(
-          geometry.clone(),
-          material.clone(),
-        );
-
-      rockB.position.set(
-        mobile ? 48 : 92,
-        3,
-        -58,
-      );
-
-      rockB.scale.set(
-        1.2,
-        0.7,
-        1.5,
-      );
-
-      rockB.rotation.set(
-        -0.08,
-        0.8,
-        0.12,
-      );
-
-      rockB.castShadow = !mobile;
-      rockB.receiveShadow = !mobile;
-
-      terrainGroup.add(rockB);
-    };
-
-    createRockOutcrop();
-
-    /* ---------------------------------------------------------------------- */
-    /* DARK WATER / HORIZON                                                    */
-    /* ---------------------------------------------------------------------- */
-
-    const waterGeometry =
-      new THREE.PlaneGeometry(
-        mobile ? 900 : 1200,
-        mobile ? 900 : 1200,
-        40,
-        40,
-      );
-
-    waterGeometry.rotateX(-Math.PI / 2);
-
-    const waterMaterial =
-      new THREE.MeshStandardMaterial({
-        color: new THREE.Color("#08141b"),
-        roughness: 0.32,
-        metalness: 0.12,
-        envMapIntensity: 0.6,
-        transparent: true,
-        opacity: 0.88,
-      });
-
-    const water =
-      new THREE.Mesh(
-        waterGeometry,
-        waterMaterial,
-      );
-
-    water.name = "DarkPolarWater";
-
-    water.position.y = -6.8;
-    water.position.z = -390;
-
-    terrainGroup.add(water);
-
-    /* ---------------------------------------------------------------------- */
-    /* CLOUD SYSTEM                                                           */
-    /* ---------------------------------------------------------------------- */
-
-    const mountainCloud = createCloudLayer({
-      width: mobile ? 680 : 920,
-      depth: mobile ? 820 : 1080,
-      height: 0,
-      y: 27,
-      opacity: mobile ? 0.31 : 0.34,
-      density: mobile ? 0.92 : 0.86,
-      color: "#b8c9d0",
-      lightColor: "#eaf5f6",
-      wind: 0.78,
-      scale: mobile ? 1.5 : 1.8,
-    });
-
-    mountainCloud.position.z = -125;
-
-    mountainCloud.renderOrder = 3;
-
-    cloudGroup.add(mountainCloud);
-
-    const transitionCloud = createCloudLayer({
-      width: mobile ? 920 : 1250,
-      depth: mobile ? 1050 : 1450,
-      height: 0,
-      y: 7,
-      opacity: mobile ? 0.54 : 0.58,
-      density: mobile ? 1.0 : 0.94,
-      color: "#81959e",
-      lightColor: "#d9e8eb",
-      wind: 0.54,
-      scale: mobile ? 2.4 : 2.8,
-    });
-
-    transitionCloud.position.z = -330;
-
-    transitionCloud.renderOrder = 4;
-
-    cloudGroup.add(transitionCloud);
-
-    const foregroundMist = createCloudLayer({
-      width: mobile ? 700 : 980,
-      depth: mobile ? 650 : 880,
-      height: 0,
-      y: 2,
-      opacity: mobile ? 0.2 : 0.23,
-      density: mobile ? 0.66 : 0.6,
-      color: "#6f858e",
-      lightColor: "#d0e0e4",
-      wind: 1.08,
-      scale: mobile ? 1.15 : 1.35,
-    });
-
-    foregroundMist.position.z = -45;
-
-    foregroundMist.renderOrder = 5;
-
-    cloudGroup.add(foregroundMist);
-
-    const cloudLayers = [
-      mountainCloud,
-      transitionCloud,
-      foregroundMist,
-    ];
-
-    /* ---------------------------------------------------------------------- */
-    /* POLAR AURORA BACKDROP                                                   */
-    /* ---------------------------------------------------------------------- */
-
-    /*
-      This is deliberately restrained.
-
-      The final hero aurora belongs to the optional real GLB
-      from Aura_Borealis_.blend. This procedural layer only
-      prevents the current build from feeling visually empty
-      while that asset is unavailable.
-
-      It is not a fake mountain and it does not replace the
-      future hero asset.
-    */
-
-    const auroraGeometry =
-      new THREE.PlaneGeometry(
-        mobile ? 500 : 720,
-        mobile ? 260 : 360,
-        mobile ? 20 : 28,
-        mobile ? 14 : 20,
-      );
-
-    const auroraMaterial =
-      new THREE.ShaderMaterial({
-        uniforms: {
-          uTime: {
-            value: 0,
-          },
-
-          uOpacity: {
-            value: mobile ? 0.075 : 0.095,
-          },
-
-          uColorA: {
-            value: new THREE.Color(
-              "#66d8d1",
-            ),
-          },
-
-          uColorB: {
-            value: new THREE.Color(
-              "#6388dd",
-            ),
-          },
-        },
-
-        vertexShader: `
-          varying vec2 vUv;
-
-          uniform float uTime;
-
-          void main() {
-            vUv = uv;
-
-            vec3 p = position;
-
-            float wave =
-              sin(
-                p.x * 0.024 +
-                uTime * 0.15
-              ) *
-              12.0;
-
-            wave +=
-              sin(
-                p.x * 0.057 -
-                uTime * 0.09
-              ) *
-              5.0;
-
-            p.y +=
-              wave *
-              smoothstep(
-                0.0,
-                1.0,
-                uv.y
-              );
-
-            vec4 world =
-              modelMatrix *
-              vec4(p, 1.0);
-
-            gl_Position =
-              projectionMatrix *
-              viewMatrix *
-              world;
-          }
-        `,
-
-        fragmentShader: `
-          varying vec2 vUv;
-
-          uniform float uOpacity;
-          uniform vec3 uColorA;
-          uniform vec3 uColorB;
-
-          void main() {
-            float edge =
-              smoothstep(
-                0.0,
-                0.22,
-                vUv.y
-              ) *
-              smoothstep(
-                1.0,
-                0.55,
-                vUv.y
-              );
-
-            float bands =
-              sin(
-                vUv.x * 18.0 +
-                vUv.y * 5.0
-              ) *
-              0.5 +
-              0.5;
-
-            vec3 color =
-              mix(
-                uColorA,
-                uColorB,
-                bands
-              );
-
-            float alpha =
-              edge *
-              uOpacity;
-
-            gl_FragColor =
-              vec4(color, alpha);
-          }
-        `,
-
-        transparent: true,
-        depthWrite: false,
-        depthTest: true,
-        side: THREE.DoubleSide,
-        blending: THREE.AdditiveBlending,
-      });
-
-    const aurora =
-      new THREE.Mesh(
-        auroraGeometry,
-        auroraMaterial,
-      );
-
-    aurora.name =
-      "TemporaryAuroraAtmosphere";
-
-    aurora.position.set(
-      0,
-      mobile ? 105 : 125,
-      -510,
     );
 
-    aurora.rotation.x = -0.08;
+    /*
+      ----------------------------------------------------------
+      OPTIONAL HERO MOUNTAIN
+      ----------------------------------------------------------
 
-    atmosphereGroup.add(aurora);
+      This is deliberately optional.
 
-    /* ---------------------------------------------------------------------- */
-    /* STARS                                                                   */
-    /* ---------------------------------------------------------------------- */
+      When the optimized GLB exported
+      from Aura_Borealis_.blend exists at
+      this path, it automatically becomes
+      the foreground hero.
 
-    const starCount = mobile ? 380 : 850;
+      Until then, the rest of the
+      environment remains fully functional.
+    */
+
+    gltfLoader.load(
+      ASSETS.hero,
+      (gltf) => {
+        if (destroyed) {
+          disposeObject(
+            gltf.scene,
+            textureSet
+          );
+
+          return;
+        }
+
+        const hero =
+          gltf.scene;
+
+        hero.traverse(
+          (child) => {
+            if (!child.isMesh) {
+              return;
+            }
+
+            child.castShadow =
+              !mobile;
+
+            child.receiveShadow =
+              !mobile;
+
+            if (
+              child.material
+            ) {
+              const materials =
+                Array.isArray(
+                  child.material
+                )
+                  ? child.material
+                  : [child.material];
+
+              materials.forEach(
+                (material) => {
+                  material.envMapIntensity =
+                    1.15;
+
+                  material.roughness =
+                    Math.min(
+                      material.roughness ??
+                        0.72,
+                      0.86
+                    );
+                }
+              );
+            }
+          }
+        );
+
+        const box =
+          new THREE.Box3().setFromObject(
+            hero
+          );
+
+        const size =
+          new THREE.Vector3();
+
+        box.getSize(size);
+
+        const maxDimension =
+          Math.max(
+            size.x,
+            size.y,
+            size.z
+          );
+
+        if (
+          Number.isFinite(
+            maxDimension
+          ) &&
+          maxDimension > 0
+        ) {
+          const targetSize =
+            mobile
+              ? 23
+              : 29;
+
+          hero.scale.setScalar(
+            targetSize /
+              maxDimension
+          );
+        }
+
+        const normalizedBox =
+          new THREE.Box3().setFromObject(
+            hero
+          );
+
+        const center =
+          new THREE.Vector3();
+
+        normalizedBox.getCenter(
+          center
+        );
+
+        hero.position.x -=
+          center.x;
+
+        hero.position.y -=
+          normalizedBox.min.y;
+
+        hero.position.y -=
+          1.15;
+
+        hero.position.z =
+          mobile ? -22 : -26;
+
+        hero.rotation.y =
+          Math.PI * 0.035;
+
+        heroGroup.add(
+          hero
+        );
+      },
+      undefined,
+      () => {
+        // Optional hero asset.
+        // No error state is shown to
+        // the visitor.
+      }
+    );
+
+    /*
+      ----------------------------------------------------------
+      CLOUD / MIST SYSTEM
+      ----------------------------------------------------------
+    */
+
+    const cloudNoise =
+      createNoiseTexture();
+
+    textureSet.add(
+      cloudNoise
+    );
+
+    const mountainCloudMaterial =
+      createCloudMaterial(
+        cloudNoise,
+        mobile
+      );
+
+    const transitionCloudMaterial =
+      createCloudMaterial(
+        cloudNoise,
+        mobile
+      );
+
+    const foregroundMistMaterial =
+      createCloudMaterial(
+        cloudNoise,
+        mobile
+      );
+
+    mountainCloudMaterial
+      .uniforms.uDensity.value =
+      mobile
+        ? 0.44
+        : 0.52;
+
+    mountainCloudMaterial
+      .uniforms.uOpacity.value =
+      0.74;
+
+    mountainCloudMaterial
+      .uniforms.uScale.value =
+      mobile ? 3.2 : 4.5;
+
+    transitionCloudMaterial
+      .uniforms.uDensity.value =
+      0.38;
+
+    transitionCloudMaterial
+      .uniforms.uOpacity.value =
+      0.82;
+
+    transitionCloudMaterial
+      .uniforms.uScale.value =
+      mobile ? 2.4 : 3.5;
+
+    foregroundMistMaterial
+      .uniforms.uDensity.value =
+      0.23;
+
+    foregroundMistMaterial
+      .uniforms.uOpacity.value =
+      0.56;
+
+    foregroundMistMaterial
+      .uniforms.uScale.value =
+      mobile ? 3.6 : 5.0;
+
+    const mountainCloud =
+      createCloudLayer({
+        width: 92,
+        height: 15,
+        depth: 42,
+        y: 3.2,
+        z: -34,
+        material:
+          mountainCloudMaterial,
+      });
+
+    const transitionCloud =
+      createCloudLayer({
+        width: 120,
+        height: 21,
+        depth: 50,
+        y: 5.5,
+        z: -13,
+        material:
+          transitionCloudMaterial,
+      });
+
+    const foregroundMist =
+      createCloudLayer({
+        width: 145,
+        height: 16,
+        depth: 36,
+        y: 0.5,
+        z: 10,
+        material:
+          foregroundMistMaterial,
+      });
+
+    cloudGroup.add(
+      mountainCloud,
+      transitionCloud,
+      foregroundMist
+    );
+
+    /*
+      ----------------------------------------------------------
+      STARS
+      ----------------------------------------------------------
+    */
+
+    const starCount =
+      mobile ? 240 : 620;
 
     const starPositions =
       new Float32Array(
-        starCount * 3,
+        starCount * 3
       );
 
     for (
-      let i = 0;
-      i < starCount;
-      i += 1
+      let index = 0;
+      index < starCount;
+      index += 1
     ) {
-      const radius =
-        850 +
-        Math.random() * 700;
+      const i = index * 3;
 
-      const angle =
-        Math.random() *
-        Math.PI *
-        2;
+      starPositions[i] =
+        (Math.random() - 0.5) *
+        150;
 
-      const height =
-        180 +
-        Math.random() *
-        500;
+      starPositions[i + 1] =
+        Math.random() * 80 +
+        6;
 
-      starPositions[i * 3] =
-        Math.cos(angle) * radius;
-
-      starPositions[i * 3 + 1] =
-        height;
-
-      starPositions[i * 3 + 2] =
-        Math.sin(angle) * radius -
-        600;
+      starPositions[i + 2] =
+        -Math.random() * 125 -
+        18;
     }
 
     const starGeometry =
@@ -1431,659 +1531,724 @@ export default function PolarScene() {
       "position",
       new THREE.BufferAttribute(
         starPositions,
-        3,
-      ),
+        3
+      )
     );
 
     const starMaterial =
       new THREE.PointsMaterial({
-        color: new THREE.Color(
-          "#d9edf4",
-        ),
-        size: mobile ? 0.9 : 1.15,
-        sizeAttenuation: true,
+        color: "#d8f5ff",
+        size: mobile
+          ? 0.045
+          : 0.065,
         transparent: true,
-        opacity: mobile ? 0.34 : 0.46,
+        opacity: 0.54,
         depthWrite: false,
       });
 
     const stars =
       new THREE.Points(
         starGeometry,
-        starMaterial,
+        starMaterial
       );
 
-    stars.name = "PolarStars";
+    starGroup.add(
+      stars
+    );
 
-    atmosphereGroup.add(stars);
+    /*
+      ----------------------------------------------------------
+      DARK WATER / HORIZON
+      ----------------------------------------------------------
+    */
 
-    /* ---------------------------------------------------------------------- */
-    /* SCROLL / WORLD TIMELINE                                                 */
-    /* ---------------------------------------------------------------------- */
+    const waterGeometry =
+      new THREE.PlaneGeometry(
+        140,
+        62,
+        mobile ? 16 : 28,
+        mobile ? 12 : 20
+      );
 
-    const scrollState = {
-      current: 0,
-      target: 0,
-    };
+    waterGeometry.rotateX(
+      -Math.PI / 2
+    );
 
-    const updateScrollTarget = () => {
-      const maxScroll =
-        Math.max(
-          document.documentElement
-            .scrollHeight -
-            window.innerHeight,
-          1,
+    const waterMaterial =
+      new THREE.MeshPhysicalMaterial({
+        color: "#10242b",
+        roughness: 0.2,
+        metalness: 0.12,
+        transmission: 0.04,
+        transparent: true,
+        opacity: 0.58,
+      });
+
+    const water =
+      new THREE.Mesh(
+        waterGeometry,
+        waterMaterial
+      );
+
+    water.position.set(
+      0,
+      -1.72,
+      -4
+    );
+
+    water.receiveShadow =
+      !mobile;
+
+    terrainGroup.add(
+      water
+    );
+
+    /*
+      ----------------------------------------------------------
+      ATMOSPHERIC HORIZON GLOW
+      ----------------------------------------------------------
+    */
+
+    const horizonGeometry =
+      new THREE.PlaneGeometry(
+        170,
+        48
+      );
+
+    const horizonMaterial =
+      new THREE.MeshBasicMaterial({
+        color: "#376b75",
+        transparent: true,
+        opacity: 0.055,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        blending:
+          THREE.AdditiveBlending,
+      });
+
+    const horizon =
+      new THREE.Mesh(
+        horizonGeometry,
+        horizonMaterial
+      );
+
+    horizon.position.set(
+      0,
+      9,
+      -66
+    );
+
+    atmosphereGroup.add(
+      horizon
+    );
+
+    /*
+      ----------------------------------------------------------
+      SCROLL / POINTER STATE
+      ----------------------------------------------------------
+    */
+
+    let scrollTarget = 0;
+    let scrollCurrent = 0;
+
+    let pointerTargetX = 0;
+    let pointerTargetY = 0;
+
+    let pointerCurrentX = 0;
+    let pointerCurrentY = 0;
+
+    let time = 0;
+
+    const cameraTarget =
+      new THREE.Vector3();
+
+    const lookTarget =
+      new THREE.Vector3();
+
+    const tempVector =
+      new THREE.Vector3();
+
+    const fogColor =
+      new THREE.Color(
+        "#08151c"
+      );
+
+    const warmFogColor =
+      new THREE.Color(
+        "#10252c"
+      );
+
+    const coolFogColor =
+      new THREE.Color(
+        "#071219"
+      );
+
+    const handleScroll =
+      () => {
+        const maxScroll =
+          Math.max(
+            1,
+            document.documentElement
+              .scrollHeight -
+              window.innerHeight
+          );
+
+        scrollTarget =
+          clamp01(
+            window.scrollY /
+              maxScroll
+          );
+      };
+
+    const handlePointer =
+      (event) => {
+        pointerTargetX =
+          (event.clientX /
+            window.innerWidth -
+            0.5) *
+          2;
+
+        pointerTargetY =
+          (event.clientY /
+            window.innerHeight -
+            0.5) *
+          2;
+      };
+
+    const handlePointerLeave =
+      () => {
+        pointerTargetX = 0;
+        pointerTargetY = 0;
+      };
+
+    const handleResize =
+      () => {
+        const width =
+          host.clientWidth ||
+          window.innerWidth;
+
+        const height =
+          host.clientHeight ||
+          window.innerHeight;
+
+        camera.aspect =
+          width / height;
+
+        camera.updateProjectionMatrix();
+
+        renderer.setSize(
+          width,
+          height,
+          false
         );
 
-      scrollState.target =
-        clamp01(
-          window.scrollY / maxScroll,
+        renderer.setPixelRatio(
+          Math.min(
+            window.devicePixelRatio ||
+              1,
+            mobile ? 1.35 : 1.8
+          )
         );
-    };
-
-    updateScrollTarget();
+      };
 
     window.addEventListener(
       "scroll",
-      updateScrollTarget,
+      handleScroll,
       {
         passive: true,
-      },
+      }
     );
-
-    /* ---------------------------------------------------------------------- */
-    /* MOUSE / POINTER                                                         */
-    /* ---------------------------------------------------------------------- */
-
-    const pointer = {
-      currentX: 0,
-      currentY: 0,
-      targetX: 0,
-      targetY: 0,
-    };
-
-    const onPointerMove = (event) => {
-      if (mobile) return;
-
-      pointer.targetX =
-        (event.clientX /
-          window.innerWidth -
-          0.5) *
-        2;
-
-      pointer.targetY =
-        (event.clientY /
-          window.innerHeight -
-          0.5) *
-        2;
-    };
 
     window.addEventListener(
       "pointermove",
-      onPointerMove,
+      handlePointer,
       {
         passive: true,
-      },
+      }
     );
 
-    /* ---------------------------------------------------------------------- */
-    /* RESIZE                                                                  */
-    /* ---------------------------------------------------------------------- */
-
-    const onResize = () => {
-      if (disposed) return;
-
-      const width =
-        window.innerWidth;
-
-      const height =
-        window.innerHeight;
-
-      camera.aspect =
-        width / height;
-
-      camera.updateProjectionMatrix();
-
-      renderer.setPixelRatio(
-        Math.min(
-          window.devicePixelRatio || 1,
-          mobile ? 1.35 : 1.8,
-        ),
-      );
-
-      renderer.setSize(
-        width,
-        height,
-        false,
-      );
-
-      updateScrollTarget();
-    };
+    window.addEventListener(
+      "pointerleave",
+      handlePointerLeave
+    );
 
     window.addEventListener(
       "resize",
-      onResize,
+      handleResize
     );
 
-    /* ---------------------------------------------------------------------- */
-    /* ANIMATION                                                               */
-    /* ---------------------------------------------------------------------- */
+    handleScroll();
+    handleResize();
 
-    const clock = new THREE.Clock();
+    /*
+      ----------------------------------------------------------
+      ANIMATION LOOP
+      ----------------------------------------------------------
+    */
 
-    const animate = () => {
-      if (disposed) return;
+    let animationFrame = 0;
+    let previousTime =
+      performance.now();
 
-      animationFrame =
-        requestAnimationFrame(
-          animate,
-        );
+    const animate =
+      (now) => {
+        if (destroyed) {
+          return;
+        }
 
-      const delta =
-        Math.min(
-          clock.getDelta(),
-          0.05,
-        );
+        animationFrame =
+          requestAnimationFrame(
+            animate
+          );
 
-      const elapsed =
-        clock.elapsedTime;
-
-      scrollState.current =
-        damp(
-          scrollState.current,
-          scrollState.target,
-          4.2,
-          delta,
-        );
-
-      pointer.currentX =
-        damp(
-          pointer.currentX,
-          pointer.targetX,
-          3.0,
-          delta,
-        );
-
-      pointer.currentY =
-        damp(
-          pointer.currentY,
-          pointer.targetY,
-          3.0,
-          delta,
-        );
-
-      const progress =
-        scrollState.current;
-
-      /* -------------------------------------------------------------------- */
-      /* WORLD PHASES                                                         */
-      /* -------------------------------------------------------------------- */
-
-      const arrival =
-        smoothstep(
-          0.0,
-          0.18,
-          progress,
-        );
-
-      const descent =
-        smoothstep(
-          0.12,
-          0.46,
-          progress,
-        );
-
-      const cloudEntry =
-        smoothstep(
-          0.31,
-          0.51,
-          progress,
-        );
-
-      const cloudExit =
-        smoothstep(
-          0.48,
-          0.68,
-          progress,
-        );
-
-      const systemsPhase =
-        smoothstep(
-          0.52,
-          0.76,
-          progress,
-        );
-
-      const horizon =
-        smoothstep(
-          0.74,
-          1.0,
-          progress,
-        );
-
-      /* -------------------------------------------------------------------- */
-      /* CAMERA                                                               */
-      /* -------------------------------------------------------------------- */
-
-      const cameraTargetX =
-        pointer.currentX *
-        (mobile ? 0.55 : 1.45);
-
-      const cameraTargetY =
-        (mobile ? 5.8 : 6.8) -
-        descent * 9.5 +
-        horizon * 4.0;
-
-      const cameraTargetZ =
-        (mobile ? 43 : 39) -
-        descent * 24 -
-        cloudEntry * 22 +
-        cloudExit * 28 +
-        horizon * 18;
-
-      camera.position.x =
-        damp(
-          camera.position.x,
-          cameraTargetX,
-          2.5,
-          delta,
-        );
-
-      camera.position.y =
-        damp(
-          camera.position.y,
-          cameraTargetY +
-            pointer.currentY *
-              (mobile ? -0.7 : -1.2),
-          2.7,
-          delta,
-        );
-
-      camera.position.z =
-        damp(
-          camera.position.z,
-          cameraTargetZ,
-          2.7,
-          delta,
-        );
-
-      const lookX =
-        pointer.currentX *
-        (mobile ? 0.5 : 1.0);
-
-      const lookY =
-        13 -
-        descent * 4.0 +
-        horizon * 7.0;
-
-      const lookZ =
-        -95 -
-        cloudEntry * 70 +
-        cloudExit * 65;
-
-      const lookTarget =
-        new THREE.Vector3(
-          lookX,
-          lookY,
-          lookZ,
-        );
-
-      const lookQuaternion =
-        new THREE.Quaternion();
-
-      const lookMatrix =
-        new THREE.Matrix4();
-
-      lookMatrix.lookAt(
-        camera.position,
-        lookTarget,
-        camera.up,
-      );
-
-      lookQuaternion.setFromRotationMatrix(
-        lookMatrix,
-      );
-
-      camera.quaternion.slerp(
-        lookQuaternion,
-        1 -
-          Math.exp(
-            -3.1 * delta,
-          ),
-      );
-
-      /* -------------------------------------------------------------------- */
-      /* HERO MOUNTAIN                                                         */
-      /* -------------------------------------------------------------------- */
-
-      heroGroup.position.x =
-        Math.sin(elapsed * 0.035) *
-        0.9;
-
-      heroGroup.position.y =
-        horizon * 1.8;
-
-      heroGroup.rotation.y =
-        Math.sin(elapsed * 0.025) *
-        0.008;
-
-      heroGroup.visible = true;
-
-      /* -------------------------------------------------------------------- */
-      /* DISTANCE MOUNTAIN                                                     */
-      /* -------------------------------------------------------------------- */
-
-      distanceGroup.position.x =
-        Math.sin(
-          elapsed * 0.018,
-        ) *
-        2.2;
-
-      distanceGroup.position.y =
-        descent * -4.5 +
-        horizon * 3.0;
-
-      distanceGroup.rotation.y =
-        pointer.currentX *
-        0.018;
-
-      /* -------------------------------------------------------------------- */
-      /* CLOUD MOTION                                                          */
-      /* -------------------------------------------------------------------- */
-
-      cloudLayers.forEach(
-        (cloud, index) => {
-          const material =
-            cloud.material;
-
-          if (
-            !material ||
-            !material.uniforms
-          ) {
-            return;
-          }
-
-          material.uniforms.uTime.value =
-            elapsed;
-
-          const depthFactor =
-            index === 0
-              ? 0.8
-              : index === 1
-                ? 1.15
-                : 1.45;
-
-          material.uniforms.uWind.value =
-            depthFactor;
-
-          const phaseOpacity =
-            index === 0
-              ? 0.22 + cloudEntry * 0.35
-              : index === 1
-                ? 0.18 +
-                  cloudEntry * 0.88 -
-                  cloudExit * 0.82
-                : 0.16 +
-                  cloudEntry * 0.32 -
-                  cloudExit * 0.28;
-
-          material.uniforms.uOpacity.value =
+        const delta =
+          Math.min(
+            0.05,
             Math.max(
-              0.045,
-              phaseOpacity,
-            );
+              0.001,
+              (now -
+                previousTime) /
+                1000
+            )
+          );
 
-          cloud.position.x =
-            Math.sin(
-              elapsed *
-                (0.011 +
-                  index * 0.004),
-            ) *
-            (index === 1
-              ? 16
-              : 9);
+        previousTime = now;
 
-          cloud.position.z =
-            cloud.position.z +
-            0;
+        time += delta;
 
-          cloud.rotation.z =
-            Math.sin(
-              elapsed * 0.013 +
-                index,
-            ) *
-            0.004;
-        },
-      );
+        const motionScale =
+          reducedMotion
+            ? 0.12
+            : 1;
 
-      /* -------------------------------------------------------------------- */
-      /* ATMOSPHERIC FOG                                                       */
-      /* -------------------------------------------------------------------- */
+        scrollCurrent =
+          damp(
+            scrollCurrent,
+            scrollTarget,
+            4.5,
+            delta
+          );
 
-      const fogColor =
-        new THREE.Color();
+        pointerCurrentX =
+          damp(
+            pointerCurrentX,
+            pointerTargetX,
+            4.5,
+            delta
+          );
 
-      fogColor.setHSL(
-        0.55,
-        0.16,
-        THREE.MathUtils.lerp(
-          0.47,
-          0.64,
-          horizon,
-        ),
-      );
+        pointerCurrentY =
+          damp(
+            pointerCurrentY,
+            pointerTargetY,
+            4.5,
+            delta
+          );
 
-      scene.fog.color.copy(
-        fogColor,
-      );
+        const p =
+          scrollCurrent;
 
-      const baseFog =
-        mobile
-          ? 0.00082
-          : 0.00067;
+        /*
+          CAMERA JOURNEY
 
-      const cloudFog =
-        cloudEntry *
-        0.00072;
+          ARRIVAL
+          ↓
+          DESCENT
+          ↓
+          CLOUD
+          ↓
+          SYSTEMS
+          ↓
+          HORIZON
+        */
 
-      const exitReduction =
-        cloudExit *
-        0.00044;
+        const descent =
+          smoothstep(
+            0.02,
+            0.62,
+            p
+          );
 
-      scene.fog.density =
-        Math.max(
-          0.00028,
-          baseFog +
-            cloudFog -
-            exitReduction,
+        const deepJourney =
+          smoothstep(
+            0.28,
+            1,
+            p
+          );
+
+        cameraTarget.set(
+          pointerCurrentX *
+            1.45,
+          5.8 -
+            descent * 4.8 +
+            pointerCurrentY *
+              0.85,
+          30 -
+            descent * 42 -
+            deepJourney * 18
         );
 
-      /* -------------------------------------------------------------------- */
-      /* TERRAIN MOTION                                                        */
-      /* -------------------------------------------------------------------- */
+        camera.position.x =
+          damp(
+            camera.position.x,
+            cameraTarget.x,
+            3.2,
+            delta
+          );
 
-      terrainGroup.position.z =
-        descent * -15 +
-        horizon * 18;
+        camera.position.y =
+          damp(
+            camera.position.y,
+            cameraTarget.y,
+            3.2,
+            delta
+          );
 
-      terrainGroup.position.x =
-        pointer.currentX * 2.5;
+        camera.position.z =
+          damp(
+            camera.position.z,
+            cameraTarget.z,
+            3.2,
+            delta
+          );
 
-      terrainGroup.rotation.y =
-        pointer.currentX *
-        0.008;
+        lookTarget.set(
+          pointerCurrentX *
+            0.55,
+          2.4 -
+            descent * 3.0,
+          -24 -
+            p * 22
+        );
 
-      /* -------------------------------------------------------------------- */
-      /* WATER                                                                  */
-      /* -------------------------------------------------------------------- */
+        camera.lookAt(
+          lookTarget
+        );
 
-      water.material.opacity =
-        0.72 +
-        horizon * 0.16;
+        /*
+          REAL MOUNTAIN PARALLAX
+        */
 
-      water.position.y =
-        -6.8 +
-        Math.sin(
-          elapsed * 0.22,
-        ) *
-        0.08;
+        distanceGroup.position.x =
+          pointerCurrentX * -1.4;
 
-      /* -------------------------------------------------------------------- */
-      /* AURORA                                                                 */
-      /* -------------------------------------------------------------------- */
+        distanceGroup.position.y =
+          Math.sin(
+            time * 0.08
+          ) *
+          0.08 *
+          motionScale;
 
-      if (
-        auroraMaterial.uniforms
-      ) {
-        auroraMaterial.uniforms.uTime.value =
-          elapsed;
+        heroGroup.position.x =
+          pointerCurrentX * -0.7;
 
-        auroraMaterial.uniforms.uOpacity.value =
-          (mobile ? 0.045 : 0.06) +
-          arrival *
+        heroGroup.position.y =
+          Math.sin(
+            time * 0.12
+          ) *
+          0.035 *
+          motionScale;
+
+        /*
+          TERRAIN TRAVEL
+        */
+
+        terrainGroup.position.z =
+          -p * 13;
+
+        terrainGroup.rotation.y =
+          pointerCurrentX *
+          0.006;
+
+        /*
+          CLOUD MOVEMENT
+        */
+
+        mountainCloud.position.x =
+          Math.sin(
+            time * 0.012
+          ) *
+          3;
+
+        transitionCloud.position.x =
+          Math.sin(
+            time * 0.009 +
+              1.7
+          ) *
+          5;
+
+        foregroundMist.position.x =
+          Math.sin(
+            time * 0.016 +
+              3
+          ) *
+          4;
+
+        mountainCloudMaterial
+          .uniforms.uTime.value =
+          time;
+
+        transitionCloudMaterial
+          .uniforms.uTime.value =
+          time * 0.82;
+
+        foregroundMistMaterial
+          .uniforms.uTime.value =
+          time * 1.18;
+
+        /*
+          CLOUD DENSITY BECOMES THE
+          NARRATIVE BRIDGE.
+
+          Early:
+          mountain visible.
+
+          Middle:
+          atmosphere thickens.
+
+          Deep:
+          cloud dominates.
+
+          Late:
+          atmosphere opens again.
+        */
+
+        const cloudApproach =
+          smoothstep(
+            0.17,
+            0.46,
+            p
+          );
+
+        const cloudDepth =
+          smoothstep(
+            0.38,
+            0.7,
+            p
+          );
+
+        const cloudExit =
+          smoothstep(
+            0.73,
+            0.98,
+            p
+          );
+
+        const density =
+          clamp01(
+            0.24 +
+              cloudApproach *
+                0.28 +
+              cloudDepth *
+                0.38 -
+              cloudExit *
+                0.48
+          );
+
+        mountainCloudMaterial
+          .uniforms.uDensity.value =
+          density * 0.95;
+
+        transitionCloudMaterial
+          .uniforms.uDensity.value =
+          density *
+          (0.68 +
+            cloudDepth *
+              0.55);
+
+        foregroundMistMaterial
+          .uniforms.uDensity.value =
+          0.18 +
+          cloudDepth *
+            0.22;
+
+        /*
+          FOG DEPTH
+        */
+
+        const fogStrength =
+          0.0046 +
+          density *
             (mobile
-              ? 0.025
-              : 0.04) +
-          horizon *
-            (mobile
-              ? 0.02
-              : 0.035);
-      }
+              ? 0.0055
+              : 0.0068);
 
-      aurora.position.x =
-        pointer.currentX *
-        14;
+        scene.fog.density =
+          damp(
+            scene.fog.density,
+            fogStrength,
+            3,
+            delta
+          );
 
-      aurora.position.y =
-        105 +
-        Math.sin(
-          elapsed * 0.03,
-        ) *
-        2;
+        const fogMix =
+          clamp01(
+            cloudDepth * 0.8 +
+              cloudApproach *
+                0.2
+          );
 
-      /* -------------------------------------------------------------------- */
-      /* STARS                                                                  */
-      /* -------------------------------------------------------------------- */
+        fogColor.lerpColors(
+          coolFogColor,
+          warmFogColor,
+          fogMix
+        );
 
-      stars.rotation.y =
-        elapsed * 0.004;
+        scene.fog.color.copy(
+          fogColor
+        );
 
-      stars.material.opacity =
-        (mobile ? 0.25 : 0.36) +
-        horizon *
-          (mobile ? 0.12 : 0.18);
+        /*
+          WATER
+        */
 
-      /* -------------------------------------------------------------------- */
-      /* LIGHTING                                                               */
-      /* -------------------------------------------------------------------- */
+        water.material.opacity =
+          0.5 +
+          Math.sin(
+            time * 0.18
+          ) *
+            0.035;
 
-      keyLight.intensity =
-        (mobile ? 1.0 : 1.22) +
-        arrival * 0.16 +
-        horizon * 0.18;
+        water.position.y =
+          -1.72 +
+          Math.sin(
+            time * 0.12
+          ) *
+          0.012 *
+          motionScale;
 
-      coldFill.intensity =
-        (mobile ? 0.32 : 0.42) +
-        cloudEntry * 0.08;
+        /*
+          STARS
+        */
 
-      hemisphereLight.intensity =
-        (mobile ? 1.02 : 1.18) +
-        horizon * 0.15;
+        starGroup.rotation.y =
+          time *
+          0.002 *
+          motionScale;
 
-      /* -------------------------------------------------------------------- */
-      /* RENDER                                                                 */
-      /* -------------------------------------------------------------------- */
+        starMaterial.opacity =
+          0.48 +
+          Math.sin(
+            time * 0.18
+          ) *
+            0.08;
 
-      renderer.render(
-        scene,
-        camera,
+        /*
+          HORIZON
+        */
+
+        horizon.material.opacity =
+          0.035 +
+          smoothstep(
+            0.68,
+            1,
+            p
+          ) *
+            0.04;
+
+        /*
+          LIGHTING CHANGES WITH DEPTH
+        */
+
+        keyLight.intensity =
+          2.2 -
+          density *
+            0.85;
+
+        ambient.intensity =
+          1.25 -
+          density *
+            0.22;
+
+        renderer.render(
+          scene,
+          camera
+        );
+      };
+
+    animationFrame =
+      requestAnimationFrame(
+        animate
       );
-    };
 
-    animate();
-
-    /* ---------------------------------------------------------------------- */
-    /* CLEANUP                                                                 */
-    /* ---------------------------------------------------------------------- */
+    /*
+      ----------------------------------------------------------
+      CLEANUP
+      ----------------------------------------------------------
+    */
 
     return () => {
-      disposed = true;
+      destroyed = true;
 
       cancelAnimationFrame(
-        animationFrame,
+        animationFrame
       );
 
       window.removeEventListener(
         "scroll",
-        updateScrollTarget,
+        handleScroll
       );
 
       window.removeEventListener(
         "pointermove",
-        onPointerMove,
+        handlePointer
+      );
+
+      window.removeEventListener(
+        "pointerleave",
+        handlePointerLeave
       );
 
       window.removeEventListener(
         "resize",
-        onResize,
+        handleResize
       );
 
-      cloudLayers.forEach(
-        (cloud) => {
-          if (cloud.geometry) {
-            cloud.geometry.dispose();
+      scene.traverse(
+        (object) => {
+          if (object.geometry) {
+            object.geometry.dispose();
           }
 
-          if (cloud.material) {
-            cloud.material.dispose();
+          if (object.material) {
+            disposeMaterial(
+              object.material,
+              textureSet
+            );
           }
-        },
+        }
       );
 
-      if (auroraGeometry) {
-        auroraGeometry.dispose();
-      }
-
-      if (auroraMaterial) {
-        auroraMaterial.dispose();
-      }
-
-      if (starGeometry) {
-        starGeometry.dispose();
-      }
-
-      if (starMaterial) {
-        starMaterial.dispose();
-      }
-
-      disposeObject(
-        world,
-        loadingTextures,
-      );
-
-      loadingTextures.forEach(
+      textureSet.forEach(
         (texture) => {
-          texture.dispose();
-        },
+          if (
+            texture &&
+            typeof texture.dispose ===
+              "function"
+          ) {
+            texture.dispose();
+          }
+        }
       );
 
       if (environmentMap) {
         environmentMap.dispose();
       }
 
-      scene.environment = null;
-      scene.background = null;
-
       renderer.dispose();
-      renderer.forceContextLoss();
 
       if (
-        renderer.domElement &&
+        renderer.forceContextLoss
+      ) {
+        renderer.forceContextLoss();
+      }
+
+      if (
         renderer.domElement.parentNode ===
-          host
+        host
       ) {
         host.removeChild(
-          renderer.domElement,
+          renderer.domElement
         );
       }
     };
