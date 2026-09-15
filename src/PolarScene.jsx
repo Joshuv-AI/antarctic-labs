@@ -23,7 +23,7 @@
 // The cloud layer is a provisional placeholder until its source arrives.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import ConstellationField from "./shaders/neuform-isolated/NeuformBatchEffects";
+import { ConstellationField } from "./shaders/neuform-isolated/NeuformBatchEffects";
 
 // ============================================================================
 // Water source — imported directly here so it can't be tree-shaken
