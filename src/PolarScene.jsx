@@ -295,23 +295,145 @@ function WaterLayer({ opacity, paused }) {
 }
 
 // ============================================================================
-// CloudField — provisional placeholder
+// CloudField — inline ThreeUI CloudField wrapper for the strata-cloud effect.
+// Same proven pattern as the constellation wrapper: inline so Vite's static
+// analyzer cannot tree-shake the source HTML out of the bundle.
 // ============================================================================
+import cloudSourceHtml from "./shaders/neuform-isolated/sources/strata-cloud.html?raw";
+
+function buildCloudSource(html) {
+  const focusStyles = `<style data-threeui-focus>
+html, body { width: 100% !important; height: 100% !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; background: #071010 !important; }
+body { position: relative !important; }
+body > * { visibility: hidden !important; }
+body[data-threeui-ready] > [data-threeui-role] { visibility: visible !important; }
+[data-threeui-residual] { display: none !important; }
+[data-threeui-role="background"] { position: fixed !important; inset: 0 !important; width: 100% !important; height: 100% !important; max-width: none !important; max-height: none !important; z-index: 0 !important; opacity: 1 !important; pointer-events: none !important; }
+</style>`;
+  const controlsJson = JSON.stringify({
+    mode: "dark", speed: 1, size: 1, length: 1, density: 1,
+    strokeWidth: 1, opacity: 1, hue: 0, saturation: 1, brightness: 1,
+  }).replace(/</g, "\\u003c");
+  const focusJson = JSON.stringify([
+    { selector: "#c", role: "background" },
+  ]).replace(/</g, "\\u003c");
+  const controlScript = `<script data-threeui-controls>
+(function () {
+  var controls = ${controlsJson};
+  window.__SF_CONTROLS = controls;
+  var origin = performance.now();
+  var virtual = 0;
+  var last = origin;
+  var performanceNow = performance.now.bind(performance);
+  performance.now = function () {
+    var real = performanceNow();
+    virtual += (real - last) * (controls.speed || 1);
+    last = real;
+    return origin + virtual;
+  };
+  var raf = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = function (callback) {
+    return raf(function () { callback(performance.now()); });
+  };
+  function applyVisual() {
+    var opacity = controls.opacity == null ? 1 : controls.opacity;
+    Array.prototype.forEach.call(document.querySelectorAll('[data-threeui-role]'), function (e) { e.style.opacity = String(opacity); });
+  }
+  window.addEventListener('message', function (event) {
+    if (!event.data || event.data.type !== 'threeui-controls') return;
+    var next = event.data.controls || {};
+    Object.keys(next).forEach(function (key) { controls[key] = next[key]; });
+    applyVisual();
+  });
+  window.__SF_APPLY_CONTROLS = applyVisual;
+})();
+</script>`;
+  const focusScript = `<script data-threeui-focus>
+(function () {
+  var isolated = false;
+  function isolate() {
+    if (isolated) return;
+    var specs = ${focusJson};
+    var roots = [];
+    specs.forEach(function (spec) {
+      var element = document.querySelector(spec.selector);
+      if (!element) return;
+      element.setAttribute('data-threeui-role', spec.role);
+      if (!roots.some(function (root) { return root.contains(element); })) roots.push(element);
+    });
+    if (!roots.length) return;
+    isolated = true;
+    roots.forEach(function (root) { document.body.appendChild(root); });
+    Array.from(document.body.children).forEach(function (element) {
+      if (roots.indexOf(element) !== -1) return;
+      element.setAttribute('data-threeui-residual', '');
+      element.setAttribute('aria-hidden', 'true');
+      if ('inert' in element) element.inert = true;
+    });
+    document.body.setAttribute('data-threeui-ready', '');
+    if (window.__SF_APPLY_CONTROLS) window.__SF_APPLY_CONTROLS();
+    requestAnimationFrame(function () { window.dispatchEvent(new Event('resize')); });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(isolate, 100); }, { once: true });
+  else setTimeout(isolate, 100);
+  window.addEventListener('load', isolate, { once: true });
+})();
+</script>`;
+  return html
+    .replace(/<head([^>]*)>/i, `<head$1>${controlScript}${focusStyles}`)
+    .replace(/<\/body>/i, `${focusScript}</body>`);
+}
+
 function CloudField({ opacity, paused }) {
+  const iframeRef = useRef(null);
+  const source = useMemo(() => buildCloudSource(cloudSourceHtml), []);
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe || !iframe.contentWindow) return;
+    iframe.contentWindow.postMessage(
+      {
+        type: "threeui-controls",
+        controls: {
+          mode: "dark", speed: 1, size: 1, length: 1, density: 1,
+          strokeWidth: 1, opacity: opacity == null ? 1 : opacity,
+          hue: 0, saturation: 1, brightness: 1, paused,
+        },
+      },
+      "*"
+    );
+  }, [paused, opacity, source]);
   return (
-    <div
-      className="polar-layer polar-cloud"
+    <iframe
+      ref={iframeRef}
+      title="Strata cloud migration field"
+      srcDoc={source}
+      sandbox="allow-scripts"
+      onLoad={() => {
+        const iframe = iframeRef.current;
+        if (!iframe || !iframe.contentWindow) return;
+        iframe.contentWindow.postMessage(
+          {
+            type: "threeui-controls",
+            controls: {
+              mode: "dark", speed: 1, size: 1, length: 1, density: 1,
+              strokeWidth: 1, opacity: opacity == null ? 1 : opacity,
+              hue: 0, saturation: 1, brightness: 1, paused,
+            },
+          },
+          "*"
+        );
+      }}
       aria-hidden="true"
+      tabIndex={-1}
       style={{
-        position: "fixed",
+        position: "absolute",
         inset: 0,
-        zIndex: 2,
-        pointerEvents: "none",
-        background:
-          "radial-gradient(ellipse at 50% 60%, rgba(8,12,16,.92) 0%, rgba(4,6,8,.55) 50%, rgba(0,0,0,0) 100%)",
-        opacity,
-        mixBlendMode: "normal",
-        transition: "opacity 200ms linear",
+        display: "block",
+        width: "100%",
+        height: "100%",
+        border: 0,
+        background: "#071010",
+        opacity: clamp(opacity, 0.05, 1),
       }}
     />
   );
