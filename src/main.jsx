@@ -1,18 +1,12 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import * as THREE from "three";
-import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
-import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import "./styles.css";
 
-gsap.registerPlugin(ScrollTrigger);
+import PolarScene from "./PolarScene";
 
-// Shared loader instances — loaders are stateless except for internal caches,
-// so we can keep them as module-level singletons.
-const fbxLoader = new FBXLoader();
-const rgbeLoader = new RGBELoader();
+gsap.registerPlugin(ScrollTrigger);
 
 const content = {
   brand: "ANTARCTIC LABS",
@@ -87,7 +81,7 @@ function App() {
 
   return (
     <>
-      <IceScene />
+      {path === "/" && <PolarScene />}
       <SiteHeader onMenu={() => setMenuOpen(true)} go={go} />
       <PageCurtain active={transitioning} label={pathLabel(path)} />
       {path === "/" && <Home go={go} />}
@@ -98,258 +92,6 @@ function App() {
       <Menu open={menuOpen} close={() => setMenuOpen(false)} go={go} />
     </>
   );
-}
-
-function IceScene() {
-  const ref = useRef(null);
-
-  useEffect(() => {
-    const canvas = ref.current;
-    const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x071018, 0.045);
-
-    const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.1, 200);
-    camera.position.set(0, 1.5, 9);
-
-    const renderer = new THREE.WebGLRenderer({
-      canvas, alpha: true, antialias: true, powerPreference: "high-performance"
-    });
-    renderer.setPixelRatio(Math.min(devicePixelRatio, 1.65));
-    renderer.setSize(innerWidth, innerHeight);
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.9;
-
-    const world = new THREE.Group();
-    scene.add(world);
-
-    // === TEXTURES ===
-    // Real PBR sets — color/normal/roughness (+ optional AO/displacement).
-    // Loaded once on mount; reused across all loaded models.
-    const texLoader = new THREE.TextureLoader();
-    const snowColor = texLoader.load('/assets/textures/snow/snow-color.png');
-    snowColor.colorSpace = THREE.SRGBColorSpace;
-    const snowNormal = texLoader.load('/assets/textures/snow/snow-normal.jpg');
-    const snowRough  = texLoader.load('/assets/textures/snow/snow-roughness.png');
-    const iceColor = texLoader.load('/assets/textures/ice/ice-color.png');
-    iceColor.colorSpace = THREE.SRGBColorSpace;
-    const iceNormal = texLoader.load('/assets/textures/ice/ice-normal.jpg');
-    const iceRough  = texLoader.load('/assets/textures/ice/ice-roughness.jpg');
-    const rockColor = texLoader.load('/assets/textures/rock/rock-color.png');
-    rockColor.colorSpace = THREE.SRGBColorSpace;
-    const rockNormal = texLoader.load('/assets/textures/rock/rock-normal.jpg');
-    const rockRough  = texLoader.load('/assets/textures/rock/rock-roughness.jpg');
-
-    // Procedural iceberg centerpieces (shelved per Josh's call).
-    const iceMaterial = new THREE.MeshPhysicalMaterial({
-      color: 0xaed2df,
-      roughness: 0.15,
-      metalness: 0.03,
-      transmission: 0.22,
-      thickness: 1.2,
-      transparent: true,
-      opacity: 0.58
-    });
-
-    const iceberg = new THREE.Mesh(new THREE.IcosahedronGeometry(2.55, 2), iceMaterial);
-    iceberg.scale.set(1.15, 1.05, 0.82);
-    iceberg.position.set(1.65, 0.55, -0.7);
-    iceberg.rotation.set(-0.22, 0.45, 0.08);
-    world.add(iceberg);
-
-    const icebergWire = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(2.58, 2),
-      new THREE.MeshBasicMaterial({ color: 0xe7f5f8, transparent: true, opacity: 0.12, wireframe: true })
-    );
-    icebergWire.scale.copy(iceberg.scale);
-    icebergWire.position.copy(iceberg.position);
-    icebergWire.rotation.copy(iceberg.rotation);
-    world.add(icebergWire);
-
-    // === FBX MODELS ===
-    // Real mountain geometry — replaces the procedural cone ridge.
-    // FBXLoader is async; we kick off both loads in parallel and add them
-    // to the world as they arrive. Materials get our PBR textures applied.
-    const trackedObjects = []; // for cleanup on unmount
-
-    function applyTexturePack(root, maps) {
-      // Recursively walk the loaded FBX scene graph; for each mesh whose
-      // material is a MeshStandardMaterial or MeshPhysicalMaterial, swap
-      // in our PBR textures. Falls back gracefully if a model has slots
-      // we don't cover.
-      root.traverse((obj) => {
-        if (!obj.isMesh) return;
-        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-        mats.forEach((mat) => {
-          if (!mat || (!mat.isMeshStandardMaterial && !mat.isMeshPhysicalMaterial)) return;
-          if (maps.color)  { mat.map  = maps.color;  mat.needsUpdate = true; }
-          if (maps.normal){ mat.normalMap = maps.normal; mat.needsUpdate = true; }
-          if (maps.rough) { mat.roughnessMap = maps.rough; mat.needsUpdate = true; }
-          // Bump envmap intensity so the HDRI reflection is visible
-          mat.envMapIntensity = mat.envMapIntensity ?? 0.6;
-        });
-      });
-    }
-
-    fbxLoader.load('/assets/models/mountains/chalaadi.fbx', (obj) => {
-      obj.scale.setScalar(0.022); // Chalaadi is a large landscape — bring it down
-      obj.position.set(-2.0, -3.0, -8.0);
-      obj.rotation.set(0, -0.2, 0);
-      applyTexturePack(obj, { color: rockColor, normal: rockNormal, rough: rockRough });
-      world.add(obj);
-      trackedObjects.push(obj);
-    });
-
-    // Note: single-mountain-snow.fbx (62 MiB) was the second mountain asset but is
-    // shelved — it exceeded Cloudflare Pages' 25 MiB per-asset limit, and the R2
-    // hosting path was blocked by TLS handshake failures from this machine
-    // (see standing_intent 'cloudflare-r2-access-blocked'). Chalaadi alone provides
-    // the mountain range visual. To re-enable, host single-mountain-snow.fbx on R2
-    // (or move to Git LFS / GitHub Releases) and update the loader URL.
-
-    // === HDRI ENVIRONMENT ===
-    // Provides realistic reflections on the procedural iceberg (and on
-    // any future PBR models with metallicness). Loaded async; scene.environment
-    // is set once it arrives.
-    // Use the smaller 4K JPG variant of the HDRI (was 52 MiB EXR -> 0.3 MiB JPG).
-    // This is the tonemapped version — works fine as a static background but won't
-    // give true HDR reflections. For true HDR, host the EXR on R2 and load via
-    // RGBELoader from the URL (see standing_intent 'cloudflare-r2-access-blocked').
-    rgbeLoader.load('/assets/hdr/daysky-8k-hdr-4k.jpg', (hdrTexture) => {
-      hdrTexture.mapping = THREE.EquirectangularReflectionMapping;
-      scene.environment = hdrTexture;
-      trackedObjects.push(hdrTexture);
-    });
-
-    // === STARS + AURORA + WATER (kept from original) ===
-    const water = new THREE.Mesh(
-      new THREE.PlaneGeometry(34, 24, 1, 1),
-      new THREE.MeshBasicMaterial({ color: 0x07151d, transparent: true, opacity: 0.72 })
-    );
-    water.rotation.x = -Math.PI / 2;
-    water.position.y = -2.35;
-    water.position.z = -1;
-    world.add(water);
-
-    const starGeometry = new THREE.BufferGeometry();
-    const starCount = 650;
-    const positions = new Float32Array(starCount * 3);
-    for (let i = 0; i < starCount; i++) {
-      positions[i * 3] = (Math.random() - 0.5) * 25;
-      positions[i * 3 + 1] = (Math.random() - 0.5) * 13;
-      positions[i * 3 + 2] = (Math.random() - 0.5) * 18 - 2;
-    }
-    starGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    const stars = new THREE.Points(
-      starGeometry,
-      new THREE.PointsMaterial({ color: 0xdceff4, size: 0.016, transparent: true, opacity: 0.55 })
-    );
-    scene.add(stars);
-
-    const aurora = new THREE.Group();
-    const auroraMaterials = [
-      new THREE.LineBasicMaterial({ color: 0x6aa9bb, transparent: true, opacity: 0.18 }),
-      new THREE.LineBasicMaterial({ color: 0x9ec7bc, transparent: true, opacity: 0.12 }),
-      new THREE.LineBasicMaterial({ color: 0x9eacd0, transparent: true, opacity: 0.09 })
-    ];
-    for (let j = 0; j < 3; j++) {
-      const points = [];
-      for (let i = 0; i < 90; i++) {
-        const x = -11 + i * 0.25;
-        const y = 3.2 + j * 0.48 + Math.sin(i * 0.11 + j) * 0.55 + Math.sin(i * 0.035) * 0.45;
-        const z = -5 + Math.sin(i * 0.07 + j) * 1.2;
-        points.push(new THREE.Vector3(x, y, z));
-      }
-      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), auroraMaterials[j]);
-      aurora.add(line);
-    }
-    scene.add(aurora);
-
-    // === LIGHTS ===
-    // Hemisphere + key + rim light the procedural geometry and any model
-    // that arrives before the HDRI. Once the HDRI is loaded, these become
-    // supplementary; the HDRI is what makes materials actually PBR-correct.
-    scene.add(new THREE.HemisphereLight(0xb8d7e2, 0x061018, 1.4));
-    const key = new THREE.DirectionalLight(0xffffff, 2.2);
-    key.position.set(-5, 6, 8);
-    scene.add(key);
-    const rim = new THREE.PointLight(0x4c9bb5, 16, 18);
-    rim.position.set(4, 0, 3);
-    scene.add(rim);
-
-    // === INTERACTION ===
-    const pointer = { x: 0, y: 0, tx: 0, ty: 0 };
-    const onMove = (e) => {
-      pointer.tx = (e.clientX / innerWidth - 0.5) * 0.9;
-      pointer.ty = (e.clientY / innerHeight - 0.5) * 0.45;
-    };
-    window.addEventListener("pointermove", onMove);
-
-    // === RENDER LOOP ===
-    const clock = new THREE.Clock();
-    let raf;
-    const tick = () => {
-      const t = clock.getElapsedTime();
-      pointer.x += (pointer.tx - pointer.x) * 0.025;
-      pointer.y += (pointer.ty - pointer.y) * 0.025;
-
-      iceberg.rotation.y += 0.0008;
-      iceberg.rotation.x = -0.22 + Math.sin(t * 0.22) * 0.025;
-      iceberg.position.y = 0.55 + Math.sin(t * 0.38) * 0.08;
-      icebergWire.rotation.copy(iceberg.rotation);
-      icebergWire.position.copy(iceberg.position);
-
-      stars.rotation.y = t * 0.004;
-      aurora.position.x = Math.sin(t * 0.12) * 0.12;
-      aurora.rotation.z = Math.sin(t * 0.08) * 0.015;
-
-      world.rotation.y += ((pointer.x * 0.075) - world.rotation.y) * 0.018;
-      world.rotation.x += ((pointer.y * 0.035) - world.rotation.x) * 0.018;
-
-      renderer.render(scene, camera);
-      raf = requestAnimationFrame(tick);
-    };
-    tick();
-
-    // === RESIZE + CLEANUP ===
-    const resize = () => {
-      camera.aspect = innerWidth / innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(innerWidth, innerHeight);
-      renderer.setPixelRatio(Math.min(devicePixelRatio, 1.65));
-    };
-    addEventListener("resize", resize);
-
-    return () => {
-      cancelAnimationFrame(raf);
-      removeEventListener("pointermove", onMove);
-      removeEventListener("resize", resize);
-
-      // Walk world + tracked async objects; release GPU resources.
-      const disposeObject = (obj) => {
-        if (!obj) return;
-        obj.traverse?.((child) => {
-          child.geometry?.dispose?.();
-          const mats = Array.isArray(child.material) ? child.material : [child.material];
-          mats.forEach((m) => m?.dispose?.());
-        });
-        if (obj.dispose) obj.dispose();
-      };
-      disposeObject(world);
-      trackedObjects.forEach(disposeObject);
-      disposeObject(starGeometry);
-      stars.material.dispose();
-      disposeObject(aurora);
-      auroraMaterials.forEach((m) => m.dispose());
-
-      renderer.dispose();
-      scene.environment?.dispose?.();
-      [snowColor, snowNormal, snowRough, iceColor, iceNormal, iceRough,
-       rockColor, rockNormal, rockRough].forEach((t) => t.dispose());
-    };
-  }, []);
-
-  return <canvas ref={ref} className="ice-canvas" aria-hidden="true" />;
 }
 
 function SiteHeader({ onMenu, go }) {
@@ -575,5 +317,7 @@ function Menu({ open, close, go }) {
 function Footer() {
   return <footer className="site-footer"><span>© {new Date().getFullYear()} ANTARCTIC LABS</span><span>BUILT FOR THE UNKNOWN</span><button onClick={() => window.scrollTo({top: 0, behavior: "smooth"})}>↑ TOP</button></footer>;
 }
+
+import { useRef } from "react";
 
 createRoot(document.getElementById("root")).render(<App />);
