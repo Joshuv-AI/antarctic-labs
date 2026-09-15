@@ -303,7 +303,7 @@ import cloudSourceHtml from "./shaders/neuform-isolated/sources/strata-cloud.htm
 
 function buildCloudSource(html) {
   const focusStyles = `<style data-threeui-focus>
-html, body { width: 100% !important; height: 100% !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; background: #071010 !important; }
+html, body { width: 100% !important; height: 100% !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; background: transparent !important; }
 body { position: relative !important; }
 /* hide the strata-cloud source's demo UI by selector so the demo cannot leak through */
 nav, main, header, aside, footer {
