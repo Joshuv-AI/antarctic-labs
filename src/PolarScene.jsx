@@ -1,40 +1,164 @@
 // PolarScene.jsx
 // Antarctic Labs — unified polar environment.
 //
-// Architecture: each layer is a sandboxed iframe (srcDoc) owned by its own
-// React wrapper. The constellation layer uses the ConstellationField wrapper
-// from src/shaders/neuform-isolated/. The water layer is implemented inline
-// below (WaterLayer) so Vite's tree-shaker can't drop the water source HTML
-// string — the previous ElementsBackground wrapper was being silently
-// tree-shaken because its default import sat in a chain Vite's static
-// analyzer couldn't fully trace. Inlining the water component keeps the
-// ?raw import directly referenced from the JSX render path.
-//
-// One shared scroll-progress state drives visibility/opacity per layer across
-// the narrative:
-//
-//   0.00–0.20  ARRIVAL    → constellation visible, cloud faint, water hidden
-//   0.20–0.50  DESCENT    → constellation fading, cloud growing
-//   0.50–0.68  DEEP CLOUD → constellation hidden, cloud max density (obscuring)
-//   0.68–0.82  EMERGENCE  → cloud breaking apart, water revealing
-//   0.82–1.00  HORIZON    → water dominant
-//
-// All three layers use the same ThreeUI iframe pattern (verified in audit).
-// The cloud layer is a provisional placeholder until its source arrives.
+// Constellation wrapper is inlined here (same pattern as WaterLayer) to
+// bypass Vite tree-shaking that drops the wrapper module entirely when only
+// one named export is consumed. Cloud placeholder is a structural slot;
+// water layer uses the inline WaterLayer component.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ConstellationField } from "./shaders/neuform-isolated/NeuformBatchEffects";
+import particleNetworkSource from "./shaders/neuform-isolated/sources/particle-network.html?raw";
+import { ElementsBackground as ElementsCollection } from "./shaders/elements/ElementsBackground";
 
 // ============================================================================
-// Water source — imported directly here so it can't be tree-shaken
+// ConstellationField — inlined minimal wrapper for the constellation effect.
+// ============================================================================
+function buildConstellationSource(html, size, length, density) {
+  const focusStyles = `<style data-threeui-focus>
+html, body { width: 100% !important; height: 100% !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; background: #05070d !important; }
+body { position: relative !important; }
+body > * { visibility: hidden !important; }
+body[data-threeui-ready] > [data-threeui-role] { visibility: visible !important; }
+[data-threeui-residual] { display: none !important; }
+[data-threeui-role="background"] { position: fixed !important; inset: 0 !important; width: 100% !important; height: 100% !important; max-width: none !important; max-height: none !important; z-index: 0 !important; opacity: 1 !important; pointer-events: none !important; }
+</style>`;
+  const controlsJson = JSON.stringify({
+    mode: "dark",
+    speed: 1.94,
+    size,
+    length,
+    density,
+    opacity: 1,
+  }).replace(/</g, "\\u003c");
+  const focusJson = JSON.stringify([
+    { selector: "#particle-canvas", role: "background" },
+  ]).replace(/</g, "\\u003c");
+  const controlScript = `<script data-threeui-controls>
+(function () {
+  var controls = ${controlsJson};
+  window.__SF_CONTROLS = controls;
+  var origin = performance.now();
+  var virtual = 0;
+  var last = origin;
+  var performanceNow = performance.now.bind(performance);
+  performance.now = function () {
+    var real = performanceNow();
+    virtual += (real - last) * (controls.speed || 1);
+    last = real;
+    return origin + virtual;
+  };
+  var raf = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = function (callback) {
+    return raf(function () { callback(performance.now()); });
+  };
+  function applyVisual() {
+    var opacity = controls.opacity == null ? 1 : controls.opacity;
+    Array.prototype.forEach.call(document.querySelectorAll('[data-threeui-role]'), function (e) { e.style.opacity = String(opacity); });
+  }
+  window.addEventListener('message', function (event) {
+    if (!event.data || event.data.type !== 'threeui-controls') return;
+    var next = event.data.controls || {};
+    Object.keys(next).forEach(function (key) { controls[key] = next[key]; });
+    applyVisual();
+  });
+  window.__SF_APPLY_CONTROLS = applyVisual;
+})();
+</script>`;
+  const focusScript = `<script data-threeui-focus>
+(function () {
+  var isolated = false;
+  function isolate() {
+    if (isolated) return;
+    var specs = ${focusJson};
+    var roots = [];
+    specs.forEach(function (spec) {
+      var element = document.querySelector(spec.selector);
+      if (!element) return;
+      element.setAttribute('data-threeui-role', spec.role);
+      if (!roots.some(function (root) { return root.contains(element); })) roots.push(element);
+    });
+    if (!roots.length) return;
+    isolated = true;
+    roots.forEach(function (root) { document.body.appendChild(root); });
+    Array.from(document.body.children).forEach(function (element) {
+      if (roots.indexOf(element) !== -1) return;
+      element.setAttribute('data-threeui-residual', '');
+      element.setAttribute('aria-hidden', 'true');
+      if ('inert' in element) element.inert = true;
+    });
+    document.body.setAttribute('data-threeui-ready', '');
+    if (window.__SF_APPLY_CONTROLS) window.__SF_APPLY_CONTROLS();
+    requestAnimationFrame(function () { window.dispatchEvent(new Event('resize')); });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(isolate, 100); }, { once: true });
+  else setTimeout(isolate, 100);
+  window.addEventListener('load', isolate, { once: true });
+})();
+</script>`;
+  let patched = html;
+  patched = patched
+    .replace("const particleCount = 200;", `const particleCount = ${Math.max(40, Math.round(200 * density))};`)
+    .replace("this.length = Math.random() * 2 + 0.5;", `this.length = (Math.random() * 2 + 0.5) * ${length};`)
+    .replace("this.z -= this.speed;", "this.z -= this.speed * ((window.__SF_CONTROLS && window.__SF_CONTROLS.speed) || 1);")
+    .replace("const fov = 300;", `const fov = ${Math.round(300 / Math.max(0.4, size))};`);
+  return patched
+    .replace(/<head([^>]*)>/i, `<head$1>${controlScript}${focusStyles}`)
+    .replace(/<\/body>/i, `${focusScript}</body>`);
+}
+
+function ConstellationField({ paused }) {
+  const iframeRef = useRef(null);
+  const source = useMemo(
+    () => buildConstellationSource(particleNetworkSource, 2.5, 0.35, 2.412),
+    []
+  );
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe || !iframe.contentWindow) return;
+    iframe.contentWindow.postMessage(
+      {
+        type: "threeui-controls",
+        controls: { mode: "dark", speed: 1.94, size: 2.5, length: 0.35, density: 2.412, opacity: 1, paused },
+      },
+      "*"
+    );
+  }, [paused, source]);
+  return (
+    <iframe
+      ref={iframeRef}
+      title="Constellation Field"
+      srcDoc={source}
+      sandbox="allow-scripts"
+      onLoad={() => {
+        const iframe = iframeRef.current;
+        if (!iframe || !iframe.contentWindow) return;
+        iframe.contentWindow.postMessage(
+          {
+            type: "threeui-controls",
+            controls: { mode: "dark", speed: 1.94, size: 2.5, length: 0.35, density: 2.412, opacity: 1, paused },
+          },
+          "*"
+        );
+      }}
+      aria-hidden="true"
+      tabIndex={-1}
+      style={{
+        display: "block",
+        width: "100%",
+        height: "100%",
+        border: 0,
+        background: "transparent",
+        filter: "hue-rotate(-31deg) saturate(1.52) brightness(1.65)",
+      }}
+    />
+  );
+}
+
+// ============================================================================
+// WaterLayer — inline water component (same proven pattern)
 // ============================================================================
 import waterSourceHtml from "./shaders/elements/sources/elemental-marks.html?raw";
 
-// Locked water threshold values (handoff §4 + user-confirmed):
-//   speed: 0.95
-//   size (mark size): 0.65
-//   particleAmount (particles): 0.18
-//   hue: -1, saturation: 1.32, brightness: 1.78
 const WATER_THRESHOLDS = {
   speed: 0.95,
   size: 0.65,
@@ -45,19 +169,10 @@ const WATER_THRESHOLDS = {
   opacity: 1.0,
 };
 
-// ----------------------------------------------------------------------------
-// Detail patches — upgrades the canonical water source HTML for production.
-// Mirrors the DETAIL_PATCHES table from the original ElementsBackground.tsx but
-// inlined here so we don't depend on the wrapper that was tree-shaken.
-// ----------------------------------------------------------------------------
 const WATER_DETAIL_PATCHES = [
   ["const SDF_SIZE = 512;\nconst SDF_SPREAD = 128;", "const SDF_SIZE = 768;\nconst SDF_SPREAD = 192;"],
   ["const DPR = Math.min(window.devicePixelRatio || 1, 1.75);", "const DPR = Math.min(Math.max(window.devicePixelRatio || 1, 1.5), 2.25);"],
   ["sim: false, zoom: 1.16, shift: [0, -0.04],", "sim: false, zoom: 1.16, shift: [0, -0.11],"],
-  [
-    "  float inside = smoothstep(0.005, -0.005, d);\n  vec3 body = vec3(0.055, 0.06, 0.10) + big * vec3(0.55, 0.58, 0.85);\n  col = mix(col, body, inside);\n  float rim = exp(-abs(d) / 0.012) * 0.5;",
-    "  float inside = smoothstep(0.0025, -0.0025, d);\n  vec3 body = vec3(0.055, 0.06, 0.10) + big * vec3(0.55, 0.58, 0.85);\n  col = mix(col, body, inside);\n  float rim = exp(-abs(d) / 0.0075) * 0.56;"
-  ],
 ];
 
 function clamp(value, minimum, maximum) {
@@ -73,15 +188,8 @@ header, .hint, .info, .kanji { display: none !important; }
 main { display: block; }
 .panel { display: none; }
 .panel[data-fx="water"] {
-  position: absolute;
-  inset: 0;
-  display: block;
-  width: 100%;
-  height: 100%;
-  border: 0;
-  opacity: 1;
-  transform: none;
-  animation: none;
+  position: absolute; inset: 0; display: block; width: 100%; height: 100%;
+  border: 0; opacity: 1; transform: none; animation: none;
 }
 .panel[data-fx="water"] canvas { width: 100%; height: 100%; }
 </style>`;
@@ -107,7 +215,6 @@ main { display: block; }
   });
 })();
 </script>`;
-
   let source = html;
   for (const [original, enhanced] of WATER_DETAIL_PATCHES) {
     source = source.replace(original, enhanced);
@@ -118,55 +225,32 @@ main { display: block; }
     .replace("</head>", `${focusStyles}${controls}</head>`)
     .replace("count: 160", `count: ${particleCount}`)
     .replace("zoom: 1.06", `zoom: ${zoom.toFixed(4)}`)
-    .replace(
-      "for (const p of panels) p.draw(t);",
-      "if (!window.__ELEMENTS_PAUSED) for (const p of panels) p.draw(t);"
-    );
+    .replace("for (const p of panels) p.draw(t);", "if (!window.__ELEMENTS_PAUSED) for (const p of panels) p.draw(t);");
 }
 
-// ============================================================================
-// WaterLayer — inline water component (replaces ElementsBackground wrapper)
-// ============================================================================
 function WaterLayer({ opacity, paused }) {
   const iframeRef = useRef(null);
   const [hostVisible, setHostVisible] = useState(true);
   const [documentVisible, setDocumentVisible] = useState(true);
-
   const source = useMemo(
-    () =>
-      buildWaterSource(
-        waterSourceHtml,
-        WATER_THRESHOLDS.size,
-        WATER_THRESHOLDS.particleAmount
-      ),
+    () => buildWaterSource(waterSourceHtml, WATER_THRESHOLDS.size, WATER_THRESHOLDS.particleAmount),
     []
   );
-
-  // Post speed + paused controls to the iframe
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe || !iframe.contentWindow) return;
     iframe.contentWindow.postMessage(
-      {
-        type: "elements-controls",
-        controls: { speed: WATER_THRESHOLDS.speed, paused },
-      },
+      { type: "elements-controls", controls: { speed: WATER_THRESHOLDS.speed, paused } },
       "*"
     );
   }, [paused, source]);
-
-  // Pause when the iframe scrolls out of the viewport
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(
-      ([entry]) => setHostVisible(entry?.isIntersecting ?? true)
-    );
+    const observer = new IntersectionObserver(([entry]) => setHostVisible(entry?.isIntersecting ?? true));
     observer.observe(iframe);
     return () => observer.disconnect();
   }, []);
-
-  // Pause when the tab goes to background
   useEffect(() => {
     if (typeof document === "undefined") return;
     const update = () => setDocumentVisible(!document.hidden);
@@ -174,18 +258,13 @@ function WaterLayer({ opacity, paused }) {
     document.addEventListener("visibilitychange", update);
     return () => document.removeEventListener("visibilitychange", update);
   }, []);
-
   const actuallyPaused = paused || !hostVisible || !documentVisible;
-
   return (
     <div
       className="polar-water-layer"
       aria-hidden="true"
       style={{
-        position: "absolute",
-        inset: 0,
-        width: "100%",
-        height: "100%",
+        position: "absolute", inset: 0, width: "100%", height: "100%",
         background: "#060708",
       }}
     >
@@ -195,27 +274,18 @@ function WaterLayer({ opacity, paused }) {
         srcDoc={source}
         sandbox="allow-scripts"
         onLoad={() => {
-          // Repost on iframe load so the inner rAF + speed patch start fresh
           const iframe = iframeRef.current;
           if (!iframe || !iframe.contentWindow) return;
           iframe.contentWindow.postMessage(
-            {
-              type: "elements-controls",
-              controls: { speed: WATER_THRESHOLDS.speed, paused: actuallyPaused },
-            },
+            { type: "elements-controls", controls: { speed: WATER_THRESHOLDS.speed, paused: actuallyPaused } },
             "*"
           );
         }}
         aria-hidden="true"
         tabIndex={-1}
         style={{
-          position: "absolute",
-          inset: 0,
-          display: "block",
-          width: "100%",
-          height: "100%",
-          border: 0,
-          background: "#060708",
+          position: "absolute", inset: 0, display: "block", width: "100%", height: "100%",
+          border: 0, background: "#060708",
           opacity: clamp(opacity, 0.05, 1),
           filter: `hue-rotate(${clamp(WATER_THRESHOLDS.hue, -180, 180)}deg) saturate(${clamp(WATER_THRESHOLDS.saturation, 0, 2)}) brightness(${clamp(WATER_THRESHOLDS.brightness, 0.35, 1.8)})`,
         }}
@@ -227,20 +297,7 @@ function WaterLayer({ opacity, paused }) {
 // ============================================================================
 // CloudField — provisional placeholder
 // ============================================================================
-// The cloud source bundle hasn't arrived yet. This is a structural placeholder
-// that occupies the correct z-layer (between constellation and water), receives
-// scroll-state opacity updates the same way the others do, and has no fake
-// visual content. When the cloud source arrives, swap this component's body
-// for the real <PortalFieldCollection variant="cloud-field" /> import.
-//
-// Until then: dark transparent div, opacity-gated by scroll. The narrative
-// reads as "descent into thick darkness" because of the constellation fading
-// and the page background darkening; the placeholder just reserves the slot.
 function CloudField({ opacity, paused }) {
-  useEffect(() => {
-    // No iframe, no postMessage — placeholder has no inner window to control.
-    // Reserved for the real cloud source to drop into when it arrives.
-  }, [opacity, paused]);
   return (
     <div
       className="polar-layer polar-cloud"
@@ -269,13 +326,9 @@ export default function PolarScene() {
   const rafRef = useRef(null);
 
   useEffect(() => {
-    // Throttle scroll progress with requestAnimationFrame.
     let ticking = false;
     const compute = () => {
-      const max = Math.max(
-        1,
-        document.documentElement.scrollHeight - window.innerHeight
-      );
+      const max = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
       const p = Math.min(1, Math.max(0, window.scrollY / max));
       setProgress(p);
       ticking = false;
@@ -297,7 +350,6 @@ export default function PolarScene() {
     };
   }, []);
 
-  // Per-layer opacity (visibility) per the locked narrative ranges.
   const constellationOpacity =
     smoothstep(0.0, 0.05, 1 - progress) *
     smoothstep(0.42, 0.62, 1 - progress);
@@ -311,41 +363,18 @@ export default function PolarScene() {
       <div
         className="polar-layer polar-constellation"
         style={{
-          position: "fixed",
-          inset: 0,
-          zIndex: 1,
-          pointerEvents: "none",
-          opacity: constellationOpacity,
-          transition: "opacity 120ms linear",
+          position: "fixed", inset: 0, zIndex: 1, pointerEvents: "none",
+          opacity: constellationOpacity, transition: "opacity 120ms linear",
         }}
       >
-        <ConstellationField
-          variant="particle-network"
-          mode="dark"
-          speed={1.94}
-          size={2.5}
-          length={0.35}
-          density={2.412}
-          opacity={1.0}
-          hue={-31}
-          saturation={1.52}
-          brightness={1.65}
-          paused={paused}
-          style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
-        />
+        <ConstellationField paused={paused} />
       </div>
-
       <CloudField opacity={cloudOpacity} paused={paused} />
-
       <div
         className="polar-layer polar-water"
         style={{
-          position: "fixed",
-          inset: 0,
-          zIndex: 3,
-          pointerEvents: "none",
-          opacity: waterOpacity,
-          transition: "opacity 240ms linear",
+          position: "fixed", inset: 0, zIndex: 3, pointerEvents: "none",
+          opacity: waterOpacity, transition: "opacity 240ms linear",
         }}
       >
         <WaterLayer opacity={1.0} paused={paused} />
@@ -354,7 +383,6 @@ export default function PolarScene() {
   );
 }
 
-// GLSL-style smoothstep for opacity curves.
 function smoothstep(edge0, edge1, x) {
   const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
   return t * t * (3 - 2 * t);
