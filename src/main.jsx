@@ -7,12 +7,9 @@ import React, {
 import { createRoot } from "react-dom/client";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-
 import PolarScene from "./scenes/PolarScene";
 import "./styles.css";
-
 gsap.registerPlugin(ScrollTrigger);
-
 const SITE = {
   brand: "ANTARCTIC LABS",
   shortBrand: "AL",
@@ -20,8 +17,9 @@ const SITE = {
   location: "INDEPENDENT / REMOTE",
   availability: "AVAILABLE FOR SELECT BUILDS",
   version: "FIELD SYSTEM / 01",
+  description:
+    "Independent digital systems, AI, automation, software, and experimental web experiences.",
 };
-
 const PROJECTS = [
   {
     id: "01",
@@ -72,7 +70,6 @@ const PROJECTS = [
       "REACT / THREE.JS / GSAP / WEBGL / INTERACTION",
   },
 ];
-
 const CAPABILITIES = [
   {
     number: "01",
@@ -99,79 +96,135 @@ const CAPABILITIES = [
       "Web experiences that use motion, 3D, interaction, and unconventional systems when they serve the idea.",
   },
 ];
-
+const ROUTE_META = {
+  "/": {
+    title: "Antarctic Labs — Digital Systems & AI",
+    description: SITE.description,
+  },
+  "/project-01": {
+    title: "AI Operations System — Antarctic Labs",
+    description:
+      "A field note on AI systems, automation, orchestration, and operational tooling.",
+  },
+  "/project-02": {
+    title: "Digital Territory — Antarctic Labs",
+    description:
+      "An experimental digital environment combining software, interaction, motion, and WebGL.",
+  },
+  "/about": {
+    title: "About — Antarctic Labs",
+    description:
+      "The position, principles, and operating philosophy behind Antarctic Labs.",
+  },
+};
 function normalizePath(pathname) {
   if (!pathname) return "/";
-
   const clean = pathname
     .replace(/\/+/g, "/")
     .replace(/\/$/, "");
-
   return clean || "/";
 }
-
 function getRoute() {
   return normalizePath(window.location.pathname);
 }
-
 function navigate(path) {
-  if (normalizePath(window.location.pathname) === path) {
+  const normalized = normalizePath(path);
+  if (normalizePath(window.location.pathname) === normalized) {
     window.scrollTo({
       top: 0,
       behavior: "smooth",
     });
     return;
   }
-
-  window.history.pushState({}, "", path);
-
-  window.dispatchEvent(
-    new PopStateEvent("popstate"),
-  );
-
+  window.history.pushState({}, "", normalized);
+  window.dispatchEvent(new PopStateEvent("popstate"));
   window.scrollTo({
     top: 0,
     behavior: "auto",
   });
 }
-
 function useRoute() {
   const [route, setRoute] = useState(getRoute);
-
   useEffect(() => {
     const handlePopState = () => {
       setRoute(getRoute());
     };
-
-    window.addEventListener(
-      "popstate",
-      handlePopState,
-    );
-
+    window.addEventListener("popstate", handlePopState);
     return () => {
-      window.removeEventListener(
-        "popstate",
-        handlePopState,
-      );
+      window.removeEventListener("popstate", handlePopState);
     };
   }, []);
-
   return route;
 }
-
+function useDocumentMeta(route) {
+  useEffect(() => {
+    const metadata =
+      ROUTE_META[route] || {
+        title: "Unknown Territory — Antarctic Labs",
+        description:
+          "This coordinate does not exist. Return to known territory.",
+      };
+    document.title = metadata.title;
+    const description = document.querySelector(
+      'meta[name="description"]',
+    );
+    if (description) {
+      description.setAttribute(
+        "content",
+        metadata.description,
+      );
+    }
+    const canonical = document.querySelector(
+      'link[rel="canonical"]',
+    );
+    if (canonical) {
+      const canonicalPath =
+        route === "/" ? "/" : `${route}/`;
+      canonical.setAttribute(
+        "href",
+        `https://antarctic-labs.com${canonicalPath}`,
+      );
+    }
+    window.scrollTo({
+      top: 0,
+      behavior: "auto",
+    });
+  }, [route]);
+}
 function usePageEntrance(dependencies = []) {
   const rootRef = useRef(null);
-
   useLayoutEffect(() => {
     const root = rootRef.current;
-
     if (!root) return undefined;
-
     const context = gsap.context(() => {
+      const reducedMotion = window.matchMedia(
+        "(prefers-reduced-motion: reduce)",
+      ).matches;
       const revealItems = root.querySelectorAll(
         "[data-reveal]",
       );
-
+      const lines = root.querySelectorAll(
+        "[data-line]",
+      );
+      const sectionItems = root.querySelectorAll(
+        "[data-scroll-reveal]",
+      );
+      if (reducedMotion) {
+        gsap.set(
+          [
+            ...revealItems,
+            ...lines,
+            ...sectionItems,
+          ],
+          {
+            clearProps: "all",
+            opacity: 1,
+            y: 0,
+            yPercent: 0,
+          },
+        );
+        return;
+      }
       if (revealItems.length) {
         gsap.fromTo(
           revealItems,
@@ -189,11 +242,6 @@ function usePageEntrance(dependencies = []) {
           },
         );
       }
-
-      const lines = root.querySelectorAll(
-        "[data-line]",
-      );
-
       lines.forEach((line) => {
         gsap.fromTo(
           line,
@@ -208,11 +256,6 @@ function usePageEntrance(dependencies = []) {
           },
         );
       });
-
-      const sectionItems = root.querySelectorAll(
-        "[data-scroll-reveal]",
-      );
-
       sectionItems.forEach((item) => {
         gsap.fromTo(
           item,
@@ -234,54 +277,41 @@ function usePageEntrance(dependencies = []) {
         );
       });
     }, root);
-
     return () => context.revert();
   }, dependencies);
-
   return rootRef;
 }
-
 function useScrollAtmosphere() {
   useEffect(() => {
     let raf = 0;
     let current = 0;
     let target = 0;
-
     const handleScroll = () => {
       target = window.scrollY;
     };
-
     const update = () => {
-      current +=
-        (target - current) * 0.08;
-
+      current += (target - current) * 0.08;
       document.documentElement.style.setProperty(
         "--scroll-progress",
         String(current),
       );
-
       raf = requestAnimationFrame(update);
     };
-
     window.addEventListener(
       "scroll",
       handleScroll,
       { passive: true },
     );
-
     raf = requestAnimationFrame(update);
-
     return () => {
       window.removeEventListener(
         "scroll",
         handleScroll,
       );
-
       cancelAnimationFrame(raf);
     };
   }, []);
 }
-
 function Brand({ onNavigate }) {
   return (
     <button
@@ -290,12 +320,11 @@ function Brand({ onNavigate }) {
       onClick={() => onNavigate("/")}
       aria-label="Antarctic Labs home"
     >
-      <span className="brand-mark">
+      <span className="brand-mark" aria-hidden="true">
         <span className="brand-mark-line" />
         <span className="brand-mark-line" />
         <span className="brand-mark-line" />
       </span>
-
       <span className="brand-copy">
         <span>{SITE.brand}</span>
         <small>{SITE.version}</small>
@@ -303,11 +332,7 @@ function Brand({ onNavigate }) {
     </button>
   );
 }
-
-function MenuTrigger({
-  open,
-  onClick,
-}) {
+function MenuTrigger({ open, onClick }) {
   return (
     <button
       type="button"
@@ -321,19 +346,21 @@ function MenuTrigger({
           : "Open navigation"
       }
       aria-expanded={open}
+      aria-controls="site-navigation"
     >
       <span className="menu-trigger-label">
         {open ? "CLOSE" : "MENU"}
       </span>
-
-      <span className="menu-trigger-icon">
+      <span
+        className="menu-trigger-icon"
+        aria-hidden="true"
+      >
         <span />
         <span />
       </span>
     </button>
   );
 }
-
 function Header({
   menuOpen,
   setMenuOpen,
@@ -342,13 +369,14 @@ function Header({
   return (
     <header className="site-header">
       <Brand onNavigate={onNavigate} />
-
       <div className="header-meta">
         <span>{SITE.location}</span>
-        <span className="header-dot" />
+        <span
+          className="header-dot"
+          aria-hidden="true"
+        />
         <span>{SITE.availability}</span>
       </div>
-
       <MenuTrigger
         open={menuOpen}
         onClick={() =>
@@ -358,32 +386,42 @@ function Header({
     </header>
   );
 }
-
 function Menu({
   open,
   onNavigate,
 }) {
   const menuRef = useRef(null);
-
   useLayoutEffect(() => {
     if (!menuRef.current) return undefined;
-
     const context = gsap.context(() => {
-      if (open) {
-        gsap.to(
-          menuRef.current,
-          {
-            autoAlpha: 1,
-            pointerEvents: "auto",
-            duration: 0.55,
-            ease: "power3.out",
-          },
+      const reducedMotion = window.matchMedia(
+        "(prefers-reduced-motion: reduce)",
+      ).matches;
+      const menuItems =
+        menuRef.current.querySelectorAll(
+          "[data-menu-item]",
         );
-
+      if (reducedMotion) {
+        gsap.set(menuRef.current, {
+          autoAlpha: open ? 1 : 0,
+          pointerEvents: open ? "auto" : "none",
+        });
+        gsap.set(menuItems, {
+          clearProps: "all",
+          opacity: open ? 1 : 0,
+          y: 0,
+        });
+        return;
+      }
+      if (open) {
+        gsap.to(menuRef.current, {
+          autoAlpha: 1,
+          pointerEvents: "auto",
+          duration: 0.55,
+          ease: "power3.out",
+        });
         gsap.fromTo(
-          menuRef.current.querySelectorAll(
-            "[data-menu-item]",
-          ),
+          menuItems,
           {
             y: 40,
             opacity: 0,
@@ -398,27 +436,44 @@ function Menu({
           },
         );
       } else {
-        gsap.to(
-          menuRef.current,
-          {
-            autoAlpha: 0,
-            pointerEvents: "none",
-            duration: 0.4,
-            ease: "power2.inOut",
-          },
-        );
+        gsap.to(menuRef.current, {
+          autoAlpha: 0,
+          pointerEvents: "none",
+          duration: 0.4,
+          ease: "power2.inOut",
+        });
       }
     }, menuRef);
-
     return () => context.revert();
   }, [open]);
-
+  useEffect(() => {
+    if (!open) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        onNavigate(
+          normalizePath(
+            window.location.pathname,
+          ),
+        );
+      }
+    };
+    window.addEventListener(
+      "keydown",
+      handleKeyDown,
+    );
+    return () => {
+      window.removeEventListener(
+        "keydown",
+        handleKeyDown,
+      );
+    };
+  }, [open, onNavigate]);
   const handleNavigate = (path) => {
     onNavigate(path);
   };
-
   return (
     <aside
+      id="site-navigation"
       ref={menuRef}
       className="menu-overlay"
       aria-hidden={!open}
@@ -428,18 +483,21 @@ function Menu({
           <span>ANTARCTIC LABS</span>
           <span>FIELD SYSTEM / 01</span>
         </div>
-
-        <nav className="menu-nav">
+        <nav
+          className="menu-nav"
+          aria-label="Primary navigation"
+        >
           <button
             type="button"
             data-menu-item
-            onClick={() => handleNavigate("/")}
+            onClick={() =>
+              handleNavigate("/")
+            }
           >
             <span>01</span>
             <strong>HOME</strong>
             <em>ARRIVAL</em>
           </button>
-
           <button
             type="button"
             data-menu-item
@@ -451,7 +509,6 @@ function Menu({
             <strong>PROJECTS</strong>
             <em>EXPEDITIONS</em>
           </button>
-
           <button
             type="button"
             data-menu-item
@@ -464,10 +521,8 @@ function Menu({
             <em>POSITION</em>
           </button>
         </nav>
-
         <div className="menu-footer">
           <span>INDEPENDENT / REMOTE</span>
-
           <a
             href={`mailto:${SITE.email}`}
             data-menu-item
@@ -479,7 +534,6 @@ function Menu({
     </aside>
   );
 }
-
 function SectionKicker({
   number,
   label,
@@ -488,7 +542,9 @@ function SectionKicker({
   return (
     <div
       className={`section-kicker ${
-        light ? "section-kicker-light" : ""
+        light
+          ? "section-kicker-light"
+          : ""
       }`}
     >
       <span>{number}</span>
@@ -496,10 +552,7 @@ function SectionKicker({
     </div>
   );
 }
-
-function HomeHero({
-  onNavigate,
-}) {
+function HomeHero({ onNavigate }) {
   return (
     <section className="hero">
       <div className="hero-inner">
@@ -510,7 +563,6 @@ function HomeHero({
           <span>INDEPENDENT DIGITAL STUDIO</span>
           <span>EST. 2026</span>
         </div>
-
         <div className="hero-title-wrap">
           <div className="hero-title-mask">
             <h1
@@ -520,7 +572,6 @@ function HomeHero({
               BUILD
             </h1>
           </div>
-
           <div className="hero-title-mask">
             <h1
               className="hero-title hero-title-offset"
@@ -530,7 +581,6 @@ function HomeHero({
             </h1>
           </div>
         </div>
-
         <div
           className="hero-bottom"
           data-reveal
@@ -540,7 +590,6 @@ function HomeHero({
             and experimental digital experiences
             for people building beyond the obvious.
           </p>
-
           <button
             type="button"
             className="hero-cta"
@@ -552,19 +601,20 @@ function HomeHero({
             <span className="arrow">↘</span>
           </button>
         </div>
-
         <div
           className="hero-scroll"
           data-reveal
         >
           <span>SCROLL TO DESCEND</span>
-          <span className="hero-scroll-line" />
+          <span
+            className="hero-scroll-line"
+            aria-hidden="true"
+          />
         </div>
       </div>
     </section>
   );
 }
-
 function Manifesto() {
   return (
     <section className="manifesto section-dark">
@@ -574,13 +624,11 @@ function Manifesto() {
           label="POSITION"
           light
         />
-
         <div className="manifesto-grid">
           <div className="manifesto-label">
             <span>FIELD NOTE</span>
             <span>WHY WE BUILD</span>
           </div>
-
           <h2
             className="manifesto-title"
             data-scroll-reveal
@@ -589,7 +637,6 @@ function Manifesto() {
             for territory that doesn't
             exist yet.
           </h2>
-
           <div
             className="manifesto-copy"
             data-scroll-reveal
@@ -599,7 +646,6 @@ function Manifesto() {
               digital studio focused on turning
               difficult ideas into working systems.
             </p>
-
             <p>
               The work sits between intelligence,
               software, automation, and experience.
@@ -613,7 +659,6 @@ function Manifesto() {
     </section>
   );
 }
-
 function SystemsSection() {
   return (
     <section className="systems section-light">
@@ -622,21 +667,18 @@ function SystemsSection() {
           number="02"
           label="CAPABILITIES"
         />
-
         <div className="section-heading-row">
           <h2 data-scroll-reveal>
             THE
             <br />
             SYSTEM.
           </h2>
-
           <p data-scroll-reveal>
             Four disciplines. One operating
             principle: build what makes the
             work better.
           </p>
         </div>
-
         <div className="capability-list">
           {CAPABILITIES.map((capability) => (
             <article
@@ -647,12 +689,12 @@ function SystemsSection() {
               <span className="capability-number">
                 {capability.number}
               </span>
-
               <h3>{capability.title}</h3>
-
               <p>{capability.text}</p>
-
-              <span className="capability-arrow">
+              <span
+                className="capability-arrow"
+                aria-hidden="true"
+              >
                 ↗
               </span>
             </article>
@@ -662,18 +704,14 @@ function SystemsSection() {
     </section>
   );
 }
-
 function ExpeditionCard({
   project,
   onNavigate,
 }) {
   const cardRef = useRef(null);
-
   const handlePointerMove = (event) => {
     const card = cardRef.current;
-
     if (!card) return;
-
     if (
       window.matchMedia(
         "(pointer: coarse)",
@@ -681,19 +719,16 @@ function ExpeditionCard({
     ) {
       return;
     }
-
-    const rect = card.getBoundingClientRect();
-
+    const rect =
+      card.getBoundingClientRect();
     const x =
       (event.clientX - rect.left) /
-      rect.width -
+        rect.width -
       0.5;
-
     const y =
       (event.clientY - rect.top) /
-      rect.height -
+        rect.height -
       0.5;
-
     gsap.to(card, {
       rotateX: -y * 3.2,
       rotateY: x * 4,
@@ -702,10 +737,8 @@ function ExpeditionCard({
       overwrite: true,
     });
   };
-
   const handlePointerLeave = () => {
     if (!cardRef.current) return;
-
     gsap.to(cardRef.current, {
       rotateX: 0,
       rotateY: 0,
@@ -713,7 +746,6 @@ function ExpeditionCard({
       ease: "power3.out",
     });
   };
-
   return (
     <article
       ref={cardRef}
@@ -726,37 +758,35 @@ function ExpeditionCard({
         <span>{project.index}</span>
         <span>{project.year}</span>
       </div>
-
       <div className="expedition-visual">
         <div className="expedition-grid" />
-
-        <div className="expedition-orbit">
+        <div
+          className="expedition-orbit"
+          aria-hidden="true"
+        >
           <span />
           <span />
           <span />
         </div>
-
-        <div className="expedition-signal">
+        <div
+          className="expedition-signal"
+          aria-hidden="true"
+        >
           <span />
           <span />
           <span />
         </div>
-
         <span className="expedition-visual-label">
           {project.signal}
         </span>
       </div>
-
       <div className="expedition-card-body">
         <div className="expedition-card-meta">
           <span>{project.category}</span>
           <span>{project.type}</span>
         </div>
-
         <h3>{project.title}</h3>
-
         <p>{project.description}</p>
-
         <button
           type="button"
           className="text-link"
@@ -767,16 +797,13 @@ function ExpeditionCard({
           }
         >
           <span>OPEN FIELD NOTE</span>
-          <span>↗</span>
+          <span aria-hidden="true">↗</span>
         </button>
       </div>
     </article>
   );
 }
-
-function Expeditions({
-  onNavigate,
-}) {
+function Expeditions({ onNavigate }) {
   return (
     <section className="expeditions section-light">
       <div className="section-shell">
@@ -784,20 +811,17 @@ function Expeditions({
           number="03"
           label="SELECTED WORK"
         />
-
         <div className="section-heading-row">
           <h2 data-scroll-reveal>
             SELECTED
             <br />
             EXPEDITIONS.
           </h2>
-
           <p data-scroll-reveal>
             A small field record of systems,
             experiments, and environments.
           </p>
         </div>
-
         <div className="expedition-list">
           {PROJECTS.map((project) => (
             <ExpeditionCard
@@ -811,7 +835,6 @@ function Expeditions({
     </section>
   );
 }
-
 function Statement() {
   return (
     <section className="statement section-dark">
@@ -821,14 +844,12 @@ function Statement() {
           label="PRINCIPLE"
           light
         />
-
         <div className="statement-wrap">
           <h2 data-scroll-reveal>
             USEFUL
             <br />
             MACHINES.
           </h2>
-
           <div
             className="statement-bottom"
             data-scroll-reveal
@@ -838,7 +859,6 @@ function Statement() {
               <br />
               SERVE THE OUTCOME.
             </span>
-
             <span>
               NOT THE OTHER
               <br />
@@ -850,7 +870,6 @@ function Statement() {
     </section>
   );
 }
-
 function Contact() {
   return (
     <section className="contact section-light">
@@ -859,7 +878,6 @@ function Contact() {
           number="05"
           label="CONTACT"
         />
-
         <div className="contact-grid">
           <div>
             <h2 data-scroll-reveal>
@@ -870,7 +888,6 @@ function Contact() {
               TO EXPLORE?
             </h2>
           </div>
-
           <div
             className="contact-side"
             data-scroll-reveal
@@ -879,15 +896,13 @@ function Contact() {
               If the problem is interesting,
               the system can probably be built.
             </p>
-
             <a
               className="contact-email"
               href={`mailto:${SITE.email}`}
             >
               {SITE.email}
-              <span>↗</span>
+              <span aria-hidden="true">↗</span>
             </a>
-
             <div className="contact-details">
               <span>{SITE.location}</span>
               <span>{SITE.availability}</span>
@@ -898,10 +913,7 @@ function Contact() {
     </section>
   );
 }
-
-function Footer({
-  onNavigate,
-}) {
+function Footer({ onNavigate }) {
   return (
     <footer className="site-footer">
       <div className="footer-top">
@@ -914,7 +926,6 @@ function Footer({
           <br />
           LABS.
         </button>
-
         <div className="footer-links">
           <button
             type="button"
@@ -924,7 +935,6 @@ function Footer({
           >
             PROJECTS
           </button>
-
           <button
             type="button"
             onClick={() =>
@@ -933,7 +943,6 @@ function Footer({
           >
             ABOUT
           </button>
-
           <a
             href={`mailto:${SITE.email}`}
           >
@@ -941,61 +950,37 @@ function Footer({
           </a>
         </div>
       </div>
-
       <div className="footer-bottom">
         <span>
           © {new Date().getFullYear()}{" "}
           {SITE.brand}
         </span>
-
-        <span>
-          {SITE.version}
-        </span>
-
-        <span>
-          INDEPENDENT / REMOTE
-        </span>
+        <span>{SITE.version}</span>
+        <span>INDEPENDENT / REMOTE</span>
       </div>
     </footer>
   );
 }
-
-function Home({
-  onNavigate,
-}) {
+function Home({ onNavigate }) {
   const rootRef = usePageEntrance([]);
-
   return (
     <main
       ref={rootRef}
       className="page home-page"
     >
-      <HomeHero
-        onNavigate={onNavigate}
-      />
-
+      <HomeHero onNavigate={onNavigate} />
       <Manifesto />
-
       <SystemsSection />
-
       <Expeditions
         onNavigate={onNavigate}
       />
-
       <Statement />
-
       <Contact />
-
-      <Footer
-        onNavigate={onNavigate}
-      />
+      <Footer onNavigate={onNavigate} />
     </main>
   );
 }
-
-function ProjectHero({
-  project,
-}) {
+function ProjectHero({ project }) {
   return (
     <section className="project-hero section-dark">
       <div className="section-shell">
@@ -1004,7 +989,6 @@ function ProjectHero({
           <span>{project.year}</span>
           <span>{project.category}</span>
         </div>
-
         <div className="project-hero-title">
           <div className="hero-title-mask">
             <h1 data-line>
@@ -1012,10 +996,8 @@ function ProjectHero({
             </h1>
           </div>
         </div>
-
         <div className="project-hero-bottom">
           <span>{project.type}</span>
-
           <p data-reveal>
             {project.description}
           </p>
@@ -1024,7 +1006,6 @@ function ProjectHero({
     </section>
   );
 }
-
 function ProjectFieldBlock({
   label,
   title,
@@ -1042,7 +1023,6 @@ function ProjectFieldBlock({
             <span>{index}</span>
             <span>{label}</span>
           </div>
-
           <div className="project-field-content">
             <h2>{title}</h2>
             <p>{text}</p>
@@ -1052,7 +1032,6 @@ function ProjectFieldBlock({
     </section>
   );
 }
-
 function ProjectPage({
   project,
   onNavigate,
@@ -1060,49 +1039,45 @@ function ProjectPage({
   const rootRef = usePageEntrance([
     project.slug,
   ]);
-
+  const nextProject = PROJECTS.find(
+    (item) => item.slug !== project.slug,
+  );
   return (
     <main
       ref={rootRef}
       className="page project-page"
     >
       <ProjectHero project={project} />
-
       <ProjectFieldBlock
         index="01"
         label="BRIEF"
         title="THE QUESTION"
         text={project.brief}
       />
-
       <ProjectFieldBlock
         index="02"
         label="TERRAIN"
         title="THE TERRAIN"
         text={project.terrain}
       />
-
       <ProjectFieldBlock
         index="03"
         label="SYSTEM"
         title="THE SYSTEM"
         text={project.system}
       />
-
       <ProjectFieldBlock
         index="04"
         label="BUILD"
         title="THE BUILD"
         text={project.build}
       />
-
       <ProjectFieldBlock
         index="05"
         label="RESULT"
         title="THE RESULT"
         text={project.result}
       />
-
       <section className="project-stack section-dark">
         <div className="section-shell">
           <SectionKicker
@@ -1110,70 +1085,48 @@ function ProjectPage({
             label="STACK"
             light
           />
-
           <div className="project-stack-content">
             <h2 data-scroll-reveal>
               BUILT
               <br />
               TO MOVE.
             </h2>
-
             <p data-scroll-reveal>
               {project.stack}
             </p>
           </div>
         </div>
       </section>
-
       <section className="project-next section-light">
         <div className="section-shell">
           <div className="project-next-inner">
             <span>NEXT EXPEDITION</span>
-
             <button
               type="button"
-              onClick={() => {
-                const next =
-                  PROJECTS.find(
-                    (item) =>
-                      item.slug !==
-                      project.slug,
-                  );
-
-                if (next) {
-                  onNavigate(
-                    `/${next.slug}`,
-                  );
-                } else {
-                  onNavigate("/");
-                }
-              }}
+              onClick={() =>
+                onNavigate(
+                  nextProject
+                    ? `/${nextProject.slug}`
+                    : "/",
+                )
+              }
             >
               <strong>
-                {PROJECTS.find(
-                  (item) =>
-                    item.slug !==
-                    project.slug,
-                )?.title ||
-                  "RETURN HOME"}
+                {nextProject
+                  ? nextProject.title
+                  : "RETURN HOME"}
               </strong>
-
-              <span>↗</span>
+              <span aria-hidden="true">↗</span>
             </button>
           </div>
         </div>
       </section>
-
-      <Footer
-        onNavigate={onNavigate}
-      />
+      <Footer onNavigate={onNavigate} />
     </main>
   );
 }
-
-function About() {
+function About({ onNavigate }) {
   const rootRef = usePageEntrance([]);
-
   return (
     <main
       ref={rootRef}
@@ -1185,43 +1138,31 @@ function About() {
             <span>03 / POSITION</span>
             <span>{SITE.version}</span>
           </div>
-
           <div className="about-title">
             <div className="hero-title-mask">
-              <h1 data-line>
-                BUILDING
-              </h1>
+              <h1 data-line>BUILDING</h1>
             </div>
-
             <div className="hero-title-mask">
-              <h1 data-line>
-                BEYOND
-              </h1>
+              <h1 data-line>BEYOND</h1>
             </div>
-
             <div className="hero-title-mask">
-              <h1 data-line>
-                THE MAP.
-              </h1>
+              <h1 data-line>THE MAP.</h1>
             </div>
           </div>
         </div>
       </section>
-
       <section className="about-manifesto section-light">
         <div className="section-shell">
           <SectionKicker
             number="01"
             label="THE STUDIO"
           />
-
           <div className="about-grid">
             <h2 data-scroll-reveal>
               SMALL BY DESIGN.
               <br />
               SERIOUS BY DEFAULT.
             </h2>
-
             <div
               className="about-copy"
               data-scroll-reveal
@@ -1232,13 +1173,11 @@ function About() {
                 automation, software, and
                 experimental web experiences.
               </p>
-
               <p>
                 The studio exists for problems
                 where the obvious solution is not
                 good enough.
               </p>
-
               <p>
                 Instead of starting with a
                 predefined stack, the work starts
@@ -1251,7 +1190,6 @@ function About() {
           </div>
         </div>
       </section>
-
       <section className="about-principles section-dark">
         <div className="section-shell">
           <SectionKicker
@@ -1259,7 +1197,6 @@ function About() {
             label="PRINCIPLES"
             light
           />
-
           <div className="principle-list">
             <div
               className="principle"
@@ -1272,7 +1209,6 @@ function About() {
                 improving the outcome.
               </p>
             </div>
-
             <div
               className="principle"
               data-scroll-reveal
@@ -1284,7 +1220,6 @@ function About() {
                 Unnecessary complexity is not.
               </p>
             </div>
-
             <div
               className="principle"
               data-scroll-reveal
@@ -1297,7 +1232,6 @@ function About() {
                 real use.
               </p>
             </div>
-
             <div
               className="principle"
               data-scroll-reveal
@@ -1312,49 +1246,25 @@ function About() {
           </div>
         </div>
       </section>
-
       <section className="about-contact section-light">
         <div className="section-shell">
           <div className="about-contact-inner">
             <span>AVAILABLE FOR SELECT BUILDS</span>
-
             <a
               href={`mailto:${SITE.email}`}
             >
               START A CONVERSATION
-              <span>↗</span>
+              <span aria-hidden="true">↗</span>
             </a>
           </div>
         </div>
       </section>
-
-      <Footer
-        onNavigate={(path) => {
-          window.history.pushState(
-            {},
-            "",
-            path,
-          );
-
-          window.dispatchEvent(
-            new PopStateEvent("popstate"),
-          );
-
-          window.scrollTo({
-            top: 0,
-            behavior: "auto",
-          });
-        }}
-      />
+      <Footer onNavigate={onNavigate} />
     </main>
   );
 }
-
-function NotFound({
-  onNavigate,
-}) {
+function NotFound({ onNavigate }) {
   const rootRef = usePageEntrance([]);
-
   return (
     <main
       ref={rootRef}
@@ -1366,7 +1276,6 @@ function NotFound({
           label="UNKNOWN TERRITORY"
           light
         />
-
         <div className="not-found-content">
           <h1 data-scroll-reveal>
             LOST
@@ -1375,118 +1284,46 @@ function NotFound({
             <br />
             FIELD.
           </h1>
-
           <p data-scroll-reveal>
             This coordinate does not exist.
             Return to known territory.
           </p>
-
           <button
             type="button"
             className="text-link text-link-light"
-            onClick={() => onNavigate("/")}
+            onClick={() =>
+              onNavigate("/")
+            }
           >
             <span>RETURN HOME</span>
-            <span>↗</span>
+            <span aria-hidden="true">↗</span>
           </button>
         </div>
       </div>
-
-      <Footer
-        onNavigate={onNavigate}
-      />
+      <Footer onNavigate={onNavigate} />
     </main>
   );
 }
-
-function PageCurtain({
-  visible,
-}) {
-  const curtainRef = useRef(null);
-
-  useEffect(() => {
-    if (!curtainRef.current) return;
-
-    if (visible) {
-      gsap.to(curtainRef.current, {
-        yPercent: 0,
-        duration: 0.5,
-        ease: "power3.inOut",
-      });
-    } else {
-      gsap.to(curtainRef.current, {
-        yPercent: -100,
-        duration: 0.75,
-        delay: 0.05,
-        ease: "power4.inOut",
-      });
-    }
-  }, [visible]);
-
-  return (
-    <div
-      ref={curtainRef}
-      className="page-curtain"
-      aria-hidden="true"
-    />
-  );
-}
-
 function App() {
   const route = useRoute();
   const [menuOpen, setMenuOpen] =
     useState(false);
-
   useScrollAtmosphere();
-
+  useDocumentMeta(route);
   useEffect(() => {
     setMenuOpen(false);
-
     const refresh = window.setTimeout(() => {
       ScrollTrigger.refresh();
     }, 80);
-
     return () => {
       window.clearTimeout(refresh);
     };
   }, [route]);
-
   const handleNavigate = (path) => {
     setMenuOpen(false);
-
-    const normalized =
-      normalizePath(path);
-
-    if (
-      normalizePath(
-        window.location.pathname,
-      ) === normalized
-    ) {
-      window.scrollTo({
-        top: 0,
-        behavior: "smooth",
-      });
-      return;
-    }
-
-    window.history.pushState(
-      {},
-      "",
-      normalized,
-    );
-
-    window.dispatchEvent(
-      new PopStateEvent("popstate"),
-    );
-
-    window.scrollTo({
-      top: 0,
-      behavior: "auto",
-    });
+    navigate(path);
   };
-
   let content;
-
   if (route === "/") {
     content = (
       <Home
@@ -1508,7 +1345,11 @@ function App() {
       />
     );
   } else if (route === "/about") {
-    content = <About />;
+    content = (
+      <About
+        onNavigate={handleNavigate}
+      />
+    );
   } else {
     content = (
       <NotFound
@@ -1516,29 +1357,22 @@ function App() {
       />
     );
   }
-
   return (
     <>
       <PolarScene />
-
       <Header
         menuOpen={menuOpen}
         setMenuOpen={setMenuOpen}
         onNavigate={handleNavigate}
       />
-
       <Menu
         open={menuOpen}
         onNavigate={handleNavigate}
       />
-
-      <PageCurtain visible={false} />
-
       {content}
     </>
   );
 }
-
 createRoot(
   document.getElementById("root"),
 ).render(
