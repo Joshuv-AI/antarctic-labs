@@ -305,17 +305,24 @@ function buildCloudSource(html) {
   const focusStyles = `<style data-threeui-focus>
 html, body { width: 100% !important; height: 100% !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; background: #071010 !important; }
 body { position: relative !important; }
-/* hide the strata-cloud source's demo UI (nav, hero copy, stat cards, scroll dots)
-   by selector as well as via data-threeui-residual, so the demo cannot leak through
-   even if the wrapper's isolate() script does not run */
+/* hide the strata-cloud source's demo UI by selector so the demo cannot leak through */
 nav, main, header, aside, footer,
 [id="reveal-text"], #scroll-dot {
   display: none !important;
 }
-body > * { visibility: hidden !important; }
-body[data-threeui-ready] > [data-threeui-role] { visibility: visible !important; }
+/* keep the cloud canvas visible without depending on the wrapper's isolate() script
+   to promote it to body root. The canvas lives at body > #c, gets full-viewport sizing,
+   and stays put instead of being moved by isolate(). */
+#c {
+  display: block !important;
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  z-index: 0 !important;
+  pointer-events: none !important;
+}
 [data-threeui-residual] { display: none !important; }
-[data-threeui-role="background"] { position: fixed !important; inset: 0 !important; width: 100% !important; height: 100% !important; max-width: none !important; max-height: none !important; z-index: 0 !important; opacity: 1 !important; pointer-events: none !important; }
 </style>`;
   const controlsJson = JSON.stringify({
     mode: "dark", speed: 1, size: 1, length: 1, density: 1,
