@@ -403,6 +403,18 @@ function CloudField({ opacity, paused }) {
     );
   }, [paused, opacity, source]);
   return (
+    <div
+      className="polar-layer polar-cloud"
+      aria-hidden="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 2,
+        pointerEvents: "none",
+        opacity,
+        transition: "opacity 200ms linear",
+      }}
+    >
     <iframe
       ref={iframeRef}
       title="Strata cloud migration field"
@@ -436,6 +448,7 @@ function CloudField({ opacity, paused }) {
         opacity: clamp(opacity, 0.05, 1),
       }}
     />
+    </div>
   );
 }
 
