@@ -305,6 +305,13 @@ function buildCloudSource(html) {
   const focusStyles = `<style data-threeui-focus>
 html, body { width: 100% !important; height: 100% !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; background: #071010 !important; }
 body { position: relative !important; }
+/* hide the strata-cloud source's demo UI (nav, hero copy, stat cards, scroll dots)
+   by selector as well as via data-threeui-residual, so the demo cannot leak through
+   even if the wrapper's isolate() script does not run */
+nav, main, header, aside, footer,
+[id="reveal-text"], #scroll-dot {
+  display: none !important;
+}
 body > * { visibility: hidden !important; }
 body[data-threeui-ready] > [data-threeui-role] { visibility: visible !important; }
 [data-threeui-residual] { display: none !important; }
