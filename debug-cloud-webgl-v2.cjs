@@ -24,7 +24,7 @@ function fetchText(url) {
 
 (async () => {
   // Fetch the cloud srcDoc from the live bundle (raw source, no wrapper)
-  const bundle = await fetchText('https://antarctic-labs.com/assets/index-DMbIyNQp.js');
+  const bundle = await fetchText('https://antarctic-labs.com/assets/index-B7VrpVbc.js');
   const docIdx = bundle.lastIndexOf('<!DOCTYPE');
   const htmlEnd = bundle.indexOf('</html>', docIdx) + 7;
   const cloudSrc = bundle.slice(docIdx, htmlEnd);

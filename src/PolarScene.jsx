@@ -531,7 +531,6 @@ export default function PolarScene() {
     smoothstep(0.0, 0.05, 1 - progress) *
     smoothstep(0.42, 0.62, 1 - progress);
   const cloudOpacity =
-    smoothstep(0.20, 0.45, progress) *
     smoothstep(0.78, 0.94, 1 - progress);
   const waterOpacity = smoothstep(0.62, 0.78, progress);
 
