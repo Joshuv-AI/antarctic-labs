@@ -310,6 +310,20 @@ nav, main, header, aside, footer,
 [id="reveal-text"], #scroll-dot {
   display: none !important;
 }
+/* Force the cloud canvas to fill the viewport regardless of isolate() state.
+   The source's Tailwind classes (fixed, inset-0, w-full, h-full) do not apply
+   because Tailwind CDN is blocked by CSP, so we set full-viewport sizing
+   here in the wrapper's focusStyles. */
+#c {
+  display: block !important;
+  visibility: visible !important;
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  z-index: 0 !important;
+  pointer-events: none !important;
+}
 body > * { visibility: hidden !important; }
 body[data-threeui-ready] > [data-threeui-role] { visibility: visible !important; }
 [data-threeui-residual] { display: none !important; }
