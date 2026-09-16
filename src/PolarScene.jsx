@@ -7,7 +7,7 @@
 // water layer uses the inline WaterLayer component.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ConstellationField as ConstellationFieldNew } from "./shaders/neuform-isolated/NeuformBatchEffects";
+import { DefenseLines as ConstellationFieldNew } from "./shaders/neuform-isolated/NeuformBatchEffects";
 
 
 // ============================================================================
