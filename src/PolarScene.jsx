@@ -7,151 +7,8 @@
 // water layer uses the inline WaterLayer component.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import particleNetworkSource from "./shaders/neuform-isolated/sources/particle-network.html?raw";
-import { ElementsBackground as ElementsCollection } from "./shaders/elements/ElementsBackground";
+import { ConstellationField as ConstellationFieldNew } from "./shaders/neuform-isolated/NeuformBatchEffects";
 
-// ============================================================================
-// ConstellationField — inlined minimal wrapper for the constellation effect.
-// ============================================================================
-function buildConstellationSource(html, size, length, density) {
-  const focusStyles = `<style data-threeui-focus>
-html, body { width: 100% !important; height: 100% !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; background: transparent !important; }
-body { position: relative !important; }
-body > * { visibility: hidden !important; }
-body[data-threeui-ready] > [data-threeui-role] { visibility: visible !important; }
-[data-threeui-residual] { display: none !important; }
-[data-threeui-role="background"] { position: fixed !important; inset: 0 !important; width: 100% !important; height: 100% !important; max-width: none !important; max-height: none !important; z-index: 0 !important; opacity: 1 !important; pointer-events: none !important; }
-</style>`;
-  const controlsJson = JSON.stringify({
-    mode: "dark",
-    speed: 1.94,
-    size,
-    length,
-    density,
-    opacity: 1,
-  }).replace(/</g, "\\u003c");
-  const focusJson = JSON.stringify([
-    { selector: "#particle-canvas", role: "background" },
-  ]).replace(/</g, "\\u003c");
-  const controlScript = `<script data-threeui-controls>
-(function () {
-  var controls = ${controlsJson};
-  window.__SF_CONTROLS = controls;
-  var origin = performance.now();
-  var virtual = 0;
-  var last = origin;
-  var performanceNow = performance.now.bind(performance);
-  performance.now = function () {
-    var real = performanceNow();
-    virtual += (real - last) * (controls.speed || 1);
-    last = real;
-    return origin + virtual;
-  };
-  var raf = window.requestAnimationFrame.bind(window);
-  window.requestAnimationFrame = function (callback) {
-    return raf(function () { callback(performance.now()); });
-  };
-  function applyVisual() {
-    var opacity = controls.opacity == null ? 1 : controls.opacity;
-    Array.prototype.forEach.call(document.querySelectorAll('[data-threeui-role]'), function (e) { e.style.opacity = String(opacity); });
-  }
-  window.addEventListener('message', function (event) {
-    if (!event.data || event.data.type !== 'threeui-controls') return;
-    var next = event.data.controls || {};
-    Object.keys(next).forEach(function (key) { controls[key] = next[key]; });
-    applyVisual();
-  });
-  window.__SF_APPLY_CONTROLS = applyVisual;
-})();
-</script>`;
-  const focusScript = `<script data-threeui-focus>
-(function () {
-  var isolated = false;
-  function isolate() {
-    if (isolated) return;
-    var specs = ${focusJson};
-    var roots = [];
-    specs.forEach(function (spec) {
-      var element = document.querySelector(spec.selector);
-      if (!element) return;
-      element.setAttribute('data-threeui-role', spec.role);
-      if (!roots.some(function (root) { return root.contains(element); })) roots.push(element);
-    });
-    if (!roots.length) return;
-    isolated = true;
-    roots.forEach(function (root) { document.body.appendChild(root); });
-    Array.from(document.body.children).forEach(function (element) {
-      if (roots.indexOf(element) !== -1) return;
-      element.setAttribute('data-threeui-residual', '');
-      element.setAttribute('aria-hidden', 'true');
-      if ('inert' in element) element.inert = true;
-    });
-    document.body.setAttribute('data-threeui-ready', '');
-    if (window.__SF_APPLY_CONTROLS) window.__SF_APPLY_CONTROLS();
-    requestAnimationFrame(function () { window.dispatchEvent(new Event('resize')); });
-  }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(isolate, 100); }, { once: true });
-  else setTimeout(isolate, 100);
-  window.addEventListener('load', isolate, { once: true });
-})();
-</script>`;
-  let patched = html;
-  patched = patched
-    .replace("const particleCount = 200;", `const particleCount = ${Math.max(40, Math.round(200 * density))};`)
-    .replace("this.length = Math.random() * 2 + 0.5;", `this.length = (Math.random() * 2 + 0.5) * ${length};`)
-    .replace("this.z -= this.speed;", "this.z -= this.speed * ((window.__SF_CONTROLS && window.__SF_CONTROLS.speed) || 1);")
-    .replace("const fov = 300;", `const fov = ${Math.round(300 / Math.max(0.4, size))};`);
-  return patched
-    .replace(/<head([^>]*)>/i, `<head$1>${controlScript}${focusStyles}`)
-    .replace(/<\/body>/i, `${focusScript}</body>`);
-}
-
-function ConstellationField({ paused }) {
-  const iframeRef = useRef(null);
-  const source = useMemo(
-    () => buildConstellationSource(particleNetworkSource, 2.5, 0.35, 2.412),
-    []
-  );
-  useEffect(() => {
-    const iframe = iframeRef.current;
-    if (!iframe || !iframe.contentWindow) return;
-    iframe.contentWindow.postMessage(
-      {
-        type: "threeui-controls",
-        controls: { mode: "dark", speed: 1.94, size: 2.5, length: 0.35, density: 2.412, opacity: 1, paused },
-      },
-      "*"
-    );
-  }, [paused, source]);
-  return (
-    <iframe
-      ref={iframeRef}
-      title="Constellation Field"
-      srcDoc={source}
-      sandbox="allow-scripts"
-      onLoad={() => {
-        const iframe = iframeRef.current;
-        if (!iframe || !iframe.contentWindow) return;
-        iframe.contentWindow.postMessage(
-          {
-            type: "threeui-controls",
-            controls: { mode: "dark", speed: 1.94, size: 2.5, length: 0.35, density: 2.412, opacity: 1, paused },
-          },
-          "*"
-        );
-      }}
-      aria-hidden="true"
-      tabIndex={-1}
-      style={{
-        display: "block",
-        width: "100%",
-        height: "100%",
-        border: 0,
-        background: "transparent",
-      }}
-    />
-  );
-}
 
 // ============================================================================
 // WaterLayer — inline water component (same proven pattern)
@@ -542,7 +399,18 @@ export default function PolarScene() {
           opacity: constellationOpacity, transition: "opacity 160ms linear",
         }}
       >
-        <ConstellationField paused={paused} />
+        <ConstellationFieldNew
+          variant="defense-lines"
+          mode="dark"
+          speed={3.00}
+          size={0.35}
+          length={0.35}
+          density={1.99}
+          opacity={1.00}
+          hue={1}
+          saturation={0.00}
+          brightness={1.65}
+        />
       </div>
       <CloudField opacity={cloudOpacity} paused={paused} />
       <div
