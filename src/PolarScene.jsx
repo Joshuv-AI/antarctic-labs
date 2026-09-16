@@ -454,7 +454,7 @@ function CloudField({ opacity, paused }) {
         zIndex: 2,
         pointerEvents: "none",
         opacity,
-        transition: "opacity 200ms linear",
+        transition: "opacity 160ms linear",
       }}
     >
     <iframe
@@ -540,7 +540,7 @@ export default function PolarScene() {
         className="polar-layer polar-constellation"
         style={{
           position: "fixed", inset: 0, zIndex: 3, pointerEvents: "none",
-          opacity: constellationOpacity, transition: "opacity 120ms linear",
+          opacity: constellationOpacity, transition: "opacity 160ms linear",
         }}
       >
         <ConstellationField paused={paused} />
@@ -550,7 +550,7 @@ export default function PolarScene() {
         className="polar-layer polar-water"
         style={{
           position: "fixed", inset: 0, zIndex: 1, pointerEvents: "none",
-          opacity: waterOpacity, transition: "opacity 240ms linear",
+          opacity: waterOpacity, transition: "opacity 160ms linear",
         }}
       >
         <WaterLayer opacity={1.0} paused={paused} />
