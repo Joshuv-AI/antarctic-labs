@@ -148,7 +148,6 @@ function ConstellationField({ paused }) {
         height: "100%",
         border: 0,
         background: "transparent",
-        filter: "hue-rotate(-31deg) saturate(1.52) brightness(1.65)",
       }}
     />
   );
