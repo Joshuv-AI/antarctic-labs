@@ -51,6 +51,40 @@ body[data-threeui-ready] > [data-threeui-role] { visibility: visible !important;
   window.requestAnimationFrame = function (callback) {
     return raf(function () { callback(performance.now()); });
   };
+
+  // TEMP DIAGNOSTIC: measure iframe-internal frame cadence. Read-only probe.
+  // Wraps the existing RAF override so each iframe frame records a delta-time.
+  // Posts a histogram to window.parent every 2s. No visual behavior changed.
+  (function () {
+    var dts = [];
+    var lastT = null;
+    var _raf = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = function (cb) {
+      return _raf(function (t) {
+        if (lastT !== null) dts.push(t - lastT);
+        lastT = t;
+        cb(t);
+      });
+    };
+    setInterval(function () {
+      if (!dts.length) return;
+      var copy = dts.slice();
+      dts.length = 0;
+      copy.sort(function (a, b) { return a - b; });
+      var sum = 0; for (var i = 0; i < copy.length; i++) sum += copy[i];
+      try {
+        window.parent.postMessage({
+          type: 'constellation-fps',
+          frames: copy.length,
+          avg_ms: sum / copy.length,
+          median_ms: copy[Math.floor(copy.length / 2)],
+          p95_ms: copy[Math.floor(copy.length * 0.95)],
+          p99_ms: copy[Math.floor(copy.length * 0.99)],
+          max_ms: copy[copy.length - 1],
+        }, '*');
+      } catch (e) {}
+    }, 2000);
+  })();
   function applyVisual() {
     var opacity = controls.opacity == null ? 1 : controls.opacity;
     Array.prototype.forEach.call(document.querySelectorAll('[data-threeui-role]'), function (e) { e.style.opacity = String(opacity); });
