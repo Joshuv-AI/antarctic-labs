@@ -389,13 +389,39 @@ export default function PolarScene() {
   const cloudOpacity =
     1 - smoothstep(0.78, 0.94, progress);
   const waterOpacity = smoothstep(0.62, 0.78, progress);
+  // Atmospheric veil — peaks during constellation→cloud handoff so the
+  // DefenseLines rain and strata-cloud orbs read as one continuous polar world.
+  const fogOpacity =
+    smoothstep(0.40, 0.55, progress) *
+    (1 - smoothstep(0.78, 0.88, progress));
 
   return (
     <div className="polar-scene" aria-hidden="true">
       <div
+        className="polar-layer polar-fog"
+        aria-hidden="true"
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 3,
+          pointerEvents: "none",
+          opacity: fogOpacity,
+          transition: "opacity 160ms linear",
+          background: [
+            "radial-gradient(60% 50% at 20% 35%, rgba(180, 210, 235, 0.55) 0%, rgba(180, 210, 235, 0) 60%)",
+            "radial-gradient(55% 45% at 78% 50%, rgba(150, 185, 220, 0.50) 0%, rgba(150, 185, 220, 0) 65%)",
+            "radial-gradient(70% 55% at 50% 75%, rgba(120, 160, 205, 0.45) 0%, rgba(120, 160, 205, 0) 70%)",
+            "radial-gradient(80% 60% at 35% 20%, rgba(200, 220, 240, 0.40) 0%, rgba(200, 220, 240, 0) 65%)",
+          ].join(", "),
+          filter: "blur(40px)",
+          mixBlendMode: "screen",
+          willChange: "opacity",
+        }}
+      />
+      <div
         className="polar-layer polar-constellation"
         style={{
-          position: "fixed", inset: 0, zIndex: 3, pointerEvents: "none",
+          position: "fixed", inset: 0, zIndex: 4, pointerEvents: "none",
           opacity: constellationOpacity, transition: "opacity 160ms linear",
         }}
       >
