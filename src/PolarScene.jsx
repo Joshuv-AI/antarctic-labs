@@ -15,7 +15,7 @@ import { ElementsBackground as ElementsCollection } from "./shaders/elements/Ele
 // ============================================================================
 function buildConstellationSource(html, size, length, density) {
   const focusStyles = `<style data-threeui-focus>
-html, body { width: 100% !important; height: 100% !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; background: #05070d !important; }
+html, body { width: 100% !important; height: 100% !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; background: transparent !important; }
 body { position: relative !important; }
 body > * { visibility: hidden !important; }
 body[data-threeui-ready] > [data-threeui-role] { visibility: visible !important; }
@@ -539,7 +539,7 @@ export default function PolarScene() {
       <div
         className="polar-layer polar-constellation"
         style={{
-          position: "fixed", inset: 0, zIndex: 1, pointerEvents: "none",
+          position: "fixed", inset: 0, zIndex: 3, pointerEvents: "none",
           opacity: constellationOpacity, transition: "opacity 120ms linear",
         }}
       >
@@ -549,7 +549,7 @@ export default function PolarScene() {
       <div
         className="polar-layer polar-water"
         style={{
-          position: "fixed", inset: 0, zIndex: 3, pointerEvents: "none",
+          position: "fixed", inset: 0, zIndex: 1, pointerEvents: "none",
           opacity: waterOpacity, transition: "opacity 240ms linear",
         }}
       >
