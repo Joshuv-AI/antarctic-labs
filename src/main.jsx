@@ -166,10 +166,10 @@ function Home({ go }) {
           </h1>
           <div className="hero-bottom">
             <p>{content.hero.sub}</p>
-            <div className="hero-actions">
-              <button className="text-link" onClick={() => go(content.hero.cta.to)}>{content.hero.cta.label} <span>↗</span></button>
-              <span className="scroll-cue">SCROLL TO EXPLORE <b>↓</b></span>
-            </div>
+            <button className="hero-cta" onClick={() => go(content.hero.cta.to)}>
+              {content.hero.cta.label} <span aria-hidden="true">↗</span>
+            </button>
+            <span className="hero-scroll-cue">SCROLL TO EXPLORE <b aria-hidden="true">↓</b></span>
           </div>
         </div>
       </section>
@@ -251,16 +251,16 @@ function Menu({ open, close, go }) {
     <div className={`menu-overlay ${open ? "is-open" : ""}`}>
       <div className="menu-top"><span>ANTARCTIC LABS / NAVIGATION</span><button onClick={close}>CLOSE <b>×</b></button></div>
       <nav>
-        <button onClick={() => go("/")}>01 <span>ARRIVAL</span><i>THE FIELD</i></button>
-        <button onClick={() => go("/the-lab")}>02 <span>THE LAB</span><i>FIELD STATION</i></button>
-        <button onClick={() => go("/systems")}>03 <span>SYSTEMS</span><i>OPERATING</i></button>
-        <button onClick={() => go("/expeditions")}>04 <span>EXPEDITIONS</span><i>SELECTED WORK</i></button>
-        <button onClick={() => go("/history")}>05 <span>HISTORY</span><i>TIMELINE</i></button>
-        <button onClick={() => go("/tower-of-babel")}>06 <span>TOWER OF BABEL</span><i>LIBRARY</i></button>
-        <button onClick={() => go("/government")}>07 <span>GOVERNMENT</span><i>PUBLIC SECTOR</i></button>
-        <button onClick={() => go("/operator")}>08 <span>THE OPERATOR</span><i>JOSHUA ALMODOVAR</i></button>
-        <button onClick={() => go("/field-interests")}>09 <span>FIELD INTERESTS</span><i>RESEARCH</i></button>
-        <button onClick={() => go("/transmission")}>10 <span>TRANSMISSION</span><i>CONTACT</i></button>
+        <button onClick={() => go("/")}><span>01</span><span>ARRIVAL</span><i>THE FIELD</i></button>
+        <button onClick={() => go("/the-lab")}><span>02</span><span>THE LAB</span><i>FIELD STATION</i></button>
+        <button onClick={() => go("/systems")}><span>03</span><span>SYSTEMS</span><i>OPERATING</i></button>
+        <button onClick={() => go("/expeditions")}><span>04</span><span>EXPEDITIONS</span><i>SELECTED WORK</i></button>
+        <button onClick={() => go("/history")}><span>05</span><span>HISTORY</span><i>TIMELINE</i></button>
+        <button onClick={() => go("/tower-of-babel")}><span>06</span><span>TOWER OF BABEL</span><i>LIBRARY</i></button>
+        <button onClick={() => go("/government")}><span>07</span><span>GOVERNMENT</span><i>PUBLIC SECTOR</i></button>
+        <button onClick={() => go("/operator")}><span>08</span><span>THE OPERATOR</span><i>JOSHUA ALMODOVAR</i></button>
+        <button onClick={() => go("/field-interests")}><span>09</span><span>FIELD INTERESTS</span><i>RESEARCH</i></button>
+        <button onClick={() => go("/transmission")}><span>10</span><span>TRANSMISSION</span><i>CONTACT</i></button>
       </nav>
       <div className="menu-bottom"><a href={`mailto:${content.email}`}>{content.email}</a><span>FLORIDA / WORLDWIDE</span></div>
     </div>
