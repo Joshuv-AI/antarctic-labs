@@ -155,7 +155,9 @@ function WaterLayer({ opacity, paused }) {
 // Same proven pattern as the constellation wrapper: inline so Vite's static
 // analyzer cannot tree-shake the source HTML out of the bundle.
 // ============================================================================
+import { injectBundledGsap } from "./lib/gsap-iframe-injector.js";
 import cloudSourceHtml from "./shaders/neuform-isolated/sources/strata-cloud.html?raw";
+const cloudSourceRaw = injectBundledGsap(cloudSourceHtml);
 
 function buildCloudSource(html) {
   const focusStyles = `<style data-threeui-focus>
@@ -284,7 +286,7 @@ body[data-threeui-ready] > [data-threeui-role] { visibility: visible !important;
 
 function CloudField({ opacity, paused }) {
   const iframeRef = useRef(null);
-  const source = useMemo(() => buildCloudSource(cloudSourceHtml), []);
+  const source = useMemo(() => buildCloudSource(cloudSourceRaw), []);
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe || !iframe.contentWindow) return;

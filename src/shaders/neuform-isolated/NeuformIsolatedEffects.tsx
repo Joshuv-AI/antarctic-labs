@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, type CSSProperties } from "react";  
-  
-import aetherisLabsSource from "./sources/aetheris-labs.html?raw";  
+
+import { injectBundledGsap } from "../../lib/gsap-iframe-injector.js";
+
+import aetherisLabsSource from "./sources/aetheris-labs.html?raw";    
 import audioWordmarkSource from "./sources/audio-wordmark.html?raw";  
 import dotBorderButtonSource from "./sources/dot-border-button.html?raw";  
 import creatorStudioIntroSource from "./sources/creator-studio-intro.html?raw";  
@@ -24,7 +26,8 @@ import spinningBorderButtonSource from "./sources/spinning-border-button.html?ra
 import thinkingSource from "./sources/thinking-button.html?raw";  
 import performanceGaugesSource from "./sources/performance-gauges.html?raw";  
 import logicCoreSource from "./sources/platform-core.html?raw";  
-import cloudSource from "./sources/strata-cloud.html?raw";  
+import cloudSourceRaw from "./sources/strata-cloud.html?raw";
+const cloudSource = injectBundledGsap(cloudSourceRaw);  
 import particleOrbSource from "./sources/synthesis-orb.html?raw";  
 import inductionSource from "./sources/valence-core.html?raw";  
 import dimensionalSource from "./sources/vanguard-dimensional.html?raw";  

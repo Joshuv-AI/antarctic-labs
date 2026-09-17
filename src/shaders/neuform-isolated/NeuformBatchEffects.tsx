@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
+import { injectBundledGsap } from "../../lib/gsap-iframe-injector.js";
+
 import constellationFieldSource from "./sources/constellation-field.html?raw";
 import particleDriftSource from "./sources/particle-drift.html?raw";
-import particleNetworkSource from "./sources/particle-network.html?raw";
+import particleNetworkSourceRaw from "./sources/particle-network.html?raw";
+const particleNetworkSource = injectBundledGsap(particleNetworkSourceRaw);
 import fluxVortexSource from "./sources/flux-vortex.html?raw";
 import portalFieldSource from "./sources/portal-field.html?raw";
 import flowFieldSource from "./sources/flow-field.html?raw";
@@ -15,7 +18,8 @@ import gatewayFlowSource from "./sources/gateway-flow.html?raw";
 import connectivityGraphSource from "./sources/connectivity-graph.html?raw";
 import interfaceLinesSource from "./sources/interface-lines.html?raw";
 import wireframeFormsSource from "./sources/wireframe-forms.html?raw";
-import defenseLinesSource from "./sources/defense-lines.html?raw";
+import defenseLinesSourceRaw from "./sources/defense-lines.html?raw";
+const defenseLinesSource = injectBundledGsap(defenseLinesSourceRaw);
 import overrideGridSource from "./sources/override-grid.html?raw";
 import topoFieldSource from "./sources/topo-field.html?raw";
 
