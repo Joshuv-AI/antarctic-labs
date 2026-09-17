@@ -1,217 +1,522 @@
-// Minimal page shells for the Stage A destinations. Each destination
-// renders an architecture-only placeholder: section index, destination
-// title, and a brief description of what will live here once the
-// lead engineer provides finalized content.
+// Destination page shells for the unified Antarctic Labs routes.
+// Each shell renders copy from the corresponding src/content/*.js
+// module and reuses the existing CSS grammar (.page-shell,
+// .inner-hero, .section, .section-index, .copy-block, .display-copy,
+// .body-copy, .text-link, .cap-row, .contact-cta, .contact-button).
 //
-// Visual language is intentionally restrained — the existing
-// .site-header, .page-shell, and .section classes from styles.css are
-// reused so the destination pages already share the home-page visual
-// grammar.
+// Visual language is intentionally not redesigned here — these shells
+// use the same classes the existing Home page already uses, so the
+// destinations already share the home-page visual grammar.
 
 import { site } from "./content/site.js";
-import { expeditions } from "./content/expeditions.js";
+import { theLab } from "./content/the-lab.js";
 import { systems } from "./content/systems.js";
+import { expeditions, expeditionsArchive } from "./content/expeditions.js";
 import { history } from "./content/history.js";
 import { operator } from "./content/operator.js";
-import { artifacts } from "./content/tower-of-babel.js";
+import { artifacts, towerOfBabel } from "./content/tower-of-babel.js";
 import { government } from "./content/government.js";
 import { matchRoute } from "./content/routes.js";
 
-function PageShell({ index, title, children, footer = true }) {
+// ----- The Lab -------------------------------------------------------------
+
+export function TheLab({ go }) {
   return (
     <main className="page-shell inner-page">
       <section className="inner-hero section">
-        <div className="section-index">{index}</div>
-        <h1>{title}</h1>
+        <div className="section-index">01 / THE LAB</div>
+        <h1>{theLab.heading}</h1>
       </section>
-      {children}
-      {footer && (
-        <section className="copy-block section">
-          <p className="body-copy">{children ? null : "Content pending — architecture in place."}</p>
-        </section>
-      )}
+
+      <section className="copy-block section reveal">
+        {theLab.body.map((p, i) => (
+          <p className={i === 0 ? "display-copy" : "body-copy"} key={i}>{p}</p>
+        ))}
+      </section>
+
+      <section className="copy-block section reveal">
+        <div className="section-index">{theLab.whyAntarctic.heading}</div>
+        {theLab.whyAntarctic.body.map((p, i) => (
+          <p className="body-copy" key={i}>{p}</p>
+        ))}
+      </section>
+
+      <section className="capabilities section reveal">
+        <div className="section-index">METHOD</div>
+        <div className="capability-list">
+          {theLab.method.steps.map(([n, title, desc]) => (
+            <div className="cap-row" key={n}>
+              <span>{n}</span>
+              <h3>{title}</h3>
+              <p>{desc}</p>
+              <i>+</i>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="copy-block section">
+        <button className="text-link" onClick={() => go("/systems")}>SEE THE SYSTEMS <span>↗</span></button>
+      </section>
     </main>
   );
 }
 
-export function TheLab({ go }) {
-  return (
-    <PageShell index="01 / THE LAB" title={<>THE <em>LAB.</em></>}>
-      <section className="copy-block section">
-        <span className="section-index">WHAT LIVES HERE</span>
-        <p className="display-copy">The laboratory. A field station for systems, software, and the unknown.</p>
-        <p className="body-copy">Final content will be provided by the lead engineer.</p>
-        <button className="text-link" onClick={() => go("/")}>RETURN TO ARRIVAL <span>↗</span></button>
-      </section>
-    </PageShell>
-  );
-}
+// ----- Systems -------------------------------------------------------------
 
 export function Systems({ go }) {
   return (
-    <PageShell index="02 / SYSTEMS" title={<>SYSTEMS</>}>
-      <section className="copy-block section">
-        <span className="section-index">CATALOG</span>
-        <ul className="body-copy">
-          {systems.map((s) => (
-            <li key={s.id}>{s.title || s.id}</li>
-          ))}
-        </ul>
-        <button className="text-link" onClick={() => go("/")}>RETURN TO ARRIVAL <span>↗</span></button>
+    <main className="page-shell inner-page">
+      <section className="inner-hero section">
+        <div className="section-index">02 / SYSTEMS</div>
+        <h1>SYSTEMS</h1>
+        <p className="body-copy">{systems.intro}</p>
       </section>
-    </PageShell>
+
+      <section className="capabilities section reveal">
+        <div className="section-index">CATALOG</div>
+        <div className="capability-list">
+          {systems.groups.map((g, i) => (
+            <div className="cap-row" key={g.id}>
+              <span>{String(i + 1).padStart(2, "0")}</span>
+              <h3>{g.title}</h3>
+              <p>{g.summary}</p>
+              <i>+</i>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="copy-block section">
+        <button className="text-link" onClick={() => go("/expeditions")}>SEE EXPEDITIONS <span>↗</span></button>
+      </section>
+    </main>
   );
 }
 
+// ----- Expeditions archive + detail ---------------------------------------
+
 export function Expeditions({ go }) {
   return (
-    <PageShell index="03 / EXPEDITIONS" title={<>EXPEDITIONS</>}>
-      <section className="copy-block section">
-        <span className="section-index">CATALOG</span>
-        <ul className="body-copy">
-          {expeditions.map((e) => (
-            <li key={e.id}>
-              <button className="text-link" onClick={() => go(`/expeditions/${e.id}`)}>{e.title || e.id} <span>↗</span></button>
-            </li>
-          ))}
-        </ul>
-        <button className="text-link" onClick={() => go("/")}>RETURN TO ARRIVAL <span>↗</span></button>
+    <main className="page-shell inner-page">
+      <section className="inner-hero section">
+        <div className="section-index">03 / EXPEDITIONS</div>
+        <h1>{expeditionsArchive.heading}</h1>
+        <p className="display-copy">{expeditionsArchive.intro}</p>
+        <p className="body-copy">{expeditionsArchive.supporting}</p>
       </section>
-    </PageShell>
+
+      <section className="copy-block section">
+        <div className="section-index">CATALOG</div>
+        {expeditions.length === 0 ? (
+          <p className="body-copy">The expedition catalog is being finalized. Records will appear here once the lead engineer provides them.</p>
+        ) : (
+          <ul className="body-copy">
+            {expeditions.map((e) => (
+              <li key={e.id}>
+                <button className="text-link" onClick={() => go(`/expeditions/${e.id}`)}>{e.title || e.id} <span>↗</span></button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </main>
   );
 }
 
 export function ExpeditionDetail({ go, params }) {
   const expedition = expeditions.find((e) => e.id === params.id);
   return (
-    <PageShell index={`EXPEDITION / ${params.id}`} title={expedition ? expedition.title : params.id}>
-      <section className="copy-block section">
-        <span className="section-index">STATUS</span>
-        <p className="body-copy">{expedition ? expedition.status : "UNKNOWN"}</p>
-        <span className="section-index">CATEGORY</span>
-        <p className="body-copy">{expedition ? expedition.category : "UNKNOWN"}</p>
-        <span className="section-index">FINAL CONTENT</span>
-        <p className="body-copy">Final expedition content will be provided by the lead engineer.</p>
-        <button className="text-link" onClick={() => go("/expeditions")}>ALL EXPEDITIONS <span>↗</span></button>
+    <main className="page-shell inner-page">
+      <section className="inner-hero section">
+        <div className="section-index">EXPEDITION / {params.id}</div>
+        <h1>{expedition ? expedition.title : params.id}</h1>
       </section>
-    </PageShell>
+
+      {expedition ? (
+        <>
+          <section className="detail-grid section">
+            <div><span className="section-index">STATUS</span><strong>{expedition.status || "—"}</strong></div>
+            <div><span className="section-index">CATEGORY</span><strong>{expedition.category || "—"}</strong></div>
+            <div><span className="section-index">DATE</span><strong>{expedition.date || "—"}</strong></div>
+            <div><span className="section-index">ROLE</span><strong>{expedition.role || "—"}</strong></div>
+          </section>
+
+          {expedition.shortDescription && (
+            <section className="copy-block section">
+              <span className="section-index">SUMMARY</span>
+              <p className="display-copy">{expedition.shortDescription}</p>
+            </section>
+          )}
+          {expedition.problem && (
+            <section className="copy-block section">
+              <span className="section-index">PROBLEM</span>
+              <p className="body-copy">{expedition.problem}</p>
+            </section>
+          )}
+          {expedition.approach && (
+            <section className="copy-block section">
+              <span className="section-index">APPROACH</span>
+              <p className="body-copy">{expedition.approach}</p>
+            </section>
+          )}
+          {expedition.system && (
+            <section className="copy-block section">
+              <span className="section-index">SYSTEM</span>
+              <p className="body-copy">{expedition.system}</p>
+            </section>
+          )}
+          {expedition.build && (
+            <section className="copy-block section">
+              <span className="section-index">BUILD</span>
+              <p className="body-copy">{expedition.build}</p>
+            </section>
+          )}
+          {expedition.technologies && expedition.technologies.length > 0 && (
+            <section className="copy-block section">
+              <span className="section-index">TECHNOLOGIES</span>
+              <p className="body-copy">{expedition.technologies.join(" · ")}</p>
+            </section>
+          )}
+          {expedition.result && (
+            <section className="copy-block section">
+              <span className="section-index">RESULT</span>
+              <p className="body-copy">{expedition.result}</p>
+            </section>
+          )}
+        </>
+      ) : (
+        <section className="copy-block section">
+          <p className="body-copy">This expedition is being finalized. The full record will appear here once the lead engineer provides it.</p>
+        </section>
+      )}
+
+      <div className="page-next">
+        <button className="text-link" onClick={() => go("/expeditions")}>ALL EXPEDITIONS <span>↗</span></button>
+      </div>
+    </main>
   );
 }
+
+// ----- History -------------------------------------------------------------
 
 export function History({ go }) {
   return (
-    <PageShell index="04 / HISTORY" title={<>HISTORY</>}>
-      <section className="copy-block section">
-        <span className="section-index">TIMELINE</span>
-        <ul className="body-copy">
-          {history.map((h) => (
-            <li key={h.id}>{h.title || h.id}</li>
-          ))}
-        </ul>
-        <button className="text-link" onClick={() => go("/")}>RETURN TO ARRIVAL <span>↗</span></button>
+    <main className="page-shell inner-page">
+      <section className="inner-hero section">
+        <div className="section-index">04 / HISTORY</div>
+        <h1>{history.heading}</h1>
+        <p className="body-copy">{history.intro}</p>
       </section>
-    </PageShell>
+
+      <section className="capabilities section reveal">
+        <div className="section-index">BUCKETS</div>
+        <div className="capability-list">
+          {history.buckets.map((b, i) => (
+            <div className="cap-row" key={b.id}>
+              <span>{String(i + 1).padStart(2, "0")}</span>
+              <h3>{b.title}</h3>
+              <p>{b.summary}</p>
+              <i>+</i>
+            </div>
+          ))}
+        </div>
+      </section>
+    </main>
   );
 }
 
+// ----- Tower of Babel ------------------------------------------------------
+
 export function TowerOfBabel({ go }) {
   return (
-    <PageShell index="05 / TOWER OF BABEL" title={<>TOWER OF <em>BABEL.</em></>}>
+    <main className="page-shell inner-page">
+      <section className="inner-hero section">
+        <div className="section-index">05 / TOWER OF BABEL</div>
+        <h1>{towerOfBabel.heading}</h1>
+        {towerOfBabel.intro.map((p, i) => (
+          <p className={i === 0 ? "display-copy" : "body-copy"} key={i}>{p}</p>
+        ))}
+      </section>
+
+      <section className="copy-block section reveal">
+        <div className="section-index">ORIGIN</div>
+        {towerOfBabel.origin.map((p, i) => (
+          <p className="body-copy" key={i}>{p}</p>
+        ))}
+      </section>
+
+      <section className="copy-block section reveal">
+        <div className="section-index">ACCESS</div>
+        {towerOfBabel.access.map((p, i) => (
+          <p className="body-copy" key={i}>{p}</p>
+        ))}
+      </section>
+
       <section className="copy-block section">
-        <span className="section-index">DESTINATION</span>
-        <p className="display-copy">A personal library, archive, and artifact catalog. Not an Expedition.</p>
         <button className="text-link" onClick={() => go("/tower-of-babel/library")}>ENTER THE LIBRARY <span>↗</span></button>
       </section>
-    </PageShell>
+    </main>
   );
 }
 
 export function TowerLibrary({ go }) {
   return (
-    <PageShell index="05.A / LIBRARY" title={<>THE <em>LIBRARY</em></>}>
+    <main className="page-shell inner-page">
+      <section className="inner-hero section">
+        <div className="section-index">05.A / LIBRARY</div>
+        <h1>{towerOfBabel.library.heading}</h1>
+        <p className="body-copy">{towerOfBabel.library.intro}</p>
+        <p className="body-copy">{towerOfBabel.library.note}</p>
+      </section>
+
       <section className="copy-block section">
-        <span className="section-index">CATALOG</span>
-        <ul className="body-copy">
-          {artifacts.map((a) => (
-            <li key={a.artifact_id}>
-              <button className="text-link" onClick={() => go(`/tower-of-babel/library/${a.artifact_id}`)}>{a.title || a.artifact_id} <span>↗</span></button>
-            </li>
-          ))}
-        </ul>
+        <div className="section-index">CATALOG</div>
+        {artifacts.length === 0 ? (
+          <p className="body-copy">Catalog entries are not yet available. The data model is in place; the lead engineer will populate the archive.</p>
+        ) : (
+          <ul className="body-copy">
+            {artifacts.map((a) => (
+              <li key={a.artifact_id}>
+                <button className="text-link" onClick={() => go(`/tower-of-babel/library/${a.artifact_id}`)}>{a.title || a.artifact_id} <span>↗</span></button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="copy-block section">
         <button className="text-link" onClick={() => go("/tower-of-babel")}>BACK TO TOWER OF BABEL <span>↗</span></button>
       </section>
-    </PageShell>
+    </main>
   );
 }
 
 export function LibraryArtifact({ go, params }) {
   const artifact = artifacts.find((a) => a.artifact_id === params.id);
   return (
-    <PageShell index={`ARTIFACT / ${params.id}`} title={artifact ? artifact.title : params.id}>
-      <section className="copy-block section">
-        <span className="section-index">COLLECTION</span>
-        <p className="body-copy">{artifact ? artifact.collection : "UNKNOWN"}</p>
-        <span className="section-index">RIGHTS</span>
-        <p className="body-copy">{artifact ? artifact.rights_status : "UNKNOWN"}</p>
-        <span className="section-index">DOWNLOAD</span>
-        <p className="body-copy">{artifact ? artifact.download_status : "UNKNOWN"}</p>
-        <button className="text-link" onClick={() => go("/tower-of-babel/library")}>BACK TO LIBRARY <span>↗</span></button>
+    <main className="page-shell inner-page">
+      <section className="inner-hero section">
+        <div className="section-index">ARTIFACT / {params.id}</div>
+        <h1>{artifact ? artifact.title : params.id}</h1>
       </section>
-    </PageShell>
+
+      {artifact ? (
+        <section className="detail-grid section">
+          <div><span className="section-index">COLLECTION</span><strong>{artifact.collection || "—"}</strong></div>
+          <div><span className="section-index">RIGHTS</span><strong>{artifact.rights_status || "—"}</strong></div>
+          <div><span className="section-index">DOWNLOAD</span><strong>{artifact.download_status || "—"}</strong></div>
+          <div><span className="section-index">YEAR</span><strong>{artifact.year || "—"}</strong></div>
+        </section>
+      ) : (
+        <section className="copy-block section">
+          <p className="body-copy">This artifact is being finalized. The full record will appear here once the lead engineer provides it.</p>
+        </section>
+      )}
+
+      <div className="page-next">
+        <button className="text-link" onClick={() => go("/tower-of-babel/library")}>BACK TO LIBRARY <span>↗</span></button>
+      </div>
+    </main>
   );
 }
+
+// ----- Government ----------------------------------------------------------
 
 export function Government({ go }) {
   return (
-    <PageShell index="06 / GOVERNMENT" title={<>GOVERNMENT</>}>
-      <section className="copy-block section">
-        <span className="section-index">PUBLIC SECTOR</span>
-        <p className="display-copy">Capabilities, registrations, and procurement information will be provided by the lead engineer.</p>
-        <button className="text-link" onClick={() => go("/")}>RETURN TO ARRIVAL <span>↗</span></button>
+    <main className="page-shell inner-page">
+      <section className="inner-hero section">
+        <div className="section-index">06 / GOVERNMENT</div>
+        <h1>{government.heading}</h1>
+        <p className="display-copy">{government.intro}</p>
       </section>
-    </PageShell>
+
+      <section className="capabilities section reveal">
+        <div className="section-index">CAPABILITIES</div>
+        <div className="capability-list">
+          {government.capabilities.map((c, i) => (
+            <div className="cap-row" key={c}>
+              <span>{String(i + 1).padStart(2, "0")}</span>
+              <h3>{c}</h3>
+              <p>{government.supporting}</p>
+              <i>+</i>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="copy-block section">
+        <p className="body-copy">
+          Antarctic Labs does not currently claim contracts, certifications, registrations, procurement status, government clients, or past performance. This destination is in active development.
+        </p>
+      </section>
+
+      <section className="copy-block section">
+        <button className="text-link" onClick={() => go("/transmission")}>MAKE CONTACT <span>↗</span></button>
+      </section>
+    </main>
   );
 }
+
+// ----- The Operator --------------------------------------------------------
 
 export function TheOperator({ go }) {
   return (
-    <PageShell index="07 / THE OPERATOR" title={<><em>{operator.name}</em></>}>
-      <section className="copy-block section">
-        <span className="section-index">LOCATION</span>
-        <p className="body-copy">{operator.location}</p>
-        <span className="section-index">PHILOSOPHY</span>
-        <p className="body-copy">{operator.philosophy}</p>
-        <span className="section-index">BIO</span>
-        <p className="body-copy">Final bio content will be provided by the lead engineer.</p>
-        <button className="text-link" onClick={() => go("/")}>RETURN TO ARRIVAL <span>↗</span></button>
+    <main className="page-shell inner-page">
+      <section className="inner-hero section">
+        <div className="section-index">07 / THE OPERATOR</div>
+        <h1>{operator.heading}</h1>
       </section>
-    </PageShell>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">OPENING</span>
+        <p className="display-copy">{operator.opening}</p>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">BACKGROUND</span>
+        <p className="body-copy">{operator.background}</p>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">TECHNICAL SHIFT</span>
+        <p className="body-copy">{operator.technicalShift}</p>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">CURRENT</span>
+        <p className="body-copy">{operator.current}</p>
+      </section>
+
+      <section className="copy-block section reveal">
+        <div className="section-index">{operator.pattern.title}</div>
+        {operator.pattern.lines.map((line, i) => (
+          <p className="body-copy" key={i}>{line}</p>
+        ))}
+      </section>
+
+      <section className="copy-block section reveal">
+        <div className="section-index">{operator.approach.title}</div>
+        <p className="body-copy">{operator.approach.summary}</p>
+      </section>
+
+      <section className="capabilities section reveal">
+        <div className="section-index">FIELD INTERESTS</div>
+        <div className="capability-list">
+          {operator.fieldInterests.map((interest, i) => (
+            <div className="cap-row" key={interest}>
+              <span>{String(i + 1).padStart(2, "0")}</span>
+              <h3>{interest}</h3>
+              <i>+</i>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="copy-block section">
+        <p className="body-copy">{operator.closing}</p>
+      </section>
+    </main>
   );
 }
+
+// ----- Field Interests -----------------------------------------------------
 
 export function FieldInterests({ go }) {
   return (
-    <PageShell index="08 / FIELD INTERESTS" title={<>FIELD <em>INTERESTS</em></>}>
-      <section className="copy-block section">
-        <span className="section-index">AREAS OF ACTIVE INTEREST</span>
-        <p className="display-copy">Field interests will be provided by the lead engineer.</p>
-        <button className="text-link" onClick={() => go("/")}>RETURN TO ARRIVAL <span>↗</span></button>
+    <main className="page-shell inner-page">
+      <section className="inner-hero section">
+        <div className="section-index">08 / FIELD INTERESTS</div>
+        <h1>FIELD INTERESTS</h1>
       </section>
-    </PageShell>
+
+      <section className="capabilities section reveal">
+        <div className="section-index">AREAS OF ACTIVE INTEREST</div>
+        <div className="capability-list">
+          {operator.fieldInterests.map((interest, i) => (
+            <div className="cap-row" key={interest}>
+              <span>{String(i + 1).padStart(2, "0")}</span>
+              <h3>{interest}</h3>
+              <i>+</i>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="copy-block section">
+        <p className="body-copy">{operator.closing}</p>
+      </section>
+
+      <section className="copy-block section">
+        <button className="text-link" onClick={() => go("/operator")}>ABOUT THE OPERATOR <span>↗</span></button>
+      </section>
+    </main>
   );
 }
+
+// ----- Transmission --------------------------------------------------------
 
 export function Transmission({ go }) {
   return (
-    <PageShell index="09 / TRANSMISSION" title={<>TRANSMISSION</>}>
-      <section className="contact-cta section">
-        <span className="section-index">CONTACT</span>
-        <h2>START WITH<br/>A HARD<br/><em>PROBLEM.</em></h2>
-        <a href={`mailto:${site.email}`} className="contact-button"><span>{site.email}</span><b>↗</b></a>
+    <main className="page-shell inner-page">
+      <section className="inner-hero section">
+        <div className="section-index">09 / TRANSMISSION</div>
+        <h1>HAVE A PROBLEM<br/>WORTH SOLVING?</h1>
       </section>
-    </PageShell>
+
+      <section className="copy-block section reveal">
+        <p className="display-copy">Have an idea, need a system built, want to collaborate, or simply found something interesting? Send a transmission.</p>
+      </section>
+
+      <section className="copy-block section reveal">
+        <form
+          className="transmission-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            // Stage B: there is no real backend integration. Keep the
+            // front-end functional but clearly do not pretend messages
+            // are transmitted.
+            const root = e.currentTarget.parentElement;
+            if (root) {
+              root.dataset.status = "received";
+            }
+            e.currentTarget.reset();
+          }}
+        >
+          <label><span>NAME *</span><input name="name" required type="text" autoComplete="name" /></label>
+          <label><span>COMPANY / PROJECT</span><input name="company" type="text" autoComplete="organization" /></label>
+          <label><span>EMAIL *</span><input name="email" required type="email" autoComplete="email" /></label>
+          <label><span>WHAT IS THIS ABOUT? *</span>
+            <select name="subject" required defaultValue="">
+              <option value="" disabled>Select a subject</option>
+              <option value="project">PROJECT</option>
+              <option value="collaboration">COLLABORATION</option>
+              <option value="tower-of-babel">TOWER OF BABEL</option>
+              <option value="government">GOVERNMENT / PUBLIC SECTOR</option>
+              <option value="general">GENERAL</option>
+            </select>
+          </label>
+          <label><span>MESSAGE *</span><textarea name="message" required rows={6} /></label>
+          <label><span>WEBSITE</span><input name="website" type="text" /></label>
+          <button type="submit" className="text-link">SEND TRANSMISSION <span>↗</span></button>
+          <p className="body-copy" data-form-note>
+            Front-end form only — messages are not yet transmitted. This will be wired to a real integration in a later stage.
+          </p>
+        </form>
+      </section>
+
+      <section className="copy-block section" data-form-confirmation hidden>
+        <span className="section-index">TRANSMISSION RECEIVED.</span>
+        <p className="body-copy">I’ll review your message and respond directly.</p>
+      </section>
+
+      <section className="copy-block section">
+        <p className="body-copy">Or write directly: <a className="text-link" href={`mailto:${site.email}`}>{site.email}</a></p>
+      </section>
+    </main>
   );
 }
 
-// Export the matcher so main.jsx can dispatch to the correct component.
+// Re-export matcher so main.jsx can dispatch dynamic routes.
 export { matchRoute };

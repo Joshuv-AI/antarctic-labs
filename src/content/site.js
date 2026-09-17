@@ -10,19 +10,21 @@ export const site = {
     "An independent technology laboratory exploring AI, automation, software, blockchain, data, and experimental systems.",
   location: "SANFORD, FLORIDA / WORLDWIDE",
   footer: "BUILT FOR THE UNKNOWN.",
-  // Preserve the existing contact email as the single source of truth.
   email: "hello@antarcticlabs.com",
   url: "https://antarctic-labs.com",
 
-  // Hero copy (homepage arrival) — preserved from the prior implementation.
+  // Home / arrival copy.
   hero: {
-    eyebrow: "INDEPENDENT DIGITAL STUDIO",
-    title: ["BUILD", "WHAT'S", "NEXT."],
-    sub: "AI systems, automation, software, and digital experiences built with intent.",
+    eyebrow: "INDEPENDENT TECHNOLOGY LABORATORY",
+    title: ["USEFUL MACHINES", "FOR UNKNOWN", "TERRITORY."],
+    sub: "AI, automation, software, data, blockchain, and experimental systems — explored, built, tested, and documented.",
+    cta: { label: "ENTER THE LAB", to: "/the-lab" },
+    signal: "Different territory. Same instinct.",
+    body: "I’m interested in problems that can be understood, rebuilt, automated, or pushed further. Antarctic Labs is where those experiments become working systems.",
+    method: "Learn → Experiment → Build → Test → Iterate.",
   },
 
-  // Site-wide capabilities (homepage section). Kept for compatibility
-  // with the existing render layer.
+  // Capabilities (kept for compatibility with the existing render layer).
   capabilities: [
     ["01", "AI SYSTEMS",       "Agents, intelligent workflows, APIs, orchestration."],
     ["02", "AUTOMATION",       "Browser automation, data pipelines, operational systems."],

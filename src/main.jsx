@@ -166,7 +166,10 @@ function Home({ go }) {
           </h1>
           <div className="hero-bottom">
             <p>{content.hero.sub}</p>
-            <span className="scroll-cue">SCROLL TO EXPLORE <b>↓</b></span>
+            <div className="hero-actions">
+              <button className="text-link" onClick={() => go(content.hero.cta.to)}>{content.hero.cta.label} <span>↗</span></button>
+              <span className="scroll-cue">SCROLL TO EXPLORE <b>↓</b></span>
+            </div>
           </div>
         </div>
       </section>
@@ -174,8 +177,9 @@ function Home({ go }) {
       <section className="manifesto section reveal">
         <div className="section-index">02 / SIGNAL</div>
         <div className="manifesto-text">
-          <p className="display-copy">We build <em>useful</em> technology with the atmosphere of a world that has not been discovered yet.</p>
-          <p className="body-copy">Antarctic Labs is an independent digital studio focused on systems, automation, AI, and experimental web experiences.</p>
+          <p className="signal-line">{content.hero.signal}</p>
+          <p className="display-copy">{content.hero.body}</p>
+          <p className="body-copy method-line">{content.hero.method}</p>
         </div>
       </section>
 
@@ -200,7 +204,7 @@ function Home({ go }) {
         <div>
           <span className="section-index">05 / NEXT</span>
           <h2>MAKE THE<br/><em>IMPOSSIBLE</em><br/>FEEL INEVITABLE.</h2>
-          <button className="text-link" onClick={() => go("/about")}>ABOUT ANTARCTIC LABS <span>↗</span></button>
+          <button className="text-link" onClick={() => go("/operator")}>ABOUT THE OPERATOR <span>↗</span></button>
         </div>
       </section>
 
