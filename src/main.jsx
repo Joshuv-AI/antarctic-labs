@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
@@ -6,41 +6,26 @@ import "./styles.css";
 
 import PolarScene from "./PolarScene";
 
+import { site as content } from "./content/site.js";
+import { routes } from "./content/routes.js";
+import { matchRoute } from "./content/routes.js";
+import { applyMeta } from "./seo.js";
+import {
+  TheLab,
+  Systems,
+  Expeditions,
+  ExpeditionDetail,
+  History,
+  TowerOfBabel,
+  TowerLibrary,
+  LibraryArtifact,
+  Government,
+  TheOperator,
+  FieldInterests,
+  Transmission,
+} from "./pages.jsx";
+
 gsap.registerPlugin(ScrollTrigger);
-
-const content = {
-  brand: "ANTARCTIC LABS",
-  email: "hello@antarcticlabs.com",
-  hero: {
-    eyebrow: "INDEPENDENT DIGITAL STUDIO",
-    title: ["BUILD", "WHAT'S", "NEXT."],
-    sub: "AI systems, automation, software, and digital experiences built with intent."
-  },
-  projects: [
-    {
-      number: "01",
-      title: "Project One",
-      type: "AI / AUTOMATION",
-      description: "A flagship case-study slot for a serious system build. The visual architecture is ready; the real project will replace this content.",
-      status: "COMING ONLINE"
-    },
-    {
-      number: "02",
-      title: "Project Two",
-      type: "SOFTWARE / EXPERIENCE",
-      description: "A second major project slot reserved for a deeper build, presented as an immersive case study.",
-      status: "IN DEVELOPMENT"
-    }
-  ],
-  capabilities: [
-    ["01", "AI SYSTEMS", "Agents, intelligent workflows, APIs, orchestration."],
-    ["02", "AUTOMATION", "Browser automation, data pipelines, operational systems."],
-    ["03", "SOFTWARE", "Web applications, interfaces, internal tools, integrations."],
-    ["04", "EXPERIMENTAL", "Interactive experiences, creative technology, prototypes."]
-  ]
-};
-
-const routes = ["/", "/project-01", "/project-02", "/about"];
 
 function pathLabel(path) {
   if (path === "/") return "ANTARCTIC LABS";
@@ -54,7 +39,8 @@ function App() {
 
   useEffect(() => {
     const onPop = () => {
-      setPath(routes.includes(window.location.pathname) ? window.location.pathname : "/404");
+      const next = matchRoute(window.location.pathname) ? window.location.pathname : "/404";
+      setPath(next);
       setMenuOpen(false);
       window.scrollTo(0, 0);
     };
@@ -66,6 +52,11 @@ function App() {
     document.body.style.overflow = menuOpen ? "hidden" : "";
     return () => { document.body.style.overflow = ""; };
   }, [menuOpen]);
+
+  // Apply per-route SEO metadata on every navigation.
+  useEffect(() => {
+    applyMeta(path);
+  }, [path]);
 
   const go = (to) => {
     if (to === path || transitioning) return;
@@ -79,15 +70,29 @@ function App() {
     }, 520);
   };
 
+  const match = matchRoute(path);
+  const pageParams = match && typeof match === "object" ? match.params : {};
+  const matchedPattern = match && typeof match === "object" ? match.pattern : null;
+
   return (
     <>
       {path === "/" && <PolarScene />}
       <SiteHeader onMenu={() => setMenuOpen(true)} go={go} />
       <PageCurtain active={transitioning} label={pathLabel(path)} />
       {path === "/" && <Home go={go} />}
-      {path === "/project-01" && <ProjectPage index={0} go={go} />}
-      {path === "/project-02" && <ProjectPage index={1} go={go} />}
       {path === "/about" && <About go={go} />}
+      {path === "/the-lab" && <TheLab go={go} />}
+      {path === "/systems" && <Systems go={go} />}
+      {path === "/expeditions" && <Expeditions go={go} />}
+      {matchedPattern === "/expeditions/:id" && <ExpeditionDetail go={go} params={pageParams} />}
+      {path === "/history" && <History go={go} />}
+      {path === "/tower-of-babel" && <TowerOfBabel go={go} />}
+      {path === "/tower-of-babel/library" && <TowerLibrary go={go} />}
+      {matchedPattern === "/tower-of-babel/library/:id" && <LibraryArtifact go={go} params={pageParams} />}
+      {path === "/government" && <Government go={go} />}
+      {path === "/operator" && <TheOperator go={go} />}
+      {path === "/field-interests" && <FieldInterests go={go} />}
+      {path === "/transmission" && <Transmission go={go} />}
       {path === "/404" && <NotFound go={go} />}
       <Menu open={menuOpen} close={() => setMenuOpen(false)} go={go} />
     </>
@@ -175,9 +180,9 @@ function Home({ go }) {
       </section>
 
       <section className="projects section">
-        <div className="section-head reveal"><div className="section-index">03 / SELECTED WORK</div><span>CASE STUDIES</span></div>
+        <div className="section-head reveal"><div className="section-index">03 / EXPEDITIONS</div><span>SELECTED WORK</span></div>
         <div className="project-stack">
-          {content.projects.map((p, i) => <ProjectCard key={p.number} p={p} index={i} onClick={() => go(`/project-0${i + 1}`)} />)}
+          <button className="text-link" onClick={() => go("/expeditions")}>ENTER EXPEDITIONS <span>↗</span></button>
         </div>
       </section>
 
@@ -205,41 +210,6 @@ function Home({ go }) {
   );
 }
 
-function ProjectCard({ p, index, onClick }) {
-  const card = useRef(null);
-  const onMove = (e) => {
-    const r = card.current.getBoundingClientRect();
-    const x = ((e.clientX - r.left) / r.width - 0.5) * 2;
-    const y = ((e.clientY - r.top) / r.height - 0.5) * 2;
-    card.current.style.setProperty("--mx", `${x * 2}%`);
-    card.current.style.setProperty("--my", `${y * 2}%`);
-    card.current.style.setProperty("--rx", `${-y * 2}deg`);
-    card.current.style.setProperty("--ry", `${x * 2}deg`);
-  };
-  const onLeave = () => {
-    card.current.style.setProperty("--mx", "0%");
-    card.current.style.setProperty("--my", "0%");
-    card.current.style.setProperty("--rx", "0deg");
-    card.current.style.setProperty("--ry", "0deg");
-  };
-
-  return (
-    <button className="project-card reveal" ref={card} onMouseMove={onMove} onMouseLeave={onLeave} onClick={onClick}>
-      <div className={`project-art art-${index + 1}`}>
-        <div className="art-sheen" />
-        <div className="art-aurora" />
-        <div className="art-glow" />
-        <div className="art-mountain back" />
-        <div className="art-mountain front" />
-        <span className="art-code">AL / {p.number}</span>
-        <span className="art-location">ICE FIELD 78° S</span>
-        <span className="art-enter">OPEN CASE STUDY ↗</span>
-      </div>
-      <div className="project-meta"><span className="project-num">{p.number}</span><div><small>{p.type}</small><h3>{p.title}</h3></div><span className="project-arrow">↗</span></div>
-    </button>
-  );
-}
-
 function ContactCTA() {
   return (
     <section className="contact-cta section reveal">
@@ -247,33 +217,6 @@ function ContactCTA() {
       <h2>HAVE A PROBLEM<br/>WORTH SOLVING?</h2>
       <a href={`mailto:${content.email}`} className="contact-button"><span>{content.email}</span><b>↗</b></a>
     </section>
-  );
-}
-
-function ProjectPage({ index, go }) {
-  const p = content.projects[index];
-  return (
-    <main className="page-shell inner-page">
-      <section className="inner-hero section">
-        <div className="section-index">PROJECT {p.number}</div>
-        <h1>{p.title}</h1>
-        <p>{p.description}</p>
-      </section>
-      <section className="project-feature section">
-        <div className={`project-art large art-${index + 1}`}><div className="art-sheen"/><div className="art-aurora"/><div className="art-mountain back"/><div className="art-mountain front"/><span className="art-code">ANTARCTIC / {p.number}</span></div>
-      </section>
-      <section className="detail-grid section">
-        <div><span className="section-index">STATUS</span><strong>{p.status}</strong></div>
-        <div><span className="section-index">TYPE</span><strong>{p.type}</strong></div>
-        <div><span className="section-index">ROLE</span><strong>DESIGN / SYSTEMS / BUILD</strong></div>
-      </section>
-      <section className="copy-block section">
-        <span className="section-index">CASE STUDY PLACEHOLDER</span>
-        <p className="display-copy">Problem. Approach. System. Implementation. Outcome. Proof. This architecture is ready for the real project.</p>
-      </section>
-      <div className="page-next"><button className="text-link" onClick={() => go(index === 0 ? "/project-02" : "/about")}>{index === 0 ? "NEXT PROJECT" : "ABOUT"} <span>↗</span></button></div>
-      <Footer />
-    </main>
   );
 }
 
@@ -304,10 +247,17 @@ function Menu({ open, close, go }) {
     <div className={`menu-overlay ${open ? "is-open" : ""}`}>
       <div className="menu-top"><span>ANTARCTIC LABS / NAVIGATION</span><button onClick={close}>CLOSE <b>×</b></button></div>
       <nav>
-        <button onClick={() => go("/")}>01 <span>HOME</span><i>THE FIELD</i></button>
-        <button onClick={() => go("/project-01")}>02 <span>PROJECT 01</span><i>SELECTED WORK</i></button>
-        <button onClick={() => go("/project-02")}>03 <span>PROJECT 02</span><i>SELECTED WORK</i></button>
-        <button onClick={() => go("/about")}>04 <span>ABOUT</span><i>THE STUDIO</i></button>
+        <button onClick={() => go("/")}>01 <span>ARRIVAL</span><i>THE FIELD</i></button>
+        <button onClick={() => go("/the-lab")}>02 <span>THE LAB</span><i>FIELD STATION</i></button>
+        <button onClick={() => go("/systems")}>03 <span>SYSTEMS</span><i>OPERATING</i></button>
+        <button onClick={() => go("/expeditions")}>04 <span>EXPEDITIONS</span><i>SELECTED WORK</i></button>
+        <button onClick={() => go("/history")}>05 <span>HISTORY</span><i>TIMELINE</i></button>
+        <button onClick={() => go("/tower-of-babel")}>06 <span>TOWER OF BABEL</span><i>LIBRARY</i></button>
+        <button onClick={() => go("/government")}>07 <span>GOVERNMENT</span><i>PUBLIC SECTOR</i></button>
+        <button onClick={() => go("/operator")}>08 <span>THE OPERATOR</span><i>JOSHUA ALMODOVAR</i></button>
+        <button onClick={() => go("/field-interests")}>09 <span>FIELD INTERESTS</span><i>RESEARCH</i></button>
+        <button onClick={() => go("/transmission")}>10 <span>TRANSMISSION</span><i>CONTACT</i></button>
+        <button onClick={() => go("/about")}>11 <span>ABOUT</span><i>THE STUDIO</i></button>
       </nav>
       <div className="menu-bottom"><a href={`mailto:${content.email}`}>{content.email}</a><span>FLORIDA / WORLDWIDE</span></div>
     </div>
@@ -317,7 +267,5 @@ function Menu({ open, close, go }) {
 function Footer() {
   return <footer className="site-footer"><span>© {new Date().getFullYear()} ANTARCTIC LABS</span><span>BUILT FOR THE UNKNOWN</span><button onClick={() => window.scrollTo({top: 0, behavior: "smooth"})}>↑ TOP</button></footer>;
 }
-
-import { useRef } from "react";
 
 createRoot(document.getElementById("root")).render(<App />);
