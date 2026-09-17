@@ -261,7 +261,6 @@ function Menu({ open, close, go }) {
         <button onClick={() => go("/operator")}>08 <span>THE OPERATOR</span><i>JOSHUA ALMODOVAR</i></button>
         <button onClick={() => go("/field-interests")}>09 <span>FIELD INTERESTS</span><i>RESEARCH</i></button>
         <button onClick={() => go("/transmission")}>10 <span>TRANSMISSION</span><i>CONTACT</i></button>
-        <button onClick={() => go("/about")}>11 <span>ABOUT</span><i>THE STUDIO</i></button>
       </nav>
       <div className="menu-bottom"><a href={`mailto:${content.email}`}>{content.email}</a><span>FLORIDA / WORLDWIDE</span></div>
     </div>

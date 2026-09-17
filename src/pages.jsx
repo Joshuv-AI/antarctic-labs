@@ -8,6 +8,8 @@
 // use the same classes the existing Home page already uses, so the
 // destinations already share the home-page visual grammar.
 
+import { useState } from "react";
+
 import { site } from "./content/site.js";
 import { theLab } from "./content/the-lab.js";
 import { systems } from "./content/systems.js";
@@ -16,6 +18,8 @@ import { history } from "./content/history.js";
 import { operator } from "./content/operator.js";
 import { artifacts, towerOfBabel } from "./content/tower-of-babel.js";
 import { government } from "./content/government.js";
+import { fieldInterests } from "./content/field-interests.js";
+import { transmission } from "./content/transmission.js";
 import { matchRoute } from "./content/routes.js";
 
 // ----- The Lab -------------------------------------------------------------
@@ -106,18 +110,30 @@ export function Expeditions({ go }) {
         <p className="body-copy">{expeditionsArchive.supporting}</p>
       </section>
 
-      <section className="copy-block section">
+      <section className="expeditions-grid section reveal">
         <div className="section-index">CATALOG</div>
         {expeditions.length === 0 ? (
           <p className="body-copy">The expedition catalog is being finalized. Records will appear here once the lead engineer provides them.</p>
         ) : (
-          <ul className="body-copy">
+          <div className="expedition-list">
             {expeditions.map((e) => (
-              <li key={e.id}>
-                <button className="text-link" onClick={() => go(`/expeditions/${e.id}`)}>{e.title || e.id} <span>↗</span></button>
-              </li>
+              <button
+                key={e.id}
+                className="expedition-card reveal"
+                onClick={() => go(`/expeditions/${e.id}`)}
+              >
+                <div className="expedition-card-meta">
+                  <span className="expedition-card-status">{e.status}</span>
+                  <span className="expedition-card-category">{e.category}</span>
+                </div>
+                <h3 className="expedition-card-title">{e.title}</h3>
+                {e.shortDescription && (
+                  <p className="expedition-card-summary">{e.shortDescription}</p>
+                )}
+                <span className="expedition-card-arrow">↗</span>
+              </button>
             ))}
-          </ul>
+          </div>
         )}
       </section>
     </main>
@@ -126,68 +142,97 @@ export function Expeditions({ go }) {
 
 export function ExpeditionDetail({ go, params }) {
   const expedition = expeditions.find((e) => e.id === params.id);
+  if (!expedition) {
+    return (
+      <main className="page-shell inner-page">
+        <section className="inner-hero section">
+          <div className="section-index">EXPEDITION / {params.id}</div>
+          <h1>UNKNOWN EXPEDITION</h1>
+        </section>
+        <section className="copy-block section">
+          <p className="body-copy">No expedition record exists for this id.</p>
+          <button className="text-link" onClick={() => go("/expeditions")}>ALL EXPEDITIONS <span>↗</span></button>
+        </section>
+      </main>
+    );
+  }
+
+  // Render only sections that have content. Avoids awkward blank blocks.
+  const sections = [
+    { label: "ORIGIN",     value: expedition.problem },
+    { label: "OBJECTIVE",  value: expedition.objective },
+    { label: "APPROACH",   value: expedition.approach },
+    { label: "SYSTEM",     value: expedition.system },
+    { label: "BUILD",      value: expedition.build },
+    { label: "RESULT",     value: expedition.result },
+  ];
+
   return (
     <main className="page-shell inner-page">
       <section className="inner-hero section">
-        <div className="section-index">EXPEDITION / {params.id}</div>
-        <h1>{expedition ? expedition.title : params.id}</h1>
+        <div className="section-index">EXPEDITION / {expedition.id}</div>
+        <h1>{expedition.title}</h1>
+        {expedition.shortDescription && (
+          <p className="display-copy">{expedition.shortDescription}</p>
+        )}
       </section>
 
-      {expedition ? (
-        <>
-          <section className="detail-grid section">
-            <div><span className="section-index">STATUS</span><strong>{expedition.status || "—"}</strong></div>
-            <div><span className="section-index">CATEGORY</span><strong>{expedition.category || "—"}</strong></div>
-            <div><span className="section-index">DATE</span><strong>{expedition.date || "—"}</strong></div>
-            <div><span className="section-index">ROLE</span><strong>{expedition.role || "—"}</strong></div>
-          </section>
+      <section className="detail-grid section">
+        {expedition.status && (<div><span className="section-index">STATUS</span><strong>{expedition.status}</strong></div>)}
+        {expedition.category && (<div><span className="section-index">CATEGORY</span><strong>{expedition.category}</strong></div>)}
+        {expedition.date && (<div><span className="section-index">DATE</span><strong>{expedition.date}</strong></div>)}
+        {expedition.role && (<div><span className="section-index">ROLE</span><strong>{expedition.role}</strong></div>)}
+      </section>
 
-          {expedition.shortDescription && (
-            <section className="copy-block section">
-              <span className="section-index">SUMMARY</span>
-              <p className="display-copy">{expedition.shortDescription}</p>
-            </section>
-          )}
-          {expedition.problem && (
-            <section className="copy-block section">
-              <span className="section-index">PROBLEM</span>
-              <p className="body-copy">{expedition.problem}</p>
-            </section>
-          )}
-          {expedition.approach && (
-            <section className="copy-block section">
-              <span className="section-index">APPROACH</span>
-              <p className="body-copy">{expedition.approach}</p>
-            </section>
-          )}
-          {expedition.system && (
-            <section className="copy-block section">
-              <span className="section-index">SYSTEM</span>
-              <p className="body-copy">{expedition.system}</p>
-            </section>
-          )}
-          {expedition.build && (
-            <section className="copy-block section">
-              <span className="section-index">BUILD</span>
-              <p className="body-copy">{expedition.build}</p>
-            </section>
-          )}
-          {expedition.technologies && expedition.technologies.length > 0 && (
-            <section className="copy-block section">
-              <span className="section-index">TECHNOLOGIES</span>
-              <p className="body-copy">{expedition.technologies.join(" · ")}</p>
-            </section>
-          )}
-          {expedition.result && (
-            <section className="copy-block section">
-              <span className="section-index">RESULT</span>
-              <p className="body-copy">{expedition.result}</p>
-            </section>
-          )}
-        </>
-      ) : (
+      {sections.filter((s) => s.value).map((s) => (
+        <section className="copy-block section" key={s.label}>
+          <span className="section-index">{s.label}</span>
+          <p className="body-copy">{s.value}</p>
+        </section>
+      ))}
+
+      {expedition.technologies && expedition.technologies.length > 0 && (
         <section className="copy-block section">
-          <p className="body-copy">This expedition is being finalized. The full record will appear here once the lead engineer provides it.</p>
+          <span className="section-index">TECHNOLOGIES</span>
+          <p className="body-copy">{expedition.technologies.join(" · ")}</p>
+        </section>
+      )}
+
+      {expedition.evidence && expedition.evidence.length > 0 && (
+        <section className="copy-block section">
+          <span className="section-index">EVIDENCE</span>
+          <ul className="body-copy evidence-list">
+            {expedition.evidence.map((item, i) => (
+              <li key={i}>{item}</li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {expedition.links && expedition.links.length > 0 && (
+        <section className="copy-block section">
+          <span className="section-index">LINKS</span>
+          <ul className="body-copy">
+            {expedition.links.map((l, i) => (
+              <li key={i}><a className="text-link" href={l.href}>{l.label || l.href} <span>↗</span></a></li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {expedition.relatedExpeditions && expedition.relatedExpeditions.length > 0 && (
+        <section className="copy-block section">
+          <span className="section-index">RELATED</span>
+          <ul className="body-copy">
+            {expedition.relatedExpeditions.map((rid) => {
+              const rel = expeditions.find((e) => e.id === rid);
+              return (
+                <li key={rid}>
+                  <button className="text-link" onClick={() => go(`/expeditions/${rid}`)}>{rel ? rel.title : rid} <span>↗</span></button>
+                </li>
+              );
+            })}
+          </ul>
         </section>
       )}
 
@@ -253,6 +298,13 @@ export function TowerOfBabel({ go }) {
         ))}
       </section>
 
+      <section className="copy-block section reveal">
+        <div className="section-index">{towerOfBabel.rebuild.heading}</div>
+        {towerOfBabel.rebuild.body.map((p, i) => (
+          <p className="body-copy" key={i}>{p}</p>
+        ))}
+      </section>
+
       <section className="copy-block section">
         <button className="text-link" onClick={() => go("/tower-of-babel/library")}>ENTER THE LIBRARY <span>↗</span></button>
       </section>
@@ -261,27 +313,59 @@ export function TowerOfBabel({ go }) {
 }
 
 export function TowerLibrary({ go }) {
+  // Group artifacts by collection for a structured catalog view.
+  const grouped = artifacts.reduce((acc, a) => {
+    const key = a.collection || "OTHER";
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(a);
+    return acc;
+  }, {});
+
   return (
     <main className="page-shell inner-page">
       <section className="inner-hero section">
         <div className="section-index">05.A / LIBRARY</div>
         <h1>{towerOfBabel.library.heading}</h1>
-        <p className="body-copy">{towerOfBabel.library.intro}</p>
-        <p className="body-copy">{towerOfBabel.library.note}</p>
+        <p className="display-copy">{towerOfBabel.library.intro}</p>
       </section>
 
-      <section className="copy-block section">
+      <section className="copy-block section reveal">
         <div className="section-index">CATALOG</div>
         {artifacts.length === 0 ? (
-          <p className="body-copy">Catalog entries are not yet available. The data model is in place; the lead engineer will populate the archive.</p>
+          <>
+            <h2 className="library-empty-heading">{towerOfBabel.library.empty.heading}</h2>
+            <p className="body-copy">{towerOfBabel.library.empty.body}</p>
+          </>
         ) : (
-          <ul className="body-copy">
-            {artifacts.map((a) => (
-              <li key={a.artifact_id}>
-                <button className="text-link" onClick={() => go(`/tower-of-babel/library/${a.artifact_id}`)}>{a.title || a.artifact_id} <span>↗</span></button>
-              </li>
+          <div className="library-catalog">
+            {Object.entries(grouped).map(([collection, items]) => (
+              <div className="library-collection" key={collection}>
+                <h3 className="library-collection-heading">{collection}</h3>
+                <div className="artifact-list">
+                  {items.map((a) => (
+                    <button
+                      key={a.artifact_id}
+                      className="artifact-card reveal"
+                      onClick={() => go(`/tower-of-babel/library/${a.artifact_id}`)}
+                    >
+                      <div className="artifact-card-meta">
+                        <span className="artifact-card-collection">{a.collection}</span>
+                        <span className="artifact-card-rights">{a.rights_status || "—"}</span>
+                      </div>
+                      <h4 className="artifact-card-title">{a.title}</h4>
+                      {a.creator && (
+                        <p className="artifact-card-creator">{a.creator}{a.year ? ` · ${a.year}` : ""}</p>
+                      )}
+                      {a.description && (
+                        <p className="artifact-card-summary">{a.description}</p>
+                      )}
+                      <span className="artifact-card-arrow">↗</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             ))}
-          </ul>
+          </div>
         )}
       </section>
 
@@ -294,23 +378,107 @@ export function TowerLibrary({ go }) {
 
 export function LibraryArtifact({ go, params }) {
   const artifact = artifacts.find((a) => a.artifact_id === params.id);
+
+  if (!artifact) {
+    return (
+      <main className="page-shell inner-page">
+        <section className="inner-hero section">
+          <div className="section-index">ARTIFACT / {params.id}</div>
+          <h1>UNKNOWN ARTIFACT</h1>
+        </section>
+        <section className="copy-block section">
+          <p className="body-copy">No artifact record exists for this id.</p>
+          <button className="text-link" onClick={() => go("/tower-of-babel/library")}>BACK TO LIBRARY <span>↗</span></button>
+        </section>
+      </main>
+    );
+  }
+
+  // Render only artifact fields that have values. Avoids awkward blanks.
+  const meta = [
+    artifact.collection      && { label: "COLLECTION",     value: artifact.collection },
+    artifact.category        && { label: "CATEGORY",       value: artifact.category },
+    artifact.subcategory     && { label: "SUBCATEGORY",    value: artifact.subcategory },
+    artifact.creator         && { label: "CREATOR",        value: artifact.creator },
+    artifact.year            && { label: "YEAR",           value: artifact.year },
+    artifact.format          && { label: "FORMAT",         value: artifact.format },
+    artifact.file_size       && { label: "FILE SIZE",      value: artifact.file_size },
+    artifact.version         && { label: "VERSION",        value: artifact.version },
+    artifact.checksum        && { label: "CHECKSUM",       value: artifact.checksum },
+    artifact.license         && { label: "LICENSE",        value: artifact.license },
+    artifact.rights_status   && { label: "RIGHTS",         value: artifact.rights_status },
+    artifact.download_status && { label: "ACCESS STATUS",  value: artifact.download_status },
+  ].filter(Boolean);
+
+  const canDownload =
+    artifact.download_status === "AVAILABLE" &&
+    typeof artifact.download_url === "string" &&
+    artifact.download_url.length > 0;
+
   return (
     <main className="page-shell inner-page">
       <section className="inner-hero section">
-        <div className="section-index">ARTIFACT / {params.id}</div>
-        <h1>{artifact ? artifact.title : params.id}</h1>
+        <div className="section-index">ARTIFACT / {artifact.artifact_id}</div>
+        <h1>{artifact.title}</h1>
+        {artifact.creator && (
+          <p className="display-copy">{artifact.creator}{artifact.year ? ` · ${artifact.year}` : ""}</p>
+        )}
       </section>
 
-      {artifact ? (
-        <section className="detail-grid section">
-          <div><span className="section-index">COLLECTION</span><strong>{artifact.collection || "—"}</strong></div>
-          <div><span className="section-index">RIGHTS</span><strong>{artifact.rights_status || "—"}</strong></div>
-          <div><span className="section-index">DOWNLOAD</span><strong>{artifact.download_status || "—"}</strong></div>
-          <div><span className="section-index">YEAR</span><strong>{artifact.year || "—"}</strong></div>
+      {artifact.description && (
+        <section className="copy-block section reveal">
+          <span className="section-index">DESCRIPTION</span>
+          <p className="body-copy">{artifact.description}</p>
         </section>
-      ) : (
+      )}
+
+      {meta.length > 0 && (
+        <section className="detail-grid section">
+          {meta.map((m) => (
+            <div key={m.label}><span className="section-index">{m.label}</span><strong>{m.value}</strong></div>
+          ))}
+        </section>
+      )}
+
+      {artifact.source && (
         <section className="copy-block section">
-          <p className="body-copy">This artifact is being finalized. The full record will appear here once the lead engineer provides it.</p>
+          <span className="section-index">SOURCE</span>
+          <p className="body-copy">{artifact.source}</p>
+        </section>
+      )}
+
+      {artifact.source_url && (
+        <section className="copy-block section">
+          <span className="section-index">SOURCE LINK</span>
+          <p className="body-copy">
+            <a className="text-link" href={artifact.source_url} rel="noopener noreferrer" target="_blank">
+              {artifact.source_url} <span>↗</span>
+            </a>
+          </p>
+        </section>
+      )}
+
+      {/* Download button is gated on real download_status + download_url. */}
+      {canDownload && (
+        <section className="copy-block section">
+          <span className="section-index">DOWNLOAD</span>
+          <p className="body-copy">
+            <a
+              className="text-link download-link"
+              href={artifact.download_url}
+              rel="noopener noreferrer"
+              target="_blank"
+            >
+              ACCESS RESOURCE <span>↗</span>
+            </a>
+          </p>
+        </section>
+      )}
+
+      {artifact.tags && artifact.tags.length > 0 && (
+        <section className="copy-block section">
+          <span className="section-index">TAGS</span>
+          <p className="body-copy">{artifact.tags.join(" · ")}</p>
         </section>
       )}
 
@@ -324,6 +492,10 @@ export function LibraryArtifact({ go, params }) {
 // ----- Government ----------------------------------------------------------
 
 export function Government({ go }) {
+  // Render only procurement fields that have values — no awkward blanks.
+  const procurementEntries = Object.entries(government.procurement.fields || {})
+    .filter(([, value]) => typeof value === "string" && value.trim().length > 0);
+
   return (
     <main className="page-shell inner-page">
       <section className="inner-hero section">
@@ -346,9 +518,70 @@ export function Government({ go }) {
         </div>
       </section>
 
+      <section className="copy-block section reveal">
+        <div className="section-index">RELEVANT WORK</div>
+        <p className="body-copy">
+          Selected Antarctic Labs Expeditions whose technical capabilities map to public-sector applicability. No Expedition is labeled as government work — only linked as applicable.
+        </p>
+        {government.relevantWork && government.relevantWork.length > 0 ? (
+          <div className="expedition-list">
+            {government.relevantWork.map((rid) => {
+              const exp = expeditions.find((e) => e.id === rid);
+              if (!exp) return null;
+              return (
+                <button
+                  key={rid}
+                  className="expedition-card reveal"
+                  onClick={() => go(`/expeditions/${rid}`)}
+                >
+                  <div className="expedition-card-meta">
+                    <span className="expedition-card-status">{exp.status}</span>
+                    <span className="expedition-card-category">{exp.category}</span>
+                  </div>
+                  <h3 className="expedition-card-title">{exp.title}</h3>
+                  {exp.shortDescription && (
+                    <p className="expedition-card-summary">{exp.shortDescription}</p>
+                  )}
+                  <span className="expedition-card-arrow">↗</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="body-copy">Relevant-work links will appear here as applicable Expedition records are finalized.</p>
+        )}
+      </section>
+
+      <section className="copy-block section reveal">
+        <div className="section-index">{government.capabilitiesStatement.heading}</div>
+        <p className="body-copy">{government.capabilitiesStatement.body}</p>
+        <p className="body-copy">
+          <span className="capabilities-statement-pill" aria-disabled="true">FUTURE — NOT YET PUBLISHED</span>
+          <span className="body-copy"> {government.capabilitiesStatement.note}</span>
+        </p>
+        {/* No fake download link. No fake PDF. */}
+      </section>
+
+      <section className="copy-block section reveal">
+        <div className="section-index">{government.procurement.heading}</div>
+        <p className="body-copy">{government.procurement.body}</p>
+        {procurementEntries.length > 0 ? (
+          <dl className="procurement-list">
+            {procurementEntries.map(([key, value]) => (
+              <div key={key} className="procurement-row">
+                <dt className="procurement-key">{key}</dt>
+                <dd className="procurement-value">{value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : (
+          <p className="body-copy">{government.procurement.note}</p>
+        )}
+      </section>
+
       <section className="copy-block section">
         <p className="body-copy">
-          Antarctic Labs does not currently claim contracts, certifications, registrations, procurement status, government clients, or past performance. This destination is in active development.
+          Antarctic Labs does not currently claim government contracts, certifications, registrations, procurement status, contract vehicles, security clearances, set-aside status, government revenue, agency relationships, or past performance. This destination is in active development.
         </p>
       </section>
 
@@ -428,24 +661,56 @@ export function FieldInterests({ go }) {
     <main className="page-shell inner-page">
       <section className="inner-hero section">
         <div className="section-index">08 / FIELD INTERESTS</div>
-        <h1>FIELD INTERESTS</h1>
+        <h1>{fieldInterests.heading}</h1>
+        {fieldInterests.intro.map((p, i) => (
+          <p className={i === 0 ? "display-copy" : "body-copy"} key={i}>{p}</p>
+        ))}
       </section>
 
-      <section className="capabilities section reveal">
+      <section className="expeditions-grid section reveal">
         <div className="section-index">AREAS OF ACTIVE INTEREST</div>
-        <div className="capability-list">
-          {operator.fieldInterests.map((interest, i) => (
-            <div className="cap-row" key={interest}>
-              <span>{String(i + 1).padStart(2, "0")}</span>
-              <h3>{interest}</h3>
-              <i>+</i>
-            </div>
-          ))}
+        <div className="expedition-list">
+          {fieldInterests.areas.map((area) => {
+            const related = (area.relatedExpeditions || [])
+              .map((rid) => expeditions.find((e) => e.id === rid))
+              .filter(Boolean);
+            return (
+              <article className="expedition-card field-interest-card reveal" key={area.id}>
+                <div className="expedition-card-meta">
+                  <span className="expedition-card-category">{area.title}</span>
+                </div>
+                <h3 className="expedition-card-title">{area.title}</h3>
+                <p className="expedition-card-summary">{area.summary}</p>
+                {related.length > 0 && (
+                  <div className="field-interest-related">
+                    <span className="section-index">RELATED EXPEDITIONS</span>
+                    <ul className="body-copy">
+                      {related.map((exp) => (
+                        <li key={exp.id}>
+                          <button
+                            className="text-link"
+                            onClick={() => go(`/expeditions/${exp.id}`)}
+                          >
+                            {exp.title} <span>↗</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </article>
+            );
+          })}
         </div>
       </section>
 
       <section className="copy-block section">
-        <p className="body-copy">{operator.closing}</p>
+        <span className="section-index">CLOSING</span>
+        <p className="body-copy">{fieldInterests.closing}</p>
+      </section>
+
+      <section className="copy-block section">
+        <button className="text-link" onClick={() => go("/expeditions")}>SEE EXPEDITIONS <span>↗</span></button>
       </section>
 
       <section className="copy-block section">
@@ -458,61 +723,206 @@ export function FieldInterests({ go }) {
 // ----- Transmission --------------------------------------------------------
 
 export function Transmission({ go }) {
+  // Controlled form state.
+  const initialValues = transmission.fields.reduce((acc, f) => {
+    acc[f.name] = "";
+    return acc;
+  }, {});
+  const [values, setValues] = useState(initialValues);
+  const [errors, setErrors] = useState({});
+  const [submitted, setSubmitted] = useState(false);
+
+  // Respect reduced motion: skip GSAP-driven reveal if the user has
+  // requested reduced motion.
+  const reduceMotion =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const validate = (next) => {
+    const errs = {};
+    transmission.fields.forEach((f) => {
+      const v = (next[f.name] || "").trim();
+      if (f.required && v.length === 0) {
+        errs[f.name] = "Required.";
+      } else if (f.type === "email" && v.length > 0) {
+        // Basic email shape check.
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
+          errs[f.name] = "Enter a valid email address.";
+        }
+      }
+    });
+    return errs;
+  };
+
+  const onChange = (name) => (e) => {
+    const next = { ...values, [name]: e.target.value };
+    setValues(next);
+    // Clear field-level error as the user edits.
+    if (errors[name]) {
+      const errs = { ...errors };
+      delete errs[name];
+      setErrors(errs);
+    }
+  };
+
+  const onSubmit = (e) => {
+    e.preventDefault();
+    const errs = validate(values);
+    setErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      // Focus the first invalid field for accessibility.
+      const firstInvalid = transmission.fields.find((f) => errs[f.name]);
+      if (firstInvalid && typeof document !== "undefined") {
+        const el = document.getElementById(firstInvalid.id);
+        if (el && typeof el.focus === "function") el.focus();
+      }
+      return;
+    }
+    // No backend. Confirmation is local to this browser. We never
+    // claim a server received the message.
+    setSubmitted(true);
+    if (typeof window !== "undefined") {
+      // Move focus to the success region for screen readers.
+      window.setTimeout(() => {
+        const region = document.getElementById("transmission-success");
+        if (region && typeof region.focus === "function") region.focus();
+      }, 50);
+    }
+  };
+
+  const onReset = () => {
+    setValues(initialValues);
+    setErrors({});
+    setSubmitted(false);
+  };
+
   return (
     <main className="page-shell inner-page">
       <section className="inner-hero section">
-        <div className="section-index">09 / TRANSMISSION</div>
-        <h1>HAVE A PROBLEM<br/>WORTH SOLVING?</h1>
+        <div className="section-index">{transmission.sectionIndex}</div>
+        <h1>
+          {transmission.heading.split("\n").map((line, i) => (
+            <span key={i}>{line}<br/></span>
+          ))}
+        </h1>
       </section>
 
-      <section className="copy-block section reveal">
-        <p className="display-copy">Have an idea, need a system built, want to collaborate, or simply found something interesting? Send a transmission.</p>
+      <section className={"copy-block section" + (reduceMotion ? "" : " reveal")}>
+        <p className="display-copy">{transmission.body}</p>
       </section>
 
-      <section className="copy-block section reveal">
-        <form
-          className="transmission-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            // Stage B: there is no real backend integration. Keep the
-            // front-end functional but clearly do not pretend messages
-            // are transmitted.
-            const root = e.currentTarget.parentElement;
-            if (root) {
-              root.dataset.status = "received";
-            }
-            e.currentTarget.reset();
-          }}
+      {!submitted && (
+        <section className={"copy-block section" + (reduceMotion ? "" : " reveal")}>
+          <form
+            className="transmission-form"
+            onSubmit={onSubmit}
+            noValidate={false}
+            aria-label="Transmission form"
+          >
+            {transmission.fields.map((f) => {
+              const fieldError = errors[f.name];
+              const errorId = `${f.id}-error`;
+              const labelText = f.required ? `${f.label} *` : f.label;
+              return (
+                <div className="transmission-field" key={f.id}>
+                  <label htmlFor={f.id}>
+                    {labelText}
+                  </label>
+                  {f.type === "select" ? (
+                    <select
+                      id={f.id}
+                      name={f.name}
+                      required={f.required}
+                      value={values[f.name]}
+                      onChange={onChange(f.name)}
+                      aria-required={f.required || undefined}
+                      aria-invalid={fieldError ? "true" : undefined}
+                      aria-describedby={fieldError ? errorId : undefined}
+                    >
+                      <option value="" disabled>Select a subject</option>
+                      {f.options.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                  ) : f.type === "textarea" ? (
+                    <textarea
+                      id={f.id}
+                      name={f.name}
+                      required={f.required}
+                      rows={f.rows || 4}
+                      value={values[f.name]}
+                      onChange={onChange(f.name)}
+                      autoComplete={f.autoComplete}
+                      aria-required={f.required || undefined}
+                      aria-invalid={fieldError ? "true" : undefined}
+                      aria-describedby={fieldError ? errorId : undefined}
+                    />
+                  ) : (
+                    <input
+                      id={f.id}
+                      name={f.name}
+                      type={f.type}
+                      required={f.required}
+                      value={values[f.name]}
+                      onChange={onChange(f.name)}
+                      autoComplete={f.autoComplete}
+                      placeholder={f.placeholder}
+                      aria-required={f.required || undefined}
+                      aria-invalid={fieldError ? "true" : undefined}
+                      aria-describedby={fieldError ? errorId : undefined}
+                    />
+                  )}
+                  {fieldError && (
+                    <p id={errorId} className="transmission-error" role="alert">
+                      {fieldError}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+
+            <div className="transmission-actions">
+              <button type="submit" className="text-link" aria-label={transmission.submit.ariaLabel}>
+                {transmission.submit.label} <span>↗</span>
+              </button>
+              <button type="button" className="text-link transmission-reset" onClick={onReset}>
+                CLEAR <span>×</span>
+              </button>
+            </div>
+
+            <p className="body-copy transmission-notice" role="note">
+              {transmission.noBackendNotice}
+            </p>
+          </form>
+        </section>
+      )}
+
+      {submitted && (
+        <section
+          id="transmission-success"
+          className={"copy-block section transmission-success" + (reduceMotion ? "" : " reveal")}
+          role="status"
+          aria-live="polite"
+          tabIndex={-1}
         >
-          <label><span>NAME *</span><input name="name" required type="text" autoComplete="name" /></label>
-          <label><span>COMPANY / PROJECT</span><input name="company" type="text" autoComplete="organization" /></label>
-          <label><span>EMAIL *</span><input name="email" required type="email" autoComplete="email" /></label>
-          <label><span>WHAT IS THIS ABOUT? *</span>
-            <select name="subject" required defaultValue="">
-              <option value="" disabled>Select a subject</option>
-              <option value="project">PROJECT</option>
-              <option value="collaboration">COLLABORATION</option>
-              <option value="tower-of-babel">TOWER OF BABEL</option>
-              <option value="government">GOVERNMENT / PUBLIC SECTOR</option>
-              <option value="general">GENERAL</option>
-            </select>
-          </label>
-          <label><span>MESSAGE *</span><textarea name="message" required rows={6} /></label>
-          <label><span>WEBSITE</span><input name="website" type="text" /></label>
-          <button type="submit" className="text-link">SEND TRANSMISSION <span>↗</span></button>
-          <p className="body-copy" data-form-note>
-            Front-end form only — messages are not yet transmitted. This will be wired to a real integration in a later stage.
-          </p>
-        </form>
-      </section>
-
-      <section className="copy-block section" data-form-confirmation hidden>
-        <span className="section-index">TRANSMISSION RECEIVED.</span>
-        <p className="body-copy">I’ll review your message and respond directly.</p>
-      </section>
+          <span className="section-index">{transmission.success.heading}</span>
+          <p className="body-copy">{transmission.success.body}</p>
+          <p className="body-copy">{transmission.success.note}</p>
+          <div className="transmission-actions">
+            <button type="button" className="text-link" onClick={onReset}>
+              SEND ANOTHER <span>↗</span>
+            </button>
+          </div>
+        </section>
+      )}
 
       <section className="copy-block section">
-        <p className="body-copy">Or write directly: <a className="text-link" href={`mailto:${site.email}`}>{site.email}</a></p>
+        <span className="section-index">DIRECT</span>
+        <p className="body-copy">
+          Or write directly:{" "}
+          <a className="text-link" href={`mailto:${site.email}`}>{site.email}</a>
+        </p>
       </section>
     </main>
   );
