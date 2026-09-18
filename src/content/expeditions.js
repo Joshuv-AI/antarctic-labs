@@ -25,7 +25,7 @@ export const EXPEDITION_STATUSES = [
 ];
 
 export const expeditionsArchive = {
-  heading: "EXPEDITIONS",
+  heading: "PROJECTS",
   intro: "Everything I’ve built that was worth documenting.",
   supporting:
     "Software, automation, AI systems, experiments, research, digital experiences, and other projects — finished, active, experimental, or archived.",

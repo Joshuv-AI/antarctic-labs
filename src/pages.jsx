@@ -92,19 +92,19 @@ export function Systems({ go }) {
       </section>
 
       <section className="copy-block section">
-        <button className="text-link" onClick={() => go("/expeditions")}>SEE EXPEDITIONS <span>↗</span></button>
+        <button className="text-link" onClick={() => go("/projects")}>SEE PROJECTS <span>↗</span></button>
       </section>
     </main>
   );
 }
 
-// ----- Expeditions archive + detail ---------------------------------------
+// ----- Projects archive + detail (was: Expeditions) -------------------------
 
-export function Expeditions({ go }) {
+export function Projects({ go }) {
   return (
     <main className="page-shell inner-page">
       <section className="inner-hero section">
-        <div className="section-index">03 / EXPEDITIONS</div>
+        <div className="section-index">03 / PROJECTS</div>
         <h1>{expeditionsArchive.heading}</h1>
         <p className="display-copy">{expeditionsArchive.intro}</p>
         <p className="body-copy">{expeditionsArchive.supporting}</p>
@@ -120,7 +120,7 @@ export function Expeditions({ go }) {
               <button
                 key={e.id}
                 className="expedition-card reveal"
-                onClick={() => go(`/expeditions/${e.id}`)}
+                onClick={() => go(`/projects/${e.id}`)}
               >
                 <div className="expedition-card-meta">
                   <span className="expedition-card-status">{e.status}</span>
@@ -140,7 +140,7 @@ export function Expeditions({ go }) {
   );
 }
 
-export function ExpeditionDetail({ go, params }) {
+export function ProjectDetail({ go, params }) {
   const expedition = expeditions.find((e) => e.id === params.id);
   if (!expedition) {
     return (
@@ -151,7 +151,7 @@ export function ExpeditionDetail({ go, params }) {
         </section>
         <section className="copy-block section">
           <p className="body-copy">No expedition record exists for this id.</p>
-          <button className="text-link" onClick={() => go("/expeditions")}>ALL EXPEDITIONS <span>↗</span></button>
+          <button className="text-link" onClick={() => go("/projects")}>ALL PROJECTS <span>↗</span></button>
         </section>
       </main>
     );
@@ -228,7 +228,7 @@ export function ExpeditionDetail({ go, params }) {
               const rel = expeditions.find((e) => e.id === rid);
               return (
                 <li key={rid}>
-                  <button className="text-link" onClick={() => go(`/expeditions/${rid}`)}>{rel ? rel.title : rid} <span>↗</span></button>
+                  <button className="text-link" onClick={() => go(`/projects/${rid}`)}>{rel ? rel.title : rid} <span>↗</span></button>
                 </li>
               );
             })}
@@ -237,7 +237,7 @@ export function ExpeditionDetail({ go, params }) {
       )}
 
       <div className="page-next">
-        <button className="text-link" onClick={() => go("/expeditions")}>ALL EXPEDITIONS <span>↗</span></button>
+        <button className="text-link" onClick={() => go("/projects")}>ALL PROJECTS <span>↗</span></button>
       </div>
     </main>
   );
@@ -521,7 +521,7 @@ export function Government({ go }) {
       <section className="copy-block section reveal">
         <div className="section-index">RELEVANT WORK</div>
         <p className="body-copy">
-          Selected Antarctic Labs Expeditions whose technical capabilities map to public-sector applicability. No Expedition is labeled as government work — only linked as applicable.
+          Selected Antarctic Labs Projects whose technical capabilities map to public-sector applicability. No Project is labeled as government work — only linked as applicable.
         </p>
         {government.relevantWork && government.relevantWork.length > 0 ? (
           <div className="expedition-list">
@@ -532,7 +532,7 @@ export function Government({ go }) {
                 <button
                   key={rid}
                   className="expedition-card reveal"
-                  onClick={() => go(`/expeditions/${rid}`)}
+                  onClick={() => go(`/projects/${rid}`)}
                 >
                   <div className="expedition-card-meta">
                     <span className="expedition-card-status">{exp.status}</span>
@@ -548,7 +548,7 @@ export function Government({ go }) {
             })}
           </div>
         ) : (
-          <p className="body-copy">Relevant-work links will appear here as applicable Expedition records are finalized.</p>
+          <p className="body-copy">Relevant-work links will appear here as applicable Project records are finalized.</p>
         )}
       </section>
 
@@ -592,9 +592,9 @@ export function Government({ go }) {
   );
 }
 
-// ----- The Operator --------------------------------------------------------
+// ----- About (was: The Operator) -------------------------------------------
 
-export function TheOperator({ go }) {
+export function About({ go }) {
   return (
     <main className="page-shell inner-page">
       <section className="inner-hero section">
@@ -683,13 +683,13 @@ export function FieldInterests({ go }) {
                 <p className="expedition-card-summary">{area.summary}</p>
                 {related.length > 0 && (
                   <div className="field-interest-related">
-                    <span className="section-index">RELATED EXPEDITIONS</span>
+                    <span className="section-index">RELATED PROJECTS</span>
                     <ul className="body-copy">
                       {related.map((exp) => (
                         <li key={exp.id}>
                           <button
                             className="text-link"
-                            onClick={() => go(`/expeditions/${exp.id}`)}
+                            onClick={() => go(`/projects/${exp.id}`)}
                           >
                             {exp.title} <span>↗</span>
                           </button>
@@ -710,11 +710,11 @@ export function FieldInterests({ go }) {
       </section>
 
       <section className="copy-block section">
-        <button className="text-link" onClick={() => go("/expeditions")}>SEE EXPEDITIONS <span>↗</span></button>
+        <button className="text-link" onClick={() => go("/projects")}>SEE PROJECTS <span>↗</span></button>
       </section>
 
       <section className="copy-block section">
-        <button className="text-link" onClick={() => go("/operator")}>ABOUT THE OPERATOR <span>↗</span></button>
+        <button className="text-link" onClick={() => go("/about")}>ABOUT THE OPERATOR <span>↗</span></button>
       </section>
     </main>
   );

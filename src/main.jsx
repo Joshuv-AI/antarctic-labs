@@ -7,22 +7,21 @@ import "./styles.css";
 import PolarScene from "./PolarScene";
 
 import { site as content } from "./content/site.js";
-import { routes } from "./content/routes.js";
-import { matchRoute } from "./content/routes.js";
+import { routes, matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
 import {
   TheLab,
   Systems,
-  Expeditions,
-  ExpeditionDetail,
   History,
   TowerOfBabel,
   TowerLibrary,
   LibraryArtifact,
   Government,
-  TheOperator,
   FieldInterests,
   Transmission,
+  Projects,
+  ProjectDetail,
+  About,
 } from "./pages.jsx";
 
 gsap.registerPlugin(ScrollTrigger);
@@ -37,10 +36,29 @@ function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [transitioning, setTransitioning] = useState(false);
 
+  // Legacy-route redirect handling (Stage F — IA consolidation).
+  // Old paths (/systems, /expeditions, /history, /operator, /field-interests)
+  // are mapped to their canonical equivalents so historical bookmarks,
+  // links, and crawls continue to resolve. The first-paint redirect
+  // happens in App's body before the first paint; popstate handles
+  // browser back/forward; the go() helper handles in-app clicks.
+  useEffect(() => {
+    const raw = window.location.pathname;
+    const target = legacyRedirect(raw);
+    if (target && target !== raw) {
+      window.history.replaceState({}, "", target);
+      setPath(target);
+    }
+  }, []);
+
   useEffect(() => {
     const onPop = () => {
-      const next = matchRoute(window.location.pathname) ? window.location.pathname : "/404";
-      setPath(next);
+      const raw = window.location.pathname;
+      const target = legacyRedirect(raw) || (matchRoute(raw) ? raw : "/404");
+      if (target !== raw) {
+        window.history.replaceState({}, "", target);
+      }
+      setPath(target);
       setMenuOpen(false);
       window.scrollTo(0, 0);
     };
@@ -60,11 +78,16 @@ function App() {
 
   const go = (to) => {
     if (to === path || transitioning) return;
+    // Translate legacy URLs (e.g. /operator, /expeditions, /systems)
+    // to their canonical equivalents on click. Keeps the visible URL
+    // canonical from the user's first interaction.
+    const canonical = legacyRedirect(to) || to;
+    if (to === path || canonical === path) return;
     setMenuOpen(false);
     setTransitioning(true);
     window.setTimeout(() => {
-      window.history.pushState({}, "", to);
-      setPath(to);
+      window.history.pushState({}, "", canonical);
+      setPath(canonical);
       window.scrollTo(0, 0);
       window.setTimeout(() => setTransitioning(false), 80);
     }, 520);
@@ -80,18 +103,14 @@ function App() {
       <SiteHeader onMenu={() => setMenuOpen(true)} go={go} />
       <PageCurtain active={transitioning} label={pathLabel(path)} />
       {path === "/" && <Home go={go} />}
-      {path === "/about" && <About go={go} />}
       {path === "/the-lab" && <TheLab go={go} />}
-      {path === "/systems" && <Systems go={go} />}
-      {path === "/expeditions" && <Expeditions go={go} />}
-      {matchedPattern === "/expeditions/:id" && <ExpeditionDetail go={go} params={pageParams} />}
-      {path === "/history" && <History go={go} />}
+      {path === "/projects" && <Projects go={go} />}
+      {matchedPattern === "/projects/:id" && <ProjectDetail go={go} params={pageParams} />}
       {path === "/tower-of-babel" && <TowerOfBabel go={go} />}
       {path === "/tower-of-babel/library" && <TowerLibrary go={go} />}
       {matchedPattern === "/tower-of-babel/library/:id" && <LibraryArtifact go={go} params={pageParams} />}
       {path === "/government" && <Government go={go} />}
-      {path === "/operator" && <TheOperator go={go} />}
-      {path === "/field-interests" && <FieldInterests go={go} />}
+      {path === "/about" && <About go={go} />}
       {path === "/transmission" && <Transmission go={go} />}
       {path === "/404" && <NotFound go={go} />}
       <Menu open={menuOpen} close={() => setMenuOpen(false)} go={go} />
@@ -184,9 +203,9 @@ function Home({ go }) {
       </section>
 
       <section className="projects section">
-        <div className="section-head reveal"><div className="section-index">03 / EXPEDITIONS</div><span>SELECTED WORK</span></div>
+        <div className="section-head reveal"><div className="section-index">03 / PROJECTS</div><span>SELECTED WORK</span></div>
         <div className="project-stack">
-          <button className="text-link" onClick={() => go("/expeditions")}>ENTER EXPEDITIONS <span>↗</span></button>
+          <button className="text-link" onClick={() => go("/projects")}>ENTER PROJECTS <span>↗</span></button>
         </div>
       </section>
 
@@ -199,12 +218,35 @@ function Home({ go }) {
         </div>
       </section>
 
+      <section className="territory section reveal">
+        <div className="section-index">05 / TERRITORY</div>
+        <div className="territory-list">
+          {[
+            ["AI / INTELLIGENCE",      "Language models, agents, orchestration, machine-assisted operations."],
+            ["AUTONOMOUS SYSTEMS",     "Long-running software that keeps going without someone pushing every button."],
+            ["AUTOMATION",             "Browser automation, APIs, webhooks, workflows, data pipelines."],
+            ["SOFTWARE",               "Web applications, interfaces, internal tools, integrations, infrastructure."],
+            ["DATA & RESEARCH",        "Scraping, extraction, cleaning, structuring, and turning scattered information into something usable."],
+            ["BLOCKCHAIN",             "Smart contracts, DeFi systems, on-chain experimentation."],
+            ["FINANCE",                "Strategy, signals, paper trading, backtest harnesses, markets as a study in systems."],
+            ["DIGITAL EXPERIENCES",    "Interactive interfaces, immersive web, prototypes, unusual ways to put information in front of someone."],
+            ["EXPERIMENTAL TECHNOLOGY","Emerging tools, unusual interfaces, ideas that don't fit neatly into another category."],
+          ].map(([title, desc]) => (
+            <div className="cap-row" key={title}>
+              <h3>{title}</h3>
+              <p>{desc}</p>
+              <i>+</i>
+            </div>
+          ))}
+        </div>
+      </section>
+
       <section className="statement section reveal">
         <div className="statement-orbit" />
         <div>
-          <span className="section-index">05 / NEXT</span>
+          <span className="section-index">06 / NEXT</span>
           <h2>MAKE THE<br/><em>IMPOSSIBLE</em><br/>FEEL INEVITABLE.</h2>
-          <button className="text-link" onClick={() => go("/operator")}>ABOUT THE OPERATOR <span>↗</span></button>
+          <button className="text-link" onClick={() => go("/about")}>ABOUT THE LAB <span>↗</span></button>
         </div>
       </section>
 
@@ -224,23 +266,11 @@ function ContactCTA() {
   );
 }
 
-function About({ go }) {
-  return (
-    <main className="page-shell inner-page">
-      <section className="inner-hero section">
-        <div className="section-index">ABOUT / ANTARCTIC LABS</div>
-        <h1>CURIOUS<br/><em>BY DEFAULT.</em></h1>
-        <p>A small independent studio exploring the intersection of AI, automation, software, and digital experience.</p>
-      </section>
-      <section className="about-grid section reveal">
-        <div className="about-panel"><span className="section-index">THE IDEA</span><p className="display-copy">Build things that are useful enough to keep and interesting enough to remember.</p></div>
-        <div className="about-panel"><span className="section-index">CURRENTLY EXPLORING</span><ul><li>Agentic systems</li><li>Browser automation</li><li>AI-powered operations</li><li>Interactive web</li><li>New software primitives</li></ul></div>
-      </section>
-      <section className="contact-cta section"><span className="section-index">LET'S BUILD</span><h2>START WITH<br/>A HARD<br/><em>PROBLEM.</em></h2><a href={`mailto:${content.email}`} className="contact-button"><span>{content.email}</span><b>↗</b></a></section>
-      <Footer />
-    </main>
-  );
-}
+// Local short About def removed (Stage F — IA consolidation):
+// The canonical /about route now uses the imported About component
+// from ./pages.jsx, which renders the substantive Operator profile
+// (preserving Joshua Almodovar's personal/background material).
+// This file no longer needs a placeholder About component.
 
 function NotFound({ go }) {
   return <main className="page-shell inner-page"><section className="inner-hero section"><div className="section-index">404</div><h1>LOST IN<br/><em>THE ICE.</em></h1><button className="text-link" onClick={() => go("/")}>RETURN HOME <span>↗</span></button></section></main>;
@@ -251,16 +281,13 @@ function Menu({ open, close, go }) {
     <div className={`menu-overlay ${open ? "is-open" : ""}`}>
       <div className="menu-top"><span>ANTARCTIC LABS / NAVIGATION</span><button onClick={close}>CLOSE <b>×</b></button></div>
       <nav>
-        <button onClick={() => go("/")}><span>01</span><span>ARRIVAL</span><i>THE FIELD</i></button>
+        <button onClick={() => go("/")}><span>01</span><span>HOME</span><i>THE FIELD</i></button>
         <button onClick={() => go("/the-lab")}><span>02</span><span>THE LAB</span><i>FIELD STATION</i></button>
-        <button onClick={() => go("/systems")}><span>03</span><span>SYSTEMS</span><i>OPERATING</i></button>
-        <button onClick={() => go("/expeditions")}><span>04</span><span>EXPEDITIONS</span><i>SELECTED WORK</i></button>
-        <button onClick={() => go("/history")}><span>05</span><span>HISTORY</span><i>TIMELINE</i></button>
-        <button onClick={() => go("/tower-of-babel")}><span>06</span><span>TOWER OF BABEL</span><i>LIBRARY</i></button>
-        <button onClick={() => go("/government")}><span>07</span><span>GOVERNMENT</span><i>PUBLIC SECTOR</i></button>
-        <button onClick={() => go("/operator")}><span>08</span><span>THE OPERATOR</span><i>JOSHUA ALMODOVAR</i></button>
-        <button onClick={() => go("/field-interests")}><span>09</span><span>FIELD INTERESTS</span><i>RESEARCH</i></button>
-        <button onClick={() => go("/transmission")}><span>10</span><span>TRANSMISSION</span><i>CONTACT</i></button>
+        <button onClick={() => go("/projects")}><span>03</span><span>PROJECTS</span><i>SELECTED WORK</i></button>
+        <button onClick={() => go("/tower-of-babel")}><span>04</span><span>TOWER OF BABEL</span><i>LIBRARY</i></button>
+        <button onClick={() => go("/government")}><span>05</span><span>GOVERNMENT</span><i>PUBLIC SECTOR</i></button>
+        <button onClick={() => go("/about")}><span>06</span><span>ABOUT</span><i>JOSHUA ALMODOVAR</i></button>
+        <button onClick={() => go("/transmission")}><span>07</span><span>TRANSMISSION</span><i>CONTACT</i></button>
       </nav>
       <div className="menu-bottom"><a href={`mailto:${content.email}`}>{content.email}</a><span>FLORIDA / WORLDWIDE</span></div>
     </div>
