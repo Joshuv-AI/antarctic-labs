@@ -439,7 +439,7 @@ function AuraBorealisField({ opacity, paused }) {
         ref={iframeRef}
         title="Aura Borealis polar background"
         srcDoc={source}
-        sandbox="allow-scripts"
+        sandbox="allow-scripts allow-same-origin"
         onLoad={() => {
           const iframe = iframeRef.current;
           if (!iframe || !iframe.contentWindow) return;
