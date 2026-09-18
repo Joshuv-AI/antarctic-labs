@@ -370,7 +370,7 @@ export const expeditions = [
     objective:
       "Ship a production site with a centralized content layer, a per-route registry, per-route SEO, and a preserved visual environment.",
     approach:
-      "React + Vite + Three.js visual environment (DefenseLines → atmospheric veil → strata-cloud → water). Centralized content under src/content/. Manual pushState + popstate routing preserved. Per-route SEO helper.",
+      "React + Vite + Three.js visual environment (DefenseLines → atmospheric veil → Aura Borealis GLB). Centralized content under src/content/. Manual pushState + popstate routing preserved. Per-route SEO helper.",
     system:
       "src/content/* modules, src/pages.jsx destination shells, src/seo.js per-route metadata applier, src/PolarScene.jsx visual environment.",
     build:

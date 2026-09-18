@@ -10,7 +10,7 @@
 // skipped the WebGL init that followed.
 //
 // Per the visual-safety directive: inspection of all three shader sources
-// (defense-lines.html, particle-network.html, strata-cloud.html) confirms
+// (defense-lines.html, particle-network.html) confirms
 // that GSAP is used ONLY by hidden demo/document UI elements (text word
 // reveals, hero badge, scroll indicator) — NOT by the canvas/WebGL init
 // code. The PolarScene wrapper already hides the demo UI via injected CSS
