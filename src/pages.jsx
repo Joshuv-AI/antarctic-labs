@@ -26,7 +26,7 @@ import { matchRoute } from "./content/routes.js";
 
 export function TheLab({ go }) {
   return (
-    <main className="page-shell inner-page">
+    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">01 / THE LAB</div>
         <h1>{theLab.heading}</h1>
@@ -69,7 +69,7 @@ export function TheLab({ go }) {
 
 export function Systems({ go }) {
   return (
-    <main className="page-shell inner-page">
+    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">02 / SYSTEMS</div>
         <h1>SYSTEMS</h1>
@@ -100,7 +100,7 @@ export function Systems({ go }) {
 
 export function Projects({ go }) {
   return (
-    <main className="page-shell inner-page">
+    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">03 / PROJECTS</div>
         <h1>{expeditionsArchive.heading}</h1>
@@ -142,7 +142,7 @@ export function ProjectDetail({ go, params }) {
   const expedition = expeditions.find((e) => e.id === params.id);
   if (!expedition) {
     return (
-      <main className="page-shell inner-page">
+      <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
         <section className="inner-hero section">
           <div className="section-index">EXPEDITION / {params.id}</div>
           <h1>UNKNOWN EXPEDITION</h1>
@@ -166,7 +166,7 @@ export function ProjectDetail({ go, params }) {
   ];
 
   return (
-    <main className="page-shell inner-page">
+    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">EXPEDITION / {expedition.id}</div>
         <h1>{expedition.title}</h1>
@@ -245,7 +245,7 @@ export function ProjectDetail({ go, params }) {
 
 export function History({ go }) {
   return (
-    <main className="page-shell inner-page">
+    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">04 / HISTORY</div>
         <h1>{history.heading}</h1>
@@ -272,7 +272,7 @@ export function History({ go }) {
 
 export function TowerOfBabel({ go }) {
   return (
-    <main className="page-shell inner-page">
+    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">05 / TOWER OF BABEL</div>
         <h1>{towerOfBabel.heading}</h1>
@@ -319,7 +319,7 @@ export function TowerLibrary({ go }) {
   }, {});
 
   return (
-    <main className="page-shell inner-page">
+    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">05.A / LIBRARY</div>
         <h1>{towerOfBabel.library.heading}</h1>
@@ -378,7 +378,7 @@ export function LibraryArtifact({ go, params }) {
 
   if (!artifact) {
     return (
-      <main className="page-shell inner-page">
+      <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
         <section className="inner-hero section">
           <div className="section-index">ARTIFACT / {params.id}</div>
           <h1>UNKNOWN ARTIFACT</h1>
@@ -413,7 +413,7 @@ export function LibraryArtifact({ go, params }) {
     artifact.download_url.length > 0;
 
   return (
-    <main className="page-shell inner-page">
+    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">ARTIFACT / {artifact.artifact_id}</div>
         <h1>{artifact.title}</h1>
@@ -494,7 +494,7 @@ export function Government({ go }) {
     .filter(([, value]) => typeof value === "string" && value.trim().length > 0);
 
   return (
-    <main className="page-shell inner-page">
+    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">06 / GOVERNMENT</div>
         <h1>{government.heading}</h1>
@@ -552,7 +552,7 @@ export function Government({ go }) {
         <div className="section-index">{government.capabilitiesStatement.heading}</div>
         <p className="body-copy">{government.capabilitiesStatement.body}</p>
         <p className="body-copy">
-          <span className="capabilities-statement-pill" aria-disabled="true">FUTURE — NOT YET PUBLISHED</span>
+          <span className="capabilities-statement-pill">FUTURE — NOT YET PUBLISHED</span>
           <span className="body-copy"> {government.capabilitiesStatement.note}</span>
         </p>
         {/* No fake download link. No fake PDF. */}
@@ -592,7 +592,7 @@ export function Government({ go }) {
 
 export function About({ go }) {
   return (
-    <main className="page-shell inner-page">
+    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">07 / THE OPERATOR</div>
         <h1>{operator.heading}</h1>
@@ -653,7 +653,7 @@ export function About({ go }) {
 
 export function FieldInterests({ go }) {
   return (
-    <main className="page-shell inner-page">
+    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">08 / FIELD INTERESTS</div>
         <h1>{fieldInterests.heading}</h1>
@@ -793,7 +793,7 @@ export function Transmission({ go }) {
   };
 
   return (
-    <main className="page-shell inner-page">
+    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">{transmission.sectionIndex}</div>
         <h1>

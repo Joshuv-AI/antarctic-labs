@@ -422,6 +422,7 @@ export default function PolarScene() {
       />
       <div
         className="polar-layer polar-constellation"
+        aria-hidden="true"
         style={{
           position: "fixed", inset: 0, zIndex: 4, pointerEvents: "none",
           opacity: constellationOpacity, transition: "opacity 160ms linear",

@@ -794,8 +794,10 @@ ${definition.focusCss ?? ""}
       if ('inert' in element) element.inert = true;
     });
     document.body.setAttribute('data-threeui-ready', '');
-    if (window.__SF_APPLY_CONTROLS) window.__SF_APPLY_CONTROLS();
-    requestAnimationFrame(function () { window.dispatchEvent(new Event('resize')); });
+    if (window.__SF_APPLY_CONTROLS) try { window.__SF_APPLY_CONTROLS(); } catch (e) { /* isolation race: canvas detaching */ }
+    try {
+      requestAnimationFrame(function () { window.dispatchEvent(new Event('resize')); });
+    } catch (e) { /* isolation race: viewport not ready */ }
   }
   function scheduleIsolation() { setTimeout(isolate, 100); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scheduleIsolation, { once: true });

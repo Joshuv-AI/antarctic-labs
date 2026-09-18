@@ -99,8 +99,9 @@ function App() {
 
   return (
     <>
+      <a href="#main-content" className="skip-link">Skip to main content</a>
       {path === "/" && <PolarScene />}
-      <SiteHeader onMenu={() => setMenuOpen(true)} go={go} />
+      <SiteHeader onMenu={() => setMenuOpen(true)} go={go} menuOpen={menuOpen} />
       <PageCurtain active={transitioning} label={pathLabel(path)} />
       {path === "/" && <Home go={go} />}
       {path === "/the-lab" && <TheLab go={go} />}
@@ -113,22 +114,22 @@ function App() {
       {path === "/about" && <About go={go} />}
       {path === "/transmission" && <Transmission go={go} />}
       {path === "/404" && <NotFound go={go} />}
-      <Menu open={menuOpen} close={() => setMenuOpen(false)} go={go} />
+      <Menu open={menuOpen} close={() => setMenuOpen(false)} go={go} path={path} />
     </>
   );
 }
 
-function SiteHeader({ onMenu, go }) {
+function SiteHeader({ onMenu, go, menuOpen }) {
   return (
     <header className="site-header">
-      <button className="brand" onClick={() => go("/")}>
-        <span className="brand-mark">△</span>
+      <button className="brand" onClick={() => go("/")} aria-label={content.brand + " — home"}>
+        <span className="brand-mark" aria-hidden="true">△</span>
         <span>{content.brand}</span>
       </button>
       <div className="header-right">
-        <span className="availability"><i /> AVAILABLE FOR SELECT PROJECTS</span>
-        <button className="menu-button" onClick={onMenu} aria-label="Open navigation">
-          <span>MENU</span><span className="menu-lines"><b/><b/></span>
+        <span className="availability"><i aria-hidden="true" /> AVAILABLE FOR SELECT PROJECTS</span>
+        <button className="menu-button" onClick={onMenu} aria-label={menuOpen ? "Close navigation" : "Open navigation"} aria-expanded={menuOpen} aria-controls="primary-menu">
+          <span>MENU</span><span className="menu-lines" aria-hidden="true"><b/><b/></span>
         </button>
       </div>
     </header>
@@ -146,6 +147,11 @@ function PageCurtain({ active, label }) {
 
 function useReveal(scope) {
   useEffect(() => {
+    const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) {
+      gsap.set(scope.current.querySelectorAll(".reveal"), { opacity: 1, y: 0 });
+      return;
+    }
     const ctx = gsap.context(() => {
       gsap.utils.toArray(".reveal").forEach((el) => {
         gsap.fromTo(el, { y: 55, opacity: 0 }, {
@@ -163,6 +169,7 @@ function Home({ go }) {
   useReveal(root);
 
   useEffect(() => {
+    if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const ctx = gsap.context(() => {
       const tl = gsap.timeline({ defaults: { ease: "power4.out" } });
       tl.from(".hero-kicker", { y: 24, opacity: 0, duration: 0.8, delay: 0.12 })
@@ -175,7 +182,7 @@ function Home({ go }) {
   }, []);
 
   return (
-    <main ref={root} className="page-shell">
+    <main ref={root} className="page-shell" id="main-content" tabIndex={-1}>
       <section className="hero section">
         <div className="hero-orb" aria-hidden="true" />
         <div className="hero-copy">
@@ -213,7 +220,7 @@ function Home({ go }) {
         <div className="section-index">04 / CAPABILITIES</div>
         <div className="capability-list">
           {content.capabilities.map(([n, title, desc]) => (
-            <div className="cap-row" key={n}><span>{n}</span><h3>{title}</h3><p>{desc}</p><i>+</i></div>
+            <div className="cap-row" key={n}><span>{n}</span><h3>{title}</h3><p>{desc}</p><i aria-hidden="true">+</i></div>
           ))}
         </div>
       </section>
@@ -235,7 +242,7 @@ function Home({ go }) {
             <div className="cap-row" key={title}>
               <h3>{title}</h3>
               <p>{desc}</p>
-              <i>+</i>
+              <i aria-hidden="true">+</i>
             </div>
           ))}
         </div>
@@ -273,21 +280,61 @@ function ContactCTA() {
 // This file no longer needs a placeholder About component.
 
 function NotFound({ go }) {
-  return <main className="page-shell inner-page"><section className="inner-hero section"><div className="section-index">404</div><h1>LOST IN<br/><em>THE ICE.</em></h1><button className="text-link" onClick={() => go("/")}>RETURN HOME <span>↗</span></button></section></main>;
+  return <main className="page-shell inner-page" id="main-content" tabIndex={-1}><section className="inner-hero section"><div className="section-index">404</div><h1>LOST IN<br/><em>THE ICE.</em></h1><button className="text-link" onClick={() => go("/")}>RETURN HOME <span aria-hidden="true">↗</span></button></section></main>;
 }
 
-function Menu({ open, close, go }) {
+function Menu({ open, close, go, path }) {
+  const overlayRef = React.useRef(null);
+  const firstItemRef = React.useRef(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); close(); return; }
+      if (e.key === "Tab") {
+        const focusables = overlayRef.current
+          ? overlayRef.current.querySelectorAll('button, a[href], [tabindex]:not([tabindex="-1"])')
+          : [];
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    const t = setTimeout(() => firstItemRef.current && firstItemRef.current.focus(), 60);
+    return () => { document.removeEventListener("keydown", onKey); clearTimeout(t); };
+  }, [open, close]);
+
+  const item = (href, idx, label, sub, ref) => (
+    <button
+      ref={ref}
+      onClick={() => go(href)}
+      aria-current={path === href ? "page" : undefined}
+    >
+      <span>{idx}</span><span>{label}</span><i aria-hidden="true">{sub}</i>
+    </button>
+  );
+
   return (
-    <div className={`menu-overlay ${open ? "is-open" : ""}`}>
-      <div className="menu-top"><span>ANTARCTIC LABS / NAVIGATION</span><button onClick={close}>CLOSE <b>×</b></button></div>
+    <div
+      ref={overlayRef}
+      id="primary-menu"
+      className={`menu-overlay ${open ? "is-open" : ""}`}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Site navigation"
+    >
+      <div className="menu-top"><span>ANTARCTIC LABS / NAVIGATION</span><button onClick={close} aria-label="Close navigation menu">CLOSE <b aria-hidden="true">×</b></button></div>
       <nav>
-        <button onClick={() => go("/")}><span>01</span><span>HOME</span><i>THE FIELD</i></button>
-        <button onClick={() => go("/the-lab")}><span>02</span><span>THE LAB</span><i>FIELD STATION</i></button>
-        <button onClick={() => go("/projects")}><span>03</span><span>PROJECTS</span><i>SELECTED WORK</i></button>
-        <button onClick={() => go("/tower-of-babel")}><span>04</span><span>TOWER OF BABEL</span><i>LIBRARY</i></button>
-        <button onClick={() => go("/government")}><span>05</span><span>GOVERNMENT</span><i>PUBLIC SECTOR</i></button>
-        <button onClick={() => go("/about")}><span>06</span><span>ABOUT</span><i>JOSHUA ALMODOVAR</i></button>
-        <button onClick={() => go("/transmission")}><span>07</span><span>TRANSMISSION</span><i>CONTACT</i></button>
+        {item("/", "01", "HOME", "THE FIELD", firstItemRef)}
+        {item("/the-lab", "02", "THE LAB", "FIELD STATION")}
+        {item("/projects", "03", "PROJECTS", "SELECTED WORK")}
+        {item("/tower-of-babel", "04", "TOWER OF BABEL", "LIBRARY")}
+        {item("/government", "05", "GOVERNMENT", "PUBLIC SECTOR")}
+        {item("/about", "06", "ABOUT", "JOSHUA ALMODOVAR")}
+        {item("/transmission", "07", "TRANSMISSION", "CONTACT")}
       </nav>
       <div className="menu-bottom"><a href={`mailto:${content.email}`}>{content.email}</a><span>FLORIDA / WORLDWIDE</span></div>
     </div>
