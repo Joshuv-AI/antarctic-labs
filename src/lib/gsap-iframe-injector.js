@@ -30,7 +30,7 @@ const NOOP_GSAP_STUB = `
      and gsap.to(...) for their hidden demo/document UI animations. GSAP
      would normally be loaded from a CDN <script src="...cdnjs..."> tag in
      each source's <head>, which the production CSP blocks. The shader
-     HTMLs also use ESM-style <script type="module"> blocks for Three.js,
+     HTMLs also use ESM-style module-script blocks for Three.js,
      which fail to parse as classic scripts in this CSP context.
 
      We replace the CDN load with this noop stub so:

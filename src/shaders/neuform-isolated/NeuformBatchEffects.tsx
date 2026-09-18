@@ -804,7 +804,7 @@ ${definition.focusCss ?? ""}
 })();
 </script>`;
   return patchedSource
-    .replace(/<head([^>]*)>/i, `<head$1>${controlScript}${focusStyle}`)
+    .replace(/(^|>)[ \t\r\n]*<head(\s+[^>]*)?>/i, `$1<head$2>${controlScript}${focusStyle}`)
     .replace(/<\/body>/i, `${focusScript}</body>`);
 }
 
