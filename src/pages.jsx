@@ -53,7 +53,6 @@ export function TheLab({ go }) {
               <span>{n}</span>
               <h3>{title}</h3>
               <p>{desc}</p>
-              <i>+</i>
             </div>
           ))}
         </div>
@@ -85,7 +84,6 @@ export function Systems({ go }) {
               <span>{String(i + 1).padStart(2, "0")}</span>
               <h3>{g.title}</h3>
               <p>{g.summary}</p>
-              <i>+</i>
             </div>
           ))}
         </div>
@@ -262,7 +260,6 @@ export function History({ go }) {
               <span>{String(i + 1).padStart(2, "0")}</span>
               <h3>{b.title}</h3>
               <p>{b.summary}</p>
-              <i>+</i>
             </div>
           ))}
         </div>
@@ -512,7 +509,6 @@ export function Government({ go }) {
               <span>{String(i + 1).padStart(2, "0")}</span>
               <h3>{c}</h3>
               <p>{government.supporting}</p>
-              <i>+</i>
             </div>
           ))}
         </div>
@@ -641,7 +637,6 @@ export function About({ go }) {
             <div className="cap-row" key={interest}>
               <span>{String(i + 1).padStart(2, "0")}</span>
               <h3>{interest}</h3>
-              <i>+</i>
             </div>
           ))}
         </div>
