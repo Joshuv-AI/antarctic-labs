@@ -259,7 +259,7 @@ function Home({ go }) {
 function ContactCTA() {
   return (
     <section className="contact-cta section reveal">
-      <span className="section-index">06 / CONTACT</span>
+      <span className="section-index">07 / CONTACT</span>
       <h2>HAVE A PROBLEM<br/>WORTH SOLVING?</h2>
       <a href={`mailto:${content.email}`} className="contact-button"><span>{content.email}</span><b>↗</b></a>
     </section>
