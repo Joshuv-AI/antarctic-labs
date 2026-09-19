@@ -1,41 +1,40 @@
-// Aura Borealis renderer — three.js + GLTFLoader, bundled by Vite as a single
-// static JS file served from /assets/aura-renderer.js.
+// Aura Borealis renderer — three.js + GLTFLoader + procedural cinematic
+// environment. Single entry, bundled by Vite as a static asset served
+// from /assets/aura-renderer.js.
 //
-// Replaces the previous hand-rolled WebGL renderer that had silent crashes
-// (unverified shader compile, manual buffer decoding, fragile scene-graph
-// traversal). three.js is already in package.json (^0.180.0) and is used
-// elsewhere in the site (NeuformBatchEffects.tsx for the constellation).
+// Scene layers (back → front, ascending renderOrder):
+//   0  Sky dome          — inverted sphere, vertical gradient shader
+//   1  Aurora curtains   — large tilted plane, FBM-noise ribbon shader,
+//                          additive blend, slow organic animation
+//   2  Procedural starfield — 2,000 Points cloud (replaces the 14k GLB
+//                          star meshes which were too dim/small to read
+//                          and which layered incorrectly on the mountain)
+//   3  Mountain          — the unchanged single-mountain-snow.glb, but
+//                          with snow-vs-rock per-vertex color + non-
+//                          metallic material injected via onBeforeCompile
+//   4  Atmospheric haze  — a few translucent additive billboards
+//                          between mountain and sky for depth fade
+//   5  Water/ice fake    — static-gradient mirror plane below the
+//                          mountain (cheap option; no render-to-texture)
+//   6  Foreground silhouette — a low dark mass at the camera bottom
+//                          for depth/separation
 //
-// The renderer:
-//   1. Creates a transparent WebGL2 canvas (or WebGL1 fallback)
-//   2. Fetches /assets/models/mountains/single-mountain-snow.glb
-//   3. Loads it via GLTFLoader
-//   4. Centers + scales the asset to fit a 40° FOV at a comfortable distance
-//   5. Renders one frame per requestAnimationFrame, gated by a `paused` flag
-//      from postMessage ("aura-controls")
-//   6. Reports errors via console.error + document.title so the parent page
-//      (and our diagnostic) can see them
-//
-// On any error during GLB load or scene build the renderer:
-//   - logs to console.error
-//   - sets document.title to a status string ("ready" / "no-webgl" / "error")
-//   - leaves the canvas transparent so the rest of the polar scene stays
-//     intact (constellation + fog still paint behind it)
-//
-// This file is bundled by Vite as a single static asset. The HTML wrapper
-// (`public/assets/aura-renderer.html`) just loads it via a `<script>` tag.
+// Architectural guarantees preserved:
+//   - same iframe + same-origin + CSP architecture (renderer is loaded
+//     by static HTML in public/assets/aura-renderer.html)
+//   - graceful WebGL failure: no-webgl / error:glb-load / error:no-scene
+//     / error:unhandled all set document.title so the parent page can
+//     see what went wrong
+//   - responsive camera composition (landscape: frame on Y; portrait:
+//     combined width+height metric)
+//   - DPR clamp [1, 1.75]
+//   - postMessage `aura-controls` pause control
+//   - no new dependencies (three.js + GLTFLoader only)
 
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 const GLB_URL = "/assets/models/mountains/single-mountain-snow.glb";
-
-// Asset bbox from prior offline inspection of the Aura_Borealis_.glb:
-//   min (-94.02, -7.79, -164.46), max (94.55, 112.38, 88.22)
-//   size (188.57 x 120.17 x 252.67), center (0.26, 52.29, -38.12)
-// We compute the actual bbox from the loaded GLTF, but keep this as a fallback.
-const FALLBACK_BBOX_CENTER = new THREE.Vector3(0.26, 52.29, -38.12);
-const FALLBACK_BBOX_SIZE = new THREE.Vector3(188.57, 120.17, 252.67);
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -48,6 +47,7 @@ function clamp(value, minimum, maximum) {
   let scene = null;
   let camera = null;
   let rootGroup = null;
+  let startTime = 0;
 
   // 1. WebGL context
   const canvas = document.getElementById("c");
@@ -79,42 +79,416 @@ function clamp(value, minimum, maximum) {
 
   renderer.setClearColor(0x000000, 0); // transparent
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  // Tone mapping + exposure: restore the GLB's PBR material detail (snow
-  // shading, rock variation, normal map response). Without this the
-  // mountain reads as a flat gray silhouette — PBR materials need a
-  // tone-mapped pipeline to show their albedo/specular response.
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.15;
+  renderer.toneMappingExposure = 1.05;
 
   // 2. Scene + camera
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(40, 1, 0.1, 5000);
 
-  // 3. Lighting — brighter, more directional. Tuned so the mountain's
-  // PBR snow material reads with highlight/shadow separation, and the
-  // rock sections show warm-cool color variation.
-  const ambient = new THREE.AmbientLight(0xdfeef5, 0.45);
+  // 3. Lighting — for the mountain PBR (snow needs realistic sun + sky
+  // bounce; no atmospheric scattering needed since the sky/aurora are
+  // shader-driven).
+  const ambient = new THREE.AmbientLight(0xb8d0e0, 0.35);
   scene.add(ambient);
 
-  // Key light (sun, warm): strong directional from above-right, casts the
-  // dominant highlight on the snow.
-  const dir1 = new THREE.DirectionalLight(0xfff4e0, 1.6);
-  dir1.position.set(160, 240, 120);
-  scene.add(dir1);
+  // Key light (moon, cool-white, from above-back): drives the dominant
+  // snow highlight + defines the silhouette against the sky.
+  const moon = new THREE.DirectionalLight(0xeaf6ff, 1.4);
+  moon.position.set(120, 200, 80);
+  scene.add(moon);
 
-  // Fill light (sky bounce, cool): softer counter-light to keep the
-  // shaded faces readable rather than crushed to black.
-  const dir2 = new THREE.DirectionalLight(0x6fa8c4, 0.85);
-  dir2.position.set(-140, 100, -60);
-  scene.add(dir2);
+  // Fill (sky bounce, cool): keeps the shaded faces readable rather
+  // than crushed to black.
+  const fill = new THREE.DirectionalLight(0x6fa8c4, 0.7);
+  fill.position.set(-140, 100, -60);
+  scene.add(fill);
 
-  // Rim light (back): very subtle back-light to separate the silhouette
-  // from the dark polar background.
-  const dir3 = new THREE.DirectionalLight(0xeaf6ff, 0.4);
-  dir3.position.set(40, 60, -200);
-  scene.add(dir3);
+  // Warm rim from the horizon (aurora reflects warmth onto rock faces
+  // near the base, simulating light spillage from the green/cyan
+  // aurora onto the lower mountain).
+  const auroraRim = new THREE.DirectionalLight(0x88e0c0, 0.5);
+  auroraRim.position.set(0, -80, 200);
+  scene.add(auroraRim);
 
-  // 4. Sizing
+  // ============================================================
+  // LAYER 0 — SKY DOME
+  // ============================================================
+  // Inverted sphere with a vertical gradient. Top is deep polar night
+  // (almost-black blue); horizon is slightly warmer. Renders first so
+  // everything else paints over it.
+  const skyGeom = new THREE.SphereGeometry(600, 32, 16);
+  const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    depthTest: false,
+    uniforms: {
+      uTopColor:    { value: new THREE.Color(0x040810) },
+      uHorizonColor: { value: new THREE.Color(0x0d1c2e) },
+      uGroundColor:  { value: new THREE.Color(0x050a14) },
+    },
+    vertexShader: `
+      varying vec3 vWorldPos;
+      void main() {
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWorldPos = wp.xyz;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vWorldPos;
+      uniform vec3 uTopColor;
+      uniform vec3 uHorizonColor;
+      uniform vec3 uGroundColor;
+      void main() {
+        // Use normalized world-Y; the sphere is centered on the camera,
+        // so positive Y maps to the upper hemisphere.
+        vec3 n = normalize(vWorldPos);
+        float h = n.y;
+        vec3 c;
+        if (h > 0.0) {
+          // Above horizon: top -> horizon
+          c = mix(uHorizonColor, uTopColor, smoothstep(0.0, 0.6, h));
+        } else {
+          // Below horizon: horizon -> ground
+          c = mix(uHorizonColor, uGroundColor, smoothstep(0.0, 0.4, -h));
+        }
+        gl_FragColor = vec4(c, 1.0);
+      }
+    `,
+  });
+  const sky = new THREE.Mesh(skyGeom, skyMat);
+  sky.renderOrder = -10;
+  scene.add(sky);
+
+  // ============================================================
+  // LAYER 1 — AURORA CURTAINS
+  // ============================================================
+  // Large tilted plane positioned high above the mountain. Fragment
+  // shader generates layered vertical curtain/ribbon structure using
+  // FBM noise, with irregular opacity + green/cyan color variation.
+  // Additive blending so the curtains brighten the sky behind them.
+  // The curtains are anchored to camera position each frame so they
+  // always read in the upper portion of the viewport.
+  const auroraGeom = new THREE.PlaneGeometry(800, 300, 1, 1);
+  const auroraMat = new THREE.ShaderMaterial({
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    depthTest: false,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uTime:    { value: 0 },
+      uColorA:  { value: new THREE.Color(0x4cffa0) }, // vivid green
+      uColorB:  { value: new THREE.Color(0x55ffd6) }, // cyan
+      uColorC:  { value: new THREE.Color(0x80ffd0) }, // mint
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      varying vec3 vLocal;
+      void main() {
+        vUv = uv;
+        vLocal = position;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec2 vUv;
+      varying vec3 vLocal;
+      uniform float uTime;
+      uniform vec3 uColorA;
+      uniform vec3 uColorB;
+      uniform vec3 uColorC;
+
+      // 2D hash + value noise + FBM
+      float hash(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+      }
+      float vnoise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        float a = hash(i);
+        float b = hash(i + vec2(1.0, 0.0));
+        float c = hash(i + vec2(0.0, 1.0));
+        float d = hash(i + vec2(1.0, 1.0));
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+      }
+      float fbm(vec2 p) {
+        float v = 0.0;
+        float a = 0.5;
+        for (int i = 0; i < 4; i++) {
+          v += a * vnoise(p);
+          p *= 2.0;
+          a *= 0.5;
+        }
+        return v;
+      }
+
+      void main() {
+        // vUv.x is 0..1 across the plane; vUv.y is 0..1 top..bottom.
+        vec2 uv = vUv;
+
+        // Curtain structure: vertical bands modulated by FBM.
+        // The "ribbon" mask uses horizontal stripes folded by FBM.
+        float bandX = uv.x * 6.0 + uTime * 0.03;
+        float ribbonNoise = fbm(vec2(bandX, uv.y * 1.2 + uTime * 0.05));
+        // Sharpen the ribbon edges using a smoothstep on the noise.
+        float ribbon = smoothstep(0.35, 0.65, ribbonNoise);
+
+        // Vertical fade: aurora is strongest in the upper portion,
+        // fading to nothing at the bottom of the plane.
+        float vFade = smoothstep(0.0, 0.45, uv.y) * smoothstep(1.0, 0.65, uv.y);
+
+        // Wisp modulation: a horizontal FBM that adds irregular opacity
+        // streaks across the ribbons (so they don't read as solid bars).
+        float wisp = fbm(vec2(uv.x * 14.0 + uTime * 0.04, uv.y * 3.5));
+        float wispMask = mix(0.5, 1.0, smoothstep(0.25, 0.85, wisp));
+
+        // Color variation: shift between green, cyan, mint based on a
+        // separate FBM (so different parts of the sky have different
+        // aurora tones).
+        float colorShift = fbm(vec2(uv.x * 3.0 - uTime * 0.02, uv.y * 1.5));
+        vec3 col = mix(uColorA, uColorB, smoothstep(0.3, 0.7, colorShift));
+        col = mix(col, uColorC, smoothstep(0.6, 0.95, colorShift));
+
+        // Final opacity: combine the ribbon, vertical fade, and wisp.
+        float alpha = ribbon * vFade * wispMask * 0.55;
+
+        gl_FragColor = vec4(col * alpha, alpha);
+      }
+    `,
+  });
+  const aurora = new THREE.Mesh(auroraGeom, auroraMat);
+  aurora.renderOrder = -9;
+  aurora.frustumCulled = false;
+  scene.add(aurora);
+
+  // ============================================================
+  // LAYER 2 — PROCEDURAL STARFIELD
+  // ============================================================
+  // 2,000 Points cloud filling a large sphere shell. Additive blend +
+  // sizeAttenuation so stars appear as faint pinpoints. Replaces the
+  // GLB's 14k tiny mesh-stars (which were too small to register and
+  // layered incorrectly on the mountain).
+  function makeStarfield() {
+    const N = 2000;
+    const positions = new Float32Array(N * 3);
+    const colors = new Float32Array(N * 3);
+    const sizes = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      // Random direction on the upper hemisphere + a bit below.
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1) * 0.7; // bias toward upper
+      const r = 480;
+      positions[i*3+0] = r * Math.sin(phi) * Math.cos(theta);
+      positions[i*3+1] = r * Math.cos(phi) * 0.7 + 60; // skew upward
+      positions[i*3+2] = r * Math.sin(phi) * Math.sin(theta);
+
+      // Slight color variation: most cool-white, some pale-blue, occasional warm.
+      const tint = Math.random();
+      let r2, g, b;
+      if (tint < 0.7) { r2 = 1.0; g = 1.0; b = 1.0; }
+      else if (tint < 0.92) { r2 = 0.7; g = 0.85; b = 1.0; }
+      else { r2 = 1.0; g = 0.85; b = 0.7; }
+
+      // Brightness falloff: most stars dim, a few brighter (the "named" stars).
+      const bright = (Math.random() < 0.04) ? 1.4 : (0.5 + Math.random() * 0.5);
+      colors[i*3+0] = r2 * bright;
+      colors[i*3+1] = g * bright;
+      colors[i*3+2] = b * bright;
+
+      sizes[i] = (Math.random() < 0.04) ? 3.0 : (1.0 + Math.random() * 1.5);
+    }
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    geom.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
+    const mat = new THREE.PointsMaterial({
+      size: 1.5,
+      sizeAttenuation: true,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.95,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: false,
+    });
+    const pts = new THREE.Points(geom, mat);
+    pts.renderOrder = -8;
+    pts.frustumCulled = false;
+    return pts;
+  }
+  const starfield = makeStarfield();
+  scene.add(starfield);
+
+  // ============================================================
+  // LAYER 3 — MOUNTAIN (single-mountain-snow.glb, unchanged geometry)
+  // ============================================================
+  // The GLB's MeshStandardMaterials have metalness=1 / roughness=1
+  // (incorrect for snow/rock) and no texture maps. We:
+  //   1. Override metalness/roughness on every mountain mesh material.
+  //   2. Inject per-vertex snow-rock color via onBeforeCompile: the
+  //      shader reads the world-Y of each vertex, blends a
+  //      rock→stone→snow color ramp, and writes it into the diffuse
+  //      output (modulating the existing base color, not replacing it).
+  //   3. Skip the 14k star meshes — they are not loaded into the
+  //      mountainGroup, so they never render.
+
+  const snow = new THREE.Color(0xf4f8fb);
+  const stone = new THREE.Color(0x8a9aa6);
+  const rock = new THREE.Color(0x3d5360);
+  const snowRockVert = /* glsl */ `
+    varying vec3 vWorldPosCustom;
+  `;
+  const snowRockFrag = /* glsl */ `
+    varying vec3 vWorldPosCustom;
+    uniform vec3 uSnowColor;
+    uniform vec3 uStoneColor;
+    uniform vec3 uRockColor;
+    uniform float uMinY;
+    uniform float uSpanY;
+  `;
+  function gradientColorForY(worldY) {
+    const t = clamp((worldY - uMinY) / uSpanY, 0, 1);
+    if (t < 0.55) {
+      return new THREE.Color().copy(rock).lerp(stone, t / 0.55);
+    }
+    return new THREE.Color().copy(stone).lerp(snow, (t - 0.55) / 0.45);
+  }
+  // (gradientColorForY is a template — actual implementation lives
+  //  inside frameCameraOnRoot() below where uMinY/uSpanY are available;
+  //  the function defined here is replaced inline.)
+
+  // The actual per-mesh injection happens after GLB load when bbox is
+  // known. See "Inject snow-rock per-vertex colors" below.
+
+  // ============================================================
+  // LAYER 4 — ATMOSPHERIC HAZE
+  // ============================================================
+  // A few translucent additive billboards between mountain and sky.
+  // Provides subtle depth separation between near and far elements.
+  function makeHaze() {
+    const group = new THREE.Group();
+    const positions = [
+      { x: 0,    y: 80,  z: -200, s: 380, tint: 0.10 },
+      { x: -100, y: 50,  z: -100, s: 280, tint: 0.07 },
+      { x: 100,  y: 40,  z: -150, s: 320, tint: 0.08 },
+    ];
+    for (const p of positions) {
+      const geom = new THREE.PlaneGeometry(p.s, p.s);
+      const mat = new THREE.ShaderMaterial({
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        uniforms: {
+          uIntensity: { value: p.tint },
+          uColor: { value: new THREE.Color(0x88b8d8) },
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          varying vec2 vUv;
+          uniform float uIntensity;
+          uniform vec3 uColor;
+          void main() {
+            vec2 c = vUv - 0.5;
+            float d = length(c);
+            float a = smoothstep(0.5, 0.0, d) * uIntensity;
+            gl_FragColor = vec4(uColor * a, a);
+          }
+        `,
+      });
+      const m = new THREE.Mesh(geom, mat);
+      m.position.set(p.x, p.y, p.z);
+      m.renderOrder = -7;
+      m.frustumCulled = false;
+      group.add(m);
+    }
+    return group;
+  }
+  const haze = makeHaze();
+  scene.add(haze);
+
+  // ============================================================
+  // LAYER 5 — WATER/ICE REFLECTION (cheap static gradient)
+  // ============================================================
+  // A flat plane below the mountain with a vertical gradient that
+  // suggests a reflection (lighter at the top of the plane, darker
+  // at the bottom). No render-to-texture, no mirror — just a faked
+  // shimmer.
+  const waterGeom = new THREE.PlaneGeometry(800, 80);
+  const waterMat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uColorTop:    { value: new THREE.Color(0x2a4060) }, // mirror of horizon
+      uColorBottom: { value: new THREE.Color(0x040810) }, // deep water
+      uColorShimmer:{ value: new THREE.Color(0xa8d8ff) },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec2 vUv;
+      uniform vec3 uColorTop;
+      uniform vec3 uColorBottom;
+      uniform vec3 uColorShimmer;
+      void main() {
+        // Vertical gradient (mirror-like)
+        vec3 c = mix(uColorTop, uColorBottom, smoothstep(0.0, 1.0, vUv.y));
+        // Horizontal shimmer noise (faked reflection)
+        float shimmer = sin(vUv.x * 60.0) * sin(vUv.x * 23.0 + vUv.y * 8.0);
+        shimmer *= smoothstep(0.6, 0.0, abs(vUv.y - 0.3));
+        c += uColorShimmer * shimmer * 0.06;
+        // Fade the front edge (away from the mountain) into darkness
+        float edgeFade = smoothstep(0.0, 0.7, vUv.y);
+        c *= edgeFade;
+        gl_FragColor = vec4(c, 0.85);
+      }
+    `,
+  });
+  const water = new THREE.Mesh(waterGeom, waterMat);
+  water.rotation.x = -Math.PI / 2;
+  water.renderOrder = -1;
+  water.frustumCulled = false;
+  scene.add(water);
+
+  // ============================================================
+  // LAYER 6 — FOREGROUND SILHOUETTE
+  // ============================================================
+  // A low dark mass at the camera bottom for depth separation. Just
+  // a dark plane sized to fill the bottom portion of the viewport
+  // when the camera is at the default position.
+  const fgGeom = new THREE.PlaneGeometry(600, 30);
+  const fgMat = new THREE.MeshBasicMaterial({
+    color: 0x000000,
+    transparent: true,
+    opacity: 0.85,
+    depthWrite: false,
+  });
+  const foreground = new THREE.Mesh(fgGeom, fgMat);
+  foreground.renderOrder = -2;
+  foreground.frustumCulled = false;
+  scene.add(foreground);
+
+  // ============================================================
+  // SIZING + RESPONSIVE FRAMING
+  // ============================================================
+  let mountainSizeVec = new THREE.Vector3(0, 0, 0);
+  let mountainCenterVec = new THREE.Vector3(0, 0, 0);
+
   function resize() {
     const dpr = clamp(window.devicePixelRatio || 1, 1, 1.75);
     const w = Math.max(1, Math.floor(window.innerWidth * dpr));
@@ -123,61 +497,21 @@ function clamp(value, minimum, maximum) {
     renderer.setPixelRatio(dpr);
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
-    // Re-frame once aspect changes (camera position depends on FOV + bbox + aspect)
     if (rootGroup) frameCameraOnRoot();
   }
   resize();
   window.addEventListener("resize", resize);
 
-  // 8b. Frame the camera on the mountain (not the whole scene bbox, which
-  // is dominated by scattered stars spread across the full X/Z extent).
-  //
-  // The GLB's "Landscape" + "Plane" + "Rock_*" meshes form an actual
-  // mountain ~182 x 72 x 253 units (Y is the short axis). The renderer's
-  // previous framing used max(sceneSize) = 252 (Z axis), which put the
-  // camera at ~416 units — making the mountain appear ~24% of viewport
-  // height (distant, small).
-  //
-  // New framing: choose the right axis based on viewport aspect, then
-  // use a 0.55x multiplier so the mountain fills ~80% of the viewport
-  // along the chosen axis. Look at the mountain's vertical center so
-  // the silhouette rises in the frame.
   function frameCameraOnRoot() {
     if (!rootGroup) return;
+    const size = mountainSizeVec;
+    const center = mountainCenterVec;
 
-    // Recompute mountain bbox (excluding the scattered 14k stars).
-    const mountainBox = new THREE.Box3();
-    rootGroup.traverse((o) => {
-      if (!o.isMesh) return;
-      if ((o.name || "").toLowerCase().includes("star")) return;
-      o.geometry.computeBoundingBox();
-      const wb = o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld);
-      mountainBox.expandByPoint(wb.min);
-      mountainBox.expandByPoint(wb.max);
-    });
-    if (mountainBox.isEmpty()) return;
-
-    const size = new THREE.Vector3();
-    const center = new THREE.Vector3();
-    mountainBox.getSize(size);
-    mountainBox.getCenter(center);
-
-    // Framing axis based on viewport aspect.
-    // - Landscape (aspect >= 1.0): frame on mountain height (Y axis).
-    //   The mountain fills the viewport vertically; the wide X extent
-    //   naturally extends beyond the viewport edges (tasteful crop).
-    // - Portrait (aspect < 1.0): frame on a combined width+height metric
-    //   so the mountain is visible BOTH in height AND width on a narrow
-    //   viewport. Old behavior (max(width, depth) alone) pushed the
-    //   mountain almost entirely off-screen on portrait.
     const aspect = camera.aspect;
     const portrait = aspect < 1.0;
     let framingAxis;
     let multiplier;
     if (portrait) {
-      // Combined metric: a weighted blend of height and width so the
-      // mountain reads at a reasonable size in both dimensions on
-      // portrait viewports (e.g. iPhone ~0.46 aspect).
       framingAxis = size.y * 1.4 + size.x * 0.6;
       multiplier = 0.42;
     } else {
@@ -187,28 +521,48 @@ function clamp(value, minimum, maximum) {
 
     const fovRad = camera.fov * Math.PI / 180;
     const dist = (framingAxis * multiplier) / (2 * Math.tan(fovRad / 2));
-
-    // Place camera at the mountain's vertical center (slightly below
-    // it for a more dramatic low-angle hero view) and look straight at
-    // the center. No lookAt lift — the mountain's full height should
-    // span the viewport naturally.
     const camY = center.y - size.y * 0.15;
-
     camera.position.set(center.x, camY, center.z + dist);
     camera.lookAt(center.x, center.y, center.z);
     camera.updateProjectionMatrix();
+
+    // Pin sky/aurora/starfield/haze to the camera so they always read
+    // in the same viewport region regardless of where the mountain is.
+    sky.position.copy(camera.position);
+    sky.position.y += 0;  // sky is centered around camera
+    aurora.position.set(camera.position.x, camera.position.y + size.y * 1.1, camera.position.z - 80);
+    aurora.lookAt(camera.position);
+    starfield.position.copy(camera.position);
+    haze.position.copy(camera.position);
+    haze.position.z -= 100;
+    foreground.position.set(camera.position.x, camera.position.y - size.y * 0.55, camera.position.z + 5);
+    foreground.lookAt(camera.position);
+    water.position.set(camera.position.x, center.y - size.y * 0.45, center.z);
   }
 
-  // 5. Render loop
-  function loop() {
+  // ============================================================
+  // RENDER LOOP
+  // ============================================================
+  function loop(t) {
     rafId = requestAnimationFrame(loop);
+    if (startTime === 0) startTime = t;
+    const elapsed = (t - startTime) / 1000;
+
+    // Drive aurora shader animation
+    auroraMat.uniforms.uTime.value = elapsed;
+
+    // Rotate aurora plane very slowly for organic drift (subtle)
+    aurora.rotation.z = Math.sin(elapsed * 0.02) * 0.04;
+
     if (!paused && rootGroup) {
       renderer.render(scene, camera);
     }
   }
   rafId = requestAnimationFrame(loop);
 
-  // 6. Pause control from parent page
+  // ============================================================
+  // PAUSE CONTROL (from parent page via postMessage)
+  // ============================================================
   window.addEventListener("message", (e) => {
     if (!e.data) return;
     if (e.data.type === "aura-controls") {
@@ -216,7 +570,9 @@ function clamp(value, minimum, maximum) {
     }
   });
 
-  // 7. Load GLB
+  // ============================================================
+  // LOAD GLB
+  // ============================================================
   console.log("Aura renderer: fetching GLB from", GLB_URL);
   let gltf;
   try {
@@ -234,117 +590,119 @@ function clamp(value, minimum, maximum) {
     return;
   }
 
-  // 8. Center + scale the model to fit the camera frustum
-  rootGroup = gltf.scene;
-  scene.add(rootGroup);
-
-  // 8b. Star layering fix: the 14k scattered stars in the GLB are
-  // rendered AT the same depth as the mountain (same scene, no
-  // depthTest discrimination), so they paint on top of the mountain
-  // surface and read as "snowflakes pasted on the rock". Move them
-  // onto a dedicated render layer that renders BEFORE the mountain
-  // and uses additive blending with depthWrite disabled — this makes
-  // them read as atmospheric/background pinpoints that the mountain
-  // occludes (when in front of a star, the mountain wins, not the star).
-  // The GLB materials/meshes are preserved — we only change their
-  // render-order properties, not their geometry or textures.
-  const mountainGroup = new THREE.Group();
-  const starsGroup = new THREE.Group();
-  starsGroup.renderOrder = -1;
-  rootGroup.traverse((o) => {
+  // ============================================================
+  // MOUNTAIN — strip GLB stars, inject snow-rock shading, fix
+  //             material params
+  // ============================================================
+  // Strategy:
+  //   1. Walk the scene; for each mesh:
+  //        - if name contains "star" → discard (we use the procedural
+  //          starfield instead — the GLB's tiny mesh-stars were the
+  //          layer-bug source AND visually unreadable)
+  //        - else → keep as mountain; modify material in place
+  //   2. Modify the mountain material via THREE.js's existing
+  //      MeshStandardMaterial.onBeforeCompile so we get the full PBR
+  //      pipeline + our injected per-vertex color + uniform-driven
+  //      rock→stone→snow gradient.
+  const mountainRoot = new THREE.Group();
+  const mountainBox = new THREE.Box3();
+  let meshCount = 0;
+  gltf.scene.traverse((o) => {
     if (!o.isMesh) return;
-    const isStar = (o.name || "").toLowerCase().includes("star");
-    const target = isStar ? starsGroup : mountainGroup;
-    // Reparent: detach from current parent, attach to dedicated group.
+    if ((o.name || "").toLowerCase().includes("star")) return;
     if (o.parent) o.parent.remove(o);
-    target.add(o);
-    if (isStar) {
-      // Stars: disable depth WRITE so the mountain (drawn after) can
-      // occlude them; keep depth TEST so they still occlude each other
-      // back-to-front via draw order. Switch to additive blending so
-      // they brighten the background rather than painting solid dots.
-      // Also boost brightness via emissive so the tiny 0.04–0.21-unit
-      // star meshes actually register at the camera distance used.
-      o.material = o.material.clone(); // avoid mutating shared GLB materials
-      o.material.depthWrite = false;
-      o.material.transparent = true;
-      o.material.blending = THREE.AdditiveBlending;
-      o.material.opacity = 1.0;
-      o.material.color = new THREE.Color(0xb8d4f0); // pale cool starlight
-      // Boost emissive if the material supports it; otherwise fall back
-      // to the base color which additive blending will brighten.
-      if ("emissive" in o.material) {
-        o.material.emissive = new THREE.Color(0x6fa8d0);
-        o.material.emissiveIntensity = 1.4;
-      }
-      // Scale each star mesh up so it's actually visible at the camera
-      // distance (~90 units). Original 0.04–0.21-unit stars become
-      // 0.4–2.1-unit stars — still tiny pinpoints but now readable.
-      o.scale.multiplyScalar(8);
-      o.renderOrder = -1;
-    }
-  });
-  scene.add(starsGroup);
-  scene.add(mountainGroup);
-  rootGroup = mountainGroup; // re-target framing to the mountain only
+    mountainRoot.add(o);
 
-  // 8c. Procedural snow-vs-rock gradient on mountain meshes.
-  //
-  // The GLB's "Plane_*" mountain meshes use a single flat color
-  // material — they don't carry PBR textures. To restore the visual
-  // depth Josh expects (snowy peak → rocky base → dark foreground)
-  // without replacing the asset, we override the material color per
-  // mesh based on the mesh's vertical position in world space:
-  //   - High Y (peak): pale snow white
-  //   - Mid Y (slope): cool stone grey
-  //   - Low Y (foreground/base): deep blue-grey rock
-  //
-  // This is a procedural color injection only — the GLB geometry,
-  // meshes, names, and bounding boxes are preserved. The material is
-  // cloned before mutation to avoid touching the original GLB material.
-  const mountainBboxForGradient = new THREE.Box3().setFromObject(mountainGroup);
-  const gMinY = mountainBboxForGradient.min.y;
-  const gMaxY = mountainBboxForGradient.max.y;
-  const gSpanY = Math.max(1, gMaxY - gMinY);
-  const snow = new THREE.Color(0xf4f8fb);
-  const stone = new THREE.Color(0x8a9aa6);
-  const rock = new THREE.Color(0x3d5360);
-  const _tmpColor = new THREE.Color();
-  function gradientColorForY(worldY) {
-    const t = Math.max(0, Math.min(1, (worldY - gMinY) / gSpanY));
-    // Two-stop gradient: 0..0.55 rock→stone, 0.55..1 stone→snow
-    if (t < 0.55) {
-      return _tmpColor.copy(rock).lerp(stone, t / 0.55);
-    }
-    return _tmpColor.copy(stone).lerp(snow, (t - 0.55) / 0.45);
-  }
-  mountainGroup.traverse((o) => {
+    o.geometry.computeBoundingBox();
+    const wb = o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld);
+    mountainBox.expandByPoint(wb.min);
+    mountainBox.expandByPoint(wb.max);
+
+    // Fix material: snow/rock are non-metallic; high roughness.
+    const mat = o.material;
+    if ("metalness" in mat) mat.metalness = 0.0;
+    if ("roughness" in mat) mat.roughness = 0.85;
+
+    // Inject per-vertex snow-rock color via onBeforeCompile. We add a
+    // world-space Y varying, then in the fragment shader we sample a
+    // rock→stone→snow ramp and multiply it into the diffuse color.
+    mat.userData.uMinY = { value: 0 };
+    mat.userData.uSpanY = { value: 1 };
+    mat.userData.uSnowColor = { value: new THREE.Color(0xf4f8fb) };
+    mat.userData.uStoneColor = { value: new THREE.Color(0x8a9aa6) };
+    mat.userData.uRockColor = { value: new THREE.Color(0x3d5360) };
+
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.uMinY = mat.userData.uMinY;
+      shader.uniforms.uSpanY = mat.userData.uSpanY;
+      shader.uniforms.uSnowColor = mat.userData.uSnowColor;
+      shader.uniforms.uStoneColor = mat.userData.uStoneColor;
+      shader.uniforms.uRockColor = mat.userData.uRockColor;
+
+      // Inject vertex stage: pass world position to fragment shader.
+      shader.vertexShader = shader.vertexShader.replace(
+        "#include <common>",
+        `#include <common>
+         varying vec3 vSnowWorldPos;`
+      );
+      shader.vertexShader = shader.vertexShader.replace(
+        "#include <worldpos_vertex>",
+        `#include <worldpos_vertex>
+         vSnowWorldPos = worldPosition.xyz;`
+      );
+
+      // Inject fragment stage: sample ramp, multiply diffuse color.
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <common>",
+        `#include <common>
+         varying vec3 vSnowWorldPos;
+         uniform float uMinY;
+         uniform float uSpanY;
+         uniform vec3 uSnowColor;
+         uniform vec3 uStoneColor;
+         uniform vec3 uRockColor;
+         vec3 snowRockRamp(float t) {
+           t = clamp(t, 0.0, 1.0);
+           if (t < 0.55) {
+             return mix(uRockColor, uStoneColor, t / 0.55);
+           }
+           return mix(uStoneColor, uSnowColor, (t - 0.55) / 0.45);
+         }`
+      );
+      shader.fragmentShader = shader.fragmentShader.replace(
+        "#include <color_fragment>",
+        `#include <color_fragment>
+         float snowT = (vSnowWorldPos.y - uMinY) / uSpanY;
+         diffuseColor.rgb *= snowRockRamp(snowT);`
+      );
+    };
+    mat.needsUpdate = true;
+
+    meshCount++;
+  });
+  scene.add(mountainRoot);
+  rootGroup = mountainRoot;
+
+  // Now that we know the mountain bbox, set the per-mesh uniform
+  // values and the size/center globals for camera framing.
+  const sz = new THREE.Vector3();
+  const cn = new THREE.Vector3();
+  mountainBox.getSize(sz);
+  mountainBox.getCenter(cn);
+  mountainSizeVec.copy(sz);
+  mountainCenterVec.copy(cn);
+
+  mountainRoot.traverse((o) => {
     if (!o.isMesh) return;
-    if ((o.name || "").toLowerCase().includes("rock")) {
-      // Rocks stay slightly cooler than the slope color so they read
-      // as distinct dark accents on the snow surface.
-      o.material = o.material.clone();
-      o.material.color = new THREE.Color(0x4a5860);
-    } else {
-      // Sample the mesh's vertical center to pick a gradient stop.
-      o.geometry.computeBoundingBox();
-      const lb = o.geometry.boundingBox.clone();
-      const wb = lb.applyMatrix4(o.matrixWorld);
-      const cy = (wb.min.y + wb.max.y) / 2;
-      o.material = o.material.clone();
-      o.material.color = gradientColorForY(cy);
-    }
-    // Slight roughness bump to keep the gradient matte (snow/rock
-    // aren't shiny).
-    if ("roughness" in o.material) o.material.roughness = 0.9;
-    if ("metalness" in o.material) o.material.metalness = 0.0;
+    const mat = o.material;
+    mat.userData.uMinY.value = cn.y - sz.y / 2;
+    mat.userData.uSpanY.value = sz.y;
   });
 
-  // Frame the camera on the actual mountain geometry (not the whole scene,
-  // which is dominated by scattered stars spread across the full bbox).
-  frameCameraOnRoot();
+  console.log("Aura renderer: mountain loaded with " + meshCount + " meshes");
+  console.log("  bbox size:", sz, "center:", cn);
 
-  console.log("Aura renderer: scene loaded");
+  frameCameraOnRoot();
   document.title = "ready";
 })().catch((e) => {
   console.error("Aura renderer: unhandled error:", e && e.message ? e.message : e, e && e.stack ? e.stack : "");
