@@ -100,6 +100,7 @@ function App() {
   };
 
   const match = matchRoute(path);
+
   const pageParams =
     match && typeof match === "object"
       ? match.params
@@ -304,26 +305,22 @@ function useReveal(scope) {
 // HOME
 // ============================================================================
 //
-// The homepage now has a deliberate cinematic arrival:
+// Cinematic arrival:
 //
-//   0% scroll
-//   └── visual environment only
+//   initial viewport
+//   └── environment + restrained arrival cue
 //
 //   first scroll
-//   └── the visitor moves through the environment
+//   └── visitor moves deeper into the field
 //
-//   later in the hero
-//   └── editorial copy enters
+//   continued scroll
+//   └── editorial hero copy enters
 //
-//   after the hero
-//   └── normal homepage sections continue
+//   end of hero
+//   └── normal homepage content begins
 //
-// The Aura environment itself is fixed behind the page by PolarScene.
-// This component therefore does NOT add another background, veil, or
-// translucent panel over it.
-//
-// The hero remains one semantic section. We are simply separating the
-// visual arrival from the editorial reveal through vertical composition.
+// The environment itself remains fixed behind the page through PolarScene.
+// No additional translucent page layer is introduced here.
 // ============================================================================
 
 function Home({ go }) {
@@ -351,13 +348,8 @@ function Home({ go }) {
 
       if (!hero || !heroCopy) return;
 
-      // ---------------------------------------------------------------
-      // HERO EDITORIAL REVEAL
-      // ---------------------------------------------------------------
-      //
-      // The copy intentionally does NOT animate in on page load.
-      // It is revealed by scrolling into the editorial portion of the
-      // hero, preserving the visual-only first arrival.
+      // One controller owns hero-copy.
+      // This avoids competing GSAP tweens fighting over the same transform.
 
       gsap.fromTo(
         heroCopy,
@@ -368,20 +360,15 @@ function Home({ go }) {
         {
           y: 0,
           opacity: 1,
-          duration: 1.15,
           ease: "power3.out",
           scrollTrigger: {
-            trigger: hero,
-            start: "top -18%",
-            end: "top -52%",
-            scrub: 0.7,
+            trigger: heroCopy,
+            start: "top 88%",
+            end: "top 52%",
+            scrub: 0.65,
           },
         }
       );
-
-      // ---------------------------------------------------------------
-      // HERO ORBIT MOVEMENT
-      // ---------------------------------------------------------------
 
       if (heroOrb) {
         gsap.to(heroOrb, {
@@ -396,21 +383,6 @@ function Home({ go }) {
           },
         });
       }
-
-      // ---------------------------------------------------------------
-      // COPY PARALLAX
-      // ---------------------------------------------------------------
-
-      gsap.to(heroCopy, {
-        y: -65,
-        ease: "none",
-        scrollTrigger: {
-          trigger: hero,
-          start: "top 25%",
-          end: "bottom top",
-          scrub: true,
-        },
-      });
     }, root);
 
     return () => ctx.revert();
@@ -433,7 +405,10 @@ function Home({ go }) {
           aria-hidden="true"
         />
 
-        <div className="hero-arrival-marker">
+        <div
+          className="hero-arrival-marker"
+          aria-hidden="true"
+        >
           <span>01</span>
           <span>THE FIELD</span>
         </div>
@@ -510,7 +485,7 @@ function Home({ go }) {
             {content.hero.body}
           </p>
 
-          {/* Homepage Method is intentionally preserved. */}
+          {/* Homepage Method remains intentionally preserved. */}
           <p className="body-copy method-line">
             {content.hero.method}
           </p>
