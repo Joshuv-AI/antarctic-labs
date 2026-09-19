@@ -7,17 +7,15 @@
 // existing pushState + popstate pattern in main.jsx is preserved and
 // extended.
 //
-// Stage F — IA consolidation: canonical routes are HOME, THE LAB,
-// PROJECTS, TOWER OF BABEL, GOVERNMENT, ABOUT, TRANSMISSION. Old
-// routes (/systems, /expeditions, /history, /operator,
-// /field-interests) remain in the route list as backward-compat
-// aliases that matchRoute() resolves to their canonical counterpart.
-
+// Canonical site IA:
+// HOME, THE LAB, PROJECTS, TOWER OF BABEL, GOVERNMENT, ABOUT, CONTACT.
+//
+// Old routes remain as backward-compatibility aliases where useful.
+// In particular, /transmission now redirects to the canonical /contact
+// route.
 import { site } from "./site.js";
-
 const DEFAULT_DESCRIPTION = site.description;
 const SITE_NAME = site.brand;
-
 export const routeMeta = {
   "/": {
     title: `${SITE_NAME} — Digital Systems & AI`,
@@ -47,16 +45,15 @@ export const routeMeta = {
     title: `About — ${SITE_NAME}`,
     description: `About Antarctic Labs and Joshua Almodovar. ${DEFAULT_DESCRIPTION}`,
   },
-  "/transmission": {
-    title: `Transmission — ${SITE_NAME}`,
-    description: `Outbound signal and contact. ${DEFAULT_DESCRIPTION}`,
+  "/contact": {
+    title: `Contact — ${SITE_NAME}`,
+    description: `Contact Antarctic Labs. ${DEFAULT_DESCRIPTION}`,
   },
 };
-
-// Old routes kept for SEO/canonicalization purposes only. The
-// runtime `matchRoute()` below maps them to their canonical target
-// so that historical links continue to resolve. They are NOT used as
-// route handlers in main.jsx.
+// Old routes kept for SEO/canonicalization purposes only.
+//
+// /transmission is now a legacy alias for /contact.
+// The other historical routes remain unchanged.
 export const routeMetaLegacy = {
   "/systems": {
     title: `Systems — ${SITE_NAME}`,
@@ -83,13 +80,18 @@ export const routeMetaLegacy = {
     description: DEFAULT_DESCRIPTION,
     redirect: "/about",
   },
+  "/transmission": {
+    title: `Contact — ${SITE_NAME}`,
+    description: `Contact Antarctic Labs. ${DEFAULT_DESCRIPTION}`,
+    redirect: "/contact",
+  },
 };
-
 // The full list of literal + dynamic patterns that the App should
-// recognize. Used to drive the path-state branch and to gate the
-// popstate handler's 404 fallback. Includes legacy patterns so old
-// URLs continue to resolve to a known pattern, which the legacy
-// redirect map then turns into a canonical path.
+// recognize.
+//
+// /transmission is intentionally NOT a canonical route. It is kept
+// here so the runtime can recognize the old URL before legacyRedirect()
+// moves it to /contact.
 export const routes = [
   "/",
   "/the-lab",
@@ -100,35 +102,37 @@ export const routes = [
   "/tower-of-babel/library/:id",
   "/government",
   "/about",
-  "/transmission",
-  // Legacy patterns (preserved for backward compatibility):
+  "/contact",
+  // Legacy patterns preserved for backward compatibility.
   "/systems",
   "/expeditions",
   "/expeditions/:id",
   "/history",
   "/operator",
   "/field-interests",
+  "/transmission",
 ];
-
-// Map any legacy path to its canonical redirect target. Returns
-// null if the path is already canonical. Used by main.jsx's
-// popstate + initial-mount handlers to redirect old URLs.
+// Map any legacy path to its canonical redirect target.
 //
 // Supports literal paths AND legacy dynamic patterns
-// (/expeditions/:id → /projects/:id) so that old URLs with id
-// segments continue to resolve to the equivalent canonical URL.
+// (/expeditions/:id → /projects/:id).
 export function legacyRedirect(path) {
-  if (path in routeMetaLegacy) return routeMetaLegacy[path].redirect;
-  // Legacy dynamic pattern: /expeditions/:id → /projects/:id
-  if (path.startsWith("/expeditions/") && path.length > "/expeditions/".length) {
+  if (path in routeMetaLegacy) {
+    return routeMetaLegacy[path].redirect;
+  }
+  // Legacy dynamic pattern:
+  // /expeditions/:id → /projects/:id
+  if (
+    path.startsWith("/expeditions/") &&
+    path.length > "/expeditions/".length
+  ) {
     const id = path.slice("/expeditions/".length);
     return `/projects/${id}`;
   }
   return null;
 }
-
-// Match a runtime path to a route pattern. Returns the matched
-// pattern or null. Supports a single :id segment per route.
+// Match a runtime path to a route pattern.
+// Supports a single :id segment per route.
 export function matchRoute(path) {
   for (const pattern of routes) {
     if (!pattern.includes(":")) {
@@ -137,7 +141,9 @@ export function matchRoute(path) {
     }
     const patternParts = pattern.split("/");
     const pathParts = path.split("/");
-    if (patternParts.length !== pathParts.length) continue;
+    if (patternParts.length !== pathParts.length) {
+      continue;
+    }
     let matched = true;
     const params = {};
     for (let i = 0; i < patternParts.length; i++) {
@@ -150,17 +156,27 @@ export function matchRoute(path) {
         break;
       }
     }
-    if (matched) return { pattern, params };
+    if (matched) {
+      return {
+        pattern,
+        params,
+      };
+    }
   }
   return null;
 }
-
-// Resolve the SEO metadata for a runtime path. Falls back to a
-// generic Antarctic Labs title. Honors legacy meta entries when the
-// path is an old URL that still gets crawled.
+// Resolve the SEO metadata for a runtime path.
+//
+// Falls back to a generic Antarctic Labs title.
+// Legacy metadata is retained so an old URL can still be understood
+// before the runtime redirect completes.
 export function metaFor(path) {
-  if (routeMeta[path]) return routeMeta[path];
-  if (routeMetaLegacy[path]) return routeMetaLegacy[path];
+  if (routeMeta[path]) {
+    return routeMeta[path];
+  }
+  if (routeMetaLegacy[path]) {
+    return routeMetaLegacy[path];
+  }
   const match = matchRoute(path);
   if (match) {
     if (match === "/projects/:id") {
