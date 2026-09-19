@@ -11,13 +11,10 @@ import { routes, matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
 import {
   TheLab,
-  Systems,
-  History,
   TowerOfBabel,
   TowerLibrary,
   LibraryArtifact,
   Government,
-  FieldInterests,
   Transmission,
   Projects,
   ProjectDetail,
@@ -113,7 +110,7 @@ function App() {
       {path === "/government" && <Government go={go} />}
       {path === "/about" && <About go={go} />}
       {path === "/transmission" && <Transmission go={go} />}
-      {path === "/404" && <NotFound go={go} />}
+      {(path === "/404" || (matchedPattern === null && path !== "/")) && <NotFound go={go} />}
       <Menu open={menuOpen} close={() => setMenuOpen(false)} go={go} path={path} />
     </>
   );
