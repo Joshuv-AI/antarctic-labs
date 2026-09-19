@@ -1,14 +1,14 @@
-import * as THREE from “three”;
-import { GLTFLoader } from “three/examples/jsm/loaders/GLTFLoader.js”;
+import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
-const canvas = document.getElementById(“c”);
+const canvas = document.getElementById("c");
 
 const renderer = new THREE.WebGLRenderer({
 canvas,
 antialias: true,
 alpha: true,
 premultipliedAlpha: false,
-powerPreference: “high-performance”,
+powerPreference: "high-performance",
 });
 
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -122,9 +122,9 @@ void main() {
   vec4 worldPosition = modelMatrix * vec4(position, 1.0);
   vWorldDirection = normalize(worldPosition.xyz - cameraPosition);
   gl_Position = projectionMatrix * viewMatrix * worldPosition;
-}
+}`,
 
-, fragmentShader: 
+fragmentShader: `
 varying vec3 vWorldDirection;
 
 uniform vec3 uTop;
@@ -192,9 +192,9 @@ void main() {
   transformed.x += sin(position.y * 0.014 + uTime * 0.06) * 7.0;
   vWave = waveA * 0.5 + waveB * 0.3 + waveC * 0.2;
   gl_Position = projectionMatrix * modelViewMatrix * vec4(transformed, 1.0);
-}
+}`,
 
-, fragmentShader: 
+fragmentShader: `
 uniform float uTime;
 uniform float uOpacity;
 
@@ -304,12 +304,12 @@ starColors[index + 2] = color.b;
 const starGeometry = new THREE.BufferGeometry();
 
 starGeometry.setAttribute(
-“position”,
+"position",
 new THREE.BufferAttribute(starPositions, 3),
 );
 
 starGeometry.setAttribute(
-“color”,
+"color",
 new THREE.BufferAttribute(starColors, 3),
 );
 
@@ -338,15 +338,15 @@ function prepareMountain(gltf) {
 const sourceScene = gltf.scene;
 
 if (!sourceScene) {
-document.title = “error:no-scene”;
-throw new Error(“GLB loaded without a scene”);
+document.title = "error:no-scene";
+throw new Error("GLB loaded without a scene");
 }
 
 const meshes = snapshotMeshes(sourceScene);
 
 if (!meshes.length) {
-document.title = “error:no-meshes”;
-throw new Error(“GLB loaded without meshes”);
+document.title = "error:no-meshes";
+throw new Error("GLB loaded without meshes");
 }
 
 meshes.forEach((mesh) => {
@@ -388,7 +388,8 @@ const bbox = new THREE.Box3().setFromBufferAttribute(position);
 const size = bbox.getSize(new THREE.Vector3());
 if (
   mesh.isPoints ||
-  (size.x < 2 && size.y < 2 && size.z < 2)
+  (mesh.name || "").startsWith("Star") ||
+  (mesh.parent && mesh.parent.name === "Sphere")
 ) {
   mesh.parent?.remove(mesh);
   return;
@@ -400,8 +401,8 @@ mountainRoot.add(mesh);
 const mountainMeshes = snapshotMeshes(mountainRoot);
 
 if (!mountainMeshes.length) {
-document.title = “error:no-mountain”;
-throw new Error(“No mountain meshes remained after preparation”);
+document.title = "error:no-mountain";
+throw new Error("No mountain meshes remained after preparation");
 }
 
 /*
@@ -495,8 +496,7 @@ materials.forEach((material) => {
   };
   material.needsUpdate = true;
 });
-
-}
+});
 
 const mountainBox = new THREE.Box3().setFromObject(mountainRoot);
 
@@ -752,9 +752,9 @@ void main() {
     projectionMatrix *
     modelViewMatrix *
     vec4(position, 1.0);
-}
+}`,
 
-, fragmentShader: 
+fragmentShader: `
 uniform vec3 uTop;
 uniform vec3 uBottom;
 uniform vec3 uShimmer;
@@ -845,8 +845,10 @@ scene.add(foreground);
 / Load GLB                                                                  /
 / ––––––––––––––––––––––––––––––––––––– */
 
+resize();
+
 loader.load(
-“/assets/models/mountains/single-mountain-snow.glb”,
+"/assets/models/mountains/single-mountain-snow.glb",
 (gltf) => {
 if (destroyed) return;
 
@@ -861,8 +863,8 @@ try {
 },
 undefined,
 (error) => {
-console.error(”[Aura] GLB load failed”, error);
-document.title = “error:glb-load”;
+console.error("[Aura] GLB load failed", error);
+document.title = "error:glb-load";
 },
 );
 
@@ -870,12 +872,12 @@ document.title = “error:glb-load”;
 / Runtime controls                                                           /
 / ––––––––––––––––––––––––––––––––––––– */
 
-window.addEventListener(“resize”, resize);
+window.addEventListener("resize", resize);
 
-window.addEventListener(“message”, (event) => {
+window.addEventListener("message", (event) => {
 if (!event || !event.data) return;
 
-if (event.data.type === “aura-pause”) {
+if (event.data.type === "aura-pause") {
 paused = Boolean(event.data.paused);
 }
 });
@@ -921,14 +923,14 @@ animate();
 / Cleanup                                                                    /
 / ––––––––––––––––––––––––––––––––––––– */
 
-window.addEventListener(“beforeunload”, () => {
+window.addEventListener("beforeunload", () => {
 destroyed = true;
 
 if (animationFrame) {
 cancelAnimationFrame(animationFrame);
 }
 
-window.removeEventListener(“resize”, resize);
+window.removeEventListener("resize", resize);
 
 disposeObject(scene);
 
