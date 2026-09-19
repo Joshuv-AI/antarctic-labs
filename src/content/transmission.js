@@ -1,13 +1,15 @@
-// Transmission — contact/intake destination. Front-end form only;
+// Contact — contact/intake destination. Front-end form only;
 // no backend integration yet. Copy and field definitions live here so
 // the form is data-driven rather than hardcoded in JSX.
-
+//
+// The exported object remains named `transmission` internally for
+// compatibility with the existing React component. The public site
+// IA is now CONTACT.
 export const transmission = {
-  sectionIndex: "09 / TRANSMISSION",
+  sectionIndex: "09 / CONTACT",
   heading: "HAVE A PROBLEM\nWORTH SOLVING?",
   body:
-    "Have an idea, need a system built, want to collaborate, or simply found something interesting? Send a transmission.",
-
+    "Have an idea, need a system built, want to collaborate, or simply found something interesting? Get in touch.",
   fields: [
     {
       id: "transmission-name",
@@ -40,11 +42,26 @@ export const transmission = {
       type: "select",
       required: true,
       options: [
-        { value: "project",         label: "PROJECT" },
-        { value: "collaboration",   label: "COLLABORATION" },
-        { value: "tower-of-babel",  label: "TOWER OF BABEL" },
-        { value: "government",      label: "GOVERNMENT / PUBLIC SECTOR" },
-        { value: "general",         label: "GENERAL" },
+        {
+          value: "project",
+          label: "PROJECT",
+        },
+        {
+          value: "collaboration",
+          label: "COLLABORATION",
+        },
+        {
+          value: "tower-of-babel",
+          label: "TOWER OF BABEL",
+        },
+        {
+          value: "government",
+          label: "GOVERNMENT / PUBLIC SECTOR",
+        },
+        {
+          value: "general",
+          label: "GENERAL",
+        },
       ],
     },
     {
@@ -64,21 +81,17 @@ export const transmission = {
       placeholder: "Leave blank if not applicable",
     },
   ],
-
   submit: {
-    label: "SEND TRANSMISSION",
-    ariaLabel: "Send transmission",
+    label: "SEND MESSAGE",
+    ariaLabel: "Send message",
   },
-
-  // No backend. The form does NOT transmit to a server. The success
-  // state is purely client-side acknowledgement that the local form
-  // was filled out. We never claim a server received the message.
+  // No backend. The form does NOT transmit to a server.
+  // The success state is purely client-side acknowledgement.
   noBackendNotice:
     "Front-end form only. Submissions are not currently transmitted to a server. Use the mailto link below to reach Antarctic Labs directly.",
-
   success: {
-    heading: "TRANSMISSION RECEIVED.",
-    body: "I’ll review your message and respond directly.",
+    heading: "MESSAGE READY.",
+    body: "Your information has been entered and is ready for review.",
     note: "Confirmation is local to this browser — nothing was sent over the network. Use the mailto link to ensure delivery.",
   },
 };
