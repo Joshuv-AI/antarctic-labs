@@ -147,7 +147,7 @@ function App() {
 function SiteHeader({ onMenu, go, menuOpen }) {
   return (
     <header className="site-header">
-      <button
+      <button type="button"
         className="brand"
         onClick={() => go("/")}
         aria-label={`${content.brand} — home`}
@@ -165,7 +165,7 @@ function SiteHeader({ onMenu, go, menuOpen }) {
           <i aria-hidden="true" />
           AVAILABLE FOR SELECT PROJECTS
         </span>
-        <button
+        <button type="button"
           className="menu-button"
           onClick={onMenu}
           aria-label={
@@ -327,7 +327,7 @@ function Home({ go }) {
       id="main-content"
       tabIndex={-1}
     >
-      <section className="hero section">
+      <section id="home" className="hero section">
         <div
           className="hero-orb"
           aria-hidden="true"
@@ -345,30 +345,29 @@ function Home({ go }) {
             {content.hero.eyebrow}
           </div>
           <h1>
-            {content.hero.title.map((line) => (
-              <span
-                className="hero-line-wrap"
-                key={line}
-              >
-                <span className="hero-line">
-                  {line}
+            {content.hero.title.map((line, idx) => (
+              <span key={line}>
+                {idx > 0 ? " " : null}
+                <span className="hero-line-wrap">
+                  <span className="hero-line">
+                    {line}
+                  </span>
                 </span>
               </span>
             ))}
           </h1>
           <div className="hero-bottom">
             <p>{content.hero.sub}</p>
-            <button
+            <a
               className="hero-cta"
-              onClick={() =>
-                go(content.hero.cta.to)
-              }
+              href={content.hero.cta.to}
+              onClick={(e) => { e.preventDefault(); go(content.hero.cta.to); }}
             >
               {content.hero.cta.label}
               <span aria-hidden="true">
                 ↗
               </span>
-            </button>
+            </a>
             <span className="hero-scroll-cue">
               SCROLL TO EXPLORE
               <b aria-hidden="true">
@@ -385,7 +384,7 @@ function Home({ go }) {
           <b>↓</b>
         </div>
       </section>
-      <section className="manifesto section reveal">
+      <section id="manifesto" className="manifesto section reveal">
         <div className="section-index">
           02 / SIGNAL
         </div>
@@ -401,7 +400,7 @@ function Home({ go }) {
           </p>
         </div>
       </section>
-      <section className="projects section">
+      <section id="projects" className="projects section">
         <div className="section-head reveal">
           <div className="section-index">
             03 / PROJECTS
@@ -409,16 +408,17 @@ function Home({ go }) {
           <span>SELECTED WORK</span>
         </div>
         <div className="project-stack">
-          <button
+          <a
             className="text-link"
-            onClick={() => go("/projects")}
+            href="/projects"
+            onClick={(e) => { e.preventDefault(); go("/projects"); }}
           >
             ENTER PROJECTS
             <span>↗</span>
-          </button>
+          </a>
         </div>
       </section>
-      <section className="capabilities section reveal">
+      <section id="capabilities" className="capabilities section reveal">
         <div className="section-index">
           04 / CAPABILITIES
         </div>
@@ -440,7 +440,7 @@ function Home({ go }) {
           )}
         </div>
       </section>
-      <section className="territory section reveal">
+      <section id="territory" className="territory section reveal">
         <div className="section-index">
           05 / TERRITORY
         </div>
@@ -496,7 +496,7 @@ function Home({ go }) {
           ))}
         </div>
       </section>
-      <section className="statement section reveal">
+      <section id="statement" className="statement section reveal">
         <div className="statement-orbit" />
         <div>
           <span className="section-index">
@@ -509,13 +509,14 @@ function Home({ go }) {
             <br />
             FEEL INEVITABLE.
           </h2>
-          <button
+          <a
             className="text-link"
-            onClick={() => go("/about")}
+            href="/about"
+            onClick={(e) => { e.preventDefault(); go("/about"); }}
           >
             ABOUT THE LAB
             <span>↗</span>
-          </button>
+          </a>
         </div>
       </section>
       <ContactCTA />
@@ -525,7 +526,7 @@ function Home({ go }) {
 }
 function ContactCTA() {
   return (
-    <section className="contact-cta section reveal">
+    <section id="contact" className="contact-cta section reveal">
       <span className="section-index">
         07 / CONTACT
       </span>
@@ -560,7 +561,7 @@ function NotFound({ go }) {
           <br />
           <em>THE ICE.</em>
         </h1>
-        <button
+        <button type="button"
           className="text-link"
           onClick={() => go("/")}
         >
@@ -641,7 +642,7 @@ function Menu({
     sub,
     ref
   ) => (
-    <button
+    <button type="button"
       ref={ref}
       onClick={() => go(href)}
       aria-current={
@@ -672,7 +673,7 @@ function Menu({
         <span>
           ANTARCTIC LABS / NAVIGATION
         </span>
-        <button
+        <button type="button"
           onClick={close}
           aria-label="Close navigation menu"
         >
@@ -750,7 +751,7 @@ function Footer() {
       <span>
         BUILT FOR THE UNKNOWN
       </span>
-      <button
+      <button type="button"
         onClick={() =>
           window.scrollTo({
             top: 0,
