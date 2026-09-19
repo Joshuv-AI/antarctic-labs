@@ -103,9 +103,62 @@ function clamp(value, minimum, maximum) {
     renderer.setPixelRatio(dpr);
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
+    // Re-frame once aspect changes (camera position depends on FOV + bbox + aspect)
+    if (rootGroup) frameCameraOnRoot();
   }
   resize();
   window.addEventListener("resize", resize);
+
+  // 8b. Frame the camera on the mountain (not the whole scene bbox, which
+  // is dominated by scattered stars spread across the full X/Z extent).
+  //
+  // The GLB's "Landscape" + "Plane" + "Rock_*" meshes form an actual
+  // mountain ~182 x 72 x 253 units (Y is the short axis). The renderer's
+  // previous framing used max(sceneSize) = 252 (Z axis), which put the
+  // camera at ~416 units — making the mountain appear ~24% of viewport
+  // height (distant, small).
+  //
+  // New framing: choose the right axis based on viewport aspect, then
+  // use a 0.55x multiplier so the mountain fills ~80% of the viewport
+  // along the chosen axis. Look at the mountain's vertical center so
+  // the silhouette rises in the frame.
+  function frameCameraOnRoot() {
+    if (!rootGroup) return;
+
+    // Recompute mountain bbox (excluding the scattered 14k stars).
+    const mountainBox = new THREE.Box3();
+    rootGroup.traverse((o) => {
+      if (!o.isMesh) return;
+      if ((o.name || "").toLowerCase().includes("star")) return;
+      o.geometry.computeBoundingBox();
+      const wb = o.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld);
+      mountainBox.expandByPoint(wb.min);
+      mountainBox.expandByPoint(wb.max);
+    });
+    if (mountainBox.isEmpty()) return;
+
+    const size = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    mountainBox.getSize(size);
+    mountainBox.getCenter(center);
+
+    // Choose which axis to frame against based on viewport aspect.
+    // - Landscape / square viewports: the mountain's Y (height) is the
+    //   limiting axis; frame on Y so the silhouette fills the viewport.
+    // - Narrow portrait: the mountain's X (width) becomes the limiting
+    //   axis; frame on X so the silhouette fills the narrow viewport.
+    const aspect = camera.aspect;
+    const portrait = aspect < 1.0;
+    const framingAxis = portrait ? Math.max(size.x, size.z) : size.y;
+    const multiplier = 0.55;
+
+    const fovRad = camera.fov * Math.PI / 180;
+    const dist = (framingAxis * multiplier) / (2 * Math.tan(fovRad / 2));
+
+    camera.position.set(center.x, center.y, center.z + dist);
+    camera.lookAt(center.x, center.y, center.z);
+    camera.updateProjectionMatrix();
+  }
 
   // 5. Render loop
   function loop() {
@@ -146,29 +199,11 @@ function clamp(value, minimum, maximum) {
   rootGroup = gltf.scene;
   scene.add(rootGroup);
 
-  const bbox = new THREE.Box3().setFromObject(rootGroup);
-  const bboxSize = new THREE.Vector3();
-  const bboxCenter = new THREE.Vector3();
-  bbox.getSize(bboxSize);
-  bbox.getCenter(bboxCenter);
+  // Frame the camera on the actual mountain geometry (not the whole scene,
+  // which is dominated by scattered stars spread across the full bbox).
+  frameCameraOnRoot();
 
-  // If the bbox is degenerate (zero size in some axis), fall back to the
-  // pre-known bbox from offline inspection.
-  const size = (bboxSize.x > 0.1 && bboxSize.y > 0.1 && bboxSize.z > 0.1)
-    ? bboxSize
-    : FALLBACK_BBOX_SIZE;
-  const center = (bboxSize.x > 0.1 && bboxSize.y > 0.1 && bboxSize.z > 0.1)
-    ? bboxCenter
-    : FALLBACK_BBOX_CENTER;
-
-  // Frame camera: distance = max half-extent / tan(fov/2) for any axis, scaled
-  const fovRad = camera.fov * Math.PI / 180;
-  const dist = Math.max(size.x, size.y, size.z) / (2 * Math.tan(fovRad / 2)) * 1.2;
-  camera.position.set(center.x, center.y, center.z + dist);
-  camera.lookAt(center);
-  camera.updateProjectionMatrix();
-
-  console.log("Aura renderer: scene loaded, bbox=", size, "center=", center, "distance=", dist);
+  console.log("Aura renderer: scene loaded");
   document.title = "ready";
 })().catch((e) => {
   console.error("Aura renderer: unhandled error:", e && e.message ? e.message : e, e && e.stack ? e.stack : "");
