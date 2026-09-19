@@ -162,26 +162,40 @@ function clamp(value, minimum, maximum) {
     mountainBox.getSize(size);
     mountainBox.getCenter(center);
 
-    // Choose which axis to frame against based on viewport aspect.
-    // - Landscape / square viewports: frame on Y (mountain height).
-    // - Narrow portrait: frame on max(width, depth) so the wide mountain
-    //   still fills the narrow viewport.
+    // Framing axis based on viewport aspect.
+    // - Landscape (aspect >= 1.0): frame on mountain height (Y axis).
+    //   The mountain fills the viewport vertically; the wide X extent
+    //   naturally extends beyond the viewport edges (tasteful crop).
+    // - Portrait (aspect < 1.0): frame on a combined width+height metric
+    //   so the mountain is visible BOTH in height AND width on a narrow
+    //   viewport. Old behavior (max(width, depth) alone) pushed the
+    //   mountain almost entirely off-screen on portrait.
     const aspect = camera.aspect;
     const portrait = aspect < 1.0;
-    const framingAxis = portrait ? Math.max(size.x, size.z) : size.y;
-    const multiplier = 0.35;
+    let framingAxis;
+    let multiplier;
+    if (portrait) {
+      // Combined metric: a weighted blend of height and width so the
+      // mountain reads at a reasonable size in both dimensions on
+      // portrait viewports (e.g. iPhone ~0.46 aspect).
+      framingAxis = size.y * 1.4 + size.x * 0.6;
+      multiplier = 0.42;
+    } else {
+      framingAxis = size.y;
+      multiplier = 0.42;
+    }
 
     const fovRad = camera.fov * Math.PI / 180;
     const dist = (framingAxis * multiplier) / (2 * Math.tan(fovRad / 2));
 
-    // Lift the lookAt point so the mountain peak sits higher in the
-    // viewport (reads as hero scenery behind the UI rather than a low
-    // base layer). The amount of lift is proportional to the mountain's
-    // height so it scales with the framing axis.
-    const liftAmount = size.y * 0.18;
+    // Place camera at the mountain's vertical center (slightly below
+    // it for a more dramatic low-angle hero view) and look straight at
+    // the center. No lookAt lift — the mountain's full height should
+    // span the viewport naturally.
+    const camY = center.y - size.y * 0.15;
 
-    camera.position.set(center.x, center.y - liftAmount * 0.3, center.z + dist);
-    camera.lookAt(center.x, center.y + liftAmount, center.z);
+    camera.position.set(center.x, camY, center.z + dist);
+    camera.lookAt(center.x, center.y, center.z);
     camera.updateProjectionMatrix();
   }
 
@@ -249,17 +263,82 @@ function clamp(value, minimum, maximum) {
       // occlude them; keep depth TEST so they still occlude each other
       // back-to-front via draw order. Switch to additive blending so
       // they brighten the background rather than painting solid dots.
+      // Also boost brightness via emissive so the tiny 0.04–0.21-unit
+      // star meshes actually register at the camera distance used.
       o.material = o.material.clone(); // avoid mutating shared GLB materials
       o.material.depthWrite = false;
       o.material.transparent = true;
       o.material.blending = THREE.AdditiveBlending;
-      o.material.opacity = 0.9;
+      o.material.opacity = 1.0;
+      o.material.color = new THREE.Color(0xb8d4f0); // pale cool starlight
+      // Boost emissive if the material supports it; otherwise fall back
+      // to the base color which additive blending will brighten.
+      if ("emissive" in o.material) {
+        o.material.emissive = new THREE.Color(0x6fa8d0);
+        o.material.emissiveIntensity = 1.4;
+      }
+      // Scale each star mesh up so it's actually visible at the camera
+      // distance (~90 units). Original 0.04–0.21-unit stars become
+      // 0.4–2.1-unit stars — still tiny pinpoints but now readable.
+      o.scale.multiplyScalar(8);
       o.renderOrder = -1;
     }
   });
   scene.add(starsGroup);
   scene.add(mountainGroup);
   rootGroup = mountainGroup; // re-target framing to the mountain only
+
+  // 8c. Procedural snow-vs-rock gradient on mountain meshes.
+  //
+  // The GLB's "Plane_*" mountain meshes use a single flat color
+  // material — they don't carry PBR textures. To restore the visual
+  // depth Josh expects (snowy peak → rocky base → dark foreground)
+  // without replacing the asset, we override the material color per
+  // mesh based on the mesh's vertical position in world space:
+  //   - High Y (peak): pale snow white
+  //   - Mid Y (slope): cool stone grey
+  //   - Low Y (foreground/base): deep blue-grey rock
+  //
+  // This is a procedural color injection only — the GLB geometry,
+  // meshes, names, and bounding boxes are preserved. The material is
+  // cloned before mutation to avoid touching the original GLB material.
+  const mountainBboxForGradient = new THREE.Box3().setFromObject(mountainGroup);
+  const gMinY = mountainBboxForGradient.min.y;
+  const gMaxY = mountainBboxForGradient.max.y;
+  const gSpanY = Math.max(1, gMaxY - gMinY);
+  const snow = new THREE.Color(0xf4f8fb);
+  const stone = new THREE.Color(0x8a9aa6);
+  const rock = new THREE.Color(0x3d5360);
+  const _tmpColor = new THREE.Color();
+  function gradientColorForY(worldY) {
+    const t = Math.max(0, Math.min(1, (worldY - gMinY) / gSpanY));
+    // Two-stop gradient: 0..0.55 rock→stone, 0.55..1 stone→snow
+    if (t < 0.55) {
+      return _tmpColor.copy(rock).lerp(stone, t / 0.55);
+    }
+    return _tmpColor.copy(stone).lerp(snow, (t - 0.55) / 0.45);
+  }
+  mountainGroup.traverse((o) => {
+    if (!o.isMesh) return;
+    if ((o.name || "").toLowerCase().includes("rock")) {
+      // Rocks stay slightly cooler than the slope color so they read
+      // as distinct dark accents on the snow surface.
+      o.material = o.material.clone();
+      o.material.color = new THREE.Color(0x4a5860);
+    } else {
+      // Sample the mesh's vertical center to pick a gradient stop.
+      o.geometry.computeBoundingBox();
+      const lb = o.geometry.boundingBox.clone();
+      const wb = lb.applyMatrix4(o.matrixWorld);
+      const cy = (wb.min.y + wb.max.y) / 2;
+      o.material = o.material.clone();
+      o.material.color = gradientColorForY(cy);
+    }
+    // Slight roughness bump to keep the gradient matte (snow/rock
+    // aren't shiny).
+    if ("roughness" in o.material) o.material.roughness = 0.9;
+    if ("metalness" in o.material) o.material.metalness = 0.0;
+  });
 
   // Frame the camera on the actual mountain geometry (not the whole scene,
   // which is dominated by scattered stars spread across the full bbox).
