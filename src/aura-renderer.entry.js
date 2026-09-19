@@ -79,20 +79,40 @@ function clamp(value, minimum, maximum) {
 
   renderer.setClearColor(0x000000, 0); // transparent
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  // Tone mapping + exposure: restore the GLB's PBR material detail (snow
+  // shading, rock variation, normal map response). Without this the
+  // mountain reads as a flat gray silhouette — PBR materials need a
+  // tone-mapped pipeline to show their albedo/specular response.
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.15;
 
   // 2. Scene + camera
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(40, 1, 0.1, 5000);
 
-  // 3. Lighting — matches the polar palette
-  const ambient = new THREE.AmbientLight(0xeaf6ff, 0.55);
+  // 3. Lighting — brighter, more directional. Tuned so the mountain's
+  // PBR snow material reads with highlight/shadow separation, and the
+  // rock sections show warm-cool color variation.
+  const ambient = new THREE.AmbientLight(0xdfeef5, 0.45);
   scene.add(ambient);
-  const dir1 = new THREE.DirectionalLight(0xeaf6ff, 1.0);
-  dir1.position.set(120, 200, 80);
+
+  // Key light (sun, warm): strong directional from above-right, casts the
+  // dominant highlight on the snow.
+  const dir1 = new THREE.DirectionalLight(0xfff4e0, 1.6);
+  dir1.position.set(160, 240, 120);
   scene.add(dir1);
-  const dir2 = new THREE.DirectionalLight(0x86b9c8, 0.45);
-  dir2.position.set(-100, 80, -80);
+
+  // Fill light (sky bounce, cool): softer counter-light to keep the
+  // shaded faces readable rather than crushed to black.
+  const dir2 = new THREE.DirectionalLight(0x6fa8c4, 0.85);
+  dir2.position.set(-140, 100, -60);
   scene.add(dir2);
+
+  // Rim light (back): very subtle back-light to separate the silhouette
+  // from the dark polar background.
+  const dir3 = new THREE.DirectionalLight(0xeaf6ff, 0.4);
+  dir3.position.set(40, 60, -200);
+  scene.add(dir3);
 
   // 4. Sizing
   function resize() {
@@ -143,20 +163,25 @@ function clamp(value, minimum, maximum) {
     mountainBox.getCenter(center);
 
     // Choose which axis to frame against based on viewport aspect.
-    // - Landscape / square viewports: the mountain's Y (height) is the
-    //   limiting axis; frame on Y so the silhouette fills the viewport.
-    // - Narrow portrait: the mountain's X (width) becomes the limiting
-    //   axis; frame on X so the silhouette fills the narrow viewport.
+    // - Landscape / square viewports: frame on Y (mountain height).
+    // - Narrow portrait: frame on max(width, depth) so the wide mountain
+    //   still fills the narrow viewport.
     const aspect = camera.aspect;
     const portrait = aspect < 1.0;
     const framingAxis = portrait ? Math.max(size.x, size.z) : size.y;
-    const multiplier = 0.55;
+    const multiplier = 0.35;
 
     const fovRad = camera.fov * Math.PI / 180;
     const dist = (framingAxis * multiplier) / (2 * Math.tan(fovRad / 2));
 
-    camera.position.set(center.x, center.y, center.z + dist);
-    camera.lookAt(center.x, center.y, center.z);
+    // Lift the lookAt point so the mountain peak sits higher in the
+    // viewport (reads as hero scenery behind the UI rather than a low
+    // base layer). The amount of lift is proportional to the mountain's
+    // height so it scales with the framing axis.
+    const liftAmount = size.y * 0.18;
+
+    camera.position.set(center.x, center.y - liftAmount * 0.3, center.z + dist);
+    camera.lookAt(center.x, center.y + liftAmount, center.z);
     camera.updateProjectionMatrix();
   }
 
@@ -198,6 +223,43 @@ function clamp(value, minimum, maximum) {
   // 8. Center + scale the model to fit the camera frustum
   rootGroup = gltf.scene;
   scene.add(rootGroup);
+
+  // 8b. Star layering fix: the 14k scattered stars in the GLB are
+  // rendered AT the same depth as the mountain (same scene, no
+  // depthTest discrimination), so they paint on top of the mountain
+  // surface and read as "snowflakes pasted on the rock". Move them
+  // onto a dedicated render layer that renders BEFORE the mountain
+  // and uses additive blending with depthWrite disabled — this makes
+  // them read as atmospheric/background pinpoints that the mountain
+  // occludes (when in front of a star, the mountain wins, not the star).
+  // The GLB materials/meshes are preserved — we only change their
+  // render-order properties, not their geometry or textures.
+  const mountainGroup = new THREE.Group();
+  const starsGroup = new THREE.Group();
+  starsGroup.renderOrder = -1;
+  rootGroup.traverse((o) => {
+    if (!o.isMesh) return;
+    const isStar = (o.name || "").toLowerCase().includes("star");
+    const target = isStar ? starsGroup : mountainGroup;
+    // Reparent: detach from current parent, attach to dedicated group.
+    if (o.parent) o.parent.remove(o);
+    target.add(o);
+    if (isStar) {
+      // Stars: disable depth WRITE so the mountain (drawn after) can
+      // occlude them; keep depth TEST so they still occlude each other
+      // back-to-front via draw order. Switch to additive blending so
+      // they brighten the background rather than painting solid dots.
+      o.material = o.material.clone(); // avoid mutating shared GLB materials
+      o.material.depthWrite = false;
+      o.material.transparent = true;
+      o.material.blending = THREE.AdditiveBlending;
+      o.material.opacity = 0.9;
+      o.renderOrder = -1;
+    }
+  });
+  scene.add(starsGroup);
+  scene.add(mountainGroup);
+  rootGroup = mountainGroup; // re-target framing to the mountain only
 
   // Frame the camera on the actual mountain geometry (not the whole scene,
   // which is dominated by scattered stars spread across the full bbox).
