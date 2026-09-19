@@ -607,10 +607,35 @@ function clamp(value, minimum, maximum) {
   const mountainRoot = new THREE.Group();
   const mountainBox = new THREE.Box3();
   let meshCount = 0;
-  gltf.scene.traverse((o) => {
-    if (!o.isMesh) return;
-    if ((o.name || "").toLowerCase().includes("star")) return;
-    if (o.parent) o.parent.remove(o);
+
+  // The GLB scene walk: detach every non-star mesh from its current
+  // parent, reparent into mountainRoot, fix the materials. We walk the
+  // scene by snapshotting the mesh list first (not via gltf.scene.traverse
+  // while we mutate parents — that's what triggered the silent crash in
+  // fe82f64 when a child node had a stale parent reference).
+  function snapshotMeshes(root3d) {
+    const out = [];
+    function walk(node) {
+      if (!node) return;
+      if (node.isMesh) out.push(node);
+      const kids = node.children;
+      if (!kids) return;
+      // Copy children array so subsequent mutations don't disturb iteration.
+      const snap = kids.slice();
+      for (const c of snap) walk(c);
+    }
+    walk(root3d);
+    return out;
+  }
+  const allMeshes = snapshotMeshes(gltf.scene);
+  for (const o of allMeshes) {
+    if (!o || !o.isMesh) continue;
+    if ((o.name || "").toLowerCase().includes("star")) continue;
+    // Detach from current parent (root scene or any nested group).
+    if (o.parent && typeof o.parent.remove === "function") {
+      o.parent.remove(o);
+    }
+    // Attach to our mountain group.
     mountainRoot.add(o);
 
     o.geometry.computeBoundingBox();
@@ -620,12 +645,10 @@ function clamp(value, minimum, maximum) {
 
     // Fix material: snow/rock are non-metallic; high roughness.
     const mat = o.material;
-    if ("metalness" in mat) mat.metalness = 0.0;
-    if ("roughness" in mat) mat.roughness = 0.85;
+    if (mat && "metalness" in mat) mat.metalness = 0.0;
+    if (mat && "roughness" in mat) mat.roughness = 0.85;
 
-    // Inject per-vertex snow-rock color via onBeforeCompile. We add a
-    // world-space Y varying, then in the fragment shader we sample a
-    // rock→stone→snow ramp and multiply it into the diffuse color.
+    // Inject per-vertex snow-rock color via onBeforeCompile.
     mat.userData.uMinY = { value: 0 };
     mat.userData.uSpanY = { value: 1 };
     mat.userData.uSnowColor = { value: new THREE.Color(0xf4f8fb) };
@@ -639,7 +662,6 @@ function clamp(value, minimum, maximum) {
       shader.uniforms.uStoneColor = mat.userData.uStoneColor;
       shader.uniforms.uRockColor = mat.userData.uRockColor;
 
-      // Inject vertex stage: pass world position to fragment shader.
       shader.vertexShader = shader.vertexShader.replace(
         "#include <common>",
         `#include <common>
@@ -651,7 +673,6 @@ function clamp(value, minimum, maximum) {
          vSnowWorldPos = worldPosition.xyz;`
       );
 
-      // Inject fragment stage: sample ramp, multiply diffuse color.
       shader.fragmentShader = shader.fragmentShader.replace(
         "#include <common>",
         `#include <common>
@@ -679,7 +700,7 @@ function clamp(value, minimum, maximum) {
     mat.needsUpdate = true;
 
     meshCount++;
-  });
+  }
   scene.add(mountainRoot);
   rootGroup = mountainRoot;
 
