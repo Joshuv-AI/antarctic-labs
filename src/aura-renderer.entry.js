@@ -662,15 +662,25 @@ function clamp(value, minimum, maximum) {
       shader.uniforms.uStoneColor = mat.userData.uStoneColor;
       shader.uniforms.uRockColor = mat.userData.uRockColor;
 
+      // The previous version tried to read `worldPosition` after
+      // `#include <worldpos_vertex>`, but that chunk is wrapped in
+      // an #ifdef block that's empty for MeshStandardMaterials
+      // (no envmap, no shadows, no transmission), so worldPosition
+      // was never declared and the shader failed to compile.
+      //
+      // Fix: compute world position from the local position +
+      // modelMatrix directly (bypassing the worldpos_vertex chunk
+      // entirely). `position` is the standard vertex attribute
+      // injected by three.js into every MeshStandardMaterial.
       shader.vertexShader = shader.vertexShader.replace(
         "#include <common>",
         `#include <common>
          varying vec3 vSnowWorldPos;`
       );
       shader.vertexShader = shader.vertexShader.replace(
-        "#include <worldpos_vertex>",
-        `#include <worldpos_vertex>
-         vSnowWorldPos = worldPosition.xyz;`
+        "#include <project_vertex>",
+        `#include <project_vertex>
+         vSnowWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;`
       );
 
       shader.fragmentShader = shader.fragmentShader.replace(
