@@ -1,1668 +1,936 @@
-// Aura Borealis renderer — three.js + GLTFLoader + procedural cinematic
-// environment.
-//
-// Antarctic Labs
-//
-// Architecture:
-//   - Static HTML iframe entry point.
-//   - Three.js runs entirely inside the iframe.
-//   - GLB geometry remains unchanged.
-//   - GLB's tiny embedded star meshes are discarded.
-//   - Procedural environment is layered behind/around the mountain.
-//   - Decorative environment failures never prevent the mountain from
-//     rendering.
-//   - WebGL / GLB failures are reported through document.title.
-//
-// Scene layers:
-//   0  Sky dome
-//   1  Aurora curtains
-//   2  Procedural starfield
-//   3  Mountain GLB
-//   4  Atmospheric haze
-//   5  Water / ice suggestion
-//   6  Foreground silhouette
-//
-// Important runtime fixes retained:
-//   - GLB mesh collection uses a child-array snapshot before reparenting.
-//   - Mountain shader computes world position directly from modelMatrix.
-//   - No dependency changes.
-//   - DPR clamped to a reasonable range.
-//   - Parent page can pause rendering through postMessage.
-
-import * as THREE from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
-
-const GLB_URL = "/assets/models/mountains/single-mountain-snow.glb";
-
-function clamp(value, minimum, maximum) {
-  return Math.min(maximum, Math.max(minimum, value));
-}
-
-function smoothstep(edge0, edge1, x) {
-  const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
-  return t * t * (3 - 2 * t);
-}
-
-(async function main() {
-  let paused = false;
-  let rafId = 0;
-  let renderer = null;
-  let scene = null;
-  let camera = null;
-  let mountainRoot = null;
-  let startTime = 0;
-
-  const mountainSize = new THREE.Vector3();
-  const mountainCenter = new THREE.Vector3();
-
-  // --------------------------------------------------------------------------
-  // CANVAS / WEBGL
-  // --------------------------------------------------------------------------
-
-  const canvas = document.getElementById("c");
-
-  if (!canvas) {
-    console.error('Aura renderer: missing canvas #c');
-    document.title = "error:no-canvas";
-    return;
-  }
-
-  try {
-    renderer = new THREE.WebGLRenderer({
-      canvas,
-      antialias: true,
-      alpha: true,
-      premultipliedAlpha: false,
-      powerPreference: "high-performance",
-    });
-  } catch (error) {
-    console.error(
-      "Aura renderer: WebGLRenderer creation failed:",
-      error?.message || error
-    );
-    document.title = "no-webgl";
-    return;
-  }
-
-  if (!renderer || !renderer.getContext()) {
-    console.error("Aura renderer: WebGL context unavailable");
-    document.title = "no-webgl";
-    return;
-  }
-
-  renderer.setClearColor(0x000000, 0);
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.05;
-
-  // --------------------------------------------------------------------------
-  // SCENE / CAMERA
-  // --------------------------------------------------------------------------
-
-  scene = new THREE.Scene();
-
-  camera = new THREE.PerspectiveCamera(
-    40,
-    1,
-    0.1,
-    5000
-  );
-
-  // --------------------------------------------------------------------------
-  // LIGHTING
-  // --------------------------------------------------------------------------
-
-  const ambient = new THREE.AmbientLight(0xb8d0e0, 0.42);
-  scene.add(ambient);
-
-  const moon = new THREE.DirectionalLight(0xeaf6ff, 1.45);
-  moon.position.set(120, 200, 100);
-  scene.add(moon);
-
-  const fill = new THREE.DirectionalLight(0x6fa8c4, 0.65);
-  fill.position.set(-140, 100, -80);
-  scene.add(fill);
-
-  const auroraRim = new THREE.DirectionalLight(0x88e0c0, 0.42);
-  auroraRim.position.set(0, -50, 180);
-  scene.add(auroraRim);
-
-  // --------------------------------------------------------------------------
-  // LAYER 0 — SKY DOME
-  // --------------------------------------------------------------------------
-
-  const skyGeometry = new THREE.SphereGeometry(700, 32, 18);
-
-  const skyMaterial = new THREE.ShaderMaterial({
-    side: THREE.BackSide,
-    depthWrite: false,
-    depthTest: false,
-    uniforms: {
-      uTopColor: {
-        value: new THREE.Color(0x03070f),
-      },
-      uUpperHorizon: {
-        value: new THREE.Color(0x0b1929),
-      },
-      uLowerHorizon: {
-        value: new THREE.Color(0x101e2b),
-      },
-      uGroundColor: {
-        value: new THREE.Color(0x040910),
-      },
-    },
-    vertexShader: `
-      varying vec3 vWorldPos;
-
-      void main() {
-        vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-        vWorldPos = worldPosition.xyz;
-
-        gl_Position =
-          projectionMatrix *
-          viewMatrix *
-          worldPosition;
-      }
-    `,
-    fragmentShader: `
-      varying vec3 vWorldPos;
-
-      uniform vec3 uTopColor;
-      uniform vec3 uUpperHorizon;
-      uniform vec3 uLowerHorizon;
-      uniform vec3 uGroundColor;
-
-      void main() {
-        vec3 direction = normalize(vWorldPos);
-        float h = direction.y;
-
-        vec3 color;
-
-        if (h >= 0.0) {
-          color = mix(
-            uUpperHorizon,
-            uTopColor,
-            smoothstep(0.0, 0.72, h)
-          );
-        } else {
-          color = mix(
-            uLowerHorizon,
-            uGroundColor,
-            smoothstep(0.0, 0.55, -h)
-          );
-        }
-
-        gl_FragColor = vec4(color, 1.0);
-      }
-    `,
-  });
-
-  const sky = new THREE.Mesh(
-    skyGeometry,
-    skyMaterial
-  );
-
-  sky.renderOrder = -100;
-  scene.add(sky);
-
-  // --------------------------------------------------------------------------
-  // LAYER 1 — AURORA CURTAINS
-  // --------------------------------------------------------------------------
-  //
-  // This is deliberately built as an irregular curtain rather than a single
-  // opaque green rectangle.
-  //
-  // The geometry is subdivided so the vertices themselves can drift slightly,
-  // while the fragment shader creates the internal luminous ribbon structure.
-  //
-  // It is positioned relative to the camera after mountain framing is known.
-
-  const auroraGeometry = new THREE.PlaneGeometry(
-    900,
-    360,
-    40,
-    20
-  );
-
-  const auroraMaterial = new THREE.ShaderMaterial({
-    transparent: true,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    depthTest: false,
-    side: THREE.DoubleSide,
-    uniforms: {
-      uTime: {
-        value: 0,
-      },
-      uColorA: {
-        value: new THREE.Color(0x48f59a),
-      },
-      uColorB: {
-        value: new THREE.Color(0x51e8d0),
-      },
-      uColorC: {
-        value: new THREE.Color(0xa2ffd8),
-      },
-    },
-    vertexShader: `
-      uniform float uTime;
-
-      varying vec2 vUv;
-
-      float hash(float n) {
-        return fract(sin(n) * 43758.5453123);
-      }
-
-      void main() {
-        vUv = uv;
-
-        vec3 p = position;
-
-        float waveA =
-          sin(p.x * 0.018 + uTime * 0.12) * 8.0;
-
-        float waveB =
-          sin(p.x * 0.037 - uTime * 0.075) * 4.0;
-
-        float envelope =
-          smoothstep(0.0, 1.0, uv.y);
-
-        p.z += (waveA + waveB) * envelope;
-
-        gl_Position =
-          projectionMatrix *
-          modelViewMatrix *
-          vec4(p, 1.0);
-      }
-    `,
-    fragmentShader: `
-      varying vec2 vUv;
-
-      uniform float uTime;
-      uniform vec3 uColorA;
-      uniform vec3 uColorB;
-      uniform vec3 uColorC;
-
-      float hash(vec2 p) {
-        return fract(
-          sin(dot(p, vec2(127.1, 311.7))) *
-          43758.5453123
-        );
-      }
-
-      float noise(vec2 p) {
-        vec2 i = floor(p);
-        vec2 f = fract(p);
-
-        float a = hash(i);
-        float b = hash(i + vec2(1.0, 0.0));
-        float c = hash(i + vec2(0.0, 1.0));
-        float d = hash(i + vec2(1.0, 1.0));
-
-        vec2 u = f * f * (3.0 - 2.0 * f);
-
-        return mix(
-          mix(a, b, u.x),
-          mix(c, d, u.x),
-          u.y
-        );
-      }
-
-      float fbm(vec2 p) {
-        float value = 0.0;
-        float amplitude = 0.5;
-
-        for (int i = 0; i < 4; i++) {
-          value += amplitude * noise(p);
-          p *= 2.0;
-          amplitude *= 0.5;
-        }
-
-        return value;
-      }
-
-      void main() {
-        vec2 uv = vUv;
-
-        // Large-scale curtain movement.
-        float slowWave =
-          sin(
-            uv.x * 7.0 +
-            uTime * 0.08
-          );
-
-        float warpedX =
-          uv.x +
-          slowWave * 0.035;
-
-        // Broad luminous vertical curtains.
-        float curtainNoise =
-          fbm(
-            vec2(
-              warpedX * 4.2,
-              uv.y * 1.8 + uTime * 0.025
-            )
-          );
-
-        float curtainBands =
-          smoothstep(
-            0.40,
-            0.70,
-            curtainNoise
-          );
-
-        // Fine internal structure.
-        float detail =
-          fbm(
-            vec2(
-              warpedX * 16.0 - uTime * 0.025,
-              uv.y * 4.5
-            )
-          );
-
-        float wisps =
-          smoothstep(
-            0.34,
-            0.78,
-            detail
-          );
-
-        // Stronger toward the upper/middle sky, fading before the horizon.
-        float verticalFade =
-          smoothstep(0.02, 0.20, uv.y) *
-          (1.0 - smoothstep(0.58, 0.96, uv.y));
-
-        // Feather the left/right edges of the entire curtain.
-        float horizontalFade =
-          smoothstep(0.0, 0.08, uv.x) *
-          (1.0 - smoothstep(0.92, 1.0, uv.x));
-
-        // Break up the lower edge so it doesn't become a rectangle.
-        float lowerNoise =
-          fbm(
-            vec2(
-              uv.x * 7.0,
-              uTime * 0.018
-            )
-          );
-
-        float lowerBreak =
-          smoothstep(
-            0.18,
-            0.65,
-            lowerNoise + uv.y * 0.65
-          );
-
-        float alpha =
-          curtainBands *
-          wisps *
-          verticalFade *
-          horizontalFade *
-          lowerBreak *
-          0.48;
-
-        // Slight color movement from green through cyan to pale mint.
-        float colorNoise =
-          fbm(
-            vec2(
-              uv.x * 3.2 - uTime * 0.015,
-              uv.y * 1.6
-            )
-          );
-
-        vec3 color =
-          mix(
-            uColorA,
-            uColorB,
-            smoothstep(0.25, 0.68, colorNoise)
-          );
-
-        color =
-          mix(
-            color,
-            uColorC,
-            smoothstep(0.68, 0.94, colorNoise)
-          );
-
-        gl_FragColor =
-          vec4(
-            color * alpha,
-            alpha
-          );
-      }
-    `,
-  });
-
-  const aurora = new THREE.Mesh(
-    auroraGeometry,
-    auroraMaterial
-  );
-
-  aurora.renderOrder = -90;
-  aurora.frustumCulled = false;
-  scene.add(aurora);
-
-  // --------------------------------------------------------------------------
-  // LAYER 2 — PROCEDURAL STARFIELD
-  // --------------------------------------------------------------------------
-
-  function createStarfield() {
-    const count = 2000;
-
-    const positions = new Float32Array(count * 3);
-    const colors = new Float32Array(count * 3);
-
-    for (let i = 0; i < count; i++) {
-      const theta =
-        Math.random() * Math.PI * 2;
-
-      const phi =
-        Math.acos(
-          2 * Math.random() - 1
-        ) * 0.72;
-
-      const radius =
-        480 +
-        Math.random() * 70;
-
-      const x =
-        radius *
-        Math.sin(phi) *
-        Math.cos(theta);
-
-      const y =
-        radius *
-        Math.cos(phi) *
-        0.72 +
-        70;
-
-      const z =
-        radius *
-        Math.sin(phi) *
-        Math.sin(theta);
-
-      positions[i * 3] = x;
-      positions[i * 3 + 1] = y;
-      positions[i * 3 + 2] = z;
-
-      const tint = Math.random();
-
-      let r;
-      let g;
-      let b;
-
-      if (tint < 0.72) {
-        r = 1.0;
-        g = 1.0;
-        b = 1.0;
-      } else if (tint < 0.93) {
-        r = 0.72;
-        g = 0.86;
-        b = 1.0;
-      } else {
-        r = 1.0;
-        g = 0.88;
-        b = 0.72;
-      }
-
-      const brightness =
-        Math.random() < 0.045
-          ? 1.45
-          : 0.48 + Math.random() * 0.52;
-
-      colors[i * 3] = r * brightness;
-      colors[i * 3 + 1] = g * brightness;
-      colors[i * 3 + 2] = b * brightness;
-    }
-
-    const geometry =
-      new THREE.BufferGeometry();
-
-    geometry.setAttribute(
-      "position",
-      new THREE.BufferAttribute(
-        positions,
-        3
-      )
-    );
-
-    geometry.setAttribute(
-      "color",
-      new THREE.BufferAttribute(
-        colors,
-        3
-      )
-    );
-
-    const material =
-      new THREE.PointsMaterial({
-        size: 1.55,
-        sizeAttenuation: true,
-        vertexColors: true,
-        transparent: true,
-        opacity: 0.9,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        depthTest: false,
-      });
-
-    const points =
-      new THREE.Points(
-        geometry,
-        material
-      );
-
-    points.renderOrder = -80;
-    points.frustumCulled = false;
-
-    return points;
-  }
-
-  const starfield =
-    createStarfield();
-
-  scene.add(starfield);
-
-  // --------------------------------------------------------------------------
-  // LAYER 4 — ATMOSPHERIC HAZE
-  // --------------------------------------------------------------------------
-
-  function createHaze() {
-    const group = new THREE.Group();
-
-    const hazeDefinitions = [
-      {
-        x: -120,
-        y: 75,
-        z: -220,
-        size: 420,
-        intensity: 0.075,
-      },
-      {
-        x: 110,
-        y: 55,
-        z: -170,
-        size: 360,
-        intensity: 0.06,
-      },
-      {
-        x: 0,
-        y: 95,
-        z: -260,
-        size: 460,
-        intensity: 0.055,
-      },
-    ];
-
-    for (const definition of hazeDefinitions) {
-      const geometry =
-        new THREE.PlaneGeometry(
-          definition.size,
-          definition.size
-        );
-
-      const material =
-        new THREE.ShaderMaterial({
-          transparent: true,
-          blending: THREE.AdditiveBlending,
-          depthWrite: false,
-          depthTest: false,
-          side: THREE.DoubleSide,
-          uniforms: {
-            uIntensity: {
-              value: definition.intensity,
-            },
-            uColor: {
-              value: new THREE.Color(
-                0x8ebbd3
-              ),
-            },
-          },
-          vertexShader: `
-            varying vec2 vUv;
-
-            void main() {
-              vUv = uv;
-
-              gl_Position =
-                projectionMatrix *
-                modelViewMatrix *
-                vec4(position, 1.0);
-            }
-          `,
-          fragmentShader: `
-            varying vec2 vUv;
-
-            uniform float uIntensity;
-            uniform vec3 uColor;
-
-            void main() {
-              vec2 center =
-                vUv - 0.5;
-
-              float distanceFromCenter =
-                length(center);
-
-              float alpha =
-                smoothstep(
-                  0.50,
-                  0.0,
-                  distanceFromCenter
-                ) *
-                uIntensity;
-
-              gl_FragColor =
-                vec4(
-                  uColor * alpha,
-                  alpha
-                );
-            }
-          `,
-        });
-
-      const mesh =
-        new THREE.Mesh(
-          geometry,
-          material
-        );
-
-      mesh.position.set(
-        definition.x,
-        definition.y,
-        definition.z
-      );
-
-      mesh.renderOrder = -70;
-      mesh.frustumCulled = false;
-
-      group.add(mesh);
-    }
-
-    return group;
-  }
-
-  const haze =
-    createHaze();
-
-  scene.add(haze);
-
-  // --------------------------------------------------------------------------
-  // LAYER 5 — WATER / ICE HORIZON
-  // --------------------------------------------------------------------------
-
-  const waterGeometry =
-    new THREE.PlaneGeometry(
-      900,
-      100
-    );
-
-  const waterMaterial =
-    new THREE.ShaderMaterial({
-      transparent: true,
-      depthWrite: false,
-      depthTest: false,
-      side: THREE.DoubleSide,
-      uniforms: {
-        uColorTop: {
-          value: new THREE.Color(
-            0x243b58
-          ),
-        },
-        uColorBottom: {
-          value: new THREE.Color(
-            0x03070d
-          ),
-        },
-        uShimmer: {
-          value: new THREE.Color(
-            0x9fcfe4
-          ),
-        },
-      },
-      vertexShader: `
-        varying vec2 vUv;
-
-        void main() {
-          vUv = uv;
-
-          gl_Position =
-            projectionMatrix *
-            modelViewMatrix *
-            vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: `
-        varying vec2 vUv;
-
-        uniform vec3 uColorTop;
-        uniform vec3 uColorBottom;
-        uniform vec3 uShimmer;
-
-        void main() {
-          float gradient =
-            smoothstep(
-              0.0,
-              1.0,
-              vUv.y
-            );
-
-          vec3 color =
-            mix(
-              uColorTop,
-              uColorBottom,
-              gradient
-            );
-
-          float wave =
-            sin(vUv.x * 65.0) *
-            sin(
-              vUv.x * 17.0 +
-              vUv.y * 9.0
-            );
-
-          float shimmerMask =
-            smoothstep(
-              0.72,
-              0.05,
-              abs(vUv.y - 0.3)
-            );
-
-          color +=
-            uShimmer *
-            wave *
-            shimmerMask *
-            0.025;
-
-          float alpha =
-            0.65 *
-            smoothstep(
-              0.0,
-              0.75,
-              vUv.y
-            );
-
-          gl_FragColor =
-            vec4(
-              color,
-              alpha
-            );
-        }
-      `,
-    });
-
-  const water =
-    new THREE.Mesh(
-      waterGeometry,
-      waterMaterial
-    );
-
-  water.rotation.x =
-    -Math.PI / 2;
-
-  water.renderOrder = -10;
-  water.frustumCulled = false;
-
-  scene.add(water);
-
-  // --------------------------------------------------------------------------
-  // LAYER 6 — FOREGROUND SILHOUETTE
-  // --------------------------------------------------------------------------
-
-  const foregroundGeometry =
-    new THREE.PlaneGeometry(
-      800,
-      35
-    );
-
-  const foregroundMaterial =
-    new THREE.MeshBasicMaterial({
-      color: 0x010305,
-      transparent: true,
-      opacity: 0.82,
-      depthWrite: false,
-      depthTest: false,
-    });
-
-  const foreground =
-    new THREE.Mesh(
-      foregroundGeometry,
-      foregroundMaterial
-    );
-
-  foreground.renderOrder = -5;
-  foreground.frustumCulled = false;
-
-  scene.add(foreground);
-
-  // --------------------------------------------------------------------------
-  // MOUNTAIN SHADING HELPERS
-  // --------------------------------------------------------------------------
-
-  const SNOW_COLOR =
-    new THREE.Color(0xf4f8fb);
-
-  const STONE_COLOR =
-    new THREE.Color(0x8a9aa6);
-
-  const ROCK_COLOR =
-    new THREE.Color(0x3d5360);
-
-  // --------------------------------------------------------------------------
-  // RESPONSIVE CAMERA
-  // --------------------------------------------------------------------------
-
-  function positionEnvironment() {
-    if (!mountainRoot) {
-      return;
-    }
-
-    const size =
-      mountainSize;
-
-    const center =
-      mountainCenter;
-
-    const aspect =
-      camera.aspect;
-
-    const portrait =
-      aspect < 1.0;
-
-    /*
-     * The mountain GLB is unusually deep compared with its visible height.
-     *
-     * The previous implementation framed landscape mode using only size.y.
-     * That placed the camera physically inside the GLB on some viewport
-     * dimensions.
-     *
-     * We instead guarantee that the camera starts outside the front of the
-     * mountain while still using the mountain height as the dominant visual
-     * framing measurement.
-     */
-
-    const depthClearance =
-      size.z * 0.62;
-
-    const widthClearance =
-      size.x * (
-        portrait
-          ? 0.52
-          : 0.40
-      );
-
-    const heightClearance =
-      size.y * (
-        portrait
-          ? 1.05
-          : 0.92
-      );
-
-    const verticalFov =
-      THREE.MathUtils.degToRad(
-        camera.fov
-      );
-
-    const horizontalFov =
-      2 *
-      Math.atan(
-        Math.tan(verticalFov / 2) *
-        Math.max(
-          aspect,
-          0.25
-        )
-      );
-
-    const heightDistance =
-      heightClearance /
-      (
-        2 *
-        Math.tan(
-          verticalFov / 2
-        )
-      );
-
-    const widthDistance =
-      widthClearance /
-      (
-        2 *
-        Math.tan(
-          horizontalFov / 2
-        )
-      );
-
-    const distance =
-      Math.max(
-        depthClearance,
-        heightDistance,
-        widthDistance,
-        55
-      );
-
-    /*
-     * Shift the visual target slightly upward.
-     *
-     * This prevents the mountain from sitting too low while leaving enough
-     * sky above it for the aurora.
-     */
-    const targetY =
-      center.y +
-      size.y * (
-        portrait
-          ? 0.07
-          : 0.03
-      );
-
-    const cameraY =
-      center.y -
-      size.y * (
-        portrait
-          ? 0.12
-          : 0.08
-      );
-
-    camera.position.set(
-      center.x,
-      cameraY,
-      center.z + distance
-    );
-
-    camera.lookAt(
-      center.x,
-      targetY,
-      center.z
-    );
-
-    camera.updateProjectionMatrix();
-
-    // Environment follows camera so it remains a background world rather
-    // than drifting away as the camera composition changes.
-
-    sky.position.copy(
-      camera.position
-    );
-
-    starfield.position.copy(
-      camera.position
-    );
-
-    haze.position.copy(
-      camera.position
-    );
-
-    haze.position.z -= 90;
-
-    /*
-     * Aurora sits well above the mountain and slightly behind it.
-     * Its rotation is deliberately mild; the shader provides most of the
-     * organic movement.
-     */
-    aurora.position.set(
-      camera.position.x,
-      camera.position.y +
-        size.y * 1.05,
-      camera.position.z - 170
-    );
-
-    aurora.rotation.set(
-      -0.10,
-      0.0,
-      0.0
-    );
-
-    /*
-     * Water sits at the mountain base. It is intentionally subtle rather
-     * than pretending to be a physically accurate reflection.
-     */
-    water.position.set(
-      camera.position.x,
-      center.y -
-        size.y * 0.46,
-      center.z -
-        size.z * 0.18
-    );
-
-    /*
-     * Foreground only occupies the very bottom edge.
-     */
-    foreground.position.set(
-      camera.position.x,
-      camera.position.y -
-        size.y * 0.60,
-      camera.position.z + 8
-    );
-
-    foreground.lookAt(
-      camera.position
-    );
-  }
-
-  function resize() {
-    const width =
-      Math.max(
-        1,
-        window.innerWidth
-      );
-
-    const height =
-      Math.max(
-        1,
-        window.innerHeight
-      );
-
-    const dpr =
-      clamp(
-        window.devicePixelRatio || 1,
-        1,
-        1.75
-      );
-
-    renderer.setPixelRatio(
-      dpr
-    );
-
-    renderer.setSize(
-      width,
-      height,
-      false
-    );
-
-    camera.aspect =
-      width / height;
-
-    camera.updateProjectionMatrix();
-
-    positionEnvironment();
-  }
-
-  window.addEventListener(
-    "resize",
-    resize,
-    { passive: true }
-  );
-
-  resize();
-
-  // --------------------------------------------------------------------------
-  // PAUSE CONTROL
-  // --------------------------------------------------------------------------
-
-  window.addEventListener(
-    "message",
-    (event) => {
-      if (!event.data) {
-        return;
-      }
-
-      if (
-        event.data.type ===
-        "aura-controls"
-      ) {
-        paused = Boolean(
-          event.data.controls &&
-          event.data.controls.paused
-        );
-      }
-    }
-  );
-
-  // --------------------------------------------------------------------------
-  // RENDER LOOP
-  // --------------------------------------------------------------------------
-
-  function renderLoop(time) {
-    rafId =
-      requestAnimationFrame(
-        renderLoop
-      );
-
-    if (startTime === 0) {
-      startTime = time;
-    }
-
-    const elapsed =
-      (time - startTime) / 1000;
-
-    auroraMaterial.uniforms.uTime.value =
-      elapsed;
-
-    /*
-     * Extremely slow movement only. The shader does the actual organic
-     * animation; this rotation prevents the entire curtain from feeling
-     * mathematically locked without making it visibly spin.
-     */
-    aurora.rotation.z =
-      Math.sin(
-        elapsed * 0.018
-      ) * 0.025;
-
-    if (
-      !paused &&
-      mountainRoot
-    ) {
-      renderer.render(
-        scene,
-        camera
-      );
-    }
-  }
-
-  rafId =
-    requestAnimationFrame(
-      renderLoop
-    );
-
-  // --------------------------------------------------------------------------
-  // GLB LOAD
-  // --------------------------------------------------------------------------
-
-  console.log(
-    "Aura renderer: loading GLB",
-    GLB_URL
-  );
-
-  let gltf;
-
-  try {
-    const loader =
-      new GLTFLoader();
-
-    gltf =
-      await loader.loadAsync(
-        GLB_URL
-      );
-  } catch (error) {
-    console.error(
-      "Aura renderer: GLB load failed:",
-      error?.message || error
-    );
-
-    document.title =
-      "error:glb-load";
-
-    if (rafId) {
-      cancelAnimationFrame(
-        rafId
-      );
-    }
-
-    return;
-  }
-
-  if (
-    !gltf ||
-    !gltf.scene
-  ) {
-    console.error(
-      "Aura renderer: GLB contains no scene"
-    );
-
-    document.title =
-      "error:no-scene";
-
-    return;
-  }
-
-  // --------------------------------------------------------------------------
-  // MOUNTAIN EXTRACTION
-  // --------------------------------------------------------------------------
-
-  /*
-   * IMPORTANT:
-   *
-   * Do not traverse the GLB while simultaneously reparenting children.
-   * The earlier renderer could invalidate traversal state this way.
-   *
-   * Snapshot the complete mesh list first.
-   */
-  function snapshotMeshes(root) {
-    const meshes = [];
-
-    function walk(node) {
-      if (!node) {
-        return;
-      }
-
-      if (node.isMesh) {
-        meshes.push(node);
-      }
-
-      const children =
-        node.children
-          ? node.children.slice()
-          : [];
-
-      for (const child of children) {
-        walk(child);
-      }
-    }
-
-    walk(root);
-
-    return meshes;
-  }
-
-  const allMeshes =
-    snapshotMeshes(
-      gltf.scene
-    );
-
-  const mountainMeshes =
-    allMeshes.filter(
-      (mesh) =>
-        mesh &&
-        mesh.isMesh &&
-        !(
-          mesh.name ||
-          ""
-        )
-          .toLowerCase()
-          .includes("star")
-    );
-
-  if (
-    mountainMeshes.length === 0
-  ) {
-    console.error(
-      "Aura renderer: no mountain meshes found"
-    );
-
-    document.title =
-      "error:no-mountain";
-
-    return;
-  }
-
-  mountainRoot =
-    new THREE.Group();
-
-  mountainRoot.name =
-    "AntarcticMountain";
-
-  const mountainBox =
-    new THREE.Box3();
-
-  // --------------------------------------------------------------------------
-  // MOUNTAIN MATERIALS / SHADER
-  // --------------------------------------------------------------------------
-
-  let processedMeshes = 0;
-
-  for (
-    const mesh of mountainMeshes
-  ) {
-    try {
-      /*
-       * Remove from original hierarchy before adding to the dedicated
-       * mountain group.
-       */
-      if (
-        mesh.parent &&
-        typeof mesh.parent.remove ===
-          "function"
-      ) {
-        mesh.parent.remove(
-          mesh
-        );
-      }
-
-      mountainRoot.add(
-        mesh
-      );
-
-      mesh.updateMatrixWorld(
-        true
-      );
-
-      if (
-        !mesh.geometry
-      ) {
-        continue;
-      }
-
-      mesh.geometry.computeBoundingBox();
-
-      if (
-        mesh.geometry.boundingBox
-      ) {
-        const worldBox =
-          mesh.geometry.boundingBox
-            .clone()
-            .applyMatrix4(
-              mesh.matrixWorld
-            );
-
-        mountainBox.expandByPoint(
-          worldBox.min
-        );
-
-        mountainBox.expandByPoint(
-          worldBox.max
-        );
-      }
-
-      const materials =
-        Array.isArray(
-          mesh.material
-        )
-          ? mesh.material
-          : [mesh.material];
-
-      for (
-        const material of materials
-      ) {
-        if (!material) {
-          continue;
-        }
-
-        if (
-          "metalness" in material
-        ) {
-          material.metalness =
-            0.0;
-        }
-
-        if (
-          "roughness" in material
-        ) {
-          material.roughness =
-            0.86;
-        }
-
-        if (
-          "envMapIntensity" in material
-        ) {
-          material.envMapIntensity =
-            0.0;
-        }
-
-        /*
-         * Each material gets its own uniform objects. This avoids accidental
-         * sharing if multiple meshes happen to reference the same material.
-         */
-        const uniforms = {
-          uMinY: {
-            value: 0,
-          },
-          uSpanY: {
-            value: 1,
-          },
-          uSnowColor: {
-            value:
-              SNOW_COLOR.clone(),
-          },
-          uStoneColor: {
-            value:
-              STONE_COLOR.clone(),
-          },
-          uRockColor: {
-            value:
-              ROCK_COLOR.clone(),
-          },
-        };
-
-        material.userData =
-          material.userData || {};
-
-        material.userData.auraUniforms =
-          uniforms;
-
-        material.onBeforeCompile =
-          (shader) => {
-            shader.uniforms.uMinY =
-              uniforms.uMinY;
-
-            shader.uniforms.uSpanY =
-              uniforms.uSpanY;
-
-            shader.uniforms.uSnowColor =
-              uniforms.uSnowColor;
-
-            shader.uniforms.uStoneColor =
-              uniforms.uStoneColor;
-
-            shader.uniforms.uRockColor =
-              uniforms.uRockColor;
-
-            /*
-             * Do NOT depend on worldpos_vertex.
-             *
-             * Three.js can leave that chunk effectively unavailable for this
-             * material configuration. Computing world position directly from
-             * modelMatrix is reliable for MeshStandardMaterial.
-             */
-            shader.vertexShader =
-              shader.vertexShader.replace(
-                "#include <common>",
-                `
-                  #include <common>
-
-                  varying vec3 vAuraWorldPos;
-                `
-              );
-
-            shader.vertexShader =
-              shader.vertexShader.replace(
-                "#include <project_vertex>",
-                `
-                  #include <project_vertex>
-
-                  vAuraWorldPos =
-                    (modelMatrix *
-                     vec4(position, 1.0)).xyz;
-                `
-              );
-
-            shader.fragmentShader =
-              shader.fragmentShader.replace(
-                "#include <common>",
-                `
-                  #include <common>
-
-                  varying vec3 vAuraWorldPos;
-
-                  uniform float uMinY;
-                  uniform float uSpanY;
-
-                  uniform vec3 uSnowColor;
-                  uniform vec3 uStoneColor;
-                  uniform vec3 uRockColor;
-
-                  vec3 auraSnowRockRamp(
-                    float value
-                  ) {
-                    float t =
-                      clamp(
-                        value,
-                        0.0,
-                        1.0
-                      );
-
-                    if (t < 0.52) {
-                      return mix(
-                        uRockColor,
-                        uStoneColor,
-                        t / 0.52
-                      );
-                    }
-
-                    return mix(
-                      uStoneColor,
-                      uSnowColor,
-                      (t - 0.52) / 0.48
-                    );
-                  }
-                `
-              );
-
-            shader.fragmentShader =
-              shader.fragmentShader.replace(
-                "#include <color_fragment>",
-                `
-                  #include <color_fragment>
-
-                  float auraSnowT =
-                    (
-                      vAuraWorldPos.y -
-                      uMinY
-                    ) /
-                    max(
-                      uSpanY,
-                      0.001
-                    );
-
-                  diffuseColor.rgb *=
-                    auraSnowRockRamp(
-                      auraSnowT
-                    );
-                `
-              );
-          };
-
-        material.needsUpdate =
-          true;
-      }
-
-      processedMeshes++;
-    } catch (error) {
-      /*
-       * One malformed decorative mesh should not destroy the complete
-       * mountain. Log it and continue processing the remaining meshes.
-       */
-      console.warn(
-        "Aura renderer: skipped problematic mountain mesh",
-        mesh.name || "(unnamed)",
-        error?.message || error
-      );
-    }
-  }
-
-  scene.add(
-    mountainRoot
-  );
-
-  // --------------------------------------------------------------------------
-  // MOUNTAIN BOUNDS
-  // --------------------------------------------------------------------------
-
-  mountainBox.getSize(
-    mountainSize
-  );
-
-  mountainBox.getCenter(
-    mountainCenter
-  );
-
-  /*
-   * If a malformed/incomplete bounding box somehow results in zero dimensions,
-   * fail explicitly rather than producing a blank renderer with a broken
-   * camera.
-   */
-  if (
-    mountainSize.x <= 0 ||
-    mountainSize.y <= 0 ||
-    mountainSize.z <= 0
-  ) {
-    console.error(
-      "Aura renderer: invalid mountain bounds",
-      mountainSize
-    );
-
-    document.title =
-      "error:invalid-bounds";
-
-    return;
-  }
-
-  // --------------------------------------------------------------------------
-  // APPLY SNOW / ROCK HEIGHT RANGE
-  // --------------------------------------------------------------------------
-
-  for (
-    const mesh of mountainMeshes
-  ) {
-    if (
-      !mesh ||
-      !mesh.isMesh
-    ) {
-      continue;
-    }
-
-    const materials =
-      Array.isArray(
-        mesh.material
-      )
-        ? mesh.material
-        : [mesh.material];
-
-    for (
-      const material of materials
-    ) {
-      if (
-        !material ||
-        !material.userData ||
-        !material.userData.auraUniforms
-      ) {
-        continue;
-      }
-
-      const uniforms =
-        material.userData
-          .auraUniforms;
-
-      uniforms.uMinY.value =
-        mountainCenter.y -
-        mountainSize.y / 2;
-
-      uniforms.uSpanY.value =
-        mountainSize.y;
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // FINAL CAMERA / ENVIRONMENT POSITION
-  // --------------------------------------------------------------------------
-
-  positionEnvironment();
-
-  console.log(
-    "Aura renderer: mountain ready"
-  );
-
-  console.log(
-    "Aura renderer: processed meshes:",
-    processedMeshes
-  );
-
-  console.log(
-    "Aura renderer: mountain bounds:",
-    {
-      width: mountainSize.x,
-      height: mountainSize.y,
-      depth: mountainSize.z,
-      center: {
-        x: mountainCenter.x,
-        y: mountainCenter.y,
-        z: mountainCenter.z,
-      },
-    }
-  );
-
-  /*
-   * This title is intentionally useful for runtime verification from the
-   * parent document. It also gives us a clean diagnostic distinction between
-   * a renderer that loaded and one that failed before the mountain existed.
-   */
-  document.title =
-    "ready";
-})().catch(
-  (error) => {
-    console.error(
-      "Aura renderer: unhandled error:",
-      error?.message || error,
-      error?.stack || ""
-    );
-
-    document.title =
-      "error:unhandled";
-  }
+import * as THREE from “three”;
+import { GLTFLoader } from “three/examples/jsm/loaders/GLTFLoader.js”;
+
+const canvas = document.getElementById(“c”);
+
+const renderer = new THREE.WebGLRenderer({
+canvas,
+antialias: true,
+alpha: true,
+premultipliedAlpha: false,
+powerPreference: “high-performance”,
+});
+
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setSize(window.innerWidth, window.innerHeight, false);
+renderer.setClearColor(0x000000, 0);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(
+38,
+window.innerWidth / window.innerHeight,
+0.1,
+5000,
 );
+
+scene.add(camera);
+
+const clock = new THREE.Clock();
+
+let animationFrame = 0;
+let paused = false;
+let destroyed = false;
+
+const mountainRoot = new THREE.Group();
+scene.add(mountainRoot);
+
+/* ––––––––––––––––––––––––––––––––––––– /
+/ Helpers                                                                    /
+/ ––––––––––––––––––––––––––––––––––––– */
+
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+function smoothstep(edge0, edge1, value) {
+const t = clamp((value - edge0) / (edge1 - edge0), 0, 1);
+return t * t * (3 - 2 * t);
+}
+
+function resize() {
+if (destroyed) return;
+
+const width = Math.max(1, window.innerWidth);
+const height = Math.max(1, window.innerHeight);
+
+camera.aspect = width / height;
+camera.updateProjectionMatrix();
+
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setSize(width, height, false);
+}
+
+function snapshotMeshes(root) {
+const meshes = [];
+
+root.traverse((object) => {
+if (object && object.isMesh) {
+meshes.push(object);
+}
+});
+
+return meshes;
+}
+
+function disposeObject(root) {
+root.traverse((object) => {
+if (object.geometry) {
+object.geometry.dispose();
+}
+
+if (object.material) {
+  const materials = Array.isArray(object.material)
+    ? object.material
+    : [object.material];
+  materials.forEach((material) => {
+    if (!material) return;
+    Object.keys(material).forEach((key) => {
+      const value = material[key];
+      if (value && value.isTexture) {
+        value.dispose();
+      }
+    });
+    material.dispose();
+  });
+}
+
+});
+}
+
+/* ––––––––––––––––––––––––––––––––––––– /
+/ Sky dome                                                                   /
+/ ––––––––––––––––––––––––––––––––––––– */
+
+const skyGeometry = new THREE.SphereGeometry(700, 32, 18);
+
+const skyMaterial = new THREE.ShaderMaterial({
+side: THREE.BackSide,
+depthWrite: false,
+depthTest: false,
+uniforms: {
+uTop: { value: new THREE.Color(0x03070f) },
+uUpperHorizon: { value: new THREE.Color(0x0b1929) },
+uLowerHorizon: { value: new THREE.Color(0x101e2b) },
+uGround: { value: new THREE.Color(0x040910) },
+},
+vertexShader: `
+varying vec3 vWorldDirection;
+
+void main() {
+  vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+  vWorldDirection = normalize(worldPosition.xyz - cameraPosition);
+  gl_Position = projectionMatrix * viewMatrix * worldPosition;
+}
+
+, fragmentShader: 
+varying vec3 vWorldDirection;
+
+uniform vec3 uTop;
+uniform vec3 uUpperHorizon;
+uniform vec3 uLowerHorizon;
+uniform vec3 uGround;
+void main() {
+  float h = clamp(vWorldDirection.y * 0.5 + 0.5, 0.0, 1.0);
+  vec3 color;
+  if (h > 0.58) {
+    color = mix(uUpperHorizon, uTop, smoothstep(0.58, 1.0, h));
+  } else if (h > 0.38) {
+    color = mix(uLowerHorizon, uUpperHorizon, smoothstep(0.38, 0.58, h));
+  } else {
+    color = mix(uGround, uLowerHorizon, smoothstep(0.0, 0.38, h));
+  }
+  gl_FragColor = vec4(color, 1.0);
+}
+
+`,
+});
+
+const sky = new THREE.Mesh(skyGeometry, skyMaterial);
+sky.renderOrder = -100;
+scene.add(sky);
+
+/* ––––––––––––––––––––––––––––––––––––– /
+/ Aurora curtains                                                            /
+/ ––––––––––––––––––––––––––––––––––––– */
+
+const auroraGeometry = new THREE.PlaneGeometry(
+900,
+360,
+40,
+20,
+);
+
+const auroraMaterial = new THREE.ShaderMaterial({
+transparent: true,
+depthWrite: false,
+depthTest: false,
+blending: THREE.AdditiveBlending,
+uniforms: {
+uTime: { value: 0 },
+uOpacity: { value: 1 },
+uColorA: { value: new THREE.Color(0x2de27b) },
+uColorB: { value: new THREE.Color(0x57e6cf) },
+uColorC: { value: new THREE.Color(0x8fffe0) },
+},
+vertexShader: `
+uniform float uTime;
+
+varying vec2 vUv;
+varying float vWave;
+void main() {
+  vUv = uv;
+  vec3 transformed = position;
+  float waveA = sin(position.x * 0.018 + uTime * 0.12);
+  float waveB = sin(position.x * 0.041 - uTime * 0.075);
+  float waveC = sin(position.x * 0.009 + uTime * 0.045);
+  transformed.z +=
+    waveA * 22.0 +
+    waveB * 10.0 +
+    waveC * 18.0;
+  transformed.x += sin(position.y * 0.014 + uTime * 0.06) * 7.0;
+  vWave = waveA * 0.5 + waveB * 0.3 + waveC * 0.2;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(transformed, 1.0);
+}
+
+, fragmentShader: 
+uniform float uTime;
+uniform float uOpacity;
+
+uniform vec3 uColorA;
+uniform vec3 uColorB;
+uniform vec3 uColorC;
+varying vec2 vUv;
+varying float vWave;
+void main() {
+  float bandA = sin(vUv.x * 12.0 + vWave * 3.0 + uTime * 0.08);
+  float bandB = sin(vUv.x * 25.0 - vWave * 4.0 - uTime * 0.045);
+  float wisps = smoothstep(0.05, 0.95, bandA * 0.5 + bandB * 0.5 + 0.5);
+  float verticalFade =
+    smoothstep(0.0, 0.15, vUv.y) *
+    (1.0 - smoothstep(0.82, 1.0, vUv.y));
+  float horizontalFade =
+    smoothstep(0.0, 0.10, vUv.x) *
+    (1.0 - smoothstep(0.90, 1.0, vUv.x));
+  float lowerBreak = smoothstep(0.06, 0.28, vUv.y);
+  float colorMix = clamp(
+    0.5 +
+    sin(vUv.x * 7.0 + uTime * 0.035 + vWave * 2.0) * 0.5,
+    0.0,
+    1.0
+  );
+  vec3 color = mix(uColorA, uColorB, colorMix);
+  color = mix(color, uColorC, smoothstep(0.65, 1.0, vUv.y));
+  float alpha =
+    wisps *
+    verticalFade *
+    horizontalFade *
+    lowerBreak *
+    0.48 *
+    uOpacity;
+  gl_FragColor = vec4(color, alpha);
+}
+
+`,
+});
+
+const auroraGroup = new THREE.Group();
+
+const auroraBack = new THREE.Mesh(auroraGeometry, auroraMaterial);
+auroraBack.position.set(0, 125, -95);
+auroraBack.rotation.y = -0.10;
+auroraBack.renderOrder = -60;
+
+const auroraFrontMaterial = auroraMaterial.clone();
+auroraFrontMaterial.uniforms = THREE.UniformsUtils.clone(
+auroraMaterial.uniforms,
+);
+
+const auroraFront = new THREE.Mesh(
+auroraGeometry.clone(),
+auroraFrontMaterial,
+);
+
+auroraFront.position.set(0, 105, -52);
+auroraFront.rotation.y = 0.12;
+auroraFront.scale.set(0.92, 0.88, 1);
+auroraFront.renderOrder = -55;
+
+auroraGroup.add(auroraBack, auroraFront);
+scene.add(auroraGroup);
+
+/* ––––––––––––––––––––––––––––––––––––– /
+/ Dedicated starfield                                                       /
+/ ––––––––––––––––––––––––––––––––––––– */
+
+const starCount = 2000;
+const starPositions = new Float32Array(starCount * 3);
+const starColors = new Float32Array(starCount * 3);
+
+const starColorA = new THREE.Color(0xbfdff2);
+const starColorB = new THREE.Color(0xffffff);
+const starColorC = new THREE.Color(0x9bc8df);
+
+for (let i = 0; i < starCount; i += 1) {
+const radius = 420 + Math.random() * 260;
+const theta = Math.random() * Math.PI * 2;
+const phi = Math.acos(THREE.MathUtils.lerp(-0.05, 0.92, Math.random()));
+
+const x = radius * Math.sin(phi) * Math.cos(theta);
+const y = Math.abs(radius * Math.cos(phi)) + 20;
+const z = radius * Math.sin(phi) * Math.sin(theta);
+
+const index = i * 3;
+
+starPositions[index] = x;
+starPositions[index + 1] = y;
+starPositions[index + 2] = z;
+
+const mix = Math.random();
+
+const color =
+mix < 0.72
+? starColorA
+: mix < 0.94
+? starColorB
+: starColorC;
+
+starColors[index] = color.r;
+starColors[index + 1] = color.g;
+starColors[index + 2] = color.b;
+}
+
+const starGeometry = new THREE.BufferGeometry();
+
+starGeometry.setAttribute(
+“position”,
+new THREE.BufferAttribute(starPositions, 3),
+);
+
+starGeometry.setAttribute(
+“color”,
+new THREE.BufferAttribute(starColors, 3),
+);
+
+const starMaterial = new THREE.PointsMaterial({
+size: 1.55,
+sizeAttenuation: true,
+vertexColors: true,
+transparent: true,
+opacity: 0.9,
+depthWrite: false,
+depthTest: false,
+blending: THREE.AdditiveBlending,
+});
+
+const stars = new THREE.Points(starGeometry, starMaterial);
+stars.renderOrder = -40;
+scene.add(stars);
+
+/* ––––––––––––––––––––––––––––––––––––– /
+/ Mountain                                                                   /
+/ ––––––––––––––––––––––––––––––––––––– */
+
+const loader = new GLTFLoader();
+
+function prepareMountain(gltf) {
+const sourceScene = gltf.scene;
+
+if (!sourceScene) {
+document.title = “error:no-scene”;
+throw new Error(“GLB loaded without a scene”);
+}
+
+const meshes = snapshotMeshes(sourceScene);
+
+if (!meshes.length) {
+document.title = “error:no-meshes”;
+throw new Error(“GLB loaded without meshes”);
+}
+
+meshes.forEach((mesh) => {
+mesh.castShadow = false;
+mesh.receiveShadow = false;
+
+const materials = Array.isArray(mesh.material)
+  ? mesh.material
+  : [mesh.material];
+materials.forEach((material) => {
+  if (!material) return;
+  material.metalness = 0;
+  material.roughness = 0.86;
+  material.envMapIntensity = 0;
+  material.transparent = false;
+  material.opacity = 1;
+});
+
+});
+
+/*
+
+* The source GLB contains the mountain and a large embedded star field.
+* We keep the mountain meshes but omit the source star meshes so the
+* dedicated controlled starfield above remains the only star layer.
+    */
+    meshes.forEach((mesh) => {
+    const geometry = mesh.geometry;
+
+if (!geometry) return;
+const position = geometry.attributes.position;
+if (!position) return;
+const bbox = new THREE.Box3().setFromBufferAttribute(position);
+/*
+ * Source stars are tiny point-like objects. The actual mountain meshes
+ * have substantial geometry extents, so this deliberately conservative
+ * test removes only the obvious star objects.
+ */
+const size = bbox.getSize(new THREE.Vector3());
+if (
+  mesh.isPoints ||
+  (size.x < 2 && size.y < 2 && size.z < 2)
+) {
+  mesh.parent?.remove(mesh);
+  return;
+}
+mountainRoot.add(mesh);
+
+});
+
+const mountainMeshes = snapshotMeshes(mountainRoot);
+
+if (!mountainMeshes.length) {
+document.title = “error:no-mountain”;
+throw new Error(“No mountain meshes remained after preparation”);
+}
+
+/*
+
+* Snow / stone / rock material treatment.
+* This is intentionally restrained: the renderer should reveal the GLB,
+* not wash it with a large environmental overlay.
+    */
+    mountainMeshes.forEach((mesh) => {
+    const materials = Array.isArray(mesh.material)
+    ? mesh.material
+    : [mesh.material];
+
+materials.forEach((material) => {
+  if (!material) return;
+  material.metalness = 0;
+  material.roughness = 0.86;
+  material.envMapIntensity = 0;
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uSnow = {
+      value: new THREE.Color(0xf4f8fb),
+    };
+    shader.uniforms.uStone = {
+      value: new THREE.Color(0x8a9aa6),
+    };
+    shader.uniforms.uRock = {
+      value: new THREE.Color(0x3d5360),
+    };
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <common>",
+      `
+        #include <common>
+        varying vec3 vAuraWorldPosition;
+        varying vec3 vAuraWorldNormal;
+      `,
+    );
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <worldpos_vertex>",
+      `
+        vec4 auraWorldPosition = modelMatrix * vec4(position, 1.0);
+        vAuraWorldPosition = auraWorldPosition.xyz;
+        vAuraWorldNormal = normalize(
+          mat3(modelMatrix) * normal
+        );
+      `,
+    );
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <common>",
+      `
+        #include <common>
+        uniform vec3 uSnow;
+        uniform vec3 uStone;
+        uniform vec3 uRock;
+        varying vec3 vAuraWorldPosition;
+        varying vec3 vAuraWorldNormal;
+      `,
+    );
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <color_fragment>",
+      `
+        #include <color_fragment>
+        float altitude = smoothstep(
+          -20.0,
+          65.0,
+          vAuraWorldPosition.y
+        );
+        float upward = smoothstep(
+          0.10,
+          0.72,
+          vAuraWorldNormal.y
+        );
+        float snowMask = clamp(
+          altitude * 0.72 +
+          upward * 0.45,
+          0.0,
+          1.0
+        );
+        vec3 mountainBase = mix(
+          uRock,
+          uStone,
+          smoothstep(0.18, 0.48, altitude)
+        );
+        mountainBase = mix(
+          mountainBase,
+          uSnow,
+          snowMask
+        );
+        diffuseColor.rgb *= mountainBase;
+      `,
+    );
+  };
+  material.needsUpdate = true;
+});
+
+}
+
+const mountainBox = new THREE.Box3().setFromObject(mountainRoot);
+
+const mountainSize = mountainBox.getSize(new THREE.Vector3());
+const mountainCenter = mountainBox.getCenter(new THREE.Vector3());
+
+const maxHorizontal =
+Math.max(mountainSize.x, mountainSize.z);
+
+const isPortrait = window.innerHeight > window.innerWidth;
+
+/*
+
+* Slightly tighter composition than the original whole-scene framing.
+* The mountain remains the hero rather than becoming a distant object.
+    */
+    const frameMultiplier = isPortrait ? 0.43 : 0.35;
+
+const verticalFov =
+THREE.MathUtils.degToRad(camera.fov);
+
+const horizontalFov =
+2 *
+Math.atan(
+Math.tan(verticalFov / 2) * camera.aspect,
+);
+
+const effectiveFov = isPortrait
+? verticalFov
+: horizontalFov;
+
+const frameDimension = isPortrait
+? maxHorizontal
+: mountainSize.x;
+
+const distance =
+(frameDimension * frameMultiplier) /
+(2 * Math.tan(effectiveFov / 2));
+
+const lookAt = mountainCenter.clone();
+
+lookAt.y += isPortrait
+? mountainSize.y * 0.03
+: mountainSize.y * 0.06;
+
+camera.position.set(
+mountainCenter.x,
+mountainCenter.y + mountainSize.y * 0.04,
+mountainCenter.z + distance,
+);
+
+camera.lookAt(lookAt);
+
+/*
+
+* Keep the environmental layers anchored around the mountain.
+    */
+    auroraGroup.position.set(
+    mountainCenter.x,
+    mountainCenter.y - mountainSize.y * 0.05,
+    mountainCenter.z,
+    );
+
+stars.position.set(
+mountainCenter.x,
+mountainCenter.y + mountainSize.y * 0.18,
+mountainCenter.z,
+);
+
+return {
+mountainBox,
+mountainSize,
+mountainCenter,
+};
+}
+
+/* ––––––––––––––––––––––––––––––––––––– /
+/ Lighting                                                                   /
+/ ––––––––––––––––––––––––––––––––––––– */
+
+const ambientLight = new THREE.AmbientLight(
+0xb8d0e0,
+0.42,
+);
+
+scene.add(ambientLight);
+
+const moonLight = new THREE.DirectionalLight(
+0xeaf6ff,
+1.45,
+);
+
+moonLight.position.set(-120, 240, 180);
+scene.add(moonLight);
+
+const fillLight = new THREE.DirectionalLight(
+0x6fa8c4,
+0.65,
+);
+
+fillLight.position.set(180, 100, 80);
+scene.add(fillLight);
+
+const auroraRim = new THREE.PointLight(
+0x88e0c0,
+0.42,
+420,
+);
+
+auroraRim.position.set(
+0,
+135,
+-110,
+);
+
+scene.add(auroraRim);
+
+/* ––––––––––––––––––––––––––––––––––––– /
+/ Atmospheric haze                                                           /
+/ ––––––––––––––––––––––––––––––––––––– */
+
+const hazeGeometry = new THREE.PlaneGeometry(
+520,
+260,
+);
+
+function createHaze(intensity, position, scale) {
+const material = new THREE.ShaderMaterial({
+transparent: true,
+depthWrite: false,
+depthTest: false,
+blending: THREE.AdditiveBlending,
+uniforms: {
+uColor: {
+value: new THREE.Color(0x8ebbd3),
+},
+uIntensity: {
+value: intensity,
+},
+},
+vertexShader: `
+varying vec2 vUv;
+
+  void main() {
+    vUv = uv;
+    gl_Position =
+      projectionMatrix *
+      modelViewMatrix *
+      vec4(position, 1.0);
+  }
+`,
+fragmentShader: `
+  uniform vec3 uColor;
+  uniform float uIntensity;
+  varying vec2 vUv;
+  void main() {
+    vec2 centered = vUv - 0.5;
+    float radial = 1.0 - smoothstep(
+      0.05,
+      0.72,
+      length(centered)
+    );
+    /*
+     * The haze is deliberately subtle. It should provide depth at the
+     * horizon without becoming a translucent page-wide veil.
+     */
+    float horizonMask =
+      smoothstep(0.08, 0.34, vUv.y) *
+      (1.0 - smoothstep(0.68, 0.96, vUv.y));
+    float alpha =
+      radial *
+      horizonMask *
+      uIntensity;
+    gl_FragColor = vec4(uColor, alpha);
+  }
+`,
+
+});
+
+const mesh = new THREE.Mesh(
+hazeGeometry.clone(),
+material,
+);
+
+mesh.position.copy(position);
+mesh.scale.set(scale, scale, 1);
+mesh.renderOrder = -70;
+
+return mesh;
+}
+
+const hazeGroup = new THREE.Group();
+
+hazeGroup.add(
+createHaze(
+0.025,
+new THREE.Vector3(0, -8, -55),
+1.15,
+),
+);
+
+hazeGroup.add(
+createHaze(
+0.018,
+new THREE.Vector3(-120, 12, -90),
+0.95,
+),
+);
+
+hazeGroup.add(
+createHaze(
+0.015,
+new THREE.Vector3(140, 18, -115),
+1.05,
+),
+);
+
+scene.add(hazeGroup);
+
+/* ––––––––––––––––––––––––––––––––––––– /
+/ Water / ice horizon                                                        /
+/ ––––––––––––––––––––––––––––––––––––– */
+
+const waterGeometry = new THREE.PlaneGeometry(
+900,
+60,
+);
+
+const waterMaterial = new THREE.ShaderMaterial({
+transparent: true,
+depthWrite: false,
+depthTest: false,
+uniforms: {
+uTop: {
+value: new THREE.Color(0x1c3046),
+},
+uBottom: {
+value: new THREE.Color(0x03070d),
+},
+uShimmer: {
+value: new THREE.Color(0x8dbbd0),
+},
+uTime: {
+value: 0,
+},
+},
+vertexShader: `
+varying vec2 vUv;
+
+void main() {
+  vUv = uv;
+  gl_Position =
+    projectionMatrix *
+    modelViewMatrix *
+    vec4(position, 1.0);
+}
+
+, fragmentShader: 
+uniform vec3 uTop;
+uniform vec3 uBottom;
+uniform vec3 uShimmer;
+uniform float uTime;
+
+varying vec2 vUv;
+void main() {
+  float gradient = smoothstep(
+    0.0,
+    0.9,
+    vUv.y
+  );
+  vec3 color = mix(
+    uBottom,
+    uTop,
+    gradient
+  );
+  float ripple = sin(
+    vUv.x * 32.0 +
+    uTime * 0.18
+  ) * 0.5 + 0.5;
+  float shimmer = smoothstep(
+    0.76,
+    0.98,
+    ripple
+  ) * 0.07;
+  color += uShimmer * shimmer;
+  /*
+   * Keep the reflection/frozen-horizon treatment extremely restrained.
+   * It is a visual suggestion, not a second opaque surface.
+   */
+  float alpha =
+    0.18 *
+    smoothstep(0.08, 0.72, vUv.y);
+  gl_FragColor = vec4(
+    color,
+    alpha
+  );
+}
+
+`,
+});
+
+const water = new THREE.Mesh(
+waterGeometry,
+waterMaterial,
+);
+
+water.rotation.x = -Math.PI / 2;
+water.position.set(0, -34, -6);
+water.renderOrder = -10;
+
+scene.add(water);
+
+/* ––––––––––––––––––––––––––––––––––––– /
+/ Foreground silhouette                                                      /
+/ ––––––––––––––––––––––––––––––––––––– */
+
+const foregroundGeometry = new THREE.PlaneGeometry(
+800,
+35,
+);
+
+const foregroundMaterial = new THREE.MeshBasicMaterial({
+color: 0x010305,
+transparent: true,
+opacity: 0.82,
+depthWrite: false,
+depthTest: false,
+});
+
+const foreground = new THREE.Mesh(
+foregroundGeometry,
+foregroundMaterial,
+);
+
+foreground.position.set(
+0,
+-window.innerHeight * 0.05,
+-25,
+);
+
+foreground.renderOrder = -5;
+
+scene.add(foreground);
+
+/* ––––––––––––––––––––––––––––––––––––– /
+/ Load GLB                                                                  /
+/ ––––––––––––––––––––––––––––––––––––– */
+
+loader.load(
+“/assets/models/mountains/single-mountain-snow.glb”,
+(gltf) => {
+if (destroyed) return;
+
+try {
+  prepareMountain(gltf);
+  document.title = "ready";
+} catch (error) {
+  console.error("[Aura] mountain preparation failed", error);
+  document.title = "error:no-scene";
+}
+
+},
+undefined,
+(error) => {
+console.error(”[Aura] GLB load failed”, error);
+document.title = “error:glb-load”;
+},
+);
+
+/* ––––––––––––––––––––––––––––––––––––– /
+/ Runtime controls                                                           /
+/ ––––––––––––––––––––––––––––––––––––– */
+
+window.addEventListener(“resize”, resize);
+
+window.addEventListener(“message”, (event) => {
+if (!event || !event.data) return;
+
+if (event.data.type === “aura-pause”) {
+paused = Boolean(event.data.paused);
+}
+});
+
+/* ––––––––––––––––––––––––––––––––––––– /
+/ Animation                                                                  /
+/ ––––––––––––––––––––––––––––––––––––– */
+
+function animate() {
+if (destroyed) return;
+
+animationFrame = requestAnimationFrame(animate);
+
+if (paused) return;
+
+const elapsed = clock.getElapsedTime();
+
+auroraMaterial.uniforms.uTime.value = elapsed;
+
+if (auroraFrontMaterial.uniforms.uTime) {
+auroraFrontMaterial.uniforms.uTime.value = elapsed + 4.5;
+}
+
+waterMaterial.uniforms.uTime.value = elapsed;
+
+/*
+
+* Very restrained environmental movement. The mountain itself remains
+* locked so the scene feels cinematic rather than like a moving wallpaper.
+    */
+    auroraGroup.rotation.y =
+    Math.sin(elapsed * 0.018) * 0.012;
+
+stars.rotation.y =
+elapsed * 0.003;
+
+renderer.render(scene, camera);
+}
+
+animate();
+
+/* ––––––––––––––––––––––––––––––––––––– /
+/ Cleanup                                                                    /
+/ ––––––––––––––––––––––––––––––––––––– */
+
+window.addEventListener(“beforeunload”, () => {
+destroyed = true;
+
+if (animationFrame) {
+cancelAnimationFrame(animationFrame);
+}
+
+window.removeEventListener(“resize”, resize);
+
+disposeObject(scene);
+
+renderer.dispose();
+});
