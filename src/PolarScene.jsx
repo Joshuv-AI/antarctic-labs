@@ -186,7 +186,13 @@ export default function PolarScene() {
       0.42,
       0.62,
       1 - progress
-    );
+    ) *
+    // STEP 24B: fade the constellation out near the very top so the
+    // hero Aura (z-index 2) is visibly dominant from scroll 0.
+    // smoothstep(0, 0.08, progress) = 0 at progress=0 (constellation hidden,
+    // Aura visible) and =1 by progress=0.08 (constellation ramps up).
+    // Existing bottom-fade-out at higher progress is preserved unchanged.
+    smoothstep(0.0, 0.08, progress);
 
   // --------------------------------------------------------------------------
   // AURA
