@@ -135,83 +135,23 @@ The camera and environment evolve as the visitor moves through the site.
 
 ⸻
 
-Three.js Scene
+Background System
 
-The primary scene lives in:
+The homepage background is a layered environment composed of:
 
-src/PolarScene.jsx
+* a constellation (ThreeUI defense-lines asset, sandboxed iframe with custom Canvas2D particle network)
+* an iceberg video loop (background.mov, full-bleed, autoplay, loop, muted, playsInline)
+* a fixed-position env-arrival runway that drives the constellation translateY and the iceberg translateY in opposite directions across scroll
 
-The scene is intentionally built as a real environment rather than a collection of flat background effects.
+The transition is spatial: the constellation slides upward and the iceberg slides upward from below — they tile the viewport with no overlap, and a 7%/7% soft mask cross-fade softens the meeting line on browsers that support mask-image.
 
-World stack
+The runtime background lives in:
 
-REAL SKY
-   ↓
-OPTIONAL HERO MOUNTAIN / AURORA
-   ↓
-REAL CHALAADI DISTANCE
-   ↓
-MOUNTAIN CLOUD
-   ↓
-DEEP TRANSITION CLOUD
-   ↓
-ATMOSPHERIC FOG
-   ↓
-REAL SNOW
-   ↓
-REAL ICE
-   ↓
-REAL ROCK
-   ↓
-DARK WATER
-   ↓
-CAMERA
-
-The cloud and mist system is procedural.
-
-It does not depend on an external cloud video or cloud asset.
+src/components/NewBackgroundVideo.jsx
 
 ⸻
 
-Hero Mountain / Aurora Asset
-
-The intended hero mountain and aurora source is:
-
-Aura_Borealis_.blend
-
-The .blend file is a source/master asset and is not intended to be loaded directly by the browser.
-
-The intended runtime workflow is:
-
-Aura_Borealis_.blend
-        ↓
-Inspect / clean in Blender
-        ↓
-Optimize
-        ↓
-Export GLB
-        ↓
-single-mountain-snow.glb
-        ↓
-public/assets/models/mountains/
-        ↓
-GitHub
-        ↓
-Cloudflare Pages
-        ↓
-Three.js
-
-The runtime scene already contains an optional slot for:
-
-/assets/models/mountains/single-mountain-snow.glb
-
-The scene must continue functioning if this file is temporarily unavailable.
-
-The future GLB should ideally remain below Cloudflare Pages’ individual asset-size limits.
-
-⸻
-
-Current 3D Assets
+Runtime Assets
 
 Runtime assets live under:
 
@@ -220,35 +160,12 @@ public/assets/
 The project currently uses:
 
 assets/
-├── hdr/
-│   └── daysky-8k-hdr-4k.jpg
+├── new-bg/
+│   └── new-background.mov
 │
-├── models/
-│   └── mountains/
-│       └── chalaadi.fbx
-│
-├── ice/
-│   ├── ice-color.png
-│   ├── ice-displacement.png
-│   ├── ice-normal.jpg
-│   └── ice-roughness.png
-│
-├── snow/
-│   ├── snow-003-color.png
-│   ├── snow-005-color.png
-│   ├── snow-ao.png
-│   ├── snow-color.png
-│   ├── snow-displacement.png
-│   ├── snow-normal.png
-│   └── snow-roughness.png
-│
-└── rock/
-    ├── rock-026-color.png
-    ├── rock-ao.png
-    ├── rock-color.png
-    ├── rock-displacement.png
-    ├── rock-normal.png
-    └── rock-roughness.png
+└── models/
+    └── mountains/
+        └── single-mountain-snow.glb
 
 Only assets actually required by the application should remain part of the production bundle.
 
@@ -275,8 +192,32 @@ Frontend Structure
 
 src/
 ├── main.jsx
-├── PolarScene.jsx
-└── styles.css
+├── pages.jsx
+├── styles.css
+├── seo.js
+├── components/
+│   └── NewBackgroundVideo.jsx
+├── content/
+│   ├── site.js
+│   ├── routes.js
+│   ├── pages.jsx
+│   ├── the-lab.js
+│   ├── systems.js
+│   ├── history.js
+│   ├── operator.js
+│   ├── transmission.js
+│   ├── tower-of-babel.js
+│   ├── government.js
+│   ├── field-interests.js
+│   ├── expeditions.js
+├── lib/
+│   └── gsap-iframe-injector.js
+└── shaders/
+    ├── threeui.css
+    └── neuform-isolated/
+        ├── NeuformBatchEffects.tsx
+        └── sources/
+            └── defense-lines.html
 
 main.jsx
 
@@ -292,26 +233,13 @@ Responsible for:
 * contact
 * metadata
 * UI animation
+* GSAP scroll-trigger orchestration for the background arrival transition
 
-PolarScene.jsx
+pages.jsx
 
-Physical environment.
+Page components.
 
-Responsible for:
-
-* Three.js renderer
-* camera
-* lighting
-* sky
-* terrain
-* models
-* PBR materials
-* clouds
-* atmosphere
-* stars
-* aurora
-* world movement
-* scroll-driven environmental movement
+Renders the homepage and all inner pages from the content modules.
 
 styles.css
 
@@ -333,12 +261,11 @@ Responsible for:
 
 Routes
 
-Current application routes:
+Current application routes are defined in:
 
-/
-├── /project-01
-├── /project-02
-└── /about
+src/content/routes.js
+
+That file is the source of truth for the site's IA, route metadata, and backward-compatibility aliases. Do not duplicate the route list elsewhere.
 
 The project uses client-side routing without introducing a routing framework.
 

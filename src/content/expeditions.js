@@ -370,21 +370,20 @@ export const expeditions = [
     objective:
       "Ship a production site with a centralized content layer, a per-route registry, per-route SEO, and a preserved visual environment.",
     approach:
-      "React + Vite + Three.js visual environment (DefenseLines → atmospheric veil → Aura Borealis GLB). Centralized content under src/content/. Manual pushState + popstate routing preserved. Per-route SEO helper.",
+      "React + Vite layered background environment (constellation ThreeUI iframe + iceberg video loop, parallel-translate scroll arrival). Centralized content under src/content/. Manual pushState + popstate routing preserved. Per-route SEO helper.",
     system:
-      "src/content/* modules, src/pages.jsx destination shells, src/seo.js per-route metadata applier, src/PolarScene.jsx visual environment.",
+      "src/content/* modules, src/pages.jsx destination shells, src/seo.js per-route metadata applier, src/components/NewBackgroundVideo.jsx background environment.",
     build:
       "Production site deployed via Cloudflare Pages. Stage A content + route architecture and Stage B finalized content landed today.",
-    technologies: ["React 19", "Vite 7", "Three.js 0.180", "GSAP 3.13", "Cloudflare Pages"],
+    technologies: ["React 19", "Vite 7", "GSAP 3.13", "Cloudflare Pages"],
     result: "",
     evidence: [
       "projects/antarctic-labs/src/main.jsx",
-      "projects/antarctic-labs/src/PolarScene.jsx",
       "projects/antarctic-labs/src/pages.jsx",
+      "projects/antarctic-labs/src/components/NewBackgroundVideo.jsx",
       "projects/antarctic-labs/src/content/*.js",
       "projects/antarctic-labs/src/seo.js",
       "https://antarctic-labs.com",
-      "workspace/MEMORY.md visual-environment commits (11dfe26, 3d1841d, 0df401d, ed109a2, 0d5ae8c)",
     ],
     links: [
       { label: "https://antarctic-labs.com", href: "https://antarctic-labs.com" },
