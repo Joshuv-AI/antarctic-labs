@@ -108,7 +108,17 @@ function App() {
               escape the .page-shell z-index:5 stacking context that would
               otherwise paint the editorial content on top of them. */}
           <div className="constellation-layer">
-            <DefenseLines />
+            <DefenseLines
+              mode="dark"
+              speed={3.0}
+              size={0.35}
+              length={0.35}
+              density={1.99}
+              opacity={1.0}
+              hue={0}
+              saturation={0.0}
+              brightness={1.65}
+            />
           </div>
           <NewBackgroundVideo />
           <Home go={go} />
