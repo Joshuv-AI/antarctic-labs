@@ -18,7 +18,7 @@ export const site = {
     eyebrow: "INDEPENDENT TECHNOLOGY LABORATORY",
     title: ["USEFUL MACHINES", "FOR UNKNOWN", "TERRITORY."],
     sub: "AI, automation, software, data, blockchain, and experimental systems — explored, built, tested, and documented.",
-    cta: { label: "ENTER THE LAB", to: "/the-lab" },
+    cta: { label: "ENTER THE LAB", to: "/projects" },
     signal: "Different territory. Same instinct.",
     body: "I’m interested in problems that can be understood, rebuilt, automated, or pushed further. Antarctic Labs is where those experiments become working systems.",
     method: "Learn → Experiment → Build → Test → Iterate.",

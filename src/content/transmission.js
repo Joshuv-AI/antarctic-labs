@@ -56,7 +56,7 @@ export const transmission = {
         },
         {
           value: "government",
-          label: "GOVERNMENT / PUBLIC SECTOR",
+          label: "GOV CONTRACTS",
         },
         {
           value: "general",

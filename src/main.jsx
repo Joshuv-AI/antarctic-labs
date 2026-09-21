@@ -9,7 +9,6 @@ import { site as content } from "./content/site.js";
 import { routes, matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
 import {
-  TheLab,
   TowerOfBabel,
   TowerLibrary,
   LibraryArtifact,
@@ -124,7 +123,6 @@ function App() {
           <Home go={go} />
         </>
       )}
-      {path === "/the-lab" && <TheLab go={go} />}
       {path === "/projects" && <Projects go={go} />}
       {matchedPattern === "/projects/:id" && (
         <ProjectDetail
@@ -144,7 +142,7 @@ function App() {
           params={pageParams}
         />
       )}
-      {path === "/government" && (
+      {path === "/government-contracting" && (
         <Government go={go} />
       )}
       {path === "/about" && (
@@ -810,38 +808,32 @@ function Menu({
           firstItemRef
         )}
         {item(
-          "/the-lab",
-          "02",
-          "THE LAB",
-          "FIELD STATION"
-        )}
-        {item(
           "/projects",
-          "03",
+          "02",
           "PROJECTS",
           "SELECTED WORK"
         )}
         {item(
           "/tower-of-babel",
-          "04",
+          "03",
           "TOWER OF BABEL",
           "LIBRARY"
         )}
         {item(
-          "/government",
-          "05",
-          "GOVERNMENT",
+          "/government-contracting",
+          "04",
+          "GOV CONTRACTS",
           "PUBLIC SECTOR"
         )}
         {item(
           "/about",
-          "06",
+          "05",
           "ABOUT",
           "JOSHUA ALMODOVAR"
         )}
         {item(
           "/contact",
-          "07",
+          "06",
           "CONTACT",
           "GET IN TOUCH"
         )}

@@ -21,13 +21,9 @@ export const routeMeta = {
     title: `${SITE_NAME} — Digital Systems & AI`,
     description: DEFAULT_DESCRIPTION,
   },
-  "/the-lab": {
-    title: `The Lab — ${SITE_NAME}`,
-    description: `The laboratory. ${DEFAULT_DESCRIPTION}`,
-  },
   "/projects": {
     title: `Projects — ${SITE_NAME}`,
-    description: `Selected projects, case studies, and expeditions. ${DEFAULT_DESCRIPTION}`,
+    description: `Selected projects, case studies, and expeditions. The Lab content (method, why Antarctic) is now included here. ${DEFAULT_DESCRIPTION}`,
   },
   "/tower-of-babel": {
     title: `Tower of Babel — ${SITE_NAME}`,
@@ -37,9 +33,9 @@ export const routeMeta = {
     title: `Library — Tower of Babel — ${SITE_NAME}`,
     description: `Personal library catalog. ${DEFAULT_DESCRIPTION}`,
   },
-  "/government": {
-    title: `Government — ${SITE_NAME}`,
-    description: `Public sector and government information. ${DEFAULT_DESCRIPTION}`,
+  "/government-contracting": {
+    title: `Government Contracting — ${SITE_NAME}`,
+    description: `Government contracting and public sector information. ${DEFAULT_DESCRIPTION}`,
   },
   "/about": {
     title: `About — ${SITE_NAME}`,
@@ -64,6 +60,16 @@ export const routeMetaLegacy = {
     title: `Projects — ${SITE_NAME}`,
     description: `Selected projects, case studies, and expeditions. ${DEFAULT_DESCRIPTION}`,
     redirect: "/projects",
+  },
+  "/the-lab": {
+    title: `Projects — ${SITE_NAME}`,
+    description: `Selected projects, case studies, and expeditions. ${DEFAULT_DESCRIPTION}`,
+    redirect: "/projects",
+  },
+  "/government": {
+    title: `Government Contracting — ${SITE_NAME}`,
+    description: `Government contracting and public sector information. ${DEFAULT_DESCRIPTION}`,
+    redirect: "/government-contracting",
   },
   "/history": {
     title: `About — ${SITE_NAME}`,
@@ -94,13 +100,12 @@ export const routeMetaLegacy = {
 // moves it to /contact.
 export const routes = [
   "/",
-  "/the-lab",
   "/projects",
   "/projects/:id",
   "/tower-of-babel",
   "/tower-of-babel/library",
   "/tower-of-babel/library/:id",
-  "/government",
+  "/government-contracting",
   "/about",
   "/contact",
   // Legacy patterns preserved for backward compatibility.

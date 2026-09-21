@@ -1,10 +1,12 @@
-// Government / Public Sector destination. Architecture-only at this
+// Government Contracting destination. Architecture-only at this
 // stage: no fabricated capabilities, registrations, NAICS codes,
 // contract vehicles, or credentials. Stage E copy is applied to the
 // public-facing fields. Per Stage E rules: do NOT claim government
 // contracts, clients, past performance, certifications, registrations,
 // security clearances, procurement status, contract vehicles,
 // set-aside status, government revenue, or agency relationships.
+//
+// Route: /government-contracting. Display label: GOV CONTRACTS.
 
 export const government = {
   brand: "ANTARCTIC LABS",

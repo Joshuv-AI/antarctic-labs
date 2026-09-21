@@ -19,31 +19,6 @@ import { government } from "./content/government.js";
 import { fieldInterests } from "./content/field-interests.js";
 import { transmission } from "./content/transmission.js";
 import { matchRoute } from "./content/routes.js";
-// ----- The Lab -------------------------------------------------------------
-export function TheLab({ go }) {
-  return (
-    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
-      <section className="inner-hero section">
-        <div className="section-index">01 / THE LAB</div>
-        <h1>{theLab.heading}</h1>
-      </section>
-      <section className="copy-block section reveal">
-        {theLab.body.map((p, i) => (
-          <p className={i === 0 ? "display-copy" : "body-copy"} key={i}>{p}</p>
-        ))}
-      </section>
-      <section className="copy-block section reveal">
-        <div className="section-index">{theLab.whyAntarctic.heading}</div>
-        {theLab.whyAntarctic.body.map((p, i) => (
-          <p className="body-copy" key={i}>{p}</p>
-        ))}
-      </section>
-      <section className="copy-block section">
-        <button className="text-link" onClick={() => go("/systems")}>SEE THE SYSTEMS <span>↗</span></button>
-      </section>
-    </main>
-  );
-}
 // ----- Systems -------------------------------------------------------------
 export function Systems({ go }) {
   return (
@@ -72,9 +47,27 @@ export function Systems({ go }) {
   );
 }
 // ----- Projects archive + detail (was: Expeditions) -------------------------
+// The Lab content (formerly a standalone /the-lab page) has been merged
+// into this page above the project archive grid. /the-lab is now a
+// legacy alias that redirects here.
 export function Projects({ go }) {
   return (
     <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
+      <section className="inner-hero section">
+        <div className="section-index">02 / THE LAB</div>
+        <h1>{theLab.heading}</h1>
+      </section>
+      <section className="copy-block section reveal">
+        {theLab.body.map((p, i) => (
+          <p className={i === 0 ? "display-copy" : "body-copy"} key={i}>{p}</p>
+        ))}
+      </section>
+      <section className="copy-block section reveal">
+        <div className="section-index">{theLab.whyAntarctic.heading}</div>
+        {theLab.whyAntarctic.body.map((p, i) => (
+          <p className="body-copy" key={i}>{p}</p>
+        ))}
+      </section>
       <section className="inner-hero section">
         <div className="section-index">03 / PROJECTS</div>
         <h1>{expeditionsArchive.heading}</h1>
