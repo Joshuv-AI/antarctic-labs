@@ -4,6 +4,7 @@ import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import "./styles.css";
 import NewBackgroundVideo from "./components/NewBackgroundVideo.jsx";
+import { ParticleNetwork } from "./shaders/neuform-isolated/NeuformBatchEffects.tsx";
 import { site as content } from "./content/site.js";
 import { routes, matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
@@ -103,6 +104,12 @@ function App() {
       />
       {path === "/" && (
         <>
+          {/* Background layers are direct children of the App root so they
+              escape the .page-shell z-index:5 stacking context that would
+              otherwise paint the editorial content on top of them. */}
+          <div className="constellation-layer">
+            <ParticleNetwork />
+          </div>
           <NewBackgroundVideo />
           <Home go={go} />
         </>

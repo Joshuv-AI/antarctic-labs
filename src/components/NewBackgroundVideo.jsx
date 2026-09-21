@@ -7,20 +7,15 @@
  * crown at the top half). Sits at z-index 0 below the constellation
  * (z-index 1) and below the page content (z-index 2+).
  *
- * Driven by the same scroll-progress signal main.jsx already exports
- * (scrollY / maxScroll), so the crossfade stays in lock-step with the
- * constellation fade-out. Falls back gracefully if the page is rendered
- * without the scroll provider (component just sits at full opacity).
+ * Computes its own scroll progress directly from window.scrollY to avoid
+ * coupling to the homepage component's internal ref state.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
-export default function NewBackgroundVideo({ progressRef }) {
+export default function NewBackgroundVideo() {
   const wrapRef = useRef(null);
   const videoRef = useRef(null);
-  const [opacity, setOpacity] = useState(0);
 
-  // Crossfade math matches the prototype — same smoothstep envelope.
-  // Constellation fades out 0.02 → 0.30; new-bg fades in 0.05 → 0.35.
   function smoothstep(e0, e1, x) {
     const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
     return t * t * (3 - 2 * t);
@@ -28,19 +23,28 @@ export default function NewBackgroundVideo({ progressRef }) {
 
   useEffect(() => {
     let raf = 0;
+    let lastWrittenOpacity = -1;
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+
     const update = () => {
-      const p = progressRef?.current ?? 0;
+      raf = 0;
+      const docH = document.documentElement.scrollHeight;
+      const winH = window.innerHeight;
+      const max = Math.max(1, docH - winH);
+      const p = Math.max(0, Math.min(1, window.scrollY / max));
+      // New bg fades in 0.05 → 0.35 of scroll progress.
       const next = smoothstep(0.05, 0.35, p);
-      setOpacity((prev) => (Math.abs(prev - next) > 0.005 ? next : prev));
+      // Only touch the DOM when the opacity actually changes by more than 0.5%.
+      if (Math.abs(lastWrittenOpacity - next) > 0.005) {
+        wrap.style.opacity = String(next);
+        lastWrittenOpacity = next;
+      }
     };
-    // Read scroll position directly so we don't need a React state
-    // update per frame — paint only when the value crosses 0.5%.
+
     const onScroll = () => {
       if (raf) return;
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        update();
-      });
+      raf = requestAnimationFrame(update);
     };
     window.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("resize", onScroll);
@@ -50,19 +54,22 @@ export default function NewBackgroundVideo({ progressRef }) {
       window.removeEventListener("resize", onScroll);
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [progressRef]);
+  }, []);
 
-  // Kick the video into motion as soon as the component mounts. The
-  // muted + autoplay + playsinline attributes keep it inline-playable
-  // on iOS Safari and Chrome mobile policies.
+  // Kick the video into motion as soon as the component mounts. Muted +
+  // autoplay + playsinline keep it inline-playable on iOS Safari + Chrome
+  // mobile autoplay policies. If autoplay is blocked until user
+  // interaction, the poster frame (none here, but the first frame of the
+  // .mov loads via preload) still holds the composition.
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    v.play().catch(() => {
-      // Autoplay can be blocked until the user interacts; the muted
-      // + playsinline attributes keep this rare. If it ever happens,
-      // the poster frame still holds the composition.
-    });
+    const playPromise = v.play();
+    if (playPromise && playPromise.catch) {
+      playPromise.catch(() => {
+        // Autoplay blocked until user interaction; first frame holds.
+      });
+    }
   }, []);
 
   return (
@@ -70,7 +77,7 @@ export default function NewBackgroundVideo({ progressRef }) {
       ref={wrapRef}
       className="new-bg-layer"
       aria-hidden="true"
-      style={{ opacity }}
+      style={{ opacity: 0 }}
     >
       <video
         ref={videoRef}
