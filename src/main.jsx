@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import "./styles.css";
-import PolarScene from "./PolarScene";
+import NewBackgroundVideo from "./components/NewBackgroundVideo.jsx";
 import { site as content } from "./content/site.js";
 import { routes, matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
@@ -91,7 +91,7 @@ function App() {
       <a href="#main-content" className="skip-link">
         Skip to main content
       </a>
-      {path === "/" && <PolarScene />}
+      {/* TODO: re-attach new background asset here on the homepage only. */}
       <SiteHeader
         onMenu={() => setMenuOpen(true)}
         go={go}
@@ -101,7 +101,12 @@ function App() {
         active={transitioning}
         label={pathLabel(path)}
       />
-      {path === "/" && <Home go={go} />}
+      {path === "/" && (
+        <>
+          <NewBackgroundVideo />
+          <Home go={go} />
+        </>
+      )}
       {path === "/the-lab" && <TheLab go={go} />}
       {path === "/projects" && <Projects go={go} />}
       {matchedPattern === "/projects/:id" && (
@@ -265,7 +270,6 @@ function useReveal(scope) {
 //   end of hero
 //   └── normal homepage content begins
 //
-// The environment itself remains fixed behind the page through PolarScene.
 // No additional translucent page layer is introduced here.
 // ============================================================================
 function Home({ go }) {
