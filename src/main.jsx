@@ -306,7 +306,69 @@ function Home({ go }) {
         root.current.querySelector(".hero-copy");
       const heroOrb =
         root.current.querySelector(".hero-orb");
+      const envArrival =
+        root.current.querySelector(".env-arrival");
+      const constellation =
+        document.querySelector(".constellation-layer");
+      const siteHeader =
+        document.querySelector(".site-header");
       if (!hero || !heroCopy) return;
+
+      // Stage 2: hide the site-header on the homepage until the
+      // environmental arrival completes. The header lives as a sibling
+      // of <Home> in the App root, so its initial hidden state must be
+      // applied here via a class (rather than scoped to .home-page in
+      // CSS, which would not match it).
+      if (siteHeader) {
+        siteHeader.classList.add("is-pending-reveal");
+      }
+
+      // Stage 2: constellation translateY + site-header fade-in.
+      // Both are scoped to .env-arrival so adding homepage sections
+      // later cannot shift when the environmental transition fires.
+      // Respect prefers-reduced-motion: skip the animation entirely
+      // and reveal the header + constellation in their final states.
+      if (envArrival && constellation) {
+        if (reduce) {
+          gsap.set(constellation, { y: 0 });
+        } else {
+          gsap.fromTo(
+            constellation,
+            { y: 0 },
+            {
+              y: "-100vh",
+              ease: "none",
+              scrollTrigger: {
+                trigger: envArrival,
+                start: "top top",
+                end: "bottom top",
+                scrub: true,
+              },
+            }
+          );
+        }
+      }
+      if (siteHeader) {
+        if (reduce) {
+          siteHeader.classList.remove("is-pending-reveal");
+          siteHeader.classList.add("is-revealed");
+        } else if (envArrival) {
+          ScrollTrigger.create({
+            trigger: envArrival,
+            start: "bottom 60%",
+            once: true,
+            onEnter: () => {
+              siteHeader.classList.remove("is-pending-reveal");
+              siteHeader.classList.add("is-revealed");
+            },
+          });
+        } else {
+          // No env-arrival on this page (e.g. inner page); show header.
+          siteHeader.classList.remove("is-pending-reveal");
+          siteHeader.classList.add("is-revealed");
+        }
+      }
+
       gsap.fromTo(
         heroCopy,
         {
@@ -317,10 +379,16 @@ function Home({ go }) {
           y: 0,
           opacity: 1,
           ease: "power3.out",
+          // Pushed the start from "top 88%" to "top 55%" so the hero
+          // copy only begins entering after the constellation has
+          // nearly finished receding (env-arrival is 200vh; the hero
+          // starts at 200vh; "top 55%" of the viewport means the
+          // hero-copy's top must rise to roughly the upper third of
+          // the viewport before the fade begins).
           scrollTrigger: {
             trigger: heroCopy,
-            start: "top 88%",
-            end: "top 52%",
+            start: "top 55%",
+            end: "top 25%",
             scrub: 0.65,
           },
         }
@@ -348,6 +416,12 @@ function Home({ go }) {
       id="main-content"
       tabIndex={-1}
     >
+      {/* .env-arrival is a visual-only scroll runway at the top of the
+          homepage. The constellation layer physically translates upward
+          as the user scrolls through this section (driven by the GSAP
+          ScrollTrigger in Home's useEffect, scoped to this element).
+          No editorial copy lives inside this section. */}
+      <section className="env-arrival" aria-hidden="true" />
       <section id="home" className="hero section">
         <div
           className="hero-orb"
