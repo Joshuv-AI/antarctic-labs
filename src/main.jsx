@@ -323,14 +323,21 @@ function Home({ go }) {
         siteHeader.classList.add("is-pending-reveal");
       }
 
-      // Stage 2: constellation translateY + site-header fade-in.
-      // Both are scoped to .env-arrival so adding homepage sections
-      // later cannot shift when the environmental transition fires.
-      // Respect prefers-reduced-motion: skip the animation entirely
-      // and reveal the header + constellation in their final states.
+      // Stage 3 (post-feedback): constellation translateY + iceberg
+      // counter-translateY. The two layers occupy opposite vertical
+      // positions at every moment during env-arrival so they never
+      // visually overlap (one ending, the other beginning). The
+      // constellation slides upward from y=0 to y=-100vh; the iceberg
+      // slides upward from y=+100vh to y=0 over the same scroll
+      // window so their visible portions never coincide.
+      // Both animations are scoped to .env-arrival so adding homepage
+      // sections later cannot shift when the transition fires.
+      const iceberg =
+        document.querySelector(".new-bg-layer");
       if (envArrival && constellation) {
         if (reduce) {
           gsap.set(constellation, { y: 0 });
+          if (iceberg) gsap.set(iceberg, { y: 0 });
         } else {
           gsap.fromTo(
             constellation,
@@ -346,6 +353,22 @@ function Home({ go }) {
               },
             }
           );
+          if (iceberg) {
+            gsap.fromTo(
+              iceberg,
+              { y: "100vh" },
+              {
+                y: 0,
+                ease: "none",
+                scrollTrigger: {
+                  trigger: envArrival,
+                  start: "top top",
+                  end: "bottom top",
+                  scrub: true,
+                },
+              }
+            );
+          }
         }
       }
       if (siteHeader) {

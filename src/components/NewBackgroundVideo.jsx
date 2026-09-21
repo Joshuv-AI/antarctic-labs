@@ -1,25 +1,23 @@
 /*
  * NewBackgroundVideo.jsx
  *
- * Full-bleed background video that sits underneath the constellation layer
- * and the homepage editorial content. The video is ALWAYS fully opaque;
- * no scroll-driven opacity logic. The constellation layer (mounted by the
- * App root) physically translates upward during the environmental arrival
- * phase, revealing the video underneath.
+ * Full-bleed background video that sits underneath the constellation
+ * layer and the homepage editorial content. The video is ALWAYS fully
+ * opaque (no scroll-driven opacity). During the environmental arrival
+ * phase it starts positioned one viewport below the screen and slides
+ * upward in parallel with the constellation sliding upward — the two
+ * layers occupy opposite vertical positions at every moment so they
+ * never visually overlap (one ending, the other beginning).
  *
  * Sits at z-index 4 (below the constellation at z-index 5, below the
- * page-shell at z-index 6).
+ * page-shell at z-index 6). Initial transform: translateY(100vh).
  */
 import { useEffect, useRef } from "react";
 
 export default function NewBackgroundVideo() {
+  const wrapRef = useRef(null);
   const videoRef = useRef(null);
 
-  // Kick the video into motion as soon as the component mounts. Muted +
-  // autoplay + playsinline keep it inline-playable on iOS Safari + Chrome
-  // mobile autoplay policies. If autoplay is blocked until user
-  // interaction, the first frame of the .mov (loaded via preload="auto")
-  // still holds the composition.
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -32,7 +30,11 @@ export default function NewBackgroundVideo() {
   }, []);
 
   return (
-    <div className="new-bg-layer" aria-hidden="true">
+    <div
+      ref={wrapRef}
+      className="new-bg-layer"
+      aria-hidden="true"
+    >
       <video
         ref={videoRef}
         className="new-bg-video"
@@ -54,3 +56,4 @@ export default function NewBackgroundVideo() {
     </div>
   );
 }
+
