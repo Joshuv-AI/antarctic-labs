@@ -6,9 +6,9 @@
  * and a single GSAP scroll timeline (built in Home.jsx) drives it up
  * to y=0 while the constellation exits upward above it. The two
  * layers are pixel-synced in that timeline so the iceberg's top edge
- * meets the constellation's bottom edge at one clean meeting line —
- * sequential, never layered or blended, with no gap. Afterwards the
- * video stays fixed as the backdrop the editorial content scrolls
+ * meets the constellation's bottom edge at one meeting line, with a
+ * 6% crossfade dissolving the starfield into the ice — sequential,
+ * never stacked, with no gap. Afterwards the video stays fixed as the backdrop the editorial content scrolls
  * over (it sits at z-index 4, below the page-shell at z-index 6).
  */
 import { useEffect, useRef } from "react";
@@ -66,12 +66,12 @@ export default function NewBackgroundVideo() {
         preload="auto"
       >
         <source
-          src="/assets/new-bg/new-background.mov"
-          type="video/quicktime"
+          src="/assets/new-bg/new-background.mp4"
+          type="video/mp4"
         />
         <source
           src="/assets/new-bg/new-background.mov"
-          type="video/mp4"
+          type="video/quicktime"
         />
       </video>
     </div>
