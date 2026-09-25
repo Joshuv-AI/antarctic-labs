@@ -556,7 +556,7 @@ export function LibraryArtifact({ go, params }) {
 // ----- Government ----------------------------------------------------------
 export function Government({ go }) {
   return (
-    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
+    <main className="page-shell inner-page gov-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">{government.index}</div>
         <span className="gov-status-pill">{government.statusPill}</span>
