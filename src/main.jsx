@@ -132,10 +132,10 @@ function App() {
             <DefenseLines
               mode="dark"
               speed={1.2}
-              size={0.35}
+              size={1.0}
               length={0.35}
-              density={1.30}
-              opacity={1.0}
+              density={1.0}
+              opacity={0.05}
               hue={0}
               saturation={0.0}
               brightness={1.65}
