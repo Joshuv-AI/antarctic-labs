@@ -285,6 +285,94 @@ function useReveal(scope) {
   }, [scope]);
 }
 // ============================================================================
+// MANIFESTO FILL
+// ============================================================================
+//
+// Montfort-style reading-progress fill: the manifesto's display copy fills
+// in character by character, scrubbed to scroll position — dim ghosts that
+// resolve into full text as the visitor reads down. Purely additive: the
+// existing .reveal entrance on the section is untouched, and with
+// prefers-reduced-motion the text renders normally with no split at all.
+function useManifestoFill(scope) {
+  useEffect(() => {
+    if (!scope.current) return;
+    const reduce =
+      window.matchMedia &&
+      window.matchMedia(
+        "(prefers-reduced-motion: reduce)"
+      ).matches;
+    if (reduce) return;
+    const el =
+      scope.current.querySelector(
+        ".manifesto .display-copy"
+      );
+    if (!el) return;
+    const text = el.textContent;
+    if (!text || !text.trim()) return;
+
+    // Split into words (kept intact so wrapping never breaks mid-word)
+    // of per-character spans. The paragraph keeps an aria-label so
+    // screen readers hear the sentence once, not a spray of letters.
+    el.setAttribute("aria-label", text.trim());
+    const frag = document.createDocumentFragment();
+    const chars = [];
+    text.split(/(\s+)/).forEach((part) => {
+      if (!part) return;
+      if (/^\s+$/.test(part)) {
+        frag.appendChild(
+          document.createTextNode(" ")
+        );
+        return;
+      }
+      const word = document.createElement("span");
+      word.className = "mf-word";
+      word.setAttribute("aria-hidden", "true");
+      [...part].forEach((ch) => {
+        const c = document.createElement("span");
+        c.className = "mf-char";
+        c.textContent = ch;
+        word.appendChild(c);
+        chars.push(c);
+      });
+      frag.appendChild(word);
+    });
+    el.textContent = "";
+    el.appendChild(frag);
+
+    const total = chars.length;
+    const applyFill = (p) => {
+      const head = p * total;
+      for (let i = 0; i < total; i++) {
+        const local = Math.min(
+          1,
+          Math.max(0, head - i) / 2
+        );
+        chars[i].style.opacity = (
+          0.13 +
+          0.87 * local
+        ).toFixed(3);
+      }
+    };
+    applyFill(0);
+
+    const ctx = gsap.context(() => {
+      ScrollTrigger.create({
+        trigger: el,
+        start: "top 82%",
+        end: "top 32%",
+        scrub: 0.6,
+        onUpdate: (self) =>
+          applyFill(self.progress),
+      });
+    }, scope);
+    return () => {
+      ctx.revert();
+      el.textContent = text;
+      el.removeAttribute("aria-label");
+    };
+  }, [scope]);
+}
+// ============================================================================
 // HOME
 // ============================================================================
 //
@@ -307,6 +395,7 @@ function useReveal(scope) {
 function Home({ go }) {
   const root = useRef(null);
   useReveal(root);
+  useManifestoFill(root);
   useEffect(() => {
     if (!root.current) return;
     const reduce =
