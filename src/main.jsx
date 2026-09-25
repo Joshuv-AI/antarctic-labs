@@ -321,21 +321,23 @@ function Home({ go }) {
         siteHeader.classList.add("is-pending-reveal");
       }
 
-      // Stage 3 (post-feedback): constellation translateY + iceberg
-      // counter-translateY. The two layers occupy opposite vertical
-      // positions at every moment during env-arrival so they never
-      // visually overlap (one ending, the other beginning). The
-      // constellation slides upward from y=0 to y=-100vh; the iceberg
-      // slides upward from y=+100vh to y=0 over the same scroll
-      // window so their visible portions never coincide.
-      // Both animations are scoped to .env-arrival so adding homepage
+      // Stage 3: the reveal. The iceberg (.new-bg-layer) sits fixed at
+      // y=0 behind the constellation for the entire arrival — it never
+      // translates. Only the constellation slides upward (y=0 to
+      // y=-100vh); its soft bottom edge dissolves to reveal the iceberg
+      // beneath. Because the two layers never share a meeting line,
+      // no seam or gap can open between them and the page background
+      // never shows through. Scoped to .env-arrival so adding homepage
       // sections later cannot shift when the transition fires.
       const iceberg =
         document.querySelector(".new-bg-layer");
+      // Park the iceberg behind the constellation on mount. The CSS
+      // pre-positions it below the viewport to avoid a one-frame flash
+      // before this effect runs.
+      if (iceberg) gsap.set(iceberg, { y: 0 });
       if (envArrival && constellation) {
         if (reduce) {
           gsap.set(constellation, { y: 0 });
-          if (iceberg) gsap.set(iceberg, { y: 0 });
         } else {
           gsap.fromTo(
             constellation,
@@ -351,22 +353,6 @@ function Home({ go }) {
               },
             }
           );
-          if (iceberg) {
-            gsap.fromTo(
-              iceberg,
-              { y: "100vh" },
-              {
-                y: 0,
-                ease: "none",
-                scrollTrigger: {
-                  trigger: envArrival,
-                  start: "top top",
-                  end: "bottom top",
-                  scrub: true,
-                },
-              }
-            );
-          }
         }
       }
       if (siteHeader) {
