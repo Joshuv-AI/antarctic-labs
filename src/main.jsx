@@ -7,6 +7,7 @@ import "./shaders/threeui.css";
 import NewBackgroundVideo from "./components/NewBackgroundVideo.jsx";
 import { DefenseLines } from "./shaders/neuform-isolated/NeuformBatchEffects.tsx";
 import { AnimatedTopDock } from "./shaders/animated-top-dock/AnimatedTopDock.tsx";
+import { TypographyVortexCanvas } from "./shaders/typography-vortex/TypographyVortexCanvas.tsx";
 import { site as content } from "./content/site.js";
 import { routes, matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
@@ -161,6 +162,35 @@ function App() {
           params={pageParams}
         />
       )}
+      {/* Tower of Babel family only: the typography vortex environment.
+          Exact ThreeUI source, configured usage (mode="light", speed 1.07,
+          ringGrowth 1.30, opacity 0.81, dissolveRadius 1.50,
+          particleAmount 1.00, suctionDuration 1100) with a site phrase.
+          Fixed behind the page content; pointer interactivity is parked
+          because the page sits above it. */}
+      {(path === "/tower-of-babel" ||
+        path === "/tower-of-babel/library" ||
+        matchedPattern === "/tower-of-babel/library/:id") && (
+        <div className="tower-vortex-layer" aria-hidden="true">
+          <TypographyVortexCanvas
+            mode="light"
+            phrase="TOWER OF BABEL / ANTARCTIC LABS / "
+            speed={1.07}
+            ringGrowth={1.30}
+            opacity={0.81}
+            dissolveRadius={1.50}
+            particleAmount={1.00}
+            suctionDuration={1100}
+          />
+        </div>
+      )}
+      {/* Projects / About / Contact share the homepage's resting
+          environment: the iceberg video parked at its final position,
+          with no scroll choreography (that belongs to the homepage). */}
+      {(path === "/projects" ||
+        matchedPattern === "/projects/:id" ||
+        path === "/about" ||
+        path === "/contact") && <NewBackgroundVideo rest />}
       {path === "/government-contracting" && (
         <Government go={go} />
       )}
