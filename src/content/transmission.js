@@ -62,6 +62,14 @@ export const transmission = {
           value: "general",
           label: "GENERAL",
         },
+        {
+          value: "question",
+          label: "QUESTION",
+        },
+        {
+          value: "just-saying-hello",
+          label: "JUST SAYING HELLO",
+        },
       ],
     },
     {
@@ -89,9 +97,12 @@ export const transmission = {
   // Direct-contact panel: the channel that works today.
   direct: {
     facts: [
-      ["RESPONSE", "I read everything myself — no inbox team, no auto-replies."],
+      ["RESPONSE", "I read everything myself and reply within 48 hours — usually much sooner."],
       ["BASED", "Sanford, Florida — working worldwide."],
       ["BEST FOR", "AI automation, data systems, and web builds."],
+    ],
+    elsewhere: [
+      { label: "GitHub", href: "https://github.com/Joshuv-AI" },
     ],
     note: "A good first message says what you're trying to build, what “working” looks like, and roughly when you need it.",
   },
