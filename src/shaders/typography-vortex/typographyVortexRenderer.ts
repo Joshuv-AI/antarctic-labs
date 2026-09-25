@@ -85,6 +85,7 @@ export function createTypographyVortexRenderer(
   let lastSpawn = 0;
   let lastAmbientSpawn = 0;
   let lastTime = 0;
+  let lastDraw = 0;
   let stateFrame = 0;
   let frame = 0;
   let visible = true;
@@ -427,7 +428,14 @@ export function createTypographyVortexRenderer(
   };
 
   const animate = (time: number) => {
-    draw(time);
+    // 30fps cap: halves the per-frame raster cost and evens the frame
+    // cadence, which keeps the animation smooth while the browser is busy
+    // compositing a scroll. Ring positions derive from absolute time, so
+    // rendering fewer frames changes nothing visually.
+    if (time - lastDraw >= 33.34) {
+      lastDraw = time;
+      draw(time);
+    }
     frame = visible && !document.hidden ? requestAnimationFrame(animate) : 0;
   };
   const locatePointer = (event: PointerEvent) => {
@@ -454,7 +462,19 @@ export function createTypographyVortexRenderer(
   const onVisibility = () => {
     if (!document.hidden && visible && !frame) frame = requestAnimationFrame(animate);
   };
-  const resizeObserver = new ResizeObserver(resize);
+  let resizeTimer = 0;
+  // Debounced resize: on mobile the URL bar collapsing/expanding during a
+  // scroll fires resize continuously, and rebuilding every ring bitmap on
+  // each one hitches the main thread and stutters the animation. Coalesce
+  // into a single rebuild once sizing settles.
+  const scheduleResize = () => {
+    if (resizeTimer) window.clearTimeout(resizeTimer);
+    resizeTimer = window.setTimeout(() => {
+      resizeTimer = 0;
+      resize();
+    }, 250);
+  };
+  const resizeObserver = new ResizeObserver(scheduleResize);
   const intersectionObserver = new IntersectionObserver(([entry]) => {
     visible = entry?.isIntersecting ?? true;
     if (visible && !frame && !document.hidden) frame = requestAnimationFrame(animate);
@@ -476,6 +496,7 @@ export function createTypographyVortexRenderer(
 
   return () => {
     if (frame) cancelAnimationFrame(frame);
+    if (resizeTimer) window.clearTimeout(resizeTimer);
     resizeObserver.disconnect();
     intersectionObserver.disconnect();
     host.removeEventListener("pointerenter", locatePointer);
