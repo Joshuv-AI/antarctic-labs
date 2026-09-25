@@ -155,8 +155,21 @@ export function createTypographyVortexRenderer(
     }
   };
 
+  // Dimensions the ring bitmaps were last built for. Mobile browser chrome
+  // (URL bar) showing/hiding during a scroll changes the viewport height in
+  // small steps; rebuilding and recentering on each one makes the whole
+  // background hop up and down. Height changes under the threshold are
+  // ignored — the canvas stretches via CSS instead, which is imperceptible
+  // for this artwork — while real resizes (rotation, window resize) rebuild.
+  let builtW = 0;
+  let builtH = 0;
   const resize = () => {
     const bounds = host.getBoundingClientRect();
+    const cssW = Math.max(1, Math.round(bounds.width));
+    const cssH = Math.max(1, Math.round(bounds.height));
+    if (builtW > 0 && cssW === builtW && Math.abs(cssH - builtH) < 100) return;
+    builtW = cssW;
+    builtH = cssH;
     width = Math.max(1, bounds.width);
     height = Math.max(1, bounds.height);
     canvas.width = Math.round(width * pixelRatio);
