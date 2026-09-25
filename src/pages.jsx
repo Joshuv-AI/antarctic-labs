@@ -533,88 +533,144 @@ export function LibraryArtifact({ go, params }) {
 }
 // ----- Government ----------------------------------------------------------
 export function Government({ go }) {
-  const procurementEntries = Object.entries(government.procurement.fields || {})
-    .filter(([, value]) => typeof value === "string" && value.trim().length > 0);
   return (
     <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
-        <div className="section-index">06 / GOVERNMENT</div>
+        <div className="section-index">{government.index}</div>
+        <span className="gov-status-pill">{government.statusPill}</span>
         <h1>{government.heading}</h1>
         <p className="display-copy">{government.intro}</p>
       </section>
-      <section className="capabilities section reveal">
-        <div className="section-index">CAPABILITIES</div>
-        <div className="capability-list">
-          {government.capabilities.map((c, i) => (
-            <div className="cap-row" key={c}>
-              <span>{String(i + 1).padStart(2, "0")}</span>
-              <h3>{c}</h3>
-              <p>{government.supporting}</p>
-            </div>
+
+      <section className="copy-block section reveal">
+        <div className="section-index">POSITIONING</div>
+        <div>
+          <h2 className="gov-h2">{government.positioning.title}</h2>
+          {government.positioning.paragraphs.map((para, i) => (
+            <p className="body-copy" key={i}>{para}</p>
           ))}
         </div>
       </section>
-      <section className="copy-block section reveal">
-        <div className="section-index">RELEVANT WORK</div>
-        <p className="body-copy">
-          Selected Antarctic Labs Projects whose technical capabilities map to public-sector applicability. No Project is labeled as government work — only linked as applicable.
-        </p>
-        {government.relevantWork && government.relevantWork.length > 0 ? (
-          <div className="expedition-list">
-            {government.relevantWork.map((rid) => {
-              const exp = expeditions.find((e) => e.id === rid);
-              if (!exp) return null;
-              return (
-                <button
-                  key={rid}
-                  className="expedition-card reveal"
-                  onClick={() => go(`/projects/${rid}`)}
-                >
-                  <div className="expedition-card-meta">
-                    <span className="expedition-card-status">{exp.status}</span>
-                    <span className="expedition-card-category">{exp.category}</span>
-                  </div>
-                  <h3 className="expedition-card-title">{exp.title}</h3>
-                  {exp.shortDescription && (
-                    <p className="expedition-card-summary">{exp.shortDescription}</p>
-                  )}
-                  <span className="expedition-card-arrow">↗</span>
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="body-copy">Relevant-work links will appear here as applicable Project records are finalized.</p>
-        )}
-      </section>
-      <section className="copy-block section reveal">
-        <div className="section-index">{government.capabilitiesStatement.heading}</div>
-        <p className="body-copy">{government.capabilitiesStatement.body}</p>
-        <p className="body-copy">
-          <span className="capabilities-statement-pill">FUTURE — NOT YET PUBLISHED</span>
-          <span className="body-copy"> {government.capabilitiesStatement.note}</span>
-        </p>
-      </section>
-      <section className="copy-block section reveal">
-        <div className="section-index">{government.procurement.heading}</div>
-        <p className="body-copy">{government.procurement.body}</p>
-        {procurementEntries.length > 0 ? (
-          <dl className="procurement-list">
-            {procurementEntries.map(([key, value]) => (
-              <div key={key} className="procurement-row">
-                <dt className="procurement-key">{key}</dt>
-                <dd className="procurement-value">{value}</dd>
+
+      <section className="capabilities section reveal">
+        <div className="section-index">{government.capabilitiesHeading}</div>
+        <div>
+          <p className="body-copy gov-section-intro">{government.capabilitiesIntro}</p>
+          <div className="capability-list">
+            {government.capabilities.map((c, i) => (
+              <div className="cap-row gov-cap-row" key={c.title}>
+                <span>{String(i + 1).padStart(2, "0")}</span>
+                <h3>{c.title}</h3>
+                <p>{c.description}</p>
               </div>
             ))}
-          </dl>
-        ) : (
-          <p className="body-copy">{government.procurement.note}</p>
-        )}
+          </div>
+        </div>
       </section>
+
+      <section className="copy-block section reveal">
+        <div className="section-index">{government.applicableWork.heading}</div>
+        <div>
+          <p className="body-copy gov-section-intro">{government.applicableWork.intro}</p>
+          <div className="project-grid">
+          {government.relevantWork.map((rid) => {
+            const e = expeditions.find((x) => x.id === rid);
+            if (!e) return null;
+            return (
+              <button
+                key={rid}
+                className="project-card"
+                onClick={() => go(`/projects/${e.id}`)}
+                aria-label={`${e.title} — open case study`}
+              >
+                <div className="project-card-top">
+                  <span
+                    className="project-card-status"
+                    style={{ "--tone": PROJECT_STATUS_TONE[e.status] || "#9ca3af" }}
+                  >
+                    <i aria-hidden="true" />
+                    {e.status}
+                  </span>
+                </div>
+                <h3 className="project-card-title">{e.title}</h3>
+                {e.shortDescription && (
+                  <p className="project-card-summary">{e.shortDescription}</p>
+                )}
+                <div className="project-card-foot">
+                  <div className="project-card-meta">
+                    <span>{e.category}</span>
+                    {projectShortDate(e.date) && <span>{projectShortDate(e.date)}</span>}
+                  </div>
+                </div>
+                <span className="project-card-arrow" aria-hidden="true">↗</span>
+              </button>
+            );
+          })}
+        </div>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <div className="section-index">{government.engagement.heading}</div>
+        <div>
+          <p className="body-copy gov-section-intro">{government.engagement.intro}</p>
+          <div className="gov-pathways">
+          {government.engagement.pathways.map((pw, i) => (
+            <div className="gov-pathway" key={pw.title}>
+              <span className="gov-pathway-index">{String(i + 1).padStart(2, "0")}</span>
+              <h3>{pw.title}</h3>
+              <p>{pw.description}</p>
+            </div>
+          ))}
+        </div>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <div className="section-index">{government.roadmap.heading}</div>
+        <div>
+          <p className="body-copy gov-section-intro">{government.roadmap.intro}</p>
+          <div className="gov-roadmap">
+          {government.roadmap.phases.map((ph) => (
+            <div className="gov-phase" key={ph.phase}>
+              <div className="gov-phase-head">
+                <span className="gov-phase-index">{ph.phase}</span>
+                <span className="gov-phase-status">{ph.status}</span>
+              </div>
+              <h3>{ph.title}</h3>
+              <p>{ph.description}</p>
+            </div>
+          ))}
+        </div>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <div className="section-index">{government.capabilitiesStatement.heading}</div>
+        <div className="gov-doc-card">
+          <p className="body-copy">{government.capabilitiesStatement.body}</p>
+          <p className="body-copy gov-doc-note">{government.capabilitiesStatement.note}</p>
+          <a className="gov-doc-link" href={`mailto:${site.email}`}>hello@antarcticlabs.com ↗</a>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <div className="section-index">{government.procurement.heading}</div>
+        <div>
+          <p className="body-copy gov-section-intro">{government.procurement.intro}</p>
+          <dl className="gov-procurement">
+          {government.procurement.rows.map((row) => (
+            <div className="gov-procurement-row" key={row.label}>
+              <dt>{row.label}</dt>
+              <dd>{row.status}</dd>
+            </div>
+          ))}
+        </dl>
+        </div>
+      </section>
+
       <section className="copy-block section">
-        <p className="body-copy">
-          Antarctic Labs does not currently claim government contracts, certifications, registrations, procurement status, contract vehicles, security clearances, set-aside status, government revenue, agency relationships, or past performance. This destination is in active development.
-        </p>
+        <p className="gov-footnote">{government.footnote}</p>
       </section>
     </main>
   );
