@@ -324,15 +324,17 @@ function Home({ go }) {
       // Stage 3: the environmental arrival. Two full-viewport layers,
       // one after the other in a fixed order: the constellation
       // (transparent starfield canvas) exits upward (y=0 to y=-100vh)
-      // while the iceberg video rises from below (y=100vh to y=0).
-      // Both tweens live in ONE scrubbed timeline on .env-arrival so
+      // while the iceberg video rises from below (y=100vh to y=-6vh).
+      // All three tweens live in ONE scrubbed timeline on .env-arrival:
       // the constellation's bottom edge and the iceberg's top edge
-      // share a single meeting line at every scroll position — the
-      // iceberg starts exactly where the constellation stops, with
-      // no gap, no overlap, and no blending between them. Neither
-      // layer carries an edge mask (a fade would reopen a band of
-      // page background at the meeting line). Scoped to .env-arrival
-      // so adding homepage sections later cannot shift the timing.
+      // share a single meeting line at every scroll position, and a
+      // 0% → 6% crossfade (--cfade) dissolves the constellation's
+      // bottom edge into the iceberg for a natural handoff. The
+      // iceberg always extends 6%-of-progress above the meeting line
+      // and stays opaque behind the fade, so the page background
+      // never shows through — crossfade, not a gap. Scoped to
+      // .env-arrival so adding homepage sections later cannot shift
+      // the timing.
       const iceberg =
         document.querySelector(".new-bg-layer");
       if (envArrival && constellation && iceberg) {
@@ -340,7 +342,7 @@ function Home({ go }) {
           // Reduced motion: settle on the end state — iceberg as the
           // static backdrop, constellation parked out of view.
           gsap.set(iceberg, { y: "0vh" });
-          gsap.set(constellation, { y: "-100vh" });
+          gsap.set(constellation, { y: "-100vh", "--cfade": "0%" });
         } else {
           const arrival = gsap.timeline({
             scrollTrigger: {
@@ -359,7 +361,13 @@ function Home({ go }) {
           arrival.fromTo(
             iceberg,
             { y: "100vh" },
-            { y: "0vh", ease: "none" },
+            { y: "-6vh", ease: "none" },
+            0
+          );
+          arrival.fromTo(
+            constellation,
+            { "--cfade": "0%" },
+            { "--cfade": "6%", ease: "none" },
             0
           );
         }
