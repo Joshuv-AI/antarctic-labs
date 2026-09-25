@@ -6,7 +6,7 @@
 // compatibility with the existing React component. The public site
 // IA is now CONTACT.
 export const transmission = {
-  sectionIndex: "09 / CONTACT",
+  sectionIndex: "CONTACT",
   heading: "HAVE A PROBLEM\nWORTH SOLVING?",
   body:
     "Have an idea, need a system built, want to collaborate, or simply found something interesting? Get in touch.",
