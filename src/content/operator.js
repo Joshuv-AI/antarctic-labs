@@ -11,7 +11,7 @@ export const operator = {
   location: site.location,
   email: site.email,
 
-  index: "07 / ABOUT",
+  index: "ABOUT",
   heading: "AN INDEPENDENT LAB FOR USEFUL TECHNOLOGY.",
 
   positioning:
