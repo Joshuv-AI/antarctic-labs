@@ -79,7 +79,7 @@ export function Projects({ go }) {
   return (
     <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
-        <div className="section-index">03 / PROJECTS</div>
+        <div className="section-index">PROJECTS</div>
         <h1>{expeditionsArchive.heading}</h1>
         <p className="display-copy">{expeditionsArchive.intro}</p>
         <p className="body-copy">{expeditionsArchive.supporting}</p>
@@ -345,7 +345,7 @@ export function TowerOfBabel({ go }) {
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
-        <div className="section-index">05 / TOWER OF BABEL</div>
+        <div className="section-index">TOWER OF BABEL</div>
         <h1>{towerOfBabel.heading}</h1>
         {towerOfBabel.intro.map((p, i) => (
           <p className={i === 0 ? "display-copy" : "body-copy"} key={i}>{p}</p>
@@ -387,7 +387,7 @@ export function TowerLibrary({ go }) {
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
-        <div className="section-index">05.A / LIBRARY</div>
+        <div className="section-index">LIBRARY</div>
         <h1>{towerOfBabel.library.heading}</h1>
         <p className="display-copy">{towerOfBabel.library.intro}</p>
       </section>
