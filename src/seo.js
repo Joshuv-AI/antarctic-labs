@@ -151,8 +151,8 @@ function personJsonLd(url) {
     url: url,
     worksFor: { "@id": SITE_URL + "/#organization" },
     jobTitle: "Founder",
-    description: operator.opening,
-    knowsAbout: operator.fieldInterests,
+    description: operator.positioning,
+    knowsAbout: operator.whatWeDo.items.map((item) => item.title),
     homeLocation: {
       "@type": "Place",
       name: operator.location,
