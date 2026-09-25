@@ -19,13 +19,35 @@ export default function NewBackgroundVideo() {
 
   useEffect(() => {
     const v = videoRef.current;
-    if (!v) return;
-    const playPromise = v.play();
-    if (playPromise && playPromise.catch) {
-      playPromise.catch(() => {
-        // Autoplay blocked until user interaction; first frame holds.
-      });
-    }
+    const wrap = wrapRef.current;
+    if (!v || !wrap) return;
+    let cancelled = false;
+    const tryPlay = () => {
+      if (cancelled || !v.paused) return;
+      // iOS Safari will not autoplay a video that starts off-screen
+      // (the iceberg begins a full viewport below the fold), so the
+      // single play() at mount may never take effect — leaving the
+      // native play button visible when the layer scrolls into view.
+      // Retry whenever the layer approaches/enters the viewport and
+      // as soon as data can play.
+      if (v.readyState === 0) v.load();
+      const playPromise = v.play();
+      if (playPromise && playPromise.catch) playPromise.catch(() => {});
+    };
+    v.addEventListener("canplay", tryPlay);
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) tryPlay();
+      },
+      { rootMargin: "200px 0px", threshold: 0.01 }
+    );
+    io.observe(wrap);
+    tryPlay();
+    return () => {
+      cancelled = true;
+      v.removeEventListener("canplay", tryPlay);
+      io.disconnect();
+    };
   }, []);
 
   return (
