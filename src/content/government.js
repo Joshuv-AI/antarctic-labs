@@ -141,24 +141,6 @@ export const government = {
     note: "No formal capabilities statement exists yet. Partnership inquiries in the meantime are welcome by email.",
   },
 
-  // PROCUREMENT STATUS — honest status table. Nothing is implied;
-  // every row states plainly where things stand.
-  procurement: {
-    heading: "PROCUREMENT STATUS",
-    intro:
-      "Where things stand, stated plainly. Rows will be updated as milestones are completed — nothing here is implied.",
-    rows: [
-      { label: "SAM.gov Registration", status: "Not yet registered — planned" },
-      { label: "Business Structure", status: "Independent lab — formal structure to be established" },
-      { label: "NAICS Codes", status: "To be determined" },
-      { label: "Contract Vehicles", status: "None currently" },
-      { label: "Certifications", status: "None currently" },
-      { label: "Security Clearance", status: "None currently" },
-      { label: "Government Past Performance", status: "None yet — commercial track record in development" },
-      { label: "Point of Contact", status: "hello@antarcticlabs.com" },
-    ],
-  },
-
   footnote:
     "Status note: Antarctic Labs does not currently hold government contracts, registrations, certifications, security clearances, or past performance as a government vendor. The technical work described on this page is real; the public-sector practice is under active development.",
 };
