@@ -72,14 +72,6 @@ export const transmission = {
       required: true,
       rows: 6,
     },
-    {
-      id: "transmission-website",
-      name: "website",
-      label: "WEBSITE",
-      type: "text",
-      required: false,
-      placeholder: "Leave blank if not applicable",
-    },
   ],
   submit: {
     label: "SEND MESSAGE",
@@ -88,10 +80,19 @@ export const transmission = {
   // No backend. The form does NOT transmit to a server.
   // The success state is purely client-side acknowledgement.
   noBackendNotice:
-    "Front-end form only. Submissions are not currently transmitted to a server. Use the mailto link below to reach Antarctic Labs directly.",
+    "This form doesn't send anywhere yet — it will be wired up soon. The direct email link is the reliable way to reach Antarctic Labs for now.",
   success: {
     heading: "MESSAGE READY.",
     body: "Your information has been entered and is ready for review.",
-    note: "Confirmation is local to this browser — nothing was sent over the network. Use the mailto link to ensure delivery.",
+    note: "Confirmation is local to this browser — nothing was sent over the network. Use the direct email link to ensure delivery.",
+  },
+  // Direct-contact panel: the channel that works today.
+  direct: {
+    facts: [
+      ["RESPONSE", "I read everything myself — no inbox team, no auto-replies."],
+      ["BASED", "Sanford, Florida — working worldwide."],
+      ["BEST FOR", "AI automation, data systems, and web builds."],
+    ],
+    note: "A good first message says what you're trying to build, what “working” looks like, and roughly when you need it.",
   },
 };
