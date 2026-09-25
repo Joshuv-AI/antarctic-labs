@@ -1,6 +1,6 @@
-// Operator — Joshua Almodovar. Identity fields are populated from the
-// global site identity; the narrative fields below are populated from
-// the Stage B copy.
+// About — Antarctic Labs. Identity fields are populated from the
+// global site identity; the narrative fields below drive the About page:
+// who we are, our mission, what we do, principles, and the team.
 
 import { site } from "./site.js";
 
@@ -11,48 +11,87 @@ export const operator = {
   location: site.location,
   email: site.email,
 
-  heading: "CURIOUS BY DEFAULT.",
+  index: "07 / ABOUT",
+  heading: "AN INDEPENDENT LAB FOR USEFUL TECHNOLOGY.",
 
-  opening:
-    "I’m Joshua Almodovar. Antarctic Labs is the place where I collect the things I’m building, investigating, and trying to understand.",
+  positioning:
+    "Antarctic Labs is an independent technology laboratory operated by Joshua Almodovar — designing and building AI systems, automation, and software for people who need things that work.",
 
-  background:
-    "My path into technology wasn’t a straight line. I’ve worked in customer service, retail, restaurant operations, management, training, and other environments where getting things right meant understanding people, processes, constraints, and what happens when something breaks.",
-
-  technicalShift:
-    "Eventually that same instinct moved toward software and technology. I became interested in a different kind of leverage: systems that can process information, automate work, connect tools, and operate without someone manually pushing every button.",
-
-  current:
-    "Today I’m interested in the intersection of AI, automation, software, data, blockchain, and whatever other territory seems worth exploring.",
-
-  pattern: {
-    title: "DIFFERENT TERRITORY. SAME INSTINCT.",
-    lines: [
-      "I’ve never been particularly interested in staying inside one lane.",
-      "A restaurant, a software system, a financial protocol, an automation workflow, and a business may look completely different on the surface. Underneath, they all contain problems to understand, processes to improve, and systems that can be rebuilt.",
-      "That’s the pattern I keep coming back to.",
+  whoWeAre: {
+    title: "WHO WE ARE",
+    paragraphs: [
+      "The lab began as a personal practice: a place to collect experiments, investigations, and working systems across AI, automation, software, data, and blockchain. It has grown into something more deliberate — a studio that takes on real problems and turns them into systems that hold up under real conditions.",
+      "Everything here is built, not theorized. If a system can't survive contact with real data, real users, and real constraints, it doesn't ship.",
     ],
   },
 
-  approach: {
-    title: "THE APPROACH",
-    summary:
-      "Most of what I know came from building something and discovering what I didn’t know yet.",
+  mission: {
+    title: "OUR MISSION",
+    statement: "Turn unknowns into working systems.",
+    paragraphs: [
+      "Most worthwhile problems start as unknowns — a process nobody has mapped, data nobody has tamed, a workflow held together by manual effort. The mission is to take those unknowns seriously: understand them, rebuild them, and automate what should never have been manual in the first place.",
+      "Useful machines for unknown territory isn't a slogan. It's the job description.",
+    ],
   },
 
-  fieldInterests: [
-    "Artificial Intelligence",
-    "Autonomous Systems",
-    "Software",
-    "Automation",
-    "Blockchain",
-    "Finance",
-    "Data & Research",
-    "Digital Experiences",
-    "History & Archives",
-    "Experimental Technology",
-  ],
+  whatWeDo: {
+    title: "WHAT WE DO",
+    items: [
+      {
+        title: "AI AUTOMATION",
+        desc: "Intelligent workflows, agents, and integrations that take repetitive work off your team's plate.",
+      },
+      {
+        title: "WEB SCRAPING & DATA",
+        desc: "Reliable extraction, cleaning, and pipelines that turn scattered web data into structured, usable datasets.",
+      },
+      {
+        title: "LEAD-GENERATION SYSTEMS",
+        desc: "Automated prospecting and list-building systems that keep your pipeline fed around the clock.",
+      },
+      {
+        title: "WEB DEVELOPMENT",
+        desc: "Fast, modern websites and web applications — designed, built, and shipped.",
+      },
+    ],
+  },
 
-  closing:
-    "Some interests become projects. Some remain questions. Both belong here.",
+  principles: {
+    title: "HOW WE WORK",
+    items: [
+      {
+        title: "UNDERSTAND FIRST",
+        text: "No building before the problem is mapped. The fastest way to waste effort is automating the wrong thing.",
+      },
+      {
+        title: "BUILT TO BE USED",
+        text: "Every system is designed for production — real data, real users, real constraints. Demos don't count.",
+      },
+      {
+        title: "ITERATE IN THE OPEN",
+        text: "Ship early, test against reality, improve. Working software beats perfect plans.",
+      },
+    ],
+  },
+
+  team: {
+    title: "THE TEAM",
+    headline: "A team of one — by design.",
+    paragraphs: [
+      "Antarctic Labs is operated by Joshua Almodovar. No account managers, no handoffs, no juniors learning on your project — the person you talk to is the person who builds it.",
+      "Joshua's path into technology wasn't a straight line. He spent years in customer service, retail, restaurant operations, management, and training — environments where getting things right meant understanding people, processes, constraints, and what happens when something breaks.",
+      "That instinct moved toward software: systems that process information, automate work, connect tools, and operate without someone manually pushing every button. Today that work centers on AI, automation, data, and software — the intersection where the highest-leverage problems live.",
+    ],
+    facts: [
+      ["OPERATOR", "JOSHUA ALMODOVAR"],
+      ["BASED", "SANFORD, FLORIDA / WORLDWIDE"],
+      ["FOCUS", "AI · AUTOMATION · DATA · SOFTWARE"],
+      ["CONTACT", "HELLO@ANTARCTICLABS.COM"],
+    ],
+  },
+
+  cta: {
+    heading: "HAVE SOMETHING WORTH BUILDING?",
+    label: "START A CONVERSATION",
+  },
 };
