@@ -321,37 +321,46 @@ function Home({ go }) {
         siteHeader.classList.add("is-pending-reveal");
       }
 
-      // Stage 3: the reveal. The iceberg (.new-bg-layer) sits fixed at
-      // y=0 behind the constellation for the entire arrival — it never
-      // translates. Only the constellation slides upward (y=0 to
-      // y=-100vh); its soft bottom edge dissolves to reveal the iceberg
-      // beneath. Because the two layers never share a meeting line,
-      // no seam or gap can open between them and the page background
-      // never shows through. Scoped to .env-arrival so adding homepage
-      // sections later cannot shift when the transition fires.
+      // Stage 3: the environmental arrival. Two full-viewport layers,
+      // one after the other in a fixed order: the constellation
+      // (transparent starfield canvas) exits upward (y=0 to y=-100vh)
+      // while the iceberg video rises from below (y=100vh to y=0).
+      // Both tweens live in ONE scrubbed timeline on .env-arrival so
+      // the constellation's bottom edge and the iceberg's top edge
+      // share a single meeting line at every scroll position — the
+      // iceberg starts exactly where the constellation stops, with
+      // no gap, no overlap, and no blending between them. Neither
+      // layer carries an edge mask (a fade would reopen a band of
+      // page background at the meeting line). Scoped to .env-arrival
+      // so adding homepage sections later cannot shift the timing.
       const iceberg =
         document.querySelector(".new-bg-layer");
-      // Park the iceberg behind the constellation on mount. The CSS
-      // pre-positions it below the viewport to avoid a one-frame flash
-      // before this effect runs.
-      if (iceberg) gsap.set(iceberg, { y: 0 });
-      if (envArrival && constellation) {
+      if (envArrival && constellation && iceberg) {
         if (reduce) {
-          gsap.set(constellation, { y: 0 });
+          // Reduced motion: settle on the end state — iceberg as the
+          // static backdrop, constellation parked out of view.
+          gsap.set(iceberg, { y: "0vh" });
+          gsap.set(constellation, { y: "-100vh" });
         } else {
-          gsap.fromTo(
+          const arrival = gsap.timeline({
+            scrollTrigger: {
+              trigger: envArrival,
+              start: "top top",
+              end: "bottom top",
+              scrub: true,
+            },
+          });
+          arrival.fromTo(
             constellation,
-            { y: 0 },
-            {
-              y: "-100vh",
-              ease: "none",
-              scrollTrigger: {
-                trigger: envArrival,
-                start: "top top",
-                end: "bottom top",
-                scrub: true,
-              },
-            }
+            { y: "0vh" },
+            { y: "-100vh", ease: "none" },
+            0
+          );
+          arrival.fromTo(
+            iceberg,
+            { y: "100vh" },
+            { y: "0vh", ease: "none" },
+            0
           );
         }
       }
