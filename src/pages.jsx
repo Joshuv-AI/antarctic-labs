@@ -654,21 +654,6 @@ export function Government({ go }) {
         </div>
       </section>
 
-      <section className="copy-block section reveal">
-        <div className="section-index">{government.procurement.heading}</div>
-        <div>
-          <p className="body-copy gov-section-intro">{government.procurement.intro}</p>
-          <dl className="gov-procurement">
-          {government.procurement.rows.map((row) => (
-            <div className="gov-procurement-row" key={row.label}>
-              <dt>{row.label}</dt>
-              <dd>{row.status}</dd>
-            </div>
-          ))}
-        </dl>
-        </div>
-      </section>
-
       <section className="copy-block section">
         <p className="gov-footnote">{government.footnote}</p>
       </section>
