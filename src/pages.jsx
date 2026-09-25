@@ -551,53 +551,97 @@ export function Government({ go }) {
     </main>
   );
 }
-// ----- About (was: The Operator) -------------------------------------------
+// ----- About ---------------------------------------------------------------
 export function About({ go }) {
   return (
     <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
-        <div className="section-index">07 / THE OPERATOR</div>
+        <div className="section-index">{operator.index}</div>
         <h1>{operator.heading}</h1>
+        <p className="display-copy">{operator.positioning}</p>
       </section>
+
       <section className="copy-block section reveal">
-        <span className="section-index">OPENING</span>
-        <p className="display-copy">{operator.opening}</p>
+        <span className="section-index">{operator.whoWeAre.title}</span>
+        <div>
+          {operator.whoWeAre.paragraphs.map((p, i) => (
+            <p className="body-copy" key={i}>{p}</p>
+          ))}
+        </div>
       </section>
+
       <section className="copy-block section reveal">
-        <span className="section-index">BACKGROUND</span>
-        <p className="body-copy">{operator.background}</p>
+        <span className="section-index">{operator.mission.title}</span>
+        <div>
+          <p className="display-copy">
+            <em>{operator.mission.statement}</em>
+          </p>
+          {operator.mission.paragraphs.map((p, i) => (
+            <p className="body-copy" key={i}>{p}</p>
+          ))}
+        </div>
       </section>
-      <section className="copy-block section reveal">
-        <span className="section-index">TECHNICAL SHIFT</span>
-        <p className="body-copy">{operator.technicalShift}</p>
-      </section>
-      <section className="copy-block section reveal">
-        <span className="section-index">CURRENT</span>
-        <p className="body-copy">{operator.current}</p>
-      </section>
-      <section className="copy-block section reveal">
-        <div className="section-index">{operator.pattern.title}</div>
-        {operator.pattern.lines.map((line, i) => (
-          <p className="body-copy" key={i}>{line}</p>
-        ))}
-      </section>
-      <section className="copy-block section reveal">
-        <div className="section-index">{operator.approach.title}</div>
-        <p className="body-copy">{operator.approach.summary}</p>
-      </section>
+
       <section className="capabilities section reveal">
-        <div className="section-index">FIELD INTERESTS</div>
+        <div className="section-index">{operator.whatWeDo.title}</div>
         <div className="capability-list">
-          {operator.fieldInterests.map((interest, i) => (
-            <div className="cap-row" key={interest}>
+          {operator.whatWeDo.items.map((item, i) => (
+            <div className="cap-row" key={item.title}>
               <span>{String(i + 1).padStart(2, "0")}</span>
-              <h3>{interest}</h3>
+              <h3>{item.title}</h3>
+              <p>{item.desc}</p>
+              <i aria-hidden="true">↗</i>
             </div>
           ))}
         </div>
       </section>
-      <section className="copy-block section">
-        <p className="body-copy">{operator.closing}</p>
+
+      <section className="section reveal">
+        <div className="section-index">{operator.principles.title}</div>
+        <div className="detail-grid">
+          {operator.principles.items.map((item) => (
+            <div key={item.title}>
+              <strong>{item.title}</strong>
+              <p className="about-principle-text">{item.text}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="about-grid section reveal">
+        <div className="about-panel">
+          <div className="section-index">{operator.team.title}</div>
+          <p className="display-copy">{operator.team.headline}</p>
+          {operator.team.paragraphs.map((p, i) => (
+            <p className="body-copy" key={i}>{p}</p>
+          ))}
+        </div>
+        <div className="about-panel">
+          <div className="section-index">OPERATOR FILE</div>
+          <ul className="about-facts">
+            {operator.team.facts.map(([k, v]) => (
+              <li key={k}>
+                <span>{k}</span>
+                <span>{v}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">CONTACT</span>
+        <div>
+          <p className="display-copy">{operator.cta.heading}</p>
+          <p className="body-copy">
+            <button
+              className="text-link"
+              onClick={() => go("/contact")}
+            >
+              {operator.cta.label} <span>↗</span>
+            </button>
+          </p>
+        </div>
       </section>
     </main>
   );
