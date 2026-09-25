@@ -586,53 +586,8 @@ function Home({ go }) {
           ))}
         </div>
       </section>
-      <section id="statement" className="statement section reveal">
-        <div className="statement-orbit" />
-        <div>
-          <span className="section-index">
-            06 / NEXT
-          </span>
-          <h2>
-            MAKE THE
-            <br />
-            <em>IMPOSSIBLE</em>
-            <br />
-            FEEL INEVITABLE.
-          </h2>
-          <a
-            className="text-link"
-            href="/about"
-            onClick={(e) => { e.preventDefault(); go("/about"); }}
-          >
-            ABOUT THE LAB
-            <span>↗</span>
-          </a>
-        </div>
-      </section>
-      <ContactCTA />
       <Footer />
     </main>
-  );
-}
-function ContactCTA() {
-  return (
-    <section id="contact" className="contact-cta section reveal">
-      <span className="section-index">
-        07 / CONTACT
-      </span>
-      <h2>
-        HAVE A PROBLEM
-        <br />
-        WORTH SOLVING?
-      </h2>
-      <a
-        href={`mailto:${content.email}`}
-        className="contact-button"
-      >
-        <span>{content.email}</span>
-        <b>↗</b>
-      </a>
-    </section>
   );
 }
 function NotFound({ go }) {
