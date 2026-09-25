@@ -9,7 +9,6 @@
 // destinations already share the home-page visual grammar.
 import { useState } from "react";
 import { site } from "./content/site.js";
-import { theLab } from "./content/the-lab.js";
 import { systems } from "./content/systems.js";
 import { expeditions, expeditionsArchive } from "./content/expeditions.js";
 import { history } from "./content/history.js";
@@ -47,58 +46,132 @@ export function Systems({ go }) {
   );
 }
 // ----- Projects archive + detail (was: Expeditions) -------------------------
-// The Lab content (formerly a standalone /the-lab page) has been merged
-// into this page above the project archive grid. /the-lab is now a
-// legacy alias that redirects here.
+const PROJECT_STATUS_TONE = {
+  ACTIVE: "#4ade80",
+  COMPLETE: "#4ade80",
+  "IN DEVELOPMENT": "#fbbf24",
+  EXPERIMENTAL: "#c084fc",
+  RESEARCH: "#60a5fa",
+  ARCHIVED: "#9ca3af",
+};
+// Dates sometimes carry a parenthetical working note; the card shows the
+// compact range and the detail page keeps the full value.
+function projectShortDate(date) {
+  return (date || "").split("(")[0].trim();
+}
 export function Projects({ go }) {
+  const [filter, setFilter] = useState("ALL");
+  const categories = [];
+  expeditions.forEach((e) => {
+    if (!categories.includes(e.category)) categories.push(e.category);
+  });
+  const countFor = (c) =>
+    c === "ALL"
+      ? expeditions.length
+      : expeditions.filter((e) => e.category === c).length;
+  const visible =
+    filter === "ALL"
+      ? expeditions
+      : expeditions.filter((e) => e.category === filter);
+  const activeCount = expeditions.filter(
+    (e) => e.status === "ACTIVE"
+  ).length;
   return (
     <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
-      <section className="inner-hero section">
-        <div className="section-index">02 / THE LAB</div>
-        <h1>{theLab.heading}</h1>
-      </section>
-      <section className="copy-block section reveal">
-        {theLab.body.map((p, i) => (
-          <p className={i === 0 ? "display-copy" : "body-copy"} key={i}>{p}</p>
-        ))}
-      </section>
-      <section className="copy-block section reveal">
-        <div className="section-index">{theLab.whyAntarctic.heading}</div>
-        {theLab.whyAntarctic.body.map((p, i) => (
-          <p className="body-copy" key={i}>{p}</p>
-        ))}
-      </section>
       <section className="inner-hero section">
         <div className="section-index">03 / PROJECTS</div>
         <h1>{expeditionsArchive.heading}</h1>
         <p className="display-copy">{expeditionsArchive.intro}</p>
         <p className="body-copy">{expeditionsArchive.supporting}</p>
-      </section>
-      <section className="expeditions-grid section reveal">
-        <div className="section-index">CATALOG</div>
-        {expeditions.length === 0 ? (
-          <p className="body-copy">The expedition catalog is being finalized. Records will appear here once the lead engineer provides them.</p>
-        ) : (
-          <div className="expedition-list">
-            {expeditions.map((e) => (
-              <button
-                key={e.id}
-                className="expedition-card reveal"
-                onClick={() => go(`/projects/${e.id}`)}
-              >
-                <div className="expedition-card-meta">
-                  <span className="expedition-card-status">{e.status}</span>
-                  <span className="expedition-card-category">{e.category}</span>
-                </div>
-                <h3 className="expedition-card-title">{e.title}</h3>
-                {e.shortDescription && (
-                  <p className="expedition-card-summary">{e.shortDescription}</p>
-                )}
-                <span className="expedition-card-arrow">↗</span>
-              </button>
-            ))}
+        <div className="project-stats">
+          <div className="project-stat">
+            <b>{expeditions.length}</b>
+            <span>PROJECTS</span>
           </div>
-        )}
+          <div className="project-stat">
+            <b>{activeCount}</b>
+            <span>ACTIVE</span>
+          </div>
+          <div className="project-stat">
+            <b>{categories.length}</b>
+            <span>DISCIPLINES</span>
+          </div>
+        </div>
+      </section>
+      <section className="project-index section reveal">
+        <div className="section-index">INDEX</div>
+        <div
+          className="project-filters"
+          role="tablist"
+          aria-label="Filter projects by discipline"
+        >
+          {["ALL", ...categories].map((c) => (
+            <button
+              key={c}
+              type="button"
+              role="tab"
+              aria-selected={filter === c}
+              className={
+                "project-filter" + (filter === c ? " is-active" : "")
+              }
+              onClick={() => setFilter(c)}
+            >
+              {c}
+              <span>{countFor(c)}</span>
+            </button>
+          ))}
+        </div>
+        <div className="project-grid">
+          {visible.map((e) => (
+            <button
+              key={e.id}
+              type="button"
+              className="project-card"
+              onClick={() => go(`/projects/${e.id}`)}
+              aria-label={`${e.title} — open case study`}
+            >
+              <div className="project-card-top">
+                <span className="project-card-index">
+                  {String(expeditions.indexOf(e) + 1).padStart(2, "0")}
+                </span>
+                <span
+                  className="project-card-status"
+                  style={{
+                    "--tone":
+                      PROJECT_STATUS_TONE[e.status] || "#9ca3af",
+                  }}
+                >
+                  <i aria-hidden="true" />
+                  {e.status}
+                </span>
+              </div>
+              <h3 className="project-card-title">{e.title}</h3>
+              {e.shortDescription && (
+                <p className="project-card-summary">
+                  {e.shortDescription}
+                </p>
+              )}
+              <div className="project-card-foot">
+                <div className="project-card-meta">
+                  <span>{e.category}</span>
+                  {projectShortDate(e.date) && (
+                    <span>{projectShortDate(e.date)}</span>
+                  )}
+                </div>
+                {e.technologies && e.technologies.length > 0 && (
+                  <div className="project-card-tags">
+                    {e.technologies.slice(0, 3).map((t) => (
+                      <span key={t}>{t}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <span className="project-card-arrow" aria-hidden="true">
+                ↗
+              </span>
+            </button>
+          ))}
+        </div>
       </section>
     </main>
   );
