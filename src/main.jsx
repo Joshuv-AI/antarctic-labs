@@ -476,6 +476,72 @@ function HomeStats() {
   );
 }
 // ============================================================================
+// ENTRANCE RITUAL
+// ============================================================================
+//
+// A brief branded loader on the homepage: the mark resolves, a hairline
+// fills, then it fades and unmounts. Purely visual ceremony — it never
+// intercepts pointer input and never touches the scroll-driven arrival
+// choreography underneath. Shown once per tab session; skipped entirely
+// for prefers-reduced-motion.
+function EntranceRitual() {
+  const [phase, setPhase] = useState("in");
+  useEffect(() => {
+    let seen = false;
+    try {
+      seen =
+        !!window.sessionStorage.getItem(
+          "al-ritual-done"
+        );
+    } catch (e) {}
+    const reduce =
+      window.matchMedia &&
+      window.matchMedia(
+        "(prefers-reduced-motion: reduce)"
+      ).matches;
+    if (seen || reduce) {
+      setPhase("gone");
+      return;
+    }
+    try {
+      window.sessionStorage.setItem(
+        "al-ritual-done",
+        "1"
+      );
+    } catch (e) {}
+    const t1 = setTimeout(
+      () => setPhase("out"),
+      950
+    );
+    const t2 = setTimeout(
+      () => setPhase("gone"),
+      1450
+    );
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, []);
+  if (phase === "gone") return null;
+  return (
+    <div
+      className={`entrance-ritual ${
+        phase === "out" ? "is-out" : ""
+      }`}
+      aria-hidden="true"
+    >
+      <div className="ritual-inner">
+        <span className="ritual-brand">
+          ANTARCTIC LABS
+        </span>
+        <span className="ritual-line">
+          <i />
+        </span>
+      </div>
+    </div>
+  );
+}
+// ============================================================================
 // HOME
 // ============================================================================
 //
@@ -622,6 +688,7 @@ function Home({ go }) {
       id="main-content"
       tabIndex={-1}
     >
+      <EntranceRitual />
       {/* .env-arrival is a visual-only scroll runway at the top of the
           homepage. The constellation layer physically translates upward
           as the user scrolls through this section (driven by the GSAP
