@@ -129,10 +129,10 @@ function App() {
           <div className="constellation-layer">
             <DefenseLines
               mode="dark"
-              speed={3.0}
+              speed={1.2}
               size={0.35}
               length={0.35}
-              density={1.99}
+              density={1.30}
               opacity={1.0}
               hue={0}
               saturation={0.0}
