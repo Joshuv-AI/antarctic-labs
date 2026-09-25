@@ -74,10 +74,30 @@ export const operator = {
     ],
   },
 
+  beliefs: {
+    title: "OPERATING BELIEFS",
+    items: [
+      {
+        title: "Show the work",
+        since: "SINCE DAY ONE",
+        text: "I don't sell roadmaps. If I tell you I'll build something, it's because I've built the hard parts before — or I'm already building them.",
+      },
+      {
+        title: "Constraints are the brief",
+        since: "FROM YEARS IN OPERATIONS",
+        text: "Budget, time, messy data — I spent years working inside constraints in service and operations jobs. They don't scare me. They're what shape systems that survive contact with reality.",
+      },
+      {
+        title: "Keep moving",
+        since: "ALWAYS",
+        text: "I learn by building. Most of what I know, I know because I tried it, broke it, and fixed it. Stuck isn't a state — it's a signal to try the next thing.",
+      },
+    ],
+  },
+
   team: {
     title: "THE TEAM",
-    headline: "A team of one — by design.",
-    paragraphs: [
+    headline: "A team of one — by design.",    paragraphs: [
       "Antarctic Labs is operated by Joshua Almodovar. No account managers, no handoffs, no juniors learning on your project — the person you talk to is the person who builds it.",
       "Joshua's path into technology wasn't a straight line. He spent years in customer service, retail, restaurant operations, management, and training — environments where getting things right meant understanding people, processes, constraints, and what happens when something breaks.",
       "That instinct moved toward software: systems that process information, automate work, connect tools, and operate without someone manually pushing every button. Today that work centers on AI, automation, data, and software — the intersection where the highest-leverage problems live.",
