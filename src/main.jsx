@@ -10,6 +10,7 @@ import { AnimatedTopDock } from "./shaders/animated-top-dock/AnimatedTopDock.tsx
 import { TypographyVortexCanvas } from "./shaders/typography-vortex/TypographyVortexCanvas.tsx";
 import { OrbitalSphereBackground } from "./shaders/orbital-sphere/OrbitalSphereBackground.tsx";
 import { site as content } from "./content/site.js";
+import { expeditions } from "./content/expeditions.js";
 import { routes, matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
 import {
@@ -373,6 +374,108 @@ function useManifestoFill(scope) {
   }, [scope]);
 }
 // ============================================================================
+// HOME STATS BAND
+// ============================================================================
+//
+// Montfort-style animated counters: honest, data-derived numbers
+// (same source of truth as the projects page) that count up once when
+// the band scrolls into view. With prefers-reduced-motion the final
+// numbers render immediately — no animation, no observer needed.
+function useCountUp(value, started) {
+  const [display, setDisplay] = useState(0);
+  useEffect(() => {
+    if (!started) return;
+    const reduce =
+      window.matchMedia &&
+      window.matchMedia(
+        "(prefers-reduced-motion: reduce)"
+      ).matches;
+    if (reduce) {
+      setDisplay(value);
+      return;
+    }
+    let raf = 0;
+    const t0 = performance.now();
+    const dur = 1400;
+    const tick = (t) => {
+      const p = Math.min(1, (t - t0) / dur);
+      const eased = 1 - Math.pow(1 - p, 3);
+      setDisplay(Math.round(eased * value));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value, started]);
+  return display;
+}
+function HomeStat({ value, label, started }) {
+  const display = useCountUp(value, started);
+  return (
+    <div className="home-stat">
+      <b>{display}</b>
+      <span>{label}</span>
+    </div>
+  );
+}
+function HomeStats() {
+  const ref = useRef(null);
+  const [started, setStarted] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const reduce =
+      window.matchMedia &&
+      window.matchMedia(
+        "(prefers-reduced-motion: reduce)"
+      ).matches;
+    if (reduce) {
+      setStarted(true);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setStarted(true);
+          io.disconnect();
+        }
+      },
+      { threshold: 0.4 }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  const categories = [];
+  expeditions.forEach((e) => {
+    if (!categories.includes(e.category))
+      categories.push(e.category);
+  });
+  const stats = [
+    [expeditions.length, "PROJECTS BUILT"],
+    [
+      expeditions.filter((e) => e.status === "ACTIVE")
+        .length,
+      "ACTIVE NOW",
+    ],
+    [categories.length, "DISCIPLINES"],
+  ];
+  return (
+    <section
+      ref={ref}
+      className="home-stats section reveal"
+      aria-label="Antarctic Labs in numbers"
+    >
+      {stats.map(([value, label]) => (
+        <HomeStat
+          key={label}
+          value={value}
+          label={label}
+          started={started}
+        />
+      ))}
+    </section>
+  );
+}
+// ============================================================================
 // HOME
 // ============================================================================
 //
@@ -591,6 +694,7 @@ function Home({ go }) {
           </p>
         </div>
       </section>
+      <HomeStats />
       <section id="capabilities" className="capabilities section reveal">
         <div className="capability-list">
           {content.capabilities.map(
