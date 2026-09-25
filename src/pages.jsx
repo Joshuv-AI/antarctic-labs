@@ -543,11 +543,6 @@ export function Government({ go }) {
           Antarctic Labs does not currently claim government contracts, certifications, registrations, procurement status, contract vehicles, security clearances, set-aside status, government revenue, agency relationships, or past performance. This destination is in active development.
         </p>
       </section>
-      <section className="copy-block section">
-        <button className="text-link" onClick={() => go("/contact")}>
-          MAKE CONTACT <span>↗</span>
-        </button>
-      </section>
     </main>
   );
 }
@@ -761,7 +756,7 @@ export function Transmission({ go }) {
     setSubmitted(false);
   };
   return (
-    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
+    <main className="page-shell inner-page contact-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">{transmission.sectionIndex}</div>
         <h1>
@@ -772,127 +767,136 @@ export function Transmission({ go }) {
             </span>
           ))}
         </h1>
+        <p className="display-copy contact-lede">{transmission.body}</p>
       </section>
-      <section className={"copy-block section" + (reduceMotion ? "" : " reveal")}>
-        <p className="display-copy">{transmission.body}</p>
-      </section>
-      {!submitted && (
-        <section className={"copy-block section" + (reduceMotion ? "" : " reveal")}>
-          <form
-            className="transmission-form"
-            onSubmit={onSubmit}
-            noValidate={false}
-            aria-label="Transmission form"
-          >
-            {transmission.fields.map((f) => {
-              const fieldError = errors[f.name];
-              const errorId = `${f.id}-error`;
-              const labelText = f.required ? `${f.label} *` : f.label;
-              return (
-                <div className="transmission-field" key={f.id}>
-                  <label htmlFor={f.id}>{labelText}</label>
-                  {f.type === "select" ? (
-                    <select
-                      id={f.id}
-                      name={f.name}
-                      required={f.required}
-                      value={values[f.name]}
-                      onChange={onChange(f.name)}
-                      aria-required={f.required || undefined}
-                      aria-invalid={fieldError ? "true" : undefined}
-                      aria-describedby={fieldError ? errorId : undefined}
-                    >
-                      <option value="" disabled>Select a subject</option>
-                      {f.options.map((opt) => (
-                        <option key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                  ) : f.type === "textarea" ? (
-                    <textarea
-                      id={f.id}
-                      name={f.name}
-                      required={f.required}
-                      rows={f.rows || 4}
-                      value={values[f.name]}
-                      onChange={onChange(f.name)}
-                      autoComplete={f.autoComplete}
-                      aria-required={f.required || undefined}
-                      aria-invalid={fieldError ? "true" : undefined}
-                      aria-describedby={fieldError ? errorId : undefined}
-                    />
-                  ) : (
-                    <input
-                      id={f.id}
-                      name={f.name}
-                      type={f.type}
-                      required={f.required}
-                      value={values[f.name]}
-                      onChange={onChange(f.name)}
-                      autoComplete={f.autoComplete}
-                      placeholder={f.placeholder}
-                      aria-required={f.required || undefined}
-                      aria-invalid={fieldError ? "true" : undefined}
-                      aria-describedby={fieldError ? errorId : undefined}
-                    />
-                  )}
-                  {fieldError && (
-                    <p id={errorId} className="transmission-error" role="alert">
-                      {fieldError}
-                    </p>
-                  )}
-                </div>
-              );
-            })}
-            <div className="transmission-actions">
-              <button
-                type="submit"
-                className="text-link"
-                aria-label={transmission.submit.ariaLabel}
-              >
-                {transmission.submit.label} <span>↗</span>
-              </button>
-              <button
-                type="button"
-                className="text-link transmission-reset"
-                onClick={onReset}
-              >
-                CLEAR <span>×</span>
-              </button>
+
+      <section className={"section contact-grid" + (reduceMotion ? "" : " reveal")}>
+        <div className="contact-form-col">
+          <div className="section-index">SEND A MESSAGE</div>
+          {!submitted ? (
+            <form
+              className="transmission-form"
+              onSubmit={onSubmit}
+              noValidate={false}
+              aria-label="Contact form"
+            >
+              {transmission.fields.map((f) => {
+                const fieldError = errors[f.name];
+                const errorId = `${f.id}-error`;
+                return (
+                  <div className="transmission-field" key={f.id}>
+                    <label htmlFor={f.id}>
+                      {f.label}
+                      {f.required && <span className="req" aria-hidden="true"> *</span>}
+                    </label>
+                    {f.type === "select" ? (
+                      <select
+                        id={f.id}
+                        name={f.name}
+                        required={f.required}
+                        value={values[f.name]}
+                        onChange={onChange(f.name)}
+                        aria-required={f.required || undefined}
+                        aria-invalid={fieldError ? "true" : undefined}
+                        aria-describedby={fieldError ? errorId : undefined}
+                      >
+                        <option value="" disabled>Select a subject</option>
+                        {f.options.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : f.type === "textarea" ? (
+                      <textarea
+                        id={f.id}
+                        name={f.name}
+                        required={f.required}
+                        rows={f.rows || 6}
+                        value={values[f.name]}
+                        onChange={onChange(f.name)}
+                        autoComplete={f.autoComplete}
+                        aria-required={f.required || undefined}
+                        aria-invalid={fieldError ? "true" : undefined}
+                        aria-describedby={fieldError ? errorId : undefined}
+                      />
+                    ) : (
+                      <input
+                        id={f.id}
+                        name={f.name}
+                        type={f.type}
+                        required={f.required}
+                        value={values[f.name]}
+                        onChange={onChange(f.name)}
+                        autoComplete={f.autoComplete}
+                        placeholder={f.placeholder}
+                        aria-required={f.required || undefined}
+                        aria-invalid={fieldError ? "true" : undefined}
+                        aria-describedby={fieldError ? errorId : undefined}
+                      />
+                    )}
+                    {fieldError && (
+                      <p id={errorId} className="transmission-error" role="alert">
+                        {fieldError}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+              <div className="transmission-actions">
+                <button
+                  type="submit"
+                  className="contact-submit"
+                  aria-label={transmission.submit.ariaLabel}
+                >
+                  {transmission.submit.label} <span aria-hidden="true">↗</span>
+                </button>
+                <button
+                  type="button"
+                  className="text-link transmission-reset"
+                  onClick={onReset}
+                >
+                  CLEAR <span aria-hidden="true">×</span>
+                </button>
+              </div>
+              <p className="transmission-notice" role="note">
+                {transmission.noBackendNotice}
+              </p>
+            </form>
+          ) : (
+            <div
+              id="transmission-success"
+              className="transmission-success"
+              role="status"
+              aria-live="polite"
+              tabIndex={-1}
+            >
+              <span className="section-index">{transmission.success.heading}</span>
+              <p className="body-copy">{transmission.success.body}</p>
+              <p className="body-copy">{transmission.success.note}</p>
+              <div className="transmission-actions">
+                <button type="button" className="text-link" onClick={onReset}>
+                  SEND ANOTHER <span aria-hidden="true">↗</span>
+                </button>
+              </div>
             </div>
-            <p className="body-copy transmission-notice" role="note">
-              {transmission.noBackendNotice}
-            </p>
-          </form>
-        </section>
-      )}
-      {submitted && (
-        <section
-          id="transmission-success"
-          className={"copy-block section transmission-success" + (reduceMotion ? "" : " reveal")}
-          role="status"
-          aria-live="polite"
-          tabIndex={-1}
-        >
-          <span className="section-index">{transmission.success.heading}</span>
-          <p className="body-copy">{transmission.success.body}</p>
-          <p className="body-copy">{transmission.success.note}</p>
-          <div className="transmission-actions">
-            <button type="button" className="text-link" onClick={onReset}>
-              SEND ANOTHER <span>↗</span>
-            </button>
-          </div>
-        </section>
-      )}
-      <section className="copy-block section">
-        <span className="section-index">DIRECT</span>
-        <p className="body-copy">
-          Or write directly:{" "}
-          <a className="text-link" href={`mailto:${site.email}`}>
+          )}
+        </div>
+        <aside className="contact-direct-col" aria-label="Direct contact">
+          <div className="section-index">DIRECT</div>
+          <a className="contact-email" href={`mailto:${site.email}`}>
             {site.email}
           </a>
-        </p>
+          <dl className="contact-facts">
+            {transmission.direct.facts.map(([k, v]) => (
+              <div key={k}>
+                <dt>{k}</dt>
+                <dd>{v}</dd>
+              </div>
+            ))}
+          </dl>
+          <p className="body-copy">{transmission.direct.note}</p>
+        </aside>
       </section>
     </main>
   );
