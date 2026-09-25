@@ -54,6 +54,7 @@ export const expeditions = [
       "OpenClaw workspace with AGENTS.md, SOUL.md, IDENTITY.md, USER.md, NOW.md, MEMORY.md, architecture/ spec set, skills/ workshop catalog.",
     technologies: ["OpenClaw", "Skills Workshop", "Markdown-based specs"],
     result: "",
+    process: ["INSTRUCT", "PLAN", "EXECUTE", "VERIFY", "REMEMBER"],
     evidence: [
       "workspace/AGENTS.md",
       "workspace/SOUL.md (10k)",
@@ -94,6 +95,7 @@ export const expeditions = [
       "Project tree under projects/tower-of-babel/ with ACQUISITION_PLAN.md, acquisition_targets_v2.log, audit_era1_report.json, and pipeline scripts.",
     technologies: ["Python", "Schema backfill tooling", "Audit pipelines"],
     result: "",
+    process: ["ACQUIRE", "ENRICH", "BACKFILL", "AUDIT"],
     evidence: [
       "projects/tower-of-babel/ACQUISITION_PLAN.md (18.8k)",
       "projects/tower-of-babel/acquisition_targets_v2.log (13.7k)",
@@ -134,6 +136,7 @@ export const expeditions = [
     technologies: ["Python", "Whisper", "YouTube captions API", "Supervisor watchdog"],
     result:
       "832 transcripts written across four categories. Pipeline paused per Josh's directive to avoid IP-block hammering.",
+    process: ["PROBE", "FETCH", "TRANSCRIBE", "SUPERVISE"],
     evidence: [
       "workspace/MEMORY.md (Phase2b section)",
       "workspace/tmp/phase2b_hybrid_fetch.py",
@@ -172,6 +175,7 @@ export const expeditions = [
       "Inventory complete (16,465 docs from 5 sources). Scoring, filtering, OCR, and conversion complete. Chunk + embed phase not yet started.",
     technologies: ["Python", "OCR tooling", "pdf-inspector", "Chunk + embed pipeline"],
     result: "16,465 docs inventoried and scored; pipeline ready for the chunk + embed phase on Josh's signal.",
+    process: ["INVENTORY", "SCORE", "FILTER", "OCR", "CHUNK + EMBED"],
     evidence: [
       "workspace/MEMORY.md (Phase 3 section)",
       "projects/tower-of-babel/rag/govdocs/phase3a_inventory.py",
@@ -211,6 +215,7 @@ export const expeditions = [
       "Harness and tooling present. Strategy, signals, trade logs, and backtest output captured as snapshots.",
     technologies: ["Python", "Backtest harness", "Agent tools"],
     result: "",
+    process: ["SIGNAL", "BACKTEST", "EXECUTE", "LOG", "REFINE"],
     evidence: [
       "projects/trading/autonomous-trader-data/backtest_detail.json",
       "projects/trading/autonomous-trader-data/backtest_summary.json",
@@ -248,6 +253,7 @@ export const expeditions = [
       "Codebase and log artifact present; no recent activity since 2026-03.",
     technologies: ["Python", "PulseChain / PulseX tooling"],
     result: "",
+    process: ["SCAN", "ANALYZE", "EXECUTE", "INSPECT"],
     evidence: [
       "projects/pdai-arb/arb_core.py",
       "projects/pdai-arb/analyze_bridge.py",
@@ -282,6 +288,7 @@ export const expeditions = [
       "15+ dated research notes plus a curated memory baseline.",
     technologies: ["Research notes", "PulseChain / PulseX"],
     result: "",
+    process: ["OBSERVE", "NOTE", "CORRECT", "COMPILE"],
     evidence: [
       "projects/crypto-pulsechain-research/2026-07-30-phex-ta-and-pulsechain-thesis.md",
       "projects/crypto-pulsechain-research/2026-07-31-pdai-catalysts-session-2.md",
@@ -314,6 +321,7 @@ export const expeditions = [
     build: "Codebase present, containerized.",
     technologies: ["JavaScript/Node", "Docker"],
     result: "",
+    process: ["CONFIGURE", "CONNECT", "TRADE", "MONITOR"],
     evidence: [
       "projects/crucix/crucix/crucix.config.mjs",
       "projects/crucix/crucix/docker-compose.yml",
@@ -343,6 +351,7 @@ export const expeditions = [
     build: "Repo present with installer.",
     technologies: ["Shell installer", "Agent panel"],
     result: "",
+    process: ["STRUCTURE", "INSTALL", "DOCUMENT", "SHIP"],
     evidence: [
       "projects/omarchy-agent-panel-repo/install.sh",
       "projects/omarchy-agent-panel-repo/bin/",
@@ -377,6 +386,7 @@ export const expeditions = [
       "Production site deployed via Cloudflare Pages. Stage A content + route architecture and Stage B finalized content landed today.",
     technologies: ["React 19", "Vite 7", "GSAP 3.13", "Cloudflare Pages"],
     result: "",
+    process: ["DESIGN", "BUILD", "VERIFY", "SHIP"],
     evidence: [
       "projects/antarctic-labs/src/main.jsx",
       "projects/antarctic-labs/src/pages.jsx",
@@ -413,6 +423,7 @@ export const expeditions = [
     build: "Corpus captured 2026-08-02.",
     technologies: ["Feed scraping", "JSON snapshot capture"],
     result: "",
+    process: ["PROBE", "SCRAPE", "STRUCTURE", "VERIFY"],
     evidence: [
       "projects/moltbook/_2026-08-02_feed_hot.json",
       "projects/moltbook/_2026-08-02_feed_new.json",
