@@ -8,6 +8,7 @@ import NewBackgroundVideo from "./components/NewBackgroundVideo.jsx";
 import { DefenseLines } from "./shaders/neuform-isolated/NeuformBatchEffects.tsx";
 import { AnimatedTopDock } from "./shaders/animated-top-dock/AnimatedTopDock.tsx";
 import { TypographyVortexCanvas } from "./shaders/typography-vortex/TypographyVortexCanvas.tsx";
+import { OrbitalSphereBackground } from "./shaders/orbital-sphere/OrbitalSphereBackground.tsx";
 import { site as content } from "./content/site.js";
 import { routes, matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
@@ -181,6 +182,24 @@ function App() {
             dissolveRadius={1.50}
             particleAmount={1.00}
             suctionDuration={1100}
+          />
+        </div>
+      )}
+      {/* Government Contracting only: the StructureFlow orbital-sphere
+          environment, configured to Joshua's thresholds (speed 2.90,
+          particleSize 0.031, particleOpacity 1.00, orbitOpacity 0.27,
+          hue -63, scale 0.83, haloOpacity 0.00). Fixed behind the page
+          content; decorative only. */}
+      {path === "/government-contracting" && (
+        <div className="gov-orbital-layer" aria-hidden="true">
+          <OrbitalSphereBackground
+            speed={2.90}
+            particleSize={0.031}
+            particleOpacity={1.00}
+            orbitOpacity={0.27}
+            hue={-63}
+            scale={0.83}
+            haloOpacity={0.00}
           />
         </div>
       )}
