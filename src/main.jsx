@@ -141,6 +141,40 @@ function App() {
               brightness={1.65}
             />
           </div>
+          {/* Brand greeting: monumental center lockup over the opening
+              starfield (Montfort-style). Fades and lifts away on the
+              arrival timeline; aria-hidden because the dock already
+              carries the brand name. */}
+          <div
+            className="brand-greeting"
+            aria-hidden="true"
+          >
+            <svg
+              className="greeting-mark"
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden="true"
+            >
+              <path
+                d="M7 15.5 12 8l5 7.5"
+                stroke="#eef4f7"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <circle
+                cx="12"
+                cy="16.4"
+                r="1.15"
+                fill="#8f7bff"
+              />
+            </svg>
+            <span className="greeting-rule" />
+            <span className="greeting-word">
+              ANTARCTIC LABS
+            </span>
+            <span className="greeting-rule" />
+          </div>
           <NewBackgroundVideo />
           <Home go={go} />
         </>
@@ -592,7 +626,7 @@ function Home({ go }) {
       // one after the other in a fixed order: the constellation
       // (transparent starfield canvas) exits upward (y=0 to y=-100vh)
       // while the iceberg video rises from below (y=100vh to y=-6vh).
-      // All five tweens live in ONE scrubbed timeline on .env-arrival:
+      // All six tweens live in ONE scrubbed timeline on .env-arrival:
       // the constellation's bottom edge and the iceberg's top edge
       // share a single meeting line at every scroll position, and a
       // two-sided 7% crossfade (--cfade on the constellation's bottom,
@@ -651,6 +685,24 @@ function Home({ go }) {
             { "--vfade": "0%", ease: "none", duration: 0.1 },
             0.4
           );
+          // The brand greeting dissolves and lifts away early in the
+          // arrival so the handoff stays clean — it never lingers over
+          // the iceberg.
+          const greeting =
+            document.querySelector(".brand-greeting");
+          if (greeting) {
+            arrival.fromTo(
+              greeting,
+              { opacity: 1, y: "0vh" },
+              {
+                opacity: 0,
+                y: "-10vh",
+                ease: "none",
+                duration: 0.2,
+              },
+              0
+            );
+          }
         }
       }
       // The top dock stays visible throughout; no reveal gating.
