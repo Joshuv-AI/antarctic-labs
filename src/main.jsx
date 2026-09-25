@@ -31,6 +31,9 @@ function dockActiveId(path) {
   if (path === "/") return "home";
   if (path === "/projects" || path.startsWith("/projects/"))
     return "projects";
+  if (path === "/tower-of-babel" || path.startsWith("/tower-of-babel/"))
+    return "tower";
+  if (path === "/government-contracting") return "gov";
   if (path === "/about") return "about";
   if (path === "/contact") return "contact";
   return undefined;
@@ -273,18 +276,10 @@ function Home({ go }) {
         root.current.querySelector(".env-arrival");
       const constellation =
         document.querySelector(".constellation-layer");
-      const siteHeader =
-        document.querySelector(".top-dock-mount");
       if (!hero || !heroCopy) return;
 
-      // Stage 2: hide the site-header on the homepage until the
-      // environmental arrival completes. The header lives as a sibling
-      // of <Home> in the App root, so its initial hidden state must be
-      // applied here via a class (rather than scoped to .home-page in
-      // CSS, which would not match it).
-      if (siteHeader) {
-        siteHeader.classList.add("is-pending-reveal");
-      }
+      // The top dock is always visible, including on first load — it is
+      // the primary navigation and should be discoverable immediately.
 
       // Stage 3: the environmental arrival. Two full-viewport layers,
       // one after the other in a fixed order: the constellation
@@ -337,26 +332,7 @@ function Home({ go }) {
           );
         }
       }
-      if (siteHeader) {
-        if (reduce) {
-          siteHeader.classList.remove("is-pending-reveal");
-          siteHeader.classList.add("is-revealed");
-        } else if (envArrival) {
-          ScrollTrigger.create({
-            trigger: envArrival,
-            start: "bottom 60%",
-            once: true,
-            onEnter: () => {
-              siteHeader.classList.remove("is-pending-reveal");
-              siteHeader.classList.add("is-revealed");
-            },
-          });
-        } else {
-          // No env-arrival on this page (e.g. inner page); show header.
-          siteHeader.classList.remove("is-pending-reveal");
-          siteHeader.classList.add("is-revealed");
-        }
-      }
+      // The top dock stays visible throughout; no reveal gating.
 
       gsap.fromTo(
         heroCopy,
