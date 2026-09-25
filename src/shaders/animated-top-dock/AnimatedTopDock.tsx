@@ -3,12 +3,16 @@
 //
 // This file is the exact upstream component with the following documented
 // site adaptations (labels/actions wired to the real site navigation):
-//   1. MODERN_ITEMS carries the site's four routes — Home, Projects, About,
-//      Contact — instead of the demo catalogue items. Icons are reused
-//      verbatim from the authored modern set (cube, layers, document, tag).
-//   2. The brand wordmark reads "Antarctic Labs" and navigates home.
-//   3. The paired actions are a mailto ghost button and a "Start a project"
-//      gradient CTA that navigates to /contact.
+//   1. MODERN_ITEMS carries the site's six routes — Home, Projects,
+//      Tower of Babel, Gov Contracts, About, Contact — instead of the
+//      demo catalogue items. Home/Projects/About/Contact icons are reused
+//      verbatim from the authored modern set (cube, layers, document,
+//      tag); Tower of Babel (open book) and Gov Contracts (landmark) are
+//      new icons drawn in the same 16px stroke style.
+//   2. The brand wordmark reads "Antarctic Labs", navigates home, and
+//      shows the active pill (data-active) when the route is "/".
+//   3. The actions area keeps only the "Email me" mailto ghost button;
+//      the "Start a project" CTA was removed (it duplicated Contact).
 //   4. The demo showcase stage (aria-hidden "Everything above the fold"
 //      headline) and the catalogue caption are not rendered; the bar is
 //      the component here.
@@ -105,6 +109,29 @@ const MODERN_ITEMS: readonly DockItem[] = [
       <>
         <path d="M8 1.9 14.4 5.6 8 9.3 1.6 5.6z" />
         <path d="m2.6 8 5.4 3.1L13.4 8M2.6 10.7 8 13.8l5.4-3.1" />
+      </>
+    ),
+  },
+  {
+    id: "tower",
+    label: "Tower of Babel",
+    path: "/tower-of-babel",
+    icon: (
+      <>
+        <path d="M3.2 2.6c1.6-.5 3.2-.5 4.8 0v10.8c-1.6-.5-3.2-.5-4.8 0z" />
+        <path d="M12.8 2.6c-1.6-.5-3.2-.5-4.8 0v10.8c1.6-.5 3.2-.5 4.8 0z" />
+      </>
+    ),
+  },
+  {
+    id: "gov",
+    label: "Gov Contracts",
+    path: "/government-contracting",
+    icon: (
+      <>
+        <path d="M2.4 6.2 8 2.4l5.6 3.8" />
+        <path d="M3.8 6.2v4.6M6.4 6.2v4.6M9.6 6.2v4.6M12.2 6.2v4.6" />
+        <path d="M2.4 13.6h11.2" />
       </>
     ),
   },
@@ -236,17 +263,6 @@ const VARIANT_ITEMS: Record<AnimatedTopDockVariant, readonly DockItem[]> = {
   glass: GLASS_ITEMS,
 };
 
-const CTA_ARROW = (
-  <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
-    <path
-      d="M3.5 8h8.2M8.7 4.7 12 8l-3.3 3.3"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
-  </svg>
-);
 
 function useDockController<T extends HTMLElement>(
   options: TopDockOptions & { variant: AnimatedTopDockVariant },
@@ -381,7 +397,6 @@ type DockShellProps = {
 function ModernDock({ className, items, active, onSelect, options }: DockShellProps) {
   const dockRef = useDockController<HTMLElement>(options);
   const homeItem = items[0];
-  const contactItem = items[items.length - 1];
   return (
     <div className={className}>
       <div className="atd-modern__aurora" aria-hidden="true" />
@@ -389,6 +404,8 @@ function ModernDock({ className, items, active, onSelect, options }: DockShellPr
         <a
           className="atd-modern__brand"
           href="/"
+          data-active={active === homeItem.id}
+          aria-current={active === homeItem.id ? "page" : undefined}
           onClick={(event) => {
             event.preventDefault();
             onSelect(homeItem);
@@ -429,14 +446,6 @@ function ModernDock({ className, items, active, onSelect, options }: DockShellPr
             }}
           >
             Email me
-          </button>
-          <button
-            className="atd-modern__cta"
-            type="button"
-            onClick={() => onSelect(contactItem)}
-          >
-            <span>Start a project</span>
-            {CTA_ARROW}
           </button>
         </div>
       </header>
