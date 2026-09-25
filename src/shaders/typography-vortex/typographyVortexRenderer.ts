@@ -45,6 +45,7 @@ type Dust = {
   size: number;
   life: number;
   maxLife: number;
+  age: number;
   phase: number;
   spin: number;
   color: string;
@@ -205,6 +206,7 @@ export function createTypographyVortexRenderer(
           size: 0.65 + Math.random() * 1.55,
           life: 560 + Math.random() * 620,
           maxLife: 1180,
+          age: 0,
           phase: Math.random() * Math.PI * 2,
           spin: Math.random() > 0.5 ? 1 : -1,
           color: `${pixels[pixelIndex]},${pixels[pixelIndex + 1]},${pixels[pixelIndex + 2]}`,
@@ -243,6 +245,7 @@ export function createTypographyVortexRenderer(
         size: 0.55 + Math.random() * 1.35,
         life: 620 + Math.random() * 520,
         maxLife: 1140,
+        age: 0,
         phase: Math.random() * Math.PI * 2,
         spin: Math.random() > 0.5 ? 1 : -1,
         color: `${pixels[pixelIndex]},${pixels[pixelIndex + 1]},${pixels[pixelIndex + 2]}`,
@@ -261,6 +264,7 @@ export function createTypographyVortexRenderer(
     const alive: Dust[] = [];
     for (const particle of particles) {
       particle.life -= deltaTime;
+      particle.age += deltaTime;
       if (particle.life <= 0 || (particle.sucked && !suctionActive)) continue;
       let distanceToSink = Infinity;
       if (suctionActive && particle.sucked) {
@@ -282,7 +286,8 @@ export function createTypographyVortexRenderer(
       particle.x += particle.velocityX * step;
       particle.y += particle.velocityY * step;
       const sinkFade = suctionActive && particle.sucked ? clamp(distanceToSink / 42, 0.12, 1) : 1;
-      const alpha = clamp(particle.life / Math.min(particle.maxLife, 820), 0, 1) * sinkFade * options.opacity;
+      const fadeIn = clamp(particle.age / 240, 0, 1);
+      const alpha = clamp(particle.life / Math.min(particle.maxLife, 820), 0, 1) * fadeIn * sinkFade * options.opacity;
       context.fillStyle = `rgba(${particle.color},${alpha * 0.88})`;
       const size = particle.size * (0.5 + alpha * 0.5);
       context.fillRect(particle.x - size * 0.5, particle.y - size * 0.5, size, size);
