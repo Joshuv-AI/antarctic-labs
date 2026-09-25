@@ -14,7 +14,7 @@
 
 export const government = {
   brand: "ANTARCTIC LABS",
-  index: "06 / GOVERNMENT",
+  index: "GOVERNMENT CONTRACTING",
   statusPill: "EMERGING CAPABILITY",
   heading: "SYSTEMS FOR REAL-WORLD OPERATIONS.",
   intro:
