@@ -10,10 +10,14 @@
  * 6% crossfade dissolving the starfield into the ice — sequential,
  * never stacked, with no gap. Afterwards the video stays fixed as the backdrop the editorial content scrolls
  * over (it sits at z-index 4, below the page-shell at z-index 6).
+ *
+ * The optional `rest` prop parks the layer at its final homepage position
+ * (translateY(-6vh)) with no scroll choreography: used on inner pages that
+ * share the homepage's resting environment.
  */
 import { useEffect, useRef } from "react";
 
-export default function NewBackgroundVideo() {
+export default function NewBackgroundVideo({ rest = false }) {
   const wrapRef = useRef(null);
   const videoRef = useRef(null);
 
@@ -59,7 +63,7 @@ export default function NewBackgroundVideo() {
   return (
     <div
       ref={wrapRef}
-      className="new-bg-layer"
+      className={"new-bg-layer" + (rest ? " new-bg-layer--rest" : "")}
       aria-hidden="true"
     >
       <video
