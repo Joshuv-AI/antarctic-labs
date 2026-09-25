@@ -430,10 +430,6 @@ function Home({ go }) {
           <span>THE FIELD</span>
         </div>
         <div className="hero-copy">
-          <div className="hero-kicker">
-            <span>01</span>
-            {content.hero.eyebrow}
-          </div>
           <h1>
             {content.hero.title.map((line, idx) => (
               <span key={line}>
@@ -475,9 +471,6 @@ function Home({ go }) {
         </div>
       </section>
       <section id="manifesto" className="manifesto section reveal">
-        <div className="section-index">
-          02 / SIGNAL
-        </div>
         <div className="manifesto-text">
           <p className="signal-line">
             {content.hero.signal}
@@ -490,28 +483,7 @@ function Home({ go }) {
           </p>
         </div>
       </section>
-      <section id="projects" className="projects section">
-        <div className="section-head reveal">
-          <div className="section-index">
-            03 / PROJECTS
-          </div>
-          <span>SELECTED WORK</span>
-        </div>
-        <div className="project-stack">
-          <a
-            className="text-link"
-            href="/projects"
-            onClick={(e) => { e.preventDefault(); go("/projects"); }}
-          >
-            ENTER PROJECTS
-            <span>↗</span>
-          </a>
-        </div>
-      </section>
       <section id="capabilities" className="capabilities section reveal">
-        <div className="section-index">
-          04 / CAPABILITIES
-        </div>
         <div className="capability-list">
           {content.capabilities.map(
             ([n, title, desc]) => (
@@ -531,9 +503,6 @@ function Home({ go }) {
         </div>
       </section>
       <section id="territory" className="territory section reveal">
-        <div className="section-index">
-          05 / TERRITORY
-        </div>
         <div className="territory-list">
           {[
             [
@@ -652,9 +621,6 @@ function Footer({ go }) {
           </a>
         </span>
       </div>
-      <span>
-        BUILT FOR THE UNKNOWN
-      </span>
       <button type="button"
         onClick={() =>
           window.scrollTo({
