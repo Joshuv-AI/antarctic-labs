@@ -163,7 +163,7 @@ function App() {
         />
       )}
       {/* Tower of Babel family only: the typography vortex environment.
-          Exact ThreeUI source, configured usage (mode="light", speed 1.07,
+          Exact ThreeUI source, configured usage (mode="light", speed 0.85,
           ringGrowth 1.30, opacity 0.81, dissolveRadius 1.50,
           particleAmount 1.00, suctionDuration 1100) with a site phrase.
           Fixed behind the page content; pointer interactivity is parked
@@ -175,7 +175,7 @@ function App() {
           <TypographyVortexCanvas
             mode="light"
             phrase="TOWER OF BABEL / ANTARCTIC LABS / "
-            speed={1.07}
+            speed={0.85}
             ringGrowth={1.30}
             opacity={0.81}
             dissolveRadius={1.50}
