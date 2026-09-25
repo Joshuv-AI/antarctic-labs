@@ -1,17 +1,15 @@
 /*
  * NewBackgroundVideo.jsx
  *
- * Full-bleed background video fixed behind the constellation layer
- * and the homepage editorial content. The video is static — it never
- * translates. During the environmental arrival the constellation
- * slides upward over it and dissolves at its soft bottom edge to
- * reveal the iceberg beneath (a reveal, not a meeting line), so the
- * two environments blend with no seam or gap.
- *
- * Sits at z-index 4 (below the constellation at z-index 5, below the
- * page-shell at z-index 6). The Home effect parks it at y=0 on mount;
- * the CSS pre-positions it below the viewport to avoid a one-frame
- * flash before that effect runs.
+ * The iceberg environment: the second full-viewport layer of the
+ * homepage arrival. It starts parked one viewport below the screen
+ * and a single GSAP scroll timeline (built in Home.jsx) drives it up
+ * to y=0 while the constellation exits upward above it. The two
+ * layers are pixel-synced in that timeline so the iceberg's top edge
+ * meets the constellation's bottom edge at one clean meeting line —
+ * sequential, never layered or blended, with no gap. Afterwards the
+ * video stays fixed as the backdrop the editorial content scrolls
+ * over (it sits at z-index 4, below the page-shell at z-index 6).
  */
 import { useEffect, useRef } from "react";
 
