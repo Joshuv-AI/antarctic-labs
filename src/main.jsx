@@ -3,8 +3,10 @@ import { createRoot } from "react-dom/client";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import "./styles.css";
+import "./shaders/threeui.css";
 import NewBackgroundVideo from "./components/NewBackgroundVideo.jsx";
 import { DefenseLines } from "./shaders/neuform-isolated/NeuformBatchEffects.tsx";
+import { AnimatedTopDock } from "./shaders/animated-top-dock/AnimatedTopDock.tsx";
 import { site as content } from "./content/site.js";
 import { routes, matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
@@ -23,9 +25,18 @@ function pathLabel(path) {
   if (path === "/") return "ANTARCTIC LABS";
   return path.replace("/", "").replaceAll("-", " ").toUpperCase();
 }
+// Map the current route to the animated dock's active item id. Project
+// detail pages highlight Projects; anything else leaves no item active.
+function dockActiveId(path) {
+  if (path === "/") return "home";
+  if (path === "/projects" || path.startsWith("/projects/"))
+    return "projects";
+  if (path === "/about") return "about";
+  if (path === "/contact") return "contact";
+  return undefined;
+}
 function App() {
   const [path, setPath] = useState(window.location.pathname);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [transitioning, setTransitioning] = useState(false);
   useEffect(() => {
     const raw = window.location.pathname;
@@ -45,7 +56,6 @@ function App() {
         window.history.replaceState({}, "", target);
       }
       setPath(target);
-      setMenuOpen(false);
       window.scrollTo(0, 0);
     };
     window.addEventListener("popstate", onPop);
@@ -54,19 +64,12 @@ function App() {
     };
   }, []);
   useEffect(() => {
-    document.body.style.overflow = menuOpen ? "hidden" : "";
-    return () => {
-      document.body.style.overflow = "";
-    };
-  }, [menuOpen]);
-  useEffect(() => {
     applyMeta(path);
   }, [path]);
   const go = (to) => {
     if (to === path || transitioning) return;
     const canonical = legacyRedirect(to) || to;
     if (to === path || canonical === path) return;
-    setMenuOpen(false);
     setTransitioning(true);
     window.setTimeout(() => {
       window.history.pushState({}, "", canonical);
@@ -85,18 +88,31 @@ function App() {
   const matchedPattern =
     match && typeof match === "object"
       ? match.pattern
-      : null;
+      : match;
   return (
     <>
       <a href="#main-content" className="skip-link">
         Skip to main content
       </a>
       {/* TODO: re-attach new background asset here on the homepage only. */}
-      <SiteHeader
-        onMenu={() => setMenuOpen(true)}
-        go={go}
-        menuOpen={menuOpen}
-      />
+      {/* Animated top dock (ThreeUI modern variant) — the site's command
+          bar, carrying the four in-scope routes. Exact configured motion:
+          proximity 122, spring 0.19, damping 0.70, widthGrowth 17,
+          heightGrowth 16, drop 3.5, lockTrack (as the authored modern
+          wiring requires). Replaces the old MENU button + overlay. */}
+      <div className="top-dock-mount">
+        <AnimatedTopDock
+          variant="modern"
+          proximity={122}
+          spring={0.19}
+          damping={0.70}
+          widthGrowth={17}
+          heightGrowth={16}
+          drop={3.5}
+          activeId={dockActiveId(path)}
+          onNavigate={(item) => go(item.path)}
+        />
+      </div>
       <PageCurtain
         active={transitioning}
         label={pathLabel(path)}
@@ -155,58 +171,7 @@ function App() {
         (matchedPattern === null && path !== "/")) && (
         <NotFound go={go} />
       )}
-      <Menu
-        open={menuOpen}
-        close={() => setMenuOpen(false)}
-        go={go}
-        path={path}
-      />
     </>
-  );
-}
-function SiteHeader({ onMenu, go, menuOpen }) {
-  return (
-    <header className="site-header">
-      <button type="button"
-        className="brand"
-        onClick={() => go("/")}
-        aria-label={`${content.brand} — home`}
-      >
-        <span
-          className="brand-mark"
-          aria-hidden="true"
-        >
-          △
-        </span>
-        <span>{content.brand}</span>
-      </button>
-      <div className="header-right">
-        <span className="availability">
-          <i aria-hidden="true" />
-          AVAILABLE FOR SELECT PROJECTS
-        </span>
-        <button type="button"
-          className="menu-button"
-          onClick={onMenu}
-          aria-label={
-            menuOpen
-              ? "Close navigation"
-              : "Open navigation"
-          }
-          aria-expanded={menuOpen}
-          aria-controls="primary-menu"
-        >
-          <span>MENU</span>
-          <span
-            className="menu-lines"
-            aria-hidden="true"
-          >
-            <b />
-            <b />
-          </span>
-        </button>
-      </div>
-    </header>
   );
 }
 function PageCurtain({ active, label }) {
@@ -309,7 +274,7 @@ function Home({ go }) {
       const constellation =
         document.querySelector(".constellation-layer");
       const siteHeader =
-        document.querySelector(".site-header");
+        document.querySelector(".top-dock-mount");
       if (!hero || !heroCopy) return;
 
       // Stage 2: hide the site-header on the homepage until the
@@ -691,167 +656,6 @@ function NotFound({ go }) {
         </button>
       </section>
     </main>
-  );
-}
-function Menu({
-  open,
-  close,
-  go,
-  path,
-}) {
-  const overlayRef = React.useRef(null);
-  const firstItemRef = React.useRef(null);
-  React.useEffect(() => {
-    if (!open) return;
-    const onKey = (e) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        close();
-        return;
-      }
-      if (e.key === "Tab") {
-        const focusables =
-          overlayRef.current
-            ? overlayRef.current.querySelectorAll(
-                'button, a[href], [tabindex]:not([tabindex="-1"])'
-              )
-            : [];
-        if (focusables.length === 0) return;
-        const first = focusables[0];
-        const last =
-          focusables[
-            focusables.length - 1
-          ];
-        if (
-          e.shiftKey &&
-          document.activeElement === first
-        ) {
-          e.preventDefault();
-          last.focus();
-        } else if (
-          !e.shiftKey &&
-          document.activeElement === last
-        ) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-    };
-    document.addEventListener(
-      "keydown",
-      onKey
-    );
-    const t = setTimeout(() => {
-      if (firstItemRef.current) {
-        firstItemRef.current.focus();
-      }
-    }, 60);
-    return () => {
-      document.removeEventListener(
-        "keydown",
-        onKey
-      );
-      clearTimeout(t);
-    };
-  }, [open, close]);
-  const item = (
-    href,
-    idx,
-    label,
-    sub,
-    ref
-  ) => (
-    <button type="button"
-      ref={ref}
-      onClick={() => go(href)}
-      aria-current={
-        path === href
-          ? "page"
-          : undefined
-      }
-    >
-      <span>{idx}</span>
-      <span>{label}</span>
-      <i aria-hidden="true">
-        {sub}
-      </i>
-    </button>
-  );
-  return (
-    <div
-      ref={overlayRef}
-      id="primary-menu"
-      className={`menu-overlay ${
-        open ? "is-open" : ""
-      }`}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Site navigation"
-    >
-      <div className="menu-top">
-        <span>
-          ANTARCTIC LABS / NAVIGATION
-        </span>
-        <button type="button"
-          onClick={close}
-          aria-label="Close navigation menu"
-        >
-          CLOSE
-          <b aria-hidden="true">
-            ×
-          </b>
-        </button>
-      </div>
-      <nav>
-        {item(
-          "/",
-          "01",
-          "HOME",
-          "THE FIELD",
-          firstItemRef
-        )}
-        {item(
-          "/projects",
-          "02",
-          "PROJECTS",
-          "SELECTED WORK"
-        )}
-        {item(
-          "/tower-of-babel",
-          "03",
-          "TOWER OF BABEL",
-          "LIBRARY"
-        )}
-        {item(
-          "/government-contracting",
-          "04",
-          "GOV CONTRACTS",
-          "PUBLIC SECTOR"
-        )}
-        {item(
-          "/about",
-          "05",
-          "ABOUT",
-          "JOSHUA ALMODOVAR"
-        )}
-        {item(
-          "/contact",
-          "06",
-          "CONTACT",
-          "GET IN TOUCH"
-        )}
-      </nav>
-      <div className="menu-bottom">
-        <a
-          href={`mailto:${content.email}`}
-        >
-          {content.email}
-        </a>
-        <span>
-          FLORIDA / WORLDWIDE
-        </span>
-      </div>
-    </div>
   );
 }
 function Footer() {
