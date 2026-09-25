@@ -44,7 +44,22 @@ export default function NewBackgroundVideo({ rest = false }) {
       const playPromise = v.play();
       if (playPromise && playPromise.catch) playPromise.catch(() => {});
     };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") tryPlay();
+    };
+    // iOS sometimes pauses a background video when it suspends the tab
+    // or reclaims resources; resume it — nothing in the site ever pauses
+    // this video on purpose.
+    let pauseTimer = 0;
+    const onPause = () => {
+      if (cancelled) return;
+      window.clearTimeout(pauseTimer);
+      pauseTimer = window.setTimeout(tryPlay, 800);
+    };
     v.addEventListener("canplay", tryPlay);
+    v.addEventListener("loadeddata", tryPlay);
+    v.addEventListener("pause", onPause);
+    document.addEventListener("visibilitychange", onVisibility);
     const io = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) tryPlay();
@@ -52,10 +67,28 @@ export default function NewBackgroundVideo({ rest = false }) {
       { rootMargin: "200px 0px", threshold: 0.01 }
     );
     io.observe(wrap);
+    // Safety net: close every autoplay race (slow cellular, suspended
+    // tab, play() called before the muted state applied). Cheap —
+    // a single property check every 2s — and it stops the moment the
+    // video is playing.
+    const watchdog = window.setInterval(() => {
+      if (
+        !cancelled &&
+        v.paused &&
+        document.visibilityState === "visible"
+      ) {
+        tryPlay();
+      }
+    }, 2000);
     tryPlay();
     return () => {
       cancelled = true;
       v.removeEventListener("canplay", tryPlay);
+      v.removeEventListener("loadeddata", tryPlay);
+      v.removeEventListener("pause", onPause);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.clearInterval(watchdog);
+      window.clearTimeout(pauseTimer);
       io.disconnect();
     };
   }, []);
@@ -69,10 +102,10 @@ export default function NewBackgroundVideo({ rest = false }) {
       <video
         ref={videoRef}
         className="new-bg-video"
-        autoPlay
         loop
         muted
         playsInline
+        disablePictureInPicture
         preload="auto"
       >
         <source
