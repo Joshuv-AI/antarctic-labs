@@ -592,23 +592,22 @@ function Home({ go }) {
       // one after the other in a fixed order: the constellation
       // (transparent starfield canvas) exits upward (y=0 to y=-100vh)
       // while the iceberg video rises from below (y=100vh to y=-6vh).
-      // All three tweens live in ONE scrubbed timeline on .env-arrival:
+      // All five tweens live in ONE scrubbed timeline on .env-arrival:
       // the constellation's bottom edge and the iceberg's top edge
       // share a single meeting line at every scroll position, and a
-      // 0% → 6% crossfade (--cfade) dissolves the constellation's
-      // bottom edge into the iceberg for a natural handoff. The
-      // iceberg always extends 6%-of-progress above the meeting line
-      // and stays opaque behind the fade, so the page background
-      // never shows through — crossfade, not a gap. Scoped to
-      // .env-arrival so adding homepage sections later cannot shift
-      // the timing.
+      // two-sided 7% crossfade (--cfade on the constellation's bottom,
+      // --vfade on the iceberg's top) melts the two environments into
+      // each other for a natural handoff. --vfade settles back to 0%
+      // as the arrival completes, so the resting iceberg backdrop is
+      // pixel-identical to before. Scoped to .env-arrival so adding
+      // homepage sections later cannot shift the timing.
       const iceberg =
         document.querySelector(".new-bg-layer");
       if (envArrival && constellation && iceberg) {
         if (reduce) {
           // Reduced motion: settle on the end state — iceberg as the
           // static backdrop, constellation parked out of view.
-          gsap.set(iceberg, { y: "0vh" });
+          gsap.set(iceberg, { y: "0vh", "--vfade": "0%" });
           gsap.set(constellation, { y: "-100vh", "--cfade": "0%" });
         } else {
           const arrival = gsap.timeline({
@@ -634,8 +633,23 @@ function Home({ go }) {
           arrival.fromTo(
             constellation,
             { "--cfade": "0%" },
-            { "--cfade": "6%", ease: "none" },
+            { "--cfade": "7%", ease: "none" },
             0
+          );
+          // The iceberg's top edge dissolves in to meet the
+          // constellation's dissolving bottom edge (two-sided 7%
+          // crossfade), then settles back to 0% as the arrival
+          // completes so the resting backdrop is unchanged.
+          arrival.fromTo(
+            iceberg,
+            { "--vfade": "0%" },
+            { "--vfade": "7%", ease: "none", duration: 0.4 },
+            0
+          );
+          arrival.to(
+            iceberg,
+            { "--vfade": "0%", ease: "none", duration: 0.1 },
+            0.4
           );
         }
       }
