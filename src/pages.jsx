@@ -200,6 +200,9 @@ export function ProjectDetail({ go, params }) {
     { label: "BUILD", value: expedition.build },
     { label: "RESULT", value: expedition.result },
   ];
+  const recordIndex = expeditions.findIndex((e) => e.id === expedition.id);
+  const prevRecord = expeditions[(recordIndex - 1 + expeditions.length) % expeditions.length];
+  const nextRecord = expeditions[(recordIndex + 1) % expeditions.length];
   return (
     <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
@@ -241,6 +244,19 @@ export function ProjectDetail({ go, params }) {
           <p className="body-copy">{s.value}</p>
         </section>
       ))}
+      {expedition.process && expedition.process.length > 0 && (
+        <section className="copy-block section">
+          <span className="section-index">HOW IT WORKS</span>
+          <ol className="process-strip">
+            {expedition.process.map((step, i) => (
+              <li key={step}>
+                <span className="process-step-index">{String(i + 1).padStart(2, "0")}</span>
+                <span className="process-step-label">{step}</span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
       {expedition.technologies && expedition.technologies.length > 0 && (
         <section className="copy-block section">
           <span className="section-index">TECHNOLOGIES</span>
@@ -288,9 +304,15 @@ export function ProjectDetail({ go, params }) {
           </ul>
         </section>
       )}
-      <div className="page-next">
-        <button className="text-link" onClick={() => go("/projects")}>ALL PROJECTS <span>↗</span></button>
-      </div>
+      <nav className="record-nav" aria-label="Project records">
+        <button className="text-link" onClick={() => go(`/projects/${prevRecord.id}`)}>
+          <span aria-hidden="true">←</span> PREV&nbsp;&nbsp;{prevRecord.title}
+        </button>
+        <button className="text-link" onClick={() => go("/projects")}>ALL PROJECTS</button>
+        <button className="text-link" onClick={() => go(`/projects/${nextRecord.id}`)}>
+          NEXT&nbsp;&nbsp;{nextRecord.title} <span aria-hidden="true">→</span>
+        </button>
+      </nav>
     </main>
   );
 }
@@ -717,6 +739,21 @@ export function About({ go }) {
         </div>
       </section>
 
+      <section className="section reveal">
+        <div className="section-index">{operator.beliefs.title}</div>
+        <div className="beliefs-list">
+          {operator.beliefs.items.map((b) => (
+            <div className="belief-row" key={b.title}>
+              <div>
+                <h3>{b.title}</h3>
+                <span className="belief-since">{b.since}</span>
+              </div>
+              <p className="body-copy">{b.text}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
       <section className="about-grid section reveal">
         <div className="about-panel">
           <div className="section-index">{operator.team.title}</div>
@@ -1008,6 +1045,21 @@ export function Transmission({ go }) {
                 <dd>{v}</dd>
               </div>
             ))}
+            {transmission.direct.elsewhere && transmission.direct.elsewhere.length > 0 && (
+              <div>
+                <dt>ELSEWHERE</dt>
+                <dd>
+                  {transmission.direct.elsewhere.map((l, i) => (
+                    <span key={l.href}>
+                      {i > 0 && " · "}
+                      <a className="contact-elsewhere-link" href={l.href} target="_blank" rel="noreferrer">
+                        {l.label} <span aria-hidden="true">↗</span>
+                      </a>
+                    </span>
+                  ))}
+                </dd>
+              </div>
+            )}
           </dl>
           <p className="body-copy">{transmission.direct.note}</p>
         </aside>
