@@ -848,7 +848,6 @@ function Home({ go }) {
           ))}
         </div>
       </section>
-      <Footer go={go} />
     </main>
   );
 }
@@ -879,52 +878,6 @@ function NotFound({ go }) {
         </button>
       </section>
     </main>
-  );
-}
-function Footer({ go }) {
-  const sitemap = [
-    ["HOME", "/"],
-    ["PROJECTS", "/projects"],
-    ["TOWER OF BABEL", "/tower-of-babel"],
-    ["GOV CONTRACTS", "/government-contracting"],
-    ["ABOUT", "/about"],
-    ["CONTACT", "/contact"],
-  ];
-  return (
-    <footer className="site-footer">
-      <div className="footer-sitemap">
-        <span>© {new Date().getFullYear()}{" "}ANTARCTIC LABS</span>
-        <nav className="footer-nav" aria-label="Site">
-          {sitemap.map(([label, path], i) => (
-            <span key={path}>
-              {i > 0 && (
-                <span className="footer-sep" aria-hidden="true"> · </span>
-              )}
-              <button type="button" onClick={() => go(path)}>
-                {label}
-              </button>
-            </span>
-          ))}
-        </nav>
-        <span>
-          <a href={`mailto:${content.email}`}>{content.email}</a>
-          <span className="footer-sep" aria-hidden="true"> · </span>
-          <a href="https://github.com/Joshuv-AI" target="_blank" rel="noreferrer">
-            GitHub <span aria-hidden="true">↗</span>
-          </a>
-        </span>
-      </div>
-      <button type="button"
-        onClick={() =>
-          window.scrollTo({
-            top: 0,
-            behavior: "smooth",
-          })
-        }
-      >
-        ↑ TOP
-      </button>
-    </footer>
   );
 }
 createRoot(
