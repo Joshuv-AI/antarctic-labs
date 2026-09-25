@@ -544,7 +544,7 @@ export function Government({ go }) {
         </p>
       </section>
       <section className="copy-block section">
-        <button className="text-link" onClick={() => go("/transmission")}>
+        <button className="text-link" onClick={() => go("/contact")}>
           MAKE CONTACT <span>↗</span>
         </button>
       </section>
@@ -626,21 +626,6 @@ export function About({ go }) {
               </li>
             ))}
           </ul>
-        </div>
-      </section>
-
-      <section className="copy-block section reveal">
-        <span className="section-index">CONTACT</span>
-        <div>
-          <p className="display-copy">{operator.cta.heading}</p>
-          <p className="body-copy">
-            <button
-              className="text-link"
-              onClick={() => go("/contact")}
-            >
-              {operator.cta.label} <span>↗</span>
-            </button>
-          </p>
         </div>
       </section>
     </main>
