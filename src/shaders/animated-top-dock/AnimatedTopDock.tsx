@@ -3,12 +3,13 @@
 //
 // This file is the exact upstream component with the following documented
 // site adaptations (labels/actions wired to the real site navigation):
-//   1. MODERN_ITEMS carries the site's six routes — Home, Projects,
-//      Tower of Babel, Gov Contracts, About, Contact — instead of the
-//      demo catalogue items. Home/Projects/About/Contact icons are reused
-//      verbatim from the authored modern set (cube, layers, document,
-//      tag); Tower of Babel (open book) and Gov Contracts (landmark) are
-//      new icons drawn in the same 16px stroke style.
+//   1. MODERN_ITEMS carries five routes — Projects, Tower of Babel,
+//      Gov Contracts, About, Contact — instead of the demo catalogue
+//      items. Projects/About/Contact icons are reused verbatim from the
+//      authored modern set (layers, document, tag); Tower of Babel
+//      (open book) and Gov Contracts (landmark) are new icons drawn in
+//      the same 16px stroke style. There is no separate Home item: the
+//      brand is the home button (navigates to "/", active on "/").
 //   2. The brand wordmark reads "Antarctic Labs", navigates home, and
 //      shows the active pill (data-active) when the route is "/".
 //   3. The actions area keeps only the "Email me" mailto ghost button;
@@ -90,17 +91,6 @@ const BRAND_MARK = (
 );
 
 const MODERN_ITEMS: readonly DockItem[] = [
-  {
-    id: "home",
-    label: "Home",
-    path: "/",
-    icon: (
-      <>
-        <path d="M8 1.9 14.1 5v6L8 14.1 1.9 11V5z" />
-        <path d="M1.9 5 8 8.1 14.1 5M8 8.1v6" />
-      </>
-    ),
-  },
   {
     id: "projects",
     label: "Projects",
@@ -396,7 +386,11 @@ type DockShellProps = {
 
 function ModernDock({ className, items, active, onSelect, options }: DockShellProps) {
   const dockRef = useDockController<HTMLElement>(options);
-  const homeItem = items[0];
+  // The brand is the home button: it navigates to "/" and carries the
+  // active state when the route is the homepage. There is no separate
+  // Home nav item (it would duplicate the brand).
+  const goHome = () => onSelect({ id: "home", path: "/" } as DockItem);
+  const homeActive = active === "home";
   return (
     <div className={className}>
       <div className="atd-modern__aurora" aria-hidden="true" />
@@ -404,11 +398,11 @@ function ModernDock({ className, items, active, onSelect, options }: DockShellPr
         <a
           className="atd-modern__brand"
           href="/"
-          data-active={active === homeItem.id}
-          aria-current={active === homeItem.id ? "page" : undefined}
+          data-active={homeActive}
+          aria-current={homeActive ? "page" : undefined}
           onClick={(event) => {
             event.preventDefault();
-            onSelect(homeItem);
+            goHome();
           }}
         >
           <span className="atd-modern__mark" aria-hidden="true">
