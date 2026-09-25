@@ -22,6 +22,12 @@ export default function NewBackgroundVideo() {
     const wrap = wrapRef.current;
     if (!v || !wrap) return;
     let cancelled = false;
+    // Set the muted state imperatively: React does not render the muted
+    // *attribute* on <video>, and the autoplay policy (especially iOS
+    // Safari) keys off the muted IDL state. Belt and suspenders alongside
+    // the muted JSX prop.
+    v.muted = true;
+    v.defaultMuted = true;
     const tryPlay = () => {
       if (cancelled || !v.paused) return;
       // iOS Safari will not autoplay a video that starts off-screen
