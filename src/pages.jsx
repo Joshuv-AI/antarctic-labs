@@ -248,7 +248,7 @@ export function History({ go }) {
 // ----- Tower of Babel ------------------------------------------------------
 export function TowerOfBabel({ go }) {
   return (
-    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
+    <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">05 / TOWER OF BABEL</div>
         <h1>{towerOfBabel.heading}</h1>
@@ -290,7 +290,7 @@ export function TowerLibrary({ go }) {
     return acc;
   }, {});
   return (
-    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
+    <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">05.A / LIBRARY</div>
         <h1>{towerOfBabel.library.heading}</h1>
@@ -349,7 +349,7 @@ export function LibraryArtifact({ go, params }) {
   const artifact = artifacts.find((a) => a.artifact_id === params.id);
   if (!artifact) {
     return (
-      <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
+      <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
         <section className="inner-hero section">
           <div className="section-index">ARTIFACT / {params.id}</div>
           <h1>UNKNOWN ARTIFACT</h1>
@@ -382,7 +382,7 @@ export function LibraryArtifact({ go, params }) {
     typeof artifact.download_url === "string" &&
     artifact.download_url.length > 0;
   return (
-    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
+    <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">ARTIFACT / {artifact.artifact_id}</div>
         <h1>{artifact.title}</h1>
