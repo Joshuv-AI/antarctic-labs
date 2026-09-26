@@ -532,11 +532,6 @@ export function TowerLibrary({ go }) {
           </>
         )}
       </section>
-      <section className="copy-block section">
-        <button className="text-link" onClick={() => go("/tower-of-babel")}>
-          BACK TO TOWER OF BABEL <span>↗</span>
-        </button>
-      </section>
     </main>
   );
 }
