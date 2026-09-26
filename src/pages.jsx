@@ -378,36 +378,51 @@ export function TowerOfBabel({ go }) {
   );
 }
 // ----- Tower of Babel / Library -------------------------------------------------
+const TOWER_SORTS = [
+  { id: "title-asc", label: "Title A–Z" },
+  { id: "year-desc", label: "Newest first" },
+  { id: "year-asc", label: "Oldest first" },
+];
+
+// Case-insensitive haystack for catalog search: title, creator, year,
+// description, collection, and tags.
+function towerHaystack(a) {
+  return [
+    a.title || "",
+    a.creator || "",
+    a.year ? String(a.year) : "",
+    a.description || "",
+    a.collection || "",
+    Array.isArray(a.tags) ? a.tags.join(" ") : "",
+  ]
+    .join("\n")
+    .toLowerCase();
+}
+
 export function TowerLibrary({ go }) {
-  // Live search + collection-filter UI. Empty `query` and `collectionFilter`
-  // mean "show everything". Filtering is case-insensitive and matches against
-  // title, creator, year, description, and any tags.
+  // Live search + collection filter + sort. Empty query/filter = show all.
   const [query, setQuery] = useState("");
   const [collectionFilter, setCollectionFilter] = useState("");
+  const [sortId, setSortId] = useState("title-asc");
   const q = query.trim().toLowerCase();
-  const visible = artifacts.filter((a) => {
-    if (collectionFilter && a.collection !== collectionFilter) return false;
-    if (!q) return true;
-    const hay = [
-      a.title || "",
-      a.creator || "",
-      a.year ? String(a.year) : "",
-      a.description || "",
-      Array.isArray(a.tags) ? a.tags.join(" ") : "",
-    ]
-      .join(" \n ")
-      .toLowerCase();
-    return hay.includes(q);
-  });
-  const grouped = visible.reduce((acc, a) => {
+  const counts = artifacts.reduce((acc, a) => {
     const key = a.collection || "OTHER";
-    if (!acc[key]) acc[key] = [];
-    acc[key].push(a);
+    acc[key] = (acc[key] || 0) + 1;
     return acc;
   }, {});
-  const presentCollections = Array.from(
-    new Set(artifacts.map((a) => a.collection || "OTHER"))
-  );
+  const presentCollections = Object.keys(counts).sort();
+  const visible = artifacts
+    .filter((a) => {
+      if (collectionFilter && (a.collection || "OTHER") !== collectionFilter)
+        return false;
+      if (!q) return true;
+      return towerHaystack(a).includes(q);
+    })
+    .sort((a, b) => {
+      if (sortId === "year-desc") return (b.year || 0) - (a.year || 0);
+      if (sortId === "year-asc") return (a.year || 0) - (b.year || 0);
+      return (a.title || "").localeCompare(b.title || "");
+    });
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
@@ -415,74 +430,102 @@ export function TowerLibrary({ go }) {
         <h1>{towerOfBabel.library.heading}</h1>
         <p className="display-copy">{towerOfBabel.library.intro}</p>
       </section>
-      <section className="copy-block section reveal">
+      <section className="tower-index section">
         <div className="section-index">CATALOG</div>
         {artifacts.length === 0 ? (
-          <>
-            <h2 className="library-empty-heading">{towerOfBabel.library.empty.heading}</h2>
-            <p className="body-copy">{towerOfBabel.library.empty.body}</p>
-          </>
+          <div className="tower-index-empty">
+            <h2>{towerOfBabel.library.empty.heading}</h2>
+            <p>{towerOfBabel.library.empty.body}</p>
+          </div>
         ) : (
           <>
-            <div className="library-controls">
+            <div className="tower-controls">
               <input
                 type="search"
-                className="library-search"
-                placeholder={`Search ${visible.length} of ${artifacts.length} entries…`}
+                className="tower-search"
+                placeholder="Search titles, creators, tags…"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 aria-label="Search the library catalog"
               />
-              <label className="library-collection-filter">
-                <span className="library-filter-label">Collection</span>
+              <label className="tower-sort">
+                <span>Sort</span>
                 <select
-                  value={collectionFilter}
-                  onChange={(e) => setCollectionFilter(e.target.value)}
-                  aria-label="Filter by collection"
+                  value={sortId}
+                  onChange={(e) => setSortId(e.target.value)}
+                  aria-label="Sort entries"
                 >
-                  <option value="">All ({presentCollections.length})</option>
-                  {presentCollections.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
+                  {TOWER_SORTS.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
                     </option>
                   ))}
                 </select>
               </label>
             </div>
+            <div className="tower-chips" role="group" aria-label="Filter by collection">
+              <button
+                type="button"
+                className={`tower-chip${collectionFilter === "" ? " is-active" : ""}`}
+                onClick={() => setCollectionFilter("")}
+              >
+                All <span>{artifacts.length}</span>
+              </button>
+              {presentCollections.map((c) => (
+                <button
+                  type="button"
+                  key={c}
+                  className={`tower-chip${collectionFilter === c ? " is-active" : ""}`}
+                  onClick={() => setCollectionFilter(collectionFilter === c ? "" : c)}
+                  aria-pressed={collectionFilter === c}
+                >
+                  {c} <span>{counts[c]}</span>
+                </button>
+              ))}
+            </div>
+            <p className="tower-result-count" aria-live="polite">
+              {visible.length} of {artifacts.length}{" "}
+              {artifacts.length === 1 ? "entry" : "entries"}
+              {q ? ` matching “${query.trim()}”` : ""}
+            </p>
             {visible.length === 0 ? (
-              <p className="library-empty-results">
-                No entries match the current search/filter. Clear the search or change the collection.
+              <p className="tower-empty-results">
+                No entries match. Clear the search or choose a different collection.
               </p>
             ) : (
-              <div className="library-catalog">
-                {Object.entries(grouped).map(([collection, items]) => (
-                  <div className="library-collection" key={collection}>
-                    <h3 className="library-collection-heading">{collection}</h3>
-                    <div className="artifact-list">
-                      {items.map((a) => (
-                        <button
-                          key={a.artifact_id}
-                          className="artifact-card reveal"
-                          onClick={() => go(`/tower-of-babel/library/${a.artifact_id}`)}
-                        >
-                          <div className="artifact-card-meta">
-                            <span className="artifact-card-collection">{a.collection}</span>
-                            <span className="artifact-card-rights">{a.rights_status || "—"}</span>
-                          </div>
-                          <h4 className="artifact-card-title">{a.title}</h4>
-                          {a.creator && (
-                            <p className="artifact-card-creator">
-                              {a.creator}{a.year ? ` · ${a.year}` : ""}
-                            </p>
-                          )}
-                          {a.description && (
-                            <p className="artifact-card-summary">{a.description}</p>
-                          )}
-                          <span className="artifact-card-arrow">↗</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+              <div className="tower-rows">
+                {visible.map((a, i) => (
+                  <button
+                    key={a.artifact_id}
+                    className="tower-row reveal"
+                    onClick={() => go(`/tower-of-babel/library/${a.artifact_id}`)}
+                  >
+                    <span className="tower-row-index">
+                      {String(i + 1).padStart(2, "0")}
+                    </span>
+                    <span className="tower-row-main">
+                      <span className="tower-row-title">{a.title}</span>
+                      {(a.creator || a.year) && (
+                        <span className="tower-row-creator">
+                          {a.creator}
+                          {a.creator && a.year ? " · " : ""}
+                          {a.year || ""}
+                        </span>
+                      )}
+                    </span>
+                    <span className="tower-row-tags">
+                      <span className="tower-tag">{a.collection}</span>
+                      {a.rights_status && (
+                        <span className="tower-tag tower-tag-rights">
+                          {a.rights_status.replace(/_/g, " ")}
+                        </span>
+                      )}
+                      {a.format && <span className="tower-tag">{a.format}</span>}
+                    </span>
+                    <span className="tower-row-arrow" aria-hidden="true">
+                      ↗
+                    </span>
+                  </button>
                 ))}
               </div>
             )}
@@ -498,7 +541,8 @@ export function TowerLibrary({ go }) {
   );
 }
 export function LibraryArtifact({ go, params }) {
-  const artifact = artifacts.find((a) => a.artifact_id === params.id);
+  const index = artifacts.findIndex((a) => a.artifact_id === params.id);
+  const artifact = artifacts[index];
   if (!artifact) {
     return (
       <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
@@ -506,7 +550,7 @@ export function LibraryArtifact({ go, params }) {
           <div className="section-index">ARTIFACT / {params.id}</div>
           <h1>UNKNOWN ARTIFACT</h1>
         </section>
-        <section className="copy-block section">
+        <section className="tower-entry-record section">
           <p className="body-copy">No artifact record exists for this id.</p>
           <button className="text-link" onClick={() => go("/tower-of-babel/library")}>
             BACK TO LIBRARY <span>↗</span>
@@ -515,98 +559,121 @@ export function LibraryArtifact({ go, params }) {
       </main>
     );
   }
-  const meta = [
-    artifact.collection && { label: "COLLECTION", value: artifact.collection },
-    artifact.category && { label: "CATEGORY", value: artifact.category },
-    artifact.subcategory && { label: "SUBCATEGORY", value: artifact.subcategory },
-    artifact.creator && { label: "CREATOR", value: artifact.creator },
-    artifact.year && { label: "YEAR", value: artifact.year },
-    artifact.format && { label: "FORMAT", value: artifact.format },
-    artifact.file_size && { label: "FILE SIZE", value: artifact.file_size },
-    artifact.version && { label: "VERSION", value: artifact.version },
-    artifact.checksum && { label: "CHECKSUM", value: artifact.checksum },
-    artifact.license && { label: "LICENSE", value: artifact.license },
-    artifact.rights_status && { label: "RIGHTS", value: artifact.rights_status },
-    artifact.download_status && { label: "ACCESS STATUS", value: artifact.download_status },
-  ].filter(Boolean);
-  const canDownload =
-    artifact.download_status === "AVAILABLE" &&
+  const prev = artifacts[(index - 1 + artifacts.length) % artifacts.length];
+  const next = artifacts[(index + 1) % artifacts.length];
+  const record = [
+    ["COLLECTION", artifact.collection],
+    ["CREATOR", artifact.creator],
+    ["YEAR", artifact.year],
+    ["FORMAT", artifact.format],
+    ["FILE SIZE", artifact.file_size],
+    ["VERSION", artifact.version],
+    ["LICENSE", artifact.license],
+    ["RIGHTS", artifact.rights_status && artifact.rights_status.replace(/_/g, " ")],
+    ["ACCESS", artifact.download_status && artifact.download_status.replace(/_/g, " ")],
+    ["CHECKSUM", artifact.checksum],
+    ["SOURCE", artifact.source],
+  ].filter(([, v]) => v !== undefined && v !== null && v !== "");
+  const status = artifact.download_status;
+  const canAccess =
+    (status === "AVAILABLE" || status === "EXTERNAL_LINK") &&
     typeof artifact.download_url === "string" &&
     artifact.download_url.length > 0;
+  const accessLabel =
+    status === "EXTERNAL_LINK" ? "OPEN EXTERNAL SOURCE" : "ACCESS RESOURCE";
   return (
-    <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
-      <section className="inner-hero section">
-        <div className="section-index">ARTIFACT / {artifact.artifact_id}</div>
+    <main className="page-shell inner-page tower-light tower-entry" id="main-content" tabIndex={-1}>
+      <section className="tower-entry-hero section">
+        <div className="section-index">LIBRARY / {artifact.collection}</div>
         <h1>{artifact.title}</h1>
-        {artifact.creator && (
-          <p className="display-copy">
-            {artifact.creator}{artifact.year ? ` · ${artifact.year}` : ""}
+        {(artifact.creator || artifact.year) && (
+          <p className="tower-entry-byline">
+            {artifact.creator}
+            {artifact.creator && artifact.year ? " · " : ""}
+            {artifact.year || ""}
           </p>
         )}
-      </section>
-      {artifact.description && (
-        <section className="copy-block section reveal">
-          <span className="section-index">DESCRIPTION</span>
-          <p className="body-copy">{artifact.description}</p>
-        </section>
-      )}
-      {meta.length > 0 && (
-        <section className="detail-grid section">
-          {meta.map((m) => (
-            <div key={m.label}>
-              <span className="section-index">{m.label}</span>
-              <strong>{m.value}</strong>
-            </div>
-          ))}
-        </section>
-      )}
-      {artifact.source && (
-        <section className="copy-block section">
-          <span className="section-index">SOURCE</span>
-          <p className="body-copy">{artifact.source}</p>
-        </section>
-      )}
-      {artifact.source_url && (
-        <section className="copy-block section">
-          <span className="section-index">SOURCE LINK</span>
-          <p className="body-copy">
+        {artifact.description && (
+          <p className="tower-entry-lede">{artifact.description}</p>
+        )}
+        <div className="tower-entry-actions">
+          {canAccess && (
+            <a
+              className="tower-access-btn"
+              href={artifact.download_url}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {accessLabel} <span aria-hidden="true">↗</span>
+            </a>
+          )}
+          {status === "METADATA_ONLY" && (
+            <p className="tower-access-note">
+              Metadata only — no file distribution for this entry.
+            </p>
+          )}
+          {status === "RESTRICTED" && (
+            <p className="tower-access-note">
+              Restricted — not available for distribution.
+            </p>
+          )}
+          {artifact.source_url && (
             <a
               className="text-link"
               href={artifact.source_url}
-              rel="noopener noreferrer"
               target="_blank"
-            >
-              {artifact.source_url} <span>↗</span>
-            </a>
-          </p>
-        </section>
-      )}
-      {canDownload && (
-        <section className="copy-block section">
-          <span className="section-index">DOWNLOAD</span>
-          <p className="body-copy">
-            <a
-              className="text-link download-link"
-              href={artifact.download_url}
               rel="noopener noreferrer"
-              target="_blank"
             >
-              ACCESS RESOURCE <span>↗</span>
+              VIEW SOURCE <span>↗</span>
             </a>
-          </p>
-        </section>
+          )}
+        </div>
+      </section>
+      <section className="tower-entry-record section">
+        <div className="section-index">CATALOG RECORD</div>
+        <dl className="tower-record">
+          {record.map(([label, value]) => (
+            <div key={label} className="tower-record-row">
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+        {artifact.tags && artifact.tags.length > 0 && (
+          <ul className="tower-tag-list" aria-label="Tags">
+            {artifact.tags.map((t) => (
+              <li key={t} className="tower-tag">
+                {t}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+      {artifacts.length > 1 ? (
+        <nav className="record-nav tower-entry-nav" aria-label="Browse entries">
+          <button
+            className="text-link tower-nav-btn"
+            onClick={() => go(`/tower-of-babel/library/${prev.artifact_id}`)}
+          >
+            <span aria-hidden="true">←</span> {prev.title}
+          </button>
+          <button className="text-link" onClick={() => go("/tower-of-babel/library")}>
+            ALL ENTRIES
+          </button>
+          <button
+            className="text-link tower-nav-btn"
+            onClick={() => go(`/tower-of-babel/library/${next.artifact_id}`)}
+          >
+            {next.title} <span aria-hidden="true">→</span>
+          </button>
+        </nav>
+      ) : (
+        <div className="page-next">
+          <button className="text-link" onClick={() => go("/tower-of-babel/library")}>
+            BACK TO LIBRARY <span>↗</span>
+          </button>
+        </div>
       )}
-      {artifact.tags && artifact.tags.length > 0 && (
-        <section className="copy-block section">
-          <span className="section-index">TAGS</span>
-          <p className="body-copy">{artifact.tags.join(" · ")}</p>
-        </section>
-      )}
-      <div className="page-next">
-        <button className="text-link" onClick={() => go("/tower-of-babel/library")}>
-          BACK TO LIBRARY <span>↗</span>
-        </button>
-      </div>
     </main>
   );
 }
