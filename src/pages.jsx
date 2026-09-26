@@ -342,7 +342,6 @@ export function History({ go }) {
 }
 // ----- Tower of Babel ------------------------------------------------------
 export function TowerOfBabel({ go }) {
-  const preview = artifacts.slice(0, 3);
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section tower-landing-hero">
@@ -359,46 +358,6 @@ export function TowerOfBabel({ go }) {
             {artifacts.length} {artifacts.length === 1 ? "entry" : "entries"} indexed
           </span>
         </div>
-      </section>
-
-      <section className="tower-landing-shelf section">
-        <div className="section-index">THE LIBRARY</div>
-        <h2 className="tower-landing-shelf-title">On the shelves now.</h2>
-        <div className="tower-rows tower-landing-rows">
-          {preview.map((a, i) => (
-            <button
-              key={a.artifact_id}
-              className="tower-row"
-              onClick={() => go(`/tower-of-babel/library/${a.artifact_id}`)}
-              aria-label={`Open ${a.title} in the library`}
-            >
-              <span className="tower-row-index">{String(i + 1).padStart(2, "0")}</span>
-              <span className="tower-row-main">
-                <span className="tower-row-title">{a.title}</span>
-                {(a.creator || a.year) && (
-                  <span className="tower-row-creator">
-                    {a.creator}
-                    {a.creator && a.year ? " · " : ""}
-                    {a.year || ""}
-                  </span>
-                )}
-              </span>
-              <span className="tower-row-tags">
-                <span className="tower-tag">{a.collection}</span>
-                {a.rights_status && (
-                  <span className="tower-tag tower-tag-rights">
-                    {a.rights_status.replace(/_/g, " ")}
-                  </span>
-                )}
-                {a.format && <span className="tower-tag">{a.format}</span>}
-              </span>
-              <span className="tower-row-arrow" aria-hidden="true">↗</span>
-            </button>
-          ))}
-        </div>
-        <button className="tower-access-btn tower-landing-cta" onClick={() => go("/tower-of-babel/library")}>
-          BROWSE THE FULL CATALOG <span aria-hidden="true">↗</span>
-        </button>
       </section>
 
       <section className="tower-landing-block section">
