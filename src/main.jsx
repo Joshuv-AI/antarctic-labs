@@ -688,6 +688,25 @@ function Home({ go, onCloudPhaseChange }) {
             onUpdate: (self) => {
               const p = self.progress;
               reportCloudPhase(p > 0.1 && p < 0.88);
+              // Variant C parallax: the back photo stratum ([data-
+              // cloud-parallax]) counter-drifts at a fraction of the
+              // front layer's motion so the flat image gains depth. It
+              // is driven here — not as a timeline tween — because the
+              // lazy cloud component mounts after the timeline is
+              // built, so a setup-time query would find nothing. The
+              // outer layer travels 10vh over p 0.14->0.32; the back
+              // layer gives back 5.5vh over the same span, netting
+              // 4.5vh — 0.45x the front. Absent in other variants.
+              const back = document.querySelector(
+                "[data-cloud-parallax]"
+              );
+              if (back) {
+                const t = Math.min(
+                  Math.max((p - 0.14) / 0.18, 0),
+                  1
+                );
+                back.style.transform = `translateY(${(t * 5.5).toFixed(3)}vh)`;
+              }
             },
           },
         });
