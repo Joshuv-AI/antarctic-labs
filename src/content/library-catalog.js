@@ -51436,7 +51436,7 @@ export const artifacts = [
   artifact({
     artifact_id: "rosenkreuzer-semler-1786",
     title: "Unparteiische Historie der Rosenkreuzer",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "Johann Salomo Semler",
     description: "Unparteiische Historie der Rosenkreuzer (Impartial History of the Rosicrucians) by Johann Salomo Semler, 1786. German text. Verified public-domain text.",
     source: "Internet Archive",
@@ -51452,7 +51452,7 @@ export const artifacts = [
   artifact({
     artifact_id: "history-of-greece-vol-5-grote",
     title: "A History of Greece, Vol. V",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "George Grote",
     description: "A History of Greece, Vol. V, by George Grote. Distinct volume; Vol. I is cataloged separately. Verified public-domain text.",
     source: "Internet Archive",
@@ -51468,7 +51468,7 @@ export const artifacts = [
   artifact({
     artifact_id: "philosophie-der-freiheit-steiner-1894",
     title: "Die Philosophie der Freiheit",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "Rudolf Steiner",
     description: "Die Philosophie der Freiheit by Rudolf Steiner. German first edition, 1894. The English translation (The Philosophy of Spiritual Activity) is cataloged separately. Verified public-domain text.",
     source: "Internet Archive",
@@ -51484,7 +51484,7 @@ export const artifacts = [
   artifact({
     artifact_id: "antiquities-of-mexico-vol-2-kingsborough",
     title: "Antiquities of Mexico, Vol. II",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "Lord Kingsborough (Edward King)",
     description: "Antiquities of Mexico, Vol. II, by Lord Kingsborough (Edward King), 1831. Facsimiles of ancient Mexican paintings and hieroglyphics. Distinct volume; Vol. III is cataloged separately. Verified public-domain text.",
     source: "Internet Archive",
@@ -51500,7 +51500,7 @@ export const artifacts = [
   artifact({
     artifact_id: "poetic-edda-bray-translation",
     title: "The Elder or Poetic Edda (Saemund's Edda), Part I",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "Olive Bray (translator)",
     description: "The Elder or Poetic Edda (Saemund's Edda), Part I: The Mythological Poems. Translated by Olive Bray. A distinct translation; the Stork translation is cataloged separately. Verified public-domain text.",
     source: "Internet Archive",
@@ -51516,7 +51516,7 @@ export const artifacts = [
   artifact({
     artifact_id: "hesiod-homeric-hymns-homerica-evelyn-white",
     title: "Hesiod, the Homeric Hymns and Homerica",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "Hugh G. Evelyn-White (translator)",
     description: "Hesiod, the Homeric Hymns and Homerica. Translated by Hugh G. Evelyn-White (1914). Verified public-domain text from an Internet Archive scan.",
     source: "Internet Archive",
@@ -51532,7 +51532,7 @@ export const artifacts = [
   artifact({
     artifact_id: "book-of-mormon-1852-front-matter",
     title: "The Book of Mormon: Publisher's Introduction and Synopsis (1852 Liverpool Edition Front Matter)",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "Jas. O. Wright & Co. (Joseph Smith Jr.)",
     description: "Front matter fragment (publisher's introduction and synopsis) from the 1852 Liverpool edition of the Book of Mormon. A distinct historical artifact; the complete text is cataloged separately. Verified public-domain text.",
     source: "Internet Archive",
@@ -51548,7 +51548,7 @@ export const artifacts = [
   artifact({
     artifact_id: "no-breakfast-plan-fasting-cure-dewey",
     title: "The No Breakfast Plan and the Fasting-Cure",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "Edward Hooker Dewey",
     description: "The No Breakfast Plan and the Fasting-Cure by Edward Hooker Dewey. Source: Project Gutenberg ebook #27128. Verified public-domain text.",
     source: "Project Gutenberg",
@@ -51565,7 +51565,7 @@ export const artifacts = [
   artifact({
     artifact_id: "papyrus-of-ani-1913-text",
     title: "The Papyrus of Ani (1913 Text Edition)",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "E. A. Wallis Budge (translator)",
     description: "The Papyrus of Ani: 1913 text edition of the Egyptian Book of the Dead. Distinct from the Medici Society facsimile and the Gutenberg edition cataloged separately. Verified public-domain text.",
     source: "Internet Archive",
@@ -51581,7 +51581,7 @@ export const artifacts = [
   artifact({
     artifact_id: "vedas-catholic-encyclopedia-remy",
     title: "Vedas (Catholic Encyclopedia article)",
-    collection: "DECLASSIFIED",
+    collection: "REFERENCE",
     creator: "Arthur F. J. Remy",
     description: "Vedas: Catholic Encyclopedia article on the Vedic scriptures. By Arthur F. J. Remy. Verified public-domain text.",
     source: "Catholic Encyclopedia (1917)",
@@ -51597,7 +51597,7 @@ export const artifacts = [
   artifact({
     artifact_id: "philo-judaeus-catholic-encyclopedia",
     title: "Philo Judaeus (Catholic Encyclopedia article)",
-    collection: "DECLASSIFIED",
+    collection: "REFERENCE",
     creator: "Emile Brehier",
     description: "Philo Judaeus: Catholic Encyclopedia article on the Hellenistic Jewish philosopher. By Emile Brehier. Verified public-domain text.",
     source: "Catholic Encyclopedia (1917)",
@@ -51613,7 +51613,7 @@ export const artifacts = [
   artifact({
     artifact_id: "pistis-sophia-schmidt-1925",
     title: "Pistis Sophia (Schmidt Critical Edition, 1925)",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "Carl Schmidt (editor)",
     description: "Pistis Sophia: Carl Schmidt's 1925 Copenhagen critical edition (German/Greek/Coptic). Distinct from the Horner and MacDermot translations cataloged separately. Verified public-domain text.",
     source: "Internet Archive",
@@ -51629,7 +51629,7 @@ export const artifacts = [
   artifact({
     artifact_id: "jargon-file-2-9-10",
     title: "The Jargon File, Version 2.9.10",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "Eric S. Raymond (editor)",
     description: "The Jargon File, version 2.9.10: the classic lexicon of hacker slang and folklore. Source: Project Gutenberg ebook #38. Verified public-domain text.",
     source: "Project Gutenberg",
@@ -51646,7 +51646,7 @@ export const artifacts = [
   artifact({
     artifact_id: "imitation-of-christ-whitford-translation",
     title: "The Imitation of Christ (Whitford Translation)",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "Thomas a Kempis; Richard Whitford (translator)",
     description: "The Imitation of Christ by Thomas a Kempis. Translated by Richard Whitford (Peter Pauper Press). A distinct translation; the Raynal translation record is cataloged separately. Verified public-domain text.",
     source: "Internet Archive",
@@ -51662,7 +51662,7 @@ export const artifacts = [
   artifact({
     artifact_id: "hermas-catholic-encyclopedia-chapman",
     title: "Hermas (Catholic Encyclopedia article)",
-    collection: "DECLASSIFIED",
+    collection: "REFERENCE",
     creator: "John Chapman",
     description: "Hermas: Catholic Encyclopedia article on the author of the Shepherd of Hermas. By John Chapman. Verified public-domain text.",
     source: "Catholic Encyclopedia (1917)",
@@ -51678,7 +51678,7 @@ export const artifacts = [
   artifact({
     artifact_id: "halma-nicolas-catholic-encyclopedia",
     title: "Halma, Nicolas (Catholic Encyclopedia article)",
-    collection: "DECLASSIFIED",
+    collection: "REFERENCE",
     creator: "William Fox",
     description: "Halma, Nicolas: Catholic Encyclopedia biographical article on the French mathematician and translator of Ptolemy. By William Fox. Verified public-domain text.",
     source: "Catholic Encyclopedia (1917)",
@@ -51694,7 +51694,7 @@ export const artifacts = [
   artifact({
     artifact_id: "nara-m887-doctors-trial-roll-1",
     title: "NARA M887 Roll 1: Nuremberg Doctors Trial Transcripts",
-    collection: "DECLASSIFIED",
+    collection: "DOCUMENTS",
     creator: "U.S. National Archives",
     description: "U.S. National Archives M887 Roll 1: Doctors Trial transcript finding aid and transcripts from the Nuremberg Military Tribunals. U.S. federal government material. Verified public-domain text.",
     source: "U.S. National Archives",
@@ -51710,7 +51710,7 @@ export const artifacts = [
   artifact({
     artifact_id: "golden-bough-abridged-1922-frazer",
     title: "The Golden Bough (Abridged Edition, 1922)",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "James George Frazer",
     description: "The Golden Bough: A Study in Magic and Religion. Abridged edition, Macmillan, 1922. Distinct from the unabridged third edition cataloged separately. Verified public-domain text.",
     source: "Internet Archive",
@@ -51726,7 +51726,7 @@ export const artifacts = [
   artifact({
     artifact_id: "outline-of-occult-science-steiner-1914",
     title: "An Outline of Occult Science",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "Rudolf Steiner",
     description: "An Outline of Occult Science by Rudolf Steiner. Rand McNally 1914 authorized translation. Text differs from the Gutenberg translation cataloged separately. Verified public-domain text.",
     source: "Internet Archive",
@@ -51742,7 +51742,7 @@ export const artifacts = [
   artifact({
     artifact_id: "shoo-king-legge-1865",
     title: "The Shoo King (The Chinese Classics, Vol. III)",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "James Legge (translator)",
     description: "The Shoo King (Book of Historical Documents). The Chinese Classics, Vol. III. Translated by James Legge. London: Trubner, 1865. Verified public-domain text.",
     source: "Internet Archive",
@@ -51758,7 +51758,7 @@ export const artifacts = [
   artifact({
     artifact_id: "book-of-dead-hieroglyphic-budge-1898",
     title: "The Book of the Dead: Hieroglyphic Text (Theban Recension, 1898)",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "E. A. Wallis Budge",
     description: "The Book of the Dead: hieroglyphic text of the Theban recension. Kegan Paul, 1898 edition. Distinct from the translation-only editions cataloged separately. Verified public-domain text.",
     source: "Internet Archive",
@@ -51774,7 +51774,7 @@ export const artifacts = [
   artifact({
     artifact_id: "garuda-purana-basu-edition",
     title: "The Garuda Purana (Sacred Books of the Hindus)",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "B. D. Basu (editor); various Sanskrit scholars (translators)",
     description: "The Garuda Purana. Sacred Books of the Hindus, Vol. IX. Translated by various Sanskrit scholars under Major B. D. Basu. Distinct from the Subrahmanyam edition record cataloged separately. Verified public-domain text.",
     source: "Internet Archive",
@@ -51790,7 +51790,7 @@ export const artifacts = [
   artifact({
     artifact_id: "mythology-of-aryan-nations-chowkhamba",
     title: "The Mythology of the Aryan Nations (Chowkhamba Reprint)",
-    collection: "DECLASSIFIED",
+    collection: "BOOKS",
     creator: "Rev. Sir George W. Cox",
     description: "The Mythology of the Aryan Nations by Rev. Sir George W. Cox. Chowkhamba Sanskrit Studies Vol. XXVII reprint (Varanasi, 1964) of the 1882 edition. Verified public-domain text.",
     source: "Internet Archive",
