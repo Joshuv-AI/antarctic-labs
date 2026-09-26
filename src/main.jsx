@@ -627,78 +627,87 @@ function Home({ go }) {
       // The top dock is always visible, including on first load — it is
       // the primary navigation and should be discoverable immediately.
 
-      // Stage 3: the environmental arrival. Two full-viewport layers
-      // in a fixed order: the constellation (transparent starfield
-      // canvas) exits upward and the iceberg video rises from below,
-      // its top 7% dissolving in behind the thinning stars (--vfade
-      // settles back to 0% as the arrival completes, so the resting
-      // iceberg backdrop is pixel-identical to before). Everything lives
-      // in ONE scrubbed timeline on .env-arrival (200vh). Scoped to
-      // .env-arrival so adding homepage sections later cannot shift
-      // the timing.
+      // Stage 3: the environmental arrival. Two full-viewport layers,
+      // one after the other in a fixed order: the constellation
+      // (transparent starfield canvas) exits upward (y=0 to y=-100vh)
+      // while the iceberg video rises from below (y=100vh to y=-6vh).
+      // All six tweens live in ONE scrubbed timeline on .env-arrival:
+      // the constellation's bottom edge and the iceberg's top edge
+      // share a single meeting line at every scroll position, and a
+      // two-sided 7% crossfade (--cfade on the constellation's bottom,
+      // --vfade on the iceberg's top) melts the two environments into
+      // each other for a natural handoff. --vfade settles back to 0%
+      // as the arrival completes, so the resting iceberg backdrop is
+      // pixel-identical to before. Scoped to .env-arrival so adding
+      // homepage sections later cannot shift the timing.
       const iceberg =
         document.querySelector(".new-bg-layer");
       if (envArrival && constellation && iceberg) {
-        const arrival = gsap.timeline({
-          scrollTrigger: {
-            trigger: envArrival,
-            start: "top top",
-            end: "bottom top",
-            scrub: true,
-          },
-        });
-        // Constellation exits upward; its bottom edge dissolves into
-        // the iceberg rising beneath it.
-        arrival.fromTo(
-          constellation,
-          { y: "0vh" },
-          { y: "-100vh", ease: "none", duration: 0.5 },
-          0
-        );
-        arrival.fromTo(
-          constellation,
-          { "--cfade": "0%" },
-          { "--cfade": "7%", ease: "none", duration: 0.5 },
-          0
-        );
-        // Iceberg rises from below; its top edge dissolves in behind
-        // the thinning stars (two-sided melt with the constellation's
-        // bottom crossfade), then settles back to 0% as the arrival
-        // completes so the resting backdrop is unchanged.
-        arrival.fromTo(
-          iceberg,
-          { y: "100vh" },
-          { y: "-6vh", ease: "none", duration: 0.55 },
-          0.45
-        );
-        arrival.fromTo(
-          iceberg,
-          { "--vfade": "0%" },
-          { "--vfade": "7%", ease: "none", duration: 0.3 },
-          0.45
-        );
-        arrival.to(
-          iceberg,
-          { "--vfade": "0%", ease: "none", duration: 0.1 },
-          0.75
-        );
-        // The brand greeting dissolves and lifts away early in the
-        // arrival so the handoff stays clean — it never lingers over
-        // the iceberg.
-        const greeting =
-          document.querySelector(".brand-greeting");
-        if (greeting) {
-          arrival.fromTo(
-            greeting,
-            { opacity: 1, y: "0vh" },
-            {
-              opacity: 0,
-              y: "-10vh",
-              ease: "none",
-              duration: 0.2,
+        if (reduce) {
+          // Reduced motion: settle on the end state — iceberg as the
+          // static backdrop, constellation parked out of view.
+          gsap.set(iceberg, { y: "0vh", "--vfade": "0%" });
+          gsap.set(constellation, { y: "-100vh", "--cfade": "0%" });
+        } else {
+          const arrival = gsap.timeline({
+            scrollTrigger: {
+              trigger: envArrival,
+              start: "top top",
+              end: "bottom top",
+              scrub: true,
             },
+          });
+          arrival.fromTo(
+            constellation,
+            { y: "0vh" },
+            { y: "-100vh", ease: "none" },
             0
           );
+          arrival.fromTo(
+            iceberg,
+            { y: "100vh" },
+            { y: "-6vh", ease: "none" },
+            0
+          );
+          arrival.fromTo(
+            constellation,
+            { "--cfade": "0%" },
+            { "--cfade": "7%", ease: "none" },
+            0
+          );
+          // The iceberg's top edge dissolves in to meet the
+          // constellation's dissolving bottom edge (two-sided 7%
+          // crossfade), then settles back to 0% as the arrival
+          // completes so the resting backdrop is unchanged.
+          arrival.fromTo(
+            iceberg,
+            { "--vfade": "0%" },
+            { "--vfade": "7%", ease: "none", duration: 0.4 },
+            0
+          );
+          arrival.to(
+            iceberg,
+            { "--vfade": "0%", ease: "none", duration: 0.1 },
+            0.4
+          );
+          // The brand greeting dissolves and lifts away early in the
+          // arrival so the handoff stays clean — it never lingers over
+          // the iceberg.
+          const greeting =
+            document.querySelector(".brand-greeting");
+          if (greeting) {
+            arrival.fromTo(
+              greeting,
+              { opacity: 1, y: "0vh" },
+              {
+                opacity: 0,
+                y: "-10vh",
+                ease: "none",
+                duration: 0.2,
+              },
+              0
+            );
+          }
         }
       }
       // The top dock stays visible throughout; no reveal gating.
@@ -713,9 +722,12 @@ function Home({ go }) {
           y: 0,
           opacity: 1,
           ease: "power3.out",
-          // The hero copy enters over the settled environment, after
-          // the constellation has thinned and the iceberg has risen.
-          // (env-arrival is 200vh; hero starts at 200vh.)
+          // Pushed the start from "top 88%" to "top 55%" so the hero
+          // copy only begins entering after the constellation has
+          // nearly finished receding (env-arrival is 200vh; the hero
+          // starts at 200vh; "top 55%" of the viewport means the
+          // hero-copy's top must rise to roughly the upper third of
+          // the viewport before the fade begins).
           scrollTrigger: {
             trigger: heroCopy,
             start: "top 55%",
