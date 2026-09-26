@@ -1,4 +1,10 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  lazy,
+  Suspense,
+} from "react";
 import { createRoot } from "react-dom/client";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
@@ -9,6 +15,9 @@ import { DefenseLines } from "./shaders/neuform-isolated/NeuformBatchEffects.tsx
 import { AnimatedTopDock } from "./shaders/animated-top-dock/AnimatedTopDock.tsx";
 import { TypographyVortexCanvas } from "./shaders/typography-vortex/TypographyVortexCanvas.tsx";
 import { OrbitalSphereBackground } from "./shaders/orbital-sphere/OrbitalSphereBackground.tsx";
+// The homepage cloud stratum (Vanta.js, approved variant A). Lazy-loaded
+// so the Vanta chunk only downloads when the cloud phase mounts it.
+const HomeClouds = lazy(() => import("./home/HomeClouds.tsx"));
 import { site as content } from "./content/site.js";
 import { expeditions } from "./content/expeditions.js";
 import { routes, matchRoute, legacyRedirect } from "./content/routes.js";
@@ -44,6 +53,9 @@ function dockActiveId(path) {
 function App() {
   const [path, setPath] = useState(window.location.pathname);
   const [transitioning, setTransitioning] = useState(false);
+  // True while the homepage arrival timeline is inside the cloud phase.
+  // Home's timeline reports it; the cloud layer mounts Vanta only then.
+  const [cloudActive, setCloudActive] = useState(false);
   useEffect(() => {
     const raw = window.location.pathname;
     const target = legacyRedirect(raw);
@@ -175,8 +187,24 @@ function App() {
             </span>
             <span className="greeting-rule" />
           </div>
+          {/* Cloud stratum: the middle environment between the
+              constellation and the iceberg (Vanta.js clouds, approved).
+              Mounted only while the arrival timeline is inside the cloud
+              phase; the timeline fades the layer in/out around it. */}
+          <div className="cloud-layer" aria-hidden="true">
+            <div className="cloud-layer-inner">
+              <Suspense fallback={null}>
+                {cloudActive && (
+                  <HomeClouds active={cloudActive} />
+                )}
+              </Suspense>
+            </div>
+          </div>
           <NewBackgroundVideo />
-          <Home go={go} />
+          <Home
+            go={go}
+            onCloudPhaseChange={setCloudActive}
+          />
         </>
       )}
       {path === "/projects" && <Projects go={go} />}
@@ -255,9 +283,8 @@ function App() {
         <Transmission go={go} />
       )}
       {(path === "/404" ||
-        (matchedPattern === null && path !== "/")) && (
-        <NotFound go={go} />
-      )}
+        (matchedPattern === null &&
+          path !== "/")) && <NotFound go={go} />}
     </>
   );
 }
@@ -595,8 +622,9 @@ function EntranceRitual() {
 //
 // No additional translucent page layer is introduced here.
 // ============================================================================
-function Home({ go }) {
+function Home({ go, onCloudPhaseChange }) {
   const root = useRef(null);
+  const cloudActiveRef = useRef(false);
   useReveal(root);
   useManifestoFill(root);
   useEffect(() => {
@@ -607,6 +635,14 @@ function Home({ go }) {
         "(prefers-reduced-motion: reduce)"
       ).matches;
     if (reduce) return;
+    // Reports whether the scrubbed timeline is inside the cloud phase.
+    // App mounts the (lazy, GPU-heavy) Vanta clouds only then.
+    const reportCloudPhase = (active) => {
+      if (active !== cloudActiveRef.current) {
+        cloudActiveRef.current = active;
+        if (onCloudPhaseChange) onCloudPhaseChange(active);
+      }
+    };
     const ctx = gsap.context(() => {
       const hero = root.current.querySelector(".hero");
       const heroCopy =
@@ -622,87 +658,124 @@ function Home({ go }) {
       // The top dock is always visible, including on first load — it is
       // the primary navigation and should be discoverable immediately.
 
-      // Stage 3: the environmental arrival. Two full-viewport layers,
-      // one after the other in a fixed order: the constellation
-      // (transparent starfield canvas) exits upward (y=0 to y=-100vh)
-      // while the iceberg video rises from below (y=100vh to y=-6vh).
-      // All six tweens live in ONE scrubbed timeline on .env-arrival:
-      // the constellation's bottom edge and the iceberg's top edge
-      // share a single meeting line at every scroll position, and a
-      // two-sided 7% crossfade (--cfade on the constellation's bottom,
-      // --vfade on the iceberg's top) melts the two environments into
-      // each other for a natural handoff. --vfade settles back to 0%
-      // as the arrival completes, so the resting iceberg backdrop is
-      // pixel-identical to before. Scoped to .env-arrival so adding
-      // homepage sections later cannot shift the timing.
+      // Stage 3: the environmental arrival. Three full-viewport layers
+      // in a fixed order: the constellation (transparent starfield
+      // canvas) exits upward, the Vanta cloud stratum rolls in as the
+      // middle environment — slightly overlapping both neighbors — and
+      // the iceberg video rises from below. The clouds fade in as the
+      // stars thin out (the constellation's bottom 7% crossfade melts
+      // into them), own the viewport briefly, then part to reveal the
+      // iceberg whose own top 7% dissolves in behind them; --vfade
+      // settles back to 0% as the arrival completes, so the resting
+      // iceberg backdrop is pixel-identical to before. Everything lives
+      // in ONE scrubbed timeline on .env-arrival (still 200vh — the
+      // cloud passage is prominent, not page-long). Scoped to
+      // .env-arrival so adding homepage sections later cannot shift
+      // the timing.
       const iceberg =
         document.querySelector(".new-bg-layer");
+      const cloudLayer =
+        document.querySelector(".cloud-layer");
+      const cloudInner =
+        document.querySelector(".cloud-layer-inner");
       if (envArrival && constellation && iceberg) {
-        if (reduce) {
-          // Reduced motion: settle on the end state — iceberg as the
-          // static backdrop, constellation parked out of view.
-          gsap.set(iceberg, { y: "0vh", "--vfade": "0%" });
-          gsap.set(constellation, { y: "-100vh", "--cfade": "0%" });
-        } else {
-          const arrival = gsap.timeline({
-            scrollTrigger: {
-              trigger: envArrival,
-              start: "top top",
-              end: "bottom top",
-              scrub: true,
+        const arrival = gsap.timeline({
+          scrollTrigger: {
+            trigger: envArrival,
+            start: "top top",
+            end: "bottom top",
+            scrub: true,
+            onUpdate: (self) => {
+              const p = self.progress;
+              reportCloudPhase(p > 0.1 && p < 0.88);
             },
-          });
+          },
+        });
+        // Constellation exits upward; its bottom edge dissolves into
+        // the clouds arriving beneath it.
+        arrival.fromTo(
+          constellation,
+          { y: "0vh" },
+          { y: "-100vh", ease: "none", duration: 0.5 },
+          0
+        );
+        arrival.fromTo(
+          constellation,
+          { "--cfade": "0%" },
+          { "--cfade": "7%", ease: "none", duration: 0.5 },
+          0
+        );
+        // Clouds: the middle environment. They fade in as the stars
+        // thin, hold the viewport, then part — overlapping the tail of
+        // the constellation above and the rise of the iceberg below.
+        // Peak opacity is 0.85 (not full) so the sky keeps some depth,
+        // and the layer's bottom edge is feathered (see .cloud-layer)
+        // so the bank sits high and never hangs down over the
+        // iceberg's aurora sky.
+        if (cloudLayer) {
           arrival.fromTo(
-            constellation,
-            { y: "0vh" },
-            { y: "-100vh", ease: "none" },
-            0
-          );
-          arrival.fromTo(
-            iceberg,
-            { y: "100vh" },
-            { y: "-6vh", ease: "none" },
-            0
-          );
-          arrival.fromTo(
-            constellation,
-            { "--cfade": "0%" },
-            { "--cfade": "7%", ease: "none" },
-            0
-          );
-          // The iceberg's top edge dissolves in to meet the
-          // constellation's dissolving bottom edge (two-sided 7%
-          // crossfade), then settles back to 0% as the arrival
-          // completes so the resting backdrop is unchanged.
-          arrival.fromTo(
-            iceberg,
-            { "--vfade": "0%" },
-            { "--vfade": "7%", ease: "none", duration: 0.4 },
-            0
+            cloudLayer,
+            { opacity: 0, y: "6vh" },
+            {
+              opacity: 0.85,
+              y: "-4vh",
+              ease: "none",
+              duration: 0.18,
+            },
+            0.14
           );
           arrival.to(
-            iceberg,
-            { "--vfade": "0%", ease: "none", duration: 0.1 },
-            0.4
+            cloudLayer,
+            { opacity: 0, ease: "none", duration: 0.22 },
+            0.58
           );
-          // The brand greeting dissolves and lifts away early in the
-          // arrival so the handoff stays clean — it never lingers over
-          // the iceberg.
-          const greeting =
-            document.querySelector(".brand-greeting");
-          if (greeting) {
-            arrival.fromTo(
-              greeting,
-              { opacity: 1, y: "0vh" },
-              {
-                opacity: 0,
-                y: "-10vh",
-                ease: "none",
-                duration: 0.2,
-              },
-              0
-            );
-          }
+        }
+        if (cloudInner) {
+          arrival.fromTo(
+            cloudInner,
+            { scale: 1.15 },
+            { scale: 1.28, ease: "none", duration: 0.66 },
+            0.14
+          );
+        }
+        // Iceberg rises from below while the clouds are still clearing;
+        // its top edge dissolves in behind them (two-sided melt), then
+        // settles back to 0% as the arrival completes so the resting
+        // backdrop is unchanged.
+        arrival.fromTo(
+          iceberg,
+          { y: "100vh" },
+          { y: "-6vh", ease: "none", duration: 0.55 },
+          0.45
+        );
+        arrival.fromTo(
+          iceberg,
+          { "--vfade": "0%" },
+          { "--vfade": "7%", ease: "none", duration: 0.3 },
+          0.45
+        );
+        arrival.to(
+          iceberg,
+          { "--vfade": "0%", ease: "none", duration: 0.1 },
+          0.75
+        );
+        // The brand greeting dissolves and lifts away early in the
+        // arrival so the handoff stays clean — it never lingers over
+        // the iceberg.
+        const greeting =
+          document.querySelector(".brand-greeting");
+        if (greeting) {
+          arrival.fromTo(
+            greeting,
+            { opacity: 1, y: "0vh" },
+            {
+              opacity: 0,
+              y: "-10vh",
+              ease: "none",
+              duration: 0.2,
+            },
+            0
+          );
         }
       }
       // The top dock stays visible throughout; no reveal gating.
@@ -717,16 +790,16 @@ function Home({ go }) {
           y: 0,
           opacity: 1,
           ease: "power3.out",
-          // Pushed the start from "top 88%" to "top 55%" so the hero
-          // copy only begins entering after the constellation has
-          // nearly finished receding (env-arrival is 200vh; the hero
-          // starts at 200vh; "top 55%" of the viewport means the
-          // hero-copy's top must rise to roughly the upper third of
-          // the viewport before the fade begins).
+          // The hero copy must wait for the clouds: it only begins
+          // entering once the cloud layer has parted (opacity hits 0 at
+          // 0.80 of the arrival timeline) and finishes over the clear
+          // iceberg. Scroll order stays: constellations -> clouds ->
+          // environment -> copy. (env-arrival is 200vh; hero starts at
+          // 200vh.)
           scrollTrigger: {
             trigger: heroCopy,
-            start: "top 55%",
-            end: "top 25%",
+            start: "top 38%",
+            end: "top 12%",
             scrub: 0.65,
           },
         }
@@ -745,7 +818,11 @@ function Home({ go }) {
         });
       }
     }, root);
-    return () => ctx.revert();
+    return () => {
+      ctx.revert();
+      cloudActiveRef.current = false;
+      if (onCloudPhaseChange) onCloudPhaseChange(false);
+    };
   }, []);
   return (
     <main
