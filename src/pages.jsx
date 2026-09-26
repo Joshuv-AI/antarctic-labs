@@ -377,13 +377,37 @@ export function TowerOfBabel({ go }) {
     </main>
   );
 }
+// ----- Tower of Babel / Library -------------------------------------------------
 export function TowerLibrary({ go }) {
-  const grouped = artifacts.reduce((acc, a) => {
+  // Live search + collection-filter UI. Empty `query` and `collectionFilter`
+  // mean "show everything". Filtering is case-insensitive and matches against
+  // title, creator, year, description, and any tags.
+  const [query, setQuery] = useState("");
+  const [collectionFilter, setCollectionFilter] = useState("");
+  const q = query.trim().toLowerCase();
+  const visible = artifacts.filter((a) => {
+    if (collectionFilter && a.collection !== collectionFilter) return false;
+    if (!q) return true;
+    const hay = [
+      a.title || "",
+      a.creator || "",
+      a.year ? String(a.year) : "",
+      a.description || "",
+      Array.isArray(a.tags) ? a.tags.join(" ") : "",
+    ]
+      .join(" \n ")
+      .toLowerCase();
+    return hay.includes(q);
+  });
+  const grouped = visible.reduce((acc, a) => {
     const key = a.collection || "OTHER";
     if (!acc[key]) acc[key] = [];
     acc[key].push(a);
     return acc;
   }, {});
+  const presentCollections = Array.from(
+    new Set(artifacts.map((a) => a.collection || "OTHER"))
+  );
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
@@ -399,37 +423,70 @@ export function TowerLibrary({ go }) {
             <p className="body-copy">{towerOfBabel.library.empty.body}</p>
           </>
         ) : (
-          <div className="library-catalog">
-            {Object.entries(grouped).map(([collection, items]) => (
-              <div className="library-collection" key={collection}>
-                <h3 className="library-collection-heading">{collection}</h3>
-                <div className="artifact-list">
-                  {items.map((a) => (
-                    <button
-                      key={a.artifact_id}
-                      className="artifact-card reveal"
-                      onClick={() => go(`/tower-of-babel/library/${a.artifact_id}`)}
-                    >
-                      <div className="artifact-card-meta">
-                        <span className="artifact-card-collection">{a.collection}</span>
-                        <span className="artifact-card-rights">{a.rights_status || "—"}</span>
-                      </div>
-                      <h4 className="artifact-card-title">{a.title}</h4>
-                      {a.creator && (
-                        <p className="artifact-card-creator">
-                          {a.creator}{a.year ? ` · ${a.year}` : ""}
-                        </p>
-                      )}
-                      {a.description && (
-                        <p className="artifact-card-summary">{a.description}</p>
-                      )}
-                      <span className="artifact-card-arrow">↗</span>
-                    </button>
+          <>
+            <div className="library-controls">
+              <input
+                type="search"
+                className="library-search"
+                placeholder={`Search ${visible.length} of ${artifacts.length} entries…`}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                aria-label="Search the library catalog"
+              />
+              <label className="library-collection-filter">
+                <span className="library-filter-label">Collection</span>
+                <select
+                  value={collectionFilter}
+                  onChange={(e) => setCollectionFilter(e.target.value)}
+                  aria-label="Filter by collection"
+                >
+                  <option value="">All ({presentCollections.length})</option>
+                  {presentCollections.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
                   ))}
-                </div>
+                </select>
+              </label>
+            </div>
+            {visible.length === 0 ? (
+              <p className="library-empty-results">
+                No entries match the current search/filter. Clear the search or change the collection.
+              </p>
+            ) : (
+              <div className="library-catalog">
+                {Object.entries(grouped).map(([collection, items]) => (
+                  <div className="library-collection" key={collection}>
+                    <h3 className="library-collection-heading">{collection}</h3>
+                    <div className="artifact-list">
+                      {items.map((a) => (
+                        <button
+                          key={a.artifact_id}
+                          className="artifact-card reveal"
+                          onClick={() => go(`/tower-of-babel/library/${a.artifact_id}`)}
+                        >
+                          <div className="artifact-card-meta">
+                            <span className="artifact-card-collection">{a.collection}</span>
+                            <span className="artifact-card-rights">{a.rights_status || "—"}</span>
+                          </div>
+                          <h4 className="artifact-card-title">{a.title}</h4>
+                          {a.creator && (
+                            <p className="artifact-card-creator">
+                              {a.creator}{a.year ? ` · ${a.year}` : ""}
+                            </p>
+                          )}
+                          {a.description && (
+                            <p className="artifact-card-summary">{a.description}</p>
+                          )}
+                          <span className="artifact-card-arrow">↗</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            )}
+          </>
         )}
       </section>
       <section className="copy-block section">
