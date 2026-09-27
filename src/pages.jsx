@@ -956,7 +956,6 @@ export function Government({ go }) {
   return (
     <main className="page-shell inner-page gov-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
-        <div className="section-index">{government.index}</div>
         <span className="gov-status-pill">{government.statusPill}</span>
         <h1>{government.heading}</h1>
         <p className="display-copy">{government.intro}</p>
@@ -985,48 +984,6 @@ export function Government({ go }) {
               </div>
             ))}
           </div>
-        </div>
-      </section>
-
-      <section className="copy-block section reveal">
-        <div className="section-index">{government.applicableWork.heading}</div>
-        <div>
-          <p className="body-copy gov-section-intro">{government.applicableWork.intro}</p>
-          <div className="project-grid">
-          {government.relevantWork.map((rid) => {
-            const e = expeditions.find((x) => x.id === rid);
-            if (!e) return null;
-            return (
-              <button
-                key={rid}
-                className="project-card"
-                onClick={() => go(`/projects/${e.id}`)}
-                aria-label={`${e.title} — open case study`}
-              >
-                <div className="project-card-top">
-                  <span
-                    className="project-card-status"
-                    style={{ "--tone": PROJECT_STATUS_TONE[e.status] || "#9ca3af" }}
-                  >
-                    <i aria-hidden="true" />
-                    {e.status}
-                  </span>
-                </div>
-                <h3 className="project-card-title">{e.title}</h3>
-                {e.shortDescription && (
-                  <p className="project-card-summary">{e.shortDescription}</p>
-                )}
-                <div className="project-card-foot">
-                  <div className="project-card-meta">
-                    <span>{e.category}</span>
-                    {projectShortDate(e.date) && <span>{projectShortDate(e.date)}</span>}
-                  </div>
-                </div>
-                <span className="project-card-arrow" aria-hidden="true">↗</span>
-              </button>
-            );
-          })}
-        </div>
         </div>
       </section>
 
@@ -1065,15 +1022,7 @@ export function Government({ go }) {
         </div>
       </section>
 
-      <section className="copy-block section reveal">
-        <div className="section-index">{government.capabilitiesStatement.heading}</div>
-        <div className="gov-doc-card">
-          <p className="body-copy">{government.capabilitiesStatement.body}</p>
-          <p className="body-copy gov-doc-note">{government.capabilitiesStatement.note}</p>
-          <a className="gov-doc-link" href={`mailto:${site.email}`}>hello@antarcticlabs.com ↗</a>
-        </div>
-      </section>
-
+      
       <section className="copy-block section">
         <p className="gov-footnote">{government.footnote}</p>
       </section>
