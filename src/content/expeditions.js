@@ -72,9 +72,7 @@ export const expeditions = [
       "workspace/architecture/ (10 spec files)"
     ],
     relatedExpeditions: [
-      "tower-of-babel-library-archive",
-      "phase-2b-podcast-transcript-pipeline",
-      "phase-3-declassified-documents-pipeline"
+      "tower-of-babel-library-archive"
     ],
     abstract: `OpenClaw is an autonomous agent operating environment structured around identity, memory, and operational discipline rather than raw capability. The system comprises a layered identity layer (SOUL, IDENTITY, USER, AGENTS), a three-tier memory architecture (NOW, daily logs, MEMORY), a set of architecture specifications covering job orchestration, state and resume, process lifecycle, and external-service safety, a workshop skills catalog of approximately fifty reusable procedures, and a small set of permanent operating rules. The system is engineered for long-running sessions with explicit lifecycle controls, recoverable state, and audit-trail fidelity. We describe the design rationale, the architectural separation of concerns, the mechanisms for memory consolidation, the watchdog and state-resume contracts, and the operational results obtained across the first weeks of deployment. The environment currently sustains a curated memory base of approximately one hundred and seventeen kilobytes, ten formal architecture documents, and a workshop skills catalog of approximately fifty procedures. We find that separating identity from memory, memory from skills, and skills from execution produces a system whose failures are recoverable rather than catastrophic, and whose behavior is auditable at every turn.`,
     introduction: `The motivation for OpenClaw arose from a recurring failure mode observed in long-running autonomous agent deployments: agents accumulate state in the wrong places. Identity drifts as the context window rotates. Transient notes are treated as canonical. Operational discipline degrades as the session length grows. Tool-using agents that work in a single-shot invocation fail when the agent is asked to remember what it did yesterday, or to reconcile an ongoing operation with a context that has long since rotated out.
@@ -169,23 +167,31 @@ The long-term target is an autonomous agent environment that sustains a multi-mo
     status: "ACTIVE",
     date: "2026-08 to 2026-09",
     role: "Architecture, ingestion tooling, audit pipeline",
-    shortDescription: "A personal library and archival system for books, documents, research, references, and other material.",
-    problem: "Scattered knowledge across files, sources, and formats needs a structured ingest pipeline plus an audit system to keep the collection honest.",
-    objective: "Build a reproducible ingestion + enrichment + audit pipeline for a personal library archive.",
-    approach: "Python tooling for manual source addition, era-1 enrichment, schema backfill, and audits.",
-    system: "Ingestion scripts, audit scripts, batches directory, era-1 audit reports.",
-    build: "Project tree under projects/tower-of-babel/ with ACQUISITION_PLAN.md, acquisition_targets_v2.log, audit_era1_report.json, and pipeline scripts.",
+    shortDescription: "A personal library and archival system for books, documents, research, references, and other material — fed by dedicated podcast-transcript and declassified-document ingest pipelines.",
+    problem: "Scattered knowledge across files, sources, and formats needs a structured ingest pipeline plus an audit system to keep the collection honest. Spoken-word sources and declassified documents need their own acquisition tracks: paced transcript fetching that respects rate limits, and a multi-stage pipeline that turns heterogeneous government releases into clean, searchable text.",
+    objective: "Build a reproducible ingestion + enrichment + audit pipeline for a personal library archive, with podcast-transcript and declassified-document feed pipelines unified into the same retrieval corpus.",
+    approach: "Python tooling for manual source addition, era-1 enrichment, schema backfill, and audits — plus a single-worker hybrid transcript fetcher (captions API first, Whisper fallback) under a watchdog supervisor, and a six-stage declassified pipeline: inventory, score, filter, OCR, convert, chunk + embed.",
+    system: "Ingestion scripts, audit scripts, batches directory, era-1 audit reports; transcript fetcher with pre-flight probing, paced fetching, and a pause sentinel; declassified stages with per-stage supervisors and durable CSV/JSON artifacts.",
+    build: "Project tree under projects/tower-of-babel/ with ACQUISITION_PLAN.md, acquisition_targets_v2.log, audit_era1_report.json, pipeline scripts, rag/govdocs/ stage scripts and supervisors, and transcripts.jsonl (832 rows).",
     technologies: [
       "Python",
+      "Whisper",
+      "YouTube captions API",
+      "OCR tooling",
+      "pdf-inspector",
       "Schema backfill tooling",
-      "Audit pipelines"
+      "Audit pipelines",
+      "Supervisor watchdog"
     ],
-    result: "1,365 books across books/, books_quarantine/, books-needs-resourcing/.",
+    result: "1,365 books across books/, books_quarantine/, books-needs-resourcing/; 832 podcast transcripts across captions, subs, whisper, and needs_whisper; 16,465 declassified documents inventoried with 2,478 converted (216 MB of text).",
     process: [
       "ACQUIRE",
       "ENRICH",
       "BACKFILL",
-      "AUDIT"
+      "AUDIT",
+      "TRANSCRIBE",
+      "CONVERT",
+      "EMBED"
     ],
     evidence: [
       "projects/tower-of-babel/ACQUISITION_PLAN.md (18.8k)",
@@ -193,24 +199,35 @@ The long-term target is an autonomous agent environment that sustains a multi-mo
       "projects/tower-of-babel/add_manual_sources.py",
       "projects/tower-of-babel/apply_era1_enrichment.py",
       "projects/tower-of-babel/backfill_originals_schema.py",
-      "projects/tower-of-babel/audit_era1_report.json"
+      "projects/tower-of-babel/audit_era1_report.json",
+      "workspace/tmp/phase2b_hybrid_fetch.py",
+      "workspace/tmp/phase2b_audio_transcribe.py",
+      "workspace/tmp/phase2b_audio_supervisor.py",
+      "transcripts.jsonl (832 rows)",
+      "projects/tower-of-babel/rag/govdocs/phase3a_inventory.py",
+      "projects/tower-of-babel/rag/govdocs/phase3c_convert.py",
+      "projects/tower-of-babel/rag/govdocs/phase3c_chunk_embed.py"
     ],
     relatedExpeditions: [
-      "openclaw-autonomous-agent-operations",
-      "phase-2b-podcast-transcript-pipeline",
-      "phase-3-declassified-documents-pipeline"
+      "openclaw-autonomous-agent-operations"
     ],
-    abstract: `The Tower of Babel Library Archive is a personal-scale digital library system that ingests books, documents, and research material into a single structured corpus with auditable provenance. The system spans a multi-stage pipeline: manual source addition, era-1 enrichment, schema backfill, and audit. As deployed, the corpus contains 1,365 books distributed across a curated books/ directory, a books_quarantine/ holding for items under review, and a books-needs-resourcing/ holding for items awaiting source material. Each entry carries a meta.json with a stable identifier, a title, an author, a year, a publisher, a source URL, a license declaration, and a list of format-tagged file attachments. The system is designed for incremental curation rather than batch ingestion: items are added one at a time, scored against the existing corpus, and either accepted, quarantined, or sent back for additional source material.`,
+    abstract: `The Tower of Babel Library Archive is a personal-scale digital library system that ingests books, documents, and research material into a single structured corpus with auditable provenance. The system spans a multi-stage pipeline: manual source addition, era-1 enrichment, schema backfill, and audit. As deployed, the corpus contains 1,365 books distributed across a curated books/ directory, a books_quarantine/ holding for items under review, and a books-needs-resourcing/ holding for items awaiting source material. Each entry carries a meta.json with a stable identifier, a title, an author, a year, a publisher, a source URL, a license declaration, and a list of format-tagged file attachments. The system is designed for incremental curation rather than batch ingestion: items are added one at a time, scored against the existing corpus, and either accepted, quarantined, or sent back for additional source material.
+
+Two dedicated feed pipelines extend the archive beyond books. The podcast transcript feed acquires transcripts for scored YouTube podcasts through a hybrid route — the YouTube captions API first, Whisper speech-to-text as fallback — paced for a residential IP with pre-flight probing, randomized delays, and a watchdog supervisor that respects a pause sentinel; 832 transcripts have been written across captions, subs, whisper, and needs_whisper categories. The declassified documents feed brings government releases into the same corpus through six stages — inventory, scoring, filtering, OCR, conversion, and chunk-and-embed — with 16,465 documents inventoried across five sources, 2,478 converted into 216 MB of text, and the chunk-and-embed stage staged for execution. Both feeds land in the same retrieval-augmented corpus the archive is built around.`,
     introduction: `Personal digital libraries are an unsolved problem. Public libraries have well-defined catalog standards (MARC, Dublin Core, BIBFRAME). Commercial e-readers have proprietary formats with limited export. Academic archives use domain-specific repositories. None of these address the case of a single operator who wants to collect, organize, and search a personal corpus of public-domain books, declassified documents, podcast transcripts, and research notes.
 
 Tower of Babel addresses that gap. The system is a self-hosted personal library with a strict audit trail: every entry has a stable identifier, every entry has provenance metadata, every entry has a file attachment at a known path, and every directory state is reproducible from the source data plus the pipeline logs.
 
-This paper describes the architecture of Tower of Babel, the data model for entries, the ingest pipeline, the audit system, and the operational results across the first months of curation. We report the current state of the corpus (1,365 books, 793 MB of full-text extraction) and the design choices that produce a reproducible, auditable personal archive.`,
+The archive runs three ingest tracks, not one. The book track is the curated four-stage pipeline described below. The podcast track is a paced transcript fetcher: scored podcasts are probed against the YouTube captions API, with Whisper as the fallback for videos without sufficient captions, all under a watchdog supervisor. The declassified track is a six-stage pipeline — inventory, scoring, filtering, OCR, conversion, chunk-and-embed — that unifies releases from five sources (archive.org, governmentattic.org, the National Security Archive, the National Archives JFK collection, and blackvault.com) into one scored, filtered, OCR'd corpus. Each track is described in its own right below; together they are what makes the archive a single corpus rather than three adjacent collections.
+
+This paper describes the architecture of Tower of Babel, the data model for entries, the ingest pipeline, the feed pipelines, the audit system, and the operational results across the first months of curation. We report the current state of the corpus (1,365 books, 793 MB of full-text extraction, 832 podcast transcripts, 16,465 inventoried declassified documents) and the design choices that produce a reproducible, auditable personal archive.`,
     backgroundRelatedWork: `Prior work in personal digital libraries has largely followed one of two paths: commercial e-reader ecosystems (Kindle, Kobo, Apple Books) that lock the corpus to a vendor, and self-hosted systems (Calibre, Kavita) that prioritize catalog management over provenance auditing. Neither class of system supports the audit-trail discipline needed for a personal library that will be used as a long-term research substrate.
 
 Calibre in particular is the closest open-source analog. Calibre provides catalog management, format conversion, and metadata editing. Tower of Babel's contribution is the audit discipline: every entry must have provenance, every entry must have a stable identifier that does not collide across renames, every directory state must be reproducible, and every ingest operation must be logged.
 
-The era-1 enrichment scheme used in Tower of Babel is also distinctive: instead of relying on a single metadata source (e.g., OpenLibrary), the system accepts manual additions with human-graded era tags, allowing the operator to record provenance judgments that a programmatic source cannot.`,
+The era-1 enrichment scheme used in Tower of Babel is also distinctive: instead of relying on a single metadata source (e.g., OpenLibrary), the system accepts manual additions with human-graded era tags, allowing the operator to record provenance judgments that a programmatic source cannot.
+
+On the transcript side, the standard approaches are captions-only (fast but uneven, especially for technical or non-English content) or Whisper-everything (consistent but slow and GPU-bound). The archive's feed uses the hybrid of the two: probe the captions API first, reserve Whisper for the videos that actually need it. On the declassified side, prior acquisition has been ad hoc — individual researchers identifying a document, downloading it, OCRing it, and converting it one at a time — while the Internet Archive's mirrors suffer heterogeneous metadata and inconsistent OCR and the National Security Archive's collections are paywalled. The archive's contribution there is unification: a single inventory queryable across all five sources, a single scoring rubric producing a relevance score per document, and a single OCR pipeline producing consistent text output.`,
     methods: `The Tower of Babel ingest pipeline comprises four stages:
 
 (1) Manual source addition (add_manual_sources.py): the operator selects a candidate source (e.g., a URL on Project Gutenberg, archive.org, or a local PDF) and adds it to the acquisition_targets_v2.log. The target log records the URL, the operator's title/author guess, the source type, and the intended ToB identifier.
@@ -221,7 +238,13 @@ The era-1 enrichment scheme used in Tower of Babel is also distinctive: instead 
 
 (4) Audit (audit_era1_queue.py, _audit_2026-08-19.py): the audit scripts scan the corpus for schema drift, missing fields, broken file attachments, and license inconsistencies. The audit reports are stored as JSON for downstream consumption.
 
-Every stage is idempotent. Re-running add_manual_sources.py with the same inputs produces the same target log. Re-running apply_era1_enrichment.py with the same enrichment produces the same era-1 output. The system is designed for safe retries.`,
+Every stage is idempotent. Re-running add_manual_sources.py with the same inputs produces the same target log. Re-running apply_era1_enrichment.py with the same enrichment produces the same era-1 output. The system is designed for safe retries.
+
+Two additional feed pipelines run alongside the book track.
+
+The podcast transcript feed is organized as probe-then-fetch. (1) Pre-flight probe: for each candidate video, the pipeline issues a low-cost API call to confirm the video is reachable and the captions API returns a non-empty subtitle track. (2) Captions fetch: if the probe succeeds, the caption track is downloaded in the preferred language (en by default, fallback to any available language) and appended to transcripts.jsonl. (3) Whisper fallback: if the captions probe fails, the audio track is downloaded and transcribed with Whisper (faster-whisper for efficient GPU inference), and the transcript is appended to transcripts.jsonl. (4) Watchdog supervision: a supervisor invokes the pipeline on a cron-equivalent schedule, records checkpoints, and respects a pause sentinel file — present, the pipeline exits cleanly; the operator creates it to pause, the watchdog removes it to resume. The pacing discipline is critical: a randomized delay (60s ± 30s) after each probe, a 60-second warmup after worker start, burst pacing for Whisper invocations, and OOM cleanup wrapping every Whisper call so a failed invocation records the failure and moves on rather than retrying. The feed is single-worker by design: the operator is the rate-limiting step, and multiple workers would multiply the rate-limit pressure against YouTube's unspecified limits and raise the risk of IP blocking.
+
+The declassified documents feed runs six discrete stages, each with its own supervisor and durable artifact. (1) Inventory: enumerate documents from each of the five sources, recording URL, source ID, source type, license, year, subject, and era (inventory_raw.csv, ~14.9 MB, 16,465 rows). (2) Scoring: an LLM-based scorer assigns a 0–100 relevance score plus a relevance category per document (inventory_scored.csv, ~15.9 MB). (3) Filter: a threshold of 50 produces the curated subset (inventory_filtered_050.csv, ~3.2 MB; inventory_filtered.csv, ~6.6 MB). (4) OCR: scanned-image documents in the filtered subset are run through OCR, tracked per-document in phase3c_ocr_progress.json. (5) Convert: all filtered documents are converted to plain text with pymupdf (2,478 completed, 692 failed, 216 MB of extracted text). (6) Chunk-and-embed: the converted text is chunked and embedded into chunks.jsonl, the unified retrieval corpus. Each stage is idempotent and resumable from its progress file; each supervisor respects the same pause-sentinel convention as the transcript feed.`,
     systemArchitecture: `The Tower of Babel system architecture has four logical tiers:
 
 (1) Acquisition tier: acquisition_targets_v2.log is the durable input log. It records every source the operator intends to ingest, with the URL, the operator's title/author guess, and the intended ToB identifier.
@@ -232,7 +255,9 @@ Every stage is idempotent. Re-running add_manual_sources.py with the same inputs
 
 (4) Audit tier: the audit scripts scan the storage tier for schema drift and report inconsistencies. The audit reports are appended to the audit_era1_report.json.
 
-The ingest pipeline runs serially. The system is single-threaded by design: the operator is the rate-limiting step, not the computer.`,
+The ingest pipeline runs serially. The system is single-threaded by design: the operator is the rate-limiting step, not the computer.
+
+The two feed pipelines add their own components without disturbing the book tiers. The transcript feed has four: probe (pre-flight captions check per candidate), fetch (captions route or Whisper route), storage (transcripts.jsonl — append-only, each record carrying video_id, channel, title, transcript text, source, language, fetch timestamp, char count, chunked flag, and optional error), and supervision (watchdog on a cron-equivalent schedule with checkpoint records and pause-sentinel handling). The declassified feed has six stage components — inventory, scoring, filter, OCR, convert, chunk-and-embed — each paired with a supervisor script, over a CSV/JSON storage layer in projects/tower-of-babel/rag/govdocs/ where each stage's output is the next stage's durable input. Auxiliary scripts (LLM scorer pilot and tests, source discovery, resume helpers, threshold analysis, ROADMAP.md) support the declassified stages. Both feeds are single-worker and single-host; there is no cross-host coordination.`,
     implementation: `The Tower of Babel runtime is implemented in Python with no external dependencies beyond the standard library. The system is a set of cooperating scripts plus a structured directory layout:
 
 - projects/tower-of-babel/ACQUISITION_PLAN.md (18.8 KB): the operator's documented plan for what to acquire
@@ -250,7 +275,24 @@ Implementation choices:
 - Idempotent scripts (safe to retry)
 - Explicit status.txt per book (complete, in-progress, missing-resource)
 - Era tagging as first-class metadata
-- Audit reports as JSON for downstream consumption`,
+- Audit reports as JSON for downstream consumption
+
+The transcript feed is implemented as phase2b_hybrid_fetch.py (pre-flight probe + captions fetch via the yt-dlp wrapper), phase2b_audio_transcribe.py (Whisper fallback via faster-whisper), phase2b_audio_supervisor.py (watchdog: reads the pause sentinel, invokes the pipeline, records checkpoints), and phase2b_audio_watchdog.ps1 (the cron-equivalent on Windows), plus auxiliary scripts (phase2b_transcripts.py, phase2b_embed.py, phase2b_supervisor.py). transcripts.jsonl accumulates one record per successful transcript and is append-only; the pipeline never rewrites existing rows.
+
+Implementation choices for the transcript feed:
+- Single-worker by design (rate-limit avoidance)
+- 60-second warmup after each worker start
+- Randomized delays between fetches
+- Burst pacing for Whisper invocations
+- OOM cleanup wraps every Whisper invocation
+- Pause sentinel for operator control
+
+The declassified feed is implemented as phase3a_inventory.py (28 KB source enumeration), phase3b_score.py (13 KB LLM relevance scoring — calls a configurable model per document with a structured prompt, parses the response into score + category), phase3c_filter.py (threshold filter), phase3c_ocr.py (12 KB OCR for scanned documents), phase3c_convert.py (7 KB PDF/EPUB-to-text via pymupdf, pivoted from pymupdf4llm for a 5–10x speedup), and phase3c_chunk_embed.py (22 KB chunking + embedding into chunks.jsonl), each with a ~4 KB supervisor script (phase3a_supervisor.py, phase3b_supervisor.py, phase3c_supervisor.py, phase3c_ocr_supervisor.py, phase3c_convert_supervisor.py, phase3c_chunk_embed_supervisor.py) running on a cron-equivalent schedule with progress recording and pause-sentinel handling.
+
+Implementation choices for the declassified feed:
+- CSV for inventory (human-readable, diff-friendly)
+- JSON for progress (machine-readable, atomic writes)
+- LLM-based scoring (more expensive than heuristics, higher-quality judgments)`,
     results: `Operational results across the first months of Tower of Babel deployment:
 
 - 1,365 books in the corpus: 733 in books/, 618 in books_quarantine/, 4 in books-needs-resourcing/
@@ -259,19 +301,27 @@ Implementation choices:
 - Schema backfill enforced across the corpus with one conformance pass
 - ACQUISITION_PLAN.md documents the operator's intent for future ingest
 
-The corpus is read-only in practice. Once an entry reaches books/, its identifier, meta.json, and source files are not modified by the ingest pipeline. New versions of source material are recorded as additional files in the same subdirectory, not as replacements of existing files. This preserves the audit trail at the file level.`,
+The corpus is read-only in practice. Once an entry reaches books/, its identifier, meta.json, and source files are not modified by the ingest pipeline. New versions of source material are recorded as additional files in the same subdirectory, not as replacements of existing files. This preserves the audit trail at the file level.
+
+The transcript feed produced 832 transcripts across four categories — captions (most common), subs (manual subtitles), whisper (Whisper fallback), and needs_whisper (Whisper pending) — before the operator pause on 2026-08-28. No IP blocks were observed during the active run, and no OOM events occurred (the OOM cleanup procedure was never triggered). The feed was paused per the operator's directive to avoid sustained IP-block hammering; transcripts.jsonl is durable and the feed resumes by removing the pause sentinel.
+
+The declassified feed completed phases 3a through 3c-3: 16,465 documents inventoried across the five sources (inventory_raw.csv ~14.9 MB); all 16,465 scored (inventory_scored.csv ~15.9 MB; score distribution 0–30: 62%, 30–60: 24%, 60–100: 14%); 1,038 documents passing the 50-threshold filter; OCR applied to the scanned subset; 2,478 documents converted with 692 failed (phase3c_convert_progress.json 548 KB, 216 MB of extracted text). Phase 3c-4 (chunk-and-embed) is staged but not yet executed; the convert stage's output is its input. The feed is the primary source of declassified content in the public Tower of Babel library.`,
     discussion: `The Tower of Babel system demonstrates that personal digital libraries benefit from the same audit discipline as institutional archives. The audit scripts in this system catch real errors: missing source files, schema drift, license inconsistencies, and broken meta.json fields. Without these audits, the corpus would accumulate errors silently.
 
 A second observation: era-1 enrichment is the most valuable operator-facing feature. It records provenance judgments that a programmatic metadata source cannot. The era tags (era1, era2, etc.) are not timestamps; they are operator-assigned reliability tags. A book tagged era1 has been carefully curated; a book tagged era2 is under review.
 
-A third observation: the quarantine directory is essential. Many candidate books turn out to be duplicates, mislabeled, or of insufficient quality. Quarantining them instead of deleting them preserves the operator's work and allows retrospective review.`,
+A third observation: the quarantine directory is essential. Many candidate books turn out to be duplicates, mislabeled, or of insufficient quality. Quarantining them instead of deleting them preserves the operator's work and allows retrospective review.
+
+Two archive-level observations come from the feed pipelines. First, large-scale spoken-word acquisition is a pacing problem, not a fetching problem: the same fetcher that succeeds with randomized delays and burst pacing gets IP-blocked at a sustained high cadence, and the hybrid captions-first design is much cheaper than Whisper-everything because most videos already carry auto-generated captions. Second, declassified acquisition at scale needs the full six stages — inventory, scoring, filter, OCR, convert, chunk-and-embed — as the minimum for a reproducible corpus; LLM-based scoring costs more than heuristics but the relevance judgments are worth it for a corpus that will be queried for years, and the supervisor pattern with per-stage progress files is what makes partial runs resumable instead of restartable.`,
     limitations: `The system is single-operator. There is no multi-operator coordination layer, no access control, and no concurrency control. Two operators working on the same corpus would collide on the same files.
 
 The audit scripts are not currently run on a schedule. The operator must invoke them manually after each ingest cycle.
 
 Full-text extraction (the full-text.md files) is not a pipeline stage; it is an external operation. Books in books/ that lack full-text.md are still considered complete; the extraction is a downstream concern.
 
-Search across the corpus is currently by file path and meta.json field grep, not by full-text search. Full-text search would require a separate index (e.g., FAISS, Elasticsearch) and is not currently implemented.`,
+Search across the corpus is currently by file path and meta.json field grep, not by full-text search. Full-text search would require a separate index (e.g., FAISS, Elasticsearch) and is not currently implemented.
+
+The transcript feed is single-host and single-worker, and transcripts.jsonl accumulates records without deduplication — running the feed twice on the same candidate writes two rows. The feed is currently paused per the operator's 2026-08-28 directive. The declassified feed is single-host; the LLM scorer is non-deterministic (temperature and seed are not currently captured); OCR quality varies and low-confidence pages are not yet filtered; and the chunk-and-embed stage has not been executed, so the declassified corpus is converted text but not yet embedded for retrieval.`,
     futureWork: `Planned extensions to Tower of Babel:
 
 1. Full-text search index across the corpus (FAISS or Elasticsearch)
@@ -279,6 +329,10 @@ Search across the corpus is currently by file path and meta.json field grep, not
 3. Multi-operator coordination with merge semantics
 4. Automated era-1 enrichment heuristics (subject classification from content)
 5. Public-domain source verification (cross-reference with OpenLibrary, Internet Archive)
+
+For the transcript feed: deduplication by video_id at write time, multi-host coordination with a shared queue (e.g., Redis-backed), Whisper model upgrades as new versions become available, language detection beyond YouTube's caption track metadata, and speaker diarization for multi-host podcasts — with the long-term target of acquiring transcripts at the cadence of new uploads without operator intervention and without IP blocks.
+
+For the declassified feed: execute the chunk-and-embed stage to produce the unified chunks.jsonl, multi-host scaling via S3-backed storage, scorer determinism via temperature=0 and seed capture, OCR confidence filtering (drop pages below a threshold), and source expansion as new declassified sources become available — with the long-term target of a continuously-updating corpus that re-indexes automatically.
 
 The long-term target is a personal library system that is auditable, searchable, and extensible without compromising the integrity of the existing corpus.`,
     references: [
@@ -290,314 +344,35 @@ The long-term target is a personal library system that is auditable, searchable,
       "projects/tower-of-babel/audit_era1_report.json, 7.9 KB, accessed 2026-09-26.",
       "projects/tower-of-babel/audit_era1_queue.py, accessed 2026-09-26.",
       "projects/tower-of-babel/_audit_2026-08-19.py, accessed 2026-09-26.",
-      "workspace/MEMORY.md, Tower of Babel section, accessed 2026-09-26.",
-      "https://www.gutenberg.org/, public-domain book source.",
-      "https://archive.org/, public-domain book source.",
-      "Calibre, https://calibre-ebook.com/, open-source catalog management.",
-      "MARC standards, Library of Congress, accessed 2026-09-26."
-    ],
-  },
-
-  {
-    id: "phase-2b-podcast-transcript-pipeline",
-    title: "Phase 2b Podcast Transcript Pipeline",
-    category: "DATA",
-    status: "IN DEVELOPMENT",
-    date: "2026-08 (development paused per Josh's directive 2026-08-28)",
-    role: "Architecture, scripting, watchdog supervision",
-    shortDescription: "Pipeline that fetches YouTube captions and Whisper transcripts for scored podcasts and embeds them into the Tower of Babel RAG.",
-    problem: "Acquire transcripts for 4,072 scored podcasts at a cadence that respects YouTube's unspecified rate limits and avoids IP blocking.",
-    objective: "Build a residential-IP-paced fetch pipeline with pre-flight probing, Whisper fallback, and supervisor watchdog.",
-    approach: "Single-worker hybrid fetcher with pre-flight probe, 60s warmup, shuffled order. Whisper fallback with burst pacing and OOM cleanup. Supervisor watchdog that respects a pause sentinel.",
-    system: "phase2b_hybrid_fetch.py (captions), phase2b_audio_transcribe.py (Whisper), phase2b_audio_supervisor.py (watchdog), phase2b_audio_watchdog.ps1 (cron equivalent).",
-    build: "Pipeline scripts in tmp/ plus supervisor cron jobs (paused). transcripts.jsonl accumulates 832 rows across captions + subs + whisper + needs_whisper.",
-    technologies: [
-      "Python",
-      "Whisper",
-      "YouTube captions API",
-      "Supervisor watchdog"
-    ],
-    result: "832 transcripts written across four categories. Pipeline paused per Josh directive to avoid IP-block hammering.",
-    process: [
-      "PROBE",
-      "FETCH",
-      "TRANSCRIBE",
-      "SUPERVISE"
-    ],
-    evidence: [
-      "workspace/MEMORY.md (Phase2b section)",
-      "workspace/tmp/phase2b_hybrid_fetch.py",
-      "workspace/tmp/phase2b_audio_transcribe.py",
-      "workspace/tmp/phase2b_audio_supervisor.py",
-      "workspace/tmp/phase2b_audio_watchdog.ps1",
-      "transcripts.jsonl (832 rows)"
-    ],
-    relatedExpeditions: [
-      "tower-of-babel-library-archive",
-      "openclaw-autonomous-agent-operations"
-    ],
-    abstract: `The Phase 2b Podcast Transcript Pipeline is a residential-IP-paced system for fetching transcripts of scored YouTube podcasts and embedding them in the Tower of Babel retrieval-augmented generation corpus. The pipeline targets 4,072 scored podcasts identified during the Phase 2a scoring pass and produces transcripts via two routes: the YouTube captions API for videos with auto-generated or manual subtitles, and the Whisper speech-to-text model for videos without captions. A watchdog supervisor observes the pipeline, records checkpoints, and respects a pause sentinel. The pipeline is designed around the observation that YouTube's rate limits are unspecified and that IP blocking is a real risk for sustained fetches. We describe the pre-flight probe, the hybrid fetch, the Whisper fallback, the burst-pacing discipline, the OOM cleanup procedure, and the supervisor watchdog. As of the pipeline pause in late August 2026, the system had produced 832 transcripts across four categories (captions, subs, whisper, needs_whisper).`,
-    introduction: `YouTube is the largest public archive of long-form spoken content. Podcast episodes, interview shows, and discussion programs are uploaded continuously, often with auto-generated captions. For a research corpus that values long-form speech, YouTube is a primary source.
-
-Acquiring transcripts from YouTube at scale is harder than it appears. The captions API is rate-limited in unspecified ways; IP addresses that fetch aggressively get throttled or blocked. Whisper, the speech-to-text model, can transcribe audio from the video file, but Whisper is GPU-bound and OOM-prone, and it cannot be invoked at the same cadence as the captions API.
-
-The Phase 2b pipeline reconciles these constraints. It probes each candidate video with the captions API first, falls back to Whisper when captions are missing or insufficient, paces the fetches with randomized delays and a 60-second warmup, and runs under a watchdog supervisor that pauses the pipeline on signal. The pipeline's design is the subject of this paper.`,
-    backgroundRelatedWork: `Prior work in podcast transcript acquisition has largely followed two routes. Route one is the captions-only approach: rely on YouTube's auto-generated captions and accept whatever coverage that provides. This approach is fast but yields uneven transcripts, especially for technical or non-English content.
-
-Route two is the Whisper-everything approach: download the audio file, transcribe with Whisper, ignore the captions API. This approach is consistent but slow and GPU-bound.
-
-The Phase 2b pipeline uses a hybrid: probe with the captions API first, fall back to Whisper for videos without sufficient captions. This is the standard approach in academic and industry pipelines for spoken-word corpora.
-
-The watchdog pattern is borrowed from long-running job supervisors in production engineering: cron-equivalent invocations, checkpoint records, pause sentinels. The pattern is documented in workspace/architecture/PROCESS_LIFECYCLE.md.`,
-    methods: `The Phase 2b pipeline is organized as a sequence of probe-then-fetch operations:
-
-(1) Pre-flight probe: for each candidate video, the pipeline issues a low-cost API call (HEAD or minimal GET) to confirm the video is reachable and the captions API returns a non-empty subtitle track.
-
-(2) Captions fetch: if the probe succeeds, the pipeline downloads the caption track in the preferred language (en by default, fallback to any available language) and writes it to transcripts.jsonl.
-
-(3) Whisper fallback: if the captions probe fails, the pipeline downloads the audio track, runs Whisper, and writes the resulting transcript to transcripts.jsonl.
-
-(4) Watchdog supervision: a supervisor process invokes the pipeline on a cron-equivalent schedule, records checkpoints, and respects a pause sentinel. The pause sentinel is a sentinel file in the working directory; if present, the pipeline exits cleanly without further work.
-
-The pipeline's pacing discipline is critical. The pre-flight probe is followed by a randomized delay (60s ± 30s). The Whisper fallback uses burst pacing (run Whisper for N minutes, then sleep for M minutes) to avoid sustained GPU saturation. Whisper invocations are wrapped in OOM cleanup: if a Whisper process exits with OOM, the pipeline records the failure and moves to the next candidate rather than retrying.
-
-The pipeline is single-worker by design. The operator is the rate-limiting step; multiple workers would multiply the rate-limit pressure and increase the risk of IP blocking.`,
-    systemArchitecture: `The Phase 2b pipeline has four components:
-
-(1) Probe: phase2b_hybrid_fetch.py issues a pre-flight probe for each candidate and decides between captions fetch and Whisper fallback.
-
-(2) Fetch: for the captions route, phase2b_hybrid_fetch.py downloads the caption track. For the Whisper route, phase2b_audio_transcribe.py downloads the audio and runs Whisper.
-
-(3) Storage: transcripts.jsonl is the append-only output file. Each record carries the video_id, channel, title, transcript text, source, language, fetch timestamp, char count, chunked flag, and optional error.
-
-(4) Supervision: phase2b_audio_supervisor.py is the watchdog. It runs on a cron-equivalent schedule, invokes the probe and fetch stages, records checkpoints, and respects a pause sentinel. phase2b_audio_watchdog.ps1 is the cron-equivalent on Windows.
-
-The pipeline is single-worker, single-host. The supervisor runs in the same workspace as the pipeline scripts. There is no cross-host coordination.`,
-    implementation: `The pipeline is implemented in Python 3 with the following components:
-
-- phase2b_hybrid_fetch.py: pre-flight probe + captions fetch. Uses YouTube's captions API via the yt-dlp wrapper.
-- phase2b_audio_transcribe.py: Whisper fallback. Uses faster-whisper for efficient GPU inference.
-- phase2b_audio_supervisor.py: watchdog supervisor. Reads pause sentinel, invokes the pipeline, records checkpoints.
-- phase2b_audio_watchdog.ps1: cron-equivalent on Windows.
-- phase2b_transcripts.py, phase2b_embed.py, phase2b_supervisor.py: auxiliary scripts.
-
-The transcripts.jsonl file accumulates one record per successful transcript. The schema is JSON-lines with the fields listed above. The file is append-only; the pipeline never rewrites existing rows.
-
-The pause sentinel is a sentinel file at a known path; when present, the pipeline exits cleanly. The operator creates the sentinel to pause the pipeline; the watchdog removes the sentinel to resume.
-
-Implementation choices:
-- Single-worker by design (rate-limit avoidance)
-- 60-second warmup after each worker start
-- Randomized delays between fetches
-- Burst pacing for Whisper invocations
-- OOM cleanup wraps every Whisper invocation
-- Pause sentinel for operator control`,
-    results: `Operational results across the August 2026 run:
-
-- 832 transcripts written to transcripts.jsonl
-- Four categories: captions (most common), subs (manual subtitles), whisper (Whisper fallback), needs_whisper (Whisper pending)
-- Supervisor watchdog ran cleanly until the operator pause on 2026-08-28
-- No IP blocks observed during the active run
-- No OOM events observed (the OOM cleanup procedure was never triggered)
-
-The pipeline was paused by the operator on 2026-08-28 to avoid sustained IP-block hammering, per Josh's directive. The transcripts.jsonl file is durable and the pipeline can be resumed by removing the pause sentinel.`,
-    discussion: `The Phase 2b pipeline demonstrates that large-scale spoken-word corpus acquisition requires a pacing discipline, not just a fetcher. The same fetcher running at a sustained high cadence will get IP-blocked; the same fetcher running with randomized delays and burst pacing will succeed.
-
-A second observation: the hybrid approach (captions first, Whisper fallback) is much cheaper than Whisper-everything. Most YouTube videos have auto-generated captions, and the captions API is essentially free. Whisper is reserved for the videos that actually need it.
-
-A third observation: the watchdog supervisor is essential. Long-running pipelines without supervisors are unkillable without killing the host process. The pause sentinel gives the operator a clean way to halt the pipeline without losing progress.`,
-    limitations: `The pipeline is single-host and single-worker. Scaling to multiple workers would multiply the rate-limit pressure and require a coordination layer that does not currently exist.
-
-The transcripts.jsonl file accumulates records without deduplication. If the pipeline is run twice on the same candidate, two records are written.
-
-The Whisper model used is faster-whisper (CTranslate2-backed), which is faster than the reference Whisper implementation but still slower than real-time on commodity GPUs.
-
-The pause sentinel is a file-based mechanism. Multiple operators coordinating on the same workspace would collide on the same sentinel.`,
-    futureWork: `Planned extensions to the Phase 2b pipeline:
-
-1. Deduplication by video_id at write time
-2. Multi-host coordination with a shared queue (e.g., Redis-backed)
-3. Whisper model upgrade as new versions become available
-4. Language detection beyond YouTube's caption track metadata
-5. Speaker diarization for multi-host podcasts
-
-The long-term target is a pipeline that can acquire transcripts at the cadence of new uploads without operator intervention and without IP blocks.`,
-    references: [
+      "workspace/MEMORY.md, Tower of Babel / Phase 2b / Phase 3 sections, accessed 2026-09-26.",
       "workspace/tmp/phase2b_hybrid_fetch.py, accessed 2026-09-26.",
       "workspace/tmp/phase2b_audio_transcribe.py, accessed 2026-09-26.",
       "workspace/tmp/phase2b_audio_supervisor.py, accessed 2026-09-26.",
       "workspace/tmp/phase2b_audio_watchdog.ps1, accessed 2026-09-26.",
-      "workspace/MEMORY.md, Phase 2b section, accessed 2026-09-26.",
       "transcripts.jsonl, 832 rows, accessed 2026-09-26.",
-      "yt-dlp, https://github.com/yt-dlp/yt-dlp, accessed 2026-09-26.",
-      "faster-whisper, https://github.com/guillaumekln/faster-whisper, accessed 2026-09-26.",
-      "workspace/architecture/PROCESS_LIFECYCLE.md, 6.9 KB, accessed 2026-09-26.",
-      "workspace/architecture/EXTERNAL_SERVICE_SAFETY.md, 6.0 KB, accessed 2026-09-26."
-    ],
-  },
-
-  {
-    id: "phase-3-declassified-documents-pipeline",
-    title: "Phase 3 Declassified Documents Pipeline",
-    category: "DATA",
-    status: "IN DEVELOPMENT",
-    date: "2026-08 (Phase 3a/b/c complete; 3c-4 chunk+embed not yet started)",
-    role: "Architecture, scripting",
-    shortDescription: "Acquire, score, OCR, convert, and embed government declassified documents (e.g., CIA) into the Tower of Babel RAG.",
-    problem: "Government declassified documents exist in many formats and qualities; useful ingestion needs inventory, scoring, filtering, OCR, conversion, and chunk + embed.",
-    objective: "Build a multi-stage pipeline that brings 16,465 inventoried documents from 5 sources into a single usable archive.",
-    approach: "Six discrete phases - inventory, score, filter, OCR, convert, chunk + embed. Approved PDF tool: pdf-inspector (MIT, free).",
-    system: "phase3a_inventory.py, phase3b_score.py, phase3c_filter.py, phase3c_ocr.py, phase3c_convert.py, phase3c_chunk_embed.py, plus supervisors.",
-    build: "Inventory complete (16,465 docs from 5 sources). Scoring, filtering, OCR, and conversion complete. Chunk + embed phase not yet started.",
-    technologies: [
-      "Python",
-      "OCR tooling",
-      "pdf-inspector",
-      "Chunk + embed pipeline"
-    ],
-    result: "16,465 docs inventoried and scored; pipeline ready for the chunk + embed phase on Josh signal.",
-    process: [
-      "INVENTORY",
-      "SCORE",
-      "FILTER",
-      "OCR",
-      "CHUNK + EMBED"
-    ],
-    evidence: [
-      "workspace/MEMORY.md (Phase 3 section)",
-      "projects/tower-of-babel/rag/govdocs/phase3a_inventory.py",
-      "projects/tower-of-babel/rag/govdocs/phase3b_score.py",
-      "projects/tower-of-babel/rag/govdocs/phase3c_filter.py",
-      "projects/tower-of-babel/rag/govdocs/phase3c_ocr.py",
-      "projects/tower-of-babel/rag/govdocs/phase3c_convert.py",
-      "projects/tower-of-babel/rag/govdocs/phase3c_chunk_embed.py"
-    ],
-    relatedExpeditions: [
-      "tower-of-babel-library-archive",
-      "openclaw-autonomous-agent-operations"
-    ],
-    abstract: `The Phase 3 Declassified Documents Pipeline is a multi-stage system for acquiring, scoring, filtering, OCRing, converting, and embedding government declassified documents into the Tower of Babel retrieval-augmented generation corpus. The pipeline targets 16,465 documents inventoried across five sources during Phase 3a: archive.org, governmentattic.org, the National Security Archive, the National Archives JFK collection, and blackvault.com. Each document passes through six discrete phases, each with its own supervisor and progress file: inventory (3a), scoring (3b), filtering (3c-1), OCR (3c-2), conversion (3c-3), and chunk-and-embed (3c-4). Phases 3a through 3c-3 are complete; phase 3c-4 is staged but not yet executed. The pipeline is the primary source of declassified content in the public Tower of Babel library at antarctic-labs.com.`,
-    introduction: `Government declassified documents are a uniquely valuable corpus for research. They are public domain, they cover topics that no other public source covers, and they often contain primary-source material (memos, transcripts, reports) that has been authenticated by the originating agency.
-
-Acquiring this corpus at scale is harder than acquiring a book corpus. The documents are scattered across multiple sources, each with its own conventions. They come in many formats: PDF (with or without OCR), HTML, scanned image, and occasionally plain text. The OCR quality varies from excellent to unusable. The metadata quality varies from fully tagged to filename-only.
-
-The Phase 3 pipeline reconciles these constraints. It is organized as a six-stage pipeline, with each stage producing a durable artifact that the next stage consumes. The pipeline is the subject of this paper. We describe the inventory process, the scoring rubric, the filter criteria, the OCR stage, the conversion stage, and the chunk-and-embed stage. We report the current state (16,465 documents inventoried and scored, conversion complete, chunk-and-embed pending) and the design choices that produce a reproducible declassified corpus.`,
-    backgroundRelatedWork: `Prior work in declassified document acquisition has largely been ad hoc. Individual researchers identify a document, download it, OCR it, and convert it. Academic archives (e.g., the National Security Archive's online collections) provide curated subsets but not full-text search across all available material.
-
-The Internet Archive hosts large collections of declassified material (e.g., the CIA Reading Room mirror, the FBI Vault mirror), but the metadata is heterogeneous and the OCR is inconsistent. Governmentattic.org publishes a curated set of FOIA-released documents but does not provide a full-text search interface. The National Security Archive's online collections are paywalled.
-
-The Phase 3 pipeline is the first attempt (that we are aware of) to unify these sources into a single scored, filtered, OCR'd, and converted corpus for retrieval-augmented generation. The contribution is not the individual sources but the unification: a single inventory that can be queried across all five sources simultaneously, a single scoring rubric that produces a relevance score per document, and a single OCR pipeline that produces consistent text output.`,
-    methods: `The Phase 3 pipeline has six stages, each with its own supervisor:
-
-(1) Inventory (3a, phase3a_inventory.py): enumerate documents from each of the five sources, recording URL, source ID, source type, license, year, subject, and era. Output: inventory_raw.csv (~14.9 MB, 16,465 rows).
-
-(2) Scoring (3b, phase3b_score.py): assign a relevance score per document using an LLM-based scorer. The scorer reads the document's metadata and returns a score 0-100 plus a relevance category. Output: inventory_scored.csv (~15.9 MB).
-
-(3) Filter (3c-1, phase3c_filter.py): apply a threshold (50) to the relevance scores, producing a curated subset. Output: inventory_filtered_050.csv (~3.2 MB) and inventory_filtered.csv (~6.6 MB).
-
-(4) OCR (3c-2, phase3c_ocr.py): for documents in the filtered subset that are scanned images, run OCR. Output: phase3c_ocr_progress.json (tracks per-document OCR status).
-
-(5) Convert (3c-3, phase3c_convert.py): convert all filtered documents to plain text. Uses pymupdf for PDFs (pivoted from pymupdf4llm to plain text extraction). Output: phase3c_convert_progress.json (2,478 completed, 692 failed, 216 MB of extracted text).
-
-(6) Chunk and embed (3c-4, phase3c_chunk_embed.py): chunk the converted text and embed the chunks. Output: chunks.jsonl (the unified corpus).
-
-Each stage is idempotent. Re-running a stage produces the same output. The progress files record per-document state so partial runs can be resumed.
-
-Each stage has a supervisor (e.g., phase3b_supervisor.py, phase3c_supervisor.py) that invokes the stage on a cron-equivalent schedule and respects a pause sentinel.`,
-    systemArchitecture: `The Phase 3 pipeline has the following components:
-
-(1) Inventory stage: phase3a_inventory.py + phase3a_supervisor.py. Produces inventory_raw.csv.
-
-(2) Scoring stage: phase3b_score.py + phase3b_supervisor.py. Produces inventory_scored.csv.
-
-(3) Filter stage: phase3c_filter.py. Produces inventory_filtered_050.csv and inventory_filtered.csv.
-
-(4) OCR stage: phase3c_ocr.py + phase3c_ocr_supervisor.py. Produces phase3c_ocr_progress.json.
-
-(5) Convert stage: phase3c_convert.py + phase3c_convert_supervisor.py. Produces phase3c_convert_progress.json.
-
-(6) Chunk-and-embed stage: phase3c_chunk_embed.py + phase3c_chunk_embed_supervisor.py. Will produce chunks.jsonl (the unified corpus).
-
-Auxiliary scripts:
-- pilot_llm.py: LLM scorer pilot.
-- test_pilot.py: scorer tests.
-- recon_round2.py, recon_sources.py: source discovery.
-- resume_3c4.py: resume helper for the chunk-and-embed stage.
-- threshold_analysis.py: scoring threshold analysis.
-- ROADMAP.md: pipeline roadmap.
-
-The pipeline's storage layer is a set of CSV and JSON files in projects/tower-of-babel/rag/govdocs/. Each stage's output is durable and serves as the next stage's input.`,
-    implementation: `The Phase 3 pipeline is implemented in Python 3 with the following components:
-
-- phase3a_inventory.py (28 KB): source enumeration. Iterates the five sources, recording metadata per document.
-- phase3b_score.py (13 KB): LLM-based relevance scoring. Calls an LLM (configurable model) per document with a structured prompt; parses the response into a score + category.
-- phase3c_filter.py (1 KB): threshold-based filter. Reads inventory_scored.csv, applies threshold, writes inventory_filtered_*.csv.
-- phase3c_ocr.py (12 KB): OCR for scanned documents. Uses pytesseract or similar OCR engine.
-- phase3c_convert.py (7 KB): PDF/EPUB-to-text conversion. Uses pymupdf (pivoted from pymupdf4llm for performance).
-- phase3c_chunk_embed.py (22 KB): chunking + embedding. Splits text into chunks, computes embeddings, writes chunks.jsonl.
-
-Supervisor scripts:
-- phase3a_supervisor.py (4 KB)
-- phase3b_supervisor.py (4 KB)
-- phase3c_convert_supervisor.py (4 KB)
-- phase3c_chunk_embed_supervisor.py (4 KB)
-- phase3c_ocr_supervisor.py (4 KB)
-- phase3c_supervisor.py (4 KB)
-
-Each supervisor invokes its stage on a cron-equivalent schedule, records progress, and respects a pause sentinel.
-
-Implementation choices:
-- CSV for inventory (human-readable, diff-friendly)
-- JSON for progress (machine-readable, atomic writes)
-- pymupdf for PDF text extraction (5-10x faster than pymupdf4llm)
-- LLM-based scoring (more expensive than heuristics but higher quality)`,
-    results: `Operational results across the August 2026 run:
-
-- Phase 3a (inventory): 16,465 documents enumerated across 5 sources. inventory_raw.csv ~14.9 MB.
-- Phase 3b (scoring): 16,465 documents scored. inventory_scored.csv ~15.9 MB. Score distribution: 0-30 (62%), 30-60 (24%), 60-100 (14%).
-- Phase 3c-1 (filter): 1,038 documents pass the 50-threshold filter. inventory_filtered_050.csv ~3.2 MB.
-- Phase 3c-2 (OCR): OCR applied to scanned documents in the filtered subset.
-- Phase 3c-3 (convert): 2,478 documents successfully converted, 692 failed. phase3c_convert_progress.json 548 KB. Total extracted text: 216 MB.
-- Phase 3c-4 (chunk + embed): staged but not yet executed. Will produce chunks.jsonl.
-
-The pipeline is ready for the chunk-and-embed phase to begin. The convert stage's output (2,478 converted documents, 216 MB of text) is the input to the chunk-and-embed stage.`,
-    discussion: `The Phase 3 pipeline demonstrates that declassified document acquisition at scale requires a multi-stage pipeline with idempotent stages, durable intermediate artifacts, and supervisor-based execution. The six-stage architecture is the minimum that produces a reproducible corpus: inventory for enumeration, scoring for relevance, filter for curation, OCR for text extraction, convert for normalization, and chunk-and-embed for retrieval.
-
-A second observation: LLM-based scoring is more expensive than heuristic scoring but produces higher-quality relevance judgments. The scorer reads the document's metadata (and optionally the document text) and returns a structured score + category. The cost is justified for a corpus that will be queried for years.
-
-A third observation: the supervisor pattern is essential. Each stage's supervisor records progress in a JSON file, so partial runs can be resumed. The pause sentinel gives the operator a clean way to halt the pipeline.`,
-    limitations: `The pipeline is single-host. Scaling to multiple hosts would require a shared storage layer (e.g., S3) and a coordination protocol.
-
-The LLM scorer is non-deterministic. Running the scorer twice on the same input can produce different scores. The pipeline does not currently capture the LLM temperature or seed.
-
-The OCR stage's quality varies. Some scanned documents are too degraded for high-quality OCR; the pipeline records the OCR confidence per page but does not currently filter low-confidence pages.
-
-The chunk-and-embed stage is not yet executed. The corpus at this stage is converted text but not yet embedded for retrieval.`,
-    futureWork: `Planned extensions to the Phase 3 pipeline:
-
-1. Execute the chunk-and-embed stage (phase 3c-4) to produce the unified chunks.jsonl.
-2. Multi-host scaling via S3-backed storage.
-3. LLM scorer determinism via temperature=0 and seed capture.
-4. OCR quality filtering (drop pages below a confidence threshold).
-5. Source expansion: add additional declassified sources as they become available.
-
-The long-term target is a continuously-updating declassified corpus that grows as new sources are added and re-indexes automatically.`,
-    references: [
       "projects/tower-of-babel/rag/govdocs/phase3a_inventory.py, 28 KB, accessed 2026-09-26.",
       "projects/tower-of-babel/rag/govdocs/phase3b_score.py, 13 KB, accessed 2026-09-26.",
       "projects/tower-of-babel/rag/govdocs/phase3c_filter.py, 1 KB, accessed 2026-09-26.",
       "projects/tower-of-babel/rag/govdocs/phase3c_ocr.py, 12 KB, accessed 2026-09-26.",
       "projects/tower-of-babel/rag/govdocs/phase3c_convert.py, 7 KB, accessed 2026-09-26.",
       "projects/tower-of-babel/rag/govdocs/phase3c_chunk_embed.py, 22 KB, accessed 2026-09-26.",
-      "projects/tower-of-babel/rag/govdocs/phase3c_*.py supervisors, accessed 2026-09-26.",
       "projects/tower-of-babel/rag/govdocs/inventory_raw.csv, 14.9 MB, accessed 2026-09-26.",
       "projects/tower-of-babel/rag/govdocs/inventory_scored.csv, 15.9 MB, accessed 2026-09-26.",
       "projects/tower-of-babel/rag/govdocs/inventory_filtered_050.csv, 3.2 MB, accessed 2026-09-26.",
       "projects/tower-of-babel/rag/govdocs/phase3c_convert_progress.json, 548 KB, accessed 2026-09-26.",
-      "workspace/MEMORY.md, Phase 3 section, accessed 2026-09-26.",
+      "https://www.gutenberg.org/, public-domain book source.",
+      "https://archive.org/, public-domain book source.",
+      "Calibre, https://calibre-ebook.com/, open-source catalog management.",
+      "MARC standards, Library of Congress, accessed 2026-09-26.",
+      "yt-dlp, https://github.com/yt-dlp/yt-dlp, accessed 2026-09-26.",
+      "faster-whisper, https://github.com/guillaumekln/faster-whisper, accessed 2026-09-26.",
+      "workspace/architecture/PROCESS_LIFECYCLE.md, 6.9 KB, accessed 2026-09-26.",
+      "workspace/architecture/EXTERNAL_SERVICE_SAFETY.md, 6.0 KB, accessed 2026-09-26.",
       "pymupdf, https://pymupdf.readthedocs.io/, accessed 2026-09-26."
     ],
   },
+
+
 
   {
     id: "autonomous-trading-system",
@@ -1037,77 +812,6 @@ The repo's design follows the conventions of well-maintained open-source project
     ],
   },
 
-  {
-    id: "antarctic-labs-site",
-    title: "Antarctic Labs Site",
-    category: "SOFTWARE",
-    status: "ACTIVE",
-    date: "2026-09",
-    role: "Architecture, build, deployment",
-    shortDescription: "Personal digital headquarters site deployed at https://antarctic-labs.com with a layered polar visual environment, content architecture, and route registry.",
-    problem: "Stand up a unified, expandable site that holds identity, systems, expeditions, history, operator, library, and government destinations behind one continuous visual environment.",
-    objective: "Ship a production site with a centralized content layer, a per-route registry, per-route SEO, and a preserved visual environment.",
-    approach: `React + Vite layered background environment (constellation ThreeUI iframe + iceberg video loop, parallel-translate scroll arrival). Centralized content under src/content/. Manual pushState + popstate routing preserved. Per-route SEO helper.`,
-    system: "src/content/* modules, src/pages.jsx destination shells, src/seo.js per-route metadata applier, src/components/NewBackgroundVideo.jsx background environment.",
-    build: "Production site deployed via Cloudflare Pages. Stage A content + route architecture and Stage B finalized content landed today.",
-    technologies: [
-      "React 19",
-      "Vite 7",
-      "GSAP 3.13",
-      "Cloudflare Pages"
-    ],
-    result: "Live production site at antarctic-labs.com. 3,425 catalog entries (Tower of Babel) live as of 2026-09-26; 6 collections + 11 expeditions + 7 routes.",
-    process: [
-      "DESIGN",
-      "BUILD",
-      "VERIFY",
-      "SHIP"
-    ],
-    evidence: [
-      "projects/antarctic-labs/src/main.jsx",
-      "projects/antarctic-labs/src/pages.jsx",
-      "projects/antarctic-labs/src/components/NewBackgroundVideo.jsx",
-      "projects/antarctic-labs/src/content/*.js",
-      "projects/antarctic-labs/src/seo.js",
-      "https://antarctic-labs.com"
-    ],
-    links: [
-      { label: "https://antarctic-labs.com", href: "https://antarctic-labs.com" }
-    ],
-    relatedExpeditions: [
-      "openclaw-autonomous-agent-operations"
-    ],
-    abstract: `The Antarctic Labs Site is a personal digital headquarters deployed at https://antarctic-labs.com. The site is built with React 19 and Vite 7, deployed via Cloudflare Pages, and structured around a layered polar visual environment that persists across all routes. The site serves as the operator's public identity: it presents the operator's projects (the 11 expeditions documented in /projects), the operator's library (the Tower of Babel with 3,425 catalog entries as of 2026-09-26), the operator's research threads, and the operator's government and disclosure pages. The site is designed for expansion: a centralized content layer under src/content/ holds the route-specific data, and a per-route registry in src/routes.js maps URLs to destination shells in src/pages.jsx. The background environment is preserved across all routes via a single src/components/NewBackgroundVideo.jsx component. The site is ACTIVE and is being maintained.`,
-    introduction: `A personal digital headquarters is more than a portfolio. It is the operator's public identity: a place where the operator's work, thinking, and identity converge. The Antarctic Labs Site is built around this idea. The site is not a portfolio (which would show only completed work); it is a headquarters (which shows the operator's work, the operator's library, the operator's research, and the operator's identity in one continuous environment).
-
-The site's design is driven by three constraints: (1) the visual environment must be coherent across all routes, so the visitor feels they are in one place; (2) the content layer must be centralized, so the operator can update content in one place; (3) the route registry must be explicit, so the operator can add new routes without touching the visual environment.`,
-    methods: `The Antarctic Labs Site is built with the following technical approach: (1) React 19 + Vite 7, (2) Cloudflare Pages deployment, (3) centralized content layer under src/content/, (4) per-route registry mapping URLs to destination shells, (5) per-route SEO via src/seo.js, (6) preserved visual environment via src/components/NewBackgroundVideo.jsx. The routing is manual pushState + popstate, a deliberate choice for fine-grained control over route transitions.`,
-    systemArchitecture: `The site has the following components: (1) content layer (src/content/) with route-specific data modules, (2) page layer (src/pages.jsx) with destination shells, (3) background environment (src/components/NewBackgroundVideo.jsx), (4) routing (src/main.jsx) with manual pushState + popstate, (5) SEO (src/seo.js) with per-route metadata, (6) build (Vite), (7) deployment (Cloudflare Pages).`,
-    implementation: `The site is implemented in React 19 + JavaScript (no TypeScript). The build is Vite 7. The deployment is Cloudflare Pages. The content layer modules are plain JavaScript. The page layer components are JSX. The routing is manual pushState + popstate. The SEO is a small module that applies metadata on route change.
-
-The visual environment is a complex composition: a ThreeUI iframe rendering a constellation of points + a video loop of an iceberg scene + a parallel-translate scroll arrival effect that animates the route transition.`,
-    results: `Operational results as of 2026-09-26: live production site at https://antarctic-labs.com, 7 routes, 3,425 catalog entries in the Tower of Babel library, 11 expeditions, 6 collections (BOOKS, DOCUMENTS, PAPERS, ARCHIVES, DECLASSIFIED, PODCASTS, REFERENCE), 1,412 declassified entries, 1,091 podcast entries, background environment renders correctly across all routes, per-route SEO metadata applied correctly.`,
-    discussion: `The Antarctic Labs Site demonstrates that a personal digital headquarters can be built with standard modern tooling and a disciplined architecture. The result is a site that feels coherent across all routes while remaining extensible.
-
-A second observation: the centralized content layer is the key discipline. Without it, content drifts across components and route updates become brittle. With it, content updates are localized to one file.
-
-A third observation: the manual pushState + popstate routing is unusual but justified. The operator wanted fine-grained control over the route transition animations; React Router's abstraction made that difficult.`,
-    limitations: "The site has no CMS. The site has no analytics. The site has no comments or social features. The site's bundle size is large (~3.27 MB JS / ~640 KB gzipped).",
-    futureWork: `Planned extensions: (1) CMS integration for content updates without code changes, (2) analytics integration for visitor behavior tracking, (3) code splitting to reduce bundle size, (4) per-page metadata for OG/Twitter cards, (5) RSS feed for new content.`,
-    references: [
-      "projects/antarctic-labs/src/main.jsx",
-      "projects/antarctic-labs/src/pages.jsx",
-      "projects/antarctic-labs/src/components/NewBackgroundVideo.jsx",
-      "projects/antarctic-labs/src/content/*.js",
-      "projects/antarctic-labs/src/seo.js",
-      "https://antarctic-labs.com",
-      "React 19, https://react.dev/",
-      "Vite 7, https://vitejs.dev/",
-      "Cloudflare Pages, https://pages.cloudflare.com/",
-      "GSAP 3.13, https://gsap.com/",
-      "Derek Sivers, sivers.org"
-    ],
-  },
 
   {
     id: "moltbook-data-corpus",
