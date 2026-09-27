@@ -412,7 +412,7 @@ The long-term target is a personal library system that is auditable, searchable,
     ],
     relatedExpeditions: [
       "pdai-arbitrage-system",
-      "crucix-trading-platform"
+      "automated-trading-bot"
     ],
     abstract: `The Autonomous Trading System is an experimental harness for testing a documented trading strategy against historical market data using agent tooling. The system is split into two halves: a data/ directory holding cache, backtest outputs, trade logs, state, and strategy updates; and a lib/ directory holding the agent tools, backtester, and configuration. The harness validates the strategy across historical data and records the results in JSON. As deployed, six versions of the strategy have been recorded (strategy_updates_v6.json), two signal files have been paired with corresponding trade logs (2026-03-20 and 2026-03-26), and the backtest output is captured in backtest_summary.json and backtest_detail.json. The system is experimental: it is designed to validate the strategy in isolation, not to execute trades in production.`,
     introduction: `Trading systems that combine a documented strategy with agent tooling face a specific challenge: the strategy must be testable in isolation, but the test harness must produce results that are comparable across strategy versions. The strategy is a set of rules (when to enter, when to exit, what to size, what to risk). The agent tooling provides the means to apply the strategy (data access, order placement, position tracking). The test harness validates the strategy against historical data without risking real capital.
@@ -629,7 +629,7 @@ The long-term target is a PulseChain arbitrage system that can compete on gas, l
     status: "RESEARCH",
     date: "2026-07-30 to 2026-08-22",
     role: "Research, note-taking",
-    shortDescription: "Dated research notes on PulseChain, PHEX, pDAI, PulseX, altcoin context, and scam-token warnings.",
+    shortDescription: "55 dated research notes across a 23-day window: PulseChain, PHEX, pDAI, PulseX, altcoin context, and scam-token warnings.",
     problem: "Capture a coherent thesis across an active research window without losing nuance across sessions.",
     objective: "Maintain a dated, traceable body of research notes for PulseChain assets and adjacent topics.",
     approach: "Daily research notes filed with date-prefixed filenames, plus foundational corrections (pDAI is not a stablecoin; pHEX vs eHEX; canonical contract addresses; scam-token warnings).",
@@ -685,23 +685,23 @@ A third observation: the MEMORY.md baseline is more important than the individua
   },
 
   {
-    id: "crucix-trading-platform",
-    title: "Crucix Trading Platform",
+    id: "automated-trading-bot",
+    title: "Automated Trading Bot",
     category: "FINANCE",
     status: "EXPERIMENTAL",
     date: "2026-03 to 2026-08",
     role: "Build",
-    shortDescription: "A standalone trading platform project with APIs, data, configuration, and Dockerized setup.",
-    problem: "Stand up a configurable trading platform with separable APIs and data layers.",
-    objective: "Provide a structured, containerized trading platform codebase.",
-    approach: "apis/, data/, crucix.config.mjs, CONTRIBUTING.md, docker-compose.yml.",
-    system: "Trading platform with API + data + config + container orchestration.",
+    shortDescription: "A standalone automated trading bot codebase: API integrations, market-data layer, config-as-code, and Dockerized deployment.",
+    problem: "Stand up a configurable automated trading bot with separable APIs and data layers.",
+    objective: "Provide a structured, containerized trading bot codebase.",
+    approach: "apis/, data/, bot.config.mjs, CONTRIBUTING.md, docker-compose.yml.",
+    system: "Trading bot with API + data + config + container orchestration.",
     build: "Codebase present, containerized.",
     technologies: [
       "JavaScript/Node",
       "Docker"
     ],
-    result: "Containerized platform with 29 entries in crucix/. Config via crucix.config.mjs; docker-compose for orchestration.",
+    result: "Containerized bot with 29 entries in bot/. Config via bot.config.mjs; docker-compose for orchestration.",
     process: [
       "CONFIGURE",
       "CONNECT",
@@ -709,40 +709,40 @@ A third observation: the MEMORY.md baseline is more important than the individua
       "MONITOR"
     ],
     evidence: [
-      "projects/crucix/crucix/crucix.config.mjs",
-      "projects/crucix/crucix/docker-compose.yml",
-      "projects/crucix/crucix/CONTRIBUTING.md",
-      "projects/crucix/crucix/apis/",
-      "projects/crucix/crucix/data/"
+      "projects/automated-trading-bot/bot/bot.config.mjs",
+      "projects/automated-trading-bot/bot/docker-compose.yml",
+      "projects/automated-trading-bot/bot/CONTRIBUTING.md",
+      "projects/automated-trading-bot/bot/apis/",
+      "projects/automated-trading-bot/bot/data/"
     ],
     relatedExpeditions: [
       "autonomous-trading-system"
     ],
-    abstract: `Crucix is a containerized trading platform project built around a clean separation between APIs, data, configuration, and orchestration. The codebase is organized under crucix/ with apis/ for API integrations, data/ for market data and trade history, crucix.config.mjs for runtime configuration, CONTRIBUTING.md for contribution guidelines, and docker-compose.yml for container orchestration. The platform is designed for deployment in a Docker-based environment with reproducible builds. Crucix is experimental: the codebase is in place but the platform has not been used for production trading.`,
-    introduction: `A trading platform requires more than a strategy. It requires APIs (for broker connection and market data), data infrastructure (for storing tick data, trade history, and account state), configuration (for runtime parameters), and orchestration (for deployment and scaling). Crucix is an attempt to build this scaffolding without committing to a specific strategy or broker.
+    abstract: `The Automated Trading Bot is a containerized trading bot project built around a clean separation between APIs, data, configuration, and orchestration. The codebase is organized under bot/ with apis/ for API integrations, data/ for market data and trade history, bot.config.mjs for runtime configuration, CONTRIBUTING.md for contribution guidelines, and docker-compose.yml for container orchestration. The bot is designed for deployment in a Docker-based environment with reproducible builds. The project is experimental: the codebase is in place but the bot has not been used for production trading.`,
+    introduction: `An automated trading bot requires more than a strategy. It requires APIs (for broker connection and market data), data infrastructure (for storing tick data, trade history, and account state), configuration (for runtime parameters), and orchestration (for deployment and scaling). This project is an attempt to build this scaffolding without committing to a specific strategy or broker.
 
-The platform's design is intentionally minimal. The codebase has 29 entries in crucix/ (subdirectories and files), plus the configuration and orchestration files at the root. The platform is meant to be forked, customized, and deployed.`,
-    methods: `The Crucix codebase is organized around four principles: (1) API separation, all broker and market-data integrations live in apis/; (2) data separation, all market data and trade history live in data/; (3) configuration as code, all runtime parameters live in crucix.config.mjs; (4) containerized deployment, the platform runs in Docker, orchestrated by docker-compose.yml. These principles produce a codebase that is forkable, customizable, and deployable.`,
-    systemArchitecture: "The Crucix platform has four components: APIs (apis/), Data (data/), Configuration (crucix.config.mjs), and Orchestration (docker-compose.yml).",
-    implementation: `The Crucix codebase is implemented in JavaScript (Node.js) and is deployed via Docker. The 29 entries in crucix/ include the API modules, the data layer, the configuration, and supporting infrastructure (e.g., CONTRIBUTING.md).
+The bot's design is intentionally minimal. The codebase has 29 entries in bot/ (subdirectories and files), plus the configuration and orchestration files at the root. The project is meant to be forked, customized, and deployed.`,
+    methods: `The bot codebase is organized around four principles: (1) API separation, all broker and market-data integrations live in apis/; (2) data separation, all market data and trade history live in data/; (3) configuration as code, all runtime parameters live in bot.config.mjs; (4) containerized deployment, the bot runs in Docker, orchestrated by docker-compose.yml. These principles produce a codebase that is forkable, customizable, and deployable.`,
+    systemArchitecture: "The bot has four components: APIs (apis/), Data (data/), Configuration (bot.config.mjs), and Orchestration (docker-compose.yml).",
+    implementation: `The bot codebase is implemented in JavaScript (Node.js) and is deployed via Docker. The 29 entries in bot/ include the API modules, the data layer, the configuration, and supporting infrastructure (e.g., CONTRIBUTING.md).
 
-The platform is experimental: the codebase is in place but has not been deployed in production. The deployment procedure is documented but not exercised.
+The project is experimental: the codebase is in place but has not been deployed in production. The deployment procedure is documented but not exercised.
 
-Implementation choices: JavaScript / Node.js for the runtime, Docker + docker-compose for orchestration, crucix.config.mjs for configuration (JavaScript module, not JSON, for flexibility), storage-agnostic data layer.`,
-    results: "The Crucix codebase is in place. The deployment procedure is documented but not exercised. The platform has not been used for production trading. The codebase is a scaffold for future development.",
-    discussion: `Crucix demonstrates that a trading platform can be scaffolded without committing to a specific strategy or broker. The codebase's separation of APIs, data, configuration, and orchestration produces a forkable starting point.
+Implementation choices: JavaScript / Node.js for the runtime, Docker + docker-compose for orchestration, bot.config.mjs for configuration (JavaScript module, not JSON, for flexibility), storage-agnostic data layer.`,
+    results: "The bot codebase is in place. The deployment procedure is documented but not exercised. The bot has not been used for production trading. The codebase is a scaffold for future development.",
+    discussion: `This project demonstrates that a trading bot can be scaffolded without committing to a specific strategy or broker. The codebase's separation of APIs, data, configuration, and orchestration produces a forkable starting point.
 
-A second observation: JavaScript / Node.js is a reasonable choice for a trading platform. The async I/O model handles concurrent market data streams well, and the npm ecosystem provides extensive tooling.
+A second observation: JavaScript / Node.js is a reasonable choice for a trading bot. The async I/O model handles concurrent market data streams well, and the npm ecosystem provides extensive tooling.
 
-A third observation: the platform's experimental status reflects the operator's preference for strategy validation before platform deployment. The Crucix scaffold is a hedge: when a strategy is ready for production, the platform is ready to receive it.`,
-    limitations: "The platform has not been deployed. The platform has no broker connection. The platform has no strategy engine. The platform has no risk management.",
+A third observation: the project's experimental status reflects the operator's preference for strategy validation before bot deployment. The scaffold is a hedge: when a strategy is ready for production, the bot is ready to receive it.`,
+    limitations: "The bot has not been deployed. The bot has no broker connection. The bot has no strategy engine. The bot has no risk management.",
     futureWork: `Planned extensions: (1) implement broker APIs (Alpaca, Interactive Brokers), (2) implement the strategy engine with risk management, (3) deploy via docker-compose for paper trading, (4) add backtesting infrastructure, (5) add live-monitoring and alerting.`,
     references: [
-      "projects/crucix/crucix/crucix.config.mjs",
-      "projects/crucix/crucix/docker-compose.yml",
-      "projects/crucix/crucix/CONTRIBUTING.md",
-      "projects/crucix/crucix/apis/",
-      "projects/crucix/crucix/data/",
+      "projects/automated-trading-bot/bot/bot.config.mjs",
+      "projects/automated-trading-bot/bot/docker-compose.yml",
+      "projects/automated-trading-bot/bot/CONTRIBUTING.md",
+      "projects/automated-trading-bot/bot/apis/",
+      "projects/automated-trading-bot/bot/data/",
       "Zipline, https://zipline.ml/",
       "Backtrader, https://www.backtrader.com/",
       "Lean, https://github.com/QuantConnect/Lean",
@@ -757,7 +757,7 @@ A third observation: the platform's experimental status reflects the operator's 
     status: "ACTIVE",
     date: "2026-09 (mtimes 2026-09-01 to 2026-09-04)",
     role: "Build",
-    shortDescription: "Repo for an agent panel with installer, bin/, docs/, assets/, and a legacy directory.",
+    shortDescription: "Structured agent-panel codebase with installer, plugin/skill extension system, docs, tests, and a legacy directory.",
     problem: "Provide a structured agent panel repo with an installer and supporting infrastructure.",
     objective: "Ship a maintainable agent panel codebase with documentation and install path.",
     approach: "install.sh plus bin/, docs/, assets/, and legacy/ directories.",
