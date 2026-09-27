@@ -346,7 +346,6 @@ export function TowerOfBabel({ go }) {
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section tower-landing-hero">
-        <div className="section-index">TOWER OF BABEL</div>
         <h1>{towerOfBabel.heading}</h1>
         {towerOfBabel.intro.map((p, i) => (
           <p className={i === 0 ? "display-copy" : "body-copy"} key={i}>{p}</p>
@@ -427,11 +426,27 @@ const TOWER_COUNTS = artifacts.reduce((acc, a) => {
 }, {});
 const TOWER_COLLECTIONS = Object.keys(TOWER_COUNTS).sort();
 
-export function TowerLibrary({ go }) {
+export function TowerLibrary({ go, onReady }) {
   // Live search + collection filter + sort. Empty query/filter = show all.
   const [query, setQuery] = useState("");
   const [collectionFilter, setCollectionFilter] = useState("");
   const [sortId, setSortId] = useState("title-asc");
+  // Tell the app shell the library has painted so it can dismiss the
+  // Tower boot loader shown during in-app navigation here.
+  useEffect(() => {
+    if (!onReady) return;
+    let raf1 = 0;
+    let raf2 = 0;
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        onReady();
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [onReady]);
   // The input stays bound to the raw query so typing never waits on work;
   // the expensive filter/sort and the deep index search run on the deferred
   // value at background priority, which removes the keystroke lag.
