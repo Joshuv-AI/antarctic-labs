@@ -942,3 +942,11 @@ function NotFound({ go }) {
 createRoot(
   document.getElementById("root")
 ).render(<App />);
+// Dismiss the Tower of Babel boot loader (if shown) once the first frame
+// has painted. The loader has its own hard failsafe, so this is best-effort.
+requestAnimationFrame(() =>
+  requestAnimationFrame(() => {
+    if (typeof window.__dismissTowerBoot === "function")
+      window.__dismissTowerBoot();
+  })
+);
