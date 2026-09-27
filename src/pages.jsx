@@ -7,7 +7,8 @@
 // Visual language is intentionally not redesigned here — these shells
 // use the same classes the existing Home page already uses, so the
 // destinations already share the home-page visual grammar.
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { searchDeep, getSnippets } from "./lib/deep-search.js";
 import { site } from "./content/site.js";
 import { systems } from "./content/systems.js";
 import { expeditions, expeditionsArchive } from "./content/expeditions.js";
@@ -408,6 +409,27 @@ export function TowerLibrary({ go }) {
   const [query, setQuery] = useState("");
   const [collectionFilter, setCollectionFilter] = useState("");
   const [sortId, setSortId] = useState("title-asc");
+  // Deep full-text search: same query, second mode. Debounced; searches the
+  // full contents of every staged text via the build-time index. Title
+  // results above are untouched by this.
+  const [deep, setDeep] = useState({ state: "idle" });
+  useEffect(() => {
+    const raw = query.trim();
+    if (raw.length < 2) {
+      setDeep({ state: "idle" });
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      setDeep((d) => ({ ...d, state: "loading" }));
+      const res = await searchDeep(raw);
+      if (!cancelled) setDeep(res);
+    }, 450);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [query]);
   const q = query.trim().toLowerCase();
   const counts = artifacts.reduce((acc, a) => {
     const key = a.collection || "OTHER";
@@ -447,10 +469,10 @@ export function TowerLibrary({ go }) {
               <input
                 type="search"
                 className="tower-search"
-                placeholder="Search titles, creators, tags…"
+                placeholder="Search titles, creators, tags… — or words inside the texts"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                aria-label="Search the library catalog"
+                aria-label="Search the library catalog and the full text of every work"
               />
               <label className="tower-sort">
                 <span>Sort</span>
@@ -533,10 +555,142 @@ export function TowerLibrary({ go }) {
                 ))}
               </div>
             )}
+            <DeepMentions deep={deep} go={go} />
           </>
         )}
       </section>
     </main>
+  );
+}
+
+// ----- Tower of Babel / deep full-text search --------------------------------
+// "Mentions in texts": every work where the query appears in the full text,
+// ranked by mention count, with expandable preview passages cut from the real
+// file. Snippets load lazily per work so a search never downloads the corpus.
+function DeepMentionRow({ work, rank, go, parsedQuery }) {
+  const [open, setOpen] = useState(false);
+  const [snips, setSnips] = useState(null);
+  const [showAll, setShowAll] = useState(false);
+  const doc = work.doc;
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && !snips) getSnippets(doc, parsedQuery).then(setSnips);
+  };
+  const shown = snips
+    ? showAll
+      ? snips.snippets
+      : snips.snippets.slice(0, snips.initial)
+    : [];
+  return (
+    <div className="tower-mention">
+      <button
+        type="button"
+        className="tower-row"
+        onClick={toggle}
+        aria-expanded={open}
+        aria-label={`${doc.title}, ${work.hits} mentions. ${open ? "Collapse" : "Expand"} passages.`}
+      >
+        <span className="tower-row-index">{String(rank).padStart(2, "0")}</span>
+        <span className="tower-row-main">
+          <span className="tower-row-title">{doc.title}</span>
+          {(doc.creator || doc.year) && (
+            <span className="tower-row-creator">
+              {doc.creator}
+              {doc.creator && doc.year ? " · " : ""}
+              {doc.year || ""}
+            </span>
+          )}
+        </span>
+        <span className="tower-row-tags">
+          <span className="tower-tag">{doc.collection}</span>
+          <span className="tower-tag tower-tag-hits">
+            {work.hits} {work.hits === 1 ? "mention" : "mentions"}
+          </span>
+        </span>
+        <span className="tower-row-arrow" aria-hidden="true">
+          {open ? "▾" : "▸"}
+        </span>
+      </button>
+      {open && (
+        <div className="tower-snippets">
+          {!snips && <p className="tower-snippets-status">Finding passages…</p>}
+          {snips && snips.snippets.length === 0 && (
+            <p className="tower-snippets-status">No passages found in this text.</p>
+          )}
+          {shown.map((s, i) => (
+            <button
+              key={i}
+              type="button"
+              className="tower-snippet"
+              onClick={() => go(`/tower-of-babel/library/${doc.id}`)}
+              dangerouslySetInnerHTML={{ __html: s.html }}
+              aria-label={`Open ${doc.title}`}
+            />
+          ))}
+          {snips && !showAll && snips.total > snips.initial && (
+            <button
+              type="button"
+              className="text-link tower-snippets-more"
+              onClick={() => setShowAll(true)}
+            >
+              Show all {snips.total} passages
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DeepMentions({ deep, go }) {
+  if (deep.state === "idle" || deep.state === "unavailable") return null;
+  const works = deep.works || [];
+  return (
+    <div className="tower-mentions">
+      <div className="tower-mentions-head">
+        <div className="section-index">Mentions in texts</div>
+        {deep.state === "ready" && deep.totalWorks > 0 && (
+          <p className="tower-mentions-sub">
+            {deep.totalWorks} {deep.totalWorks === 1 ? "work" : "works"} ·{" "}
+            {deep.texts.toLocaleString()} texts searched
+          </p>
+        )}
+      </div>
+      {deep.state === "loading" && works.length === 0 && (
+        <p className="tower-mentions-status">Searching inside the texts…</p>
+      )}
+      {deep.state === "empty" && (
+        <p className="tower-mentions-status">
+          That word appears just about everywhere — try something more specific.
+        </p>
+      )}
+      {(deep.state === "ready" || (deep.state === "loading" && works.length > 0)) && (
+        <>
+          {deep.state === "ready" && works.length === 0 ? (
+            <p className="tower-mentions-status">No mentions found in any text.</p>
+          ) : (
+            <div className="tower-rows">
+              {works.map((w, i) => (
+                <DeepMentionRow
+                  key={w.doc.id}
+                  work={w}
+                  rank={i + 1}
+                  go={go}
+                  parsedQuery={deep.query}
+                />
+              ))}
+            </div>
+          )}
+          {deep.state === "ready" && deep.truncated && (
+            <p className="tower-mentions-status">
+              Showing the top {works.length} of {deep.totalWorks} — refine your
+              search to narrow it.
+            </p>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 export function LibraryArtifact({ go, params }) {
