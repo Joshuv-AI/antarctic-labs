@@ -887,21 +887,25 @@ export function LibraryArtifact({ go, params }) {
         )}
       </section>
       {artifacts.length > 1 ? (
-        <nav className="record-nav tower-entry-nav" aria-label="Browse entries">
+        <nav className="record-nav" aria-label="Browse entries">
           <button
-            className="text-link tower-nav-btn"
+            type="button"
+            className="record-nav-card"
             onClick={() => go(`/tower-of-babel/library/${prev.artifact_id}`)}
           >
-            <span aria-hidden="true">←</span> {prev.title}
+            <span className="record-nav-eyebrow"><span aria-hidden="true">←</span> PREVIOUS ENTRY</span>
+            <span className="record-nav-title">{prev.title}</span>
           </button>
-          <button className="text-link" onClick={() => go("/tower-of-babel/library")}>
+          <button type="button" className="record-nav-all" onClick={() => go("/tower-of-babel/library")}>
             ALL ENTRIES
           </button>
           <button
-            className="text-link tower-nav-btn"
+            type="button"
+            className="record-nav-card record-nav-next"
             onClick={() => go(`/tower-of-babel/library/${next.artifact_id}`)}
           >
-            {next.title} <span aria-hidden="true">→</span>
+            <span className="record-nav-eyebrow">NEXT ENTRY <span aria-hidden="true">→</span></span>
+            <span className="record-nav-title">{next.title}</span>
           </button>
         </nav>
       ) : (
