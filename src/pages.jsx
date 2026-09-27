@@ -443,12 +443,6 @@ export function TowerOfBabel({ go, onReady }) {
           <p className="body-copy" key={i}>{p}</p>
         ))}
       </section>
-      <section className="tower-landing-block section">
-        <div className="section-index">{towerOfBabel.rebuild.heading}</div>
-        {towerOfBabel.rebuild.body.map((p, i) => (
-          <p className="body-copy" key={i}>{p}</p>
-        ))}
-      </section>
     </main>
   );
 }
