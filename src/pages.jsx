@@ -386,7 +386,24 @@ export function History({ go }) {
   );
 }
 // ----- Tower of Babel ------------------------------------------------------
-export function TowerOfBabel({ go }) {
+export function TowerOfBabel({ go, onReady }) {
+  // Tell the app shell the landing page has painted so it can dismiss the
+  // Tower boot loader shown during in-app navigation here (same loader as
+  // ENTER THE LIBRARY uses).
+  useEffect(() => {
+    if (!onReady) return;
+    let raf1 = 0;
+    let raf2 = 0;
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        onReady();
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [onReady]);
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section tower-landing-hero">
