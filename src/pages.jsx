@@ -7,7 +7,7 @@
 // Visual language is intentionally not redesigned here — these shells
 // use the same classes the existing Home page already uses, so the
 // destinations already share the home-page visual grammar.
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useDeferredValue } from "react";
 import { searchDeep, getSnippets } from "./lib/deep-search.js";
 import { site } from "./content/site.js";
 import { systems } from "./content/systems.js";
@@ -368,6 +368,18 @@ export function TowerOfBabel({ go }) {
         ))}
       </section>
       <section className="tower-landing-block section">
+        <div className="section-index">WHAT IT HOLDS</div>
+        {towerOfBabel.collection.map((p, i) => (
+          <p className="body-copy" key={i}>{p}</p>
+        ))}
+      </section>
+      <section className="tower-landing-block section">
+        <div className="section-index">THE NAME</div>
+        {towerOfBabel.name.map((p, i) => (
+          <p className="body-copy" key={i}>{p}</p>
+        ))}
+      </section>
+      <section className="tower-landing-block section">
         <div className="section-index">ACCESS</div>
         {towerOfBabel.access.map((p, i) => (
           <p className="body-copy" key={i}>{p}</p>
@@ -404,17 +416,32 @@ function towerHaystack(a) {
     .toLowerCase();
 }
 
+// Precomputed once at module load: the catalog is static at runtime, so the
+// per-record search haystacks and the collection counts are built a single
+// time instead of on every keystroke/render.
+const TOWER_HAYSTACKS = artifacts.map(towerHaystack);
+const TOWER_COUNTS = artifacts.reduce((acc, a) => {
+  const key = a.collection || "OTHER";
+  acc[key] = (acc[key] || 0) + 1;
+  return acc;
+}, {});
+const TOWER_COLLECTIONS = Object.keys(TOWER_COUNTS).sort();
+
 export function TowerLibrary({ go }) {
   // Live search + collection filter + sort. Empty query/filter = show all.
   const [query, setQuery] = useState("");
   const [collectionFilter, setCollectionFilter] = useState("");
   const [sortId, setSortId] = useState("title-asc");
+  // The input stays bound to the raw query so typing never waits on work;
+  // the expensive filter/sort and the deep index search run on the deferred
+  // value at background priority, which removes the keystroke lag.
+  const deferredQuery = useDeferredValue(query);
   // Deep full-text search: same query, second mode. Debounced; searches the
   // full contents of every staged text via the build-time index. Title
   // results above are untouched by this.
   const [deep, setDeep] = useState({ state: "idle" });
   useEffect(() => {
-    const raw = query.trim();
+    const raw = deferredQuery.trim();
     if (raw.length < 2) {
       setDeep({ state: "idle" });
       return;
@@ -429,26 +456,24 @@ export function TowerLibrary({ go }) {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [query]);
-  const q = query.trim().toLowerCase();
-  const counts = artifacts.reduce((acc, a) => {
-    const key = a.collection || "OTHER";
-    acc[key] = (acc[key] || 0) + 1;
-    return acc;
-  }, {});
-  const presentCollections = Object.keys(counts).sort();
-  const visible = artifacts
-    .filter((a) => {
+  }, [deferredQuery]);
+  const q = deferredQuery.trim().toLowerCase();
+  const visible = useMemo(() => {
+    const out = [];
+    for (let i = 0; i < artifacts.length; i++) {
+      const a = artifacts[i];
       if (collectionFilter && (a.collection || "OTHER") !== collectionFilter)
-        return false;
-      if (!q) return true;
-      return towerHaystack(a).includes(q);
-    })
-    .sort((a, b) => {
+        continue;
+      if (q && !TOWER_HAYSTACKS[i].includes(q)) continue;
+      out.push(a);
+    }
+    out.sort((a, b) => {
       if (sortId === "year-desc") return (b.year || 0) - (a.year || 0);
       if (sortId === "year-asc") return (a.year || 0) - (b.year || 0);
       return (a.title || "").localeCompare(b.title || "");
     });
+    return out;
+  }, [q, collectionFilter, sortId]);
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
@@ -497,7 +522,7 @@ export function TowerLibrary({ go }) {
               >
                 All <span>{artifacts.length}</span>
               </button>
-              {presentCollections.map((c) => (
+              {TOWER_COLLECTIONS.map((c) => (
                 <button
                   type="button"
                   key={c}
@@ -505,14 +530,14 @@ export function TowerLibrary({ go }) {
                   onClick={() => setCollectionFilter(collectionFilter === c ? "" : c)}
                   aria-pressed={collectionFilter === c}
                 >
-                  {c} <span>{counts[c]}</span>
+                  {c} <span>{TOWER_COUNTS[c]}</span>
                 </button>
               ))}
             </div>
             <p className="tower-result-count" aria-live="polite">
               {visible.length} of {artifacts.length}{" "}
               {artifacts.length === 1 ? "entry" : "entries"}
-              {q ? ` matching “${query.trim()}”` : ""}
+              {q ? ` matching “${deferredQuery.trim()}”` : ""}
             </p>
             {visible.length === 0 ? (
               <p className="tower-empty-results">
