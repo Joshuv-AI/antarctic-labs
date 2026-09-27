@@ -56,24 +56,6 @@ export const operator = {
     ],
   },
 
-  principles: {
-    title: "HOW WE WORK",
-    items: [
-      {
-        title: "UNDERSTAND FIRST",
-        text: "No building before the problem is mapped. The fastest way to waste effort is automating the wrong thing.",
-      },
-      {
-        title: "BUILT TO BE USED",
-        text: "Every system is designed for production — real data, real users, real constraints. Demos don't count.",
-      },
-      {
-        title: "ITERATE IN THE OPEN",
-        text: "Ship early, test against reality, improve. Working software beats perfect plans.",
-      },
-    ],
-  },
-
   beliefs: {
     title: "OPERATING BELIEFS",
     items: [
