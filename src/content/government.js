@@ -72,10 +72,7 @@ export const government = {
   // evidence of transferable technical capability only.
   relevantWork: [
     "openclaw-autonomous-agent-operations",
-    "phase-3-declassified-documents-pipeline",
-    "phase-2b-podcast-transcript-pipeline",
     "tower-of-babel-library-archive",
-    "antarctic-labs-site",
   ],
   applicableWork: {
     heading: "APPLICABLE EXPERIENCE",
