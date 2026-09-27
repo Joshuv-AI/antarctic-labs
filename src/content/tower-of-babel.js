@@ -32,13 +32,6 @@ export const towerOfBabel = {
     "Where redistribution is permitted, the full text of each work can be read and downloaded directly from the archive.",
     "Where it is restricted, the library preserves the complete metadata and points back to the source. Nothing is hidden about what it holds — only the files that can't legally be shared are withheld.",
   ],
-  rebuild: {
-    heading: "REBUILD",
-    body: [
-      "The long-term goal is a reproducible structure: a library that does not depend on one computer, one hard drive, or one website.",
-      "Where the underlying material can legally be shared, the archive should make it possible for others to reconstruct the same collection from its published structure and manifests. Knowledge this important shouldn't have a single point of failure.",
-    ],
-  },
   // Library landing — separate destination at /tower-of-babel/library.
   library: {
     heading: "THE LIBRARY",
