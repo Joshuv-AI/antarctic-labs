@@ -78,6 +78,35 @@ function App() {
     const t = setTimeout(dismissTowerBoot, wait);
     towerBootTimers.current.push(t);
   }, [dismissTowerBoot]);
+  // Antarctic Labs branded loader for dock navigation: the same mark +
+  // hairline ceremony as the homepage entrance ritual, raised on demand
+  // when the dock goes to a non-Tower section. Tower of Babel keeps its
+  // own unique animation.
+  const [brandBoot, setBrandBoot] = useState(false);
+  const [brandBootLeaving, setBrandBootLeaving] = useState(false);
+  const brandBootTimers = useRef([]);
+  const clearBrandBootTimers = () => {
+    brandBootTimers.current.forEach(clearTimeout);
+    brandBootTimers.current = [];
+  };
+  const dismissBrandBoot = useCallback(() => {
+    clearBrandBootTimers();
+    setBrandBootLeaving(true);
+    const t = setTimeout(() => {
+      setBrandBoot(false);
+      setBrandBootLeaving(false);
+    }, 450);
+    brandBootTimers.current.push(t);
+  }, []);
+  const raiseBrandBoot = useCallback(() => {
+    clearBrandBootTimers();
+    setBrandBootLeaving(false);
+    setBrandBoot(true);
+    // Let the mark + hairline animation read, then fade. Hard failsafe
+    // so the overlay can never trap the user.
+    brandBootTimers.current.push(setTimeout(dismissBrandBoot, 1450));
+    brandBootTimers.current.push(setTimeout(dismissBrandBoot, 4000));
+  }, [dismissBrandBoot]);
   useEffect(() => {
     const raw = window.location.pathname;
     const target = legacyRedirect(raw);
@@ -97,13 +126,14 @@ function App() {
       }
       setPath(target);
       dismissTowerBoot();
+      dismissBrandBoot();
       window.scrollTo(0, 0);
     };
     window.addEventListener("popstate", onPop);
     return () => {
       window.removeEventListener("popstate", onPop);
     };
-  }, [dismissTowerBoot]);
+  }, [dismissTowerBoot, dismissBrandBoot]);
   useEffect(() => {
     applyMeta(path);
   }, [path]);
@@ -120,6 +150,7 @@ function App() {
         canonical.startsWith("/tower-of-babel/library/")) &&
       path !== canonical
     ) {
+      dismissBrandBoot();
       clearTowerBootTimers();
       setTowerBootLeaving(false);
       setTowerBoot(true);
@@ -139,6 +170,18 @@ function App() {
         setTransitioning(false);
       }, 80);
     }, 520);
+  };
+  // Dock navigation: every section except Tower of Babel gets the
+  // Antarctic Labs branded loader; Tower keeps its own unique animation.
+  const goDock = (to) => {
+    const canonical = legacyRedirect(to) || to;
+    if (canonical === path || to === path) return;
+    const isTower =
+      canonical === "/tower-of-babel" ||
+      canonical === "/tower-of-babel/library" ||
+      canonical.startsWith("/tower-of-babel/library/");
+    if (!isTower) raiseBrandBoot();
+    go(to);
   };
   const match = matchRoute(path);
   const pageParams =
@@ -170,7 +213,7 @@ function App() {
           heightGrowth={16}
           drop={3.5}
           activeId={dockActiveId(path)}
-          onNavigate={(item) => go(item.path)}
+          onNavigate={(item) => goDock(item.path)}
         />
       </div>
       <PageCurtain
@@ -178,6 +221,7 @@ function App() {
         label={pathLabel(path)}
       />
       {towerBoot && <TowerBoot leaving={towerBootLeaving} />}
+      {brandBoot && <BrandLoader leaving={brandBootLeaving} />}
       {path === "/" && (
         <>
           {/* Background layers are direct children of the App root so they
@@ -613,6 +657,28 @@ function HomeStats() {
 // intercepts pointer input and never touches the scroll-driven arrival
 // choreography underneath. Shown once per tab session; skipped entirely
 // for prefers-reduced-motion.
+// Branded loader visual: the ANTARCTIC LABS mark resolving with a
+// hairline fill — the same ceremony as the homepage first load. Used by
+// the entrance ritual and on demand for dock navigation.
+function BrandLoader({ leaving }) {
+  return (
+    <div
+      className={`entrance-ritual ${
+        leaving ? "is-out" : ""
+      }`}
+      aria-hidden="true"
+    >
+      <div className="ritual-inner">
+        <span className="ritual-brand">
+          ANTARCTIC LABS
+        </span>
+        <span className="ritual-line">
+          <i />
+        </span>
+      </div>
+    </div>
+  );
+}
 function EntranceRitual() {
   const [phase, setPhase] = useState("in");
   useEffect(() => {
@@ -652,23 +718,7 @@ function EntranceRitual() {
     };
   }, []);
   if (phase === "gone") return null;
-  return (
-    <div
-      className={`entrance-ritual ${
-        phase === "out" ? "is-out" : ""
-      }`}
-      aria-hidden="true"
-    >
-      <div className="ritual-inner">
-        <span className="ritual-brand">
-          ANTARCTIC LABS
-        </span>
-        <span className="ritual-line">
-          <i />
-        </span>
-      </div>
-    </div>
-  );
+  return <BrandLoader leaving={phase === "out"} />;
 }
 // ============================================================================
 // HOME
