@@ -60,6 +60,15 @@ const PROJECT_STATUS_TONE = {
 function projectShortDate(date) {
   return (date || "").split("(")[0].trim();
 }
+// Paper-grade fields are written as template literals with blank lines
+// between paragraphs. Split them into clean <p> blocks so they don't
+// collapse into one wall of text. Single-paragraph values pass through.
+function paperParas(text) {
+  return String(text || "")
+    .split(/\n\s*\n/)
+    .map((p) => p.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
 export function Projects({ go }) {
   const [filter, setFilter] = useState("ALL");
   const categories = [];
@@ -193,14 +202,40 @@ export function ProjectDetail({ go, params }) {
       </main>
     );
   }
-  const sections = [
+  const caseFile = [
     { label: "ORIGIN", value: expedition.problem },
     { label: "OBJECTIVE", value: expedition.objective },
     { label: "APPROACH", value: expedition.approach },
     { label: "SYSTEM", value: expedition.system },
     { label: "BUILD", value: expedition.build },
     { label: "RESULT", value: expedition.result },
-  ];
+  ].filter((s) => s.value);
+  const paperSections = [
+    { label: "ABSTRACT", value: expedition.abstract },
+    { label: "INTRODUCTION", value: expedition.introduction },
+    { label: "BACKGROUND & RELATED WORK", value: expedition.backgroundRelatedWork },
+    { label: "METHODS", value: expedition.methods },
+    { label: "SYSTEM ARCHITECTURE", value: expedition.systemArchitecture },
+    { label: "IMPLEMENTATION", value: expedition.implementation },
+    { label: "RESULTS", value: expedition.results },
+    { label: "DISCUSSION", value: expedition.discussion },
+    { label: "LIMITATIONS", value: expedition.limitations },
+    { label: "FUTURE WORK", value: expedition.futureWork },
+  ].filter((s) => s.value);
+  const references = (expedition.references || []).filter(Boolean);
+  const related = (expedition.relatedExpeditions || [])
+    .map((id) => expeditions.find((e) => e.id === id))
+    .filter(Boolean);
+  const links = (expedition.links || []).filter((l) => l && l.href);
+  const hasPaper = paperSections.length > 0 || references.length > 0;
+  const hasRecord =
+    caseFile.length > 0 ||
+    hasPaper ||
+    (expedition.process && expedition.process.length > 0) ||
+    (expedition.technologies && expedition.technologies.length > 0) ||
+    (expedition.evidence && expedition.evidence.length > 0) ||
+    related.length > 0 ||
+    links.length > 0;
   const recordIndex = expeditions.findIndex((e) => e.id === expedition.id);
   const prevRecord = expeditions[(recordIndex - 1 + expeditions.length) % expeditions.length];
   const nextRecord = expeditions[(recordIndex + 1) % expeditions.length];
@@ -239,97 +274,97 @@ export function ProjectDetail({ go, params }) {
           </div>
         )}
       </section>
-      {sections.filter((s) => s.value).map((s) => (
-        <section className="copy-block section" key={s.label}>
-          <span className="section-index">{s.label}</span>
-          <p className="body-copy">{s.value}</p>
-        </section>
-      ))}
-      {(expedition.abstract || expedition.introduction || expedition.backgroundRelatedWork || expedition.methods || expedition.systemArchitecture || expedition.implementation || expedition.results || expedition.discussion || expedition.limitations || expedition.futureWork || (expedition.references && expedition.references.length > 0)) && (
-        <section className="copy-block section paper-divider" key="paper">
-          <span className="section-index">PAPER-GRADE DETAIL</span>
-          <p className="body-copy paper-lead">
-            The sections below present a scientific-paper-style expansion of this
-            project. Each section is drawn directly from the operator's working
-            notes, the project artifacts on disk, and the verified file inventory.
-          </p>
-        </section>
-      )}
-      {expedition.abstract && (
-        <section className="copy-block section" key="abstract">
-          <span className="section-index">ABSTRACT</span>
-          <p className="body-copy paper-prose">{expedition.abstract}</p>
-        </section>
-      )}
-      {expedition.introduction && (
-        <section className="copy-block section" key="introduction">
-          <span className="section-index">INTRODUCTION</span>
-          <p className="body-copy paper-prose">{expedition.introduction}</p>
-        </section>
-      )}
-      {expedition.backgroundRelatedWork && (
-        <section className="copy-block section" key="background">
-          <span className="section-index">BACKGROUND & RELATED WORK</span>
-          <p className="body-copy paper-prose">{expedition.backgroundRelatedWork}</p>
-        </section>
-      )}
-      {expedition.methods && (
-        <section className="copy-block section" key="methods">
-          <span className="section-index">METHODS</span>
-          <p className="body-copy paper-prose">{expedition.methods}</p>
-        </section>
-      )}
-      {expedition.systemArchitecture && (
-        <section className="copy-block section" key="systemArchitecture">
-          <span className="section-index">SYSTEM ARCHITECTURE</span>
-          <p className="body-copy paper-prose">{expedition.systemArchitecture}</p>
-        </section>
-      )}
-      {expedition.implementation && (
-        <section className="copy-block section" key="implementation">
-          <span className="section-index">IMPLEMENTATION</span>
-          <p className="body-copy paper-prose">{expedition.implementation}</p>
-        </section>
-      )}
-      {expedition.results && (
-        <section className="copy-block section" key="results">
-          <span className="section-index">RESULTS</span>
-          <p className="body-copy paper-prose">{expedition.results}</p>
-        </section>
-      )}
-      {expedition.discussion && (
-        <section className="copy-block section" key="discussion">
-          <span className="section-index">DISCUSSION</span>
-          <p className="body-copy paper-prose">{expedition.discussion}</p>
-        </section>
-      )}
-      {expedition.process && expedition.process.length > 0 && (
-        <section className="copy-block section">
-          <span className="section-index">HOW IT WORKS</span>
-          <ol className="process-strip">
-            {expedition.process.map((step, i) => (
-              <li key={step}>
-                <span className="process-step-index">{String(i + 1).padStart(2, "0")}</span>
-                <span className="process-step-label">{step}</span>
-              </li>
-            ))}
-          </ol>
-        </section>
-      )}
-      {expedition.technologies && expedition.technologies.length > 0 && (
-        <section className="copy-block section">
-          <span className="section-index">TECHNOLOGIES</span>
-          <p className="body-copy">{expedition.technologies.join(" · ")}</p>
-        </section>
-      )}
-      {expedition.evidence && expedition.evidence.length > 0 && (
-        <section className="copy-block section">
-          <span className="section-index">EVIDENCE</span>
-          <ul className="body-copy evidence-list">
-            {expedition.evidence.map((item, i) => (
-              <li key={i}>{item}</li>
-            ))}
-          </ul>
+      {hasRecord && (
+        <section className="section paper-record">
+          {caseFile.map((s) => (
+            <div className="paper-section" key={s.label}>
+              <span className="section-index">{s.label}</span>
+              {paperParas(s.value).map((p, i) => (
+                <p className="body-copy" key={i}>{p}</p>
+              ))}
+            </div>
+          ))}
+          {hasPaper && (
+            <div className="paper-section paper-divider" key="paper-head">
+              <span className="section-index">PAPER-GRADE DETAIL</span>
+              <p className="body-copy paper-lead">
+                The sections below present a scientific-paper-style expansion of
+                this project, drawn directly from the operator&apos;s working
+                notes and the verified file inventory.
+              </p>
+            </div>
+          )}
+          {paperSections.map((s) => (
+            <div className="paper-section" key={s.label}>
+              <span className="section-index">{s.label}</span>
+              {paperParas(s.value).map((p, i) => (
+                <p className="body-copy paper-prose" key={i}>{p}</p>
+              ))}
+            </div>
+          ))}
+          {expedition.process && expedition.process.length > 0 && (
+            <div className="paper-section" key="process">
+              <span className="section-index">HOW IT WORKS</span>
+              <ol className="process-strip">
+                {expedition.process.map((step, i) => (
+                  <li key={step}>
+                    <span className="process-step-index">{String(i + 1).padStart(2, "0")}</span>
+                    <span className="process-step-label">{step}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+          {expedition.technologies && expedition.technologies.length > 0 && (
+            <div className="paper-section" key="technologies">
+              <span className="section-index">TECHNOLOGIES</span>
+              <p className="body-copy">{expedition.technologies.join(" \u00b7 ")}</p>
+            </div>
+          )}
+          {expedition.evidence && expedition.evidence.length > 0 && (
+            <div className="paper-section" key="evidence">
+              <span className="section-index">EVIDENCE</span>
+              <ul className="body-copy evidence-list">
+                {expedition.evidence.map((item, i) => (
+                  <li key={i}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {references.length > 0 && (
+            <div className="paper-section" key="references">
+              <span className="section-index">REFERENCES</span>
+              <ol className="references-list">
+                {references.map((r, i) => (
+                  <li key={i}>{r}</li>
+                ))}
+              </ol>
+            </div>
+          )}
+          {related.length > 0 && (
+            <div className="paper-section" key="related">
+              <span className="section-index">RELATED PROJECTS</span>
+              <div className="related-links">
+                {related.map((r) => (
+                  <button key={r.id} type="button" className="text-link" onClick={() => go(`/projects/${r.id}`)}>
+                    {r.title} <span aria-hidden="true">↗</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {links.length > 0 && (
+            <div className="paper-section" key="links">
+              <span className="section-index">LINKS</span>
+              <div className="related-links">
+                {links.map((l) => (
+                  <a key={l.href} className="text-link" href={l.href} target="_blank" rel="noreferrer">
+                    {l.label || l.href} <span aria-hidden="true">↗</span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
       )}
       <nav className="record-nav" aria-label="Project records">
