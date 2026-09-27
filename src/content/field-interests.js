@@ -57,7 +57,7 @@ export const fieldInterests = {
       title: "FINANCE",
       summary:
         "Strategy, signals, paper trading, and backtest harnesses. Exploring markets as a study in systems, decisions, and asymmetric information.",
-      relatedExpeditions: ["autonomous-trading-system", "automated-trading-bot"],
+      relatedExpeditions: ["autonomous-trading-system"],
     },
     {
       id: "data-and-research",
