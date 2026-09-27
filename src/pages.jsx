@@ -222,9 +222,6 @@ export function ProjectDetail({ go, params }) {
     { label: "LIMITATIONS", value: expedition.limitations },
     { label: "FUTURE WORK", value: expedition.futureWork },
   ].filter((s) => s.value);
-  const related = (expedition.relatedExpeditions || [])
-    .map((id) => expeditions.find((e) => e.id === id))
-    .filter(Boolean);
   const links = (expedition.links || []).filter((l) => l && l.href);
   const hasPaper = paperSections.length > 0;
   const hasRecord =
@@ -232,7 +229,6 @@ export function ProjectDetail({ go, params }) {
     hasPaper ||
     (expedition.process && expedition.process.length > 0) ||
     (expedition.technologies && expedition.technologies.length > 0) ||
-    related.length > 0 ||
     links.length > 0;
   const recordIndex = expeditions.findIndex((e) => e.id === expedition.id);
   const prevRecord = expeditions[(recordIndex - 1 + expeditions.length) % expeditions.length];
@@ -317,18 +313,6 @@ export function ProjectDetail({ go, params }) {
             <div className="paper-section" key="technologies">
               <span className="section-index">TECHNOLOGIES</span>
               <p className="body-copy">{expedition.technologies.join(" \u00b7 ")}</p>
-            </div>
-          )}
-          {related.length > 0 && (
-            <div className="paper-section" key="related">
-              <span className="section-index">RELATED PROJECTS</span>
-              <div className="related-links">
-                {related.map((r) => (
-                  <button key={r.id} type="button" className="text-link" onClick={() => go(`/projects/${r.id}`)}>
-                    {r.title} <span aria-hidden="true">↗</span>
-                  </button>
-                ))}
-              </div>
             </div>
           )}
           {links.length > 0 && (
