@@ -222,18 +222,16 @@ export function ProjectDetail({ go, params }) {
     { label: "LIMITATIONS", value: expedition.limitations },
     { label: "FUTURE WORK", value: expedition.futureWork },
   ].filter((s) => s.value);
-  const references = (expedition.references || []).filter(Boolean);
   const related = (expedition.relatedExpeditions || [])
     .map((id) => expeditions.find((e) => e.id === id))
     .filter(Boolean);
   const links = (expedition.links || []).filter((l) => l && l.href);
-  const hasPaper = paperSections.length > 0 || references.length > 0;
+  const hasPaper = paperSections.length > 0;
   const hasRecord =
     caseFile.length > 0 ||
     hasPaper ||
     (expedition.process && expedition.process.length > 0) ||
     (expedition.technologies && expedition.technologies.length > 0) ||
-    (expedition.evidence && expedition.evidence.length > 0) ||
     related.length > 0 ||
     links.length > 0;
   const recordIndex = expeditions.findIndex((e) => e.id === expedition.id);
@@ -321,26 +319,6 @@ export function ProjectDetail({ go, params }) {
               <p className="body-copy">{expedition.technologies.join(" \u00b7 ")}</p>
             </div>
           )}
-          {expedition.evidence && expedition.evidence.length > 0 && (
-            <div className="paper-section" key="evidence">
-              <span className="section-index">EVIDENCE</span>
-              <ul className="body-copy evidence-list">
-                {expedition.evidence.map((item, i) => (
-                  <li key={i}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {references.length > 0 && (
-            <div className="paper-section" key="references">
-              <span className="section-index">REFERENCES</span>
-              <ol className="references-list">
-                {references.map((r, i) => (
-                  <li key={i}>{r}</li>
-                ))}
-              </ol>
-            </div>
-          )}
           {related.length > 0 && (
             <div className="paper-section" key="related">
               <span className="section-index">RELATED PROJECTS</span>
@@ -368,12 +346,16 @@ export function ProjectDetail({ go, params }) {
         </section>
       )}
       <nav className="record-nav" aria-label="Project records">
-        <button className="text-link" onClick={() => go(`/projects/${prevRecord.id}`)}>
-          <span aria-hidden="true">←</span> PREV&nbsp;&nbsp;{prevRecord.title}
+        <button type="button" className="record-nav-card" onClick={() => go(`/projects/${prevRecord.id}`)}>
+          <span className="record-nav-eyebrow"><span aria-hidden="true">←</span> PREVIOUS PROJECT</span>
+          <span className="record-nav-title">{prevRecord.title}</span>
         </button>
-        <button className="text-link" onClick={() => go("/projects")}>ALL PROJECTS</button>
-        <button className="text-link" onClick={() => go(`/projects/${nextRecord.id}`)}>
-          NEXT&nbsp;&nbsp;{nextRecord.title} <span aria-hidden="true">→</span>
+        <button type="button" className="record-nav-all" onClick={() => go("/projects")}>
+          ALL PROJECTS
+        </button>
+        <button type="button" className="record-nav-card record-nav-next" onClick={() => go(`/projects/${nextRecord.id}`)}>
+          <span className="record-nav-eyebrow">NEXT PROJECT <span aria-hidden="true">→</span></span>
+          <span className="record-nav-title">{nextRecord.title}</span>
         </button>
       </nav>
     </main>
