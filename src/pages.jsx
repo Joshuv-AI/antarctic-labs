@@ -794,9 +794,27 @@ function DeepMentions({ deep, go }) {
     </div>
   );
 }
-export function LibraryArtifact({ go, params }) {
+export function LibraryArtifact({ go, params, onReady }) {
   const index = artifacts.findIndex((a) => a.artifact_id === params.id);
   const artifact = artifacts[index];
+  // Tell the app shell the entry has painted so it can dismiss the
+  // Tower boot loader shown during in-app navigation here. Keyed on the
+  // entry id so entry-to-entry (prev/next) navigation re-fires it even
+  // though the component itself does not remount.
+  useEffect(() => {
+    if (!onReady) return;
+    let raf1 = 0;
+    let raf2 = 0;
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        onReady();
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [onReady, params.id]);
   if (!artifact) {
     return (
       <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
@@ -904,25 +922,23 @@ export function LibraryArtifact({ go, params }) {
         )}
       </section>
       {artifacts.length > 1 ? (
-        <nav className="record-nav" aria-label="Browse entries">
+        <nav className="tower-entry-nav" aria-label="Browse entries">
           <button
             type="button"
-            className="record-nav-card"
+            className="tower-entry-nav-btn"
             onClick={() => go(`/tower-of-babel/library/${prev.artifact_id}`)}
           >
-            <span className="record-nav-eyebrow"><span aria-hidden="true">←</span> PREVIOUS ENTRY</span>
-            <span className="record-nav-title">{prev.title}</span>
+            <span aria-hidden="true">←</span> Previous
           </button>
-          <button type="button" className="record-nav-all" onClick={() => go("/tower-of-babel/library")}>
-            ALL ENTRIES
+          <button type="button" className="tower-entry-nav-btn" onClick={() => go("/tower-of-babel/library")}>
+            All Entries
           </button>
           <button
             type="button"
-            className="record-nav-card record-nav-next"
+            className="tower-entry-nav-btn"
             onClick={() => go(`/tower-of-babel/library/${next.artifact_id}`)}
           >
-            <span className="record-nav-eyebrow">NEXT ENTRY <span aria-hidden="true">→</span></span>
-            <span className="record-nav-title">{next.title}</span>
+            Next <span aria-hidden="true">→</span>
           </button>
         </nav>
       ) : (
