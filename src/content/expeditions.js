@@ -379,26 +379,28 @@ The long-term target is a personal library system that is auditable, searchable,
     title: "Autonomous Trading System",
     category: "FINANCE",
     status: "EXPERIMENTAL",
-    date: "2026-03 to 2026-04",
-    role: "Architecture, scripting, backtest analysis",
-    shortDescription: "An autonomous trader with a documented strategy, agent tools, and backtest output.",
-    problem: "Test a documented strategy through agent tooling and a backtest harness against historical market data.",
-    objective: "Build a separable data + library structure that supports an agent, a backtester, and a strategy update log.",
-    approach: "Split into autonomous-trader-data/ (cache, backtest outputs, trade logs, state, strategy updates) and autonomous-trader-lib/ (agent_tools.py, backtest.py, config.py).",
-    system: "Signal files, trade logs, backtest_detail.json + backtest_summary.json, strategy.md, strategy_updates_v6.json, config.json, state.json.",
-    build: "Harness and tooling present. Strategy, signals, trade logs, and backtest output captured as snapshots.",
+    date: "2026-03 to 2026-08",
+    role: "Architecture, scripting, backtest analysis, deployment scaffold",
+    shortDescription: "An autonomous trading system pairing a documented, backtested strategy harness with a containerized bot scaffold for APIs, data, and deployment.",
+    problem: "Validate a documented trading strategy against historical market data — and scaffold the containerized platform that would one day execute it.",
+    objective: "Build a validation harness (separable data + library, agent tooling, versioned strategy log) alongside a containerized execution scaffold (APIs, data layer, config-as-code, Docker orchestration).",
+    approach: "Two tracks: (1) autonomous-trader-data/ (cache, backtest outputs, trade logs, state, strategy updates) + autonomous-trader-lib/ (agent_tools.py, backtest.py, config.py) for strategy validation; (2) a bot/ codebase (apis/, data/, bot.config.mjs, docker-compose.yml) as the containerized execution scaffold.",
+    system: "Signal files, trade logs, backtest_detail.json + backtest_summary.json, strategy.md, strategy_updates_v6.json, config.json, state.json — plus a containerized bot with API + data + config + orchestration layers.",
+    build: "Harness and tooling present; strategy, signals, trade logs, and backtest output captured as snapshots. Containerized bot scaffold present (29 entries).",
     technologies: [
       "Python",
+      "JavaScript/Node",
+      "Docker",
       "Backtest harness",
       "Agent tools"
     ],
-    result: "Backtest harness validated against historical data; strategy snapshots v1 through v6 captured.",
+    result: "Backtest harness validated against historical data; strategy snapshots v1 through v6 captured. Containerized scaffold in place; deployment procedure documented but not exercised.",
     process: [
       "SIGNAL",
       "BACKTEST",
-      "EXECUTE",
       "LOG",
-      "REFINE"
+      "REFINE",
+      "CONTAINERIZE"
     ],
     evidence: [
       "projects/trading/autonomous-trader-data/backtest_detail.json",
@@ -408,24 +410,30 @@ The long-term target is a personal library system that is auditable, searchable,
       "projects/trading/autonomous-trader-data/signals_2026-03-20.md",
       "projects/trading/autonomous-trader-data/signals_2026-03-26.md",
       "projects/trading/strategy.md",
-      "projects/trading/config.json"
+      "projects/trading/config.json",
+      "projects/automated-trading-bot/bot/bot.config.mjs",
+      "projects/automated-trading-bot/bot/docker-compose.yml",
+      "projects/automated-trading-bot/bot/CONTRIBUTING.md",
+      "projects/automated-trading-bot/bot/apis/",
+      "projects/automated-trading-bot/bot/data/"
     ],
     relatedExpeditions: [
-      "pdai-arbitrage-system",
-      "automated-trading-bot"
+      "pdai-arbitrage-system"
     ],
-    abstract: `The Autonomous Trading System is an experimental harness for testing a documented trading strategy against historical market data using agent tooling. The system is split into two halves: a data/ directory holding cache, backtest outputs, trade logs, state, and strategy updates; and a lib/ directory holding the agent tools, backtester, and configuration. The harness validates the strategy across historical data and records the results in JSON. As deployed, six versions of the strategy have been recorded (strategy_updates_v6.json), two signal files have been paired with corresponding trade logs (2026-03-20 and 2026-03-26), and the backtest output is captured in backtest_summary.json and backtest_detail.json. The system is experimental: it is designed to validate the strategy in isolation, not to execute trades in production.`,
+    abstract: `The Autonomous Trading System is an experimental trading system built on two tracks: a Python validation harness that tests a documented strategy against historical market data using agent tooling, and a containerized execution scaffold (JavaScript/Node, Docker) with separated APIs, data, configuration, and orchestration. The harness splits into a data/ directory (cache, backtest outputs, trade logs, state, strategy updates) and a lib/ directory (agent tools, backtester, configuration); six strategy versions are recorded (strategy_updates_v6.json), two signal files are paired with trade logs (2026-03-20 and 2026-03-26), and backtest output is captured in backtest_summary.json and backtest_detail.json. The scaffold organizes 29 entries under bot/ — apis/ for broker and market-data integrations, data/ for market data and trade history, bot.config.mjs for runtime configuration, and docker-compose.yml for orchestration. The system is experimental: the strategy is validated in isolation and the scaffold is in place, but neither has executed production trades.`,
     introduction: `Trading systems that combine a documented strategy with agent tooling face a specific challenge: the strategy must be testable in isolation, but the test harness must produce results that are comparable across strategy versions. The strategy is a set of rules (when to enter, when to exit, what to size, what to risk). The agent tooling provides the means to apply the strategy (data access, order placement, position tracking). The test harness validates the strategy against historical data without risking real capital.
 
 The Autonomous Trading System is built around this discipline. The strategy is recorded in strategy.md and versioned in strategy_updates_v6.json. The signals are recorded as Markdown files (one per trading day) with paired trade logs in JSON Lines format. The backtest harness reads the historical data, applies the strategy, and produces a summary (P&L, win rate, drawdown) plus a detailed per-trade log. The agent tools provide a programmatic interface to the same operations.
 
-This paper describes the architecture of the system, the strategy versioning scheme, the signal-and-trade-log pairing, and the backtest harness. We report the results of the 2026-03-20 and 2026-03-26 windows as illustrative examples.`,
+A validated strategy still needs somewhere to run. The second track of the system is a containerized execution scaffold: a JavaScript/Node codebase organized around API separation (all broker and market-data integrations live in apis/), data separation (market data and trade history live in data/), configuration as code (runtime parameters in bot.config.mjs), and containerized deployment (Docker, orchestrated by docker-compose.yml). The scaffold is intentionally strategy-agnostic — a hedge: when a strategy is ready for production, the platform is ready to receive it.
+
+This paper describes the architecture of the system, the strategy versioning scheme, the signal-and-trade-log pairing, the backtest harness, and the execution scaffold. We report the results of the 2026-03-20 and 2026-03-26 windows as illustrative examples.`,
     backgroundRelatedWork: `Prior work in autonomous trading systems includes the open-source Zipline and Backtrader frameworks, the QuantConnect platform, and various broker-provided APIs (Interactive Brokers, Alpaca, TD Ameritrade). These systems share the trait of being designed for production trading: they connect to live brokers, manage real positions, and risk real capital.
 
 The Autonomous Trading System is different. It is designed for strategy validation, not production trading. The system has no broker connection, no live order placement, and no real-money position management. Its purpose is to validate strategies against historical data so that the operator can iterate on the strategy before committing capital.
 
 This validation-first approach is well-established in professional quantitative trading. The difference between a quant shop and a hobbyist is often the rigor of the backtest harness, not the sophistication of the strategy. The Autonomous Trading System aims for the quant-shop rigor in a personal-scale package.`,
-    methods: `The Autonomous Trading System has the following components:
+    methods: `The validation harness has the following components:
 
 (1) Strategy: strategy.md documents the strategy in human-readable form. strategy_updates_v6.json records the versioned history of the strategy, with each version specifying the entry rules, exit rules, sizing rules, and risk rules.
 
@@ -439,17 +447,21 @@ This validation-first approach is well-established in professional quantitative 
 
 (6) Configuration: config.json holds the strategy parameters (capital, position sizing, risk limits). state.json holds the live state (current positions, pending orders).
 
-The harness is designed to be reproducible: given the same historical data and the same strategy version, the harness produces the same signals and the same trade log. There is no randomness in the signal generation.`,
-    systemArchitecture: `The Autonomous Trading System has a clean separation between data and library:
+The harness is designed to be reproducible: given the same historical data and the same strategy version, the harness produces the same signals and the same trade log. There is no randomness in the signal generation.
 
-(1) Data layer (autonomous-trader-data/): cache/, backtest_detail.json, backtest_summary.json, trade_log.jsonl, signals/, state.json, strategy_updates_v6.json. The data layer is durable and reproducible.
+The execution scaffold follows four principles: (1) API separation, all broker and market-data integrations live in apis/; (2) data separation, all market data and trade history live in data/; (3) configuration as code, all runtime parameters live in bot.config.mjs; (4) containerized deployment, the scaffold runs in Docker, orchestrated by docker-compose.yml. These principles produce a codebase that is forkable, customizable, and deployable.`,
+    systemArchitecture: `The Autonomous Trading System has a clean separation between validation and execution:
 
-(2) Library layer (autonomous-trader-lib/): agent_tools.py, backtest.py, config.py. The library layer is versioned and re-entrant.
+(1) Validation — data layer (autonomous-trader-data/): cache/, backtest_detail.json, backtest_summary.json, trade_log.jsonl, signals/, state.json, strategy_updates_v6.json. Durable and reproducible.
 
-(3) Top level: strategy.md (human-readable strategy), config.json (configuration), state.json (live state).
+(2) Validation — library layer (autonomous-trader-lib/): agent_tools.py, backtest.py, config.py. Versioned and re-entrant.
 
-The separation between data and library is what allows the system to be validated in isolation. The library can be replaced (e.g., a new backtester, a different signal generator) without invalidating the data, and vice versa.`,
-    implementation: `The system is implemented in Python 3 with the following components:
+(3) Execution scaffold (bot/): APIs (apis/), Data (data/), Configuration (bot.config.mjs), Orchestration (docker-compose.yml).
+
+(4) Top level: strategy.md (human-readable strategy), config.json (strategy parameters), state.json (live state).
+
+The separation between data and library is what allows the strategy to be validated in isolation, and the scaffold's separation of APIs, data, configuration, and orchestration is what will allow a validated strategy to be deployed without rework.`,
+    implementation: `The validation harness is implemented in Python 3:
 
 - autonomous-trader-data/backtest_detail.json: per-trade detail from the most recent backtest run
 - autonomous-trader-data/backtest_summary.json: summary metrics (P&L, win rate, max drawdown, etc.)
@@ -463,42 +475,43 @@ The separation between data and library is what allows the system to be validate
 - config.json: strategy parameters
 - state.json: live state
 
-The signal files are Markdown for human readability. The trade logs are JSON Lines for machine readability. The backtest output is JSON for downstream consumption.
+The execution scaffold is implemented in JavaScript (Node.js) and deployed via Docker: 29 entries under bot/ including the API modules, the data layer, bot.config.mjs (a JavaScript module, not JSON, for flexibility), and supporting infrastructure (CONTRIBUTING.md), orchestrated by docker-compose.yml.
 
 Implementation choices:
-- Plain JSON / Markdown (no proprietary formats)
-- Data and library separation
-- Versioned strategy history
-- Reproducible backtests (no randomness)`,
-    results: `Operational results across the March-April 2026 deployment:
+- Plain JSON / Markdown for the harness (no proprietary formats)
+- Data and library separation; reproducible backtests (no randomness)
+- JavaScript / Node.js for the scaffold (async I/O suits concurrent market-data streams)
+- Docker + docker-compose for reproducible deployment`,
+    results: `Operational results across the March–August 2026 window:
 
 - Six strategy versions recorded (strategy_updates_v6.json)
 - Two signal files paired with trade logs: 2026-03-20 and 2026-03-26
-- Backtest harness executed for both windows
-- Backtest summary and detail captured in JSON
+- Backtest harness executed for both windows; summary and detail captured in JSON
+- Containerized execution scaffold in place (29 entries); deployment procedure documented but not exercised
 
-The system is experimental. It has not been used to execute production trades. The results in the backtest output are illustrative, not predictive.`,
+The system is experimental. It has not been used to execute production trades. The backtest results are illustrative, not predictive.`,
     discussion: `The Autonomous Trading System demonstrates that strategy validation can be separated from execution. By building a backtest harness that operates on historical data with no broker connection, the system provides a safe environment for iterating on the strategy.
 
-A second observation: the data/library separation is what makes the system reproducible. The library can be re-run against the same data to produce the same results. The data can be re-analyzed by a different library to produce different results. Neither side invalidates the other.
+A second observation: the data/library separation is what makes the validation reproducible. The library can be re-run against the same data to produce the same results. The strategy versioning scheme (strategy_updates_v6.json) is the audit trail — each version recorded with its parameters and rationale.
 
-A third observation: the strategy versioning scheme (strategy_updates_v6.json) is the audit trail. Each version of the strategy is recorded with its parameters and its rationale. Future strategy work can reference prior versions.`,
+A third observation: the containerized scaffold is the hedge that completes the system. Validation tells the operator which strategy deserves capital; the scaffold's separation of APIs, data, configuration, and orchestration means a validated strategy can move to paper trading without being rebuilt. The scaffold stays strategy-agnostic on purpose: when a strategy is ready for production, the platform is ready to receive it.`,
     limitations: `The system is single-strategy. Multi-strategy support (running multiple strategies in parallel) is not implemented.
 
 The historical data source is not documented in the evidence files. The system assumes the data is available in a known format.
 
 The backtest harness does not model slippage or market impact. The reported P&L is the gross P&L before transaction costs.
 
-The system has no broker connection. It cannot execute production trades.`,
-    futureWork: `Planned extensions to the Autonomous Trading System:
+The system has no broker connection and the scaffold has not been deployed. It cannot execute production trades. There is no live risk management yet.`,
+    futureWork: `Planned extensions:
 
 1. Multi-strategy support with separate backtest instances
 2. Slippage and market-impact modeling
-3. Broker integration (Alpaca, Interactive Brokers) for paper trading
-4. Live execution under supervisor watchdog
-5. Portfolio-level metrics (correlation with other strategies, capital allocation)
+3. Broker integration (Alpaca, Interactive Brokers) for paper trading through the containerized scaffold
+4. Live monitoring and alerting
+5. Live execution under supervisor watchdog
+6. Portfolio-level metrics (correlation with other strategies, capital allocation)
 
-The long-term target is a strategy validation harness that can be used to iterate on a strategy until it is production-ready, then transitioned to a live execution environment with the same code.`,
+The long-term target is a validated strategy running on the scaffold: iterate in the harness until a strategy is production-ready, then promote it to the containerized execution environment with the same code.`,
     references: [
       "projects/trading/autonomous-trader-data/backtest_detail.json, accessed 2026-09-26.",
       "projects/trading/autonomous-trader-data/backtest_summary.json, accessed 2026-09-26.",
@@ -508,9 +521,16 @@ The long-term target is a strategy validation harness that can be used to iterat
       "projects/trading/autonomous-trader-data/signals_2026-03-26.md, accessed 2026-09-26.",
       "projects/trading/strategy.md, accessed 2026-09-26.",
       "projects/trading/config.json, accessed 2026-09-26.",
+      "projects/automated-trading-bot/bot/bot.config.mjs",
+      "projects/automated-trading-bot/bot/docker-compose.yml",
+      "projects/automated-trading-bot/bot/CONTRIBUTING.md",
+      "projects/automated-trading-bot/bot/apis/",
+      "projects/automated-trading-bot/bot/data/",
       "Zipline, https://zipline.ml/, accessed 2026-09-26.",
       "Backtrader, https://www.backtrader.com/, accessed 2026-09-26.",
-      "QuantConnect, https://www.quantconnect.com/, accessed 2026-09-26."
+      "QuantConnect, https://www.quantconnect.com/, accessed 2026-09-26.",
+      "Lean, https://github.com/QuantConnect/Lean",
+      "Freqtrade, https://www.freqtrade.io/"
     ],
   },
 
@@ -681,72 +701,6 @@ A third observation: the MEMORY.md baseline is more important than the individua
       "workspace/MEMORY.md, pDAI/pHEX baseline",
       "PulseChain documentation, https://pulsechain.com/",
       "PHEX, https://pulsehex.com/"
-    ],
-  },
-
-  {
-    id: "automated-trading-bot",
-    title: "Automated Trading Bot",
-    category: "FINANCE",
-    status: "EXPERIMENTAL",
-    date: "2026-03 to 2026-08",
-    role: "Build",
-    shortDescription: "A standalone automated trading bot codebase: API integrations, market-data layer, config-as-code, and Dockerized deployment.",
-    problem: "Stand up a configurable automated trading bot with separable APIs and data layers.",
-    objective: "Provide a structured, containerized trading bot codebase.",
-    approach: "apis/, data/, bot.config.mjs, CONTRIBUTING.md, docker-compose.yml.",
-    system: "Trading bot with API + data + config + container orchestration.",
-    build: "Codebase present, containerized.",
-    technologies: [
-      "JavaScript/Node",
-      "Docker"
-    ],
-    result: "Containerized bot with 29 entries in bot/. Config via bot.config.mjs; docker-compose for orchestration.",
-    process: [
-      "CONFIGURE",
-      "CONNECT",
-      "TRADE",
-      "MONITOR"
-    ],
-    evidence: [
-      "projects/automated-trading-bot/bot/bot.config.mjs",
-      "projects/automated-trading-bot/bot/docker-compose.yml",
-      "projects/automated-trading-bot/bot/CONTRIBUTING.md",
-      "projects/automated-trading-bot/bot/apis/",
-      "projects/automated-trading-bot/bot/data/"
-    ],
-    relatedExpeditions: [
-      "autonomous-trading-system"
-    ],
-    abstract: `The Automated Trading Bot is a containerized trading bot project built around a clean separation between APIs, data, configuration, and orchestration. The codebase is organized under bot/ with apis/ for API integrations, data/ for market data and trade history, bot.config.mjs for runtime configuration, CONTRIBUTING.md for contribution guidelines, and docker-compose.yml for container orchestration. The bot is designed for deployment in a Docker-based environment with reproducible builds. The project is experimental: the codebase is in place but the bot has not been used for production trading.`,
-    introduction: `An automated trading bot requires more than a strategy. It requires APIs (for broker connection and market data), data infrastructure (for storing tick data, trade history, and account state), configuration (for runtime parameters), and orchestration (for deployment and scaling). This project is an attempt to build this scaffolding without committing to a specific strategy or broker.
-
-The bot's design is intentionally minimal. The codebase has 29 entries in bot/ (subdirectories and files), plus the configuration and orchestration files at the root. The project is meant to be forked, customized, and deployed.`,
-    methods: `The bot codebase is organized around four principles: (1) API separation, all broker and market-data integrations live in apis/; (2) data separation, all market data and trade history live in data/; (3) configuration as code, all runtime parameters live in bot.config.mjs; (4) containerized deployment, the bot runs in Docker, orchestrated by docker-compose.yml. These principles produce a codebase that is forkable, customizable, and deployable.`,
-    systemArchitecture: "The bot has four components: APIs (apis/), Data (data/), Configuration (bot.config.mjs), and Orchestration (docker-compose.yml).",
-    implementation: `The bot codebase is implemented in JavaScript (Node.js) and is deployed via Docker. The 29 entries in bot/ include the API modules, the data layer, the configuration, and supporting infrastructure (e.g., CONTRIBUTING.md).
-
-The project is experimental: the codebase is in place but has not been deployed in production. The deployment procedure is documented but not exercised.
-
-Implementation choices: JavaScript / Node.js for the runtime, Docker + docker-compose for orchestration, bot.config.mjs for configuration (JavaScript module, not JSON, for flexibility), storage-agnostic data layer.`,
-    results: "The bot codebase is in place. The deployment procedure is documented but not exercised. The bot has not been used for production trading. The codebase is a scaffold for future development.",
-    discussion: `This project demonstrates that a trading bot can be scaffolded without committing to a specific strategy or broker. The codebase's separation of APIs, data, configuration, and orchestration produces a forkable starting point.
-
-A second observation: JavaScript / Node.js is a reasonable choice for a trading bot. The async I/O model handles concurrent market data streams well, and the npm ecosystem provides extensive tooling.
-
-A third observation: the project's experimental status reflects the operator's preference for strategy validation before bot deployment. The scaffold is a hedge: when a strategy is ready for production, the bot is ready to receive it.`,
-    limitations: "The bot has not been deployed. The bot has no broker connection. The bot has no strategy engine. The bot has no risk management.",
-    futureWork: `Planned extensions: (1) implement broker APIs (Alpaca, Interactive Brokers), (2) implement the strategy engine with risk management, (3) deploy via docker-compose for paper trading, (4) add backtesting infrastructure, (5) add live-monitoring and alerting.`,
-    references: [
-      "projects/automated-trading-bot/bot/bot.config.mjs",
-      "projects/automated-trading-bot/bot/docker-compose.yml",
-      "projects/automated-trading-bot/bot/CONTRIBUTING.md",
-      "projects/automated-trading-bot/bot/apis/",
-      "projects/automated-trading-bot/bot/data/",
-      "Zipline, https://zipline.ml/",
-      "Backtrader, https://www.backtrader.com/",
-      "Lean, https://github.com/QuantConnect/Lean",
-      "Freqtrade, https://www.freqtrade.io/"
     ],
   },
 
