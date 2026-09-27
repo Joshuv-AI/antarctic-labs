@@ -111,12 +111,13 @@ function App() {
     if (to === path || transitioning) return;
     const canonical = legacyRedirect(to) || to;
     if (to === path || canonical === path) return;
-    // Entering the Tower of Babel (landing or library) from inside the app:
-    // raise the Tower loader so the transition gets the same branded beat
-    // as the initial page load and the ENTER THE LIBRARY button.
+    // Entering the Tower of Babel (landing, library, or any entry page) from
+    // inside the app: raise the Tower loader so the transition gets the same
+    // branded beat as the initial page load and the ENTER THE LIBRARY button.
     if (
       (canonical === "/tower-of-babel" ||
-        canonical === "/tower-of-babel/library") &&
+        canonical === "/tower-of-babel/library" ||
+        canonical.startsWith("/tower-of-babel/library/")) &&
       path !== canonical
     ) {
       clearTowerBootTimers();
@@ -250,6 +251,7 @@ function App() {
         <LibraryArtifact
           go={go}
           params={pageParams}
+          onReady={handleTowerReady}
         />
       )}
       {/* Tower of Babel family only: the typography vortex environment.
