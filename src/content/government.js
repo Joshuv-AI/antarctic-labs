@@ -14,8 +14,7 @@
 
 export const government = {
   brand: "ANTARCTIC LABS",
-  index: "GOVERNMENT CONTRACTING",
-  statusPill: "EMERGING CAPABILITY",
+  statusPill: "GOVERNMENT CONTRACTING",
   heading: "SYSTEMS FOR REAL-WORLD OPERATIONS.",
   intro:
     "Antarctic Labs is an independent technology lab building operational systems — AI, automation, software, and data infrastructure — for commercial clients today, while deliberately developing the capability, registrations, and partnerships for public-sector work.",
@@ -64,21 +63,6 @@ export const government = {
         "Emerging technology evaluated honestly — what works, what doesn't, and what it would take to deploy.",
     },
   ],
-
-  // APPLICABLE EXPERIENCE: Expedition ids whose technical capabilities
-  // transfer to public-sector contexts. Source-of-truth is the verified
-  // Expedition records in src/content/expeditions.js. These are NOT
-  // government work — commercial and independent projects shown as
-  // evidence of transferable technical capability only.
-  relevantWork: [
-    "openclaw-autonomous-agent-operations",
-    "tower-of-babel-library-archive",
-  ],
-  applicableWork: {
-    heading: "APPLICABLE EXPERIENCE",
-    intro:
-      "Commercial and independent projects demonstrating technical capabilities that transfer directly to public-sector contexts. None of this work was performed as government contracting — it is shown as evidence of what the lab can build.",
-  },
 
   engagement: {
     heading: "HOW WE'LL WORK TOGETHER",
@@ -130,12 +114,6 @@ export const government = {
           "Subcontractor partnerships and pilot engagements — proving value on real public-sector problems before pursuing direct awards.",
       },
     ],
-  },
-
-  capabilitiesStatement: {
-    heading: "CAPABILITIES STATEMENT",
-    body: "The one-page capabilities statement — the document contracting officers actually read — will be published here once finalized.",
-    note: "No formal capabilities statement exists yet. Partnership inquiries in the meantime are welcome by email.",
   },
 
   footnote:
