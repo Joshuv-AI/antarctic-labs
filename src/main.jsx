@@ -1,4 +1,5 @@
 import React, {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -50,6 +51,33 @@ function dockActiveId(path) {
 function App() {
   const [path, setPath] = useState(window.location.pathname);
   const [transitioning, setTransitioning] = useState(false);
+  // Tower of Babel in-app boot loader: shown when the library is entered
+  // via client-side navigation (the index.html overlay only covers the
+  // initial page load). Dismissed when the library reports it has painted.
+  const [towerBoot, setTowerBoot] = useState(false);
+  const [towerBootLeaving, setTowerBootLeaving] = useState(false);
+  const towerBootStarted = useRef(0);
+  const towerBootTimers = useRef([]);
+  const clearTowerBootTimers = () => {
+    towerBootTimers.current.forEach(clearTimeout);
+    towerBootTimers.current = [];
+  };
+  const dismissTowerBoot = useCallback(() => {
+    clearTowerBootTimers();
+    setTowerBootLeaving(true);
+    const t = setTimeout(() => {
+      setTowerBoot(false);
+      setTowerBootLeaving(false);
+    }, 650);
+    towerBootTimers.current.push(t);
+  }, []);
+  const handleLibraryReady = useCallback(() => {
+    // Keep the loader up for at least ~1.1s so the animation reads.
+    const elapsed = Date.now() - towerBootStarted.current;
+    const wait = Math.max(0, 1100 - elapsed);
+    const t = setTimeout(dismissTowerBoot, wait);
+    towerBootTimers.current.push(t);
+  }, [dismissTowerBoot]);
   useEffect(() => {
     const raw = window.location.pathname;
     const target = legacyRedirect(raw);
@@ -68,13 +96,14 @@ function App() {
         window.history.replaceState({}, "", target);
       }
       setPath(target);
+      dismissTowerBoot();
       window.scrollTo(0, 0);
     };
     window.addEventListener("popstate", onPop);
     return () => {
       window.removeEventListener("popstate", onPop);
     };
-  }, []);
+  }, [dismissTowerBoot]);
   useEffect(() => {
     applyMeta(path);
   }, [path]);
@@ -82,6 +111,22 @@ function App() {
     if (to === path || transitioning) return;
     const canonical = legacyRedirect(to) || to;
     if (to === path || canonical === path) return;
+    // Entering the library from inside the app: raise the Tower loader so
+    // the transition gets the same branded beat as the initial page load.
+    if (
+      canonical === "/tower-of-babel/library" &&
+      path !== "/tower-of-babel/library"
+    ) {
+      clearTowerBootTimers();
+      setTowerBootLeaving(false);
+      setTowerBoot(true);
+      towerBootStarted.current = Date.now();
+      // Hard failsafe: the overlay can never trap the user.
+      const t = setTimeout(dismissTowerBoot, 4000);
+      towerBootTimers.current.push(t);
+    } else {
+      dismissTowerBoot();
+    }
     setTransitioning(true);
     window.setTimeout(() => {
       window.history.pushState({}, "", canonical);
@@ -129,6 +174,7 @@ function App() {
         active={transitioning}
         label={pathLabel(path)}
       />
+      {towerBoot && <TowerBoot leaving={towerBootLeaving} />}
       {path === "/" && (
         <>
           {/* Background layers are direct children of the App root so they
@@ -196,7 +242,7 @@ function App() {
         <TowerOfBabel go={go} />
       )}
       {path === "/tower-of-babel/library" && (
-        <TowerLibrary go={go} />
+        <TowerLibrary go={go} onReady={handleLibraryReady} />
       )}
       {matchedPattern === "/tower-of-babel/library/:id" && (
         <LibraryArtifact
@@ -276,6 +322,46 @@ function PageCurtain({ active, label }) {
     >
       <div className="curtain-glow" />
       <span>{label}</span>
+    </div>
+  );
+}
+// Tower of Babel boot loader for in-app navigation into the library.
+// Same visual language as the initial-load overlay in index.html.
+function TowerBoot({ leaving }) {
+  const word = "Tower of Babel";
+  return (
+    <div
+      className={`tower-boot${leaving ? " is-leaving" : ""}`}
+      aria-hidden="true"
+    >
+      <div className="tb-boot-inner">
+        <div className="tb-boot-brand">ANTARCTIC LABS</div>
+        <div className="tb-boot-title">
+          {word.split("").map((ch, i) =>
+            ch === " " ? (
+              <span className="tb-l tb-sp" key={i}>
+                &nbsp;
+              </span>
+            ) : (
+              <span className="tb-l" key={i}>
+                <span
+                  style={{
+                    animationDelay: `${
+                      0.08 + i * 0.045
+                    }s`,
+                  }}
+                >
+                  {ch}
+                </span>
+              </span>
+            )
+          )}
+        </div>
+        <div className="tb-boot-rule" />
+        <div className="tb-boot-sub">
+          ENTERING THE LIBRARY
+        </div>
+      </div>
     </div>
   );
 }
