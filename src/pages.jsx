@@ -245,6 +245,64 @@ export function ProjectDetail({ go, params }) {
           <p className="body-copy">{s.value}</p>
         </section>
       ))}
+      {(expedition.abstract || expedition.introduction || expedition.backgroundRelatedWork || expedition.methods || expedition.systemArchitecture || expedition.implementation || expedition.results || expedition.discussion || expedition.limitations || expedition.futureWork || (expedition.references && expedition.references.length > 0)) && (
+        <section className="copy-block section paper-divider" key="paper">
+          <span className="section-index">PAPER-GRADE DETAIL</span>
+          <p className="body-copy paper-lead">
+            The sections below present a scientific-paper-style expansion of this
+            project. Each section is drawn directly from the operator's working
+            notes, the project artifacts on disk, and the verified file inventory.
+          </p>
+        </section>
+      )}
+      {expedition.abstract && (
+        <section className="copy-block section" key="abstract">
+          <span className="section-index">ABSTRACT</span>
+          <p className="body-copy paper-prose">{expedition.abstract}</p>
+        </section>
+      )}
+      {expedition.introduction && (
+        <section className="copy-block section" key="introduction">
+          <span className="section-index">INTRODUCTION</span>
+          <p className="body-copy paper-prose">{expedition.introduction}</p>
+        </section>
+      )}
+      {expedition.backgroundRelatedWork && (
+        <section className="copy-block section" key="background">
+          <span className="section-index">BACKGROUND & RELATED WORK</span>
+          <p className="body-copy paper-prose">{expedition.backgroundRelatedWork}</p>
+        </section>
+      )}
+      {expedition.methods && (
+        <section className="copy-block section" key="methods">
+          <span className="section-index">METHODS</span>
+          <p className="body-copy paper-prose">{expedition.methods}</p>
+        </section>
+      )}
+      {expedition.systemArchitecture && (
+        <section className="copy-block section" key="systemArchitecture">
+          <span className="section-index">SYSTEM ARCHITECTURE</span>
+          <p className="body-copy paper-prose">{expedition.systemArchitecture}</p>
+        </section>
+      )}
+      {expedition.implementation && (
+        <section className="copy-block section" key="implementation">
+          <span className="section-index">IMPLEMENTATION</span>
+          <p className="body-copy paper-prose">{expedition.implementation}</p>
+        </section>
+      )}
+      {expedition.results && (
+        <section className="copy-block section" key="results">
+          <span className="section-index">RESULTS</span>
+          <p className="body-copy paper-prose">{expedition.results}</p>
+        </section>
+      )}
+      {expedition.discussion && (
+        <section className="copy-block section" key="discussion">
+          <span className="section-index">DISCUSSION</span>
+          <p className="body-copy paper-prose">{expedition.discussion}</p>
+        </section>
+      )}
       {expedition.process && expedition.process.length > 0 && (
         <section className="copy-block section">
           <span className="section-index">HOW IT WORKS</span>
@@ -271,37 +329,6 @@ export function ProjectDetail({ go, params }) {
             {expedition.evidence.map((item, i) => (
               <li key={i}>{item}</li>
             ))}
-          </ul>
-        </section>
-      )}
-      {expedition.links && expedition.links.length > 0 && (
-        <section className="copy-block section">
-          <span className="section-index">LINKS</span>
-          <ul className="body-copy">
-            {expedition.links.map((l, i) => (
-              <li key={i}>
-                <a className="text-link" href={l.href}>
-                  {l.label || l.href} <span>↗</span>
-                </a>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-      {expedition.relatedExpeditions && expedition.relatedExpeditions.length > 0 && (
-        <section className="copy-block section">
-          <span className="section-index">RELATED</span>
-          <ul className="body-copy">
-            {expedition.relatedExpeditions.map((rid) => {
-              const rel = expeditions.find((e) => e.id === rid);
-              return (
-                <li key={rid}>
-                  <button className="text-link" onClick={() => go(`/projects/${rid}`)}>
-                    {rel ? rel.title : rid} <span>↗</span>
-                  </button>
-                </li>
-              );
-            })}
           </ul>
         </section>
       )}
