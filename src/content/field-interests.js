@@ -36,7 +36,7 @@ export const fieldInterests = {
       title: "SOFTWARE",
       summary:
         "Websites, applications, interfaces, internal tools, integrations, and supporting infrastructure. Building things that hold up over time.",
-      relatedExpeditions: ["antarctic-labs-site", "tower-of-babel-library-archive"],
+      relatedExpeditions: ["tower-of-babel-library-archive"],
     },
     {
       id: "automation",
@@ -65,8 +65,7 @@ export const fieldInterests = {
       summary:
         "Scraping, extraction, cleaning, structuring, and turning scattered information into something searchable and reusable.",
       relatedExpeditions: [
-        "phase-2b-podcast-transcript-pipeline",
-        "phase-3-declassified-documents-pipeline",
+        "tower-of-babel-library-archive",
         "moltbook-data-corpus",
       ],
     },
@@ -75,7 +74,7 @@ export const fieldInterests = {
       title: "DIGITAL EXPERIENCES",
       summary:
         "Interactive interfaces, immersive web, prototypes, and unusual ways to put information in front of someone.",
-      relatedExpeditions: ["antarctic-labs-site"],
+      relatedExpeditions: [],
     },
     {
       id: "history-and-archives",
