@@ -346,16 +346,14 @@ export function ProjectDetail({ go, params }) {
         </section>
       )}
       <nav className="record-nav" aria-label="Project records">
-        <button type="button" className="record-nav-card" onClick={() => go(`/projects/${prevRecord.id}`)}>
-          <span className="record-nav-eyebrow"><span aria-hidden="true">←</span> PREVIOUS PROJECT</span>
-          <span className="record-nav-title">{prevRecord.title}</span>
+        <button type="button" className="record-nav-pill" onClick={() => go(`/projects/${prevRecord.id}`)} aria-label="Previous project">
+          <span aria-hidden="true">←</span> Previous
         </button>
-        <button type="button" className="record-nav-all" onClick={() => go("/projects")}>
-          ALL PROJECTS
+        <button type="button" className="record-nav-pill" onClick={() => go("/projects")} aria-label="All projects">
+          All Projects
         </button>
-        <button type="button" className="record-nav-card record-nav-next" onClick={() => go(`/projects/${nextRecord.id}`)}>
-          <span className="record-nav-eyebrow">NEXT PROJECT <span aria-hidden="true">→</span></span>
-          <span className="record-nav-title">{nextRecord.title}</span>
+        <button type="button" className="record-nav-pill" onClick={() => go(`/projects/${nextRecord.id}`)} aria-label="Next project">
+          Next <span aria-hidden="true">→</span>
         </button>
       </nav>
     </main>
