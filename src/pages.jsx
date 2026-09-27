@@ -1051,18 +1051,6 @@ export function About({ go }) {
       </section>
 
       <section className="section reveal">
-        <div className="section-index">{operator.principles.title}</div>
-        <div className="detail-grid">
-          {operator.principles.items.map((item) => (
-            <div key={item.title}>
-              <strong>{item.title}</strong>
-              <p className="about-principle-text">{item.text}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="section reveal">
         <div className="section-index">{operator.beliefs.title}</div>
         <div className="beliefs-list">
           {operator.beliefs.items.map((b) => (
