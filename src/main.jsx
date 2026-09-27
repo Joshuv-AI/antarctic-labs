@@ -71,7 +71,7 @@ function App() {
     }, 650);
     towerBootTimers.current.push(t);
   }, []);
-  const handleLibraryReady = useCallback(() => {
+  const handleTowerReady = useCallback(() => {
     // Keep the loader up for at least ~1.1s so the animation reads.
     const elapsed = Date.now() - towerBootStarted.current;
     const wait = Math.max(0, 1100 - elapsed);
@@ -111,11 +111,13 @@ function App() {
     if (to === path || transitioning) return;
     const canonical = legacyRedirect(to) || to;
     if (to === path || canonical === path) return;
-    // Entering the library from inside the app: raise the Tower loader so
-    // the transition gets the same branded beat as the initial page load.
+    // Entering the Tower of Babel (landing or library) from inside the app:
+    // raise the Tower loader so the transition gets the same branded beat
+    // as the initial page load and the ENTER THE LIBRARY button.
     if (
-      canonical === "/tower-of-babel/library" &&
-      path !== "/tower-of-babel/library"
+      (canonical === "/tower-of-babel" ||
+        canonical === "/tower-of-babel/library") &&
+      path !== canonical
     ) {
       clearTowerBootTimers();
       setTowerBootLeaving(false);
@@ -239,10 +241,10 @@ function App() {
         />
       )}
       {path === "/tower-of-babel" && (
-        <TowerOfBabel go={go} />
+        <TowerOfBabel go={go} onReady={handleTowerReady} />
       )}
       {path === "/tower-of-babel/library" && (
-        <TowerLibrary go={go} onReady={handleLibraryReady} />
+        <TowerLibrary go={go} onReady={handleTowerReady} />
       )}
       {matchedPattern === "/tower-of-babel/library/:id" && (
         <LibraryArtifact
