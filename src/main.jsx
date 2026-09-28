@@ -906,13 +906,6 @@ function Home({ go }) {
           className="hero-orb"
           aria-hidden="true"
         />
-        <div
-          className="hero-arrival-marker"
-          aria-hidden="true"
-        >
-          <span>01</span>
-          <span>THE FIELD</span>
-        </div>
         <div className="hero-copy">
           <h1>
             {content.hero.title.map((line, idx) => (
@@ -938,20 +931,7 @@ function Home({ go }) {
                 ↗
               </span>
             </a>
-            <span className="hero-scroll-cue">
-              SCROLL TO EXPLORE
-              <b aria-hidden="true">
-                ↓
-              </b>
-            </span>
           </div>
-        </div>
-        <div
-          className="hero-arrival-cue"
-          aria-hidden="true"
-        >
-          <span>SCROLL TO ENTER</span>
-          <b>↓</b>
         </div>
       </section>
       <section id="manifesto" className="manifesto section reveal">
@@ -968,22 +948,6 @@ function Home({ go }) {
         </div>
       </section>
       <HomeStats />
-      <section id="capabilities" className="capabilities home-capabilities section reveal">
-        <div className="capability-list">
-          {content.capabilities.map(
-            ([n, title, desc]) => (
-              <div
-                className="cap-row"
-                key={n}
-              >
-                <span>{n}</span>
-                <h3>{title}</h3>
-                <p>{desc}</p>
-              </div>
-            )
-          )}
-        </div>
-      </section>
       <section id="territory" className="territory section reveal">
         <div className="territory-list">
           {content.territory.map(([title, desc]) => (
