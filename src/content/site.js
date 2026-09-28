@@ -24,15 +24,7 @@ export const site = {
     method: "Learn → Experiment → Build → Test → Iterate.",
   },
 
-  // Capabilities (kept for compatibility with the existing render layer).
-  capabilities: [
-    ["01", "AI AUTOMATION",       "AI agents and intelligent workflows that take repetitive work off your plate — from n8n to custom code."],
-    ["02", "WEB DEVELOPMENT",     "Fast, modern websites and web apps — designed, built, and shipped. This site is the demo."],
-    ["03", "DATA SYSTEMS",        "Web scraping, data pipelines, and automated lead generation — clean, structured data on tap."],
-    ["04", "TRADING & BLOCKCHAIN","Backtested trading systems, market automation, and on-chain tooling — built, tested, honestly labeled."],
-  ],
-
-  // Territory list rendered on the homepage below the capabilities —
+  // Territory list rendered on the homepage below the stats —
   // the full map of what the lab can do for clients.
   territory: [
     [
