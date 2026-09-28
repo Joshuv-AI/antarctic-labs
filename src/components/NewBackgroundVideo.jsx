@@ -3,7 +3,7 @@
  *
  * The iceberg environment: the second full-viewport layer of the
  * homepage arrival. It starts parked one viewport below the screen
- * and a single GSAP scroll timeline (built in Home.jsx) drives it up
+ * and a single GSAP scroll timeline (built in src/main.jsx) drives it up
  * to y=0 while the constellation exits upward above it. The two
  * layers are pixel-synced in that timeline so the iceberg's top edge
  * meets the constellation's bottom edge at one meeting line, with a
