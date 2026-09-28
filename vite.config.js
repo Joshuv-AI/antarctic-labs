@@ -13,10 +13,9 @@ import { resolve } from "node:path";
 // ready. See src/main.jsx for the homepage integration site.
 export default defineConfig({
   resolve: {
-    // The exact ThreeUI animated-top-dock source imports its glass particle
-    // field from "three128" (its vendored three alias). Point it at the
+    // The orbital-sphere background imports its three.js scene from
+    // "three128" (its vendored three alias). Point it at the
     // project's three install so the module graph resolves at build time.
-    // Only the modern variant is mounted, so that chunk never loads.
     alias: {
       three128: "three",
     },
