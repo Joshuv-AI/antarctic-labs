@@ -3,19 +3,19 @@
 // iframe's own scripts that reference `gsap` / `ScrollTrigger` don't throw
 // ReferenceError and skip the downstream WebGL init.
 //
-// The PolarScene / Neuform shader iframes ship <script src="...cdnjs...">
+// The Neuform shader iframe ships <script src="...cdnjs...">
 // tags that the production CSP (script-src 'self' 'unsafe-inline') blocks.
 // Before this helper existed, those CDN script tags failed to load and the
 // iframe's first gsap.registerPlugin(...) call threw ReferenceError, which
 // skipped the WebGL init that followed.
 //
-// Per the visual-safety directive: inspection of all three shader sources
-// (defense-lines.html, particle-network.html) confirms
+// Per the visual-safety directive: inspection of the shader source
+// (defense-lines.html) confirms
 // that GSAP is used ONLY by hidden demo/document UI elements (text word
 // reveals, hero badge, scroll indicator) — NOT by the canvas/WebGL init
-// code. The PolarScene wrapper already hides the demo UI via injected CSS
-// (nav, main, header, aside, footer { display: none !important; } in
-// buildCloudSource). Replacing the CDN scripts with a noop stub is the
+// code. The DefenseLines wrapper already hides the demo UI via injected CSS
+// (nav, main, header, aside, footer { display: none !important; }).
+// Replacing the CDN scripts with a noop stub is the
 // minimum-disruption fix: the WebGL canvas still initializes, the demo UI
 // animations become inert no-ops (invisible because the UI is already
 // hidden), and there are no thrown errors to skip the canvas init.
