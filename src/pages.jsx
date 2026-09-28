@@ -935,6 +935,19 @@ export function Government({ go }) {
         <span className="gov-status-pill">{government.statusPill}</span>
         <h1>{government.heading}</h1>
         <p className="display-copy">{government.intro}</p>
+        <div className="gov-hero-actions">
+          <a
+            className="gov-access-btn"
+            href="http://129.80.81.5/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            ENTER THE SYSTEM <span aria-hidden="true">↗</span>
+          </a>
+          <span className="gov-access-note">
+            Live operational intelligence system
+          </span>
+        </div>
       </section>
 
       <section className="copy-block section reveal">
