@@ -8,26 +8,6 @@
 // Missing or unverifiable fields are left empty. No fabricated outcomes,
 // users, clients, revenue, profits, deployment, or production usage.
 
-export const EXPEDITION_CATEGORIES = [
-  "AI",
-  "AUTOMATION",
-  "SOFTWARE",
-  "DATA",
-  "BLOCKCHAIN",
-  "FINANCE",
-  "REAL ESTATE",
-  "EXPERIMENTAL",
-];
-
-export const EXPEDITION_STATUSES = [
-  "ACTIVE",
-  "COMPLETE",
-  "IN DEVELOPMENT",
-  "EXPERIMENTAL",
-  "RESEARCH",
-  "ARCHIVED",
-];
-
 export const expeditionsArchive = {
   heading: "PROJECTS",
   intro: "Everything I’ve built that was worth documenting.",
