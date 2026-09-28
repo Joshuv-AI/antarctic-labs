@@ -968,7 +968,7 @@ function Home({ go }) {
         </div>
       </section>
       <HomeStats />
-      <section id="capabilities" className="capabilities section reveal">
+      <section id="capabilities" className="capabilities home-capabilities section reveal">
         <div className="capability-list">
           {content.capabilities.map(
             ([n, title, desc]) => (
@@ -979,9 +979,6 @@ function Home({ go }) {
                 <span>{n}</span>
                 <h3>{title}</h3>
                 <p>{desc}</p>
-                <i aria-hidden="true">
-                  +
-                </i>
               </div>
             )
           )}
@@ -989,53 +986,13 @@ function Home({ go }) {
       </section>
       <section id="territory" className="territory section reveal">
         <div className="territory-list">
-          {[
-            [
-              "AI / INTELLIGENCE",
-              "Language models, agents, orchestration, machine-assisted operations.",
-            ],
-            [
-              "AUTONOMOUS SYSTEMS",
-              "Long-running software that keeps going without someone pushing every button.",
-            ],
-            [
-              "AUTOMATION",
-              "Browser automation, APIs, webhooks, workflows, data pipelines.",
-            ],
-            [
-              "SOFTWARE",
-              "Web applications, interfaces, internal tools, integrations, infrastructure.",
-            ],
-            [
-              "DATA & RESEARCH",
-              "Scraping, extraction, cleaning, structuring, and turning scattered information into something usable.",
-            ],
-            [
-              "BLOCKCHAIN",
-              "Smart contracts, DeFi systems, on-chain experimentation.",
-            ],
-            [
-              "FINANCE",
-              "Strategy, signals, paper trading, backtest harnesses, markets as a study in systems.",
-            ],
-            [
-              "DIGITAL EXPERIENCES",
-              "Interactive interfaces, immersive web, prototypes, unusual ways to put information in front of someone.",
-            ],
-            [
-              "EXPERIMENTAL TECHNOLOGY",
-              "Emerging tools, unusual interfaces, ideas that don't fit neatly into another category.",
-            ],
-          ].map(([title, desc]) => (
+          {content.territory.map(([title, desc]) => (
             <div
-              className="cap-row"
+              className="cap-row territory-row"
               key={title}
             >
               <h3>{title}</h3>
               <p>{desc}</p>
-              <i aria-hidden="true">
-                +
-              </i>
             </div>
           ))}
         </div>
