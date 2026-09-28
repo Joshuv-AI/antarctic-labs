@@ -5,7 +5,7 @@
 // This file holds only the marketing copy that renders on /tower-of-babel
 // and /tower-of-babel/library.
 
-export { artifacts, TOWER_COLLECTIONS, TOWER_RIGHTS, TOWER_DOWNLOAD_STATUS } from "./library-catalog.js";
+export { artifacts } from "./library-catalog.js";
 
 export const towerOfBabel = {
   heading: "TOWER OF BABEL",
