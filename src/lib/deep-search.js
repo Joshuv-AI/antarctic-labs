@@ -39,10 +39,6 @@ function stemCached(w) {
   return s;
 }
 
-export function parseDeepQuery(raw) {
-  return parseQuery(raw);
-}
-
 export async function getManifest() {
   if (!manifestPromise) {
     manifestPromise = fetch("/search-index/manifest.json")
