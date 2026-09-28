@@ -91,9 +91,4 @@ export const operator = {
       ["CONTACT", "HELLO@ANTARCTICLABS.COM"],
     ],
   },
-
-  cta: {
-    heading: "HAVE SOMETHING WORTH BUILDING?",
-    label: "START A CONVERSATION",
-  },
 };
