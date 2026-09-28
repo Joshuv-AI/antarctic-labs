@@ -3,8 +3,6 @@ import React, {
   useEffect,
   useRef,
   useState,
-  lazy,
-  Suspense,
 } from "react";
 import { createRoot } from "react-dom/client";
 import { gsap } from "gsap";
@@ -18,7 +16,7 @@ import { TypographyVortexCanvas } from "./shaders/typography-vortex/TypographyVo
 import { OrbitalSphereBackground } from "./shaders/orbital-sphere/OrbitalSphereBackground.tsx";
 import { site as content } from "./content/site.js";
 import { expeditions } from "./content/expeditions.js";
-import { routes, matchRoute, legacyRedirect } from "./content/routes.js";
+import { matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
 import {
   TowerOfBabel,
@@ -783,12 +781,7 @@ function Home({ go }) {
       const iceberg =
         document.querySelector(".new-bg-layer");
       if (envArrival && constellation && iceberg) {
-        if (reduce) {
-          // Reduced motion: settle on the end state — iceberg as the
-          // static backdrop, constellation parked out of view.
-          gsap.set(iceberg, { y: "0vh", "--vfade": "0%" });
-          gsap.set(constellation, { y: "-100vh", "--cfade": "0%" });
-        } else {
+        {
           const arrival = gsap.timeline({
             scrollTrigger: {
               trigger: envArrival,
