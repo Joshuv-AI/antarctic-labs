@@ -77,16 +77,6 @@ function scaleCount(base: number, density: number, minimum = 1) {
   return Math.max(minimum, Math.round(base * density));
 }
 
-function resolveWireframeVariant(variant: string) {
-  return variant === "cylinders" || variant === "sphere" ? variant : "cube";
-}
-
-/** WebGL1 GLSL ES requires float literals (10.0), not ints (10). */
-function glslFloat(value: number, digits = 3) {
-  const fixed = Number(value).toFixed(digits);
-  return fixed.includes(".") ? fixed : `${fixed}.0`;
-}
-
 function resolveMode(mode: NeuformMode | number | string | undefined, fallback: NeuformMode = "dark"): NeuformMode {
   if (mode === undefined || mode === null) return fallback;
   if (mode === "light" || mode === 1 || mode === "1") return "light";
@@ -124,39 +114,6 @@ function useAutomaticMode(enabled: boolean) {
 
 function resolveBackground(background: EffectDefinition["background"], mode: NeuformMode) {
   return typeof background === "function" ? background(mode) : background;
-}
-
-const DIAGNOSTICS_PANEL_FOCUS_CSS = `
-[data-threeui-role="ui"].flex-grow {
-  flex: none !important;
-  width: min(calc(100% - 32px), var(--threeui-target-width, 360px)) !important;
-  height: auto !important;
-  min-height: 0 !important;
-  max-height: calc(100% - 32px) !important;
-  aspect-ratio: 1 / 1 !important;
-  margin: 0 !important;
-  overflow: hidden !important;
-}
-[data-threeui-role="ui"] > canvas {
-  position: absolute !important;
-  inset: 0 !important;
-  width: 100% !important;
-  height: 100% !important;
-}
-`;
-
-function patchDiagnosticsPanel(source: string, { mode }: BakeKnobs) {
-  let next = source.replaceAll(
-    "time += 0.015;",
-    "time += 0.015 * ((window.__SF_CONTROLS&&window.__SF_CONTROLS.speed)||1);",
-  );
-  if (mode === "light") {
-    // Match canvas cutouts to light paper; deepen emerald strokes for contrast.
-    next = next
-      .replaceAll("ctx.fillStyle = '#020804';", `ctx.fillStyle = '${LIGHT_PAPER}';`)
-      .replaceAll("rgba(52,211,153,", "rgba(4,120,87,");
-  }
-  return next;
 }
 
 const EFFECTS = {
