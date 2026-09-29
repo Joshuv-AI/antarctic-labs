@@ -235,21 +235,30 @@ export function createTypographyVortexRenderer(
 
   const spawnAmbientDust = (time: number, ambientWidth: number) => {
     const options = getOptions();
-    if (reduced || time < suction.until || time - lastAmbientSpawn < 115) return;
+    // Throttled to ~3x/sec: each call does a getImageData readback, which
+    // stalls the canvas pipeline, so calling it every 115ms on a
+    // full-height strip was a steady source of frame hitches. The dust is
+    // stochastic, so a lower spawn cadence is visually indistinguishable.
+    if (reduced || time < suction.until || time - lastAmbientSpawn < 300) return;
     lastAmbientSpawn = time;
     const sampleWidth = Math.min(width, ambientWidth * 1.12);
     const pixelWidth = Math.max(1, Math.floor(sampleWidth * pixelRatio));
     const pixelHeight = Math.max(1, Math.floor(height * pixelRatio));
-    const pixels = layerContext.getImageData(0, 0, pixelWidth, pixelHeight).data;
+    // Sample a random ~240px band of the strip instead of its full height:
+    // the readback cost scales with pixel count, and random bands keep the
+    // spawn distribution uniform over time.
+    const bandHeight = Math.max(1, Math.min(pixelHeight, Math.floor(240 * pixelRatio)));
+    const bandY = pixelHeight > bandHeight ? Math.floor(Math.random() * (pixelHeight - bandHeight)) : 0;
+    const pixels = layerContext.getImageData(0, bandY, pixelWidth, bandHeight).data;
     const spawnLimit = Math.max(1, Math.round(16 * options.particleAmount));
     let spawned = 0;
     for (let attempt = 0; attempt < 520 && spawned < spawnLimit; attempt += 1) {
       const x = (Math.random() * pixelWidth) | 0;
-      const y = (Math.random() * pixelHeight) | 0;
+      const y = (Math.random() * bandHeight) | 0;
       const pixelIndex = (y * pixelWidth + x) * 4;
       if (pixels[pixelIndex + 3] < 32) continue;
       const particleX = x / pixelRatio;
-      const particleY = y / pixelRatio;
+      const particleY = (bandY + y) / pixelRatio;
       const edge = clamp(particleX / sampleWidth, 0, 1);
       particles.push({
         x: particleX,
