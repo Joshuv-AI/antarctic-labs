@@ -34,28 +34,6 @@ export const operator = {
     ],
   },
 
-  whatWeDo: {
-    title: "WHAT WE DO",
-    items: [
-      {
-        title: "AI AUTOMATION",
-        desc: "Intelligent workflows, agents, and integrations that take repetitive work off your team's plate.",
-      },
-      {
-        title: "WEB SCRAPING & DATA",
-        desc: "Reliable extraction, cleaning, and pipelines that turn scattered web data into structured, usable datasets.",
-      },
-      {
-        title: "LEAD-GENERATION SYSTEMS",
-        desc: "Automated prospecting and list-building systems that keep your pipeline fed around the clock.",
-      },
-      {
-        title: "WEB DEVELOPMENT",
-        desc: "Fast, modern websites and web applications — designed, built, and shipped.",
-      },
-    ],
-  },
-
   beliefs: {
     title: "OPERATING BELIEFS",
     items: [
