@@ -992,26 +992,6 @@ export function Government({ go }) {
         </div>
       </section>
 
-      <section className="copy-block section reveal">
-        <div className="section-index">{government.roadmap.heading}</div>
-        <div>
-          <p className="body-copy gov-section-intro">{government.roadmap.intro}</p>
-          <div className="gov-roadmap">
-          {government.roadmap.phases.map((ph) => (
-            <div className="gov-phase" key={ph.phase}>
-              <div className="gov-phase-head">
-                <span className="gov-phase-index">{ph.phase}</span>
-                <span className="gov-phase-status">{ph.status}</span>
-              </div>
-              <h3>{ph.title}</h3>
-              <p>{ph.description}</p>
-            </div>
-          ))}
-        </div>
-        </div>
-      </section>
-
-      
       <section className="copy-block section">
         <p className="gov-footnote">{government.footnote}</p>
       </section>
@@ -1045,20 +1025,6 @@ export function About({ go }) {
           </p>
           {operator.mission.paragraphs.map((p, i) => (
             <p className="body-copy" key={i}>{p}</p>
-          ))}
-        </div>
-      </section>
-
-      <section className="capabilities section reveal">
-        <div className="section-index">{operator.whatWeDo.title}</div>
-        <div className="capability-list">
-          {operator.whatWeDo.items.map((item, i) => (
-            <div className="cap-row" key={item.title}>
-              <span>{String(i + 1).padStart(2, "0")}</span>
-              <h3>{item.title}</h3>
-              <p>{item.desc}</p>
-              <i aria-hidden="true">↗</i>
-            </div>
           ))}
         </div>
       </section>
