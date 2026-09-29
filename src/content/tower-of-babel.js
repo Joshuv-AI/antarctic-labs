@@ -11,26 +11,21 @@ export const towerOfBabel = {
   heading: "TOWER OF BABEL",
   intro: [
     "Tower of Babel is a library and archival project from Antarctic Labs — thousands of books, documents, transcripts, and texts in one organized, searchable collection.",
-    "It exists because important information disappears: suppressed, dismissed, deleted, quietly rewritten. This is an attempt to stop that — an unchangeable copy of the texts that matter most, preserved independently and open to everyone.",
+    "Important information disappears: suppressed, dismissed, deleted, quietly rewritten. This is an unchangeable copy of the texts that matter most — preserved independently, open to everyone.",
   ],
   origin: [
-    "It began with a reaction: the news that Anthropic was scanning books and destroying them afterward. If the organizations building the future of knowledge are comfortable destroying books, then someone should be preserving them.",
-    "It started with old texts — the important works. Then came the question of what mattered most, and the answer was religion: the sacred texts of every culture and every tradition. No favoritism, no picking sides — a personal, unchangeable copy of the world's most important texts, one nobody could rewrite or take away.",
-    "From there the archive grew toward everything else that gets lost: secret societies, folklore passed down through generations, firsthand accounts of the unexplained, phenomena brushed off and forgotten. Dismissed doesn't mean untrue — and across these fields the same threads keep appearing, pointing toward something bigger. The long conversations joined too: hours-long podcasts with experts and researchers, kept searchable instead of vanishing into a feed.",
-    "What began as one person's preservation effort became something larger: a living archive of everything worth keeping, growing in every direction that matters.",
+    "It began with a reaction: the news that Anthropic was scanning books and destroying them afterward. If the organizations building the future of knowledge are comfortable destroying books, someone should be preserving them. It started with old texts, then the sacred texts of every culture and tradition — no favoritism, no picking sides — an unchangeable copy nobody could rewrite or take away.",
+    "From there it grew toward everything else that gets lost: secret societies, folklore passed down through generations, firsthand accounts of the unexplained, phenomena brushed off and forgotten. Dismissed doesn't mean untrue — and across these fields the same threads keep appearing, pointing toward something bigger. The long conversations joined too: hours-long podcasts with experts and researchers, kept searchable instead of vanishing into a feed. What began as one person's preservation effort became a living archive of everything worth keeping.",
   ],
   collection: [
-    "The library spans sacred and religious texts from every tradition, philosophy, history, science, law, and literature — alongside the harder-to-categorize material: declassified government documents, secret societies, the unexplained, folklore and mythology, and full podcast transcripts.",
-    "Every entry is verified — title, creator, edition, translation, and content checked against the source — and converted to clean, searchable text. Copyright is the only reason a work ever ships without its full text.",
+    "Sacred and religious texts from every tradition, philosophy, history, science, law, and literature — plus the harder-to-categorize material: declassified government documents, secret societies, the unexplained, folklore and mythology, and full podcast transcripts. Every entry is verified against its source and converted to clean, searchable text. Copyright is the only reason a work ever ships without its full text.",
   ],
   name: [
-    "It takes its name from the Tower of Babel — the old story of a place where the works of the world were gathered together, where knowledge was meant to be open and shared.",
-    "That is the idea here: one library collecting the most important texts from every corner — every culture, every tradition, every field — so the information is truly open. No suppression, no hiding.",
-    "The deeper purpose is connection. When thousands of texts sit side by side, patterns emerge: a story in one tradition echoes a declassified document in another; a folktale rhymes with a witness account. Anyone can read, anyone can research — and maybe unravel a greater story than any single book could tell. Something like the Akashic records: the whole of human knowledge, unlocked, open to everyone.",
+    "Named for the old story of a place where the works of the world were gathered together — knowledge meant to be open and shared. One library collecting the most important texts from every culture, tradition, and field. No suppression, no hiding.",
+    "The deeper purpose is connection: with thousands of texts side by side, patterns emerge — a story in one tradition echoes a declassified document in another; a folktale rhymes with a witness account. Anyone can read, anyone can research — and maybe unravel a greater story than any single book could tell. Something like the Akashic records: the whole of human knowledge, unlocked.",
   ],
   access: [
-    "Where redistribution is permitted, the full text of each work can be read and downloaded directly from the archive.",
-    "Where it is restricted, the library preserves the complete metadata and points back to the source. Nothing is hidden about what it holds — only the files that can't legally be shared are withheld.",
+    "Where redistribution is permitted, the full text can be read and downloaded directly. Where it's restricted, the library preserves the complete metadata and points back to the source — nothing about what it holds is hidden; only the files that can't legally be shared are withheld.",
   ],
   // Library landing — separate destination at /tower-of-babel/library.
   library: {
