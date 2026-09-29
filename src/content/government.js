@@ -87,35 +87,6 @@ export const government = {
     ],
   },
 
-  roadmap: {
-    heading: "PATH TO READINESS",
-    intro:
-      "An emerging practice, pursued in order. Each phase funds and informs the next.",
-    phases: [
-      {
-        phase: "PHASE 01",
-        title: "COMMERCIAL DELIVERY",
-        status: "ACTIVE NOW",
-        description:
-          "Building and shipping operational systems for commercial clients — the technical foundation and documented track record that public-sector work will stand on.",
-      },
-      {
-        phase: "PHASE 02",
-        title: "REGISTRATION & COMPLIANCE",
-        status: "NEXT",
-        description:
-          "Business registration, SAM.gov enrollment, NAICS alignment, and a formal capabilities statement — the administrative groundwork for eligibility.",
-      },
-      {
-        phase: "PHASE 03",
-        title: "PARTNERSHIP & PILOTS",
-        status: "WHEN READY",
-        description:
-          "Subcontractor partnerships and pilot engagements — proving value on real public-sector problems before pursuing direct awards.",
-      },
-    ],
-  },
-
   footnote:
     "Status note: Antarctic Labs does not currently hold government contracts, registrations, certifications, security clearances, or past performance as a government vendor. The technical work described on this page is real; the public-sector practice is under active development.",
 };
