@@ -91,6 +91,71 @@ export function createTypographyVortexRenderer(
   let visible = true;
   let renderSignature = "";
 
+  type RingBuildCursor = {
+    options: TypographyVortexOptions;
+    phrase: string;
+    random: () => number;
+    fontFamily: string;
+    ringPixelRatio: number;
+    maximumRadius: number;
+    radius: number;
+    index: number;
+  };
+  let ringCursor: RingBuildCursor | null = null;
+
+  // Rings built per animation frame while (re)building the bitmaps. The
+  // full build is ~2,500 canvas text ops — doing it synchronously blocks
+  // the main thread for hundreds of ms, which froze the Tower boot
+  // animation on the library route. Building a couple of rings per frame
+  // keeps every frame well under budget; draw() renders whatever rings
+  // exist so far, so the vortex blooms in over a few frames instead of
+  // popping in after one long freeze. The seeded random sequence is
+  // untouched, so the finished result is pixel-identical.
+  const RINGS_PER_STEP = 2;
+
+  const buildOneRing = (cursor: RingBuildCursor): boolean => {
+    const { options, phrase, random, fontFamily, ringPixelRatio, maximumRadius } = cursor;
+    const sparse = cursor.index % 3 === 2;
+    const ringBase = {
+      radius: cursor.radius,
+      fontSize: clamp(7 + cursor.radius * 0.015, 7, 17),
+      alpha: clamp(0.34 + cursor.radius / maximumRadius, 0.36, 0.92) * (sparse ? 0.72 : 1) * options.opacity,
+      speed: (0.05 + 40 / (cursor.radius + 60)) * 0.35,
+      offset: random() * Math.PI * 2,
+      spacing: sparse ? 2.4 + random() * 1.2 : 1.02 + random() * 0.14,
+      wobble: random() * Math.PI * 2,
+    };
+    const size = Math.ceil((ringBase.radius + ringBase.fontSize * 2) * 2);
+    const bitmap = document.createElement("canvas");
+    bitmap.width = bitmap.height = Math.ceil(size * ringPixelRatio);
+    const bitmapContext = bitmap.getContext("2d");
+    if (!bitmapContext) return false;
+    bitmapContext.scale(ringPixelRatio, ringPixelRatio);
+    bitmapContext.translate(size / 2, size / 2);
+    bitmapContext.font = `${ringBase.fontSize}px ${fontFamily}`;
+    bitmapContext.textAlign = "center";
+    bitmapContext.textBaseline = "middle";
+    const ink = resolveMode(options.mode) === "light" ? "42,44,52" : "211,211,206";
+    bitmapContext.fillStyle = `rgba(${ink},${ringBase.alpha})`;
+    const step = (ringBase.fontSize * 0.62 * ringBase.spacing) / ringBase.radius;
+    const count = Math.max(4, Math.floor((Math.PI * 2) / step));
+    const actualStep = (Math.PI * 2) / count;
+    for (let characterIndex = 0; characterIndex < count; characterIndex += 1) {
+      const angle = characterIndex * actualStep;
+      const character = phrase[characterIndex % phrase.length];
+      if (character === " ") continue;
+      bitmapContext.save();
+      bitmapContext.translate(Math.cos(angle) * ringBase.radius, Math.sin(angle) * ringBase.radius);
+      bitmapContext.rotate(angle + Math.PI / 2);
+      bitmapContext.fillText(character, 0, 0);
+      bitmapContext.restore();
+    }
+    rings.push({ ...ringBase, bitmap, size });
+    cursor.radius *= Math.max(1.08, options.ringGrowth);
+    cursor.index += 1;
+    return true;
+  };
+
   const buildRings = () => {
     const options = getOptions();
     const phrase = options.phrase || "SABLE / SYSTEMS IN MOTION / ";
@@ -99,59 +164,38 @@ export function createTypographyVortexRenderer(
     const ringPixelRatio = Math.max(pixelRatio, 1.5);
     const maximumRadius = Math.hypot(Math.max(width * 0.55, width * 0.48), Math.max(height * 0.52, height * 0.5)) + 40;
     rings = [];
-    let radius = Math.max(26, width * 0.038);
-    let index = 0;
-    while (radius < maximumRadius) {
-      const sparse = index % 3 === 2;
-      const ringBase = {
-        radius,
-        fontSize: clamp(7 + radius * 0.015, 7, 17),
-        alpha: clamp(0.34 + radius / maximumRadius, 0.36, 0.92) * (sparse ? 0.72 : 1) * options.opacity,
-        speed: (0.05 + 40 / (radius + 60)) * 0.35,
-        offset: random() * Math.PI * 2,
-        spacing: sparse ? 2.4 + random() * 1.2 : 1.02 + random() * 0.14,
-        wobble: random() * Math.PI * 2,
-      };
-      const size = Math.ceil((ringBase.radius + ringBase.fontSize * 2) * 2);
-      const bitmap = document.createElement("canvas");
-      bitmap.width = bitmap.height = Math.ceil(size * ringPixelRatio);
-      const bitmapContext = bitmap.getContext("2d");
-      if (!bitmapContext) break;
-      bitmapContext.scale(ringPixelRatio, ringPixelRatio);
-      bitmapContext.translate(size / 2, size / 2);
-      bitmapContext.font = `${ringBase.fontSize}px ${fontFamily}`;
-      bitmapContext.textAlign = "center";
-      bitmapContext.textBaseline = "middle";
-      const ink = resolveMode(options.mode) === "light" ? "42,44,52" : "211,211,206";
-      bitmapContext.fillStyle = `rgba(${ink},${ringBase.alpha})`;
-      const step = (ringBase.fontSize * 0.62 * ringBase.spacing) / ringBase.radius;
-      const count = Math.max(4, Math.floor((Math.PI * 2) / step));
-      const actualStep = (Math.PI * 2) / count;
-      for (let characterIndex = 0; characterIndex < count; characterIndex += 1) {
-        const angle = characterIndex * actualStep;
-        const character = phrase[characterIndex % phrase.length];
-        if (character === " ") continue;
-        bitmapContext.save();
-        bitmapContext.translate(Math.cos(angle) * ringBase.radius, Math.sin(angle) * ringBase.radius);
-        bitmapContext.rotate(angle + Math.PI / 2);
-        bitmapContext.fillText(character, 0, 0);
-        bitmapContext.restore();
-      }
-      rings.push({ ...ringBase, bitmap, size });
-      radius *= Math.max(1.08, options.ringGrowth);
-      index += 1;
-    }
+    ringCursor = {
+      options,
+      phrase,
+      random,
+      fontFamily,
+      ringPixelRatio,
+      maximumRadius,
+      radius: Math.max(26, width * 0.038),
+      index: 0,
+    };
+  };
 
-    strays = [];
-    for (let strayIndex = 0; strayIndex < 34; strayIndex += 1) {
-      strays.push({
-        radius: 30 + random() * (maximumRadius - 60),
-        angle: random() * Math.PI * 2,
-        speed: (random() - 0.5) * 0.06,
-        character: phrase[(random() * phrase.length) | 0],
-        alpha: (0.18 + random() * 0.3) * options.opacity,
-        fontSize: 8 + random() * 6,
-      });
+  const stepRingBuild = () => {
+    const cursor = ringCursor;
+    if (!cursor) return;
+    let failed = false;
+    for (let n = 0; n < RINGS_PER_STEP && cursor.radius < cursor.maximumRadius && !failed; n += 1) {
+      if (!buildOneRing(cursor)) failed = true;
+    }
+    if (failed || cursor.radius >= cursor.maximumRadius) {
+      strays = [];
+      for (let strayIndex = 0; strayIndex < 34; strayIndex += 1) {
+        strays.push({
+          radius: 30 + cursor.random() * (cursor.maximumRadius - 60),
+          angle: cursor.random() * Math.PI * 2,
+          speed: (cursor.random() - 0.5) * 0.06,
+          character: cursor.phrase[(cursor.random() * cursor.phrase.length) | 0],
+          alpha: (0.18 + cursor.random() * 0.3) * cursor.options.opacity,
+          fontSize: 8 + cursor.random() * 6,
+        });
+      }
+      ringCursor = null;
     }
   };
 
@@ -341,6 +385,9 @@ export function createTypographyVortexRenderer(
       renderSignature = signature;
       buildRings();
     }
+    // The ring bitmaps build a couple per frame (see stepRingBuild) so a
+    // rebuild never blocks the main thread; draw what exists so far.
+    if (ringCursor) stepRingBuild();
     context.clearRect(0, 0, width, height);
     context.fillStyle = isLight ? "#eef1f6" : "#151515";
     context.fillRect(0, 0, width, height);
