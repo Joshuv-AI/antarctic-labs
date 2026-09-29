@@ -503,15 +503,19 @@ export function createTypographyVortexRenderer(
     // rendering fewer frames changes nothing visually.
     //
     // While the visitor is typing in a text field (the library search box),
-    // ease down to ~10fps: this artwork is ambient, and yielding the main
-    // thread is what keeps input latency instant on phones. Positions and
-    // dust aging derive from absolute time/deltaTime, so resuming full rate
-    // is seamless — no jump, no state to repair.
+    // skip drawing entirely. The canvas is an ambient backdrop, and a frozen
+    // frame is imperceptible while attention is on the keyboard — but every
+    // frame otherwise forces the phone to repaint the frosted-glass rows
+    // sitting above the canvas (their backdrop blur re-samples on every
+    // backdrop change), which is what kept keystrokes feeling heavy. Ring
+    // positions and dust aging derive from absolute time/deltaTime, so when
+    // focus leaves the field the animation resumes exactly where it should
+    // be — no jump, no state to repair. The frame loop keeps running so
+    // resume is instant.
     const typing =
       document.activeElement instanceof HTMLInputElement ||
       document.activeElement instanceof HTMLTextAreaElement;
-    const interval = typing ? 100 : 33.34;
-    if (time - lastDraw >= interval) {
+    if (!typing && time - lastDraw >= 33.34) {
       lastDraw = time;
       draw(time);
     }
