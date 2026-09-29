@@ -34,7 +34,33 @@ export function TypographyVortexCanvas({ className = "", ...props }: TypographyV
     const host = hostRef.current;
     const canvas = canvasRef.current;
     if (!host || !canvas) return undefined;
-    return createTypographyVortexRenderer(host, canvas, () => optionsRef.current);
+    // Defer the heavy renderer creation (the ring-bitmap build can block
+    // the main thread for hundreds of ms) until the Tower boot overlay has
+    // played through: the overlay covers ~1.1s plus a 650ms fade, so the
+    // canvas initializes after the animation is done instead of hitching
+    // it. The overlay hides the delay; the canvas simply fades in a beat
+    // later. requestIdleCallback is layered on top when available so the
+    // build also yields to any other pending main-thread work.
+    let cleanup: (() => void) | undefined;
+    let cancelled = false;
+    const start = () => {
+      if (cancelled) return;
+      const begin = () => {
+        if (cancelled) return;
+        cleanup = createTypographyVortexRenderer(host, canvas, () => optionsRef.current);
+      };
+      if (typeof window.requestIdleCallback === "function") {
+        window.requestIdleCallback(begin, { timeout: 1200 });
+      } else {
+        begin();
+      }
+    };
+    const delayId = window.setTimeout(start, 1500);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(delayId);
+      if (cleanup) cleanup();
+    };
   }, []);
 
   return (
