@@ -7,7 +7,7 @@
 // Visual language is intentionally not redesigned here — these shells
 // use the same classes the existing Home page already uses, so the
 // destinations already share the home-page visual grammar.
-import { useState, useEffect, useMemo, useDeferredValue, useRef } from "react";
+import { useState, useEffect, useMemo, useDeferredValue, useRef, memo } from "react";
 import { searchDeep, getSnippets } from "./lib/deep-search.js";
 import { site } from "./content/site.js";
 import { systems } from "./content/systems.js";
@@ -496,15 +496,25 @@ export function TowerLibrary({ go, onReady }) {
   // mid-play. The page frame paints immediately with zero rows, and the
   // rows stream in behind the overlay in small rAF chunks below.
   const [rowBudget, setRowBudget] = useState(0);
-  // Persistent across filter/search/sort updates so the list never blanks:
-  // the budget only resets on the initial mount stream.
+  // Persistent across renders for the mount stream below; the budget is
+  // only ever grown on mount, never shrunk by filters.
   const budgetRef = useRef(0);
-  const streamStartedRef = useRef(false);
   const bootedRef = useRef(false);
   // The input stays bound to the raw query so typing never waits on work;
   // the expensive filter/sort and the deep index search run on the deferred
   // value at background priority, which removes the keystroke lag.
   const deferredQuery = useDeferredValue(query);
+  // The catalog list itself updates on a debounced copy of the query, not on
+  // the deferred value directly: at normal typing speed the deferred value
+  // still catches up between keystrokes, which would re-reconcile thousands
+  // of rows mid-burst. Debouncing collapses a burst into ~1 list update, so
+  // the input never competes with row reconciliation. The deep full-text
+  // search above keeps its own 450ms debounce on the deferred value.
+  const [listQuery, setListQuery] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setListQuery(deferredQuery.trim().toLowerCase()), 280);
+    return () => clearTimeout(t);
+  }, [deferredQuery]);
   // Deep full-text search: same query, second mode. Debounced; searches the
   // full contents of every staged text via the build-time index. Title
   // results above are untouched by this.
@@ -526,30 +536,35 @@ export function TowerLibrary({ go, onReady }) {
       clearTimeout(t);
     };
   }, [deferredQuery]);
-  const q = deferredQuery.trim().toLowerCase();
-  const visible = useMemo(() => {
-    const order = TOWER_ORDER[sortId] || TOWER_ORDER["title-asc"];
-    const out = [];
-    for (let k = 0; k < order.length; k++) {
-      const i = order[k];
+  const q = listQuery;
+  const towerOrder = TOWER_ORDER[sortId] || TOWER_ORDER["title-asc"];
+  // Rank of each matching artifact in the current filter/sort (1-based), as
+  // a Map from artifact_id. Rows stay mounted across filter/search/sort
+  // updates and are only shown/hidden, so a keystroke burst never
+  // unmounts/remounts thousands of rows — the 500ms+ hitch this replaces.
+  // The memoized TowerRow below re-renders only when its own rank or
+  // visibility actually changes.
+  const { rankMap, matchCount } = useMemo(() => {
+    const map = new Map();
+    for (let k = 0; k < towerOrder.length; k++) {
+      const i = towerOrder[k];
       const a = artifacts[i];
       if (collectionFilter && (a.collection || "OTHER") !== collectionFilter)
         continue;
       if (q && !TOWER_HAYSTACKS[i].includes(q)) continue;
-      out.push(a);
+      map.set(a.artifact_id, map.size + 1);
     }
-    return out;
-  }, [q, collectionFilter, sortId]);
+    return { rankMap: map, matchCount: map.size };
+  }, [q, collectionFilter, sortId, towerOrder]);
   // Stream the index rows in behind the Tower boot overlay: each rAF chunk
   // commits a few hundred rows and then yields, so the boot animation keeps
   // clean frames. The overlay is released only after the final chunk has
-  // painted, so it always lifts onto a complete list.
-  //
-  // Filter/search/sort updates reuse the same budget without ever blanking
-  // the list: shrinking renders the smaller list in one commit, growing
-  // streams the new rows in with no delay.
+  // painted, so it always lifts onto a complete list. This runs once on
+  // mount: filter/search/sort updates never touch the budget — rows stay
+  // mounted and only flip their hidden flag (see LibraryResults), so the
+  // list can neither blank nor thrash the DOM mid-typing.
   useEffect(() => {
-    const total = visible.length;
+    const total = artifacts.length;
     let raf = 0;
     let timer = 0;
     let cancelled = false;
@@ -560,7 +575,7 @@ export function TowerLibrary({ go, onReady }) {
       setRowBudget(next);
       if (next < total) {
         raf = requestAnimationFrame(tick);
-      } else if (!bootedRef.current) {
+      } else {
         bootedRef.current = true;
         if (onReady) {
           // Full list committed — two frames later it is painted.
@@ -572,30 +587,19 @@ export function TowerLibrary({ go, onReady }) {
         }
       }
     };
-    if (!streamStartedRef.current) {
-      // Initial mount: let the boot overlay's entrance play before any row
-      // work begins.
-      streamStartedRef.current = true;
-      budgetRef.current = 0;
-      setRowBudget(0);
-      timer = setTimeout(() => {
-        raf = requestAnimationFrame(tick);
-      }, 650);
-    } else if (!bootedRef.current || total > budgetRef.current) {
-      // Boot stream still running, or the list grew: stream toward the new
-      // total with no extra delay.
+    // Initial mount: let the boot overlay's entrance play before any row
+    // work begins.
+    budgetRef.current = 0;
+    setRowBudget(0);
+    timer = setTimeout(() => {
       raf = requestAnimationFrame(tick);
-    } else {
-      // List shrank (or is unchanged): one cheap commit.
-      budgetRef.current = total;
-      setRowBudget(total);
-    }
+    }, 650);
     return () => {
       cancelled = true;
       clearTimeout(timer);
       cancelAnimationFrame(raf);
     };
-  }, [visible, onReady]);
+  }, [onReady]);
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
@@ -656,59 +660,115 @@ export function TowerLibrary({ go, onReady }) {
                 </button>
               ))}
             </div>
-            <p className="tower-result-count" aria-live="polite">
-              {visible.length} of {artifacts.length}{" "}
-              {artifacts.length === 1 ? "entry" : "entries"}
-              {q ? ` matching “${deferredQuery.trim()}”` : ""}
-            </p>
-            {visible.length === 0 ? (
-              <p className="tower-empty-results">
-                No entries match. Clear the search or choose a different collection.
-              </p>
-            ) : (
-              <div className="tower-rows">
-                {visible.slice(0, rowBudget).map((a, i) => (
-                  <button
-                    key={a.artifact_id}
-                    className="tower-row reveal"
-                    onClick={() => go(`/tower-of-babel/library/${a.artifact_id}`)}
-                  >
-                    <span className="tower-row-index">
-                      {String(i + 1).padStart(2, "0")}
-                    </span>
-                    <span className="tower-row-main">
-                      <span className="tower-row-title">{a.title}</span>
-                      {(a.creator || a.year) && (
-                        <span className="tower-row-creator">
-                          {a.creator}
-                          {a.creator && a.year ? " · " : ""}
-                          {a.year || ""}
-                        </span>
-                      )}
-                    </span>
-                    <span className="tower-row-tags">
-                      <span className="tower-tag">{a.collection}</span>
-                      {a.rights_status && (
-                        <span className="tower-tag tower-tag-rights">
-                          {a.rights_status.replace(/_/g, " ")}
-                        </span>
-                      )}
-                      {a.format && <span className="tower-tag">{a.format}</span>}
-                    </span>
-                    <span className="tower-row-arrow" aria-hidden="true">
-                      ↗
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-            <DeepMentions deep={deep} go={go} />
+            <LibraryResults
+              towerOrder={towerOrder}
+              rankMap={rankMap}
+              matchCount={matchCount}
+              rowBudget={rowBudget}
+              deep={deep}
+              q={q}
+              go={go}
+            />
           </>
         )}
       </section>
     </main>
   );
 }
+
+// ----- Tower of Babel / library results -------------------------------------
+// The result count, index rows, and deep-search mentions, isolated behind
+// React.memo so keystrokes in the search box never touch the thousands of
+// catalog rows. TowerLibrary re-renders on every keystroke (the input is
+// bound to the raw query); every prop here derives from the *debounced*
+// list query, filter, sort, or row budget, which only change once typing
+// pauses — so typing stays at input speed while the list updates right
+// after.
+//
+// Rows are never unmounted by filtering: each row stays in the DOM and only
+// flips its `hidden` flag, and each row is itself memoized on (artifact,
+// rank, hidden). A filter update therefore writes attributes on the rows
+// whose visibility changed instead of tearing down and rebuilding thousands
+// of DOM nodes — the unmount/remount churn was the 500ms+ hitch mid-typing.
+const LibraryResults = memo(function LibraryResults({
+  towerOrder,
+  rankMap,
+  matchCount,
+  rowBudget,
+  deep,
+  q,
+  go,
+}) {
+  return (
+    <>
+      <p className="tower-result-count" aria-live="polite">
+        {matchCount} of {artifacts.length}{" "}
+        {artifacts.length === 1 ? "entry" : "entries"}
+        {q ? ` matching “${q}”` : ""}
+      </p>
+      {matchCount === 0 && (
+        <p className="tower-empty-results">
+          No entries match. Clear the search or choose a different collection.
+        </p>
+      )}
+      <div className="tower-rows">
+        {towerOrder.slice(0, rowBudget).map((i) => {
+          const a = artifacts[i];
+          const rank = rankMap.get(a.artifact_id);
+          return (
+            <TowerRow
+              key={a.artifact_id}
+              a={a}
+              index={rank}
+              hidden={rank === undefined}
+              go={go}
+            />
+          );
+        })}
+      </div>
+      <DeepMentions deep={deep} go={go} />
+    </>
+  );
+});
+
+// One catalog row. Memoized: the artifact object is a stable module-level
+// reference and `go` is stable across keystrokes, so a row re-renders only
+// when its own rank or visibility changes.
+const TowerRow = memo(function TowerRow({ a, index, hidden, go }) {
+  return (
+    <button
+      className="tower-row reveal"
+      hidden={hidden}
+      onClick={() => go(`/tower-of-babel/library/${a.artifact_id}`)}
+    >
+      <span className="tower-row-index">
+        {index === undefined ? null : String(index).padStart(2, "0")}
+      </span>
+      <span className="tower-row-main">
+        <span className="tower-row-title">{a.title}</span>
+        {(a.creator || a.year) && (
+          <span className="tower-row-creator">
+            {a.creator}
+            {a.creator && a.year ? " · " : ""}
+            {a.year || ""}
+          </span>
+        )}
+      </span>
+      <span className="tower-row-tags">
+        <span className="tower-tag">{a.collection}</span>
+        {a.rights_status && (
+          <span className="tower-tag tower-tag-rights">
+            {a.rights_status.replace(/_/g, " ")}
+          </span>
+        )}
+        {a.format && <span className="tower-tag">{a.format}</span>}
+      </span>
+      <span className="tower-row-arrow" aria-hidden="true">
+        ↗
+      </span>
+    </button>
+  );
+});
 
 // ----- Tower of Babel / deep full-text search --------------------------------
 // "Mentions in texts": every work where the query appears in the full text,
