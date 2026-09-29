@@ -7,7 +7,7 @@
 // Visual language is intentionally not redesigned here — these shells
 // use the same classes the existing Home page already uses, so the
 // destinations already share the home-page visual grammar.
-import { useState, useEffect, useMemo, useDeferredValue } from "react";
+import { useState, useEffect, useMemo, useDeferredValue, useRef } from "react";
 import { searchDeep, getSnippets } from "./lib/deep-search.js";
 import { site } from "./content/site.js";
 import { systems } from "./content/systems.js";
@@ -463,27 +463,44 @@ const TOWER_COUNTS = artifacts.reduce((acc, a) => {
 }, {});
 const TOWER_COLLECTIONS = Object.keys(TOWER_COUNTS).sort();
 
+// Rows per animation frame when streaming the index in (see TowerLibrary).
+// Keeps each chunk's commit well under a frame budget on modest phones.
+const TOWER_ROW_CHUNK = 350;
+
+// Precomputed once at module load: the catalog is static at runtime, so
+// every sort order is built a single time instead of re-sorting 3,448
+// records with localeCompare on every mount and every sort change. These
+// are index orders into `artifacts`, so TOWER_HAYSTACKS[i] stays aligned.
+// Filtering one of these orders yields exactly the sequence a stable sort
+// of the filtered subset would produce.
+const TOWER_ORDER = {
+  "title-asc": artifacts
+    .map((_, i) => i)
+    .sort((p, q) => (artifacts[p].title || "").localeCompare(artifacts[q].title || "")),
+  "year-desc": artifacts
+    .map((_, i) => i)
+    .sort((p, q) => (artifacts[q].year || 0) - (artifacts[p].year || 0)),
+  "year-asc": artifacts
+    .map((_, i) => i)
+    .sort((p, q) => (artifacts[p].year || 0) - (artifacts[q].year || 0)),
+};
+
 export function TowerLibrary({ go, onReady }) {
   // Live search + collection filter + sort. Empty query/filter = show all.
   const [query, setQuery] = useState("");
   const [collectionFilter, setCollectionFilter] = useState("");
   const [sortId, setSortId] = useState("title-asc");
-  // Tell the app shell the library has painted so it can dismiss the
-  // Tower boot loader shown during in-app navigation here.
-  useEffect(() => {
-    if (!onReady) return;
-    let raf1 = 0;
-    let raf2 = 0;
-    raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => {
-        onReady();
-      });
-    });
-    return () => {
-      cancelAnimationFrame(raf1);
-      cancelAnimationFrame(raf2);
-    };
-  }, [onReady]);
+  // How many index rows are committed so far. The full 3,448-row list is
+  // the heaviest commit on this route; rendering it synchronously on mount
+  // blocks the main thread for ~1s and freezes the Tower boot animation
+  // mid-play. The page frame paints immediately with zero rows, and the
+  // rows stream in behind the overlay in small rAF chunks below.
+  const [rowBudget, setRowBudget] = useState(0);
+  // Persistent across filter/search/sort updates so the list never blanks:
+  // the budget only resets on the initial mount stream.
+  const budgetRef = useRef(0);
+  const streamStartedRef = useRef(false);
+  const bootedRef = useRef(false);
   // The input stays bound to the raw query so typing never waits on work;
   // the expensive filter/sort and the deep index search run on the deferred
   // value at background priority, which removes the keystroke lag.
@@ -511,21 +528,74 @@ export function TowerLibrary({ go, onReady }) {
   }, [deferredQuery]);
   const q = deferredQuery.trim().toLowerCase();
   const visible = useMemo(() => {
+    const order = TOWER_ORDER[sortId] || TOWER_ORDER["title-asc"];
     const out = [];
-    for (let i = 0; i < artifacts.length; i++) {
+    for (let k = 0; k < order.length; k++) {
+      const i = order[k];
       const a = artifacts[i];
       if (collectionFilter && (a.collection || "OTHER") !== collectionFilter)
         continue;
       if (q && !TOWER_HAYSTACKS[i].includes(q)) continue;
       out.push(a);
     }
-    out.sort((a, b) => {
-      if (sortId === "year-desc") return (b.year || 0) - (a.year || 0);
-      if (sortId === "year-asc") return (a.year || 0) - (b.year || 0);
-      return (a.title || "").localeCompare(b.title || "");
-    });
     return out;
   }, [q, collectionFilter, sortId]);
+  // Stream the index rows in behind the Tower boot overlay: each rAF chunk
+  // commits a few hundred rows and then yields, so the boot animation keeps
+  // clean frames. The overlay is released only after the final chunk has
+  // painted, so it always lifts onto a complete list.
+  //
+  // Filter/search/sort updates reuse the same budget without ever blanking
+  // the list: shrinking renders the smaller list in one commit, growing
+  // streams the new rows in with no delay.
+  useEffect(() => {
+    const total = visible.length;
+    let raf = 0;
+    let timer = 0;
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) return;
+      const next = Math.min(total, budgetRef.current + TOWER_ROW_CHUNK);
+      budgetRef.current = next;
+      setRowBudget(next);
+      if (next < total) {
+        raf = requestAnimationFrame(tick);
+      } else if (!bootedRef.current) {
+        bootedRef.current = true;
+        if (onReady) {
+          // Full list committed — two frames later it is painted.
+          raf = requestAnimationFrame(() => {
+            raf = requestAnimationFrame(() => {
+              if (!cancelled) onReady();
+            });
+          });
+        }
+      }
+    };
+    if (!streamStartedRef.current) {
+      // Initial mount: let the boot overlay's entrance play before any row
+      // work begins.
+      streamStartedRef.current = true;
+      budgetRef.current = 0;
+      setRowBudget(0);
+      timer = setTimeout(() => {
+        raf = requestAnimationFrame(tick);
+      }, 650);
+    } else if (!bootedRef.current || total > budgetRef.current) {
+      // Boot stream still running, or the list grew: stream toward the new
+      // total with no extra delay.
+      raf = requestAnimationFrame(tick);
+    } else {
+      // List shrank (or is unchanged): one cheap commit.
+      budgetRef.current = total;
+      setRowBudget(total);
+    }
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      cancelAnimationFrame(raf);
+    };
+  }, [visible, onReady]);
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
@@ -597,7 +667,7 @@ export function TowerLibrary({ go, onReady }) {
               </p>
             ) : (
               <div className="tower-rows">
-                {visible.map((a, i) => (
+                {visible.slice(0, rowBudget).map((a, i) => (
                   <button
                     key={a.artifact_id}
                     className="tower-row reveal"
