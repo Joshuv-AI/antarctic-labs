@@ -501,7 +501,17 @@ export function createTypographyVortexRenderer(
     // cadence, which keeps the animation smooth while the browser is busy
     // compositing a scroll. Ring positions derive from absolute time, so
     // rendering fewer frames changes nothing visually.
-    if (time - lastDraw >= 33.34) {
+    //
+    // While the visitor is typing in a text field (the library search box),
+    // ease down to ~10fps: this artwork is ambient, and yielding the main
+    // thread is what keeps input latency instant on phones. Positions and
+    // dust aging derive from absolute time/deltaTime, so resuming full rate
+    // is seamless — no jump, no state to repair.
+    const typing =
+      document.activeElement instanceof HTMLInputElement ||
+      document.activeElement instanceof HTMLTextAreaElement;
+    const interval = typing ? 100 : 33.34;
+    if (time - lastDraw >= interval) {
       lastDraw = time;
       draw(time);
     }
