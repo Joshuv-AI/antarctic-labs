@@ -512,9 +512,24 @@ function useManifestoFill(scope) {
     el.appendChild(frag);
 
     const total = chars.length;
+    // Perf: opacity is a pure function of the head position, so only the
+    // characters near the moving boundary can change between frames. Track
+    // the last head and rewrite just the overlapped window instead of all
+    // ~230 spans on every scrub update — identical visuals, ~50x fewer
+    // style writes per frame while scrolling.
+    let lastHead = -1;
     const applyFill = (p) => {
       const head = p * total;
-      for (let i = 0; i < total; i++) {
+      if (lastHead < 0) {
+        for (let i = 0; i < total; i++) {
+          chars[i].style.opacity = "0.130";
+        }
+        lastHead = head;
+        return;
+      }
+      const lo = Math.max(0, Math.floor(Math.min(lastHead, head)) - 2);
+      const hi = Math.min(total - 1, Math.ceil(Math.max(lastHead, head)) + 2);
+      for (let i = lo; i <= hi; i++) {
         const local = Math.min(
           1,
           Math.max(0, head - i) / 2
@@ -524,6 +539,7 @@ function useManifestoFill(scope) {
           0.87 * local
         ).toFixed(3);
       }
+      lastHead = head;
     };
     applyFill(0);
 
@@ -788,6 +804,18 @@ function Home({ go }) {
               start: "top top",
               end: "bottom top",
               scrub: true,
+              // Perf: once the arrival completes, the iceberg's --vfade is
+              // back at 0% (mask = no-op), so drop the mask entirely until
+              // the user scrolls back up. Keeps the resting page identical
+              // while removing per-video-frame mask compositing.
+              onUpdate: (self) => {
+                if (iceberg) {
+                  iceberg.classList.toggle(
+                    "arrival-done",
+                    self.progress >= 0.999
+                  );
+                }
+              },
             },
           });
           arrival.fromTo(
