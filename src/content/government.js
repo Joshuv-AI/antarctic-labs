@@ -15,74 +15,73 @@
 export const government = {
   brand: "ANTARCTIC LABS",
   statusPill: "GOVERNMENT CONTRACTING",
-  heading: "SYSTEMS FOR REAL-WORLD OPERATIONS.",
+  heading: "AI SYSTEMS FOR MISSION OPERATIONS.",
   intro:
-    "Antarctic Labs is an independent technology lab building operational systems — AI, automation, software, and data infrastructure — for commercial clients today, while deliberately developing the capability, registrations, and partnerships for public-sector work.",
+    "Antarctic Labs is an independent technology lab building operational AI, automation, and data systems for commercial clients today — developed deliberately toward subcontract partnerships, phased R&D programs, and competitive prototypes with defense and public-sector teams.",
 
   positioning: {
-    title: "BUILT FOR OPERATIONS. DEVELOPING TOWARD PUBLIC SERVICE.",
+    title: "A TECHNICAL SPECIALIST DEVELOPING TOWARD PUBLIC SERVICE.",
     paragraphs: [
-      "The systems that matter in government are the same systems that matter everywhere else: tools that handle real workloads, automation that removes real bottlenecks, and data infrastructure that turns scattered material into something usable. That is what Antarctic Labs builds.",
-      "This practice is emerging. The technical foundation is being laid now through commercial delivery — working systems, documented methods, a real track record. The registrations, certifications, and partnerships that public-sector work requires are the next phase, and they are being pursued deliberately.",
-      "If you are a contracting officer, a prime looking for a technical specialist, or a partner evaluating future capability — this page is the honest picture of where things stand and where they are headed.",
+      "Primes don't need another generalist. They need small technical specialists who can prove a capability against a real operational problem — analyst workflows, data at scale, geospatial fusion, automation that removes real bottlenecks. That is what Antarctic Labs builds.",
+      "This practice is emerging. The technical foundation is being laid now through commercial delivery — working systems, documented methods, demonstrated prototypes. Registrations, phased R&D programs, and prime partnerships are the next phase, pursued deliberately and stated honestly.",
     ],
   },
 
-  capabilitiesHeading: "CORE CAPABILITIES",
+  capabilitiesHeading: "WHERE WE FIT",
   capabilitiesIntro:
-    "Technical capabilities under active development through commercial work — each one directly transferable to public-sector contexts.",
+    "Narrow technical lanes, each grounded in systems already built and operating — the small expansions from here are prototypes, not promises.",
   capabilities: [
     {
-      title: "AI & INTELLIGENCE",
+      title: "ANALYST WORKFLOWS",
       description:
-        "Agent operations, LLM-powered workflows, and intelligent automation — systems that work through problems rather than just answering questions.",
+        "AI systems that work through operational problems: triage, extraction, and summarization that cut hours of manual review.",
     },
     {
-      title: "AUTOMATION",
+      title: "DATA AT SCALE",
       description:
-        "Browser automation, data pipelines, and operational workflows that remove repetitive work from real processes.",
+        "Ingestion, cleaning, and structuring that turn scattered or unstructured material into usable datasets and archives.",
     },
     {
-      title: "SOFTWARE",
+      title: "GEOSPATIAL FUSION",
       description:
-        "Web applications, internal tools, and integrations — designed, built, tested, and documented.",
+        "Live data fusion and visualization for a clear operational picture — built and running today.",
     },
     {
-      title: "DATA SYSTEMS",
+      title: "WORKFLOW AUTOMATION",
       description:
-        "Scraping, extraction, cleaning, and structuring — turning scattered or unstructured material into usable archives and datasets.",
+        "Browser automation and operational pipelines that remove repetitive work from real processes.",
     },
     {
-      title: "INTEGRATION",
+      title: "SECURE SOFTWARE",
       description:
-        "APIs, webhooks, and cross-system connections that make existing tools operate as one.",
+        "Web applications and internal tools — designed, built, tested, and documented.",
     },
     {
-      title: "TECHNICAL RESEARCH",
+      title: "RAPID PROTOTYPES",
       description:
-        "Emerging technology evaluated honestly — what works, what doesn't, and what it would take to deploy.",
+        "Small, sharply-scoped unclassified builds that prove a capability before anyone commits to more.",
     },
   ],
 
   engagement: {
-    heading: "HOW WE'LL WORK TOGETHER",
+    heading: "HOW WE ENGAGE",
     intro:
-      "The engagement models this practice is being built to support — available as readiness milestones are reached.",
+      "The doors this practice is being built to walk through — pursued in order, as readiness milestones are reached.",
     pathways: [
       {
-        title: "PILOT ENGAGEMENTS",
+        title: "PROTOTYPE PILOTS",
         description:
-          "Small, sharply-scoped prototypes that prove a capability against a real operational problem — before anyone commits to more.",
+          "Sharply-scoped demonstrations against a real operational problem — the fastest way to prove fit.",
       },
       {
-        title: "SUBCONTRACT PARTNERSHIPS",
+        title: "SBIR / STTR & OTA",
         description:
-          "Technical execution under an experienced prime: AI, automation, and data systems delivered as a specialist partner.",
+          "Phased R&D topics and rapid-prototype programs built for nontraditional vendors — the designed on-ramp for an emerging practice.",
       },
       {
-        title: "DIRECT PROJECT WORK",
+        title: "SUBCONTRACT TEAMING",
         description:
-          "Fixed-scope builds for agencies and public-sector organizations, once registration and compliance milestones are complete.",
+          "Technical execution under an experienced prime: a specialist partner for AI, automation, and data systems.",
       },
     ],
   },
