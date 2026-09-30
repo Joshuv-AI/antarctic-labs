@@ -142,12 +142,12 @@ function App() {
     // Entering the Tower of Babel (landing, library, or any entry page) from
     // inside the app: raise the Tower loader so the transition gets the same
     // branded beat as the initial page load and the ENTER THE LIBRARY button.
-    if (
+    const enteringTower =
       (canonical === "/tower-of-babel" ||
         canonical === "/tower-of-babel/library" ||
         canonical.startsWith("/tower-of-babel/library/")) &&
-      path !== canonical
-    ) {
+      path !== canonical;
+    if (enteringTower) {
       dismissBrandBoot();
       clearTowerBootTimers();
       setTowerBootLeaving(false);
@@ -160,6 +160,11 @@ function App() {
       dismissTowerBoot();
     }
     setTransitioning(true);
+    // Tower routes get a shorter swap delay: the Tower boot overlay is
+    // already covering the screen, so the full 520ms curtain beat is pure
+    // added latency before the new page even starts mounting. Other routes
+    // keep the standard delay for their curtain choreography.
+    const swapDelay = enteringTower ? 150 : 520;
     window.setTimeout(() => {
       window.history.pushState({}, "", canonical);
       setPath(canonical);
@@ -167,7 +172,7 @@ function App() {
       window.setTimeout(() => {
         setTransitioning(false);
       }, 80);
-    }, 520);
+    }, swapDelay);
   };
   // Dock navigation: every section except Tower of Babel gets the
   // Antarctic Labs branded loader; Tower keeps its own unique animation.
@@ -315,6 +320,14 @@ function App() {
             dissolveRadius={1.50}
             particleAmount={1.00}
             suctionDuration={1100}
+            // The library index is the heaviest page on the site (3,448
+            // rows over a live canvas). Freeze the backdrop to one static
+            // frame here: every animated frame was forcing the
+            // frosted-glass rows above it to repaint their backdrop blur,
+            // which is what made scrolling and typing feel heavy. The
+            // option is read live, so navigating away resumes motion with
+            // no remount and no blank gap.
+            frozen={path === "/tower-of-babel/library"}
           />
         </div>
       )}
