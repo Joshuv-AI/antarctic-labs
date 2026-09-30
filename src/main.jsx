@@ -855,15 +855,15 @@ function Home({ go }) {
       // one after the other in a fixed order: the constellation
       // (transparent starfield canvas) exits upward (y=0 to y=-100vh)
       // while the iceberg video rises from below (y=100vh to y=-6vh).
-      // All six tweens live in ONE scrubbed timeline on .env-arrival:
+      // four tweens live in ONE scrubbed timeline on .env-arrival:
       // the constellation's bottom edge and the iceberg's top edge
       // share a single meeting line at every scroll position, and a
-      // two-sided 7% crossfade (--cfade on the constellation's bottom,
-      // --vfade on the iceberg's top) melts the two environments into
-      // each other for a natural handoff. --vfade settles back to 0%
-      // as the arrival completes, so the resting iceberg backdrop is
-      // pixel-identical to before. Scoped to .env-arrival so adding
-      // homepage sections later cannot shift the timing.
+      // 7% dissolve on the constellation's bottom (--cfade) softens the
+      // handoff into the iceberg for a natural transition. (A second
+      // mask on the video was removed 2026-09-30: two simultaneous
+      // masks stuttered the first half of the scroll.) Scoped to
+      // .env-arrival so adding homepage sections later cannot shift
+      // the timing.
       const iceberg =
         document.querySelector(".new-bg-layer");
       if (envArrival && constellation && iceberg) {
@@ -874,10 +874,10 @@ function Home({ go }) {
               start: "top top",
               end: "bottom top",
               scrub: true,
-              // Perf: once the arrival completes, the iceberg's --vfade is
-              // back at 0% (mask = no-op), so drop the mask entirely until
-              // the user scrolls back up. Keeps the resting page identical
-              // while removing per-video-frame mask compositing.
+              // Perf: once the arrival completes, drop the iceberg's mask
+              // entirely until the user scrolls back up. Keeps the resting
+              // page identical while removing per-video-frame mask
+              // compositing.
               onUpdate: (self) => {
                 if (iceberg) {
                   iceberg.classList.toggle(
@@ -906,21 +906,13 @@ function Home({ go }) {
             { "--cfade": "7%", ease: "none" },
             0
           );
-          // The iceberg's top edge dissolves in to meet the
-          // constellation's dissolving bottom edge (two-sided 7%
-          // crossfade), then settles back to 0% as the arrival
-          // completes so the resting backdrop is unchanged.
-          arrival.fromTo(
-            iceberg,
-            { "--vfade": "0%" },
-            { "--vfade": "7%", ease: "none", duration: 0.4 },
-            0
-          );
-          arrival.to(
-            iceberg,
-            { "--vfade": "0%", ease: "none", duration: 0.1 },
-            0.4
-          );
+          // Perf (2026-09-30): the iceberg's --vfade mask animation was
+          // removed. Animating two mask gradients at once (constellation's
+          // --cfade + the video's --vfade) forced full re-compositing of
+          // both layers every scroll frame, which stuttered on the first
+          // half of the arrival. The constellation's one-sided --cfade
+          // still softens the meeting line; the resting backdrop is
+          // unchanged (--vfade stays 0%).
           // The brand greeting dissolves and lifts away early in the
           // arrival so the handoff stays clean — it never lingers over
           // the iceberg.
