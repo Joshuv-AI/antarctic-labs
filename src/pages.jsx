@@ -2,7 +2,7 @@
 // Each shell renders copy from the corresponding src/content/*.js
 // module and reuses the existing CSS grammar (.page-shell,
 // .inner-hero, .section, .section-index, .copy-block, .display-copy,
-// .body-copy, .text-link, .cap-row, .contact-cta, .contact-button).
+// .body-copy, .text-link, .cap-row).
 //
 // Visual language is intentionally not redesigned here — these shells
 // use the same classes the existing Home page already uses, so the
@@ -10,42 +10,11 @@
 import { useState, useEffect, useMemo, useDeferredValue, useRef, memo } from "react";
 import { searchDeep, getSnippets } from "./lib/deep-search.js";
 import { site } from "./content/site.js";
-import { systems } from "./content/systems.js";
 import { expeditions, expeditionsArchive } from "./content/expeditions.js";
-import { history } from "./content/history.js";
 import { operator } from "./content/operator.js";
 import { artifacts, towerOfBabel } from "./content/tower-of-babel.js";
 import { government } from "./content/government.js";
-import { fieldInterests } from "./content/field-interests.js";
 import { transmission } from "./content/transmission.js";
-import { matchRoute } from "./content/routes.js";
-// ----- Systems -------------------------------------------------------------
-export function Systems({ go }) {
-  return (
-    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
-      <section className="inner-hero section">
-        <div className="section-index">02 / SYSTEMS</div>
-        <h1>SYSTEMS</h1>
-        <p className="body-copy">{systems.intro}</p>
-      </section>
-      <section className="capabilities section reveal">
-        <div className="section-index">CATALOG</div>
-        <div className="capability-list">
-          {systems.groups.map((g, i) => (
-            <div className="cap-row" key={g.id}>
-              <span>{String(i + 1).padStart(2, "0")}</span>
-              <h3>{g.title}</h3>
-              <p>{g.summary}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-      <section className="copy-block section">
-        <button className="text-link" onClick={() => go("/projects")}>SEE PROJECTS <span>↗</span></button>
-      </section>
-    </main>
-  );
-}
 // ----- Projects archive + detail (was: Expeditions) -------------------------
 const PROJECT_STATUS_TONE = {
   ACTIVE: "#4ade80",
@@ -340,30 +309,6 @@ export function ProjectDetail({ go, params }) {
           Next <span aria-hidden="true">→</span>
         </button>
       </nav>
-    </main>
-  );
-}
-// ----- History -------------------------------------------------------------
-export function History({ go }) {
-  return (
-    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
-      <section className="inner-hero section">
-        <div className="section-index">04 / HISTORY</div>
-        <h1>{history.heading}</h1>
-        <p className="body-copy">{history.intro}</p>
-      </section>
-      <section className="capabilities section reveal">
-        <div className="section-index">BUCKETS</div>
-        <div className="capability-list">
-          {history.buckets.map((b, i) => (
-            <div className="cap-row" key={b.id}>
-              <span>{String(i + 1).padStart(2, "0")}</span>
-              <h3>{b.title}</h3>
-              <p>{b.summary}</p>
-            </div>
-          ))}
-        </div>
-      </section>
     </main>
   );
 }
@@ -684,11 +629,10 @@ export function TowerLibrary({ go, onReady }) {
 // pauses — so typing stays at input speed while the list updates right
 // after.
 //
-// Rows are never unmounted by filtering: each row stays in the DOM and only
-// flips its `hidden` flag, and each row is itself memoized on (artifact,
-// rank, hidden). A filter update therefore writes attributes on the rows
-// whose visibility changed instead of tearing down and rebuilding thousands
-// of DOM nodes — the unmount/remount churn was the 500ms+ hitch mid-typing.
+// Only matching rows are mounted (derived from rowBudget + rankMap via
+// useMemo); each row is memoized on (artifact, rank). A filter update
+// therefore mounts exactly the visible slice instead of keeping thousands
+// of rows in the DOM — the mounted-row churn was the 500ms+ hitch mid-typing.
 const LibraryResults = memo(function LibraryResults({
   towerOrder,
   rankMap,
@@ -1207,70 +1151,6 @@ export function About({ go }) {
     </main>
   );
 }
-// ----- Field Interests -----------------------------------------------------
-export function FieldInterests({ go }) {
-  return (
-    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
-      <section className="inner-hero section">
-        <div className="section-index">08 / FIELD INTERESTS</div>
-        <h1>{fieldInterests.heading}</h1>
-        {fieldInterests.intro.map((p, i) => (
-          <p className={i === 0 ? "display-copy" : "body-copy"} key={i}>{p}</p>
-        ))}
-      </section>
-      <section className="expeditions-grid section reveal">
-        <div className="section-index">AREAS OF ACTIVE INTEREST</div>
-        <div className="expedition-list">
-          {fieldInterests.areas.map((area) => {
-            const related = (area.relatedExpeditions || [])
-              .map((rid) => expeditions.find((e) => e.id === rid))
-              .filter(Boolean);
-            return (
-              <article className="expedition-card field-interest-card reveal" key={area.id}>
-                <div className="expedition-card-meta">
-                  <span className="expedition-card-category">{area.title}</span>
-                </div>
-                <h3 className="expedition-card-title">{area.title}</h3>
-                <p className="expedition-card-summary">{area.summary}</p>
-                {related.length > 0 && (
-                  <div className="field-interest-related">
-                    <span className="section-index">RELATED PROJECTS</span>
-                    <ul className="body-copy">
-                      {related.map((exp) => (
-                        <li key={exp.id}>
-                          <button
-                            className="text-link"
-                            onClick={() => go(`/projects/${exp.id}`)}
-                          >
-                            {exp.title} <span>↗</span>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </article>
-            );
-          })}
-        </div>
-      </section>
-      <section className="copy-block section">
-        <span className="section-index">CLOSING</span>
-        <p className="body-copy">{fieldInterests.closing}</p>
-      </section>
-      <section className="copy-block section">
-        <button className="text-link" onClick={() => go("/projects")}>
-          SEE PROJECTS <span>↗</span>
-        </button>
-      </section>
-      <section className="copy-block section">
-        <button className="text-link" onClick={() => go("/about")}>
-          ABOUT THE OPERATOR <span>↗</span>
-        </button>
-      </section>
-    </main>
-  );
-}
 // ----- Transmission --------------------------------------------------------
 export function Transmission({ go }) {
   const initialValues = transmission.fields.reduce((acc, f) => {
@@ -1497,5 +1377,3 @@ export function Transmission({ go }) {
     </main>
   );
 }
-// Re-export matcher so main.jsx can dispatch dynamic routes.
-export { matchRoute };
