@@ -15,9 +15,9 @@
 export const government = {
   brand: "ANTARCTIC LABS",
   statusPill: "GOVERNMENT CONTRACTING",
-  heading: "AI SYSTEMS FOR MISSION OPERATIONS.",
+  heading: "WHERE WE'RE HEADING.",
   intro:
-    "Antarctic Labs is an independent technology lab building operational AI, automation, and data systems for commercial clients today — developed deliberately toward subcontract partnerships, phased R&D programs, and competitive prototypes with defense and public-sector teams.",
+    "Antarctic Labs is an independent technology lab building operational AI, automation, and data systems for commercial clients today. Government contracting is where this practice is heading — subcontract partnerships, phased R&D programs, and competitive prototypes with defense and public-sector teams.",
 
   positioning: {
     title: "A TECHNICAL SPECIALIST DEVELOPING TOWARD PUBLIC SERVICE.",
@@ -27,9 +27,9 @@ export const government = {
     ],
   },
 
-  capabilitiesHeading: "WHERE WE FIT",
+  capabilitiesHeading: "WHERE WE FIT TODAY",
   capabilitiesIntro:
-    "Narrow technical lanes, each grounded in systems already built and operating — the small expansions from here are prototypes, not promises.",
+    "Narrow technical lanes, each grounded in systems already built and operating for commercial clients — the expansions from here are prototypes, not promises.",
   capabilities: [
     {
       title: "ANALYST WORKFLOWS",
@@ -64,7 +64,7 @@ export const government = {
   ],
 
   engagement: {
-    heading: "HOW WE ENGAGE",
+    heading: "HOW WE'LL ENGAGE",
     intro:
       "The doors this practice is being built to walk through — pursued in order, as readiness milestones are reached.",
     pathways: [
