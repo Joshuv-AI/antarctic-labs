@@ -638,16 +638,19 @@ export function TowerLibrary({ go, onReady }) {
 }
 
 // ----- Tower of Babel / suggest an entry ------------------------------------
-// Suggestion intake form. Front-end only: submissions go through
-// submitSuggestion(), which is currently an unwired stub. When a
-// destination exists (API route, form service, inbox), POST the payload
-// there — the form already awaits it, so wiring it up is a one-spot
-// change.
+// Suggestion intake form. Submissions POST to the /api/suggest Pages
+// Function, which forwards them to the lab inbox via Resend.
+// Payload shape: { type, title, format, seriesDetails, creator, year,
+// source, notes, website } (all strings; website is the honeypot).
 async function submitSuggestion(payload) {
-  // SUGGESTION ENDPOINT — not wired yet. Replace this stub with the real
-  // POST when the backend exists. Payload shape: { type, title, format,
-  // seriesDetails, creator, year, source, notes } (all strings).
-  return { ok: true, payload };
+  const res = await fetch("/api/suggest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.error || "send failed");
+  return data;
 }
 
 export function SuggestEntry({ go }) {
@@ -661,6 +664,8 @@ export function SuggestEntry({ go }) {
   const [errors, setErrors] = useState({});
   const [submitError, setSubmitError] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  // Honeypot: invisible to humans, bots fill it. The API drops those silently.
+  const [honeypot, setHoneypot] = useState("");
   const validate = (next) => {
     const errs = {};
     fields.forEach((f) => {
@@ -696,7 +701,7 @@ export function SuggestEntry({ go }) {
       return;
     }
     try {
-      await submitSuggestion(values);
+      await submitSuggestion({ ...values, website: honeypot });
     } catch (err) {
       setSubmitError(s.submitError);
       return;
@@ -716,6 +721,7 @@ export function SuggestEntry({ go }) {
     setErrors({});
     setSubmitError("");
     setSubmitted(false);
+    setHoneypot("");
   };
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
@@ -801,6 +807,19 @@ export function SuggestEntry({ go }) {
                   {submitError}
                 </p>
               )}
+              {/* Honeypot: positioned off-screen, never visible to humans. */}
+              <div aria-hidden="true" style={{ position: "absolute", left: "-9999px", top: "auto", width: "1px", height: "1px", overflow: "hidden" }}>
+                <label htmlFor="suggest-website">Website</label>
+                <input
+                  id="suggest-website"
+                  name="website"
+                  type="text"
+                  value={honeypot}
+                  onChange={(e) => setHoneypot(e.target.value)}
+                  tabIndex={-1}
+                  autoComplete="off"
+                />
+              </div>
               <div className="suggest-actions">
                 <button type="submit" className="tower-access-btn suggest-submit">
                   {s.submitLabel} <span aria-hidden="true">↗</span>
@@ -1413,6 +1432,10 @@ export function Transmission({ go }) {
   const [values, setValues] = useState(initialValues);
   const [errors, setErrors] = useState({});
   const [submitted, setSubmitted] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  // Honeypot: invisible to humans, bots fill it. The API drops those silently.
+  const [honeypot, setHoneypot] = useState("");
   const reduceMotion =
     typeof window !== "undefined" &&
     typeof window.matchMedia === "function" &&
@@ -1439,8 +1462,9 @@ export function Transmission({ go }) {
       delete errs[name];
       setErrors(errs);
     }
+    if (submitError) setSubmitError("");
   };
-  const onSubmit = (e) => {
+  const onSubmit = async (e) => {
     e.preventDefault();
     const errs = validate(values);
     setErrors(errs);
@@ -1454,6 +1478,24 @@ export function Transmission({ go }) {
       }
       return;
     }
+    setSending(true);
+    setSubmitError("");
+    try {
+      const res = await fetch("/api/contact", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...values, website: honeypot }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || "send failed");
+    } catch (err) {
+      setSending(false);
+      setSubmitError(
+        "Something went wrong sending your message. Please try again, or email hello@antarcticlabs.com directly."
+      );
+      return;
+    }
+    setSending(false);
     setSubmitted(true);
     if (typeof window !== "undefined") {
       window.setTimeout(() => {
@@ -1468,6 +1510,9 @@ export function Transmission({ go }) {
     setValues(initialValues);
     setErrors({});
     setSubmitted(false);
+    setSending(false);
+    setSubmitError("");
+    setHoneypot("");
   };
   return (
     <main className="page-shell inner-page contact-page" id="main-content" tabIndex={-1}>
@@ -1557,13 +1602,33 @@ export function Transmission({ go }) {
                   </div>
                 );
               })}
+              {/* Honeypot: positioned off-screen, never visible to humans. */}
+              <div aria-hidden="true" style={{ position: "absolute", left: "-9999px", top: "auto", width: "1px", height: "1px", overflow: "hidden" }}>
+                <label htmlFor="transmission-website">Website</label>
+                <input
+                  id="transmission-website"
+                  name="website"
+                  type="text"
+                  value={honeypot}
+                  onChange={(e) => setHoneypot(e.target.value)}
+                  tabIndex={-1}
+                  autoComplete="off"
+                />
+              </div>
+              {submitError && (
+                <p className="transmission-error" role="alert">
+                  {submitError}
+                </p>
+              )}
               <div className="transmission-actions">
                 <button
                   type="submit"
                   className="contact-submit"
                   aria-label={transmission.submit.ariaLabel}
+                  disabled={sending}
                 >
-                  {transmission.submit.label} <span aria-hidden="true">↗</span>
+                  {sending ? "SENDING…" : transmission.submit.label}{" "}
+                  <span aria-hidden="true">↗</span>
                 </button>
                 <button
                   type="button"
