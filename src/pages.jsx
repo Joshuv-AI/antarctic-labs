@@ -1491,7 +1491,7 @@ export function Transmission({ go }) {
     } catch (err) {
       setSending(false);
       setSubmitError(
-        "Something went wrong sending your message. Please try again, or email hello@antarcticlabs.com directly."
+        "Something went wrong sending your message. Please try again, or email hello@antarctic-labs.com directly."
       );
       return;
     }
