@@ -10,7 +10,7 @@ export const site = {
     "Freelance AI automation, web development, and data systems — working solutions, built and delivered ready to use.",
   location: "SANFORD, FLORIDA / WORLDWIDE",
   footer: "BUILT FOR THE UNKNOWN.",
-  email: "hello@antarcticlabs.com",
+  email: "hello@antarctic-labs.com",
   url: "https://antarctic-labs.com",
 
   // Home / arrival copy.
