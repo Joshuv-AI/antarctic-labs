@@ -10,7 +10,7 @@
 // set on the Pages project; without it the function answers 503 and the
 // form shows its normal error state.
 
-// Destination inbox. hello@antarcticlabs.com has no MX records (Email
+// Destination inbox. hello@antarctic-labs.com has no MX records (Email
 // Routing isn't enabled), so form mail goes straight to the Gmail inbox
 // instead of bouncing. Override with the FORMS_TO Pages env var anytime.
 const DEFAULT_TO = "joshuaalmodovar@gmail.com";
