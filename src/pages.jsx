@@ -421,12 +421,6 @@ export function TowerOfBabel({ go, onReady }) {
           <p className="body-copy" key={i}>{p}</p>
         ))}
       </section>
-      <section className="tower-landing-block section">
-        <div className="section-index">ACCESS</div>
-        {towerOfBabel.access.map((p, i) => (
-          <p className="body-copy" key={i}>{p}</p>
-        ))}
-      </section>
     </main>
   );
 }
