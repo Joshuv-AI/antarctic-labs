@@ -15,7 +15,7 @@ export function shardFor(stem, shards = SHARD_COUNT) {
 // Lowercase alphanumeric tokens, length >= 2. Same tokenization must be used
 // when indexing and when extracting snippets, or offsets won't line up.
 const TOKEN_RE = /[a-z0-9]+/g;
-export function tokenize(text) {
+function tokenize(text) {
   const out = [];
   const lower = text.toLowerCase();
   let m;
@@ -151,8 +151,7 @@ export const STOPWORDS = new Set(
 // Parse a raw query into stemmed terms + quoted phrases.
 // Returns { terms: string[] (stems, stopwords removed),
 //           phrases: { full: string[] (stems, stopwords kept),
-//                      indexable: string[] (stems, stopwords removed) }[],
-//           droppedStopwords: boolean }
+//                      indexable: string[] (stems, stopwords removed) }[] }
 export function parseQuery(raw) {
   const phrases = [];
   const phraseRe = /"([^"]+)"/g;
@@ -168,19 +167,16 @@ export function parseQuery(raw) {
     phrases.push({ full, indexable });
   }
   for (const s of seen) rest = rest.replace(s, " ");
-  let droppedStopwords = false;
   const terms = [];
   for (const t of tokenize(rest)) {
     const s = stem(t);
-    if (STOPWORDS.has(s)) { droppedStopwords = true; continue; }
+    if (STOPWORDS.has(s)) continue;
     terms.push(s);
   }
-  const phraseHadStopwords = phrases.some((p) => p.full.length !== p.indexable.length);
   return {
     terms,
     phrases: phrases.filter((p) => p.indexable.length > 0),
     unsearchable: terms.length === 0 && phrases.length === 0,
-    droppedStopwords: droppedStopwords || phraseHadStopwords,
   };
 }
 
