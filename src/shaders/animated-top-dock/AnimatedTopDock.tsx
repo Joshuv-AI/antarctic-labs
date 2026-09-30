@@ -436,7 +436,7 @@ function ModernDock({ className, items, active, onSelect, options }: DockShellPr
             className="atd-modern__ghost"
             type="button"
             onClick={() => {
-              window.location.href = "mailto:hello@antarcticlabs.com";
+              window.location.href = "mailto:hello@antarctic-labs.com";
             }}
           >
             Email me
