@@ -22,6 +22,7 @@ import {
   TowerOfBabel,
   TowerLibrary,
   LibraryArtifact,
+  SuggestEntry,
   Government,
   Transmission,
   Projects,
@@ -300,6 +301,9 @@ function App() {
           onReady={handleTowerReady}
         />
       )}
+      {path === "/tower-of-babel/library/suggest" && (
+        <SuggestEntry go={go} />
+      )}
       {/* Tower of Babel family only: the typography vortex environment.
           Exact ThreeUI source, configured usage (mode="light", speed 0.85,
           ringGrowth 1.30, opacity 0.81, dissolveRadius 1.50,
@@ -308,6 +312,7 @@ function App() {
           because the page sits above it. */}
       {(path === "/tower-of-babel" ||
         path === "/tower-of-babel/library" ||
+        path === "/tower-of-babel/library/suggest" ||
         matchedPattern === "/tower-of-babel/library/:id") && (
         <div className="tower-vortex-layer" aria-hidden="true">
           <TypographyVortexCanvas
