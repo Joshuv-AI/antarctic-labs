@@ -453,6 +453,12 @@ export function TowerLibrary({ go, onReady }) {
     const t = setTimeout(() => setListQuery(deferredQuery.trim().toLowerCase()), 280);
     return () => clearTimeout(t);
   }, [deferredQuery]);
+  // Whether the top "entries matching" list is expanded past its 2-row
+  // cap (see LibraryResults). Collapses again whenever the query changes.
+  const [matchesExpanded, setMatchesExpanded] = useState(false);
+  useEffect(() => {
+    setMatchesExpanded(false);
+  }, [listQuery]);
   // Deep full-text search: same query, second mode. Debounced; searches the
   // full contents of every staged text via the build-time index. Title
   // results above are untouched by this.
@@ -612,6 +618,8 @@ export function TowerLibrary({ go, onReady }) {
               deep={deep}
               q={q}
               go={go}
+              matchesExpanded={matchesExpanded}
+              onToggleMatches={() => setMatchesExpanded((v) => !v)}
             />
           </>
         )}
@@ -641,6 +649,8 @@ const LibraryResults = memo(function LibraryResults({
   deep,
   q,
   go,
+  matchesExpanded,
+  onToggleMatches,
 }) {
   // Render only the matching rows instead of keeping all 3,448 mounted and
   // flipping `hidden`: a filter update then reconciles dozens of rows
@@ -655,6 +665,24 @@ const LibraryResults = memo(function LibraryResults({
     }
     return out;
   }, [towerOrder, rankMap, rowBudget]);
+  // While searching, the top "entries matching" list is capped at 2 rows
+  // with a show-more expander — so the "Mentions in texts" section stays
+  // visible on screen instead of being buried under dozens of title hits.
+  // The cap lifts (all title matches show) only when the deep search has
+  // nothing to show: it came back empty, is unavailable, or never runs
+  // (query under 2 chars). While it is idle/loading we keep the cap, so
+  // the list never jumps between capped and full as results stream in.
+  const SEARCH_TOP_N = 2;
+  const deepHasNothing =
+    deep.state === "empty" ||
+    deep.state === "unavailable" ||
+    (deep.state === "ready" && (!deep.works || deep.works.length === 0));
+  const searching = !!q && q.trim().length >= 2;
+  const showExpander = searching && !deepHasNothing && matchCount > SEARCH_TOP_N;
+  const shownIndices =
+    searching && !deepHasNothing && !matchesExpanded
+      ? visibleIndices.slice(0, SEARCH_TOP_N)
+      : visibleIndices;
   return (
     <>
       <p className="tower-result-count" aria-live="polite">
@@ -668,7 +696,7 @@ const LibraryResults = memo(function LibraryResults({
         </p>
       )}
       <div className="tower-rows">
-        {visibleIndices.map((i) => {
+        {shownIndices.map((i) => {
           const a = artifacts[i];
           return (
             <TowerRow
@@ -680,6 +708,18 @@ const LibraryResults = memo(function LibraryResults({
           );
         })}
       </div>
+      {showExpander && (
+        <button
+          type="button"
+          className="tower-show-more"
+          aria-expanded={matchesExpanded}
+          onClick={onToggleMatches}
+        >
+          {matchesExpanded
+            ? "Show fewer"
+            : `Show all ${matchCount} matching entries`}
+        </button>
+      )}
       <DeepMentions deep={deep} go={go} />
     </>
   );
