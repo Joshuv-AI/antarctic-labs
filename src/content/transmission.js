@@ -1,5 +1,6 @@
-// Contact — contact/intake destination. Front-end form only;
-// no backend integration yet. Copy and field definitions live here so
+// Contact — contact/intake destination. The form POSTs to the
+// /api/contact Pages Function, which forwards submissions to the lab
+// inbox via Resend. Copy and field definitions live here so
 // the form is data-driven rather than hardcoded in JSX.
 //
 // The exported object remains named `transmission` internally for
@@ -85,14 +86,13 @@ export const transmission = {
     label: "SEND MESSAGE",
     ariaLabel: "Send message",
   },
-  // No backend. The form does NOT transmit to a server.
-  // The success state is purely client-side acknowledgement.
+  // Below the form: sets the expectation that a human reads it.
   noBackendNotice:
-    "This form doesn't send anywhere yet — it will be wired up soon. The direct email link is the reliable way to reach Antarctic Labs for now.",
+    "Your message goes straight to the lab inbox — I read everything myself.",
   success: {
-    heading: "MESSAGE READY.",
-    body: "Your information has been entered and is ready for review.",
-    note: "Confirmation is local to this browser — nothing was sent over the network. Use the direct email link to ensure delivery.",
+    heading: "MESSAGE SENT.",
+    body: "Your message is on its way to the lab.",
+    note: "I read everything myself and reply within 48 hours — usually much sooner.",
   },
   // Direct-contact panel: the channel that works today.
   direct: {
