@@ -14,40 +14,56 @@
 // In particular, /transmission now redirects to the canonical /contact
 // route.
 import { site } from "./site.js";
+import { expeditions } from "./expeditions.js";
+import { artifacts } from "./library-catalog.js";
 const DEFAULT_DESCRIPTION = site.description;
 const SITE_NAME = site.brand;
+// Per-page SEO: every canonical route carries keyword-targeted metadata
+// aimed at the obvious simple searches for its sector. Service pages
+// (home, contact, about, projects) target hire-intent freelance searches
+// — client acquisition is the site's main goal. Tower of Babel pages
+// target free-library/archive searches for authority and traffic.
+// Titles stay near ~60 chars, descriptions near ~155, keyword up front.
 export const routeMeta = {
   "/": {
-    title: `${SITE_NAME} — Digital Systems & AI`,
-    description: DEFAULT_DESCRIPTION,
+    title: `Freelance AI Automation & Web Developer | ${SITE_NAME}`,
+    description:
+      "Hire a freelance AI automation developer: n8n workflows, AI agents, websites, web scraping, lead generation. Scoped clearly, delivered ready to work.",
   },
   "/projects": {
-    title: `Projects — ${SITE_NAME}`,
-    description: `Selected projects, case studies, and expeditions. The Lab content (method, why Antarctic) is now included here. ${DEFAULT_DESCRIPTION}`,
+    title: `AI & Automation Project Portfolio | ${SITE_NAME}`,
+    description:
+      "Selected freelance projects and case studies: AI agents, automation systems, web apps, and data pipelines — proof of work from Antarctic Labs.",
   },
   "/tower-of-babel": {
-    title: `Tower of Babel — ${SITE_NAME}`,
-    description: `Personal library and artifact catalog. ${DEFAULT_DESCRIPTION}`,
+    title: `Tower of Babel — Free Online Library | ${SITE_NAME}`,
+    description:
+      "A free, searchable online library: thousands of books, sacred texts, declassified documents, and transcripts preserved in clean, readable text.",
   },
   "/tower-of-babel/library": {
-    title: `Library — Tower of Babel — ${SITE_NAME}`,
-    description: `Personal library catalog. ${DEFAULT_DESCRIPTION}`,
+    title: `Free Online Library — Search & Read Books | Tower of Babel`,
+    description:
+      "Search thousands of books, documents, and texts in the Tower of Babel's free online library catalog. Read in clean, searchable text.",
   },
   "/tower-of-babel/library/suggest": {
-    title: `Suggest an Entry — Tower of Babel — ${SITE_NAME}`,
-    description: `Suggest a book, document, or text for the Tower of Babel library catalog. ${DEFAULT_DESCRIPTION}`,
+    title: `Suggest a Book for the Free Online Library | Tower of Babel`,
+    description:
+      "Suggest a book, document, or text for the Tower of Babel's free online library catalog.",
   },
   "/government-contracting": {
-    title: `Government Contracting — ${SITE_NAME}`,
-    description: `Government contracting and public sector information. ${DEFAULT_DESCRIPTION}`,
+    title: `AI Systems for Government Contracting | ${SITE_NAME}`,
+    description:
+      "Antarctic Labs is developing toward public-sector work: AI analyst workflows, data systems, and automation for primes — pilots, SBIR/STTR, and teaming.",
   },
   "/about": {
-    title: `About — ${SITE_NAME}`,
-    description: `About Antarctic Labs and Joshua Almodovar. ${DEFAULT_DESCRIPTION}`,
+    title: `Joshua Almodovar — Freelance AI Developer | ${SITE_NAME}`,
+    description:
+      "Joshua Almodovar runs Antarctic Labs, a freelance studio for AI automation, websites, and data systems. No account managers — you talk to the builder.",
   },
   "/contact": {
-    title: `Contact — ${SITE_NAME}`,
-    description: `Contact Antarctic Labs. ${DEFAULT_DESCRIPTION}`,
+    title: `Hire a Freelance AI Developer — Contact | ${SITE_NAME}`,
+    description:
+      "Have a project? Hire Antarctic Labs for AI automation, web development, and data systems. Send the details, get a working solution back.",
   },
 };
 // Old routes kept for SEO/canonicalization purposes only.
@@ -190,16 +206,39 @@ export function metaFor(path) {
     return routeMetaLegacy[path];
   }
   const match = matchRoute(path);
-  if (match) {
-    if (match === "/projects/:id") {
+  // matchRoute returns a string for literal matches and
+  // { pattern, params } for dynamic ones — compare against
+  // match.pattern, not match itself.
+  if (match && typeof match === "object") {
+    if (match.pattern === "/projects/:id") {
+      const exp = expeditions.find((e) => e.id === match.params.id);
+      if (exp) {
+        return {
+          title: `${exp.title} | ${SITE_NAME} Projects`,
+          description: exp.shortDescription
+            ? `${exp.shortDescription} — a freelance build by Antarctic Labs.`
+            : DEFAULT_DESCRIPTION,
+        };
+      }
       return {
-        title: `Project — ${SITE_NAME}`,
+        title: `Project | ${SITE_NAME}`,
         description: DEFAULT_DESCRIPTION,
       };
     }
-    if (match === "/tower-of-babel/library/:id") {
+    if (match.pattern === "/tower-of-babel/library/:id") {
+      const art = artifacts.find((a) => a.artifact_id === match.params.id);
+      if (art) {
+        const suffix = " — free in the Tower of Babel online library.";
+        const maxBlurb = 160 - suffix.length;
+        let blurb = art.description || "Preserved in clean, searchable text.";
+        if (blurb.length > maxBlurb) blurb = blurb.slice(0, maxBlurb - 3).trimEnd() + "...";
+        return {
+          title: `${art.title} — Read Free | Tower of Babel`,
+          description: blurb + suffix,
+        };
+      }
       return {
-        title: `Artifact — Tower of Babel — ${SITE_NAME}`,
+        title: `Library Entry | Tower of Babel`,
         description: DEFAULT_DESCRIPTION,
       };
     }
