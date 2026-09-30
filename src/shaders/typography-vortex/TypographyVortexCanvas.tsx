@@ -10,6 +10,8 @@ export type TypographyVortexCanvasProps = {
   dissolveRadius?: number;
   particleAmount?: number;
   suctionDuration?: number;
+  /** Render one static frame and park the animation loop (library page). */
+  frozen?: boolean;
   className?: string;
 };
 
