@@ -1400,16 +1400,13 @@ export function About({ go }) {
         </div>
       </section>
 
-      <section className="about-grid section reveal">
+      <section className="about-grid about-grid-single section reveal">
         <div className="about-panel">
           <div className="section-index">{operator.team.title}</div>
           <p className="display-copy">{operator.team.headline}</p>
           {operator.team.paragraphs.map((p, i) => (
             <p className="body-copy" key={i}>{p}</p>
           ))}
-        </div>
-        <div className="about-panel">
-          <div className="section-index">OPERATOR FILE</div>
           <ul className="about-facts">
             {operator.team.facts.map(([k, v]) => (
               <li key={k}>
@@ -1529,8 +1526,7 @@ export function Transmission({ go }) {
         <p className="display-copy contact-lede">{transmission.body}</p>
       </section>
 
-      <section className={"section contact-grid" + (reduceMotion ? "" : " reveal")}>
-        <div className="contact-form-col">
+      <section className={"section contact-form-wrap" + (reduceMotion ? "" : " reveal")}>
           <div className="section-index">SEND A MESSAGE</div>
           {!submitted ? (
             <form
@@ -1660,8 +1656,8 @@ export function Transmission({ go }) {
               </div>
             </div>
           )}
-        </div>
-        <aside className="contact-direct-col" aria-label="Direct contact">
+      </section>
+      <aside className="contact-direct-strip" aria-label="Direct contact">
           <div className="section-index">DIRECT</div>
           <a className="contact-email" href={`mailto:${site.email}`}>
             {site.email}
@@ -1690,8 +1686,7 @@ export function Transmission({ go }) {
             )}
           </dl>
           <p className="body-copy">{transmission.direct.note}</p>
-        </aside>
-      </section>
+      </aside>
     </main>
   );
 }
