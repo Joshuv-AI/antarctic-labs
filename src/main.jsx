@@ -39,6 +39,25 @@ gsap.registerPlugin(ScrollTrigger);
 if (typeof history !== "undefined" && "scrollRestoration" in history) {
   history.scrollRestoration = "manual";
 }
+// Scroll to the top instantly. The site's CSS sets
+// `html { scroll-behavior: smooth }`, so a bare window.scrollTo(0, 0)
+// becomes an animated scroll — and a DOM swap mid-animation can stall or
+// cancel it, which is what occasionally left new pages sitting mid-page.
+// Forcing "auto" for this one call makes the jump synchronous.
+function scrollToTopInstant() {
+  const root = document.documentElement;
+  const prev = root.style.scrollBehavior;
+  root.style.scrollBehavior = "auto";
+  window.scrollTo(0, 0);
+  const se = document.scrollingElement;
+  if (se) {
+    se.scrollTop = 0;
+  } else {
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  }
+  root.style.scrollBehavior = prev;
+}
 function pathLabel(path) {
   if (path === "/") return "ANTARCTIC LABS";
   return path.replace("/", "").replaceAll("-", " ").toUpperCase();
@@ -135,7 +154,7 @@ function App() {
       setPath(target);
       dismissTowerBoot();
       dismissBrandBoot();
-      window.scrollTo(0, 0);
+      scrollToTopInstant();
     };
     window.addEventListener("popstate", onPop);
     return () => {
@@ -155,15 +174,10 @@ function App() {
     let raf2 = 0;
     const raf1 = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(() => {
-        window.scrollTo(0, 0);
-        // Belt and suspenders: some embedded browsers honor the element
-        // scrollTop more reliably than window.scrollTo.
-        if (document.scrollingElement) {
-          document.scrollingElement.scrollTop = 0;
-        } else {
-          document.documentElement.scrollTop = 0;
-          document.body.scrollTop = 0;
-        }
+        // Instant, not smooth: the path effect is the guarantee that every
+        // page lands at the top, and it must not be an interruptible
+        // animation.
+        scrollToTopInstant();
       });
     });
     return () => {
@@ -208,7 +222,7 @@ function App() {
     window.setTimeout(() => {
       window.history.pushState({}, "", canonical);
       setPath(canonical);
-      window.scrollTo(0, 0);
+      scrollToTopInstant();
       window.setTimeout(() => {
         setTransitioning(false);
       }, 80);
