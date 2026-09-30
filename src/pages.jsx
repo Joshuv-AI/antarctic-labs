@@ -493,7 +493,6 @@ export function TowerLibrary({ go, onReady }) {
   // Persistent across renders for the mount stream below; the budget is
   // only ever grown on mount, never shrunk by filters.
   const budgetRef = useRef(0);
-  const bootedRef = useRef(false);
   // The input stays bound to the raw query so typing never waits on work;
   // the expensive filter/sort and the deep index search run on the deferred
   // value at background priority, which removes the keystroke lag.
@@ -552,46 +551,52 @@ export function TowerLibrary({ go, onReady }) {
   }, [q, collectionFilter, sortId, towerOrder]);
   // Stream the index rows in behind the Tower boot overlay: each rAF chunk
   // commits a few hundred rows and then yields, so the boot animation keeps
-  // clean frames. The overlay is released only after the final chunk has
-  // painted, so it always lifts onto a complete list. This runs once on
-  // mount: filter/search/sort updates never touch the budget — rows stay
-  // mounted and only flip their hidden flag (see LibraryResults), so the
-  // list can neither blank nor thrash the DOM mid-typing.
+  // clean frames. The overlay used to lift only after the final chunk
+  // painted, which held the loader up for seconds on phones even though the
+  // page was ready long before. Now it releases on first meaningful paint —
+  // hero, controls, and the first chunk of rows — while the remaining rows
+  // keep streaming behind the visible page. This runs once on mount:
+  // filter/search/sort updates never touch the budget — rows stay mounted
+  // and only flip their hidden flag (see LibraryResults), so the list can
+  // neither blank nor thrash the DOM mid-typing.
   useEffect(() => {
     const total = artifacts.length;
-    let raf = 0;
+    const rafs = [];
     let timer = 0;
     let cancelled = false;
+    let released = false;
+    const later = (fn) => {
+      const id = requestAnimationFrame(fn);
+      rafs.push(id);
+      return id;
+    };
+    const releaseLoader = () => {
+      if (released || !onReady) return;
+      released = true;
+      // First chunk committed — two frames later it is painted.
+      later(() => later(() => {
+        if (!cancelled) onReady();
+      }));
+    };
     const tick = () => {
       if (cancelled) return;
       const next = Math.min(total, budgetRef.current + TOWER_ROW_CHUNK);
       budgetRef.current = next;
       setRowBudget(next);
-      if (next < total) {
-        raf = requestAnimationFrame(tick);
-      } else {
-        bootedRef.current = true;
-        if (onReady) {
-          // Full list committed — two frames later it is painted.
-          raf = requestAnimationFrame(() => {
-            raf = requestAnimationFrame(() => {
-              if (!cancelled) onReady();
-            });
-          });
-        }
-      }
+      releaseLoader();
+      if (next < total) later(tick);
     };
-    // Initial mount: let the boot overlay's entrance play before any row
+    // Initial mount: let the boot overlay's entrance start before any row
     // work begins.
     budgetRef.current = 0;
     setRowBudget(0);
     timer = setTimeout(() => {
-      raf = requestAnimationFrame(tick);
-    }, 650);
+      later(tick);
+    }, 150);
     return () => {
       cancelled = true;
       clearTimeout(timer);
-      cancelAnimationFrame(raf);
+      rafs.forEach((id) => cancelAnimationFrame(id));
     };
   }, [onReady]);
   return (
