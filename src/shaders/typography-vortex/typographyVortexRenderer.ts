@@ -9,6 +9,11 @@ export type TypographyVortexOptions = {
   dissolveRadius: number;
   particleAmount: number;
   suctionDuration: number;
+  // Frozen mode: render one static frame, then park the animation loop.
+  // Used on content-heavy routes (the Tower library index) where a living
+  // backdrop costs more than it gives — every animated frame forces the
+  // frosted-glass content above the canvas to repaint its backdrop blur.
+  frozen?: boolean;
 };
 
 function resolveMode(mode: TypographyVortexOptions["mode"] | number | string | undefined): TypographyVortexMode {
@@ -87,6 +92,7 @@ export function createTypographyVortexRenderer(
   let lastTime = 0;
   let lastDraw = 0;
   let stateFrame = 0;
+  let framesDrawn = 0;
   let frame = 0;
   let visible = true;
   let renderSignature = "";
@@ -515,11 +521,22 @@ export function createTypographyVortexRenderer(
     const typing =
       document.activeElement instanceof HTMLInputElement ||
       document.activeElement instanceof HTMLTextAreaElement;
-    if (!typing && time - lastDraw >= 33.34) {
+    // Frozen mode (library page): once the ring build is done and a full
+    // frame has drawn, stop drawing. The bitmap stays put as a static
+    // backdrop, so the frosted-glass content above it never repaints its
+    // backdrop blur — the per-frame tax that made scrolling and typing on
+    // the 3,448-row index feel heavy. The loop itself keeps ticking (a few
+    // property reads per wake — negligible), so un-freezing or a
+    // resize-triggered rebuild resumes drawing immediately.
+    const frozen = !!getOptions().frozen;
+    const buildDone = ringCursor === null && framesDrawn > 0;
+    if ((!frozen || !buildDone) && !typing && time - lastDraw >= 33.34) {
       lastDraw = time;
       draw(time);
+      framesDrawn += 1;
     }
-    frame = visible && !document.hidden ? requestAnimationFrame(animate) : 0;
+    frame = 0;
+    if (visible && !document.hidden) frame = requestAnimationFrame(animate);
   };
   const locatePointer = (event: PointerEvent) => {
     const bounds = host.getBoundingClientRect();
@@ -550,11 +567,25 @@ export function createTypographyVortexRenderer(
   // scroll fires resize continuously, and rebuilding every ring bitmap on
   // each one hitches the main thread and stutters the animation. Coalesce
   // into a single rebuild once sizing settles.
+  // Frozen mode: the ticking loop deliberately skips draw() once the
+  // static frame is complete, so a resize (which clears the canvas and
+  // invalidates the ring build) would otherwise leave a blank backdrop.
+  // Rebuild and repaint the single frame synchronously. This path is rare
+  // (rotation or a real window resize — sub-100px height wiggles never
+  // reach it), so a few hundred ms of canvas work here is acceptable.
+  const renderStaticFrame = () => {
+    let guard = 0;
+    draw(performance.now()); // signature check triggers buildRings()
+    while (ringCursor && guard++ < 1000) stepRingBuild();
+    draw(performance.now());
+    framesDrawn += 1;
+  };
   const scheduleResize = () => {
     if (resizeTimer) window.clearTimeout(resizeTimer);
     resizeTimer = window.setTimeout(() => {
       resizeTimer = 0;
       resize();
+      if (getOptions().frozen) renderStaticFrame();
     }, 250);
   };
   const resizeObserver = new ResizeObserver(scheduleResize);
