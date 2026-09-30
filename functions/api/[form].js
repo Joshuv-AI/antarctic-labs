@@ -10,7 +10,7 @@
 // set on the Pages project; without it the function answers 503 and the
 // form shows its normal error state.
 
-const TO = "hello@antarcticlabs.com";
+const DEFAULT_TO = "hello@antarcticlabs.com";
 const FROM = "Antarctic Labs <noreply@antarctic-labs.com>";
 const MAX_LEN = 8000;
 
@@ -46,7 +46,7 @@ function json(data, status = 200) {
 const str = (v) => (typeof v === "string" ? v.trim().slice(0, MAX_LEN) : "");
 const emailOk = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
-async function sendEmail(env, { replyTo, subject, text }) {
+async function sendEmail(env, { to, replyTo, subject, text }) {
   const key = env.RESEND_API_KEY;
   if (!key) return { ok: false, notConfigured: true };
   let res;
@@ -59,7 +59,7 @@ async function sendEmail(env, { replyTo, subject, text }) {
       },
       body: JSON.stringify({
         from: FROM,
-        to: [TO],
+        to: [to],
         ...(replyTo ? { reply_to: replyTo } : {}),
         subject,
         text,
@@ -169,7 +169,10 @@ export async function onRequestPost({ request, env, params }) {
     email = buildSuggestEmail(d);
   }
 
-  const sent = await sendEmail(env, email);
+  const sent = await sendEmail(env, {
+    to: env.FORMS_TO || DEFAULT_TO,
+    ...email,
+  });
   if (!sent.ok) {
     if (sent.notConfigured) {
       return json({ ok: false, error: "email service not configured" }, 503);
