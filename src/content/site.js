@@ -1,6 +1,6 @@
 // Global site identity — single source of truth for brand, contact,
 // operator, philosophy, and footer. Updating any field here updates the
-// header, menu, footer, contact CTA, and SEO metadata across the site.
+// header, menu, footer, and SEO metadata across the site.
 
 export const site = {
   brand: "ANTARCTIC LABS",
