@@ -574,9 +574,6 @@ function SableDock({ className, items, active, onSelect, options }: DockShellPro
               </button>
             ))}
           </nav>
-          <button className="animated-top-dock__cta" type="button">
-            Get started
-          </button>
         </header>
       </div>
     </div>
