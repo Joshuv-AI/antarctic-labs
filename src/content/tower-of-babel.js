@@ -35,4 +35,109 @@ export const towerOfBabel = {
         "Tower of Babel is being structured before the catalog opens. Once entries are finalized, they will appear here with their rights status, source links, and (where redistribution is permitted) direct access.",
     },
   },
+  // Suggest an entry — separate destination at
+  // /tower-of-babel/library/suggest. Front-end form only; no backend
+  // integration yet. Copy and field definitions live here so the form
+  // is data-driven rather than hardcoded in JSX.
+  suggest: {
+    sectionIndex: "SUGGEST AN ENTRY",
+    heading: "SUGGEST AN ENTRY",
+    intro:
+      "Know something that belongs in the Tower? Send it our way — a title and a type are all it takes. Every suggestion gets reviewed for the catalog.",
+    submitLabel: "SUBMIT SUGGESTION",
+    suggestAnother: "SUGGEST ANOTHER",
+    backToLibrary: "BACK TO THE LIBRARY",
+    success: {
+      heading: "SUGGESTION RECEIVED.",
+      body:
+        "Thanks — it's in the review pile. If it fits the Tower, it'll join the catalog.",
+    },
+    submitError:
+      "Something went wrong sending your suggestion. Please try again.",
+    fields: [
+      {
+        id: "suggest-type",
+        name: "type",
+        label: "TYPE OF MEDIA",
+        type: "select",
+        required: true,
+        selectPlaceholder: "Select a type",
+        options: [
+          { value: "BOOKS", label: "Books" },
+          { value: "DECLASSIFIED", label: "Declassified" },
+          { value: "DOCUMENTS", label: "Documents" },
+          { value: "PAPERS", label: "Papers" },
+          { value: "PODCASTS", label: "Podcasts" },
+          { value: "REFERENCE", label: "Reference" },
+        ],
+      },
+      {
+        id: "suggest-title",
+        name: "title",
+        label: "TITLE",
+        type: "text",
+        required: true,
+        autoComplete: "off",
+        placeholder: "The title of the work",
+      },
+      {
+        id: "suggest-format",
+        name: "format",
+        label: "SERIES OR EDITIONS?",
+        type: "select",
+        required: true,
+        selectPlaceholder: "Select one",
+        options: [
+          { value: "single", label: "Single standalone work" },
+          { value: "series", label: "Part of a series" },
+          { value: "editions", label: "Has multiple editions" },
+        ],
+      },
+      {
+        id: "suggest-series-details",
+        name: "seriesDetails",
+        label: "SERIES / EDITION DETAILS",
+        type: "text",
+        required: false,
+        autoComplete: "off",
+        placeholder: "e.g. Volume 2 of the Foundation series — optional",
+      },
+      {
+        id: "suggest-creator",
+        name: "creator",
+        label: "AUTHOR OR CREATOR",
+        type: "text",
+        required: false,
+        autoComplete: "off",
+        placeholder: "Who made it — if known",
+      },
+      {
+        id: "suggest-year",
+        name: "year",
+        label: "DATE PUBLISHED",
+        type: "text",
+        required: false,
+        autoComplete: "off",
+        placeholder: "e.g. 1925 — if known",
+      },
+      {
+        id: "suggest-source",
+        name: "source",
+        label: "WHERE TO FIND IT",
+        type: "text",
+        required: false,
+        autoComplete: "off",
+        placeholder: "A link or source — optional",
+      },
+      {
+        id: "suggest-notes",
+        name: "notes",
+        label: "ANYTHING ELSE",
+        type: "textarea",
+        required: false,
+        rows: 4,
+        placeholder: "Why this belongs in the Tower, context, etc. — optional",
+      },
+    ],
+  },
 };
