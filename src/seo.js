@@ -101,7 +101,7 @@ const ORG_NAME = site.brand;
 // Only routes that benefit from structured data emit one; other
 // routes clear the route-scoped script tag entirely.
 function buildJsonLdForPath(path, canonicalHref) {
-  if (path === "/") return organizationJsonLd(canonicalHref);
+  if (path === "/") return homeJsonLd(canonicalHref);
   if (path === "/about") return personJsonLd(canonicalHref);
   // Detail pages emit a BreadcrumbList to help crawlers understand
   // parent → child navigation.
@@ -121,6 +121,44 @@ function buildJsonLdForPath(path, canonicalHref) {
     ]);
   }
   return null;
+}
+
+function homeJsonLd(url) {
+  // Homepage emits an @graph: the Organization, the WebSite, and a
+  // ProfessionalService node describing the freelance services offered.
+  // The service node is the structured-data counterpart of the
+  // hire-intent keyword targeting (freelance AI developer, n8n expert…).
+  return {
+    "@context": "https://schema.org",
+    "@graph": [
+      organizationJsonLd(url),
+      {
+        "@type": "WebSite",
+        "@id": SITE_URL + "/#website",
+        url: SITE_URL + "/",
+        name: ORG_NAME,
+        publisher: { "@id": SITE_URL + "/#organization" },
+      },
+      {
+        "@type": "ProfessionalService",
+        "@id": SITE_URL + "/#service",
+        name: "Antarctic Labs — Freelance AI Automation & Web Development",
+        url: SITE_URL + "/",
+        provider: { "@id": SITE_URL + "/#organization" },
+        areaServed: "Worldwide",
+        description: site.description,
+        serviceType: [
+          "AI automation",
+          "n8n workflow automation",
+          "AI agent development",
+          "Web development",
+          "Web scraping & data extraction",
+          "Lead generation",
+          "API & systems integration",
+        ],
+      },
+    ],
+  };
 }
 
 function organizationJsonLd(url) {
