@@ -9,16 +9,18 @@
 // statically in index.html so that the first paint and any
 // crawler that doesn't run JavaScript still see canonical metadata.
 
-import { metaFor } from "./content/routes.js";
+import { metaFor, matchRoute } from "./content/routes.js";
 import { site } from "./content/site.js";
 import { operator } from "./content/operator.js";
+import { expeditions } from "./content/expeditions.js";
+import { artifacts } from "./content/library-catalog.js";
 
 const TAG_DEFS = [
-  { attr: "name", key: "description",       selector: "meta[name='description']" },
-  { attr: "property", key: "og:title",       selector: "meta[property='og:title']" },
-  { attr: "property", key: "og:description", selector: "meta[property='og:description']" },
-  { attr: "name", key: "twitter:title",       selector: "meta[name='twitter:title']" },
-  { attr: "name", key: "twitter:description", selector: "meta[name='twitter:description']" },
+  { attr: "name", key: "description", selector: "meta[name='description']", field: "description" },
+  { attr: "property", key: "og:title", selector: "meta[property='og:title']", field: "title" },
+  { attr: "property", key: "og:description", selector: "meta[property='og:description']", field: "description" },
+  { attr: "name", key: "twitter:title", selector: "meta[name='twitter:title']", field: "title" },
+  { attr: "name", key: "twitter:description", selector: "meta[name='twitter:description']", field: "description" },
 ];
 
 export function applyMeta(path) {
@@ -29,7 +31,8 @@ export function applyMeta(path) {
     document.title = meta.title;
   }
 
-  // Named / property meta tags
+  // Named / property meta tags. Title tags take meta.title, description
+  // tags take meta.description.
   for (const def of TAG_DEFS) {
     let el = document.head.querySelector(def.selector);
     if (!el) {
@@ -37,8 +40,9 @@ export function applyMeta(path) {
       el.setAttribute(def.attr, def.key);
       document.head.appendChild(el);
     }
-    if (el.getAttribute("content") !== meta.description) {
-      el.setAttribute("content", meta.description);
+    const want = meta[def.field];
+    if (el.getAttribute("content") !== want) {
+      el.setAttribute("content", want);
     }
   }
 
@@ -103,22 +107,66 @@ const ORG_NAME = site.brand;
 function buildJsonLdForPath(path, canonicalHref) {
   if (path === "/") return homeJsonLd(canonicalHref);
   if (path === "/about") return personJsonLd(canonicalHref);
-  // Detail pages emit a BreadcrumbList to help crawlers understand
-  // parent → child navigation.
-  if (path.startsWith("/projects/") && path.length > "/projects/".length) {
+  if (path === "/tower-of-babel/library") {
     return breadcrumbJsonLd([
       { name: "HOME", url: SITE_URL + "/" },
-      { name: "PROJECTS", url: SITE_URL + "/projects" },
-      { name: "PROJECT", url: canonicalHref },
+      { name: "TOWER OF BABEL", url: SITE_URL + "/tower-of-babel" },
+      { name: "LIBRARY", url: canonicalHref },
     ]);
   }
-  if (path === "/tower-of-babel/library" ||
-      (path.startsWith("/tower-of-babel/library/") && path.length > "/tower-of-babel/library/".length)) {
+  if (path === "/tower-of-babel/library/suggest") {
     return breadcrumbJsonLd([
       { name: "HOME", url: SITE_URL + "/" },
       { name: "TOWER OF BABEL", url: SITE_URL + "/tower-of-babel" },
       { name: "LIBRARY", url: SITE_URL + "/tower-of-babel/library" },
+      { name: "SUGGEST", url: canonicalHref },
     ]);
+  }
+  const match = matchRoute(path);
+  // matchRoute returns a string for literal matches and
+  // { pattern, params } for dynamic ones.
+  if (match && typeof match === "object") {
+    if (match.pattern === "/projects/:id") {
+      const exp = expeditions.find((e) => e.id === match.params.id);
+      const crumb = breadcrumbJsonLd([
+        { name: "HOME", url: SITE_URL + "/" },
+        { name: "PROJECTS", url: SITE_URL + "/projects" },
+        { name: exp ? exp.title.toUpperCase() : "PROJECT", url: canonicalHref },
+      ]);
+      if (!exp) return crumb;
+      // Project detail pages emit a CreativeWork node so Google
+      // understands each page as a distinct portfolio piece.
+      const work = {
+        "@type": "CreativeWork",
+        name: exp.title,
+        url: canonicalHref,
+        author: { "@id": SITE_URL + "/#organization" },
+      };
+      if (exp.shortDescription) work.description = exp.shortDescription;
+      return { "@context": "https://schema.org", "@graph": [crumb, work] };
+    }
+    if (match.pattern === "/tower-of-babel/library/:id") {
+      const art = artifacts.find((a) => a.artifact_id === match.params.id);
+      const crumb = breadcrumbJsonLd([
+        { name: "HOME", url: SITE_URL + "/" },
+        { name: "TOWER OF BABEL", url: SITE_URL + "/tower-of-babel" },
+        { name: "LIBRARY", url: SITE_URL + "/tower-of-babel/library" },
+        { name: art ? art.title.toUpperCase() : "ENTRY", url: canonicalHref },
+      ]);
+      if (!art) return crumb;
+      // Library entries emit a Book node — the structured-data
+      // counterpart of the free-library keyword targeting, and
+      // eligible for book rich results.
+      const book = {
+        "@type": "Book",
+        name: art.title,
+        url: canonicalHref,
+      };
+      if (art.creator) book.author = { "@type": "Person", name: art.creator };
+      if (art.year) book.datePublished = String(art.year);
+      if (art.description) book.description = art.description;
+      return { "@context": "https://schema.org", "@graph": [crumb, book] };
+    }
   }
   return null;
 }
