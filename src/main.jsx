@@ -200,7 +200,6 @@ function App() {
       <a href="#main-content" className="skip-link">
         Skip to main content
       </a>
-      {/* TODO: re-attach new background asset here on the homepage only. */}
       {/* Animated top dock (ThreeUI modern variant) — the site's command
           bar, carrying the four in-scope routes. Exact configured motion:
           proximity 122, spring 0.19, damping 0.70, widthGrowth 17,
