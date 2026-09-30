@@ -30,7 +30,7 @@ export const operator = {
     statement: "Turn unknowns into working systems.",
     paragraphs: [
       "Most worthwhile problems start as unknowns — a process nobody has mapped, data nobody has tamed, a workflow held together by manual effort. The mission is to take those unknowns seriously: understand them, rebuild them, and automate what should never have been manual in the first place.",
-      "Useful machines for unknown territory isn't a slogan. It's the job description.",
+      "Ready to work on your project isn't a slogan. It's the job description.",
     ],
   },
 
