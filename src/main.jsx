@@ -30,6 +30,15 @@ import {
   About,
 } from "./pages.jsx";
 gsap.registerPlugin(ScrollTrigger);
+// Take scroll behavior fully under app control. With the default "auto"
+// restoration, browsers (notably iOS Safari) can reinstate a stale scroll
+// position around pushState/popstate, which is what landed some page
+// navigations mid-page instead of at the top. "manual" disables that, so
+// the app's own page-change scroll below is the only thing that moves the
+// viewport. Runs at module load, before the browser's load-time restoration.
+if (typeof history !== "undefined" && "scrollRestoration" in history) {
+  history.scrollRestoration = "manual";
+}
 function pathLabel(path) {
   if (path === "/") return "ANTARCTIC LABS";
   return path.replace("/", "").replaceAll("-", " ").toUpperCase();
@@ -136,6 +145,32 @@ function App() {
   useEffect(() => {
     applyMeta(path);
   }, [path]);
+  // Every page starts at the top. This runs after React commits the new
+  // page's DOM (effects fire post-commit), then waits two animation frames
+  // so layout is settled before scrolling. The previous approach scrolled
+  // inside go() before the new DOM existed, which let the browser keep a
+  // stale mid-page offset on some navigations. Covers every route, since
+  // all pages render through `path`.
+  useEffect(() => {
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        window.scrollTo(0, 0);
+        // Belt and suspenders: some embedded browsers honor the element
+        // scrollTop more reliably than window.scrollTo.
+        if (document.scrollingElement) {
+          document.scrollingElement.scrollTop = 0;
+        } else {
+          document.documentElement.scrollTop = 0;
+          document.body.scrollTop = 0;
+        }
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [path]);
   const go = (to) => {
     if (to === path || transitioning) return;
     const canonical = legacyRedirect(to) || to;
@@ -143,10 +178,14 @@ function App() {
     // Entering the Tower of Babel (landing, library, or any entry page) from
     // inside the app: raise the Tower loader so the transition gets the same
     // branded beat as the initial page load and the ENTER THE LIBRARY button.
+    // The suggest-an-entry form is excluded: it is a lightweight form, not a
+    // destination, and it never reports ready — so the boot overlay would sit
+    // on it until the 4s failsafe. It uses the standard fast swap instead.
     const enteringTower =
       (canonical === "/tower-of-babel" ||
         canonical === "/tower-of-babel/library" ||
-        canonical.startsWith("/tower-of-babel/library/")) &&
+        (canonical.startsWith("/tower-of-babel/library/") &&
+          canonical !== "/tower-of-babel/library/suggest")) &&
       path !== canonical;
     if (enteringTower) {
       dismissBrandBoot();
