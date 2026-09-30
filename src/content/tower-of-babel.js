@@ -24,9 +24,6 @@ export const towerOfBabel = {
     "Named for the old story of a place where the works of the world were gathered together — knowledge meant to be open and shared. One library collecting the most important texts from every culture, tradition, and field. No suppression, no hiding.",
     "The deeper purpose is connection: with thousands of texts side by side, patterns emerge — a story in one tradition echoes a declassified document in another; a folktale rhymes with a witness account. Anyone can read, anyone can research — and maybe unravel a greater story than any single book could tell. Something like the Akashic records: the whole of human knowledge, unlocked.",
   ],
-  access: [
-    "Where redistribution is permitted, the full text can be read and downloaded directly. Where it's restricted, the library preserves the complete metadata and points back to the source — nothing about what it holds is hidden; only the files that can't legally be shared are withheld.",
-  ],
   // Library landing — separate destination at /tower-of-babel/library.
   library: {
     heading: "THE LIBRARY",
