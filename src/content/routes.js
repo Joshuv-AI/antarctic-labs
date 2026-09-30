@@ -33,6 +33,10 @@ export const routeMeta = {
     title: `Library — Tower of Babel — ${SITE_NAME}`,
     description: `Personal library catalog. ${DEFAULT_DESCRIPTION}`,
   },
+  "/tower-of-babel/library/suggest": {
+    title: `Suggest an Entry — Tower of Babel — ${SITE_NAME}`,
+    description: `Suggest a book, document, or text for the Tower of Babel library catalog. ${DEFAULT_DESCRIPTION}`,
+  },
   "/government-contracting": {
     title: `Government Contracting — ${SITE_NAME}`,
     description: `Government contracting and public sector information. ${DEFAULT_DESCRIPTION}`,
@@ -104,6 +108,9 @@ export const routes = [
   "/projects/:id",
   "/tower-of-babel",
   "/tower-of-babel/library",
+  // Literal suggest route must precede the dynamic :id pattern so
+  // matchRoute resolves it as its own page, not an artifact id.
+  "/tower-of-babel/library/suggest",
   "/tower-of-babel/library/:id",
   "/government-contracting",
   "/about",
