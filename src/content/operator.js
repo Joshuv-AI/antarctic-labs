@@ -69,7 +69,6 @@ export const operator = {
       "That instinct moved toward software: systems that process information, automate work, connect tools, and operate without someone manually pushing every button. Today that work is the service — AI workflow automation with n8n, Make, and Zapier; web scraping and data extraction; lead generation; and website development — scoped clearly up front, delivered clean and ready to use.",
     ],
     facts: [
-      ["OPERATOR", "JOSHUA ALMODOVAR"],
       ["BASED", "SANFORD, FLORIDA / WORLDWIDE"],
       ["FOCUS", "AI AUTOMATION · DATA · WEB DEV"],
     ],
