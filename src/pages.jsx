@@ -556,6 +556,15 @@ export function TowerLibrary({ go, onReady }) {
         <div className="section-index">LIBRARY</div>
         <h1>{towerOfBabel.library.heading}</h1>
         <p className="display-copy">{towerOfBabel.library.intro}</p>
+        <div className="tower-suggest-actions">
+          <button
+            type="button"
+            className="tower-access-btn"
+            onClick={() => go("/tower-of-babel/library/suggest")}
+          >
+            SUGGEST AN ENTRY <span aria-hidden="true">↗</span>
+          </button>
+        </div>
       </section>
       <section className="tower-index section">
         <div className="section-index">CATALOG</div>
@@ -623,6 +632,210 @@ export function TowerLibrary({ go, onReady }) {
             />
           </>
         )}
+      </section>
+    </main>
+  );
+}
+
+// ----- Tower of Babel / suggest an entry ------------------------------------
+// Suggestion intake form. Front-end only: submissions go through
+// submitSuggestion(), which is currently an unwired stub. When a
+// destination exists (API route, form service, inbox), POST the payload
+// there — the form already awaits it, so wiring it up is a one-spot
+// change.
+async function submitSuggestion(payload) {
+  // SUGGESTION ENDPOINT — not wired yet. Replace this stub with the real
+  // POST when the backend exists. Payload shape: { type, title, format,
+  // seriesDetails, creator, year, source, notes } (all strings).
+  return { ok: true, payload };
+}
+
+export function SuggestEntry({ go }) {
+  const s = towerOfBabel.suggest;
+  const fields = s.fields;
+  const initialValues = fields.reduce((acc, f) => {
+    acc[f.name] = "";
+    return acc;
+  }, {});
+  const [values, setValues] = useState(initialValues);
+  const [errors, setErrors] = useState({});
+  const [submitError, setSubmitError] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const validate = (next) => {
+    const errs = {};
+    fields.forEach((f) => {
+      const v = (next[f.name] || "").trim();
+      if (f.required && v.length === 0) {
+        errs[f.name] = "Required.";
+      }
+    });
+    return errs;
+  };
+  const onChange = (name) => (e) => {
+    const next = { ...values, [name]: e.target.value };
+    setValues(next);
+    if (errors[name]) {
+      const errs = { ...errors };
+      delete errs[name];
+      setErrors(errs);
+    }
+    if (submitError) setSubmitError("");
+  };
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    const errs = validate(values);
+    setErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      const firstInvalid = fields.find((f) => errs[f.name]);
+      if (firstInvalid && typeof document !== "undefined") {
+        const el = document.getElementById(firstInvalid.id);
+        if (el && typeof el.focus === "function") {
+          el.focus();
+        }
+      }
+      return;
+    }
+    try {
+      await submitSuggestion(values);
+    } catch (err) {
+      setSubmitError(s.submitError);
+      return;
+    }
+    setSubmitted(true);
+    if (typeof window !== "undefined") {
+      window.setTimeout(() => {
+        const region = document.getElementById("suggest-success");
+        if (region && typeof region.focus === "function") {
+          region.focus();
+        }
+      }, 50);
+    }
+  };
+  const onReset = () => {
+    setValues(initialValues);
+    setErrors({});
+    setSubmitError("");
+    setSubmitted(false);
+  };
+  return (
+    <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
+      <section className="inner-hero section">
+        <div className="section-index">{s.sectionIndex}</div>
+        <h1>{s.heading}</h1>
+        <p className="display-copy">{s.intro}</p>
+      </section>
+      <section className="section suggest-section">
+        <div className="suggest-wrap">
+          {!submitted ? (
+            <form
+              className="suggest-form"
+              onSubmit={onSubmit}
+              noValidate={false}
+              aria-label="Suggest a library entry"
+            >
+              {fields.map((f) => {
+                const fieldError = errors[f.name];
+                const errorId = `${f.id}-error`;
+                return (
+                  <div className="suggest-field" key={f.id}>
+                    <label htmlFor={f.id}>
+                      {f.label}
+                      {f.required && <span className="req" aria-hidden="true"> *</span>}
+                    </label>
+                    {f.type === "select" ? (
+                      <select
+                        id={f.id}
+                        name={f.name}
+                        required={f.required}
+                        value={values[f.name]}
+                        onChange={onChange(f.name)}
+                        aria-required={f.required || undefined}
+                        aria-invalid={fieldError ? "true" : undefined}
+                        aria-describedby={fieldError ? errorId : undefined}
+                      >
+                        <option value="" disabled>{f.selectPlaceholder || "Select"}</option>
+                        {f.options.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : f.type === "textarea" ? (
+                      <textarea
+                        id={f.id}
+                        name={f.name}
+                        required={f.required}
+                        rows={f.rows || 4}
+                        value={values[f.name]}
+                        onChange={onChange(f.name)}
+                        placeholder={f.placeholder}
+                        aria-required={f.required || undefined}
+                        aria-invalid={fieldError ? "true" : undefined}
+                        aria-describedby={fieldError ? errorId : undefined}
+                      />
+                    ) : (
+                      <input
+                        id={f.id}
+                        name={f.name}
+                        type={f.type}
+                        required={f.required}
+                        value={values[f.name]}
+                        onChange={onChange(f.name)}
+                        autoComplete={f.autoComplete}
+                        placeholder={f.placeholder}
+                        aria-required={f.required || undefined}
+                        aria-invalid={fieldError ? "true" : undefined}
+                        aria-describedby={fieldError ? errorId : undefined}
+                      />
+                    )}
+                    {fieldError && (
+                      <p className="suggest-error" id={errorId} role="alert">
+                        {fieldError}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+              {submitError && (
+                <p className="suggest-error" role="alert">
+                  {submitError}
+                </p>
+              )}
+              <div className="suggest-actions">
+                <button type="submit" className="tower-access-btn suggest-submit">
+                  {s.submitLabel} <span aria-hidden="true">↗</span>
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div
+              className="suggest-success"
+              id="suggest-success"
+              tabIndex={-1}
+              aria-live="polite"
+            >
+              <div className="section-index">RECEIVED</div>
+              <h2>{s.success.heading}</h2>
+              <p className="body-copy">{s.success.body}</p>
+              <div className="suggest-success-actions">
+                <button
+                  type="button"
+                  className="tower-access-btn suggest-submit"
+                  onClick={onReset}
+                >
+                  {s.suggestAnother}
+                </button>
+                <button
+                  type="button"
+                  className="suggest-ghost-btn"
+                  onClick={() => go("/tower-of-babel/library")}
+                >
+                  {s.backToLibrary}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       </section>
     </main>
   );
