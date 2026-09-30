@@ -15,7 +15,7 @@ export const operator = {
   heading: "WHO WE ARE.",
 
   positioning:
-    "Antarctic Labs is a freelance technology studio run by Joshua Almodovar — AI automation, websites, and data systems, built and delivered ready to work. The person you talk to is the person who builds it.",
+    "Antarctic Labs is a freelance technology studio — AI automation, websites, and data systems, built and delivered ready to work. When you reach out, you talk directly to the team building your project — no account managers, no handoffs.",
 
   whoWeAre: {
     title: "WHO WE ARE",
@@ -62,11 +62,11 @@ export const operator = {
 
   team: {
     title: "THE TEAM",
-    headline: "A team of one — by design.",
+    headline: "Joshua Almodovar.",
     paragraphs: [
       "Antarctic Labs is operated by Joshua Almodovar. No account managers, no handoffs, no juniors learning on your project — the person you talk to is the person who builds it.",
       "Joshua's path into technology wasn't a straight line. He spent years in customer service, retail, restaurant operations, management, and training — environments where getting things right meant understanding people, processes, constraints, and what happens when something breaks.",
-      "That instinct is now the service: AI workflow automation with n8n, Make, and Zapier; web scraping and data extraction; lead generation; and website development — scoped clearly up front, delivered clean and ready to use.",
+      "That instinct moved toward software: systems that process information, automate work, connect tools, and operate without someone manually pushing every button. Today that work is the service — AI workflow automation with n8n, Make, and Zapier; web scraping and data extraction; lead generation; and website development — scoped clearly up front, delivered clean and ready to use.",
     ],
     facts: [
       ["OPERATOR", "JOSHUA ALMODOVAR"],
