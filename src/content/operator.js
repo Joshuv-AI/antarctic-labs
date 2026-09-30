@@ -72,7 +72,6 @@ export const operator = {
       ["OPERATOR", "JOSHUA ALMODOVAR"],
       ["BASED", "SANFORD, FLORIDA / WORLDWIDE"],
       ["FOCUS", "AI AUTOMATION · DATA · WEB DEV"],
-      ["CONTACT", "HELLO@ANTARCTICLABS.COM"],
     ],
   },
 };
