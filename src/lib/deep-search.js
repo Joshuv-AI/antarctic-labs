@@ -39,7 +39,7 @@ function stemCached(w) {
   return s;
 }
 
-export async function getManifest() {
+async function getManifest() {
   if (!manifestPromise) {
     manifestPromise = fetch("/search-index/manifest.json")
       .then((r) => (r.ok ? r.json() : null))
