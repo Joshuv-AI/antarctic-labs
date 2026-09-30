@@ -10,9 +10,9 @@
 
 export const expeditionsArchive = {
   heading: "PROJECTS",
-  intro: "Everything I’ve built that was worth documenting.",
+  intro: "A curated set of independent builds.",
   supporting:
-    "Software, automation, AI systems, experiments, research, digital experiences, and other projects — finished, active, experimental, or archived.",
+    "Self-directed projects selected to demonstrate proficiency across software, automation, AI systems, and research. Not client work, and not a complete archive.",
 };
 
 export const expeditions = [
