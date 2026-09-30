@@ -532,11 +532,11 @@ export function TowerLibrary({ go, onReady }) {
   const q = listQuery;
   const towerOrder = TOWER_ORDER[sortId] || TOWER_ORDER["title-asc"];
   // Rank of each matching artifact in the current filter/sort (1-based), as
-  // a Map from artifact_id. Rows stay mounted across filter/search/sort
-  // updates and are only shown/hidden, so a keystroke burst never
-  // unmounts/remounts thousands of rows — the 500ms+ hitch this replaces.
-  // The memoized TowerRow below re-renders only when its own rank or
-  // visibility actually changes.
+  // a Map from artifact_id. LibraryResults mounts only the matching rows,
+  // so a filter/sort update reconciles dozens of rows instead of all
+  // 3,448 — the hidden-flag approach this replaced kept input fast but
+  // made every update walk the whole catalog. The memoized TowerRow
+  // re-renders only when its own rank actually changes.
   const { rankMap, matchCount } = useMemo(() => {
     const map = new Map();
     for (let k = 0; k < towerOrder.length; k++) {
@@ -556,8 +556,8 @@ export function TowerLibrary({ go, onReady }) {
   // page was ready long before. Now it releases on first meaningful paint —
   // hero, controls, and the first chunk of rows — while the remaining rows
   // keep streaming behind the visible page. This runs once on mount:
-  // filter/search/sort updates never touch the budget — rows stay mounted
-  // and only flip their hidden flag (see LibraryResults), so the list can
+  // filter/search/sort updates never touch the budget — LibraryResults
+  // derives the visible rows from the budget + rank map, so the list can
   // neither blank nor thrash the DOM mid-typing.
   useEffect(() => {
     const total = artifacts.length;
@@ -698,6 +698,19 @@ const LibraryResults = memo(function LibraryResults({
   q,
   go,
 }) {
+  // Render only the matching rows instead of keeping all 3,448 mounted and
+  // flipping `hidden`: a filter update then reconciles dozens of rows
+  // instead of thousands, and the DOM stays small so style recalc and
+  // paint stay cheap. (The previous hidden-flip approach kept input fast
+  // but made every filter/sort update walk all 3,448 rows.)
+  const visibleIndices = useMemo(() => {
+    const out = [];
+    for (let k = 0; k < rowBudget; k++) {
+      const i = towerOrder[k];
+      if (rankMap.has(artifacts[i].artifact_id)) out.push(i);
+    }
+    return out;
+  }, [towerOrder, rankMap, rowBudget]);
   return (
     <>
       <p className="tower-result-count" aria-live="polite">
@@ -711,15 +724,13 @@ const LibraryResults = memo(function LibraryResults({
         </p>
       )}
       <div className="tower-rows">
-        {towerOrder.slice(0, rowBudget).map((i) => {
+        {visibleIndices.map((i) => {
           const a = artifacts[i];
-          const rank = rankMap.get(a.artifact_id);
           return (
             <TowerRow
               key={a.artifact_id}
               a={a}
-              index={rank}
-              hidden={rank === undefined}
+              index={rankMap.get(a.artifact_id)}
               go={go}
             />
           );
@@ -732,12 +743,12 @@ const LibraryResults = memo(function LibraryResults({
 
 // One catalog row. Memoized: the artifact object is a stable module-level
 // reference and `go` is stable across keystrokes, so a row re-renders only
-// when its own rank or visibility changes.
-const TowerRow = memo(function TowerRow({ a, index, hidden, go }) {
+// when its own rank actually changes. Only matching rows are mounted (see
+// LibraryResults), so there is no per-row visibility flag.
+const TowerRow = memo(function TowerRow({ a, index, go }) {
   return (
     <button
       className="tower-row reveal"
-      hidden={hidden}
       onClick={() => go(`/tower-of-babel/library/${a.artifact_id}`)}
     >
       <span className="tower-row-index">
