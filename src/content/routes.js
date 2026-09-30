@@ -48,7 +48,7 @@ export const routeMeta = {
   "/tower-of-babel/library/suggest": {
     title: `Suggest a Book for the Free Online Library | Tower of Babel`,
     description:
-      "Suggest a book, document, or text for the Tower of Babel's free online library catalog.",
+      "Suggest a book, document, or text for the Tower of Babel free online library. Every suggestion is reviewed; accepted works are preserved in clean text.",
   },
   "/government-contracting": {
     title: `AI Systems for Government Contracting | ${SITE_NAME}`,
