@@ -7,8 +7,6 @@
 // compatibility with the existing React component. The public site
 // IA is now CONTACT.
 
-import { transmissionFaqs } from "./faq.js";
-
 export const transmission = {
   sectionIndex: "CONTACT",
   heading: "GET A FREE\nQUOTE.",
@@ -132,7 +130,4 @@ export const transmission = {
   // good-first-message note) was removed from the page per Joshua's call.
   // The email remains the Resend fallback in the form error message.
 
-  // Contact-page FAQ — rendered below the form flow and emitted as
-  // FAQPage JSON-LD. Targets "hire AI automation developer" discovery.
-  faqs: transmissionFaqs,
 };
