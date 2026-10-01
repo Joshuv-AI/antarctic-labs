@@ -391,7 +391,6 @@ export function TowerOfBabel({ go, onReady }) {
           <p className="body-copy" key={i}>{p}</p>
         ))}
       </section>
-      <FaqBlock index="QUESTIONS" faqs={towerOfBabel.faqs} />
     </main>
   );
 }
@@ -1579,17 +1578,6 @@ export function About({ go }) {
           </ul>
         </div>
       </section>
-
-      {operator.extra && (
-        <section className="copy-block section reveal">
-          <span className="section-index">HOW ENGAGEMENTS WORK</span>
-          <div>
-            <p className="body-copy">{operator.extra}</p>
-          </div>
-        </section>
-      )}
-
-      <FaqBlock index="QUESTIONS" faqs={operator.faqs} />
     </main>
   );
 }
@@ -1850,7 +1838,6 @@ export function Transmission({ go }) {
             ))}
           </ol>
       </section>
-      <FaqBlock index="QUESTIONS" faqs={transmission.faqs} />
     </main>
   );
 }
