@@ -12,6 +12,8 @@
 //
 // Route: /government-contracting. Display label: GOV CONTRACTS.
 
+import { governmentFaqs, governmentExtra } from "./faq.js";
+
 export const government = {
   brand: "ANTARCTIC LABS",
   statusPill: "GOVERNMENT CONTRACTING",
@@ -88,4 +90,11 @@ export const government = {
 
   footnote:
     "Status note: Antarctic Labs does not currently hold government contracts, registrations, certifications, security clearances, or past performance as a government vendor. The technical work described on this page is real; the public-sector practice is under active development.",
+
+  // Emerging-practice narrative — honest positioning, claims nothing unreal.
+  extra: governmentExtra,
+
+  // Gov-page FAQ — rendered on the page and emitted as FAQPage JSON-LD.
+  // Targets "small business government contracting" informational discovery.
+  faqs: governmentFaqs,
 };
