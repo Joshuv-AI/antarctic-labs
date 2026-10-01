@@ -4,8 +4,10 @@
 // The artifact catalog (data model + entries) lives in ./library-catalog.js.
 // This file holds only the marketing copy that renders on /tower-of-babel
 // and /tower-of-babel/library.
-
-export { artifacts } from "./library-catalog.js";
+//
+// NOTE: this module must NOT import ./library-catalog.js. The catalog is
+// lazy-loaded via ../lib/catalog.js (dynamic import); a static import here
+// would drag all 3,448 records back into the main bundle.
 
 export const towerOfBabel = {
   heading: "TOWER OF BABEL",
