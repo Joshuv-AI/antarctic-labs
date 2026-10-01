@@ -2,6 +2,8 @@
 // operator, philosophy, and footer. Updating any field here updates the
 // header, menu, footer, and SEO metadata across the site.
 
+import { siteFaqs } from "./faq.js";
+
 export const site = {
   brand: "ANTARCTIC LABS",
   operator: "JOSHUA ALMODOVAR",
@@ -30,22 +32,27 @@ export const site = {
     [
       "AI AGENTS & AUTOMATION",
       "AI workflows and agents that take repetitive work off your team's plate.",
+      "/services/ai-agents",
     ],
     [
       "WEB DESIGN & DEVELOPMENT",
       "Fast, modern websites and web applications — designed, built, and shipped.",
+      "/services/web-development",
     ],
     [
       "BUSINESS AUTOMATION",
       "n8n, Make, and Zapier systems for lead handling, notifications, data processing, and business processes.",
+      "/services/n8n-workflows",
     ],
     [
       "WEB SCRAPING & DATA",
       "Clean, structured data from public sources — delivered in Excel or CSV.",
+      "/services/web-scraping",
     ],
     [
       "LEAD GENERATION",
       "Targeted B2B lists with verified contacts, built to your spec.",
+      "/services/lead-generation",
     ],
     [
       "DATA CLEANING & SPREADSHEETS",
@@ -58,6 +65,7 @@ export const site = {
     [
       "API & SYSTEMS INTEGRATION",
       "Your tools connected as one system — CRMs, chat, docs, webhooks, custom APIs.",
+      "/services/ai-automation",
     ],
     [
       "TRADING SYSTEMS",
@@ -72,4 +80,8 @@ export const site = {
       "Interactive interfaces, unusual tools, and ideas worth building to learn from.",
     ],
   ],
+
+  // Homepage FAQ — rendered at the foot of the home page and emitted as
+  // FAQPage JSON-LD. Targets "AI automation developer" discovery.
+  faqs: siteFaqs,
 };
