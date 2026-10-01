@@ -33,6 +33,11 @@ import {
   About,
 } from "./pages.jsx";
 gsap.registerPlugin(ScrollTrigger);
+// iOS Safari perf (2026-10-01, researched): the address bar showing/hiding
+// resizes the viewport, which triggers ScrollTrigger.refresh() and stalls
+// scroll momentum. Ignore mobile resize events — the layout doesn't depend
+// on the exact viewport height.
+ScrollTrigger.config({ ignoreMobileResize: true });
 // Take scroll behavior fully under app control. With the default "auto"
 // restoration, browsers (notably iOS Safari) can reinstate a stale scroll
 // position around pushState/popstate, which is what landed some page
@@ -909,7 +914,12 @@ function Home({ go }) {
               trigger: envArrival,
               start: "top top",
               end: "bottom top",
-              scrub: true,
+              // iOS Safari perf (2026-10-01, researched): scrub as a number
+              // (0.6s catch-up) instead of `true` smooths chunky iOS scroll
+              // deltas; fastScrollEnd prevents mid-state glitches on fast
+              // flings. Both are transform-only — no visual change.
+              scrub: 0.6,
+              fastScrollEnd: true,
               // Perf (2026-10-01): the arrival-live mask toggle is removed.
               // Toggling a mask class at scroll start forced iOS Safari to
               // re-rasterize the WebGL constellation layer, causing a hitch
