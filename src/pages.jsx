@@ -20,6 +20,7 @@ import {
   loadCatalog,
   getCachedArtifacts,
 } from "./lib/catalog.js";
+import { TOWER_FILES } from "./lib/tower-files.js";
 import { applyMeta } from "./seo.js";
 import { government } from "./content/government.js";
 import { transmission } from "./content/transmission.js";
@@ -776,6 +777,9 @@ export function SuggestEntry({ go }) {
   const [errors, setErrors] = useState({});
   const [submitError, setSubmitError] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  // W10 fix (2026-10-01): prevent double-submit. Without this, rapid
+  // double-clicks fire duplicate POST /api/suggest requests.
+  const [sending, setSending] = useState(false);
   // Honeypot: invisible to humans, bots fill it. The API drops those silently.
   const [honeypot, setHoneypot] = useState("");
   const validate = (next) => {
@@ -800,6 +804,8 @@ export function SuggestEntry({ go }) {
   };
   const onSubmit = async (e) => {
     e.preventDefault();
+    // W10: ignore if already sending (double-click protection)
+    if (sending) return;
     const errs = validate(values);
     setErrors(errs);
     if (Object.keys(errs).length > 0) {
@@ -812,12 +818,15 @@ export function SuggestEntry({ go }) {
       }
       return;
     }
+    setSending(true);
     try {
       await submitSuggestion({ ...values, website: honeypot });
     } catch (err) {
       setSubmitError(s.submitError);
+      setSending(false);
       return;
     }
+    setSending(false);
     setSubmitted(true);
     if (typeof window !== "undefined") {
       window.setTimeout(() => {
@@ -933,8 +942,13 @@ export function SuggestEntry({ go }) {
                 />
               </div>
               <div className="suggest-actions">
-                <button type="submit" className="tower-access-btn suggest-submit">
-                  {s.submitLabel} <span aria-hidden="true">↗</span>
+                <button
+                  type="submit"
+                  className="tower-access-btn suggest-submit"
+                  disabled={sending}
+                >
+                  {sending ? "SENDING…" : s.submitLabel}{" "}
+                  <span aria-hidden="true">↗</span>
                 </button>
               </div>
             </form>
@@ -1302,10 +1316,20 @@ export function LibraryArtifact({ go, params, onReady }) {
     ["SOURCE", artifact.source],
   ].filter(([, v]) => v !== undefined && v !== null && v !== "");
   const status = artifact.download_status;
+  const url = artifact.download_url;
+  // C1 fix (2026-10-01): 2,539 AVAILABLE records point at .txt files that
+  // were never uploaded. Verify local files against the build-time manifest
+  // so the button never 404s. External links are always shown.
+  const isLocalTowerFile =
+    typeof url === "string" && url.startsWith("/tower-of-babel/");
+  const localFileExists =
+    !isLocalTowerFile ||
+    TOWER_FILES.has(url.split("/").pop().replace(/\.txt$/, ""));
   const canAccess =
     (status === "AVAILABLE" || status === "EXTERNAL_LINK") &&
-    typeof artifact.download_url === "string" &&
-    artifact.download_url.length > 0;
+    typeof url === "string" &&
+    url.length > 0 &&
+    localFileExists;
   const accessLabel =
     status === "EXTERNAL_LINK" ? "OPEN EXTERNAL SOURCE" : "ACCESS RESOURCE";
   return (
