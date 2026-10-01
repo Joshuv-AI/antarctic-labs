@@ -10,7 +10,7 @@ export const transmission = {
   sectionIndex: "CONTACT",
   heading: "GET A FREE\nQUOTE.",
   body:
-    "Tell me what you're trying to build — I'll reply within 24 hours with an honest quote, even if we don't end up working together.",
+    "Tell me what you're trying to build — I'll reply within 24 hours with an honest quote, even if we don't end up working together. After you send the brief, you can also schedule a Zoom call to talk it through.",
   // Dual path, form-first: the book-a-call link appears ONLY after a
   // successful form submission, so Joshua always has the brief's context
   // before the call. (His call, 2026-09-30 — no blind bookings.)
