@@ -11,6 +11,7 @@ import { useState, useEffect, useMemo, useDeferredValue, useRef, memo } from "re
 import { searchDeep, getSnippets } from "./lib/deep-search.js";
 import { site } from "./content/site.js";
 import { expeditions, expeditionsArchive } from "./content/expeditions.js";
+import { projectsIntro } from "./content/faq.js";
 import { operator } from "./content/operator.js";
 import { towerOfBabel } from "./content/tower-of-babel.js";
 // The artifact catalog is lazy (see ./lib/catalog.js): it is ~2.6MB of
@@ -24,6 +25,7 @@ import { TOWER_FILES } from "./lib/tower-files.js";
 import { applyMeta } from "./seo.js";
 import { government } from "./content/government.js";
 import { transmission } from "./content/transmission.js";
+import { services } from "./content/services.js";
 // ----- Projects archive + detail (was: Expeditions) -------------------------
 const PROJECT_STATUS_TONE = {
   ACTIVE: "#4ade80",
@@ -71,6 +73,7 @@ export function Projects({ go }) {
         <h1>{expeditionsArchive.heading}</h1>
         <p className="display-copy">{expeditionsArchive.intro}</p>
         <p className="body-copy">{expeditionsArchive.supporting}</p>
+        <p className="body-copy">{projectsIntro}</p>
         <div className="project-stats">
           <div className="project-stat">
             <b>{expeditions.length}</b>
@@ -388,6 +391,7 @@ export function TowerOfBabel({ go, onReady }) {
           <p className="body-copy" key={i}>{p}</p>
         ))}
       </section>
+      <FaqBlock index="QUESTIONS" faqs={towerOfBabel.faqs} />
     </main>
   );
 }
@@ -668,6 +672,7 @@ export function TowerLibrary({ go, onReady }) {
         <div className="section-index">LIBRARY</div>
         <h1>{towerOfBabel.library.heading}</h1>
         <p className="display-copy">{towerOfBabel.library.intro}</p>
+        <p className="body-copy">{towerOfBabel.library.scopeNote}</p>
         <div className="tower-suggest-actions">
           <button
             type="button"
@@ -746,6 +751,7 @@ export function TowerLibrary({ go, onReady }) {
           </>
         )}
       </section>
+      <FaqBlock index="QUESTIONS" faqs={towerOfBabel.library.faqs} />
     </main>
   );
 }
@@ -1495,6 +1501,15 @@ export function Government({ go }) {
         </div>
       </section>
 
+      <section className="copy-block section reveal">
+        <div className="section-index">THE PATH IN</div>
+        <div>
+          <p className="body-copy">{government.extra}</p>
+        </div>
+      </section>
+
+      <FaqBlock index="QUESTIONS" faqs={government.faqs} />
+
       <section className="copy-block section">
         <p className="gov-footnote">{government.footnote}</p>
       </section>
@@ -1564,6 +1579,17 @@ export function About({ go }) {
           </ul>
         </div>
       </section>
+
+      {operator.extra && (
+        <section className="copy-block section reveal">
+          <span className="section-index">HOW ENGAGEMENTS WORK</span>
+          <div>
+            <p className="body-copy">{operator.extra}</p>
+          </div>
+        </section>
+      )}
+
+      <FaqBlock index="QUESTIONS" faqs={operator.faqs} />
     </main>
   );
 }
@@ -1823,6 +1849,226 @@ export function Transmission({ go }) {
               </li>
             ))}
           </ol>
+      </section>
+      <FaqBlock index="QUESTIONS" faqs={transmission.faqs} />
+    </main>
+  );
+}
+// ----- Shared: FAQ block -----------------------------------------------------
+// Native <details>/<summary> — zero JS, fully crawler-visible (the Q&A text
+// is in the HTML, which is what search + AI engines index), keyboard
+// accessible, and styled in the site's index-row language. Rendered by any
+// page that carries an `faqs` array in its content object. The same Q&A
+// feeds the FAQPage JSON-LD in seo.js.
+export function FaqBlock({ index = "QUESTIONS", faqs = [], id }) {
+  if (!faqs || faqs.length === 0) return null;
+  const group = id || `faq-${String(index).toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+  return (
+    <section className="section reveal faq-section" aria-label={index}>
+      <div className="section-index">{index}</div>
+      <div className="faq-list">
+        {faqs.map((f, i) => (
+          <details className="faq-row" key={i} name={group}>
+            <summary>
+              <span className="faq-num" aria-hidden="true">{String(i + 1).padStart(2, "0")}</span>
+              <span className="faq-q">{f.q}</span>
+              <span className="faq-plus" aria-hidden="true">+</span>
+            </summary>
+            <div className="faq-answer">
+              {(Array.isArray(f.a) ? f.a : [f.a]).map((p, j) => (
+                <p className="body-copy" key={j}>{p}</p>
+              ))}
+            </div>
+          </details>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// ----- Services -----------------------------------------------------------------
+// One component serves all six service detail pages. Content comes from
+// src/content/services.js (slug, h1, intro, definition, included, process,
+// comparison, pricing, use cases, FAQs). Rendered with the site's existing
+// inner-page primitives — no new visual language.
+export function ServiceDetail({ go, path }) {
+  const slug = String(path || "").replace("/services/", "").split("/")[0];
+  const svc = services.find((s) => s.slug === slug);
+  if (!svc) {
+    return (
+      <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
+        <section className="inner-hero section">
+          <div className="section-index">404</div>
+          <h1>SERVICE NOT FOUND.</h1>
+          <p className="display-copy">
+            That service page does not exist — but the work does.
+          </p>
+          <button type="button" className="text-link" onClick={() => go("/contact")}>
+            GET A FREE QUOTE <span aria-hidden="true">↗</span>
+          </button>
+        </section>
+      </main>
+    );
+  }
+  return (
+    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
+      <section className="inner-hero section">
+        <div className="section-index">{svc.kicker}</div>
+        <h1>{svc.h1}</h1>
+        <p className="display-copy">{svc.intro}</p>
+      </section>
+
+      <section className="copy-block section reveal">
+        <div className="section-index">WHAT IT IS</div>
+        <div>
+          <p className="body-copy">{svc.definition}</p>
+        </div>
+      </section>
+
+      <section className="section reveal">
+        <div className="section-index">WHAT'S INCLUDED</div>
+        <div className="capability-list">
+          {svc.included.map((item, i) => (
+            <div className="cap-row" key={item.title}>
+              <span>{String(i + 1).padStart(2, "0")}</span>
+              <h3>{item.title}</h3>
+              <p>{item.text}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="section reveal">
+        <div className="section-index">HOW IT WORKS</div>
+        <div className="capability-list">
+          {svc.process.map((step) => (
+            <div className="cap-row" key={step.num}>
+              <span>{step.num}</span>
+              <h3>{step.title}</h3>
+              <p>{step.text}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="section reveal">
+        <div className="section-index">COMPARISON</div>
+        <h2 className="svc-h2">{svc.comparison.title}</h2>
+        <div className="svc-table-wrap">
+          <table className="svc-table">
+            <thead>
+              <tr>
+                {svc.comparison.headers.map((h, i) => (
+                  <th key={i} scope="col">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {svc.comparison.rows.map((row, i) => (
+                <tr key={i}>
+                  {row.map((cell, j) =>
+                    j === 0 ? (
+                      <th key={j} scope="row">{cell}</th>
+                    ) : (
+                      <td key={j}>{cell}</td>
+                    )
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <div className="section-index">PRICING</div>
+        <div>
+          <h2 className="svc-h2">{svc.pricing.title}</h2>
+          <p className="body-copy">{svc.pricing.body}</p>
+          <p className="body-copy svc-note">{svc.pricing.note}</p>
+        </div>
+      </section>
+
+      <section className="section reveal">
+        <div className="section-index">USE CASES</div>
+        <div className="capability-list">
+          {svc.useCases.map((u, i) => (
+            <div className="cap-row" key={u.title}>
+              <span>{String(i + 1).padStart(2, "0")}</span>
+              <h3>{u.title}</h3>
+              <p>{u.text}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <FaqBlock index="QUESTIONS" faqs={svc.faqs} />
+
+      <section className="section">
+        <button type="button" className="text-link" onClick={() => go("/contact")}>
+          GET A FREE QUOTE <span aria-hidden="true">↗</span>
+        </button>
+        <p className="svc-updated">Updated {svc.updated}.</p>
+      </section>
+    </main>
+  );
+}
+
+// ----- Tower of Babel / Agent API -------------------------------------------------
+// Machine-readable documentation for AI agents: the static catalog surface,
+// record schema, fetch pattern, corpus composition, licensing, and limits.
+// Rendered with the Tower's light inner-page language. The fetch example is
+// static JSX — the page documents a static file surface, not a live API.
+const API_FETCH_EXAMPLE = `const catalog = await (await fetch("https://antarctic-labs.com/catalog.json")).json();
+const books = catalog.filter(
+  (r) => r.collection === "BOOKS" && r.download_status === "AVAILABLE"
+);
+for (const b of books.slice(0, 5)) {
+  const res = await fetch(b.download_url);
+  if (res.ok) {
+    const text = await res.text(); // index it
+  }
+  // non-200: the record is metadata-only for now — skip it
+}`;
+
+export function TowerApiPage({ go }) {
+  const api = towerOfBabel.apiPage;
+  return (
+    <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
+      <section className="inner-hero section">
+        <div className="section-index">FOR AI AGENTS</div>
+        <h1>{api.h1}</h1>
+        <p className="display-copy">{api.intro}</p>
+      </section>
+
+      <section className="copy-block section reveal">
+        <div className="section-index">THE SHAPE OF IT</div>
+        <div>
+          <p className="body-copy">{api.definition}</p>
+        </div>
+      </section>
+
+      {api.sections.map((s) => (
+        <section className="copy-block section reveal" key={s.title}>
+          <div className="section-index">{s.title.toUpperCase()}</div>
+          <div>
+            <p className="body-copy">{s.body}</p>
+            {s.title === "How an agent uses it" && (
+              <pre className="code-block">
+                <code>{API_FETCH_EXAMPLE}</code>
+              </pre>
+            )}
+          </div>
+        </section>
+      ))}
+
+      <FaqBlock index="QUESTIONS" faqs={api.faqs} />
+
+      <section className="section">
+        <button type="button" className="text-link" onClick={() => go("/tower-of-babel/library")}>
+          ENTER THE LIBRARY <span aria-hidden="true">↗</span>
+        </button>
+        <p className="svc-updated">Updated {api.updated}.</p>
       </section>
     </main>
   );
