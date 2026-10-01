@@ -1524,6 +1524,14 @@ export function Transmission({ go }) {
           ))}
         </h1>
         <p className="display-copy contact-lede">{transmission.body}</p>
+        {transmission.booking.url && (
+          <p className="contact-alt-path">
+            {transmission.booking.prompt}{" "}
+            <a href={transmission.booking.url} target="_blank" rel="noreferrer">
+              {transmission.booking.label} <span aria-hidden="true">↗</span>
+            </a>
+          </p>
+        )}
       </section>
 
       <section className={"section contact-form-wrap" + (reduceMotion ? "" : " reveal")}>
@@ -1656,6 +1664,18 @@ export function Transmission({ go }) {
               </div>
             </div>
           )}
+      </section>
+      <section className="contact-next" aria-label="What happens next">
+          <div className="section-index">{transmission.next.sectionIndex}</div>
+          <ol className="contact-next-steps">
+            {transmission.next.steps.map((s) => (
+              <li key={s.num}>
+                <span className="step-num">{s.num}</span>
+                <h3>{s.title}</h3>
+                <p>{s.body}</p>
+              </li>
+            ))}
+          </ol>
       </section>
       <aside className="contact-direct-strip" aria-label="Direct contact">
           <div className="section-index">DIRECT</div>
