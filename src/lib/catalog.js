@@ -1,56 +1,46 @@
-// Tower of Babel — lazy artifact catalog.
+// Tower of Babel — lazy artifact catalog (JSON fetch).
 //
-// The catalog (3,448 records, ~2.6MB of source) used to be statically
-// imported, which put ~80% of the main bundle's bytes on the critical path
-// of EVERY page load: the bundle had to download and parse before React
-// could mount, so a slow connection left the boot loader sitting for many
-// seconds (the "sometimes stuck at the loading animation"). Now the catalog
-// is code-split out via dynamic import and fetched only when a Tower route
-// actually needs it. The initial bundle stays lean; the branded Tower loader
-// covers the fetch; and the app shell's loader failsafe accounts for a
-// still-pending fetch before giving up.
+// The catalog (3,448 records, ~2.4MB JSON) is fetched as JSON rather than
+// a JavaScript module. JSON.parse is significantly lighter than JS module
+// evaluation on iOS Safari: no bytecode compilation, lower peak memory,
+// and the main thread stays responsive. The fetch is cached by the browser.
 //
-// NOTE: a failed dynamic import() is cached by the browser's module map —
-// retrying import() in place can NEVER succeed (verified: the second call
-// rejects without a network request). So there is exactly one attempt per
-// page load. On failure the caller shows an error state whose RETRY button
-// reloads the page, which gives a fresh module map and a fresh attempt.
-//
-// The catalog is static at runtime, so the loaded array is cached in module
-// state and shared by every consumer.
+// NOTE: a failed fetch can be retried (unlike a failed dynamic import(),
+// which the browser's module map caches permanently). The caller shows
+// an error state with RETRY on failure.
 let artifactsCache = null;
 let pending = null;
 
 export function loadCatalog() {
   if (artifactsCache) return Promise.resolve(artifactsCache);
   if (!pending) {
-    pending = import("../content/library-catalog.js").then(
-      (m) => {
-        artifactsCache = m.artifacts;
-        return artifactsCache;
-      },
-      (err) => {
-        // Clear so a later call surfaces the (cached) rejection instead of
-        // hanging on a settled promise; the user-facing retry is a page
-        // reload (see note above).
-        pending = null;
-        throw err;
-      }
-    );
+    pending = fetch("/catalog.json")
+      .then((r) => {
+        if (!r.ok) throw new Error("catalog fetch failed: " + r.status);
+        return r.json();
+      })
+      .then(
+        (data) => {
+          artifactsCache = data;
+          return artifactsCache;
+        },
+        (err) => {
+          // Clear so a later call retries the fetch instead of hanging
+          // on a rejected promise.
+          pending = null;
+          throw err;
+        }
+      );
   }
   return pending;
 }
 
-// True while a catalog fetch is in flight. The Tower loader failsafe
-// consults this so a slow chunk download gets more time instead of
-// dismissing to a blank page.
+// True while a catalog fetch is in flight.
 export function isCatalogPending() {
   return pending !== null;
 }
 
-// The loaded array, or null if it hasn't resolved yet. Synchronous metadata
-// (route titles, JSON-LD) uses this with a generic fallback and re-applies
-// once the catalog arrives.
+// The loaded array, or null if it hasn't resolved yet.
 export function getCachedArtifacts() {
   return artifactsCache;
 }
