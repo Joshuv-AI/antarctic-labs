@@ -133,7 +133,9 @@ function buildJsonLdForPath(path, canonicalHref) {
       const crumb = breadcrumbJsonLd([
         { name: "HOME", url: SITE_URL + "/" },
         { name: "PROJECTS", url: SITE_URL + "/projects" },
-        { name: exp ? exp.title.toUpperCase() : "PROJECT", url: canonicalHref },
+        // W6 fix (2026-10-01): guard against null/undefined titles. A malformed
+        // record would throw inside useEffect and unmount the entire React tree.
+        { name: exp ? String(exp.title ?? "PROJECT").toUpperCase() : "PROJECT", url: canonicalHref },
       ]);
       if (!exp) return crumb;
       // Project detail pages emit a CreativeWork node so Google
@@ -156,7 +158,7 @@ function buildJsonLdForPath(path, canonicalHref) {
         { name: "HOME", url: SITE_URL + "/" },
         { name: "TOWER OF BABEL", url: SITE_URL + "/tower-of-babel" },
         { name: "LIBRARY", url: SITE_URL + "/tower-of-babel/library" },
-        { name: art ? art.title.toUpperCase() : "ENTRY", url: canonicalHref },
+        { name: art ? String(art.title ?? "ENTRY").toUpperCase() : "ENTRY", url: canonicalHref },
       ]);
       if (!art) return crumb;
       // Library entries emit a Book node — the structured-data
