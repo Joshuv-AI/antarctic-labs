@@ -12,7 +12,16 @@ import { searchDeep, getSnippets } from "./lib/deep-search.js";
 import { site } from "./content/site.js";
 import { expeditions, expeditionsArchive } from "./content/expeditions.js";
 import { operator } from "./content/operator.js";
-import { artifacts, towerOfBabel } from "./content/tower-of-babel.js";
+import { towerOfBabel } from "./content/tower-of-babel.js";
+// The artifact catalog is lazy (see ./lib/catalog.js): it is ~2.6MB of
+// source and used to ride in the main bundle, stalling every cold load.
+// Components that need it use useArtifacts() below.
+import {
+  loadCatalog,
+  getCachedArtifacts,
+  resetCatalog,
+} from "./lib/catalog.js";
+import { applyMeta } from "./seo.js";
 import { government } from "./content/government.js";
 import { transmission } from "./content/transmission.js";
 // ----- Projects archive + detail (was: Expeditions) -------------------------
@@ -331,6 +340,13 @@ export function TowerOfBabel({ go, onReady }) {
       cancelAnimationFrame(raf2);
     };
   }, [onReady]);
+  // Prefetch the catalog while the visitor reads the landing page, so
+  // ENTER THE LIBRARY usually resolves instantly. Fire-and-forget: the
+  // library route awaits the same cached promise.
+  useEffect(() => {
+    loadCatalog().catch(() => {});
+  }, []);
+  const [artifacts] = useArtifacts();
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section tower-landing-hero">
@@ -343,7 +359,13 @@ export function TowerOfBabel({ go, onReady }) {
             ENTER THE LIBRARY <span aria-hidden="true">↗</span>
           </button>
           <span className="tower-landing-count">
-            {artifacts.length} {artifacts.length === 1 ? "entry" : "entries"} indexed
+            {artifacts ? (
+              <>
+                {artifacts.length} {artifacts.length === 1 ? "entry" : "entries"} indexed
+              </>
+            ) : (
+              <>indexing&hellip;</>
+            )}
           </span>
         </div>
       </section>
@@ -376,6 +398,60 @@ const TOWER_SORTS = [
   { id: "year-asc", label: "Oldest first" },
 ];
 
+// Async access to the artifact catalog. Returns [artifacts, error, retry]:
+// artifacts is null while the catalog chunk loads (the Tower boot loader
+// covers the wait), error is true if the chunk failed even after the
+// automatic retry, and retry refetches. The loaded array is cached in the
+// catalog module, so mounting a second Tower route resolves instantly.
+function useArtifacts() {
+  const [state, setState] = useState(() => ({
+    artifacts: getCachedArtifacts(),
+    error: false,
+  }));
+  useEffect(() => {
+    let live = true;
+    if (!state.artifacts && !state.error) {
+      loadCatalog().then(
+        (a) => {
+          if (live) setState({ artifacts: a, error: false });
+        },
+        () => {
+          if (live) setState({ artifacts: null, error: true });
+        }
+      );
+    }
+    return () => {
+      live = false;
+    };
+  }, [state.artifacts, state.error]);
+  const retry = () => {
+    resetCatalog();
+    setState({ artifacts: null, error: false });
+  };
+  return [state.artifacts, state.error, retry];
+}
+
+// Shared catalog-failed UI: the loader failsafe guarantees the overlay
+// dismisses, so a failed fetch must never leave a blank page. Plain,
+// on-brand, with a manual retry.
+function TowerCatalogError({ onRetry }) {
+  return (
+    <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
+      <section className="inner-hero section">
+        <h1>THE LIBRARY</h1>
+        <p className="body-copy">
+          The catalog couldn't be loaded. Check your connection and try again.
+        </p>
+        <div className="tower-landing-actions">
+          <button className="tower-access-btn" onClick={onRetry}>
+            RETRY <span aria-hidden="true">↻</span>
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 // Case-insensitive haystack for catalog search: title, creator, year,
 // description, collection, and tags.
 function towerHaystack(a) {
@@ -391,40 +467,57 @@ function towerHaystack(a) {
     .toLowerCase();
 }
 
-// Precomputed once at module load: the catalog is static at runtime, so the
-// per-record search haystacks and the collection counts are built a single
-// time instead of on every keystroke/render.
-const TOWER_HAYSTACKS = artifacts.map(towerHaystack);
-const TOWER_COUNTS = artifacts.reduce((acc, a) => {
-  const key = a.collection || "OTHER";
-  acc[key] = (acc[key] || 0) + 1;
-  return acc;
-}, {});
-const TOWER_COLLECTIONS = Object.keys(TOWER_COUNTS).sort();
+// Derived catalog data, built lazily on first Tower use and then cached.
+// The catalog is static at runtime, so the per-record search haystacks,
+// the collection counts, and every sort order are built a single time
+// instead of on every keystroke/render. The sort orders are index orders
+// into `artifacts`, so haystacks[i] stays aligned. Filtering one of these
+// orders yields exactly the sequence a stable sort of the filtered subset
+// would produce. (Lazy because the catalog itself is lazy — see
+// ./lib/catalog.js. The cache is keyed on the array identity.)
+let towerDataCache = null;
+let towerDataFor = null;
+function getTowerData(artifacts) {
+  if (towerDataCache && towerDataFor === artifacts) return towerDataCache;
+  const haystacks = artifacts.map(towerHaystack);
+  const counts = artifacts.reduce((acc, a) => {
+    const key = a.collection || "OTHER";
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const data = {
+    haystacks,
+    counts,
+    collections: Object.keys(counts).sort(),
+    order: {
+      "title-asc": artifacts
+        .map((_, i) => i)
+        .sort((p, q) =>
+          (artifacts[p].title || "").localeCompare(artifacts[q].title || "")
+        ),
+      "year-desc": artifacts
+        .map((_, i) => i)
+        .sort((p, q) => (artifacts[q].year || 0) - (artifacts[p].year || 0)),
+      "year-asc": artifacts
+        .map((_, i) => i)
+        .sort((p, q) => (artifacts[p].year || 0) - (artifacts[q].year || 0)),
+    },
+  };
+  towerDataCache = data;
+  towerDataFor = artifacts;
+  return data;
+}
 
 // Rows per animation frame when streaming the index in (see TowerLibrary).
 // Keeps each chunk's commit well under a frame budget on modest phones.
 const TOWER_ROW_CHUNK = 350;
 
-// Precomputed once at module load: the catalog is static at runtime, so
-// every sort order is built a single time instead of re-sorting 3,448
-// records with localeCompare on every mount and every sort change. These
-// are index orders into `artifacts`, so TOWER_HAYSTACKS[i] stays aligned.
-// Filtering one of these orders yields exactly the sequence a stable sort
-// of the filtered subset would produce.
-const TOWER_ORDER = {
-  "title-asc": artifacts
-    .map((_, i) => i)
-    .sort((p, q) => (artifacts[p].title || "").localeCompare(artifacts[q].title || "")),
-  "year-desc": artifacts
-    .map((_, i) => i)
-    .sort((p, q) => (artifacts[q].year || 0) - (artifacts[p].year || 0)),
-  "year-asc": artifacts
-    .map((_, i) => i)
-    .sort((p, q) => (artifacts[p].year || 0) - (artifacts[q].year || 0)),
-};
-
 export function TowerLibrary({ go, onReady }) {
+  // The catalog loads asynchronously (see ./lib/catalog.js). While it is
+  // null the Tower boot loader covers the screen, so rendering nothing is
+  // correct — never a half-built page.
+  const [artifacts, catalogError, retryCatalog] = useArtifacts();
+  const towerData = artifacts ? getTowerData(artifacts) : null;
   // Live search + collection filter + sort. Empty query/filter = show all.
   const [query, setQuery] = useState("");
   const [collectionFilter, setCollectionFilter] = useState("");
@@ -481,7 +574,9 @@ export function TowerLibrary({ go, onReady }) {
     };
   }, [deferredQuery]);
   const q = listQuery;
-  const towerOrder = TOWER_ORDER[sortId] || TOWER_ORDER["title-asc"];
+  const towerOrder = towerData
+    ? towerData.order[sortId] || towerData.order["title-asc"]
+    : [];
   // Rank of each matching artifact in the current filter/sort (1-based), as
   // a Map from artifact_id. LibraryResults mounts only the matching rows,
   // so a filter/sort update reconciles dozens of rows instead of all
@@ -490,16 +585,17 @@ export function TowerLibrary({ go, onReady }) {
   // re-renders only when its own rank actually changes.
   const { rankMap, matchCount } = useMemo(() => {
     const map = new Map();
+    if (!artifacts || !towerData) return { rankMap: map, matchCount: 0 };
     for (let k = 0; k < towerOrder.length; k++) {
       const i = towerOrder[k];
       const a = artifacts[i];
       if (collectionFilter && (a.collection || "OTHER") !== collectionFilter)
         continue;
-      if (q && !TOWER_HAYSTACKS[i].includes(q)) continue;
+      if (q && !towerData.haystacks[i].includes(q)) continue;
       map.set(a.artifact_id, map.size + 1);
     }
     return { rankMap: map, matchCount: map.size };
-  }, [q, collectionFilter, sortId, towerOrder]);
+  }, [q, collectionFilter, sortId, towerOrder, artifacts, towerData]);
   // Stream the index rows in behind the Tower boot overlay: each rAF chunk
   // commits a few hundred rows and then yields, so the boot animation keeps
   // clean frames. The overlay used to lift only after the final chunk
@@ -509,8 +605,10 @@ export function TowerLibrary({ go, onReady }) {
   // keep streaming behind the visible page. This runs once on mount:
   // filter/search/sort updates never touch the budget — LibraryResults
   // derives the visible rows from the budget + rank map, so the list can
-  // neither blank nor thrash the DOM mid-typing.
+  // neither blank nor thrash the DOM mid-typing. Gated on the catalog:
+  // the stream starts once the data arrives, not on mount.
   useEffect(() => {
+    if (!artifacts) return;
     const total = artifacts.length;
     const rafs = [];
     let timer = 0;
@@ -549,7 +647,12 @@ export function TowerLibrary({ go, onReady }) {
       clearTimeout(timer);
       rafs.forEach((id) => cancelAnimationFrame(id));
     };
-  }, [onReady]);
+  }, [onReady, artifacts]);
+  // Catalog failed even after the automatic retry: show the error state,
+  // never a blank page. While the catalog loads, render nothing — the
+  // Tower boot loader covers the screen.
+  if (catalogError) return <TowerCatalogError onRetry={retryCatalog} />;
+  if (!artifacts) return null;
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
@@ -607,7 +710,7 @@ export function TowerLibrary({ go, onReady }) {
               >
                 All <span>{artifacts.length}</span>
               </button>
-              {TOWER_COLLECTIONS.map((c) => (
+              {towerData.collections.map((c) => (
                 <button
                   type="button"
                   key={c}
@@ -615,11 +718,12 @@ export function TowerLibrary({ go, onReady }) {
                   onClick={() => setCollectionFilter(collectionFilter === c ? "" : c)}
                   aria-pressed={collectionFilter === c}
                 >
-                  {c} <span>{TOWER_COUNTS[c]}</span>
+                  {c} <span>{towerData.counts[c]}</span>
                 </button>
               ))}
             </div>
             <LibraryResults
+              artifacts={artifacts}
               towerOrder={towerOrder}
               rankMap={rankMap}
               matchCount={matchCount}
@@ -874,6 +978,7 @@ export function SuggestEntry({ go }) {
 // therefore mounts exactly the visible slice instead of keeping thousands
 // of rows in the DOM — the mounted-row churn was the 500ms+ hitch mid-typing.
 const LibraryResults = memo(function LibraryResults({
+  artifacts,
   towerOrder,
   rankMap,
   matchCount,
@@ -896,7 +1001,7 @@ const LibraryResults = memo(function LibraryResults({
       if (rankMap.has(artifacts[i].artifact_id)) out.push(i);
     }
     return out;
-  }, [towerOrder, rankMap, rowBudget]);
+  }, [artifacts, towerOrder, rankMap, rowBudget]);
   // While searching, the top "entries matching" list is capped at 2 rows
   // with a show-more expander — so the "Mentions in texts" section stays
   // visible on screen instead of being buried under dozens of title hits.
@@ -1127,14 +1232,20 @@ function DeepMentions({ deep, go }) {
   );
 }
 export function LibraryArtifact({ go, params, onReady }) {
-  const index = artifacts.findIndex((a) => a.artifact_id === params.id);
-  const artifact = artifacts[index];
+  const [artifacts, catalogError, retryCatalog] = useArtifacts();
+  // The entry's <title> / meta / JSON-LD need the catalog too: the app
+  // shell applies generic Tower meta on navigation, so re-apply once the
+  // record is available.
+  useEffect(() => {
+    if (artifacts) applyMeta(window.location.pathname);
+  }, [artifacts]);
   // Tell the app shell the entry has painted so it can dismiss the
   // Tower boot loader shown during in-app navigation here. Keyed on the
   // entry id so entry-to-entry (prev/next) navigation re-fires it even
-  // though the component itself does not remount.
+  // though the component itself does not remount. Gated on the catalog:
+  // no ready signal before there is something to paint.
   useEffect(() => {
-    if (!onReady) return;
+    if (!onReady || !artifacts) return;
     let raf1 = 0;
     let raf2 = 0;
     raf1 = requestAnimationFrame(() => {
@@ -1146,7 +1257,11 @@ export function LibraryArtifact({ go, params, onReady }) {
       cancelAnimationFrame(raf1);
       cancelAnimationFrame(raf2);
     };
-  }, [onReady, params.id]);
+  }, [onReady, params.id, artifacts]);
+  if (catalogError) return <TowerCatalogError onRetry={retryCatalog} />;
+  if (!artifacts) return null;
+  const index = artifacts.findIndex((a) => a.artifact_id === params.id);
+  const artifact = artifacts[index];
   if (!artifact) {
     return (
       <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
@@ -1524,14 +1639,6 @@ export function Transmission({ go }) {
           ))}
         </h1>
         <p className="display-copy contact-lede">{transmission.body}</p>
-        {transmission.booking.url && (
-          <p className="contact-alt-path">
-            {transmission.booking.prompt}{" "}
-            <a href={transmission.booking.url} target="_blank" rel="noreferrer">
-              {transmission.booking.label} <span aria-hidden="true">↗</span>
-            </a>
-          </p>
-        )}
       </section>
 
       <section className={"section contact-form-wrap" + (reduceMotion ? "" : " reveal")}>
@@ -1657,6 +1764,14 @@ export function Transmission({ go }) {
               <span className="section-index">{transmission.success.heading}</span>
               <p className="body-copy">{transmission.success.body}</p>
               <p className="body-copy">{transmission.success.note}</p>
+              {transmission.booking.url && (
+                <p className="contact-alt-path">
+                  {transmission.success.bookingPrompt}{" "}
+                  <a href={transmission.booking.url} target="_blank" rel="noreferrer">
+                    {transmission.booking.label} <span aria-hidden="true">↗</span>
+                  </a>
+                </p>
+              )}
               <div className="transmission-actions">
                 <button type="button" className="text-link" onClick={onReset}>
                   SEND ANOTHER <span aria-hidden="true">↗</span>
