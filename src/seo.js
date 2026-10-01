@@ -13,7 +13,9 @@ import { metaFor, matchRoute } from "./content/routes.js";
 import { site } from "./content/site.js";
 import { operator } from "./content/operator.js";
 import { expeditions } from "./content/expeditions.js";
-import { artifacts } from "./content/library-catalog.js";
+// Entry JSON-LD uses the cached catalog when available (see
+// ./lib/catalog.js); falls back to a generic entry node until it arrives.
+import { getCachedArtifacts } from "./lib/catalog.js";
 
 const TAG_DEFS = [
   { attr: "name", key: "description", selector: "meta[name='description']", field: "description" },
@@ -146,7 +148,10 @@ function buildJsonLdForPath(path, canonicalHref) {
       return { "@context": "https://schema.org", "@graph": [crumb, work] };
     }
     if (match.pattern === "/tower-of-babel/library/:id") {
-      const art = artifacts.find((a) => a.artifact_id === match.params.id);
+      const artifacts = getCachedArtifacts();
+      const art = artifacts
+        ? artifacts.find((a) => a.artifact_id === match.params.id)
+        : null;
       const crumb = breadcrumbJsonLd([
         { name: "HOME", url: SITE_URL + "/" },
         { name: "TOWER OF BABEL", url: SITE_URL + "/tower-of-babel" },
