@@ -1677,36 +1677,6 @@ export function Transmission({ go }) {
             ))}
           </ol>
       </section>
-      <aside className="contact-direct-strip" aria-label="Direct contact">
-          <div className="section-index">DIRECT</div>
-          <a className="contact-email" href={`mailto:${site.email}`}>
-            {site.email}
-          </a>
-          <dl className="contact-facts">
-            {transmission.direct.facts.map(([k, v]) => (
-              <div key={k}>
-                <dt>{k}</dt>
-                <dd>{v}</dd>
-              </div>
-            ))}
-            {transmission.direct.elsewhere && transmission.direct.elsewhere.length > 0 && (
-              <div>
-                <dt>ELSEWHERE</dt>
-                <dd>
-                  {transmission.direct.elsewhere.map((l, i) => (
-                    <span key={l.href}>
-                      {i > 0 && " · "}
-                      <a className="contact-elsewhere-link" href={l.href} target="_blank" rel="noreferrer">
-                        {l.label} <span aria-hidden="true">↗</span>
-                      </a>
-                    </span>
-                  ))}
-                </dd>
-              </div>
-            )}
-          </dl>
-          <p className="body-copy">{transmission.direct.note}</p>
-      </aside>
     </main>
   );
 }
