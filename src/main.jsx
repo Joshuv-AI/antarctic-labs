@@ -3,6 +3,8 @@ import React, {
   useEffect,
   useRef,
   useState,
+  lazy,
+  Suspense,
 } from "react";
 import { createRoot } from "react-dom/client";
 import { gsap } from "gsap";
@@ -10,10 +12,26 @@ import { ScrollTrigger } from "gsap/ScrollTrigger";
 import "./styles.css";
 import "./shaders/threeui.css";
 import NewBackgroundVideo from "./components/NewBackgroundVideo.jsx";
-import { DefenseLines } from "./shaders/neuform-isolated/NeuformBatchEffects.tsx";
+// Perf (2026-10-01): route-specific WebGL components are lazy-loaded.
+// three.js (~600KB) was shipping to all 15 routes but only renders on
+// /government-contracting. DefenseLines only on /, TypographyVortexCanvas
+// only on Tower routes. Lazy-loading drops the main bundle ~60%.
+const DefenseLines = lazy(() =>
+  import("./shaders/neuform-isolated/NeuformBatchEffects.tsx").then((m) => ({
+    default: m.DefenseLines,
+  }))
+);
 import { AnimatedTopDock } from "./shaders/animated-top-dock/AnimatedTopDock.tsx";
-import { TypographyVortexCanvas } from "./shaders/typography-vortex/TypographyVortexCanvas.tsx";
-import { OrbitalSphereBackground } from "./shaders/orbital-sphere/OrbitalSphereBackground.tsx";
+const TypographyVortexCanvas = lazy(() =>
+  import("./shaders/typography-vortex/TypographyVortexCanvas.tsx").then((m) => ({
+    default: m.TypographyVortexCanvas,
+  }))
+);
+const OrbitalSphereBackground = lazy(() =>
+  import("./shaders/orbital-sphere/OrbitalSphereBackground.tsx").then((m) => ({
+    default: m.OrbitalSphereBackground,
+  }))
+);
 import { site as content } from "./content/site.js";
 import { expeditions } from "./content/expeditions.js";
 import { matchRoute, legacyRedirect } from "./content/routes.js";
@@ -325,17 +343,19 @@ function App() {
               escape the .page-shell z-index:5 stacking context that would
               otherwise paint the editorial content on top of them. */}
           <div className="constellation-layer">
-            <DefenseLines
-              mode="dark"
-              speed={1.2}
-              size={1.0}
-              length={0.35}
-              density={1.0}
-              opacity={0.05}
-              hue={0}
-              saturation={0.0}
-              brightness={1.65}
-            />
+            <Suspense fallback={null}>
+              <DefenseLines
+                mode="dark"
+                speed={1.2}
+                size={1.0}
+                length={0.35}
+                density={1.0}
+                opacity={0.05}
+                hue={0}
+                saturation={0.0}
+                brightness={1.65}
+              />
+            </Suspense>
           </div>
           {/* Brand greeting: monumental center lockup over the opening
               starfield (Montfort-style). Fades and lifts away on the
@@ -409,24 +429,26 @@ function App() {
         path === "/tower-of-babel/library/suggest" ||
         matchedPattern === "/tower-of-babel/library/:id") && (
         <div className="tower-vortex-layer" aria-hidden="true">
-          <TypographyVortexCanvas
-            mode="light"
-            phrase="TOWER OF BABEL / ANTARCTIC LABS / "
-            speed={0.85}
-            ringGrowth={1.30}
-            opacity={0.81}
-            dissolveRadius={1.50}
-            particleAmount={1.00}
-            suctionDuration={1100}
-            // The library index is the heaviest page on the site (3,448
-            // rows over a live canvas). Freeze the backdrop to one static
-            // frame here: every animated frame was forcing the
-            // frosted-glass rows above it to repaint their backdrop blur,
-            // which is what made scrolling and typing feel heavy. The
-            // option is read live, so navigating away resumes motion with
-            // no remount and no blank gap.
-            frozen={path === "/tower-of-babel/library"}
-          />
+          <Suspense fallback={null}>
+            <TypographyVortexCanvas
+              mode="light"
+              phrase="TOWER OF BABEL / ANTARCTIC LABS / "
+              speed={0.85}
+              ringGrowth={1.30}
+              opacity={0.81}
+              dissolveRadius={1.50}
+              particleAmount={1.00}
+              suctionDuration={1100}
+              // The library index is the heaviest page on the site (3,448
+              // rows over a live canvas). Freeze the backdrop to one static
+              // frame here: every animated frame was forcing the
+              // frosted-glass rows above it to repaint their backdrop blur,
+              // which is what made scrolling and typing feel heavy. The
+              // option is read live, so navigating away resumes motion with
+              // no remount and no blank gap.
+              frozen={path === "/tower-of-babel/library"}
+            />
+          </Suspense>
         </div>
       )}
       {/* Government Contracting only: the StructureFlow orbital-sphere
@@ -436,15 +458,17 @@ function App() {
           content; decorative only. */}
       {path === "/government-contracting" && (
         <div className="gov-orbital-layer" aria-hidden="true">
-          <OrbitalSphereBackground
-            speed={2.90}
-            particleSize={0.031}
-            particleOpacity={1.00}
-            orbitOpacity={0.27}
-            hue={-63}
-            scale={0.83}
-            haloOpacity={0.00}
-          />
+          <Suspense fallback={null}>
+            <OrbitalSphereBackground
+              speed={2.90}
+              particleSize={0.031}
+              particleOpacity={1.00}
+              orbitOpacity={0.27}
+              hue={-63}
+              scale={0.83}
+              haloOpacity={0.00}
+            />
+          </Suspense>
         </div>
       )}
       {/* Projects / About / Contact share the homepage's resting
