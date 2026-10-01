@@ -49,7 +49,11 @@ import {
   Projects,
   ProjectDetail,
   About,
+  ServiceDetail,
+  TowerApiPage,
+  FaqBlock,
 } from "./pages.jsx";
+import { siteFaqs } from "./content/faq.js";
 gsap.registerPlugin(ScrollTrigger);
 // iOS Safari perf (2026-10-01, researched): the address bar showing/hiding
 // resizes the viewport, which triggers ScrollTrigger.refresh() and stalls
@@ -99,6 +103,8 @@ function dockActiveId(path) {
   if (path === "/government-contracting") return "gov";
   if (path === "/about") return "about";
   if (path === "/contact") return "contact";
+  // Service pages: a sentinel no dock item matches, so nothing highlights.
+  if (path.startsWith("/services/")) return "services";
   return undefined;
 }
 function App() {
@@ -418,6 +424,12 @@ function App() {
       {path === "/tower-of-babel/library/suggest" && (
         <SuggestEntry go={go} />
       )}
+      {path === "/tower-of-babel/api" && (
+        <TowerApiPage go={go} />
+      )}
+      {path.startsWith("/services/") && (
+        <ServiceDetail go={go} path={path} />
+      )}
       {/* Tower of Babel family only: the typography vortex environment.
           Exact ThreeUI source, configured usage (mode="light", speed 0.85,
           ringGrowth 1.30, opacity 0.81, dissolveRadius 1.50,
@@ -425,6 +437,7 @@ function App() {
           Fixed behind the page content; pointer interactivity is parked
           because the page sits above it. */}
       {(path === "/tower-of-babel" ||
+        path === "/tower-of-babel/api" ||
         path === "/tower-of-babel/library" ||
         path === "/tower-of-babel/library/suggest" ||
         matchedPattern === "/tower-of-babel/library/:id") && (
@@ -476,6 +489,7 @@ function App() {
           with no scroll choreography (that belongs to the homepage). */}
       {(path === "/projects" ||
         matchedPattern === "/projects/:id" ||
+        path.startsWith("/services/") ||
         path === "/about" ||
         path === "/contact") && <NewBackgroundVideo rest />}
       {path === "/government-contracting" && (
@@ -1107,17 +1121,33 @@ function Home({ go }) {
       <HomeStats />
       <section id="territory" className="territory section reveal">
         <div className="territory-list">
-          {content.territory.map(([title, desc]) => (
-            <div
-              className="cap-row territory-row"
-              key={title}
-            >
-              <h3>{title}</h3>
-              <p>{desc}</p>
-            </div>
+          {content.territory.map(([title, desc, link]) => (
+            link ? (
+              <a
+                className="cap-row territory-row territory-link"
+                key={title}
+                href={link}
+                onClick={(e) => {
+                  e.preventDefault();
+                  go(link);
+                }}
+              >
+                <h3>{title} <span className="t-arrow" aria-hidden="true">↗</span></h3>
+                <p>{desc}</p>
+              </a>
+            ) : (
+              <div
+                className="cap-row territory-row"
+                key={title}
+              >
+                <h3>{title}</h3>
+                <p>{desc}</p>
+              </div>
+            )
           ))}
         </div>
       </section>
+      <FaqBlock index="QUESTIONS" faqs={siteFaqs} />
     </main>
   );
 }
