@@ -910,21 +910,11 @@ function Home({ go }) {
               start: "top top",
               end: "bottom top",
               scrub: true,
-              // Perf: the seam feather is a STATIC mask now (see
-              // .constellation-layer.arrival-live in styles.css).
-              // Toggling a class flips it at most twice per pass instead
-              // of re-rasterizing a mask on every scroll frame, which was
-              // the top-of-page stutter. At rest (progress 0 or 1) there
-              // is no mask: pure starfield / clean video, as before.
-              onUpdate: (self) => {
-                if (constellation) {
-                  constellation.classList.toggle(
-                    "arrival-live",
-                    self.progress > 0 &&
-                      self.progress < 1
-                  );
-                }
-              },
+              // Perf (2026-10-01): the arrival-live mask toggle is removed.
+              // Toggling a mask class at scroll start forced iOS Safari to
+              // re-rasterize the WebGL constellation layer, causing a hitch
+              // every time the user scrolled from the top. The timeline now
+              // animates transform-only with no mask changes mid-scroll.
             },
           });
           arrival.fromTo(
