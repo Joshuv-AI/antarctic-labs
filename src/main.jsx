@@ -20,7 +20,7 @@ import { matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
 // Lazy Tower catalog (see ./lib/catalog.js): prefetched on Tower navigation
 // so the chunk usually arrives before the route needs it.
-import { loadCatalog, isCatalogPending, getCachedArtifacts } from "./lib/catalog.js";
+import { loadCatalog, isCatalogPending } from "./lib/catalog.js";
 import {
   TowerOfBabel,
   TowerLibrary,
@@ -245,13 +245,7 @@ function App() {
       path !== canonical;
     if (enteringTower) {
       dismissBrandBoot();
-      // Skip the loader if the catalog is already cached (e.g. prefetched
-      // on the landing page): the library renders instantly, no overlay
-      // needed. This also avoids the loader getting stuck if the cached
-      // data is available but the loader timers misbehave on iOS.
-      if (!getCachedArtifacts()) {
-        raiseTowerBoot();
-      }
+      raiseTowerBoot();
     } else {
       dismissTowerBoot();
     }
