@@ -18,6 +18,9 @@ import { site as content } from "./content/site.js";
 import { expeditions } from "./content/expeditions.js";
 import { matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
+// Lazy Tower catalog (see ./lib/catalog.js): prefetched on Tower navigation
+// so the chunk usually arrives before the route needs it.
+import { loadCatalog, isCatalogPending } from "./lib/catalog.js";
 import {
   TowerOfBabel,
   TowerLibrary,
@@ -105,6 +108,28 @@ function App() {
     const t = setTimeout(dismissTowerBoot, wait);
     towerBootTimers.current.push(t);
   }, [dismissTowerBoot]);
+  // Raise the Tower boot loader with its hard failsafe. The failsafe is
+  // catalog-aware: if the catalog chunk is still downloading at 4s, it
+  // re-arms once (8s absolute cap) instead of dismissing to a blank page.
+  // Either way the overlay can never trap the user.
+  const raiseTowerBoot = useCallback(() => {
+    clearTowerBootTimers();
+    setTowerBootLeaving(false);
+    setTowerBoot(true);
+    towerBootStarted.current = Date.now();
+    // Prefetch the catalog chunk now — the route awaits the same cached
+    // promise, so this head start is usually the whole fetch.
+    loadCatalog().catch(() => {});
+    const t = setTimeout(() => {
+      if (isCatalogPending()) {
+        const t2 = setTimeout(dismissTowerBoot, 4000);
+        towerBootTimers.current.push(t2);
+      } else {
+        dismissTowerBoot();
+      }
+    }, 4000);
+    towerBootTimers.current.push(t);
+  }, [dismissTowerBoot]);
   // Antarctic Labs branded loader for dock navigation: the same mark +
   // hairline ceremony as the homepage entrance ritual, raised on demand
   // when the dock goes to a non-Tower section. Tower of Babel keeps its
@@ -161,6 +186,23 @@ function App() {
       window.removeEventListener("popstate", onPop);
     };
   }, [dismissTowerBoot, dismissBrandBoot]);
+  // Cold load directly onto a Tower destination: the index.html overlay
+  // covers the bundle download, but the catalog chunk still has to load
+  // after React mounts. Raise the branded loader so the fetch never plays
+  // out on a blank page — it dismisses via onReady (or the failsafe) just
+  // like in-app navigation. The landing page is light enough to skip this;
+  // its own prefetch warms the chunk for ENTER THE LIBRARY.
+  useEffect(() => {
+    const p = window.location.pathname;
+    const isTowerDest =
+      p === "/tower-of-babel/library" ||
+      (p.startsWith("/tower-of-babel/library/") &&
+        p !== "/tower-of-babel/library/suggest");
+    if (isTowerDest) raiseTowerBoot();
+    // Mount only: this is the cold-load path; in-app navigation goes
+    // through go().
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => {
     applyMeta(path);
   }, [path]);
@@ -203,13 +245,7 @@ function App() {
       path !== canonical;
     if (enteringTower) {
       dismissBrandBoot();
-      clearTowerBootTimers();
-      setTowerBootLeaving(false);
-      setTowerBoot(true);
-      towerBootStarted.current = Date.now();
-      // Hard failsafe: the overlay can never trap the user.
-      const t = setTimeout(dismissTowerBoot, 4000);
-      towerBootTimers.current.push(t);
+      raiseTowerBoot();
     } else {
       dismissTowerBoot();
     }
@@ -855,15 +891,15 @@ function Home({ go }) {
       // one after the other in a fixed order: the constellation
       // (transparent starfield canvas) exits upward (y=0 to y=-100vh)
       // while the iceberg video rises from below (y=100vh to y=-6vh).
-      // four tweens live in ONE scrubbed timeline on .env-arrival:
-      // the constellation's bottom edge and the iceberg's top edge
-      // share a single meeting line at every scroll position, and a
-      // 7% dissolve on the constellation's bottom (--cfade) softens the
-      // handoff into the iceberg for a natural transition. (A second
-      // mask on the video was removed 2026-09-30: two simultaneous
-      // masks stuttered the first half of the scroll.) Scoped to
-      // .env-arrival so adding homepage sections later cannot shift
-      // the timing.
+      // The timeline now animates transform + opacity ONLY (compositor
+      // work). The old per-frame --cfade mask tween is gone: animating
+      // mask-image every scroll frame forced a full-layer repaint and
+      // stuttered the first half of the page. The meeting-line feather
+      // is now a STATIC 7% mask applied via the arrival-live class
+      // while the arrival is in progress — same soft seam, zero
+      // per-frame cost. At rest there is no mask: pure starfield,
+      // pixel-identical to before. Scoped to .env-arrival so adding
+      // homepage sections later cannot shift the timing.
       const iceberg =
         document.querySelector(".new-bg-layer");
       if (envArrival && constellation && iceberg) {
@@ -874,15 +910,18 @@ function Home({ go }) {
               start: "top top",
               end: "bottom top",
               scrub: true,
-              // Perf: once the arrival completes, drop the iceberg's mask
-              // entirely until the user scrolls back up. Keeps the resting
-              // page identical while removing per-video-frame mask
-              // compositing.
+              // Perf: the seam feather is a STATIC mask now (see
+              // .constellation-layer.arrival-live in styles.css).
+              // Toggling a class flips it at most twice per pass instead
+              // of re-rasterizing a mask on every scroll frame, which was
+              // the top-of-page stutter. At rest (progress 0 or 1) there
+              // is no mask: pure starfield / clean video, as before.
               onUpdate: (self) => {
-                if (iceberg) {
-                  iceberg.classList.toggle(
-                    "arrival-done",
-                    self.progress >= 0.999
+                if (constellation) {
+                  constellation.classList.toggle(
+                    "arrival-live",
+                    self.progress > 0 &&
+                      self.progress < 1
                   );
                 }
               },
@@ -900,19 +939,10 @@ function Home({ go }) {
             { y: "-6vh", ease: "none" },
             0
           );
-          arrival.fromTo(
-            constellation,
-            { "--cfade": "0%" },
-            { "--cfade": "7%", ease: "none" },
-            0
-          );
-          // Perf (2026-09-30): the iceberg's --vfade mask animation was
-          // removed. Animating two mask gradients at once (constellation's
-          // --cfade + the video's --vfade) forced full re-compositing of
-          // both layers every scroll frame, which stuttered on the first
-          // half of the arrival. The constellation's one-sided --cfade
-          // still softens the meeting line; the resting backdrop is
-          // unchanged (--vfade stays 0%).
+          // (2026-09-30) The constellation's --cfade mask tween was
+          // removed. Animating mask-image per scroll frame forced a
+          // full-viewport repaint every frame — the top-of-page stutter.
+          // The 7% seam feather is now the static .arrival-live mask.
           // The brand greeting dissolves and lifts away early in the
           // arrival so the handoff stays clean — it never lingers over
           // the iceberg.
