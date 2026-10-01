@@ -11,9 +11,9 @@ export const transmission = {
   heading: "GET A FREE\nQUOTE.",
   body:
     "Tell me what you're trying to build — I'll reply within 24 hours with an honest quote, even if we don't end up working together.",
-  // Dual path: form + book-a-call. The call band only renders when a
-  // scheduling URL is set (Joshua's call, 2026-09-30 — he wants Zoom
-  // booking as the parallel path to the form).
+  // Dual path, form-first: the book-a-call link appears ONLY after a
+  // successful form submission, so Joshua always has the brief's context
+  // before the call. (His call, 2026-09-30 — no blind bookings.)
   booking: {
     url: "https://calendly.com/joshuaalmodovar/30min",
     prompt: "Prefer to talk it through?",
@@ -123,6 +123,7 @@ export const transmission = {
     heading: "MESSAGE SENT.",
     body: "Your message is on its way to the lab.",
     note: "I read everything myself and reply within 24 hours — usually much sooner.",
+    bookingPrompt: "Want to talk it through? Skip the wait —",
   },
   // NOTE 2026-09-30: the direct-contact strip (facts, elsewhere links,
   // good-first-message note) was removed from the page per Joshua's call.
