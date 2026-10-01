@@ -30,63 +30,6 @@ export const siteFaqs = [
   },
 ];
 
-export const operatorFaqs = [
-  {
-    q: "Who is Joshua Almodovar?",
-    a: "Joshua Almodovar is a freelance AI automation developer based in Sanford, Florida. He runs Antarctic Labs, where he designs and builds AI automation, websites, and data systems for clients directly. His work centers on n8n workflows, custom AI agents, web development, web scraping pipelines, and automated lead generation systems, all delivered through direct client engagements with quotes answered within 24 hours.",
-  },
-  {
-    q: "Who runs Antarctic Labs?",
-    a: "Antarctic Labs is run by Joshua Almodovar, an independent developer in Sanford, Florida. Clients work with him directly: scoping, building, and delivery all happen with the same person. There are no intermediaries and no handoffs. That direct model is the point: the person who understands the problem is the person who solves it.",
-  },
-  {
-    q: "Is Antarctic Labs a real company?",
-    a: "Antarctic Labs is a real freelance technology studio at antarctic-labs.com, operated by Joshua Almodovar. It delivers client work through direct engagements: quotes within 24 hours, scoped projects with agreed pricing, and working systems delivered ready to use. The site documents the work, the process, and the operator openly, so anyone evaluating the studio can see exactly what they are getting.",
-  },
-  {
-    q: "What kind of work does Joshua Almodovar take on?",
-    a: "AI automation and workflow builds, custom AI agents, website design and development, web scraping and data extraction, automated lead generation systems, and API integrations between business tools. Projects are scoped individually and priced by quote. If a project falls outside these areas, the quote says so honestly instead of stretching to fit.",
-  },
-  {
-    q: "Where is Antarctic Labs located?",
-    a: "Sanford, Florida. Client work is remote, so geography does not limit engagements. Communication runs through the contact form, email, and video calls as needed, all handled directly by the developer. The 24-hour quote response applies regardless of time zone, and project work follows the client's schedule rather than the other way around.",
-  },
-  {
-    q: "Why hire an independent developer instead of a firm?",
-    a: "Direct access. The person scoping the project is the person building it, which removes the miscommunication that happens when requirements pass through salespeople and project managers. For a single system with one owner, that model is hard to beat on clarity.",
-  },
-];
-
-export const operatorExtra =
-  "Antarctic Labs is the freelance studio of Joshua Almodovar, an AI automation developer in Sanford, Florida. The work is practical technology: n8n workflows that eliminate manual processes, AI agents that operate tools and APIs on a business's behalf, websites designed and built from scratch, web scraping pipelines that deliver clean data, and automated lead generation systems. Every engagement runs the same way. The client describes the problem. Scope and price are agreed up front in writing. The system is built, tested, and delivered ready to run, with documentation of what was built. The client owns the finished build. Quotes go out within 24 hours of the first message, and they are honest: if a project is a bad fit or a cheaper tool already solves it, the quote says so. The build stack is modern and boring in the right ways: n8n for workflows, current AI models and APIs for agents, standard web tooling for sites, and clean Python for data work. Nothing exotic, nothing that locks the client in.";
-
-export const transmissionFaqs = [
-  {
-    q: "How do I hire an AI automation developer?",
-    a: "Describe the work on the contact page and submit the form. Antarctic Labs replies within 24 hours with a straight answer: what it will build, what it costs, and how long it takes. If the project is a bad fit, the reply says that instead of selling something unnecessary. The process is built to respect the client's time: one brief, one honest quote, one decision.",
-  },
-  {
-    q: "What should I include in my project brief?",
-    a: "Three things are enough: what the problem is, what the work currently looks like done manually, and what the ideal outcome would be. Screenshots of the current process help. There is no need for a formal spec or technical language; scoping is part of the quote, and the developer will ask the right follow-up questions.",
-  },
-  {
-    q: "How much does it cost to hire someone to automate my business?",
-    a: "Every project is quoted individually because scope varies too much for a price list. Published guides put agency automation projects in the $5K to $50K range; freelance builds typically come in well below that. The free quote states the exact price before any work begins, so there are no surprises. The quote is free whether the answer is yes or no.",
-  },
-  {
-    q: "What happens after I submit the contact form?",
-    a: "The submission goes straight to the developer. Within 24 hours comes a reply with a quote or clarifying questions. After scope and price are agreed, the build starts. After submitting, there is also the option to book a 30-minute intro call to talk the project through directly, so the conversation starts from the actual project instead of a generic sales call.",
-  },
-  {
-    q: "Is the quote really free?",
-    a: "Yes. Every brief gets a quote or an honest assessment within 24 hours, at no cost and with no obligation. If the right answer is a free tool or a simpler approach, that is what the reply says. The quote exists to give the client real information, not to create sales pressure.",
-  },
-  {
-    q: "Can I talk to someone before committing?",
-    a: "Yes. After submitting the form, a booking link appears for a 30-minute intro call. Booking is only offered after the brief is in, so the conversation starts from the actual project instead of a generic sales call. Nothing is committed by taking the call; it is a working conversation about the work.",
-  },
-];
-
 export const governmentFaqs = [
   {
     q: "How does a small business get its first government contract?",
@@ -119,30 +62,3 @@ export const governmentExtra =
 
 export const projectsIntro =
   "Every project here is a real build: AI automation, n8n workflows, AI agents, websites, and data systems, built end to end as working systems. These are AI automation examples in the concrete sense: workflow logic, integrations, data pipelines, and delivery formats shown as they were actually built, not mockups. Each entry documents what the system does, how it is put together, and the technology behind it. Browse the index to see the range, then open any project for the full breakdown. If a project here looks like what your business needs built, the contact page takes it from there: one brief, one quote within 24 hours, one working system delivered and documented.";
-
-export const towerFaqs = [
-  {
-    q: "What is the Tower of Babel library?",
-    a: "The Tower of Babel is a free online library at antarctic-labs.com/tower-of-babel. It holds thousands of texts: books, sacred texts, declassified documents, and transcripts, preserved in clean, readable text. There is no sign-up, no paywall, and no app to install. Open the library, search the catalog, and read. It is a separate project from the freelance studio, built to keep important texts accessible.",
-  },
-  {
-    q: "Where can I read books online for free without signing up?",
-    a: "The Tower of Babel library is one option: thousands of books and documents readable in the browser with no account required. Everything is free, from classic literature to declassified documents. The catalog is searchable by title, author, or keyword, and each entry has its own reading page with the full text.",
-  },
-  {
-    q: "Is the Tower of Babel really free?",
-    a: "Yes. Every text in the library is free to read, with no account, no subscription, and no download fees. There is no catch and no upsell. The library exists to keep important texts accessible in clean, readable form, and that mission does not include charging readers or gating content behind registration.",
-  },
-  {
-    q: "Where do the library's texts come from?",
-    a: "The collection draws from public sources: public domain literature, sacred texts, declassified government documents, historical records, and transcripts. Texts are converted to clean, consistent text files so they read well on any device. Each entry notes its source so readers know where the text originated and can verify it independently.",
-  },
-  {
-    q: "What is in the Tower of Babel catalog?",
-    a: "Books, sacred texts, declassified documents, and transcripts. The catalog is searchable and browsable, and each entry has its own page with the full text where available. New texts are added over time as the collection grows, so regular readers will find the catalog worth revisiting for fresh additions across every collection.",
-  },
-  {
-    q: "How is the Tower of Babel different from other free libraries?",
-    a: "It is built for reading, not archiving: clean text, fast search, and no account walls. It also keeps unusual holdings alongside the classics, including declassified documents and transcripts that most free libraries do not carry. The interface is minimal on purpose: search, open, read. Nothing between the reader and the text.",
-  },
-];
