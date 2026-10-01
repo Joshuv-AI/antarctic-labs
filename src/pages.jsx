@@ -19,7 +19,6 @@ import { towerOfBabel } from "./content/tower-of-babel.js";
 import {
   loadCatalog,
   getCachedArtifacts,
-  resetCatalog,
 } from "./lib/catalog.js";
 import { applyMeta } from "./seo.js";
 import { government } from "./content/government.js";
@@ -398,11 +397,13 @@ const TOWER_SORTS = [
   { id: "year-asc", label: "Oldest first" },
 ];
 
-// Async access to the artifact catalog. Returns [artifacts, error, retry]:
+// Async access to the artifact catalog. Returns [artifacts, error]:
 // artifacts is null while the catalog chunk loads (the Tower boot loader
-// covers the wait), error is true if the chunk failed even after the
-// automatic retry, and retry refetches. The loaded array is cached in the
-// catalog module, so mounting a second Tower route resolves instantly.
+// covers the wait), error is true if the chunk failed to load. The loaded
+// array is cached in the catalog module, so mounting a second Tower route
+// resolves instantly. (A failed dynamic import is cached by the browser's
+// module map, so in-place retry can never work — the error UI reloads the
+// page for a fresh attempt. See ./lib/catalog.js.)
 function useArtifacts() {
   const [state, setState] = useState(() => ({
     artifacts: getCachedArtifacts(),
@@ -424,17 +425,14 @@ function useArtifacts() {
       live = false;
     };
   }, [state.artifacts, state.error]);
-  const retry = () => {
-    resetCatalog();
-    setState({ artifacts: null, error: false });
-  };
-  return [state.artifacts, state.error, retry];
+  return [state.artifacts, state.error];
 }
 
 // Shared catalog-failed UI: the loader failsafe guarantees the overlay
 // dismisses, so a failed fetch must never leave a blank page. Plain,
-// on-brand, with a manual retry.
-function TowerCatalogError({ onRetry }) {
+// on-brand, with a manual retry (page reload — the only retry that can
+// work, since the browser caches failed dynamic imports).
+function TowerCatalogError() {
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
@@ -443,7 +441,10 @@ function TowerCatalogError({ onRetry }) {
           The catalog couldn't be loaded. Check your connection and try again.
         </p>
         <div className="tower-landing-actions">
-          <button className="tower-access-btn" onClick={onRetry}>
+          <button
+            className="tower-access-btn"
+            onClick={() => window.location.reload()}
+          >
             RETRY <span aria-hidden="true">↻</span>
           </button>
         </div>
@@ -516,7 +517,7 @@ export function TowerLibrary({ go, onReady }) {
   // The catalog loads asynchronously (see ./lib/catalog.js). While it is
   // null the Tower boot loader covers the screen, so rendering nothing is
   // correct — never a half-built page.
-  const [artifacts, catalogError, retryCatalog] = useArtifacts();
+  const [artifacts, catalogError] = useArtifacts();
   const towerData = artifacts ? getTowerData(artifacts) : null;
   // Live search + collection filter + sort. Empty query/filter = show all.
   const [query, setQuery] = useState("");
@@ -651,7 +652,7 @@ export function TowerLibrary({ go, onReady }) {
   // Catalog failed even after the automatic retry: show the error state,
   // never a blank page. While the catalog loads, render nothing — the
   // Tower boot loader covers the screen.
-  if (catalogError) return <TowerCatalogError onRetry={retryCatalog} />;
+  if (catalogError) return <TowerCatalogError />;
   if (!artifacts) return null;
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
@@ -1232,7 +1233,7 @@ function DeepMentions({ deep, go }) {
   );
 }
 export function LibraryArtifact({ go, params, onReady }) {
-  const [artifacts, catalogError, retryCatalog] = useArtifacts();
+  const [artifacts, catalogError] = useArtifacts();
   // The entry's <title> / meta / JSON-LD need the catalog too: the app
   // shell applies generic Tower meta on navigation, so re-apply once the
   // record is available.
@@ -1258,7 +1259,7 @@ export function LibraryArtifact({ go, params, onReady }) {
       cancelAnimationFrame(raf2);
     };
   }, [onReady, params.id, artifacts]);
-  if (catalogError) return <TowerCatalogError onRetry={retryCatalog} />;
+  if (catalogError) return <TowerCatalogError />;
   if (!artifacts) return null;
   const index = artifacts.findIndex((a) => a.artifact_id === params.id);
   const artifact = artifacts[index];
