@@ -3,7 +3,6 @@
 // who we are, our mission, what we do, principles, and the team.
 
 import { site } from "./site.js";
-import { operatorFaqs, operatorExtra } from "./faq.js";
 
 export const operator = {
   name: site.operator,
@@ -75,9 +74,4 @@ export const operator = {
     ],
   },
 
-  // Extended narrative — how engagements work, stated factually.
-  extra: operatorExtra,
-
-  // About-page FAQ — rendered on /about and emitted as FAQPage JSON-LD.
-  faqs: operatorFaqs,
 };
