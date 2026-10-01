@@ -22,6 +22,11 @@ export function loadCatalog() {
       .then(
         (data) => {
           artifactsCache = data;
+          // W1 fix (2026-10-01): clear pending on success too. Otherwise
+          // isCatalogPending() returns true forever after the first load,
+          // and the Tower loader takes the 8s re-arm branch on every
+          // later navigation instead of dismissing at 4s.
+          pending = null;
           return artifactsCache;
         },
         (err) => {
