@@ -623,7 +623,7 @@ export function TowerLibrary({ go, onReady }) {
     const releaseLoader = () => {
       if (released || !onReady) return;
       released = true;
-      // First chunk committed — two frames later it is painted.
+      // All rows committed — two frames later they are painted.
       later(() => later(() => {
         if (!cancelled) onReady();
       }));
@@ -633,8 +633,15 @@ export function TowerLibrary({ go, onReady }) {
       const next = Math.min(total, budgetRef.current + TOWER_ROW_CHUNK);
       budgetRef.current = next;
       setRowBudget(next);
-      releaseLoader();
-      if (next < total) later(tick);
+      // Only release the loader when ALL rows are mounted. Releasing after
+      // the first chunk exposes the progressive batch rendering, which
+      // looks inconsistent and janky on scroll. The loader covers the
+      // chunking; the user sees loader → complete list.
+      if (next >= total) {
+        releaseLoader();
+      } else {
+        later(tick);
+      }
     };
     // Initial mount: let the boot overlay's entrance start before any row
     // work begins.
