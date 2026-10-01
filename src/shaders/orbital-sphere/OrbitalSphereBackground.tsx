@@ -6,6 +6,11 @@ export function OrbitalSphereBackground({ className = "", ...props }: OrbitalSph
   useEffect(() => { const host = hostRef.current, canvas = canvasRef.current; if (!host || !canvas) return undefined; const renderer = createOrbitalSphereRenderer(canvas, () => optionsRef.current); let frame = 0, visible = true;
     const resize = () => { const bounds = host.getBoundingClientRect(); renderer.resize(bounds.width, bounds.height); renderer.render(); }; const tick = () => { renderer.render(); frame = visible && !document.hidden ? requestAnimationFrame(tick) : 0; };
     const resizeObserver = new ResizeObserver(resize), intersection = new IntersectionObserver(([entry]) => { visible = entry?.isIntersecting ?? true; if (visible && !frame) frame = requestAnimationFrame(tick); if (!visible && frame) cancelAnimationFrame(frame), frame = 0; }); resizeObserver.observe(host); intersection.observe(host); resize(); frame = requestAnimationFrame(tick);
-    return () => { if (frame) cancelAnimationFrame(frame); resizeObserver.disconnect(); intersection.disconnect(); renderer.dispose(); }; }, []);
+    // W4 fix (2026-10-01): the rAF loop stops when document.hidden (frame=0)
+    // but nothing restarted it on tab return. Listen for visibilitychange
+    // to resume the loop when the tab becomes visible again.
+    const onVisibility = () => { if (!document.hidden && visible && !frame) frame = requestAnimationFrame(tick); };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { if (frame) cancelAnimationFrame(frame); resizeObserver.disconnect(); intersection.disconnect(); document.removeEventListener("visibilitychange", onVisibility); renderer.dispose(); }; }, []);
   return <div ref={hostRef} className={`threeui-background orbital-sphere${className ? ` ${className}` : ""}`}><canvas ref={canvasRef} style={{ filter: `hue-rotate(${optionsRef.current.hue}deg)` }} /></div>;
 }
