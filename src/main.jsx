@@ -920,15 +920,20 @@ function Home({ go }) {
       // one after the other in a fixed order: the constellation
       // (transparent starfield canvas) exits upward (y=0 to y=-100vh)
       // while the iceberg video rises from below (y=100vh to y=-6vh).
-      // The timeline now animates transform + opacity ONLY (compositor
+      // The timeline animates transform + opacity ONLY (compositor
       // work). The old per-frame --cfade mask tween is gone: animating
       // mask-image every scroll frame forced a full-layer repaint and
       // stuttered the first half of the page. The meeting-line feather
-      // is now a STATIC 7% mask applied via the arrival-live class
-      // while the arrival is in progress — same soft seam, zero
-      // per-frame cost. At rest there is no mask: pure starfield,
-      // pixel-identical to before. Scoped to .env-arrival so adding
-      // homepage sections later cannot shift the timing.
+      // is a STATIC 18% mask (rasterized once, zero per-frame cost),
+      // and the crossfade itself is an opacity dissolve on both layers
+      // (2026-10-01): the starfield fades 1→0 as it exits while the
+      // iceberg blooms 0.55→1 as it rises, so the two backgrounds melt
+      // into each other through the scroll instead of meeting at a
+      // hard sliding edge. At rest there is no mask animation and the
+      // opacities sit at their fromTo endpoints: pure starfield at
+      // scroll 0, pure iceberg at the end — pixel-identical to before
+      // at both ends. Scoped to .env-arrival so adding homepage
+      // sections later cannot shift the timing.
       const iceberg =
         document.querySelector(".new-bg-layer");
       if (envArrival && constellation && iceberg) {
@@ -953,14 +958,22 @@ function Home({ go }) {
           });
           arrival.fromTo(
             constellation,
-            { y: "0vh" },
-            { y: "-100vh", ease: "none" },
+            // Crossfade (2026-10-01): the starfield dissolves (opacity 1→0)
+            // as it slides away while the iceberg rises beneath it — the
+            // two backgrounds blend into each other through the transition
+            // instead of meeting at a hard sliding edge. Opacity is
+            // compositor-cheap like transform: no repaint, no stutter.
+            // The static 18% bottom mask stays as-is (rasterized once).
+            { y: "0vh", opacity: 1 },
+            { y: "-100vh", opacity: 0, ease: "none" },
             0
           );
           arrival.fromTo(
             iceberg,
-            { y: "100vh" },
-            { y: "-6vh", ease: "none" },
+            // The iceberg blooms in (opacity 0.55→1) as it rises, deepening
+            // the crossfade where the two layers overlap at the seam.
+            { y: "100vh", opacity: 0.55 },
+            { y: "-6vh", opacity: 1, ease: "none" },
             0
           );
           // (2026-09-30) The constellation's --cfade mask tween was
