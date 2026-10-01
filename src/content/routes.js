@@ -30,24 +30,59 @@ const SITE_NAME = site.brand;
 // Titles stay near ~60 chars, descriptions near ~155, keyword up front.
 export const routeMeta = {
   "/": {
-    title: `Freelance AI Automation & Web Developer | ${SITE_NAME}`,
+    title: `AI Automation Developer | ${SITE_NAME}`,
     description:
       "Hire a freelance AI automation developer: n8n workflows, AI agents, websites, web scraping, lead generation. Scoped clearly, delivered ready to work.",
   },
-  "/projects": {
-    title: `AI & Automation Project Portfolio | ${SITE_NAME}`,
+  "/services/ai-automation": {
+    title: `AI Automation Services for Small Business | Antarctic Labs`,
     description:
-      "Selected freelance projects and case studies: AI agents, automation systems, web apps, and data pipelines — proof of work from Antarctic Labs.",
+      "AI automation services for small business: n8n workflows, AI agents, and data pipelines built by a freelance developer. Free quote within 24 hours.",
+  },
+  "/services/n8n-workflows": {
+    title: `n8n Workflow Automation Developer | Antarctic Labs`,
+    description:
+      "Hire an n8n developer: custom n8n workflow automation, API integrations, AI steps, debugging, and self-hosted setup. Free quote within 24 hours.",
+  },
+  "/services/ai-agents": {
+    title: `AI Agent Development for Business | Antarctic Labs`,
+    description:
+      "Custom AI agent development: support agents, RAG knowledge bases, and workflow agents built by a freelance developer. Free quote within 24 hours.",
+  },
+  "/services/web-development": {
+    title: `Freelance Web Developer for Hire | Antarctic Labs`,
+    description:
+      "Freelance web developer: fast custom websites, landing pages, redesigns, and web apps. Direct communication, fixed quotes. Free quote within 24 hours.",
+  },
+  "/services/web-scraping": {
+    title: `Web Scraping Services | Data Extraction | Antarctic Labs`,
+    description:
+      "Web scraping services: clean structured data from public websites, delivered in Excel or CSV. Anti-bot handling, scheduled runs. Free quote in 24 hours.",
+  },
+  "/services/lead-generation": {
+    title: `Lead Generation Automation Systems | Antarctic Labs`,
+    description:
+      "Lead generation automation: systems that source, enrich, and qualify B2B prospects on autopilot. Built by a freelance developer. Free quote in 24 hours.",
+  },
+  "/projects": {
+    title: `AI Automation Examples | ${SITE_NAME} Projects`,
+    description:
+      "Real AI automation examples: n8n workflows, AI agents, web apps, and data pipelines built and delivered — proof of work from Antarctic Labs.",
   },
   "/tower-of-babel": {
-    title: `Tower of Babel — Free Online Library | ${SITE_NAME}`,
+    title: `Free Online Library | Tower of Babel`,
     description:
       "A free, searchable online library: thousands of books, sacred texts, declassified documents, and transcripts preserved in clean, readable text.",
   },
   "/tower-of-babel/library": {
-    title: `Free Online Library — Search & Read Books | Tower of Babel`,
+    title: `Free Classic Books Online | Tower of Babel Library`,
     description:
-      "Search thousands of books, documents, and texts in the Tower of Babel's free online library catalog. Read in clean, searchable text.",
+      "Read free classic books online: search thousands of books, documents, and texts in the Tower of Babel's free library catalog. No sign-up.",
+  },
+  "/tower-of-babel/api": {
+    title: `Free Books API for AI Agents | Tower of Babel`,
+    description:
+      "Free books API for AI agents: machine-readable catalog of 3,448 records (books, declassified documents, transcripts) with plain-text .txt downloads where available. No key, no sign-up.",
   },
   "/tower-of-babel/library/suggest": {
     title: `Suggest a Book for the Free Online Library | Tower of Babel`,
@@ -55,19 +90,19 @@ export const routeMeta = {
       "Suggest a book, document, or text for the Tower of Babel free online library. Every suggestion is reviewed; accepted works are preserved in clean text.",
   },
   "/government-contracting": {
-    title: `AI Systems for Government Contracting | ${SITE_NAME}`,
+    title: `Small Business Government Contracting | ${SITE_NAME}`,
     description:
       "Antarctic Labs is developing toward public-sector work: AI analyst workflows, data systems, and automation for primes — pilots, SBIR/STTR, and teaming.",
   },
   "/about": {
-    title: `Joshua Almodovar — Freelance AI Developer | ${SITE_NAME}`,
+    title: `Joshua Almodovar | ${SITE_NAME}`,
     description:
       "Joshua Almodovar runs Antarctic Labs, a freelance studio for AI automation, websites, and data systems. No account managers — you talk to the builder.",
   },
   "/contact": {
-    title: `Hire a Freelance AI Developer — Contact | ${SITE_NAME}`,
+    title: `Hire AI Automation Developer — Free Quote | ${SITE_NAME}`,
     description:
-      "Have a project? Hire Antarctic Labs for AI automation, web development, and data systems. Send the details, get a working solution back.",
+      "Hire an AI automation developer: send your project brief and get an honest quote within 24 hours. AI automation, web development, and data systems.",
   },
 };
 // Old routes kept for SEO/canonicalization purposes only.
@@ -124,9 +159,16 @@ export const routeMetaLegacy = {
 // moves it to /contact.
 export const routes = [
   "/",
+  "/services/ai-automation",
+  "/services/n8n-workflows",
+  "/services/ai-agents",
+  "/services/web-development",
+  "/services/web-scraping",
+  "/services/lead-generation",
   "/projects",
   "/projects/:id",
   "/tower-of-babel",
+  "/tower-of-babel/api",
   "/tower-of-babel/library",
   // Literal suggest route must precede the dynamic :id pattern so
   // matchRoute resolves it as its own page, not an artifact id.
