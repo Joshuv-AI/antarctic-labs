@@ -9,7 +9,6 @@
 // lazy-loaded via ../lib/catalog.js (dynamic import); a static import here
 // would drag all 3,448 records back into the main bundle.
 
-import { towerFaqs } from "./faq.js";
 import { libraryFaqs, libraryIntroExtra, apiPage } from "./tower-api.js";
 
 export const towerOfBabel = {
@@ -44,9 +43,6 @@ export const towerOfBabel = {
     // Library FAQ — rendered on /tower-of-babel/library, FAQPage JSON-LD.
     faqs: libraryFaqs,
   },
-  // Tower landing FAQ — rendered on /tower-of-babel, FAQPage JSON-LD.
-  // Targets "free online library" discovery.
-  faqs: towerFaqs,
   // Agent-resource FAQ — emitted as FAQPage JSON-LD on /tower-of-babel/api.
   agentFaqs: apiPage.faqs,
   // Full agent-resource page content for /tower-of-babel/api.
