@@ -15,7 +15,11 @@
 // route.
 import { site } from "./site.js";
 import { expeditions } from "./expeditions.js";
-import { artifacts } from "./library-catalog.js";
+// The artifact catalog is lazy (see ../../lib/catalog.js) — route metadata
+// must stay synchronous, so entry pages use the cached array when available
+// and fall back to generic Tower meta until the catalog arrives (the entry
+// component re-applies meta once it loads).
+import { getCachedArtifacts } from "../lib/catalog.js";
 const DEFAULT_DESCRIPTION = site.description;
 const SITE_NAME = site.brand;
 // Per-page SEO: every canonical route carries keyword-targeted metadata
@@ -226,7 +230,10 @@ export function metaFor(path) {
       };
     }
     if (match.pattern === "/tower-of-babel/library/:id") {
-      const art = artifacts.find((a) => a.artifact_id === match.params.id);
+      const artifacts = getCachedArtifacts();
+      const art = artifacts
+        ? artifacts.find((a) => a.artifact_id === match.params.id)
+        : null;
       if (art) {
         const suffix = " — free in the Tower of Babel online library.";
         const maxBlurb = 160 - suffix.length;
