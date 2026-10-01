@@ -8,9 +8,38 @@
 // IA is now CONTACT.
 export const transmission = {
   sectionIndex: "CONTACT",
-  heading: "HAVE A PROBLEM\nWORTH SOLVING?",
+  heading: "GET A FREE\nQUOTE.",
   body:
-    "Have an idea, need a system built, want to collaborate, or simply found something interesting? Get in touch.",
+    "Tell me what you're trying to build — I'll reply within 24 hours with an honest quote, even if we don't end up working together.",
+  // Dual path: form + book-a-call. The call band only renders when a
+  // scheduling URL is set (Joshua's call, 2026-09-30 — he wants Zoom
+  // booking as the parallel path to the form).
+  booking: {
+    url: "",
+    prompt: "Prefer to talk it through?",
+    label: "BOOK A 20-MIN INTRO CALL",
+  },
+  // "What happens next" — answers the post-send fear before the ask.
+  next: {
+    sectionIndex: "WHAT HAPPENS NEXT",
+    steps: [
+      {
+        num: "01",
+        title: "SEND THE BRIEF",
+        body: "Tell me what you're trying to build and what “working” looks like.",
+      },
+      {
+        num: "02",
+        title: "GET AN HONEST QUOTE",
+        body: "I reply within 24 hours — a straight answer, not a sales pitch.",
+      },
+      {
+        num: "03",
+        title: "SCOPE IT ON ONE CALL",
+        body: "If it's a fit, we lock the plan down on a single call.",
+      },
+    ],
+  },
   fields: [
     {
       id: "transmission-name",
@@ -87,17 +116,18 @@ export const transmission = {
     ariaLabel: "Send message",
   },
   // Below the form: sets the expectation that a human reads it.
+  // 24-hour SLA sits at the ask (submit button), not below the fold.
   noBackendNotice:
-    "Your message goes straight to the lab inbox — I read everything myself.",
+    "Your message goes straight to the lab inbox — I read everything myself and reply within 24 hours.",
   success: {
     heading: "MESSAGE SENT.",
     body: "Your message is on its way to the lab.",
-    note: "I read everything myself and reply within 48 hours — usually much sooner.",
+    note: "I read everything myself and reply within 24 hours — usually much sooner.",
   },
   // Direct-contact panel: the channel that works today.
   direct: {
     facts: [
-      ["RESPONSE", "I read everything myself and reply within 48 hours — usually much sooner."],
+      ["RESPONSE", "I read everything myself and reply within 24 hours — usually much sooner."],
       ["BASED", "Sanford, Florida — working worldwide."],
       ["BEST FOR", "AI automation, data systems, and web builds."],
     ],
