@@ -9,6 +9,9 @@
 // lazy-loaded via ../lib/catalog.js (dynamic import); a static import here
 // would drag all 3,448 records back into the main bundle.
 
+import { towerFaqs } from "./faq.js";
+import { libraryFaqs, libraryIntroExtra, apiPage } from "./tower-api.js";
+
 export const towerOfBabel = {
   heading: "TOWER OF BABEL",
   intro: [
@@ -36,7 +39,18 @@ export const towerOfBabel = {
       body:
         "Tower of Babel is being structured before the catalog opens. Once entries are finalized, they will appear here with their rights status, source links, and (where redistribution is permitted) direct access.",
     },
+    // Catalog scope, in the library's own words — rendered on /tower-of-babel/library.
+    scopeNote: libraryIntroExtra,
+    // Library FAQ — rendered on /tower-of-babel/library, FAQPage JSON-LD.
+    faqs: libraryFaqs,
   },
+  // Tower landing FAQ — rendered on /tower-of-babel, FAQPage JSON-LD.
+  // Targets "free online library" discovery.
+  faqs: towerFaqs,
+  // Agent-resource FAQ — emitted as FAQPage JSON-LD on /tower-of-babel/api.
+  agentFaqs: apiPage.faqs,
+  // Full agent-resource page content for /tower-of-babel/api.
+  apiPage: apiPage,
   // Suggest an entry — separate destination at
   // /tower-of-babel/library/suggest. Front-end form only; no backend
   // integration yet. Copy and field definitions live here so the form
