@@ -15,9 +15,9 @@ export const transmission = {
   // scheduling URL is set (Joshua's call, 2026-09-30 — he wants Zoom
   // booking as the parallel path to the form).
   booking: {
-    url: "",
+    url: "https://calendly.com/joshuaalmodovar/30min",
     prompt: "Prefer to talk it through?",
-    label: "BOOK A 20-MIN INTRO CALL",
+    label: "BOOK A 30-MIN INTRO CALL",
   },
   // "What happens next" — answers the post-send fear before the ask.
   next: {
@@ -124,16 +124,7 @@ export const transmission = {
     body: "Your message is on its way to the lab.",
     note: "I read everything myself and reply within 24 hours — usually much sooner.",
   },
-  // Direct-contact panel: the channel that works today.
-  direct: {
-    facts: [
-      ["RESPONSE", "I read everything myself and reply within 24 hours — usually much sooner."],
-      ["BASED", "Sanford, Florida — working worldwide."],
-      ["BEST FOR", "AI automation, data systems, and web builds."],
-    ],
-    elsewhere: [
-      { label: "GitHub", href: "https://github.com/Joshuv-AI" },
-    ],
-    note: "A good first message says what you're trying to build, what “working” looks like, and roughly when you need it.",
-  },
+  // NOTE 2026-09-30: the direct-contact strip (facts, elsewhere links,
+  // good-first-message note) was removed from the page per Joshua's call.
+  // The email remains the Resend fallback in the form error message.
 };
