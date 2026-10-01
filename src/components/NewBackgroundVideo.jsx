@@ -32,15 +32,32 @@ export default function NewBackgroundVideo({ rest = false }) {
     // the muted JSX prop.
     v.muted = true;
     v.defaultMuted = true;
+    // W2/W3 fix (2026-10-01): bound the retry loop. If the video 404s or
+    // fails repeatedly, stop retrying after MAX_ATTEMPTS instead of churning
+    // 404s forever. Also don't call v.load() when a load is already in
+    // flight — per spec it aborts the in-progress fetch, which can prevent
+    // the video from ever loading on slow connections.
+    let attempts = 0;
+    const MAX_ATTEMPTS = 8;
+    let loadInFlight = false;
+    const onError = () => {
+      attempts = MAX_ATTEMPTS; // Give up; the CSS fallback covers the visual
+      window.clearInterval(watchdog);
+    };
     const tryPlay = () => {
       if (cancelled || !v.paused) return;
+      if (attempts >= MAX_ATTEMPTS) return;
+      attempts += 1;
       // iOS Safari will not autoplay a video that starts off-screen
       // (the iceberg begins a full viewport below the fold), so the
       // single play() at mount may never take effect — leaving the
       // native play button visible when the layer scrolls into view.
       // Retry whenever the layer approaches/enters the viewport and
       // as soon as data can play.
-      if (v.readyState === 0) v.load();
+      if (v.readyState === 0 && !loadInFlight) {
+        loadInFlight = true;
+        v.load();
+      }
       const playPromise = v.play();
       if (playPromise && playPromise.catch) playPromise.catch(() => {});
     };
@@ -58,8 +75,13 @@ export default function NewBackgroundVideo({ rest = false }) {
     };
     v.addEventListener("canplay", tryPlay);
     v.addEventListener("loadeddata", tryPlay);
+    v.addEventListener("loadeddata", () => {
+      loadInFlight = false;
+    });
     v.addEventListener("pause", onPause);
     document.addEventListener("visibilitychange", onVisibility);
+    // W2: listen for errors to stop the retry loop on 404/failure
+    v.addEventListener("error", onError);
     const io = new IntersectionObserver(
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) tryPlay();
@@ -86,6 +108,7 @@ export default function NewBackgroundVideo({ rest = false }) {
       v.removeEventListener("canplay", tryPlay);
       v.removeEventListener("loadeddata", tryPlay);
       v.removeEventListener("pause", onPause);
+      v.removeEventListener("error", onError);
       document.removeEventListener("visibilitychange", onVisibility);
       window.clearInterval(watchdog);
       window.clearTimeout(pauseTimer);
@@ -111,10 +134,6 @@ export default function NewBackgroundVideo({ rest = false }) {
         <source
           src="/assets/new-bg/new-background.mp4"
           type="video/mp4"
-        />
-        <source
-          src="/assets/new-bg/new-background.mov"
-          type="video/quicktime"
         />
       </video>
     </div>
