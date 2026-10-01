@@ -18,7 +18,7 @@ export const site = {
     eyebrow: "INDEPENDENT TECHNOLOGY LABORATORY",
     title: ["READY TO WORK", "ON YOUR", "PROJECT."],
     sub: "AI automation, websites, and data systems — designed and built by one person you talk to directly. Send the details, get a working solution back.",
-    cta: { label: "WORK WITH US", to: "/contact" },
+    cta: { label: "GET A FREE QUOTE", to: "/contact" },
     signal: "Have a project? Let's get it built.",
     body: "Antarctic Labs is a freelance studio for practical technology: automation that replaces manual work, websites that ship, data you can actually use. Real projects, built, tested, and delivered ready to work.",
     method: "Scope it → Build it → Ship it.",
