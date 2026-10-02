@@ -671,7 +671,6 @@ export function TowerLibrary({ go, onReady }) {
         <div className="section-index">LIBRARY</div>
         <h1>{towerOfBabel.library.heading}</h1>
         <p className="display-copy">{towerOfBabel.library.intro}</p>
-        <p className="body-copy">{towerOfBabel.library.scopeNote}</p>
         <div className="tower-suggest-actions">
           <button
             type="button"
@@ -751,6 +750,11 @@ export function TowerLibrary({ go, onReady }) {
         )}
       </section>
       <FaqBlock index="QUESTIONS" faqs={towerOfBabel.library.faqs} />
+      {/* Catalog scope note — deliberately last on the page, below the FAQ. */}
+      <section className="section tower-scope-note" aria-label="About the catalog">
+        <div className="section-index">ABOUT THE CATALOG</div>
+        <p className="body-copy">{towerOfBabel.library.scopeNote}</p>
+      </section>
     </main>
   );
 }
