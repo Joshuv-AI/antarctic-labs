@@ -42,12 +42,19 @@ function main() {
     `local-${Date.now().toString(36)}`;
   const t0 = Date.now();
 
+  // Wipe previous builds first so stale buildId dirs don't accumulate.
+  rmSync(OUT, { recursive: true, force: true });
+  const tmpDir = join(OUT, ".tmp-postings");
+  mkdirSync(tmpDir, { recursive: true });
+
   const docs = [];
-  const postings = new Map(); // stem -> flat [docIdx, count, docIdx, count, ...]
   const stemCache = new Map(); // shared across docs: common words stem once
   let skipped = 0;
   let totalBytes = 0;
 
+  // PASS 1 — stream per-doc postings to per-shard temp files so memory stays
+  // flat no matter how large the library grows. Line format per shard file:
+  // [stem, docIdx, count] as JSON, one per line, in docIdx order.
   for (const a of artifacts) {
     const url = a.download_url || "";
     if (!url.startsWith("/tower-of-babel/") || !url.endsWith(".txt")) continue;
@@ -70,34 +77,51 @@ function main() {
       file: url,
       words: [...counts.values()].reduce((s, c) => s + c, 0),
     });
+    const bufs = new Map(); // shardIdx -> lines for this doc
     for (const [stem, count] of counts) {
-      let arr = postings.get(stem);
-      if (!arr) { arr = []; postings.set(stem, arr); }
-      arr.push(docIdx, count);
+      const si = shardFor(stem, SHARD_COUNT);
+      let b = bufs.get(si);
+      if (!b) { b = []; bufs.set(si, b); }
+      b.push(JSON.stringify([stem, docIdx, count]));
+    }
+    for (const [si, b] of bufs) {
+      writeFileSync(join(tmpDir, si + ".jsonl"), b.join("\n") + "\n", { flag: "a" });
     }
   }
 
-  // Shard by hash so query-time fetches stay small.
-  const shards = Array.from({ length: SHARD_COUNT }, () => ({}));
-  for (const [stem, flat] of postings) {
-    const obj = shards[shardFor(stem, SHARD_COUNT)];
-    const pairs = [];
-    for (let i = 0; i < flat.length; i += 2) pairs.push([flat[i], flat[i + 1]]);
-    obj[stem] = pairs;
-  }
-
+  // PASS 2 — merge one shard at a time into its final postings object.
   const dir = join(OUT, buildId, "terms");
-  // Wipe previous local builds so stale buildId dirs don't accumulate.
-  rmSync(OUT, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
+  let distinctTerms = 0;
   for (let i = 0; i < SHARD_COUNT; i++) {
-    writeFileSync(join(dir, `${i}.json`), JSON.stringify(shards[i]));
+    const obj = Object.create(null); // null proto: stems like "push" must not hit Object.prototype
+    let raw = "";
+    try {
+      raw = readFileSync(join(tmpDir, i + ".jsonl"), "utf8");
+    } catch {
+      raw = "";
+    }
+    if (raw) {
+      const lines = raw.split("\n");
+      for (let li = 0; li < lines.length; li++) {
+        const line = lines[li];
+        if (!line) continue;
+        const parsed = JSON.parse(line);
+        const stem = parsed[0], docIdx = parsed[1], count = parsed[2];
+        let arr = obj[stem];
+        if (!arr) { arr = []; obj[stem] = arr; distinctTerms++; }
+        arr.push([docIdx, count]);
+      }
+    }
+    writeFileSync(join(dir, i + ".json"), JSON.stringify(obj));
   }
+  rmSync(tmpDir, { recursive: true, force: true });
+
   const manifest = {
     buildId,
     builtAt: new Date().toISOString(),
     texts: docs.length,
-    terms: postings.size,
+    terms: distinctTerms,
     shards: SHARD_COUNT,
     docs,
   };
@@ -105,9 +129,9 @@ function main() {
 
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(
-    `[search-index] indexed ${docs.length} texts (${(totalBytes / 1048576).toFixed(1)} MB), ` +
-    `${postings.size.toLocaleString()} terms, ${SHARD_COUNT} shards in ${secs}s` +
-    (skipped ? ` (${skipped} referenced files missing, skipped)` : "")
+    "[search-index] indexed " + docs.length + " texts (" + (totalBytes / 1048576).toFixed(1) + " MB), " +
+    distinctTerms.toLocaleString() + " terms, " + SHARD_COUNT + " shards in " + secs + "s" +
+    (skipped ? " (" + skipped + " referenced files missing, skipped)" : "")
   );
 }
 
