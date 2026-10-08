@@ -11,14 +11,32 @@
 let artifactsCache = null;
 let pending = null;
 
+// How long a single catalog fetch may run before it is treated as stalled.
+// Mobile connections routinely stall mid-download; without a timeout the
+// promise never settles, the library renders nothing forever, and the user
+// is left on a blank page after the boot loader's failsafe lifts.
+const CATALOG_TIMEOUT_MS = 30000;
+
+function fetchCatalogOnce() {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), CATALOG_TIMEOUT_MS);
+  return fetch("/catalog.json", { signal: ctrl.signal })
+    .then((r) => {
+      if (!r.ok) throw new Error("catalog fetch failed: " + r.status);
+      return r.json();
+    })
+    .finally(() => clearTimeout(timer));
+}
+
 export function loadCatalog() {
   if (artifactsCache) return Promise.resolve(artifactsCache);
   if (!pending) {
-    pending = fetch("/catalog.json")
-      .then((r) => {
-        if (!r.ok) throw new Error("catalog fetch failed: " + r.status);
-        return r.json();
-      })
+    // One silent retry: a single stalled attempt on a flaky mobile
+    // connection shouldn't doom the visit. A second failure rejects, and
+    // the caller shows the error state with RETRY — the loading state
+    // always resolves, never an infinite blank page.
+    pending = fetchCatalogOnce()
+      .catch(() => fetchCatalogOnce())
       .then(
         (data) => {
           artifactsCache = data;

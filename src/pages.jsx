@@ -514,8 +514,34 @@ function getTowerData(artifacts) {
 }
 
 // Rows per animation frame when streaming the index in (see TowerLibrary).
-// Keeps each chunk's commit well under a frame budget on modest phones.
-const TOWER_ROW_CHUNK = 350;
+// Each commit re-reconciles every mounted row, so commit cost grows with
+// the mounted count: three 1,400-row commits do roughly 4x less total
+// main-thread work than twelve 350-row ones. The boot overlay's animation
+// is compositor-driven (transform/opacity), so the larger commits never
+// visibly hitch it. The loader still lifts only after every row is
+// mounted — loader → complete list, never progressive rendering.
+const TOWER_ROW_CHUNK = 1400;
+
+// Loading shell for the library: shown while the catalog downloads. Same
+// page chrome as the loaded library so the boot loader's failsafe never
+// reveals a blank page on a slow connection.
+function TowerLibraryLoading() {
+  return (
+    <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
+      <section className="inner-hero section">
+        <div className="section-index">LIBRARY</div>
+        <h1>{towerOfBabel.library.heading}</h1>
+        <p className="display-copy">{towerOfBabel.library.intro}</p>
+      </section>
+      <section className="tower-index section">
+        <div className="section-index">CATALOG</div>
+        <p className="tower-empty-results" aria-live="polite">
+          Loading the catalog…
+        </p>
+      </section>
+    </main>
+  );
+}
 
 export function TowerLibrary({ go, onReady }) {
   // The catalog loads asynchronously (see ./lib/catalog.js). While it is
@@ -527,7 +553,7 @@ export function TowerLibrary({ go, onReady }) {
   const [query, setQuery] = useState("");
   const [collectionFilter, setCollectionFilter] = useState("");
   const [sortId, setSortId] = useState("title-asc");
-  // How many index rows are committed so far. The full 3,448-row list is
+  // How many index rows are committed so far. The full 4,088-row list is
   // the heaviest commit on this route; rendering it synchronously on mount
   // blocks the main thread for ~1s and freezes the Tower boot animation
   // mid-play. The page frame paints immediately with zero rows, and the
@@ -602,7 +628,7 @@ export function TowerLibrary({ go, onReady }) {
     return { rankMap: map, matchCount: map.size };
   }, [q, collectionFilter, sortId, towerOrder, artifacts, towerData]);
   // Stream the index rows in behind the Tower boot overlay: each rAF chunk
-  // commits a few hundred rows and then yields, so the boot animation keeps
+  // commits ~1,400 rows and then yields, so the boot animation keeps
   // clean frames. The overlay used to lift only after the final chunk
   // painted, which held the loader up for seconds on phones even though the
   // page was ready long before. Now it releases on first meaningful paint —
@@ -661,10 +687,12 @@ export function TowerLibrary({ go, onReady }) {
     };
   }, [onReady, artifacts]);
   // Catalog failed even after the automatic retry: show the error state,
-  // never a blank page. While the catalog loads, render nothing — the
-  // Tower boot loader covers the screen.
+  // never a blank page. While the catalog loads, render the page shell —
+  // the Tower boot loader covers the first seconds, but its failsafe can
+  // lift before a slow connection delivers the catalog, and the shell
+  // guarantees the user never stares at a void in that gap.
   if (catalogError) return <TowerCatalogError />;
-  if (!artifacts) return null;
+  if (!artifacts) return <TowerLibraryLoading />;
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
