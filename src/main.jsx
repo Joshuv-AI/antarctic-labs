@@ -940,10 +940,10 @@ function Home({ go }) {
       // stuttered the first half of the page. The meeting-line feather
       // is a STATIC 18% mask (rasterized once, zero per-frame cost),
       // and the crossfade itself is an opacity dissolve on both layers
-      // (2026-10-01): the starfield fades 1→0 as it exits while the
-      // iceberg blooms 0.55→1 as it rises, so the two backgrounds melt
-      // into each other through the scroll instead of meeting at a
-      // hard sliding edge. At rest there is no mask animation and the
+      // (2026-10-01, retuned 2026-10-08 for the brighter aurora asset):
+      // the starfield fades 1→0 as it exits while the video dissolves
+      // 0→1 as it rises, so the two backgrounds melt into each other
+      // through the scroll instead of meeting at a hard sliding edge. At rest there is no mask animation and the
       // opacities sit at their fromTo endpoints: pure starfield at
       // scroll 0, pure iceberg at the end — pixel-identical to before
       // at both ends. Scoped to .env-arrival so adding homepage
@@ -984,10 +984,25 @@ function Home({ go }) {
           );
           arrival.fromTo(
             iceberg,
-            // The iceberg blooms in (opacity 0.55→1) as it rises, deepening
-            // the crossfade where the two layers overlap at the seam.
-            { y: "100vh", opacity: 0.55 },
-            { y: "-6vh", opacity: 1, ease: "none" },
+            // The rise: full-timeline slide from below the fold to rest.
+            // (Opacity is a separate, faster tween below.)
+            { y: "100vh" },
+            { y: "-6vh", ease: "none" },
+            0
+          );
+          arrival.fromTo(
+            iceberg,
+            // True crossfade (2026-10-08, retuned for the brighter aurora
+            // asset): the video dissolves in FAST (first ~55% of the
+            // scroll) while the starfield melts away SLOWLY over the full
+            // timeline. The second half of the scroll is pure dissolve —
+            // dark starfield fading over the already-placed aurora — so
+            // the handoff reads as a melt, not a sliding edge. The old
+            // 0.55 opacity floor was tuned for the dark iceberg clip; with
+            // the vivid aurora it read as a pop-in.
+            // Transform + opacity only: compositor-cheap, no repaint.
+            { opacity: 0 },
+            { opacity: 1, ease: "none", duration: 0.55 },
             0
           );
           // (2026-09-30) The constellation's --cfade mask tween was

@@ -131,6 +131,15 @@ export default function NewBackgroundVideo({ rest = false }) {
         disablePictureInPicture
         preload="auto"
       >
+        {/* Portrait cut (2026-10-08): phones get a purpose-framed 1080x1920
+            crop from the 4K master instead of a hard landscape crop —
+            aurora up top, snowfields below. The browser picks the first
+            source whose media query matches. */}
+        <source
+          src="/assets/new-bg/new-background-portrait.mp4"
+          type="video/mp4"
+          media="(max-width: 820px)"
+        />
         <source
           src="/assets/new-bg/new-background.mp4"
           type="video/mp4"
