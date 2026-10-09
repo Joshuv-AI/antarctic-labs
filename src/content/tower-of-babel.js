@@ -9,7 +9,7 @@
 // lazy-loaded via ../lib/catalog.js (dynamic import); a static import here
 // would drag all 3,448 records back into the main bundle.
 
-import { libraryFaqs, libraryIntroExtra, apiPage } from "./tower-api.js";
+import { libraryFaqs, apiPage } from "./tower-api.js";
 
 export const towerOfBabel = {
   heading: "TOWER OF BABEL",
@@ -21,6 +21,10 @@ export const towerOfBabel = {
     "From there it grew toward everything else that gets lost — suppressed, deleted, quietly rewritten: secret societies, folklore passed down through generations, firsthand accounts of the unexplained, phenomena brushed off and forgotten. The long conversations joined too — hours-long podcasts with experts and researchers, kept searchable instead of vanishing into a feed. What began as one preservation effort became a living archive of everything worth keeping: sacred and religious texts from every tradition, philosophy, history, science, law, and literature, declassified government documents, the unexplained, folklore and mythology, and full podcast transcripts — every entry verified against its source and preserved independently as clean, searchable text.",
     "Named for the old story of the gathering place where the works of the world were meant to be open and shared — no suppression, no hiding. And with thousands of texts side by side, a deeper purpose emerges: patterns surface. A story in one tradition echoes a declassified document in another; a folktale rhymes with a witness account. Anyone can read, anyone can research — and maybe unravel a greater story than any single book could tell. Something like the Akashic records: the whole of human knowledge, unlocked.",
   ],
+  // About the catalog — rendered inside the ABOUT THE PROJECT dropdown,
+  // condensed from the old bottom-of-page section.
+  catalogNote:
+    "The catalog holds thousands of texts and keeps growing: books, declassified documents, podcast transcripts, reference works, and papers — for readers who want full texts without accounts or paywalls, and for researchers and AI agents who need clean, citable source material. Classic literature, philosophy, sacred texts, and foundational political documents sit alongside government records and long-form conversation transcripts. Every record carries its own rights status, and the entire catalog is published as one machine-readable file so the collection can be searched, filtered, and retrieved programmatically.",
   // Library landing — separate destination at /tower-of-babel/library.
   library: {
     heading: "THE LIBRARY",
@@ -31,8 +35,6 @@ export const towerOfBabel = {
       body:
         "Tower of Babel is being structured before the catalog opens. Once entries are finalized, they will appear here with their rights status, source links, and (where redistribution is permitted) direct access.",
     },
-    // Catalog scope, in the library's own words — rendered on /tower-of-babel/library.
-    scopeNote: libraryIntroExtra,
     // Library FAQ — rendered on /tower-of-babel/library, FAQPage JSON-LD.
     faqs: libraryFaqs,
   },
