@@ -1,5 +1,5 @@
 // Draft copy for the Tower of Babel agent-resource surface.
-// Page: /tower-of-babel/library  (libraryFaqs, libraryIntroExtra)
+// Page: /tower-of-babel/library  (libraryFaqs)
 // Page: /tower-of-babel/api      (apiPage)
 // All facts verified 2026-10-01. No invented numbers, no MCP/API claims.
 
@@ -33,18 +33,6 @@ export const libraryFaqs = [
     a: "Yes. The catalog is published as a single machine-readable JSON file with a documented schema, and texts are served as plain .txt files at predictable URLs where the text exists. The /tower-of-babel/api page documents the fetch pattern, the record fields, licensing, and the limits of what is available.",
   },
 ];
-
-export const libraryIntroExtra =
-  "The library catalogues 3,448 texts: 913 books, 1,412 declassified documents, " +
-  "1,091 podcast transcripts, plus documents, reference works, and papers. It is built for readers " +
-  "who want full texts without accounts or paywalls, and for researchers and AI agents who need " +
-  "clean, citable source material. Classic literature, philosophy, sacred texts, and foundational " +
-  "political documents sit alongside government records released to the public and long-form " +
-  "conversation transcripts. Every record carries its own rights status, and the entire catalog " +
-  "is published as one machine-readable file so the collection can be searched, filtered, and " +
-  "retrieved programmatically. Availability of downloadable text varies per record: the catalog " +
-  "marks what is present, the site only offers access buttons for texts that exist, and agents " +
-  "can confirm availability with a plain HTTP request before fetching.";
 
 export const apiPage = {
   h1: "Free books API for AI agents",
