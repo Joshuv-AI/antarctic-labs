@@ -1044,7 +1044,10 @@ const LibraryResults = memo(function LibraryResults({
   // but made every filter/sort update walk all 3,448 rows.)
   const visibleIndices = useMemo(() => {
     const out = [];
-    for (let k = 0; k < rowBudget; k++) {
+    // Walk the full sort order, collecting the first `rowBudget` MATCHING
+    // items — not just the first `rowBudget` in sort order (which breaks
+    // pagination when a collection filter is active).
+    for (let k = 0; k < towerOrder.length && out.length < rowBudget; k++) {
       const i = towerOrder[k];
       if (rankMap.has(artifacts[i].artifact_id)) out.push(i);
     }
@@ -1109,7 +1112,7 @@ const LibraryResults = memo(function LibraryResults({
       {!searching && matchCount > rowBudget && (
         <button
           type="button"
-          className="tower-show-more"
+          className="tower-load-more"
           onClick={onLoadMore}
         >
           Load more — showing {Math.min(rowBudget, matchCount)} of {matchCount}
