@@ -1,69 +1,99 @@
-// Tower of Babel — lazy artifact catalog (JSON fetch).
+// Tower of Babel — lazy artifact catalog.
 //
-// The catalog (3,448 records, ~2.4MB JSON) is fetched as JSON rather than
-// a JavaScript module. JSON.parse is significantly lighter than JS module
-// evaluation on iOS Safari: no bytecode compilation, lower peak memory,
-// and the main thread stays responsive. The fetch is cached by the browser.
+// Two-tier loading (2026-10-09 optimization):
+// - The library LIST loads `catalog-index.json` (~1MB, 4,088 records with
+//   only list/search/sort fields). This is 57% smaller than the full
+//   catalog and is what unblocks the list view on mobile.
+// - The full `catalog.json` (~2.5MB) loads ON DEMAND when a user opens a
+//   specific book's detail page. It's cached by the browser after first load.
 //
-// NOTE: a failed fetch can be retried (unlike a failed dynamic import(),
-// which the browser's module map caches permanently). The caller shows
-// an error state with RETRY on failure.
-let artifactsCache = null;
-let pending = null;
+// Both are fetched as JSON (not JS modules): JSON.parse is lighter than
+// module evaluation on iOS Safari, and a failed fetch can be retried
+// (unlike a failed dynamic import, which the module map caches permanently).
+let indexCache = null;
+let fullCache = null;
+let indexPending = null;
+let fullPending = null;
 
-// How long a single catalog fetch may run before it is treated as stalled.
-// Mobile connections routinely stall mid-download; without a timeout the
-// promise never settles, the library renders nothing forever, and the user
-// is left on a blank page after the boot loader's failsafe lifts.
-const CATALOG_TIMEOUT_MS = 30000;
+// How long a single fetch may run before treated as stalled. Mobile
+// connections routinely stall mid-download; without a timeout the promise
+// never settles and the user is stuck on the loading state forever.
+const FETCH_TIMEOUT_MS = 30000;
 
-function fetchCatalogOnce() {
+function fetchJsonOnce(url) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), CATALOG_TIMEOUT_MS);
-  return fetch("/catalog.json", { signal: ctrl.signal })
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  return fetch(url, { signal: ctrl.signal })
     .then((r) => {
-      if (!r.ok) throw new Error("catalog fetch failed: " + r.status);
+      if (!r.ok) throw new Error(`fetch failed: ${url} ${r.status}`);
       return r.json();
     })
     .finally(() => clearTimeout(timer));
 }
 
-export function loadCatalog() {
-  if (artifactsCache) return Promise.resolve(artifactsCache);
-  if (!pending) {
+function loadWithRetry(url, getPending, setPending, getCache, setCache) {
+  if (getCache()) return Promise.resolve(getCache());
+  if (!getPending()) {
     // One silent retry: a single stalled attempt on a flaky mobile
     // connection shouldn't doom the visit. A second failure rejects, and
-    // the caller shows the error state with RETRY — the loading state
-    // always resolves, never an infinite blank page.
-    pending = fetchCatalogOnce()
-      .catch(() => fetchCatalogOnce())
-      .then(
-        (data) => {
-          artifactsCache = data;
-          // W1 fix (2026-10-01): clear pending on success too. Otherwise
-          // isCatalogPending() returns true forever after the first load,
-          // and the Tower loader takes the 8s re-arm branch on every
-          // later navigation instead of dismissing at 4s.
-          pending = null;
-          return artifactsCache;
-        },
-        (err) => {
-          // Clear so a later call retries the fetch instead of hanging
-          // on a rejected promise.
-          pending = null;
-          throw err;
-        }
-      );
+    // the caller shows the error state with RETRY.
+    setPending(
+      fetchJsonOnce(url)
+        .catch(() => fetchJsonOnce(url))
+        .then(
+          (data) => {
+            setCache(data);
+            setPending(null);
+            return data;
+          },
+          (err) => {
+            setPending(null);
+            throw err;
+          }
+        )
+    );
   }
-  return pending;
+  return getPending();
 }
 
-// True while a catalog fetch is in flight.
+// Lightweight index for the library list view.
+export function loadCatalog() {
+  return loadWithRetry(
+    "/catalog-index.json",
+    () => indexPending,
+    (p) => { indexPending = p; },
+    () => indexCache,
+    (d) => { indexCache = d; }
+  );
+}
+
+// Full catalog for detail pages — loaded on demand.
+export function loadFullCatalog() {
+  return loadWithRetry(
+    "/catalog.json",
+    () => fullPending,
+    (p) => { fullPending = p; },
+    () => fullCache,
+    (d) => { fullCache = d; }
+  );
+}
+
+// True while an index fetch is in flight.
 export function isCatalogPending() {
-  return pending !== null;
+  return indexPending !== null;
 }
 
-// The loaded array, or null if it hasn't resolved yet.
+// The loaded index array, or null if it hasn't resolved yet.
 export function getCachedArtifacts() {
-  return artifactsCache;
+  return indexCache;
+}
+
+// Find a full record by artifact_id, loading the full catalog on demand.
+export function getFullArtifact(artifactId) {
+  if (fullCache) {
+    return Promise.resolve(fullCache.find((a) => a.artifact_id === artifactId) || null);
+  }
+  return loadFullCatalog().then(
+    (full) => full.find((a) => a.artifact_id === artifactId) || null
+  );
 }

@@ -20,6 +20,7 @@ import { towerOfBabel } from "./content/tower-of-babel.js";
 import {
   loadCatalog,
   getCachedArtifacts,
+  getFullArtifact,
 } from "./lib/catalog.js";
 import { TOWER_FILES } from "./lib/tower-files.js";
 import { applyMeta } from "./seo.js";
@@ -1292,6 +1293,17 @@ function DeepMentions({ deep, go }) {
 }
 export function LibraryArtifact({ go, params, onReady }) {
   const [artifacts, catalogError] = useArtifacts();
+  // Full record loads on demand (the index has list fields only).
+  const [fullArtifact, setFullArtifact] = useState(null);
+  useEffect(() => {
+    let live = true;
+    setFullArtifact(null);
+    getFullArtifact(params.id).then(
+      (a) => { if (live) setFullArtifact(a); },
+      () => { if (live) setFullArtifact(null); }
+    );
+    return () => { live = false; };
+  }, [params.id]);
   // The entry's <title> / meta / JSON-LD need the catalog too: the app
   // shell applies generic Tower meta on navigation, so re-apply once the
   // record is available.
@@ -1320,7 +1332,10 @@ export function LibraryArtifact({ go, params, onReady }) {
   if (catalogError) return <TowerCatalogError />;
   if (!artifacts) return null;
   const index = artifacts.findIndex((a) => a.artifact_id === params.id);
-  const artifact = artifacts[index];
+  const indexRecord = artifacts[index];
+  // Prefer the full record (has description, download_url, etc.); fall back
+  // to the index record for basic fields while the full catalog loads.
+  const artifact = fullArtifact || indexRecord;
   if (!artifact) {
     return (
       <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
