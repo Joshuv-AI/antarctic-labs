@@ -41,7 +41,6 @@ import { applyMeta } from "./seo.js";
 import { loadCatalog, loadBootstrap, isCatalogPending } from "./lib/catalog.js";
 import {
   TowerOfBabel,
-  TowerLibrary,
   LibraryArtifact,
   SuggestEntry,
   Government,
@@ -413,8 +412,10 @@ function App() {
       {path === "/tower-of-babel" && (
         <TowerOfBabel go={go} onReady={handleTowerReady} />
       )}
+      {/* The library lives on the main Tower page now — the /library path
+          renders the same combined page. */}
       {path === "/tower-of-babel/library" && (
-        <TowerLibrary go={go} onReady={handleTowerReady} />
+        <TowerOfBabel go={go} onReady={handleTowerReady} />
       )}
       {matchedPattern === "/tower-of-babel/library/:id" && (
         <LibraryArtifact

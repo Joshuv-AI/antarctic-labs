@@ -330,29 +330,9 @@ export function ProjectDetail({ go, params }) {
 }
 // ----- Tower of Babel ------------------------------------------------------
 export function TowerOfBabel({ go, onReady }) {
-  // Tell the app shell the landing page has painted so it can dismiss the
-  // Tower boot loader shown during in-app navigation here (same loader as
-  // ENTER THE LIBRARY uses).
-  useEffect(() => {
-    if (!onReady) return;
-    let raf1 = 0;
-    let raf2 = 0;
-    raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => {
-        onReady();
-      });
-    });
-    return () => {
-      cancelAnimationFrame(raf1);
-      cancelAnimationFrame(raf2);
-    };
-  }, [onReady]);
-  // Prefetch the catalog while the visitor reads the landing page, so
-  // ENTER THE LIBRARY usually resolves instantly. Fire-and-forget: the
-  // library route awaits the same cached promise.
-  useEffect(() => {
-    loadCatalog().catch(() => {});
-  }, []);
+  // The combined Tower page: landing content + full library section below.
+  // The library section manages its own catalog loading and reports ready
+  // via onReady once the first 50 rows paint.
   const [artifacts] = useArtifacts();
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
@@ -362,9 +342,6 @@ export function TowerOfBabel({ go, onReady }) {
           <p className={i === 0 ? "display-copy" : "body-copy"} key={i}>{p}</p>
         ))}
         <div className="tower-landing-actions">
-          <button className="tower-access-btn" onClick={() => go("/tower-of-babel/library")}>
-            ENTER THE LIBRARY <span aria-hidden="true">↗</span>
-          </button>
           <span className="tower-landing-count">
             {artifacts ? (
               <>
@@ -383,6 +360,9 @@ export function TowerOfBabel({ go, onReady }) {
           <p className="body-copy" key={i}>{p}</p>
         ))}
       </section>
+
+      {/* The full library, poured directly below the landing content. */}
+      <TowerLibrarySection go={go} onReady={onReady} />
     </main>
   );
 }
@@ -527,28 +507,7 @@ function getTowerData(artifacts) {
 // "Load more" for the next 50 — no auto-streaming of all 4,088 rows.
 const TOWER_ROWS_PER_PAGE = 50;
 
-// Loading shell for the library: shown while the catalog downloads. Same
-// page chrome as the loaded library so the boot loader's failsafe never
-// reveals a blank page on a slow connection.
-function TowerLibraryLoading() {
-  return (
-    <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
-      <section className="inner-hero section">
-        <div className="section-index">LIBRARY</div>
-        <h1>{towerOfBabel.library.heading}</h1>
-        <p className="display-copy">{towerOfBabel.library.intro}</p>
-      </section>
-      <section className="tower-index section">
-        <div className="section-index">CATALOG</div>
-        <p className="tower-empty-results" aria-live="polite">
-          Loading the catalog…
-        </p>
-      </section>
-    </main>
-  );
-}
-
-export function TowerLibrary({ go, onReady }) {
+function TowerLibrarySection({ go, onReady }) {
   // The catalog loads asynchronously (see ./lib/catalog.js). While it is
   // null the Tower boot loader covers the screen, so rendering nothing is
   // correct — never a half-built page.
@@ -662,10 +621,24 @@ export function TowerLibrary({ go, onReady }) {
   // lift before a slow connection delivers the catalog, and the shell
   // guarantees the user never stares at a void in that gap.
   if (catalogError) return <TowerCatalogError />;
-  if (!artifacts) return <TowerLibraryLoading />;
-  return (
-    <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
+  if (!artifacts) return (
+    <>
       <section className="inner-hero section">
+        <div className="section-index">LIBRARY</div>
+        <h1>{towerOfBabel.library.heading}</h1>
+        <p className="display-copy">{towerOfBabel.library.intro}</p>
+      </section>
+      <section className="tower-index section">
+        <div className="section-index">CATALOG</div>
+        <p className="tower-empty-results" aria-live="polite">
+          Loading the catalog…
+        </p>
+      </section>
+    </>
+  );
+  return (
+    <>
+      <section className="inner-hero section" id="tower-library">
         <div className="section-index">LIBRARY</div>
         <h1>{towerOfBabel.library.heading}</h1>
         <p className="display-copy">{towerOfBabel.library.intro}</p>
@@ -759,7 +732,7 @@ export function TowerLibrary({ go, onReady }) {
         <div className="section-index">ABOUT THE CATALOG</div>
         <p className="body-copy">{towerOfBabel.library.scopeNote}</p>
       </section>
-    </main>
+    </>
   );
 }
 
