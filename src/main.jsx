@@ -906,6 +906,62 @@ function EntranceRitual() {
 //
 // No additional translucent page layer is introduced here.
 // ============================================================================
+// ============================================================================
+// Photo retouching proof gallery (2026-10-09). Before/after pairs from real
+// client-style work: background removal, flare removal, object removal.
+// Placed on the homepage after the territory section so Upwork clients
+// clicking through from proposals see proof backing the photo-retouching
+// claims. Side-by-side comparison, stacks on mobile.
+const RETOUCH_PAIRS = [
+  {
+    label: "BACKGROUND REMOVAL",
+    desc: "Distracting background replaced with a clean studio backdrop.",
+    before: "/assets/retouch/background-before.jpg",
+    after: "/assets/retouch/background-after.jpg",
+  },
+  {
+    label: "FLARE REMOVAL",
+    desc: "Lens flare and haze cleaned for a crisp, natural finish.",
+    before: "/assets/retouch/flare-before.jpg",
+    after: "/assets/retouch/flare-after.jpg",
+  },
+  {
+    label: "OBJECT REMOVAL",
+    desc: "Unwanted objects removed with seamless background reconstruction.",
+    before: "/assets/retouch/object-before.jpg",
+    after: "/assets/retouch/object-after.jpg",
+  },
+];
+function PhotoRetouchGallery() {
+  return (
+    <section id="retouch-proof" className="retouch section reveal">
+      <div className="section-index">PHOTO RETOUCHING</div>
+      <h2 className="retouch-heading">Before / After</h2>
+      <p className="body-copy retouch-lede">
+        Real retouching work — background removal, product and wedding photo
+        editing. Every pair is the same photo, retouched by hand.
+      </p>
+      <div className="retouch-grid">
+        {RETOUCH_PAIRS.map((p) => (
+          <figure className="retouch-pair" key={p.label}>
+            <figcaption className="retouch-label">{p.label}</figcaption>
+            <div className="retouch-compare">
+              <div className="retouch-frame">
+                <img src={p.before} alt={`${p.label} — before`} loading="lazy" />
+                <span className="retouch-tag">BEFORE</span>
+              </div>
+              <div className="retouch-frame">
+                <img src={p.after} alt={`${p.label} — after`} loading="lazy" />
+                <span className="retouch-tag">AFTER</span>
+              </div>
+            </div>
+            <p className="retouch-desc">{p.desc}</p>
+          </figure>
+        ))}
+      </div>
+    </section>
+  );
+}
 function Home({ go }) {
   const root = useRef(null);
   useReveal(root);
@@ -1166,6 +1222,7 @@ function Home({ go }) {
           ))}
         </div>
       </section>
+      <PhotoRetouchGallery />
       <FaqBlock index="QUESTIONS" faqs={siteFaqs} />
     </main>
   );
