@@ -366,6 +366,8 @@ export function TowerOfBabel({ go, onReady }) {
             {towerOfBabel.project.map((p, i) => (
               <p className="body-copy" key={i}>{p}</p>
             ))}
+            <div className="tower-about-subhead">ABOUT THE CATALOG</div>
+            <p className="body-copy">{towerOfBabel.catalogNote}</p>
           </div>
         </details>
       </section>
@@ -736,11 +738,6 @@ function TowerLibrarySection({ go, onReady }) {
         )}
       </section>
       <FaqBlock index="QUESTIONS" faqs={towerOfBabel.library.faqs} />
-      {/* Catalog scope note — deliberately last on the page, below the FAQ. */}
-      <section className="section tower-scope-note" aria-label="About the catalog">
-        <div className="section-index">ABOUT THE CATALOG</div>
-        <p className="body-copy">{towerOfBabel.library.scopeNote}</p>
-      </section>
     </>
   );
 }
