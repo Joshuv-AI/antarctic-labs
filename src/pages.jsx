@@ -535,11 +535,9 @@ function getTowerData(artifacts) {
 // Rows per animation frame when streaming the index in (see TowerLibrary).
 // Each commit re-reconciles every mounted row, so commit cost grows with
 // the mounted count: three 1,400-row commits do roughly 4x less total
-// main-thread work than twelve 350-row ones. The boot overlay's animation
-// is compositor-driven (transform/opacity), so the larger commits never
-// visibly hitch it. The loader still lifts only after every row is
-// mounted — loader → complete list, never progressive rendering.
-const TOWER_ROW_CHUNK = 1400;
+// Rows per page for library pagination (2026-10-09). The user clicks
+// "Load more" for the next 50 — no auto-streaming of all 4,088 rows.
+const TOWER_ROWS_PER_PAGE = 50;
 
 // Loading shell for the library: shown while the catalog downloads. Same
 // page chrome as the loaded library so the boot loader's failsafe never
@@ -577,10 +575,11 @@ export function TowerLibrary({ go, onReady }) {
   // blocks the main thread for ~1s and freezes the Tower boot animation
   // mid-play. The page frame paints immediately with zero rows, and the
   // rows stream in behind the overlay in small rAF chunks below.
-  const [rowBudget, setRowBudget] = useState(0);
-  // Persistent across renders for the mount stream below; the budget is
-  // only ever grown on mount, never shrunk by filters.
-  const budgetRef = useRef(0);
+  const [rowBudget, setRowBudget] = useState(50);
+  // Pagination: 50 rows per page, user clicks "Load more". This replaces
+  // the old auto-streaming (which mounted all 4,088 rows). The loader
+  // releases after the first 50 paint — the user sees content instantly.
+  const ROWS_PER_PAGE = 50;
   // The input stays bound to the raw query so typing never waits on work;
   // the expensive filter/sort and the deep index search run on the deferred
   // value at background priority, which removes the keystroke lag.
@@ -601,7 +600,9 @@ export function TowerLibrary({ go, onReady }) {
   const [matchesExpanded, setMatchesExpanded] = useState(false);
   useEffect(() => {
     setMatchesExpanded(false);
-  }, [listQuery]);
+    // Reset pagination to first 50 when filters change.
+    setRowBudget(TOWER_ROWS_PER_PAGE);
+  }, [listQuery, collectionFilter, sortId]);
   // Deep full-text search: same query, second mode. Debounced; searches the
   // full contents of every staged text via the build-time index. Title
   // results above are untouched by this.
@@ -651,58 +652,20 @@ export function TowerLibrary({ go, onReady }) {
   // clean frames. The overlay used to lift only after the final chunk
   // painted, which held the loader up for seconds on phones even though the
   // page was ready long before. Now it releases on first meaningful paint —
-  // hero, controls, and the first chunk of rows — while the remaining rows
-  // keep streaming behind the visible page. This runs once on mount:
-  // filter/search/sort updates never touch the budget — LibraryResults
-  // derives the visible rows from the budget + rank map, so the list can
-  // neither blank nor thrash the DOM mid-typing. Gated on the catalog:
-  // the stream starts once the data arrives, not on mount.
+  // Release the loader after the first 50 rows paint. Pagination (50 per
+  // page, "Load more" button) replaces the old auto-streaming of all 4,088
+  // rows — the user sees content instantly and controls how much loads.
   useEffect(() => {
-    if (!artifacts) return;
-    const total = artifacts.length;
-    const rafs = [];
-    let timer = 0;
+    if (!artifacts || !onReady) return;
     let cancelled = false;
-    let released = false;
-    const later = (fn) => {
-      const id = requestAnimationFrame(fn);
-      rafs.push(id);
-      return id;
-    };
-    const releaseLoader = () => {
-      if (released || !onReady) return;
-      released = true;
-      // All rows committed — two frames later they are painted.
-      later(() => later(() => {
+    const raf1 = requestAnimationFrame(() => {
+      const raf2 = requestAnimationFrame(() => {
         if (!cancelled) onReady();
-      }));
-    };
-    const tick = () => {
-      if (cancelled) return;
-      const next = Math.min(total, budgetRef.current + TOWER_ROW_CHUNK);
-      budgetRef.current = next;
-      setRowBudget(next);
-      // Only release the loader when ALL rows are mounted. Releasing after
-      // the first chunk exposes the progressive batch rendering, which
-      // looks inconsistent and janky on scroll. The loader covers the
-      // chunking; the user sees loader → complete list.
-      if (next >= total) {
-        releaseLoader();
-      } else {
-        later(tick);
-      }
-    };
-    // Initial mount: let the boot overlay's entrance start before any row
-    // work begins.
-    budgetRef.current = 0;
-    setRowBudget(0);
-    timer = setTimeout(() => {
-      later(tick);
-    }, 150);
+      });
+    });
     return () => {
       cancelled = true;
-      clearTimeout(timer);
-      rafs.forEach((id) => cancelAnimationFrame(id));
+      cancelAnimationFrame(raf1);
     };
   }, [onReady, artifacts]);
   // Catalog failed even after the automatic retry: show the error state,
@@ -792,6 +755,7 @@ export function TowerLibrary({ go, onReady }) {
               rankMap={rankMap}
               matchCount={matchCount}
               rowBudget={rowBudget}
+              onLoadMore={() => setRowBudget((b) => b + TOWER_ROWS_PER_PAGE)}
               deep={deep}
               q={q}
               go={go}
@@ -1066,6 +1030,7 @@ const LibraryResults = memo(function LibraryResults({
   rankMap,
   matchCount,
   rowBudget,
+  onLoadMore,
   deep,
   q,
   go,
@@ -1138,6 +1103,16 @@ const LibraryResults = memo(function LibraryResults({
           {matchesExpanded
             ? "Show fewer"
             : `Show all ${matchCount} matching entries`}
+        </button>
+      )}
+      {/* Pagination: 50 per page, "Load more" for the next 50. */}
+      {!searching && matchCount > rowBudget && (
+        <button
+          type="button"
+          className="tower-show-more"
+          onClick={onLoadMore}
+        >
+          Load more — showing {Math.min(rowBudget, matchCount)} of {matchCount}
         </button>
       )}
       <DeepMentions deep={deep} go={go} />
