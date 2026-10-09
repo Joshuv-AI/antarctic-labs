@@ -52,6 +52,19 @@ export function applyMeta(path) {
     }
   }
 
+  // Robots — per-route. metaFor may return `robots` (e.g. noindex for the
+  // full-text reader); everything else keeps the index.html default.
+  let robots = document.head.querySelector("meta[name='robots']");
+  if (!robots) {
+    robots = document.createElement("meta");
+    robots.setAttribute("name", "robots");
+    document.head.appendChild(robots);
+  }
+  const wantRobots = meta.robots || "index, follow, max-image-preview:large";
+  if (robots.getAttribute("content") !== wantRobots) {
+    robots.setAttribute("content", wantRobots);
+  }
+
   // Canonical link
   let canonical = document.head.querySelector("link[rel='canonical']");
   if (!canonical) {
