@@ -12,8 +12,8 @@
  * over (it sits at z-index 4, below the page-shell at z-index 6).
  *
  * The optional `rest` prop parks the layer at its final homepage position
- * (translateY(-6vh)) with no scroll choreography: used on inner pages that
- * share the homepage's resting environment.
+ * (translateY(0), full-viewport) with no scroll choreography: used on
+ * inner pages that share the homepage's resting environment.
  */
 import { useEffect, useRef } from "react";
 

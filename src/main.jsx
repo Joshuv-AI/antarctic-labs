@@ -933,7 +933,7 @@ function Home({ go }) {
       // Stage 3: the environmental arrival. Two full-viewport layers,
       // one after the other in a fixed order: the constellation
       // (transparent starfield canvas) exits upward (y=0 to y=-100vh)
-      // while the iceberg video rises from below (y=100vh to y=-6vh).
+      // while the video rises from below (y=100vh to y=0, full-viewport).
       // The timeline animates transform + opacity ONLY (compositor
       // work). The old per-frame --cfade mask tween is gone: animating
       // mask-image every scroll frame forced a full-layer repaint and
@@ -984,10 +984,11 @@ function Home({ go }) {
           );
           arrival.fromTo(
             iceberg,
-            // The rise: full-timeline slide from below the fold to rest.
-            // (Opacity is a separate, faster tween below.)
+            // The rise: full-timeline slide from below the fold to a
+            // full-viewport rest (y=0). (Opacity is a separate, faster
+            // tween below.)
             { y: "100vh" },
-            { y: "-6vh", ease: "none" },
+            { y: "0vh", ease: "none" },
             0
           );
           arrival.fromTo(
