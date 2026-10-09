@@ -145,6 +145,10 @@ export default function NewBackgroundVideo({ rest = false }) {
           type="video/mp4"
         />
       </video>
+      {/* Feather overlay: softens the video's leading edge during the
+          homepage arrival so the crossfade melts instead of meeting at a
+          hard line. Rides with the layer; static gradient, zero repaint. */}
+      <div className="new-bg-feather" aria-hidden="true" />
     </div>
   );
 }
