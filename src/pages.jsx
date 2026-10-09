@@ -333,7 +333,6 @@ export function TowerOfBabel({ go, onReady }) {
   // The combined Tower page: landing content + full library section below.
   // The library section manages its own catalog loading and reports ready
   // via onReady once the first 50 rows paint.
-  const [artifacts] = useArtifacts();
   return (
     <main className="page-shell inner-page tower-light tower-combined" id="main-content" tabIndex={-1}>
       <section className="inner-hero section tower-landing-hero">
@@ -341,17 +340,6 @@ export function TowerOfBabel({ go, onReady }) {
         {towerOfBabel.intro.map((p, i) => (
           <p className={i === 0 ? "display-copy" : "body-copy"} key={i}>{p}</p>
         ))}
-        <div className="tower-landing-actions">
-          <span className="tower-landing-count">
-            {artifacts ? (
-              <>
-                {artifacts.length} {artifacts.length === 1 ? "entry" : "entries"} indexed
-              </>
-            ) : (
-              <>indexing&hellip;</>
-            )}
-          </span>
-        </div>
       </section>
 
       {/* About the project — collapsed by default so the landing stays tight;
