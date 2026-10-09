@@ -105925,7 +105925,7 @@ export const artifacts = [
   artifact({
     artifact_id: "harte-luck-roaring-camp-1870",
     title: "The Luck of Roaring Camp and Other Stories",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Bret Harte",
     year: 1870,
     description: "The stories that created the California myth — Roaring Camp, Poker Flat, and the gambler with a heart of gold; the founding book of American local color.",
@@ -105944,7 +105944,7 @@ export const artifacts = [
   artifact({
     artifact_id: "sandburg-smoke-and-steel-1920",
     title: "Smoke and Steel",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Carl Sandburg",
     year: 1920,
     description: "The great book of American industry in verse — smoke, steel, and the workers who tend them.",
@@ -105963,7 +105963,7 @@ export const artifacts = [
   artifact({
     artifact_id: "sandburg-rootabaga-stories-1922",
     title: "Rootabaga Stories",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Carl Sandburg",
     year: 1922,
     description: "The Rootabaga Country tales — America's own fairy-tale geography, for children of the prairie.",
@@ -105982,7 +105982,7 @@ export const artifacts = [
   artifact({
     artifact_id: "gilman-yellow-wallpaper-1892",
     title: "The Yellow Wallpaper",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Charlotte Perkins Gilman",
     year: 1892,
     description: "A woman's descent behind the wallpaper's pattern — the story that indicted patriarchal medicine.",
@@ -106001,7 +106001,7 @@ export const artifacts = [
   artifact({
     artifact_id: "gilman-herland-1915",
     title: "Herland",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Charlotte Perkins Gilman",
     year: 1915,
     description: "Three explorers discover a civilization of women — the utopia that founded feminist speculative fiction.",
@@ -106020,7 +106020,7 @@ export const artifacts = [
   artifact({
     artifact_id: "mckay-banjo-1929",
     title: "Banjo",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Claude McKay",
     year: 1929,
     description: "Black drifters on the Marseille waterfront — McKay's great novel of the Black Atlantic.",
@@ -106039,7 +106039,7 @@ export const artifacts = [
   artifact({
     artifact_id: "cullen-copper-sun-1927",
     title: "Copper Sun",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Countee Cullen",
     year: 1927,
     description: "The companion to Color — 'Heritage' and the lyrics of Cullen's maturity.",
@@ -106058,7 +106058,7 @@ export const artifacts = [
   artifact({
     artifact_id: "cummings-tulips-and-chimneys-1923",
     title: "Tulips and Chimneys",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "E. E. Cummings",
     year: 1923,
     description: "The first book of poems — the beginning of Cummings's lifelong reinvention of the lyric.",
@@ -106077,7 +106077,7 @@ export const artifacts = [
   artifact({
     artifact_id: "cummings-is-5-1926",
     title: "is 5",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "E. E. Cummings",
     year: 1926,
     description: "The collection containing 'anyone lived in a pretty how town' — Cummings at his most beloved and most daring.",
@@ -106096,7 +106096,7 @@ export const artifacts = [
   artifact({
     artifact_id: "wharton-fruit-of-the-tree-1907",
     title: "The Fruit of the Tree",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Edith Wharton",
     year: 1907,
     description: "A nurse, a mill-town, and a mercy killing — Wharton's novel of industrial reform and moral tragedy.",
@@ -106115,7 +106115,7 @@ export const artifacts = [
   artifact({
     artifact_id: "wharton-reef-1912",
     title: "The Reef",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Edith Wharton",
     year: 1912,
     description: "An American widow in France entangled in a younger man's affair — Wharton's most psychologically intricate novel.",
@@ -106134,7 +106134,7 @@ export const artifacts = [
   artifact({
     artifact_id: "wharton-custom-of-the-country-1913",
     title: "The Custom of the Country",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Edith Wharton",
     year: 1913,
     description: "Undine Spragg's ruthless ascent through husbands and millions — Wharton's savage anatomy of the marriage market.",
@@ -106153,7 +106153,7 @@ export const artifacts = [
   artifact({
     artifact_id: "wharton-summer-1917",
     title: "Summer",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Edith Wharton",
     year: 1917,
     description: "Charity Royall's summer of love in the Berkshires — Wharton's boldest novel of female desire.",
@@ -106172,7 +106172,7 @@ export const artifacts = [
   artifact({
     artifact_id: "wharton-false-dawn-1924",
     title: "False Dawn (The 'Forties)",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Edith Wharton",
     year: 1924,
     description: "'The 'Forties' — the first Old New York novella; a young man's daring purchase of avant-garde art.",
@@ -106191,7 +106191,7 @@ export const artifacts = [
   artifact({
     artifact_id: "wharton-new-years-day-1924",
     title: "New Year's Day (The 'Seventies)",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Edith Wharton",
     year: 1924,
     description: "'The 'Seventies' — the final Old New York novella; a widow's secret revealed after decades.",
@@ -106210,7 +106210,7 @@ export const artifacts = [
   artifact({
     artifact_id: "wharton-old-maid-1924",
     title: "The Old Maid (The 'Fifties)",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Edith Wharton",
     year: 1924,
     description: "'The 'Fifties' — Delia Ralston and her cousin's secret child; the best-known of the Old New York novellas.",
@@ -106229,7 +106229,7 @@ export const artifacts = [
   artifact({
     artifact_id: "wharton-the-spark-1924",
     title: "The Spark (The 'Sixties)",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Edith Wharton",
     year: 1924,
     description: "'The 'Sixties' — a wife's belated discovery of her husband's wartime heroism.",
@@ -106248,7 +106248,7 @@ export const artifacts = [
   artifact({
     artifact_id: "millay-few-figs-1920",
     title: "A Few Figs from Thistles",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Edna St. Vincent Millay",
     year: 1920,
     description: "The slim volume that made Millay famous — the flaming youth of the Jazz Age in verse.",
@@ -106267,7 +106267,7 @@ export const artifacts = [
   artifact({
     artifact_id: "millay-second-april-1921",
     title: "Second April",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Edna St. Vincent Millay",
     year: 1921,
     description: "The sonnets and lyrics of Millay's Greenwich Village maturity.",
@@ -106286,7 +106286,7 @@ export const artifacts = [
   artifact({
     artifact_id: "millay-harp-weaver-1923",
     title: "The Harp-Weaver and Other Poems",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Edna St. Vincent Millay",
     year: 1923,
     description: "The Pulitzer volume — 'The Harp-Weaver' ballad and the sonnet sequence of Millay's prime.",
@@ -106305,7 +106305,7 @@ export const artifacts = [
   artifact({
     artifact_id: "robinson-children-of-the-night-1897",
     title: "The Children of the Night",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Edwin Arlington Robinson",
     year: 1897,
     description: "'Richard Cory,' 'Miniver Cheevy,' 'Luke Havergal' — the book that made Robinson's name.",
@@ -106324,7 +106324,7 @@ export const artifacts = [
   artifact({
     artifact_id: "robinson-town-down-the-river-1910",
     title: "The Town Down the River",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Edwin Arlington Robinson",
     year: 1910,
     description: "Further Tilbury Town portraits — the essential middle Robinson collection.",
@@ -106343,7 +106343,7 @@ export const artifacts = [
   artifact({
     artifact_id: "robinson-merlin-1917",
     title: "Merlin",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Edwin Arlington Robinson",
     year: 1917,
     description: "The Arthurian epic in blank verse — Robinson's most ambitious single poem.",
@@ -106362,7 +106362,7 @@ export const artifacts = [
   artifact({
     artifact_id: "glasgow-virginia-1913",
     title: "Virginia",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Ellen Glasgow",
     year: 1913,
     description: "Virginia Pendleton's life sacrificed to Southern womanhood — the opening of Glasgow's great sequence.",
@@ -106381,7 +106381,7 @@ export const artifacts = [
   artifact({
     artifact_id: "glasgow-barren-ground-1925",
     title: "Barren Ground",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Ellen Glasgow",
     year: 1925,
     description: "A woman's thirty-year conquest of worn-out Virginia farmland — the novel Glasgow considered her best.",
@@ -106400,7 +106400,7 @@ export const artifacts = [
   artifact({
     artifact_id: "glasgow-romantic-comedians-1926",
     title: "The Romantic Comedians",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Ellen Glasgow",
     year: 1926,
     description: "A judge's late marriage and its collapse — Glasgow's sharpest comedy of Southern manners.",
@@ -106419,7 +106419,7 @@ export const artifacts = [
   artifact({
     artifact_id: "dickinson-poems-three-series-complete-1896",
     title: "Poems by Emily Dickinson, Three Series, Complete",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Emily Dickinson",
     year: 1896,
     description: "All three 1890s Todd/Higginson selections in one volume — the complete public-domain record of Emily Dickinson's poetry.",
@@ -106438,7 +106438,7 @@ export const artifacts = [
   artifact({
     artifact_id: "dickinson-single-hound-1914",
     title: "The Single Hound",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Emily Dickinson",
     year: 1914,
     description: "Martha Bianchi's selection from the family manuscripts — the first new Dickinson book of the modernist era.",
@@ -106457,7 +106457,7 @@ export const artifacts = [
   artifact({
     artifact_id: "hemingway-three-stories-1923",
     title: "Three Stories and Ten Poems",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Ernest Hemingway",
     year: 1923,
     description: "The 1923 Paris debut — 'Up in Michigan' and the first Nick Adams stories; where Hemingway began.",
@@ -106476,7 +106476,7 @@ export const artifacts = [
   artifact({
     artifact_id: "hemingway-in-our-time-1925",
     title: "In Our Time",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Ernest Hemingway",
     year: 1925,
     description: "The stories that changed American prose — Nick Adams from Michigan to the war; the founding book of the Hemingway style.",
@@ -106495,7 +106495,7 @@ export const artifacts = [
   artifact({
     artifact_id: "hemingway-torrents-of-spring-1926",
     title: "The Torrents of Spring",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Ernest Hemingway",
     year: 1926,
     description: "The Anderson parody that ended a mentorship — Hemingway's comic novella and publishing gambit.",
@@ -106514,7 +106514,7 @@ export const artifacts = [
   artifact({
     artifact_id: "hemingway-men-without-women-1927",
     title: "Men Without Women",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Ernest Hemingway",
     year: 1927,
     description: "Fourteen stories including 'The Killers' and 'Hills Like White Elephants' — the essential Hemingway book.",
@@ -106533,7 +106533,7 @@ export const artifacts = [
   artifact({
     artifact_id: "pound-exultations-1909",
     title: "Exultations",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Ezra Pound",
     year: 1909,
     description: "Troubadour songs and early lyrics — the medievalist Pound emerging beside the modernist.",
@@ -106552,7 +106552,7 @@ export const artifacts = [
   artifact({
     artifact_id: "pound-personae-1909",
     title: "Personae",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Ezra Pound",
     year: 1909,
     description: "The 1909 London collection — the young American's bid for poetic mastery, the root of Imagism.",
@@ -106571,7 +106571,7 @@ export const artifacts = [
   artifact({
     artifact_id: "pound-canzoni-ripostes-1913",
     title: "Canzoni & Ripostes",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Ezra Pound",
     year: 1913,
     description: "The combined 1913 volume — Canzoni with the Ripostes appendix of Hulme's poems; the book that launched Imagism.",
@@ -106590,7 +106590,7 @@ export const artifacts = [
   artifact({
     artifact_id: "pound-lustra-1916",
     title: "Lustra",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Ezra Pound",
     year: 1916,
     description: "The 1916 collection of satires and epigrams — Pound's London modernism at its sharpest.",
@@ -106609,7 +106609,7 @@ export const artifacts = [
   artifact({
     artifact_id: "pound-hugh-selwyn-mauberley-1920",
     title: "Hugh Selwyn Mauberley",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Ezra Pound",
     year: 1920,
     description: "The eighteen-poem sequence bidding farewell to a civilization — Pound's masterpiece of the postwar reckoning.",
@@ -106628,7 +106628,7 @@ export const artifacts = [
   artifact({
     artifact_id: "fitzgerald-flappers-and-philosophers-1920",
     title: "Flappers and Philosophers",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "F. Scott Fitzgerald",
     year: 1920,
     description: "Eight stories including 'Bernice Bobs Her Hair' — the flapper canon in its first collected form.",
@@ -106647,7 +106647,7 @@ export const artifacts = [
   artifact({
     artifact_id: "fitzgerald-this-side-of-paradise-1920",
     title: "This Side of Paradise",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "F. Scott Fitzgerald",
     year: 1920,
     description: "Amory Blaine's Princeton-to-war youth — the book that named a generation and invented the Jazz Age novel.",
@@ -106666,7 +106666,7 @@ export const artifacts = [
   artifact({
     artifact_id: "fitzgerald-beautiful-and-damned-1922",
     title: "The Beautiful and Damned",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "F. Scott Fitzgerald",
     year: 1922,
     description: "The beautiful young couple rotting on expectation — Fitzgerald's darkest Jazz Age novel.",
@@ -106685,7 +106685,7 @@ export const artifacts = [
   artifact({
     artifact_id: "fitzgerald-tales-of-the-jazz-age-1922",
     title: "Tales of the Jazz Age",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "F. Scott Fitzgerald",
     year: 1922,
     description: "Eleven stories including 'May Day' and 'The Diamond as Big as the Ritz' — the Jazz Age at full volume.",
@@ -106704,7 +106704,7 @@ export const artifacts = [
   artifact({
     artifact_id: "norris-mcteague-1899",
     title: "McTeague",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Frank Norris",
     year: 1899,
     description: "The dentist's descent into murderous avarice in Polk Street — the masterpiece of American naturalism.",
@@ -106723,7 +106723,7 @@ export const artifacts = [
   artifact({
     artifact_id: "norris-octopus-1901",
     title: "The Octopus",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Frank Norris",
     year: 1901,
     description: "The Southern Pacific Railroad as the tentacled monopoly crushing the wheat ranchers — the founding novel of the American protest epic.",
@@ -106742,7 +106742,7 @@ export const artifacts = [
   artifact({
     artifact_id: "norris-pit-1903",
     title: "The Pit",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Frank Norris",
     year: 1903,
     description: "The Chicago wheat pit and a speculator's corner — the great American novel of finance, completing the wheat trilogy's arc.",
@@ -106761,7 +106761,7 @@ export const artifacts = [
   artifact({
     artifact_id: "james-daisy-miller-1878",
     title: "Daisy Miller",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Henry James",
     year: 1878,
     description: "The American girl in Rome — the story that made Henry James's name and defined the American-abroad theme for a century.",
@@ -106780,7 +106780,7 @@ export const artifacts = [
   artifact({
     artifact_id: "james-washington-square-1880",
     title: "Washington Square",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Henry James",
     year: 1880,
     description: "The plain heiress, the fortune-hunter, and the tyrannical father — James's flawless novella-length tragedy of filial obedience.",
@@ -106799,7 +106799,7 @@ export const artifacts = [
   artifact({
     artifact_id: "james-portrait-of-a-lady-1881-vol-1",
     title: "The Portrait of a Lady — Volume 1",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Henry James",
     year: 1881,
     description: "Volume 1 of James's first masterpiece — Isabel Archer's inheritance and European education.",
@@ -106818,7 +106818,7 @@ export const artifacts = [
   artifact({
     artifact_id: "james-portrait-of-a-lady-1881-vol-2",
     title: "The Portrait of a Lady — Volume 2",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Henry James",
     year: 1881,
     description: "Volume 2 of James's first masterpiece — the fatal marriage to Osmond and its reckoning.",
@@ -106837,7 +106837,7 @@ export const artifacts = [
   artifact({
     artifact_id: "james-bostonians-1886-vol-1",
     title: "The Bostonians — Volume 1",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Henry James",
     year: 1886,
     description: "Volume 1 — the battle for the feminist orator Verena Tarrant begins.",
@@ -106856,7 +106856,7 @@ export const artifacts = [
   artifact({
     artifact_id: "james-bostonians-1886-vol-2",
     title: "The Bostonians — Volume 2",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Henry James",
     year: 1886,
     description: "Volume 2 — reform, love, and Verena's choice.",
@@ -106875,7 +106875,7 @@ export const artifacts = [
   artifact({
     artifact_id: "james-turn-of-the-screw-1898",
     title: "The Turn of the Screw",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Henry James",
     year: 1898,
     description: "The governess, the children, the ghosts at Bly — the most argued-about novella in English, horror's great ambiguous masterpiece.",
@@ -106894,7 +106894,7 @@ export const artifacts = [
   artifact({
     artifact_id: "james-wings-of-the-dove-1902-vol-1",
     title: "The Wings of the Dove — Volume 1",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Henry James",
     year: 1902,
     description: "Volume 1 of the first late masterpiece — Kate, Densher, and the dying heiress Milly Theale.",
@@ -106913,7 +106913,7 @@ export const artifacts = [
   artifact({
     artifact_id: "james-wings-of-the-dove-1902-vol-2",
     title: "The Wings of the Dove — Volume 2",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Henry James",
     year: 1902,
     description: "Volume 2 — Venice, the deception, and Milly's posthumous victory.",
@@ -106932,7 +106932,7 @@ export const artifacts = [
   artifact({
     artifact_id: "james-ambassadors-1903",
     title: "The Ambassadors",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Henry James",
     year: 1903,
     description: "Strether's belated European education in Paris — the novel James himself ranked first among his works.",
@@ -106951,7 +106951,7 @@ export const artifacts = [
   artifact({
     artifact_id: "james-golden-bowl-1904",
     title: "The Golden Bowl",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Henry James",
     year: 1904,
     description: "Maggie Verver's discovery of her husband's affair — the densest, most architectonic novel James ever wrote.",
@@ -106970,7 +106970,7 @@ export const artifacts = [
   artifact({
     artifact_id: "longfellow-evangeline-1847",
     title: "Evangeline",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Henry Wadsworth Longfellow",
     year: 1847,
     description: "The tale of the Acadian lovers parted by the British expulsion — the American epic in English hexameters, memorized by generations.",
@@ -106989,7 +106989,7 @@ export const artifacts = [
   artifact({
     artifact_id: "longfellow-hiawatha-1855",
     title: "The Song of Hiawatha",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Henry Wadsworth Longfellow",
     year: 1855,
     description: "Longfellow's trochaic epic of Hiawatha — the single most-read American poem of the 19th century, for better and worse the national myth of the 'noble savage.'",
@@ -107008,7 +107008,7 @@ export const artifacts = [
   artifact({
     artifact_id: "longfellow-miles-standish-1858",
     title: "The Courtship of Miles Standish",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Henry Wadsworth Longfellow",
     year: 1858,
     description: "The Pilgrim love-triangle of Miles Standish, John Alden, and Priscilla — the verse epic that made Plymouth the American origin story.",
@@ -107027,7 +107027,7 @@ export const artifacts = [
   artifact({
     artifact_id: "longfellow-wayside-inn-1863",
     title: "Tales of a Wayside Inn",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Henry Wadsworth Longfellow",
     year: 1863,
     description: "The frame-tale collection whose 'Paul Revere's Ride' became the most recited poem in America — Longfellow's Canterbury Tales.",
@@ -107046,7 +107046,7 @@ export const artifacts = [
   artifact({
     artifact_id: "london-son-of-the-wolf-1900",
     title: "The Son of the Wolf",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Jack London",
     year: 1900,
     description: "The debut story collection — the first Klondike tales, the book that made Jack London's name.",
@@ -107065,7 +107065,7 @@ export const artifacts = [
   artifact({
     artifact_id: "london-people-of-the-abyss-1903",
     title: "The People of the Abyss",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Jack London",
     year: 1903,
     description: "Seven weeks disguised as a sailor in the East End slums — the book that invented immersive social reportage.",
@@ -107084,7 +107084,7 @@ export const artifacts = [
   artifact({
     artifact_id: "london-love-of-life-1907",
     title: "Love of Life and Other Stories",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Jack London",
     year: 1907,
     description: "The starving prospector crawling to survival — with 'The Story of Keesh' and other essential later stories.",
@@ -107103,7 +107103,7 @@ export const artifacts = [
   artifact({
     artifact_id: "london-road-1907",
     title: "The Road",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Jack London",
     year: 1907,
     description: "Riding the rails as a teenage tramp — the memoir that made the hobo an American literary figure.",
@@ -107122,7 +107122,7 @@ export const artifacts = [
   artifact({
     artifact_id: "london-south-sea-tales-1911",
     title: "South Sea Tales",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Jack London",
     year: 1911,
     description: "Tales of the Solomon Islands and the leper colony — London's Pacific fiction at its most brutal and humane.",
@@ -107141,7 +107141,7 @@ export const artifacts = [
   artifact({
     artifact_id: "london-john-barleycorn-1913",
     title: "John Barleycorn",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Jack London",
     year: 1913,
     description: "London's confessional of a lifetime's drinking — the first major American memoir of alcoholism.",
@@ -107160,7 +107160,7 @@ export const artifacts = [
   artifact({
     artifact_id: "cooper-spy-1821",
     title: "The Spy",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "James Fenimore Cooper",
     year: 1821,
     description: "A Revolutionary War tale of espionage and divided loyalties; the novel that proved American fiction could outsell British imports on American soil.",
@@ -107179,7 +107179,7 @@ export const artifacts = [
   artifact({
     artifact_id: "cooper-pioneers-1823",
     title: "The Pioneers",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "James Fenimore Cooper",
     year: 1823,
     description: "The first Leatherstocking tale — old Natty Bumppo confronts the settlement of the wilderness he helped open; the founding novel of the American frontier myth.",
@@ -107198,7 +107198,7 @@ export const artifacts = [
   artifact({
     artifact_id: "cooper-pilot-1824",
     title: "The Pilot",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "James Fenimore Cooper",
     year: 1824,
     description: "A Revolutionary War sea-adventure modeled on John Paul Jones; the first sea novel in American literature and the direct ancestor of Moby-Dick's tradition.",
@@ -107217,7 +107217,7 @@ export const artifacts = [
   artifact({
     artifact_id: "cooper-last-of-the-mohicans-1826",
     title: "The Last of the Mohicans",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "James Fenimore Cooper",
     year: 1826,
     description: "Hawkeye, Chingachgook, and Uncas in the French and Indian War — the archetypal American adventure novel, still the most-translated early American book.",
@@ -107236,7 +107236,7 @@ export const artifacts = [
   artifact({
     artifact_id: "cooper-prairie-1827",
     title: "The Prairie",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "James Fenimore Cooper",
     year: 1827,
     description: "The aged Natty Bumppo dies facing west on the prairie — the elegiac close of Cooper's frontier epic and the first great American novel of the West.",
@@ -107255,7 +107255,7 @@ export const artifacts = [
   artifact({
     artifact_id: "cooper-pathfinder-1840",
     title: "The Pathfinder",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "James Fenimore Cooper",
     year: 1840,
     description: "Natty Bumppo as scout on Lake Ontario in the Seven Years' War — the essential middle volume of the Leatherstocking Tales.",
@@ -107274,7 +107274,7 @@ export const artifacts = [
   artifact({
     artifact_id: "cooper-deerslayer-1841",
     title: "The Deerslayer",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "James Fenimore Cooper",
     year: 1841,
     description: "Young Natty Bumppo's first war-path on Glimmerglass — the genesis volume of the Leatherstocking Tales and the template of the American hero's moral code.",
@@ -107293,7 +107293,7 @@ export const artifacts = [
   artifact({
     artifact_id: "lowell-biglow-papers-1848",
     title: "The Biglow Papers",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "James Russell Lowell",
     year: 1848,
     description: "Hosea Biglow's Yankee-dialect satires on the Mexican War — the masterpiece of American comic verse and the ancestor of all dialect poetry.",
@@ -107312,7 +107312,7 @@ export const artifacts = [
   artifact({
     artifact_id: "lowell-fable-for-critics-1848",
     title: "A Fable for Critics",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "James Russell Lowell",
     year: 1848,
     description: "Lowell's galloping survey of his contemporaries — Poe, Emerson, Hawthorne judged in verse; the founding document of American critical reputation-making.",
@@ -107331,7 +107331,7 @@ export const artifacts = [
   artifact({
     artifact_id: "lowell-vision-sir-launfal-1848",
     title: "The Vision of Sir Launfal",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "James Russell Lowell",
     year: 1848,
     description: "The Grail quest as moral allegory, containing 'The Present Crisis' — the poem that gave abolitionism its battle-cry.",
@@ -107350,7 +107350,7 @@ export const artifacts = [
   artifact({
     artifact_id: "whittier-in-war-time-1864",
     title: "In War Time, and Other Poems",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "John Greenleaf Whittier",
     year: 1864,
     description: "Whittier's Civil War collection, including 'Barbara Frietchie' — the abolitionist bard's wartime voice at full power.",
@@ -107369,7 +107369,7 @@ export const artifacts = [
   artifact({
     artifact_id: "whittier-snow-bound-1866",
     title: "Snow-Bound",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "John Greenleaf Whittier",
     year: 1866,
     description: "A family snowed in around the hearth — the great American fireside poem and Whittier's most perfect work.",
@@ -107388,7 +107388,7 @@ export const artifacts = [
   artifact({
     artifact_id: "chopin-bayou-folk-1894",
     title: "Bayou Folk",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Kate Chopin",
     year: 1894,
     description: "Twenty-three Louisiana stories including 'Désirée's Baby' — the founding collection of Creole local color.",
@@ -107407,7 +107407,7 @@ export const artifacts = [
   artifact({
     artifact_id: "chopin-night-in-acadie-1897",
     title: "A Night in Acadie",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Kate Chopin",
     year: 1897,
     description: "Further Acadian tales — the essential companion to Bayou Folk.",
@@ -107426,7 +107426,7 @@ export const artifacts = [
   artifact({
     artifact_id: "chopin-awakening-1899",
     title: "The Awakening",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Kate Chopin",
     year: 1899,
     description: "Edna Pontellier's awakening in Creole Louisiana — the novel that invented modern feminist fiction.",
@@ -107445,7 +107445,7 @@ export const artifacts = [
   artifact({
     artifact_id: "hughes-not-without-laughter-1930",
     title: "Not Without Laughter",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Langston Hughes",
     year: 1930,
     description: "Sandy Rogers's coming of age — the classic novel of the Harlem Renaissance's Midwestern roots.",
@@ -107464,7 +107464,7 @@ export const artifacts = [
   artifact({
     artifact_id: "holmes-autocrat-1858",
     title: "The Autocrat of the Breakfast-Table",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Oliver Wendell Holmes",
     year: 1858,
     description: "The breakfast-table monologues that made Holmes famous — the founding text of American familiar-essay wit.",
@@ -107483,7 +107483,7 @@ export const artifacts = [
   artifact({
     artifact_id: "holmes-professor-1860",
     title: "The Professor at the Breakfast-Table",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Oliver Wendell Holmes",
     year: 1860,
     description: "The Autocrat's successor volume, containing 'The Chambered Nautilus' — Holmes's meditation on the soul's expansion.",
@@ -107502,7 +107502,7 @@ export const artifacts = [
   artifact({
     artifact_id: "holmes-elsie-venner-1861",
     title: "Elsie Venner",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Oliver Wendell Holmes",
     year: 1861,
     description: "A girl tainted by prenatal snakebite — Holmes's novel of heredity and moral responsibility, the first American novel of biological determinism.",
@@ -107521,7 +107521,7 @@ export const artifacts = [
   artifact({
     artifact_id: "frost-mountain-interval-1916",
     title: "Mountain Interval",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Robert Frost",
     year: 1916,
     description: "'The Road Not Taken,' 'Birches,' 'The Oven Bird' — the book that made Frost America's poet.",
@@ -107540,7 +107540,7 @@ export const artifacts = [
   artifact({
     artifact_id: "frost-new-hampshire-1923",
     title: "New Hampshire",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Robert Frost",
     year: 1923,
     description: "The Pulitzer volume containing 'Stopping by Woods on a Snowy Evening' and 'Fire and Ice.'",
@@ -107559,7 +107559,7 @@ export const artifacts = [
   artifact({
     artifact_id: "anderson-poor-white-1920",
     title: "Poor White",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Sherwood Anderson",
     year: 1920,
     description: "Hugh McVey's machines remake Bidwell, Ohio — Anderson's novel of the industrial revolution's human price.",
@@ -107578,7 +107578,7 @@ export const artifacts = [
   artifact({
     artifact_id: "anderson-many-marriages-1923",
     title: "Many Marriages",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Sherwood Anderson",
     year: 1923,
     description: "A manufacturer's midnight confession of erotic discontent — the most outspoken of Anderson's novels.",
@@ -107597,7 +107597,7 @@ export const artifacts = [
   artifact({
     artifact_id: "anderson-dark-laughter-1925",
     title: "Dark Laughter",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Sherwood Anderson",
     year: 1925,
     description: "The journalist who flees civilization for the 'dark laughter' of instinct — the novel Hemingway parodied.",
@@ -107616,7 +107616,7 @@ export const artifacts = [
   artifact({
     artifact_id: "lanier-science-english-verse-1880",
     title: "The Science of English Verse",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Sidney Lanier",
     year: 1880,
     description: "Lanier's lectures treating poetry as scored music — the first systematic American prosody, by the South's poet-flautist.",
@@ -107635,7 +107635,7 @@ export const artifacts = [
   artifact({
     artifact_id: "lanier-poems-1884",
     title: "The Poems of Sidney Lanier",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Sidney Lanier",
     year: 1884,
     description: "The posthumous collection containing 'The Marshes of Glynn' and 'The Symphony' — the South's great musical poet at full stretch.",
@@ -107654,7 +107654,7 @@ export const artifacts = [
   artifact({
     artifact_id: "lewis-arrowsmith-1925",
     title: "Arrowsmith",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Sinclair Lewis",
     year: 1925,
     description: "Martin Arrowsmith's war between research and commerce — the novel that made the scientist a tragic American hero.",
@@ -107673,7 +107673,7 @@ export const artifacts = [
   artifact({
     artifact_id: "lewis-elmer-gantry-1927",
     title: "Elmer Gantry",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Sinclair Lewis",
     year: 1927,
     description: "The evangelist as magnificent fraud — the satire that made religious hucksterism an American archetype.",
@@ -107692,7 +107692,7 @@ export const artifacts = [
   artifact({
     artifact_id: "lewis-man-who-knew-coolidge-1928",
     title: "The Man Who Knew Coolidge",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Sinclair Lewis",
     year: 1928,
     description: "Lowell Schmaltz's endless monologue on knowing Coolidge — the comic pendant to Babbitt.",
@@ -107711,7 +107711,7 @@ export const artifacts = [
   artifact({
     artifact_id: "lewis-dodsworth-1929",
     title: "Dodsworth",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Sinclair Lewis",
     year: 1929,
     description: "Sam Dodsworth's retirement and his wife's restlessness in Europe — the mature masterpiece of Lewis's middle period.",
@@ -107730,7 +107730,7 @@ export const artifacts = [
   artifact({
     artifact_id: "crane-maggie-1893",
     title: "Maggie: A Girl of the Streets",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Stephen Crane",
     year: 1893,
     description: "The first unflinching American slum novel — the founding text of literary naturalism in the United States.",
@@ -107749,7 +107749,7 @@ export const artifacts = [
   artifact({
     artifact_id: "crane-red-badge-1895",
     title: "The Red Badge of Courage",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Stephen Crane",
     year: 1895,
     description: "Henry Fleming's terror and flight at Chancellorsville — the novel that invented modern war fiction.",
@@ -107768,7 +107768,7 @@ export const artifacts = [
   artifact({
     artifact_id: "crane-open-boat-1898",
     title: "The Open Boat and Other Stories",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Stephen Crane",
     year: 1898,
     description: "The shipwreck-survival masterpiece 'The Open Boat' with 'The Bride Comes to Yellow Sky' — Crane's essential short fiction.",
@@ -107787,7 +107787,7 @@ export const artifacts = [
   artifact({
     artifact_id: "dreiser-jennie-gerhardt-1911",
     title: "Jennie Gerhardt",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Theodore Dreiser",
     year: 1911,
     description: "The laundress who sacrifices everything for love — Dreiser's most tender and morally complex novel.",
@@ -107806,7 +107806,7 @@ export const artifacts = [
   artifact({
     artifact_id: "dreiser-financier-1912",
     title: "The Financier",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Theodore Dreiser",
     year: 1912,
     description: "Frank Cowperwood's ruthless rise in Philadelphia — the first volume of Dreiser's trilogy of American capitalism.",
@@ -107825,7 +107825,7 @@ export const artifacts = [
   artifact({
     artifact_id: "dreiser-titan-1914",
     title: "The Titan",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Theodore Dreiser",
     year: 1914,
     description: "Cowperwood's Chicago streetcar empire — the middle volume of the Trilogy of Desire.",
@@ -107844,7 +107844,7 @@ export const artifacts = [
   artifact({
     artifact_id: "dreiser-genius-1915",
     title: "The 'Genius'",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Theodore Dreiser",
     year: 1915,
     description: "The artist Eugene Witla's erotic and artistic education — the novel suppressed as obscene, Dreiser's most autobiographical work.",
@@ -107863,7 +107863,7 @@ export const artifacts = [
   artifact({
     artifact_id: "wolfe-look-homeward-angel-1929",
     title: "Look Homeward, Angel",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Thomas Wolfe",
     year: 1929,
     description: "Eugene Gant's vast hunger for life in Altamont — the most exuberant debut in American fiction.",
@@ -107882,7 +107882,7 @@ export const artifacts = [
   artifact({
     artifact_id: "sinclair-jungle-1906",
     title: "The Jungle",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Upton Sinclair",
     year: 1906,
     description: "Jurgis Rudkus in the Chicago stockyards — the exposé that forced the Pure Food and Drug Act through Congress.",
@@ -107901,7 +107901,7 @@ export const artifacts = [
   artifact({
     artifact_id: "sinclair-king-coal-1917",
     title: "King Coal",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Upton Sinclair",
     year: 1917,
     description: "The undercover organizer in the Colorado coalfields — Sinclair's novel of the mine wars.",
@@ -107920,7 +107920,7 @@ export const artifacts = [
   artifact({
     artifact_id: "sinclair-brass-check-1919",
     title: "The Brass Check",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Upton Sinclair",
     year: 1919,
     description: "Sinclair's exposé of American newspaper corruption — the first systematic American critique of the press.",
@@ -107939,7 +107939,7 @@ export const artifacts = [
   artifact({
     artifact_id: "sinclair-oil-1927",
     title: "Oil!",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Upton Sinclair",
     year: 1927,
     description: "The Teapot Dome-era epic of oil, labor, and Hollywood — the novel behind 'There Will Be Blood.'",
@@ -107958,7 +107958,7 @@ export const artifacts = [
   artifact({
     artifact_id: "irving-knickerbocker-history-1809-vol-1",
     title: "Knickerbocker's History of New York — Volume 1",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Washington Irving",
     year: 1809,
     description: "Volume 1 of the mock-chronicle of Dutch New Amsterdam.",
@@ -107977,7 +107977,7 @@ export const artifacts = [
   artifact({
     artifact_id: "irving-knickerbocker-history-1809-vol-2",
     title: "Knickerbocker's History of New York — Volume 2",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Washington Irving",
     year: 1809,
     description: "Volume 2 of the mock-chronicle of Dutch New Amsterdam.",
@@ -107996,7 +107996,7 @@ export const artifacts = [
   artifact({
     artifact_id: "irving-sketch-book-1819",
     title: "The Sketch Book of Geoffrey Crayon",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Washington Irving",
     year: 1819,
     description: "The collection that made American literature a fact on the world stage — Rip Van Winkle, the Legend of Sleepy Hollow, and the Christmas sketches that invented the modern American holiday mythos.",
@@ -108015,7 +108015,7 @@ export const artifacts = [
   artifact({
     artifact_id: "irving-alhambra-1832",
     title: "Tales of the Alhambra",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Washington Irving",
     year: 1832,
     description: "Sketches and legends gathered in Granada's Alhambra — the founding American travel book about Europe, and the source of Spain's romantic myth in English.",
@@ -108034,7 +108034,7 @@ export const artifacts = [
   artifact({
     artifact_id: "cather-song-of-the-lark-1915",
     title: "The Song of the Lark",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Willa Cather",
     year: 1915,
     description: "Thea Kronborg's ascent from a Colorado railroad town to prima donna — the definitive American novel of the artist's formation.",
@@ -108053,7 +108053,7 @@ export const artifacts = [
   artifact({
     artifact_id: "cather-one-of-ours-1922",
     title: "One of Ours",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Willa Cather",
     year: 1922,
     description: "Claude Wheeler's escape from Nebraska into the Great War — the Pulitzer-winning novel of America's war awakening.",
@@ -108072,7 +108072,7 @@ export const artifacts = [
   artifact({
     artifact_id: "cather-lost-lady-1923",
     title: "A Lost Lady",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Willa Cather",
     year: 1923,
     description: "The fading belle of the Nebraska frontier — Cather's most perfectly proportioned elegy.",
@@ -108091,7 +108091,7 @@ export const artifacts = [
   artifact({
     artifact_id: "cather-professors-house-1925",
     title: "The Professor's House",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Willa Cather",
     year: 1925,
     description: "Godfrey St. Peter's midlife reckoning, enclosing the mesa-country masterpiece 'Tom Outland's Story.'",
@@ -108110,7 +108110,7 @@ export const artifacts = [
   artifact({
     artifact_id: "cather-death-comes-archbishop-1927",
     title: "Death Comes for the Archbishop",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Willa Cather",
     year: 1927,
     description: "Two French priests in 19th-century New Mexico — the luminous epic of faith and landscape.",
@@ -108129,7 +108129,7 @@ export const artifacts = [
   artifact({
     artifact_id: "williams-al-que-quiere-1917",
     title: "Al Que Quiere!",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "William Carlos Williams",
     year: 1917,
     description: "The 1917 collection that announced Williams's American idiom — the foundation of his life's work.",
@@ -108148,7 +108148,7 @@ export const artifacts = [
   artifact({
     artifact_id: "williams-sour-grapes-1921",
     title: "Sour Grapes",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "William Carlos Williams",
     year: 1921,
     description: "The essential middle book — the Rutherford doctor-poet finding his full voice.",
@@ -108167,7 +108167,7 @@ export const artifacts = [
   artifact({
     artifact_id: "bryant-poems-1821",
     title: "Poems (Bryant, 1821)",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "William Cullen Bryant",
     year: 1821,
     description: "The slim volume containing 'Thanatopsis,' written at seventeen — the first American poetry to be taken seriously abroad, and the seed of American nature poetry.",
@@ -108186,7 +108186,7 @@ export const artifacts = [
   artifact({
     artifact_id: "howells-silas-lapham-1885",
     title: "The Rise of Silas Lapham",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "William Dean Howells",
     year: 1885,
     description: "The paint-millionaire's moral rise and fall in Boston — the novel that established realism as America's serious fictional mode.",
@@ -108205,7 +108205,7 @@ export const artifacts = [
   artifact({
     artifact_id: "howells-hazard-new-fortunes-1890",
     title: "A Hazard of New Fortunes",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "William Dean Howells",
     year: 1890,
     description: "Basil March's move to New York and a socialist's martyrdom — the founding novel of urban American realism.",
@@ -108224,7 +108224,7 @@ export const artifacts = [
   artifact({
     artifact_id: "faulkner-soldiers-pay-1926",
     title: "Soldiers' Pay",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "William Faulkner",
     year: 1926,
     description: "The first Faulkner novel — a dying flier comes home to Georgia; the beginning of the Yoknapatawpha journey.",
@@ -108243,7 +108243,7 @@ export const artifacts = [
   artifact({
     artifact_id: "faulkner-mosquitoes-1927",
     title: "Mosquitoes",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "William Faulkner",
     year: 1927,
     description: "A yacht party of New Orleans artists — Faulkner's satiric second novel, the bridge to his maturity.",
@@ -108262,7 +108262,7 @@ export const artifacts = [
   artifact({
     artifact_id: "faulkner-sartoris-1929",
     title: "Sartoris",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "William Faulkner",
     year: 1929,
     description: "The decayed Sartoris family of Jefferson — the first novel of Yoknapatawpha County.",
@@ -108281,7 +108281,7 @@ export const artifacts = [
   artifact({
     artifact_id: "faulkner-as-i-lay-dying-1930",
     title: "As I Lay Dying",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "William Faulkner",
     year: 1930,
     description: "Fifteen narrators carry Addie Bundren to Jefferson — the polyphonic masterpiece of high American modernism.",
@@ -108300,7 +108300,7 @@ export const artifacts = [
   artifact({
     artifact_id: "hurston-eatonville-anthology-1926",
     title: "The Eatonville Anthology",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Zora Neale Hurston",
     year: 1926,
     description: "Fourteen Eatonville character sketches from the Messenger (1926) — the firstfruits of Hurston's anthropological fiction.",
@@ -108319,7 +108319,7 @@ export const artifacts = [
   artifact({
     artifact_id: "hurston-sweat-1926",
     title: "Sweat",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Zora Neale Hurston",
     year: 1926,
     description: "Delia Jones, the washerwoman, and her snake of a husband — the defining short story of the Harlem Renaissance, from Fire!! (1926).",
@@ -108338,7 +108338,7 @@ export const artifacts = [
   artifact({
     artifact_id: "hurston-cudjos-own-story-1927",
     title: "Cudjo's Own Story of the Last African Slaver",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Zora Neale Hurston",
     year: 1927,
     description: "Hurston's 1927 Journal of Negro History interview with Cudjo Lewis, last survivor of the Clotilda — the raw primary source of Barracoon.",
@@ -108357,7 +108357,7 @@ export const artifacts = [
   artifact({
     artifact_id: "hurston-how-it-feels-to-be-colored-me-1928",
     title: "How It Feels to Be Colored Me",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Zora Neale Hurston",
     year: 1928,
     description: "Hurston's 1928 World Tomorrow essay — the triumphant declaration of Black identity that became the Harlem Renaissance's most quoted personal statement.",
@@ -108376,7 +108376,7 @@ export const artifacts = [
   artifact({
     artifact_id: "racine-phedre-french-1854",
     title: "Phèdre",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Jean Racine",
     year: 1677,
     description: "Racine's supreme tragedy — Phèdre's fatal passion for Hippolyte, the summit of French neoclassical theater. French original (Didot 1854 edition) — no public-domain English translation exists.",
@@ -108395,7 +108395,7 @@ export const artifacts = [
   artifact({
     artifact_id: "nerval-aurelia-french-1855",
     title: "Aurélia",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Gérard de Nerval",
     year: 1855,
     description: "Nerval's dream-autobiography of madness and vision — the surrealists' bible, companion to batch 07's Sylvie. French original — no public-domain English translation exists (Aldington 1932 still in copyright).",
@@ -108414,7 +108414,7 @@ export const artifacts = [
   artifact({
     artifact_id: "rimbaud-illuminations-french-1886",
     title: "Illuminations",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Arthur Rimbaud",
     year: 1886,
     description: "Rimbaud's prose-poem 'coloured plates' — the charter of modern poetry, companion to batch 07's Season in Hell. French original, 1886 La Vogue edition — no public-domain English translation exists.",
@@ -108433,7 +108433,7 @@ export const artifacts = [
   artifact({
     artifact_id: "mallarme-poesies-french-1887",
     title: "Poésies",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Stéphane Mallarmé",
     year: 1887,
     description: "Mallarmé's collected poems — the high Symbolist summit: 'L'Après-midi d'un faune,' 'Le Cygne,' the sonnets. French original, 1887 edition — no public-domain English translation exists.",
@@ -108452,7 +108452,7 @@ export const artifacts = [
   artifact({
     artifact_id: "corneille-cid-mongan-1896",
     title: "The Cid",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Pierre Corneille",
     year: 1637,
     description: "Corneille's thunderously successful tragicomedy of honor and love — the play that provoked the Querelle du Cid and defined French classical drama. Translated by Roscoe Mongan (1896).",
@@ -108471,7 +108471,7 @@ export const artifacts = [
   artifact({
     artifact_id: "moliere-dramatic-works-vanlaun-vol1-1875",
     title: "The Dramatic Works of Molière, Vol. I",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Molière",
     year: 1875,
     description: "Vol. I of van Laun's complete English Molière: The Blunderer, The Love-Tiff, The Pretentious Young Ladies, Sganarelle, Don Garcia of Navarre. Translated by Henri van Laun (1875).",
@@ -108490,7 +108490,7 @@ export const artifacts = [
   artifact({
     artifact_id: "moliere-dramatic-works-vanlaun-vol2-1875",
     title: "The Dramatic Works of Molière, Vol. II",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Molière",
     year: 1875,
     description: "Vol. II of van Laun's complete English Molière: The School for Husbands, The Bores, The School for Wives (+ Criticised), The Impromptu of Versailles, The Forced Marriage. Translated by Henri van Laun (1875).",
@@ -108509,7 +108509,7 @@ export const artifacts = [
   artifact({
     artifact_id: "moliere-dramatic-works-vanlaun-vol3-1875",
     title: "The Dramatic Works of Molière, Vol. III",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Molière",
     year: 1875,
     description: "Vol. III of van Laun's complete English Molière: The Princess of Elis, Don Juan, Love is the Best Doctor, The Misanthrope, The Physician in Spite of Himself. Translated by Henri van Laun (1875).",
@@ -108528,7 +108528,7 @@ export const artifacts = [
   artifact({
     artifact_id: "moliere-dramatic-works-vanlaun-vol4-1876",
     title: "The Dramatic Works of Molière, Vol. IV",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Molière",
     year: 1876,
     description: "Vol. IV of van Laun's complete English Molière: Mélicerte, The Sicilian, Tartuffe, Amphitryon, George Dandin. Translated by Henri van Laun (1876).",
@@ -108547,7 +108547,7 @@ export const artifacts = [
   artifact({
     artifact_id: "moliere-dramatic-works-vanlaun-vol5-1876",
     title: "The Dramatic Works of Molière, Vol. V",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Molière",
     year: 1876,
     description: "Vol. V of van Laun's complete English Molière: The Miser, Monsieur de Pourceaugnac, The Magnificent Lovers, The Citizen Who Apes the Nobleman, Psyche. Translated by Henri van Laun (1876).",
@@ -108566,7 +108566,7 @@ export const artifacts = [
   artifact({
     artifact_id: "moliere-dramatic-works-vanlaun-vol6-1876",
     title: "The Dramatic Works of Molière, Vol. VI",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Molière",
     year: 1876,
     description: "Vol. VI of van Laun's complete English Molière: The Rogueries of Scapin, The Countess of Escarbagnas, The Learned Ladies, The Imaginary Invalid, and the early farces. Translated by Henri van Laun (1876).",
@@ -108585,7 +108585,7 @@ export const artifacts = [
   artifact({
     artifact_id: "lafontaine-fables-wright-1841",
     title: "Fables of La Fontaine",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Jean de La Fontaine",
     year: 1668,
     description: "The complete Fables in Wright's classic verse translation — the foundation-stone of French fabulist literature, all twelve books. Translated by Elizur Wright (1841).",
@@ -108604,7 +108604,7 @@ export const artifacts = [
   artifact({
     artifact_id: "pascal-pensees-trotter-1910",
     title: "Pensées",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Blaise Pascal",
     year: 1670,
     description: "Pascal's posthumous fragments — the wager, the thinking reed, the heart's reasons: the most quoted devotional-philosophical work in French. Translated by W. F. Trotter (1910).",
@@ -108623,7 +108623,7 @@ export const artifacts = [
   artifact({
     artifact_id: "pascal-provincial-letters-pearce-1849",
     title: "The Provincial Letters",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Blaise Pascal",
     year: 1657,
     description: "Pascal's eighteen (plus two fragmentary) letters demolishing Jesuit casuistry — the prose masterpiece that made French satire an art form. Translated by George Pearce (1849).",
@@ -108642,7 +108642,7 @@ export const artifacts = [
   artifact({
     artifact_id: "larochefoucauld-maxims-heard-1917",
     title: "Maxims and Reflections",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "François de La Rochefoucauld",
     year: 1665,
     description: "All 504 maxims — the cold-eyed anatomy of amour-propre that invented the French moralist tradition. Translated by John Heard, Jr. (1917).",
@@ -108661,7 +108661,7 @@ export const artifacts = [
   artifact({
     artifact_id: "rousseau-confessions-1903",
     title: "The Confessions of Jean-Jacques Rousseau",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Jean-Jacques Rousseau",
     year: 1782,
     description: "The complete Confessions in twelve books — the founding text of modern autobiography and Romantic self-exposure. Anonymous English translation (1903 Aldus Society edition).",
@@ -108680,7 +108680,7 @@ export const artifacts = [
   artifact({
     artifact_id: "laclos-liaisons-dangereuses-aldington-1924",
     title: "Dangerous Acquaintances (Les Liaisons dangereuses)",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Choderlos de Laclos",
     year: 1782,
     description: "The great French epistolary novel of seduction and ruin — Valmont and Merteuil's cold war, in Aldington's 1924 translation. Translated by Richard Aldington (1924).",
@@ -108699,7 +108699,7 @@ export const artifacts = [
   artifact({
     artifact_id: "gautier-cleopatras-nights-hearn-1882",
     title: "One of Cleopatra's Nights and Other Fantastic Romances",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Théophile Gautier",
     year: 1882,
     description: "Six tales of the fantastic — Clarimonde the vampire, Arria Marcella, The Mummy's Foot — in Hearn's lush 1882 translation; the founding texts of French fantastique. Translated by Lafcadio Hearn (1882).",
@@ -108718,7 +108718,7 @@ export const artifacts = [
   artifact({
     artifact_id: "rolland-jean-christophe-cannan-vol1-1910",
     title: "Jean-Christophe, Vol. I: Dawn, Morning, Youth, Revolt",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Romain Rolland",
     year: 1904,
     description: "Vol. I (books 1–4) of the Nobel-winning roman-fleuve: the making of the musician Jean-Christophe Krafft. Translated by Gilbert Cannan (1910).",
@@ -108737,7 +108737,7 @@ export const artifacts = [
   artifact({
     artifact_id: "rolland-jean-christophe-cannan-vol2-1911",
     title: "Jean-Christophe in Paris: The Market-Place, Antoinette, the House",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Romain Rolland",
     year: 1908,
     description: "Vol. II (books 5–7): Christophe's Paris years — the market-place of letters, Antoinette, the house on the hill. Translated by Gilbert Cannan (1911).",
@@ -108756,7 +108756,7 @@ export const artifacts = [
   artifact({
     artifact_id: "rolland-jean-christophe-cannan-vol3-1913",
     title: "Jean-Christophe: Journey's End",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Romain Rolland",
     year: 1910,
     description: "Vol. III (books 8–10): Love and Friendship, The Burning Bush, The New Dawn — the close of the ten-book cycle. Translated by Gilbert Cannan (1913).",
@@ -108775,7 +108775,7 @@ export const artifacts = [
   artifact({
     artifact_id: "proust-budding-grove-moncrieff-1924",
     title: "Within a Budding Grove",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Marcel Proust",
     year: 1919,
     description: "Vol. 2 of In Search of Lost Time: Balbec, the young girls in flower, and the first disillusionments — completing batch 07's Swann's Way in Moncrieff's translation. Translated by C. K. Scott Moncrieff (1924).",
@@ -108794,7 +108794,7 @@ export const artifacts = [
   artifact({
     artifact_id: "proust-guermantes-way-moncrieff-1925",
     title: "The Guermantes Way",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Marcel Proust",
     year: 1920,
     description: "Vol. 3 of In Search of Lost Time: the Faubourg Saint-Germain, salon warfare, and the Dreyfus Affair as social X-ray. Translated by C. K. Scott Moncrieff (1925).",
@@ -108813,7 +108813,7 @@ export const artifacts = [
   artifact({
     artifact_id: "proust-cities-plain-moncrieff-1927",
     title: "Cities of the Plain",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Marcel Proust",
     year: 1921,
     description: "Vol. 4 of In Search of Lost Time (both parts): Charlus unmasked and Sodom revealed — the novel's darkest comedy. Translated by C. K. Scott Moncrieff (1927).",
@@ -108832,7 +108832,7 @@ export const artifacts = [
   artifact({
     artifact_id: "proust-captive-moncrieff-1929",
     title: "The Captive",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Marcel Proust",
     year: 1923,
     description: "Vol. 5 of In Search of Lost Time: Albertine imprisoned in Paris — jealousy anatomized across a thousand pages of suspicion. Translated by C. K. Scott Moncrieff (1929).",
@@ -108851,7 +108851,7 @@ export const artifacts = [
   artifact({
     artifact_id: "proust-sweet-cheat-gone-moncrieff-1930",
     title: "The Sweet Cheat Gone",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "Marcel Proust",
     year: 1925,
     description: "Vol. 6 of In Search of Lost Time: Albertine gone — mourning, forgetting, and the long road toward Time Regained. Translated by C. K. Scott Moncrieff (1930).",
@@ -108870,7 +108870,7 @@ export const artifacts = [
   artifact({
     artifact_id: "gide-immoralist-bussy-1930",
     title: "The Immoralist",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "André Gide",
     year: 1902,
     description: "Gide's récit of Michel's liberation into amorality — the book that made him the conscience (and scandal) of French letters. Translated by Dorothy Bussy (1930).",
@@ -108889,7 +108889,7 @@ export const artifacts = [
   artifact({
     artifact_id: "gide-counterfeiters-bussy-1927",
     title: "The Counterfeiters",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "André Gide",
     year: 1925,
     description: "Gide's only 'novel' proper — the mise-en-abyme of counterfeit coin, counterfeit selves, and the novelist writing the novel. Translated by Dorothy Bussy (1927).",
@@ -108908,7 +108908,7 @@ export const artifacts = [
   artifact({
     artifact_id: "gide-strait-is-the-gate-bussy-1924",
     title: "Strait is the Gate",
-    collection: "Tower of Babel",
+    collection: "BOOKS",
     creator: "André Gide",
     year: 1909,
     description: "Alissa and Jérôme's renunciant love — Gide's most perfect récit, in the first English translation. Translated by Dorothy Bussy (1924).",
