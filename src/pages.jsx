@@ -335,7 +335,7 @@ export function TowerOfBabel({ go, onReady }) {
   // via onReady once the first 50 rows paint.
   const [artifacts] = useArtifacts();
   return (
-    <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
+    <main className="page-shell inner-page tower-light tower-combined" id="main-content" tabIndex={-1}>
       <section className="inner-hero section tower-landing-hero">
         <h1>{towerOfBabel.heading}</h1>
         {towerOfBabel.intro.map((p, i) => (
@@ -354,11 +354,20 @@ export function TowerOfBabel({ go, onReady }) {
         </div>
       </section>
 
-      <section className="tower-landing-block section">
-        <div className="section-index">THE PROJECT</div>
-        {towerOfBabel.project.map((p, i) => (
-          <p className="body-copy" key={i}>{p}</p>
-        ))}
+      {/* About the project — collapsed by default so the landing stays tight;
+          the copy pops open on tap instead of sitting in the way. */}
+      <section className="section tower-about-section">
+        <details className="tower-about">
+          <summary>
+            <span className="section-index">ABOUT THE PROJECT</span>
+            <span className="faq-plus" aria-hidden="true">+</span>
+          </summary>
+          <div className="tower-about-body">
+            {towerOfBabel.project.map((p, i) => (
+              <p className="body-copy" key={i}>{p}</p>
+            ))}
+          </div>
+        </details>
       </section>
 
       {/* The full library, poured directly below the landing content. */}
