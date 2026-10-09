@@ -340,9 +340,6 @@ export function TowerOfBabel({ go, onReady }) {
         {towerOfBabel.intro.map((p, i) => (
           <p className={i === 0 ? "display-copy" : "body-copy"} key={i}>{p}</p>
         ))}
-        {/* Library intro merged here 2026-10-09 per Joshua — one combined
-            intro section instead of a separate library header. */}
-        <p className="body-copy">{towerOfBabel.library.intro}</p>
       </section>
 
       {/* About the project — collapsed by default so the landing stays tight;

@@ -14,7 +14,7 @@ import { libraryFaqs, apiPage } from "./tower-api.js";
 export const towerOfBabel = {
   heading: "TOWER OF BABEL",
   intro: [
-    "Tower of Babel is a library and archival project from Antarctic Labs — thousands of books, documents, transcripts, and texts in one organized, searchable collection.",
+    "Tower of Babel is a library and archival project from Antarctic Labs — thousands of books, documents, transcripts, and texts in one organized, searchable collection. Individual resources appear here once finalized.",
   ],
   project: [
     "Tower of Babel began as one person's reaction to a headline: Anthropic was scanning books and destroying them afterward. If the organizations building the future of knowledge are comfortable destroying books, someone should be preserving them. It started with old texts, then the sacred texts of every culture and tradition — no favoritism, no picking sides — preserved as unchangeable copies nobody could rewrite or take away.",
