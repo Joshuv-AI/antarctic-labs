@@ -360,7 +360,7 @@ export function TowerOfBabel({ go, onReady }) {
         <details className="tower-about">
           <summary>
             <span className="section-index">ABOUT THE PROJECT</span>
-            <span className="faq-plus" aria-hidden="true">+</span>
+            <span className="tower-about-chevron" aria-hidden="true">▾</span>
           </summary>
           <div className="tower-about-body">
             {towerOfBabel.project.map((p, i) => (
