@@ -49,6 +49,10 @@ function main() {
 
   const docs = [];
   const stemCache = new Map(); // shared across docs: common words stem once
+  // Bound the cache: it grows with distinct terms (~5M+ for the full library)
+  // and OOM-killed Cloudflare Pages builds once the library passed ~5k texts.
+  // stem() is deterministic, so eviction cannot change the index output.
+  const STEM_CACHE_CAP = 200000;
   let skipped = 0;
   let totalBytes = 0;
 
@@ -67,6 +71,7 @@ function main() {
     }
     totalBytes += text.length;
     const counts = analyze(text, stemCache);
+    if (stemCache.size > STEM_CACHE_CAP) stemCache.clear(); // keep memory flat
     const docIdx = docs.length;
     docs.push({
       id: a.artifact_id,
