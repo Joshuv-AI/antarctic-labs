@@ -1336,22 +1336,6 @@ export function LibraryArtifact({ go, params, onReady }) {
     ["SOURCE", artifact.source],
   ].filter(([, v]) => v !== undefined && v !== null && v !== "");
   const status = artifact.download_status;
-  const url = artifact.download_url;
-  // C1 fix (2026-10-01): 2,539 AVAILABLE records point at .txt files that
-  // were never uploaded. Verify local files against the build-time manifest
-  // so the button never 404s. External links are always shown.
-  const isLocalTowerFile =
-    typeof url === "string" && url.startsWith("/tower-of-babel/");
-  const localFileExists =
-    !isLocalTowerFile ||
-    TOWER_FILES.has(url.split("/").pop().replace(/\.txt$/, ""));
-  const canAccess =
-    (status === "AVAILABLE" || status === "EXTERNAL_LINK") &&
-    typeof url === "string" &&
-    url.length > 0 &&
-    localFileExists;
-  const accessLabel =
-    status === "EXTERNAL_LINK" ? "OPEN EXTERNAL SOURCE" : "ACCESS RESOURCE";
   return (
     <main className="page-shell inner-page tower-light tower-entry" id="main-content" tabIndex={-1}>
       <section className="tower-entry-hero section">
@@ -1368,14 +1352,26 @@ export function LibraryArtifact({ go, params, onReady }) {
           <p className="tower-entry-lede">{artifact.description}</p>
         )}
         <div className="tower-entry-actions">
-          {canAccess && (
+          {/* VIEW TEXT opens our hosted full text in the in-library reader —
+              every entry gets it; the reader itself handles entries whose
+              text isn't available yet. */}
+          <button
+            type="button"
+            className="tower-access-btn"
+            onClick={() =>
+              go(`/tower-of-babel/library/${artifact.artifact_id}/text`)
+            }
+          >
+            VIEW TEXT <span aria-hidden="true">→</span>
+          </button>
+          {artifact.source_url && (
             <a
-              className="tower-access-btn"
-              href={artifact.download_url}
+              className="tower-source-btn"
+              href={artifact.source_url}
               target="_blank"
               rel="noopener noreferrer"
             >
-              {accessLabel} <span aria-hidden="true">↗</span>
+              VIEW SOURCE <span aria-hidden="true">↗</span>
             </a>
           )}
           {status === "METADATA_ONLY" && (
@@ -1387,16 +1383,6 @@ export function LibraryArtifact({ go, params, onReady }) {
             <p className="tower-access-note">
               Restricted — not available for distribution.
             </p>
-          )}
-          {artifact.source_url && (
-            <a
-              className="text-link"
-              href={artifact.source_url}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              VIEW SOURCE <span>↗</span>
-            </a>
           )}
         </div>
       </section>
@@ -1447,6 +1433,244 @@ export function LibraryArtifact({ go, params, onReady }) {
           </button>
         </div>
       )}
+    </main>
+  );
+}
+// ----- Library full-text reader ---------------------------------------------
+// In-library reading view: displays OUR hosted text for an entry instead of
+// linking out to the source. One shared template, so every entry gets a
+// VIEW TEXT button automatically — no entry is skipped. Entries whose text
+// isn't available (metadata-only backlog, restricted) get a clean empty
+// state, and the button appears for them automatically once their text lands.
+const READER_CHUNK_CHARS = 60000;
+
+// Split the text on line boundaries so rendered chunks never break mid-line.
+function chunkReaderText(t) {
+  const lines = t.split("\n");
+  const chunks = [];
+  let cur = "";
+  for (const line of lines) {
+    if (cur.length > 0 && cur.length + line.length + 1 > READER_CHUNK_CHARS) {
+      chunks.push(cur);
+      cur = "";
+    }
+    cur += line + "\n";
+  }
+  if (cur) chunks.push(cur);
+  return chunks;
+}
+
+export function LibraryTextReader({ go, params, onReady }) {
+  const [artifacts, catalogError] = useArtifacts();
+  // Full record loads on demand (the index has list fields only).
+  const [fullArtifact, setFullArtifact] = useState(null);
+  useEffect(() => {
+    let live = true;
+    setFullArtifact(null);
+    getFullArtifact(params.id).then(
+      (a) => { if (live) setFullArtifact(a); },
+      () => { if (live) setFullArtifact(null); }
+    );
+    return () => { live = false; };
+  }, [params.id]);
+  useEffect(() => {
+    if (artifacts) applyMeta(window.location.pathname);
+  }, [artifacts]);
+
+  const indexRecord = artifacts
+    ? artifacts.find((a) => a.artifact_id === params.id)
+    : null;
+  const artifact = fullArtifact || indexRecord;
+
+  const status = artifact && artifact.download_status;
+  const url = artifact && artifact.download_url;
+  // Same C1 guard as the entry page: local /tower-of-babel/*.txt files are
+  // verified against the build-time manifest so the reader never 404s.
+  // External links are always attempted (and degrade gracefully on CORS).
+  const isLocalTowerFile =
+    typeof url === "string" && url.startsWith("/tower-of-babel/");
+  const localFileExists =
+    !isLocalTowerFile ||
+    TOWER_FILES.has(url.split("/").pop().replace(/\.txt$/, ""));
+  const canRead =
+    !!artifact &&
+    (status === "AVAILABLE" || status === "EXTERNAL_LINK") &&
+    typeof url === "string" &&
+    url.length > 0 &&
+    localFileExists;
+
+  const [text, setText] = useState(null);
+  const [textError, setTextError] = useState(false);
+  const [shownChunks, setShownChunks] = useState(1);
+  useEffect(() => {
+    let live = true;
+    setText(null);
+    setTextError(false);
+    setShownChunks(1);
+    if (!canRead) return;
+    fetch(url)
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.text();
+      })
+      .then((t) => { if (live) setText(t); })
+      .catch(() => { if (live) setTextError(true); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url, canRead]);
+
+  const chunks = useMemo(() => (text ? chunkReaderText(text) : []), [text]);
+  const sentinelRef = useRef(null);
+  // Long texts (the largest is ~9MB) render in chunks; more load as the
+  // reader scrolls, so the first paint stays fast on phones.
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || shownChunks >= chunks.length) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setShownChunks((n) => Math.min(n + 2, chunks.length));
+        }
+      },
+      { rootMargin: "1200px" }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [shownChunks, chunks.length]);
+
+  const stats = useMemo(() => {
+    if (!text) return null;
+    const words = text.trim().split(/\s+/).length;
+    return {
+      words,
+      minutes: Math.max(1, Math.round(words / 200)),
+    };
+  }, [text]);
+
+  // Report ready once the text (or its loading/error/empty state) has
+  // painted, so the Tower boot overlay dismisses like the entry page.
+  useEffect(() => {
+    if (!onReady || !artifacts) return;
+    if (text === null && !textError && canRead) return;
+    let raf1 = 0;
+    let raf2 = 0;
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        onReady();
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [onReady, params.id, artifacts, text, textError, canRead]);
+
+  if (catalogError) return <TowerCatalogError />;
+  if (!artifacts) return null;
+  if (!artifact) {
+    return (
+      <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
+        <section className="inner-hero section">
+          <div className="section-index">FULL TEXT / {params.id}</div>
+          <h1>UNKNOWN ARTIFACT</h1>
+        </section>
+        <section className="tower-entry-record section">
+          <p className="body-copy">No artifact record exists for this id.</p>
+          <button className="text-link" onClick={() => go("/tower-of-babel/library")}>
+            BACK TO LIBRARY <span>↗</span>
+          </button>
+        </section>
+      </main>
+    );
+  }
+  return (
+    <main className="page-shell inner-page tower-light tower-reader" id="main-content" tabIndex={-1}>
+      <section className="tower-reader-head section">
+        <div className="section-index">LIBRARY / {artifact.collection} / FULL TEXT</div>
+        <h1>{artifact.title}</h1>
+        {(artifact.creator || artifact.year) && (
+          <p className="tower-entry-byline">
+            {artifact.creator}
+            {artifact.creator && artifact.year ? " · " : ""}
+            {artifact.year || ""}
+          </p>
+        )}
+        <div className="tower-reader-meta">
+          <button
+            type="button"
+            className="tower-source-btn"
+            onClick={() => go(`/tower-of-babel/library/${artifact.artifact_id}`)}
+          >
+            <span aria-hidden="true">←</span> ENTRY
+          </button>
+          {isLocalTowerFile && localFileExists && (
+            <a className="tower-reader-download" href={url} download>
+              DOWNLOAD .TXT
+            </a>
+          )}
+          {stats && (
+            <span className="tower-reader-stats">
+              {stats.words.toLocaleString()} WORDS · ~{stats.minutes} MIN READ
+            </span>
+          )}
+        </div>
+      </section>
+      <section className="tower-reader-body section">
+        {text === null && !textError && canRead && (
+          <p className="tower-reader-status">Preparing the full text…</p>
+        )}
+        {textError && (
+          <div className="tower-reader-empty">
+            <p className="body-copy">
+              The full text couldn&rsquo;t be loaded right now. You can still
+              open the file directly:
+            </p>
+            <a
+              className="tower-source-btn"
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              OPEN FILE <span aria-hidden="true">↗</span>
+            </a>
+          </div>
+        )}
+        {!canRead && (
+          <div className="tower-reader-empty">
+            <p className="body-copy">
+              {status === "RESTRICTED"
+                ? "This entry is restricted — its text isn't available for distribution."
+                : "The full text for this entry is still being prepared. Check back soon — the button appears here automatically once it lands."}
+            </p>
+            <button
+              type="button"
+              className="tower-source-btn"
+              onClick={() => go(`/tower-of-babel/library/${artifact.artifact_id}`)}
+            >
+              <span aria-hidden="true">←</span> BACK TO ENTRY
+            </button>
+          </div>
+        )}
+        {text !== null && (
+          <div className="tower-reader-text" role="document" aria-label={`Full text of ${artifact.title}`}>
+            {chunks.slice(0, shownChunks).map((c, i) => (
+              <p key={i} className="tower-reader-chunk">{c}</p>
+            ))}
+            {shownChunks < chunks.length && (
+              <div className="tower-reader-more">
+                <div ref={sentinelRef} className="tower-reader-sentinel" aria-hidden="true" />
+                <button
+                  type="button"
+                  className="tower-source-btn"
+                  onClick={() => setShownChunks(chunks.length)}
+                >
+                  LOAD FULL TEXT
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
     </main>
   );
 }
