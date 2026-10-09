@@ -378,20 +378,8 @@ export function TowerOfBabel({ go, onReady }) {
       </section>
 
       <section className="tower-landing-block section">
-        <div className="section-index">ORIGIN</div>
-        {towerOfBabel.origin.map((p, i) => (
-          <p className="body-copy" key={i}>{p}</p>
-        ))}
-      </section>
-      <section className="tower-landing-block section">
-        <div className="section-index">WHAT IT HOLDS</div>
-        {towerOfBabel.collection.map((p, i) => (
-          <p className="body-copy" key={i}>{p}</p>
-        ))}
-      </section>
-      <section className="tower-landing-block section">
-        <div className="section-index">THE NAME</div>
-        {towerOfBabel.name.map((p, i) => (
+        <div className="section-index">THE PROJECT</div>
+        {towerOfBabel.project.map((p, i) => (
           <p className="body-copy" key={i}>{p}</p>
         ))}
       </section>
