@@ -38,7 +38,7 @@ import { matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
 // Lazy Tower catalog (see ./lib/catalog.js): prefetched on Tower navigation
 // so the chunk usually arrives before the route needs it.
-import { loadCatalog, isCatalogPending } from "./lib/catalog.js";
+import { loadCatalog, loadBootstrap, isCatalogPending } from "./lib/catalog.js";
 import {
   TowerOfBabel,
   TowerLibrary,
@@ -146,8 +146,10 @@ function App() {
     setTowerBootLeaving(false);
     setTowerBoot(true);
     towerBootStarted.current = Date.now();
-    // Prefetch the catalog chunk now — the route awaits the same cached
-    // promise, so this head start is usually the whole fetch.
+    // Prefetch the bootstrap chunk now (43KB, instant) — the route awaits
+    // the same cached promise, so this head start is usually the whole fetch.
+    // The full index loads in the background after the bootstrap paints.
+    loadBootstrap().catch(() => {});
     loadCatalog().catch(() => {});
     const t = setTimeout(() => {
       if (isCatalogPending()) {

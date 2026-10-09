@@ -1,23 +1,23 @@
 // Tower of Babel — lazy artifact catalog.
 //
-// Two-tier loading (2026-10-09 optimization):
-// - The library LIST loads `catalog-index.json` (~1MB, 4,088 records with
-//   only list/search/sort fields). This is 57% smaller than the full
-//   catalog and is what unblocks the list view on mobile.
-// - The full `catalog.json` (~2.5MB) loads ON DEMAND when a user opens a
-//   specific book's detail page. It's cached by the browser after first load.
+// Three-tier loading (2026-10-09 optimization):
+// - `catalog-bootstrap.json` (~43KB, first 200 records) loads INSTANTLY.
+//   The list renders immediately, no spinner.
+// - `catalog-index.json` (~1MB, all 4,088 records) loads in the BACKGROUND.
+//   Search/filter upgrade to full catalog when it arrives.
+// - `catalog.json` (~2.5MB, full records) loads ON DEMAND for detail pages.
 //
-// Both are fetched as JSON (not JS modules): JSON.parse is lighter than
-// module evaluation on iOS Safari, and a failed fetch can be retried
-// (unlike a failed dynamic import, which the module map caches permanently).
+// This solves the "stuck on loading" issue: the page paints in <1s even on
+// a slow connection, and the full catalog streams in behind it.
+let bootstrapCache = null;
 let indexCache = null;
 let fullCache = null;
+let bootstrapPending = null;
 let indexPending = null;
 let fullPending = null;
+// Listeners for when the full index arrives (to upgrade the UI).
+const indexReadyListeners = new Set();
 
-// How long a single fetch may run before treated as stalled. Mobile
-// connections routinely stall mid-download; without a timeout the promise
-// never settles and the user is stuck on the loading state forever.
 const FETCH_TIMEOUT_MS = 30000;
 
 function fetchJsonOnce(url) {
@@ -31,12 +31,9 @@ function fetchJsonOnce(url) {
     .finally(() => clearTimeout(timer));
 }
 
-function loadWithRetry(url, getPending, setPending, getCache, setCache) {
+function loadWithRetry(url, getPending, setPending, getCache, setCache, onReady) {
   if (getCache()) return Promise.resolve(getCache());
   if (!getPending()) {
-    // One silent retry: a single stalled attempt on a flaky mobile
-    // connection shouldn't doom the visit. A second failure rejects, and
-    // the caller shows the error state with RETRY.
     setPending(
       fetchJsonOnce(url)
         .catch(() => fetchJsonOnce(url))
@@ -44,6 +41,7 @@ function loadWithRetry(url, getPending, setPending, getCache, setCache) {
           (data) => {
             setCache(data);
             setPending(null);
+            if (onReady) onReady(data);
             return data;
           },
           (err) => {
@@ -56,18 +54,33 @@ function loadWithRetry(url, getPending, setPending, getCache, setCache) {
   return getPending();
 }
 
-// Lightweight index for the library list view.
+// Bootstrap: first 200 records, loads instantly.
+export function loadBootstrap() {
+  return loadWithRetry(
+    "/catalog-bootstrap.json",
+    () => bootstrapPending,
+    (p) => { bootstrapPending = p; },
+    () => bootstrapCache,
+    (d) => { bootstrapCache = d; }
+  );
+}
+
+// Full index: all 4,088 records, loads in background.
 export function loadCatalog() {
   return loadWithRetry(
     "/catalog-index.json",
     () => indexPending,
     (p) => { indexPending = p; },
     () => indexCache,
-    (d) => { indexCache = d; }
+    (d) => { indexCache = d; },
+    (data) => {
+      // Notify listeners that the full index is ready.
+      indexReadyListeners.forEach((cb) => { try { cb(data); } catch {} });
+    }
   );
 }
 
-// Full catalog for detail pages — loaded on demand.
+// Full records for detail pages — loaded on demand.
 export function loadFullCatalog() {
   return loadWithRetry(
     "/catalog.json",
@@ -78,14 +91,30 @@ export function loadFullCatalog() {
   );
 }
 
-// True while an index fetch is in flight.
-export function isCatalogPending() {
-  return indexPending !== null;
+// Subscribe to full-index readiness. Returns unsubscribe.
+export function onIndexReady(cb) {
+  if (indexCache) {
+    // Already loaded — call immediately (async to keep consistent).
+    Promise.resolve().then(() => cb(indexCache));
+    return () => {};
+  }
+  indexReadyListeners.add(cb);
+  return () => { indexReadyListeners.delete(cb); };
 }
 
-// The loaded index array, or null if it hasn't resolved yet.
+// True while the full index is still loading.
+export function isIndexLoading() {
+  return indexCache === null;
+}
+
+// The best available data: full index if ready, bootstrap otherwise.
 export function getCachedArtifacts() {
-  return indexCache;
+  return indexCache || bootstrapCache;
+}
+
+// True while a bootstrap fetch is in flight (initial page load).
+export function isCatalogPending() {
+  return bootstrapPending !== null;
 }
 
 // Find a full record by artifact_id, loading the full catalog on demand.

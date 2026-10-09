@@ -19,8 +19,11 @@ import { towerOfBabel } from "./content/tower-of-babel.js";
 // Components that need it use useArtifacts() below.
 import {
   loadCatalog,
+  loadBootstrap,
   getCachedArtifacts,
   getFullArtifact,
+  onIndexReady,
+  isIndexLoading,
 } from "./lib/catalog.js";
 import { TOWER_FILES } from "./lib/tower-files.js";
 import { applyMeta } from "./seo.js";
@@ -413,24 +416,39 @@ function useArtifacts() {
   const [state, setState] = useState(() => ({
     artifacts: getCachedArtifacts(),
     error: false,
+    fullIndexReady: !isIndexLoading(),
   }));
   useEffect(() => {
     let live = true;
+    // Load bootstrap first (instant, 43KB), then full index in background.
     if (!state.artifacts && !state.error) {
-      loadCatalog().then(
+      loadBootstrap().then(
         (a) => {
-          if (live) setState({ artifacts: a, error: false });
+          if (live) setState((s) => ({ ...s, artifacts: a, error: false }));
+          // Start full index load in background after bootstrap paints.
+          loadCatalog().catch(() => {});
         },
         () => {
-          if (live) setState({ artifacts: null, error: true });
+          if (live) setState({ artifacts: null, error: true, fullIndexReady: false });
         }
       );
+    } else if (state.artifacts && !state.fullIndexReady) {
+      // Bootstrap is showing; upgrade to full index when it arrives.
+      const unsub = onIndexReady((full) => {
+        if (live) setState((s) => ({ ...s, artifacts: full, fullIndexReady: true }));
+      });
+      // Also trigger the load if not already in flight.
+      loadCatalog().catch(() => {});
+      return () => {
+        live = false;
+        unsub();
+      };
     }
     return () => {
       live = false;
     };
-  }, [state.artifacts, state.error]);
-  return [state.artifacts, state.error];
+  }, [state.artifacts, state.error, state.fullIndexReady]);
+  return [state.artifacts, state.error, state.fullIndexReady];
 }
 
 // Shared catalog-failed UI: the loader failsafe guarantees the overlay
@@ -548,7 +566,7 @@ export function TowerLibrary({ go, onReady }) {
   // The catalog loads asynchronously (see ./lib/catalog.js). While it is
   // null the Tower boot loader covers the screen, so rendering nothing is
   // correct — never a half-built page.
-  const [artifacts, catalogError] = useArtifacts();
+  const [artifacts, catalogError, fullIndexReady] = useArtifacts();
   const towerData = artifacts ? getTowerData(artifacts) : null;
   // Live search + collection filter + sort. Empty query/filter = show all.
   const [query, setQuery] = useState("");
@@ -728,6 +746,11 @@ export function TowerLibrary({ go, onReady }) {
                 onChange={(e) => setQuery(e.target.value)}
                 aria-label="Search the library catalog and the full text of every work"
               />
+              {!fullIndexReady && (
+                <p className="tower-index-status" aria-live="polite">
+                  Loading full catalog…
+                </p>
+              )}
               <label className="tower-sort">
                 <span>Sort</span>
                 <select
