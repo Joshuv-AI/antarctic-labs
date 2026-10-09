@@ -340,6 +340,9 @@ export function TowerOfBabel({ go, onReady }) {
         {towerOfBabel.intro.map((p, i) => (
           <p className={i === 0 ? "display-copy" : "body-copy"} key={i}>{p}</p>
         ))}
+        {/* Library intro merged here 2026-10-09 per Joshua — one combined
+            intro section instead of a separate library header. */}
+        <p className="body-copy">{towerOfBabel.library.intro}</p>
       </section>
 
       {/* About the project — collapsed by default so the landing stays tight;
@@ -622,11 +625,6 @@ function TowerLibrarySection({ go, onReady }) {
   if (catalogError) return <TowerCatalogError />;
   if (!artifacts) return (
     <>
-      <section className="inner-hero section">
-        <div className="section-index">LIBRARY</div>
-        <h1>{towerOfBabel.library.heading}</h1>
-        <p className="display-copy">{towerOfBabel.library.intro}</p>
-      </section>
       <section className="tower-index section">
         <div className="section-index">CATALOG</div>
         <p className="tower-empty-results" aria-live="polite">
@@ -637,10 +635,8 @@ function TowerLibrarySection({ go, onReady }) {
   );
   return (
     <>
-      <section className="inner-hero section" id="tower-library">
-        <div className="section-index">LIBRARY</div>
-        <h1>{towerOfBabel.library.heading}</h1>
-        <p className="display-copy">{towerOfBabel.library.intro}</p>
+      <section className="tower-index section">
+        <div className="section-index">CATALOG</div>
         <div className="tower-suggest-actions">
           <button
             type="button"
@@ -650,9 +646,6 @@ function TowerLibrarySection({ go, onReady }) {
             SUGGEST AN ENTRY <span aria-hidden="true">↗</span>
           </button>
         </div>
-      </section>
-      <section className="tower-index section">
-        <div className="section-index">CATALOG</div>
         {artifacts.length === 0 ? (
           <div className="tower-index-empty">
             <h2>{towerOfBabel.library.empty.heading}</h2>
