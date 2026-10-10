@@ -15,15 +15,16 @@ export function shardFor(stem, shards = SHARD_COUNT) {
 // Lowercase alphanumeric tokens, length >= 2. Same tokenization must be used
 // when indexing and when extracting snippets, or offsets won't line up.
 const TOKEN_RE = /[a-z0-9]+/g;
-function tokenize(text) {
-  const out = [];
+// Generator: streams tokens instead of building a giant array, so indexing
+// huge texts (e.g. 28MB dictionaries) doesn't blow the heap. Callers that
+// need an array spread it: [...tokenize(s)].
+function* tokenize(text) {
   const lower = text.toLowerCase();
   let m;
   TOKEN_RE.lastIndex = 0;
   while ((m = TOKEN_RE.exec(lower)) !== null) {
-    if (m[0].length >= 2) out.push(m[0]);
+    if (m[0].length >= 2) yield m[0];
   }
-  return out;
 }
 
 // Same as tokenize, but keeps char offsets so snippets can be cut + highlighted.
@@ -160,7 +161,7 @@ export function parseQuery(raw) {
   const seen = [];
   while ((m = phraseRe.exec(raw)) !== null) {
     seen.push(m[0]);
-    const toks = tokenize(m[1]);
+    const toks = [...tokenize(m[1])];
     if (toks.length === 0) continue;
     const full = toks.map(stem);
     const indexable = full.filter((s) => !STOPWORDS.has(s));
