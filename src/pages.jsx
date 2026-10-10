@@ -1481,6 +1481,25 @@ export function LibraryTextReader({ go, params, onReady }) {
   const [text, setText] = useState(null);
   const [textError, setTextError] = useState(false);
   const [shownChunks, setShownChunks] = useState(1);
+  // The orb must never sit on top of the Tower boot loader: wait until the
+  // boot overlay is fully dismissed before mounting it. Re-arms on every
+  // text navigation (the boot raises on each in-app tower visit).
+  const [bootGone, setBootGone] = useState(false);
+  useEffect(() => {
+    if (!document.querySelector(".tower-boot")) {
+      setBootGone(true);
+      return;
+    }
+    setBootGone(false);
+    const mo = new MutationObserver(() => {
+      if (!document.querySelector(".tower-boot")) {
+        setBootGone(true);
+        mo.disconnect();
+      }
+    });
+    mo.observe(document.body, { childList: true, subtree: true });
+    return () => mo.disconnect();
+  }, [url]);
   // ReaderAssist plumbing: element refs per chunk (for match scrolling) and
   // the fallback <mark> position when the CSS Highlight API is unavailable.
   const chunkElsRef = useRef([]);
@@ -1683,7 +1702,7 @@ export function LibraryTextReader({ go, params, onReady }) {
           </div>
         )}
       </section>
-      {text !== null && (
+      {text !== null && bootGone && (
         <ReaderAssist
           text={text}
           chunkStarts={chunkStarts}
