@@ -26,6 +26,7 @@ import {
   isIndexLoading,
 } from "./lib/catalog.js";
 import { TOWER_FILES } from "./lib/tower-files.js";
+import ReaderAssist, { SUPPORTS_HIGHLIGHTS } from "./components/ReaderAssist.jsx";
 import { applyMeta } from "./seo.js";
 import { government } from "./content/government.js";
 import { transmission } from "./content/transmission.js";
@@ -1480,11 +1481,17 @@ export function LibraryTextReader({ go, params, onReady }) {
   const [text, setText] = useState(null);
   const [textError, setTextError] = useState(false);
   const [shownChunks, setShownChunks] = useState(1);
+  // ReaderAssist plumbing: element refs per chunk (for match scrolling) and
+  // the fallback <mark> position when the CSS Highlight API is unavailable.
+  const chunkElsRef = useRef([]);
+  const [activeMark, setActiveMark] = useState(null);
   useEffect(() => {
     let live = true;
     setText(null);
     setTextError(false);
     setShownChunks(1);
+    chunkElsRef.current = [];
+    setActiveMark(null);
     if (!canRead) return;
     fetch(url)
       .then((r) => {
@@ -1498,6 +1505,17 @@ export function LibraryTextReader({ go, params, onReady }) {
   }, [url, canRead]);
 
   const chunks = useMemo(() => (text ? chunkReaderText(text) : []), [text]);
+  // Cumulative character offsets per chunk — maps global match offsets to
+  // rendered chunks for the ReaderAssist find panel.
+  const chunkStarts = useMemo(() => {
+    const starts = new Array(chunks.length);
+    let off = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      starts[i] = off;
+      off += chunks[i].length;
+    }
+    return starts;
+  }, [chunks]);
   const sentinelRef = useRef(null);
   // Long texts (the largest is ~9MB) render in chunks; more load as the
   // reader scrolls, so the first paint stays fast on phones.
@@ -1632,7 +1650,23 @@ export function LibraryTextReader({ go, params, onReady }) {
         {text !== null && (
           <div className="tower-reader-text" role="document" aria-label={`Full text of ${artifact.title}`}>
             {chunks.slice(0, shownChunks).map((c, i) => (
-              <p key={i} className="tower-reader-chunk">{c}</p>
+              <p
+                key={i}
+                ref={(el) => { chunkElsRef.current[i] = el; }}
+                className="tower-reader-chunk"
+              >
+                {activeMark && activeMark.chunkIndex === i && !SUPPORTS_HIGHLIGHTS ? (
+                  <>
+                    {c.slice(0, activeMark.start)}
+                    <mark className="ra-mark">
+                      {c.slice(activeMark.start, activeMark.end)}
+                    </mark>
+                    {c.slice(activeMark.end)}
+                  </>
+                ) : (
+                  c
+                )}
+              </p>
             ))}
             {shownChunks < chunks.length && (
               <div className="tower-reader-more">
@@ -1649,6 +1683,16 @@ export function LibraryTextReader({ go, params, onReady }) {
           </div>
         )}
       </section>
+      {text !== null && (
+        <ReaderAssist
+          text={text}
+          chunkStarts={chunkStarts}
+          shownChunks={shownChunks}
+          ensureChunk={(i) => setShownChunks((n) => Math.max(n, i + 1))}
+          chunkElsRef={chunkElsRef}
+          onActiveMark={setActiveMark}
+        />
+      )}
     </main>
   );
 }
