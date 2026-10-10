@@ -16,8 +16,7 @@
 // The generated files are build artifacts (gitignored) — they are NOT pushed
 // to the repo; Cloudflare regenerates them on every deploy.
 
-import { readFileSync, writeFileSync, mkdirSync, rmSync, createReadStream } from "node:fs";
-import { createInterface } from "node:readline";
+import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { artifacts } from "../src/content/library-catalog.js";
@@ -37,7 +36,7 @@ function failSafe(reason) {
   } catch { /* last resort: ignore */ }
 }
 
-async function main() {
+function main() {
   const buildId =
     (process.env.CF_PAGES_COMMIT_SHA || "").slice(0, 12) ||
     `local-${Date.now().toString(36)}`;
@@ -57,25 +56,21 @@ async function main() {
   let skipped = 0;
   let totalBytes = 0;
 
+  // Reference works like dictionaries/lexicons/concordances are lookup tools,
+  // not readable texts: indexing every headword would bloat the index 10x and
+  // pollute search results (every common word matches the dictionary). They
+  // stay in the library (browsable, viewable, downloadable) but are excluded
+  // from the full-text index.
+  const REF_RE = /dictionary|lexicon|concordance|thesaurus|glossary/i;
+
   // PASS 1 — stream per-doc postings to per-shard temp files so memory stays
   // flat no matter how large the library grows. Line format per shard file:
   // [stem, docIdx, count] as JSON, one per line, in docIdx order.
-  // Shard lines are buffered and flushed every FLUSH_LINES lines: opening and
-  // closing the 64 shard files once per document (~500k syscalls at 8k docs)
-  // made the build too slow once the library passed ~7.5k texts.
-  const FLUSH_LINES = 2000000;
-  const bufs = new Map(); // shardIdx -> array of lines
-  let bufferedLines = 0;
-  function flushBufs() {
-    for (const [si, b] of bufs) {
-      writeFileSync(join(tmpDir, si + ".jsonl"), b.join("\n") + "\n", { flag: "a" });
-    }
-    bufs.clear();
-    bufferedLines = 0;
-  }
+  let skippedRef = 0;
   for (const a of artifacts) {
     const url = a.download_url || "";
     if (!url.startsWith("/tower-of-babel/") || !url.endsWith(".txt")) continue;
+    if (REF_RE.test(url)) { skippedRef++; continue; }
     let text;
     try {
       text = readFileSync(join(ROOT, "public", url), "utf8");
@@ -96,30 +91,34 @@ async function main() {
       file: url,
       words: [...counts.values()].reduce((s, c) => s + c, 0),
     });
+    const bufs = new Map(); // shardIdx -> lines for this doc
     for (const [stem, count] of counts) {
       const si = shardFor(stem, SHARD_COUNT);
       let b = bufs.get(si);
       if (!b) { b = []; bufs.set(si, b); }
       b.push(JSON.stringify([stem, docIdx, count]));
-      bufferedLines++;
     }
-    if (bufferedLines >= FLUSH_LINES) flushBufs();
+    for (const [si, b] of bufs) {
+      writeFileSync(join(tmpDir, si + ".jsonl"), b.join("\n") + "\n", { flag: "a" });
+    }
   }
-  flushBufs();
 
   // PASS 2 — merge one shard at a time into its final postings object.
-  // The shard file is streamed line-by-line (never loaded whole into memory):
-  // at 8k+ texts the largest shard's raw text alone could OOM the build.
   const dir = join(OUT, buildId, "terms");
   mkdirSync(dir, { recursive: true });
   let distinctTerms = 0;
   for (let i = 0; i < SHARD_COUNT; i++) {
     const obj = Object.create(null); // null proto: stems like "push" must not hit Object.prototype
-    let shardPath;
+    let raw = "";
     try {
-      shardPath = join(tmpDir, i + ".jsonl");
-      const rl = createInterface({ input: createReadStream(shardPath), crlfDelay: Infinity });
-      for await (const line of rl) {
+      raw = readFileSync(join(tmpDir, i + ".jsonl"), "utf8");
+    } catch {
+      raw = "";
+    }
+    if (raw) {
+      const lines = raw.split("\n");
+      for (let li = 0; li < lines.length; li++) {
+        const line = lines[li];
         if (!line) continue;
         const parsed = JSON.parse(line);
         const stem = parsed[0], docIdx = parsed[1], count = parsed[2];
@@ -127,8 +126,6 @@ async function main() {
         if (!arr) { arr = []; obj[stem] = arr; distinctTerms++; }
         arr.push([docIdx, count]);
       }
-    } catch {
-      // missing/empty shard file: leave obj empty
     }
     writeFileSync(join(dir, i + ".json"), JSON.stringify(obj));
   }
@@ -148,12 +145,13 @@ async function main() {
   console.log(
     "[search-index] indexed " + docs.length + " texts (" + (totalBytes / 1048576).toFixed(1) + " MB), " +
     distinctTerms.toLocaleString() + " terms, " + SHARD_COUNT + " shards in " + secs + "s" +
-    (skipped ? " (" + skipped + " referenced files missing, skipped)" : "")
+    (skipped ? " (" + skipped + " referenced files missing, skipped)" : "") +
+    (skippedRef ? " (" + skippedRef + " reference works excluded from index)" : "")
   );
 }
 
 try {
-  await main();
+  main();
 } catch (err) {
   failSafe(String((err && err.message) || err));
 }
