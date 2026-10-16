@@ -9,7 +9,7 @@
 // (CF_PAGES_COMMIT_SHA), not main — the manifest's buildId must always
 // match the term shards shipped in the same deploy.
 
-const REPO = "Joshuv-AI/antarctic-labs";
+const REPO = "Joshuv-AI/antarctic-labs-texts";
 
 export async function onRequest(context) {
   const buildId = context.params.buildId || "";
@@ -28,7 +28,7 @@ export async function onRequest(context) {
     return new Response("Not found", { status: 404 });
   }
 
-  const sha = (context.env && context.env.CF_PAGES_COMMIT_SHA) || "main";
+  const sha = "main"; // index lives in the texts repo; "main" keeps manifest+shards consistent
   const ORIGIN =
     `https://raw.githubusercontent.com/${REPO}/${sha}/search-index-data/` +
     `${buildId}/terms/${n}.json`;
