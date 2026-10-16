@@ -16,10 +16,10 @@
 // pinned SHA. Edge cache (caches.default) is keyed by request URL; the SHA
 // in the deployed URL makes each deploy's manifest immutable and safe.
 
-const REPO = "Joshuv-AI/antarctic-labs";
+const REPO = "Joshuv-AI/antarctic-labs-texts";
 
 export async function onRequest(context) {
-  const sha = (context.env && context.env.CF_PAGES_COMMIT_SHA) || "main";
+  const sha = "main"; // index lives in the texts repo; "main" keeps manifest+shards consistent
   const ORIGIN = `https://raw.githubusercontent.com/${REPO}/${sha}/search-index-data/manifest.json`;
 
   const cache = caches.default;
