@@ -1,0 +1,1378 @@
+Idleness is Relative: Exploiting Tool-Call Idle Windows for Offloading in Agentic Systems with MORI
+Tian Xia 1 , Hanchen Li 1 , Zhifei Li 2 , Xiaokun Chen 3 , Hao Kang 4 , Yifan Qiao 1 , Yi Xu 1 , Ion Stoica 1 1 University of California, Berkeley 2 Renmin University of China 3 Stanford University 4 Georgia Institute of Technology
+
+Abstract
+. Modern LLM serving systems increasingly host agentic workloads, whose sessions issue tens of model invocations interleaved with tool calls, accumulating KV cache that can be reused across steps. As requests’ total KV cache size easily exceeds GPU HBM capacity, researchers offload them to CPU DRAM. However, tool-call durations span orders of magnitude, and the cost of transferring KV cache between tiers makes it impractical to re-place entries on every call. We observe that agentic programs exhibit a two-phase structure: busy phases of rapid short tool calls and idle phases dominated by long-running calls. Current eviction policies such as LRU fail to capture this property. A binary busy/idle label also falls short because the ratio of busy to idle programs may not match the hardware’s GPU-to-CPU capacity ratio. When it does not, one tier sits underutilized while the other is oversubscribed, wasting memory or forcing unnecessary evictions. We present MORI , an agent serving system that solves the above problem. Our key insight is that idleness is a continuous, relative spectrum. MORI ranks all active programs by idleness, assigns the busiest to GPU HBM and the most idle to CPU DRAM, dynamically shifts the partition boundary to match hardware capacity, and enforces admission control at each memory tier. Evaluated on real coding agent workloads collected from Claude Code across four GPU and model pairs, MORI delivers 20–71% higher throughput and 18–43% lower TTFT than the best baseline with offloading.
+
+
+
+thoncode
+
+[yamlcode]yaml
+baselinestretch=1.2
+
+1.
+Introduction
+
+Modern large language model (LLM) serving systems increasingly execute long-running agentic workloads
+(
+6
+;
+7
+;
+36
+;
+63
+;
+55
+;
+56
+)
+rather than isolated chat requests.
+In these workloads, a program is not a single prompt-response interaction but a stateful execution that follows a ReAct-style loop
+(
+65
+;
+46
+)
+of model reasoning and tool execution: each model invocation produces an action, the action’s result is appended to the context, and the next invocation continues from the extended state.
+As a result, the unit of serving is no longer an individual LLM request, but an agent program whose context, tool state, and memory footprint evolve over time.
+
+This shift in agentic workload changes the way that serving systems interpret the gaps between model invocations. In conventional request-based serving, a completed invocation marks a natural boundary at which KV cache can be reclaimed or offloaded. In an agent program, however, the intervening tool-execution period is part of the same logical execution: the agent is waiting for feedback that will be embedded in the next prompt, often over the same accumulated context. While the inference engine itself sees only individual requests, a program-aware scheduler can recognize these requests as parts of the same program with prefix dependencies across requests and a persistent memory working set. As a result, program-aware scheduling has been increasingly adopted by recent systems
+(
+24
+;
+27
+;
+33
+;
+13
+)
+, which pin a program’s KV cache in GPU HBM across tool calls to prevent eviction during short gaps that would otherwise cause thrashing.
+
+Figure 1
+.
+Overview of
+MORI
+. (1)
+MORI
+categorizes programs into a continuous idleness spectrum reflecting how likely each is to remain GPU-resident. (2) An adaptive offloading scheduler places busy programs (low idleness) in GPU HBM and idle programs (high idleness) in CPU DRAM, with admission control for both tiers. (3) In multi-replica deployments, an affinity-aware load balancer routes requests to engines that already cache each program’s KV state while respecting load balance across replicas.
+
+As agent programs grow their memory footprint over time, the aggregate KV cache of concurrently running programs can quickly exceed the GPU KV cache capacity. However, pinning confines the working set to GPU-local HBM: the context of a program that do not fit must be evicted entirely and later recomputed from scratch, wasting GPU cycles and increasing latency. This has motivated memory spilling techniques, including KV cache offloading to CPU memory or other storage tiers
+(
+45
+;
+60
+;
+12
+;
+31
+;
+21
+;
+41
+;
+32
+;
+64
+;
+26
+;
+50
+)
+, to increase the effective capacity of LLM serving systems.
+
+Such memory spilling introduces a two-tier hierarchy: GPU HBM and CPU DRAM. From the scheduler’s perspective, each program is placed in exactly one tier at any given time. A program in the GPU tier runs inference normally. However, when it calls a tool, its KV cache can be offloaded to CPU DRAM to free GPU memory for other programs. By contrast, a program with its context in the CPU tier remains paused even after its tool call completes, because inference cannot resume until that context is promoted back to GPU HBM. The scheduling objective is therefore to maximize GPU utilization by keeping the most active programs GPU-resident, while retaining as many other programs as possible in CPU DRAM to avoid costly recomputation when they resume. The key challenge is that tool-call durations can vary by orders of magnitude and are not known until the calls are completed.
+
+This unpredictability complicates offloading decisions. Ideally, the system would keep the program’s KV cache in GPU memory for short tool calls and offload it for long ones. Unfortunately, this would require one to accurately predict the duration of the tool call, which is not feasible in most cases.
+Existing eviction policies are ill-suited to this setting. Standard LRU, used in many serving systems
+(
+25
+;
+68
+)
+, evicts the least recently active program without considering whether it will resume soon. Program-aware schedulers that choose eviction candidates based on static properties such as context length
+(
+24
+)
+, face the same problem: they may keep a program blocked on a long tool call in GPU memory while evicting one that is about to resume.
+
+Our trace analysis reveals a key pattern: despite per-call unpredictability, agentic programs typically remain in one of two phases for extended periods. In a
+busy
+phase, the program issues a sequence of short tool calls, each lasting hundreds of milliseconds, such as reading or writing multiple files. In an
+idle
+phase, the program blocks on a long tool call lasting seconds or more, such as waiting for human input or for a spawned subagent to return. Thus, keeping busy-phase programs in GPU HBM and moving idle-phase programs to CPU DRAM uses the fast tier for programs likely to resume soon, while freeing GPU memory from programs likely to remain blocked.
+
+However, a binary busy/idle classification is not sufficient for tier placement. Because programs continuously transition between phases and grow their contexts, the aggregate memory demand of busy programs relative to idle programs fluctuates over time. A fixed GPU-to-CPU capacity ratio cannot track this shifting demand: at some moments busy programs require more memory than GPU HBM can hold, forcing evictions of programs likely to resume soon; at others they require less, leaving GPU capacity idle.
+
+The capacity problem also extends beyond GPU: both GPU HBM and CPU DRAM are finite. Prior work has studied GPU-side admission control to avoid thrashing
+(
+24
+;
+27
+)
+, but CPU memory requires the same treatment. Offloading too many idle programs to DRAM causes them to contend for CPU memory and evict one another, so that evicted programs lose their cached contexts and must recompute them when they resume.
+
+These limitations call for an adaptive policy. Our key insight is that idleness is not a binary state, but a continuous and relative measure. We introduce
+MORI
+(
+Figure
+
+1
+;
+M
+emory
+O
+ffloader with
+R
+elative
+I
+dleness), which defines each program’s
+Idleness
+as the fraction of recent execution time spent in tool calls, relative to total time spent in tool calls and inference.
+This ratio captures how much GPU memory is wasted by keeping a program’s KV cache in HBM: the higher the ratio, the more time the program spends waiting on tool calls rather than using the GPU. We estimate it with a windowed average that is both responsive and robust. By dropping stale history, the metric reacts quickly to phase changes; by averaging over a window, it smooths isolated outliers, such as a single long tool call during an otherwise busy phase. This avoids the need to predict individual tool-call durations. Instead, the scheduler infers a program’s phase from recent behavior, which is a better signal of future GPU use than recency or frequency alone.
+
+Rather than eagerly reshuffling programs,
+MORI
+performs
+sticky placement
+: a program remains in its current tier until a capacity violation forces a demotion or idle capacity in a higher tier allows promotion. When demotion is necessary, the program with the highest idleness is offloaded from GPU to CPU; when GPU capacity becomes available, the least-idle program in CPU is promoted back. This avoids unnecessary churn from the cost of offloading and reloading KV cache, while still adapting to phase changes. Because idleness is continuous, the scheduler can rank programs by relative idleness and adapt placement to any GPU-to-CPU capacity ratio without per-hardware tuning. Filling each tier to capacity naturally enforces admission control.
+
+We implement
+MORI
+on top of ThunderAgent
+(
+24
+)
+and SGLang
+(
+68
+)
+and evaluate it on replayed Claude Code traces from SWE-bench Pro
+(
+10
+)
+across four hardware configurations spanning three GPU tiers (H200 at 80 GB, H200, B200), three model sizes (7B, 30B MoE, 70B), and both single- and multi-replica deployments. At 80 concurrent programs,
+MORI
+delivers 20–71% higher output throughput and 18–43% lower TTFT than the best offloading baseline, and 1.6–2.1
+\times
+higher throughput than non-offloading systems. In the multi-replica (DP=3) setting,
+MORI
+achieves 54–79% higher throughput than the offloading baseline while sustaining 99%+ GPU utilization, compared to 59–76% for phase-oblivious schedulers that suffer throughput collapse at high concurrency.
+
+In summary, we make the following contributions:
+
+\bullet
+
+We characterize the phase structure of real agentic workloads and show that programs alternate between busy and idle phases that persist long enough to be exploited by a scheduler.
+
+\bullet
+
+We introduce a continuous idleness metric, enabling hardware-adaptive KV cache placement across a two-tier memory hierarchy.
+
+\bullet
+
+We design
+MORI
+, a program-aware scheduler with explicit KV cache placement across GPU HBM and CPU DRAM based on each program’s current idleness.
+
+\bullet
+
+Across four hardware and model pairs,
+MORI
+achieves 20–71% throughput gains over the best offloading baseline and up to 2.8
+\times
+TTFT reduction over non-offloading systems with coding-agent workloads.
+
+2.
+Background
+
+2.1.
+LLM Inference and KV Cache
+
+LLM inference proceeds in two phases: a
+prefill
+phase that processes the input prompt in parallel, and a
+decode
+phase that generates one token at a time autoregressively
+(
+53
+)
+.
+Because each decode step attends to all prior tokens, serving systems cache the per-layer key and value projections in GPU memory as the
+KV cache
+to avoid recomputation
+(
+25
+;
+67
+)
+.
+
+The KV cache grows linearly with sequence length and quickly dominates GPU memory: a single 32K-token request to Llama-3-70B
+(
+14
+)
+occupies roughly 5 GB in FP16, and concurrent or long-context workloads amplify this cost further.
+Prior work attacks the problem from two angles.
+On the model side, Multi-Query and Grouped-Query Attention
+(
+43
+;
+3
+)
+shrink the cache by sharing key/value heads.
+On the system side, PagedAttention
+(
+25
+)
+reduces fragmentation by managing the cache in non-contiguous blocks, and RadixAttention
+(
+68
+)
+reuses cached prefixes across requests via a radix tree.
+Even with these optimizations, the KV cache remains the primary memory bottleneck for long-context
+(
+19
+)
+and multi-turn workloads such as SWE-bench
+(
+10
+)
+, motivating techniques that extend capacity beyond GPU HBM.
+
+2.2.
+KV Cache Offloading
+
+Due to the size of KV cache, much prior work has utilized offloading techniques as a promising approach to addressing the memory bottleneck
+since GPU HBM is the scarcest resource in an LLM serving node.
+A typical H100 server pairs 80 GB of HBM per GPU for 8 GPUs with 1 TB of host DRAM
+(
+35
+)
+,
+creating a roughly 2
+\times
+capacity gap between the two memory tiers.
+When GPU memory is insufficient, it would be beneficial to offload KV cache tensors to host memory or even lower tiers of the memory hierarchy
+if they are not immediately needed and reload them on demand
+(
+26
+;
+50
+;
+41
+)
+.
+
+Early offloading work targeted throughput-oriented batch inference on resource-constrained hardware,
+treating GPU, CPU, and disk as a unified memory hierarchy and solving for an optimal placement of weights, activations,
+and KV cache across tiers
+(
+45
+)
+.
+Pie
+(
+60
+)
+further pools CPU memory with performance-transparent swapping, exploiting predictable memory access patterns to overlap data transfers with computation.
+Subsequent efforts have shifted toward latency-sensitive online serving, where the reload cost of offloaded KV cache directly affects time-to-first-token
+(
+12
+;
+21
+;
+31
+;
+32
+)
+.
+These methods mainly target the chatbot use case, where inter-turn gaps are dominated by human typing latency (typically tens of seconds), leaving ample time to offload KV cache after each turn and reload it before the next.
+
+2.3.
+Prior Work in Agent Serving
+
+The offloading methods expand the effective memory available for KV cache but introduce a new scheduling dimension:
+the system must decide
+which
+entries to keep resident on GPU, which to offload, and
+when
+to reload them.
+
+This decision becomes highly non-trivial in the context of agent serving, where workflows consist of repeated tool-call and GPU-inference cycles (
+section
+
+3.1
+) with high variance in tool-call durations (
+section
+
+3.2
+)
+(
+27
+;
+11
+;
+58
+)
+.
+Prior work on agent serving has proposed several approaches to optimize inference:
+
+Parrot
+(
+30
+)
+, Teola
+(
+51
+)
+, and Ayo
+(
+52
+)
+improve scheduling choices by taking a fixed workflow structure into account.
+KVFlow
+(
+38
+)
+and Helium
+(
+54
+)
+further exploit workflow-level structure with cache-aware eviction and scheduling.
+However, these methods are less effective when agent structures evolve into more complex and dynamic forms such as Claude Code
+(
+6
+)
+, Codex
+(
+36
+)
+, or Cursor
+(
+7
+)
+;
+Continuum
+(
+27
+)
+, ThunderAgent
+(
+24
+)
+, Infercept
+(
+1
+)
+, and Pie
+(
+13
+)
+improve throughput and latency by temporarily pinning KV cache in GPU memory during short tool-call intervals to avoid eviction.
+SAGA
+(
+16
+)
+proposes workflow-atomic scheduling at cluster scale, and PASTE
+(
+48
+)
+speculatively executes predicted tool calls during generation.
+However, these methods either require explicit workflow graphs, confine KV management to GPU memory without coordinated DRAM offloading, or lack load balancing for dynamic agents such as subagent spawning.
+
+3.
+Motivation
+
+This section motivates the design of
+MORI
+through an analysis of real-world agentic workloads. We first formalize the notion of an
+agentic program
+as the scheduling unit (§
+3.1
+). We then characterize the high variance in tool-call durations (§
+3.2
+) and show that programs exhibit a two-phase structure (§
+3.3
+). Finally, we argue that this phase structure naturally maps to a two-tier memory hierarchy and an effective placement policy must treat idleness as a relative attribute whose threshold adapts to the underlying hardware configuration (§
+3.4
+).
+
+3.1.
+Agentic Programs as the Scheduling Unit
+
+Figure 2
+.
+Structure of an agentic program. A program alternates between inference steps (shaded) and tool-call gaps. The KV cache grows across steps due to prefix dependencies.
+
+In previous LLM serving, each request is independent: once a request completes, its KV cache is no longer protected and may be evicted to make room for newly arrived requests. In agentic workloads, however, a single user task produces a chain of model invocations connected by prefix dependencies. As illustrated in
+Figure
+
+2
+, each invocation appends its tool-call results to the context produced by earlier ones, and consecutive invocations are separated by tool-call gaps during which the model is idle but the accumulated KV cache remains valuable. For example, a typical coding-agent program resolving a software bug
+(
+63
+)
+may issue tens of inference steps interleaved with tool calls over the course of several minutes, accumulating a KV cache that grows with each step.
+
+We define an
+agentic program
+(or simply
+program
+) as the complete sequence of model invocations that constitute a single agent session, together with the tool calls that interleave them. A program consists of alternating
+steps
+, each comprising one inference call on the GPU followed by a
+tool-call gap
+where the program is waiting for an external action to complete. When multiple tool calls execute in parallel, we treat them as a single gap whose duration is the maximum of the individual durations. The KV cache grows monotonically across these steps and every request shares the prefix of all preceding requests in the same program.
+
+In a multi-agent setup
+(
+56
+)
+, an agent will spawn child agents to handle subtasks. Each subagent is an independent program separate from the parent process, often with its own clean contexts. From the parent agent’s perspective, the subagent’s entire execution could be treated as a single (potentially long) tool call, during which the parent program is idle and its KV cache is a candidate for offloading.
+
+Prior work
+(
+27
+;
+24
+;
+33
+)
+has established that the program, not the individual request, must be the unit of memory management: without program-level awareness, concurrent programs evict each other’s KV caches during tool-call gaps, causing thrashing. Given program-level tracking, the key question turns into
+when
+to keep a program’s KV cache resident, offload it, or evict it. This decision depends on the program’s current memory footprint and its position in the inference/tool-call cycle. However, this decision is often complicated by the high variance in tool-call durations.
+
+3.2.
+Tool-Call Duration Variance
+
+Figure 3
+.
+CDF of tool-call durations from coding-agent traces. Durations span from milliseconds (file I/O) to up to minutes (human input, subagents), exhibiting a heavy-tailed distribution with over three orders of magnitude of variance.
+
+Figure
+
+3
+shows the distribution of tool-call durations from traces of a coding agent (Claude Code
+(
+6
+)
+;
+section
+
+6.1
+). The distribution spans several orders of magnitude, from hundreds of milliseconds for file reads to up to minutes for human input or subagent invocations. This variance exists not only across tool types but within the same type: a shell command may complete in hundreds of milliseconds or a
+pytest
+may run for tens of seconds to minutes. Furthermore, a single program’s tool-call behavior varies over its lifetime, alternating between bursts of fast calls and occasional long-running ones.
+
+This variance has direct implications for KV cache placement. Offloading a program’s KV cache from GPU HBM to CPU DRAM and reloading it later incurs a transfer cost linear to its size. For a program in a short tool-call gap, this transfer cost can exceed the gap itself, making offloading counterproductive. For a program blocked on a long tool call, the same transfer cost is negligible relative to the gap, and keeping the cache in HBM wastes GPU memory that could serve other programs. The optimal placement therefore depends on the duration of the gap, but reacting to each individual tool call is impractical: the overhead of offloading and reloading on every transition would dominate short gaps. Moreover, predicting individual tool-call durations ahead of time is unreliable
+(
+1
+)
+, as the duration depends on external factors invisible to the serving system. Instead, we look for exploitable patterns at a coarser, program-level granularity.
+
+3.3.
+Busy and Idle Phases
+
+While individual tool-call durations vary widely, we observe that agentic programs exhibit a structured
+phase behavior
+over time. Through trace analysis, we identify two alternating phases (
+fig.
+
+4
+):
+
+Busy phase.
+The program is actively interacting with its environment through a sustained sequence of short tool calls (reading files, writing edits, issuing lightweight shell commands), each completing in hundreds of milliseconds to several seconds. The program repeatedly returns to the inference engine with brief gaps between consecutive inference steps. As discussed in §
+3.2
+, the transfer cost of offloading could dominate these short gaps.
+
+Idle phase.
+The program enters a sustained period of inactivity, typically triggered by a long-running tool call (executing a test suite, waiting for human approval, or awaiting a subagent’s result) that takes tens of seconds to up to minutes. The program will not resume inference until the tool call completes, and preserving its KV cache in GPU memory does not provide any immediate benefit.
+
+Figure 4
+.
+Three examples of idle phases in agentic programs: (a) a long-running tool call such as a test suite or compilation, (b) waiting for human interaction (e.g., approval or feedback), and (c) spawning subagents and waiting for their results. Red dashed frames denote busy phases; green dashed frames denote idle phases. Note that in (c), the subagents themselves may be in busy phases, but the parent agent remains idle until they return.
+
+Trace analysis.
+We quantify this phase structure by analyzing 532 programs from coding-agent traces (
+section
+
+6.1
+). We classify each tool call as short or long relative to a duration threshold.
+Figure
+
+5
+plots the CDF of wall-clock busy-phase duration under three thresholds (1 s, 2 s, 5 s). The clustering pattern is robust to the choice of threshold: median busy-phase durations are 4 s, 20 s, and 41 s respectively, with p90 values of 15 s, 81 s, and 185 s. At the 2 s threshold, 87% of the tool calls are short, yet the remaining 13% of long tool calls account for 58% of total wall-clock tool-call time. This confirms that short tool calls cluster into sustained bursts lasting tens of seconds, while a small fraction of long tool calls dominate idle time.
+
+Two properties make phases a robust signal for scheduling. First, phase transitions are
+infrequent
+: busy phases last a median of 20 s (p90
+\approx
+81 s) in wall-clock time (
+fig.
+
+5
+), and idle phases are similarly sustained, as the long tool calls that trigger them have a p99 duration of approximately 20 s and can extend to minutes in the tail (
+fig.
+
+3
+). Phase persistence prevents the placement policy from oscillating at every tool-call boundary: once a program is classified as busy or idle, the same placement decision tends to remain for tens of seconds. Second, a program’s current phase is
+identifiable
+from recent history without requiring prediction of future tool-call durations: a program that has issued several short tool calls in succession is likely in a busy phase, while a program whose current tool call has already run significantly longer than its recent calls is likely entering an idle phase. These properties allow the scheduler to make reliable placement decisions based on observed recent behavior.
+
+Figure 5
+.
+CDF of wall-clock busy-phase duration under three short-call thresholds (1 s, 2 s, 5 s). Medians are approximately 4 s, 20 s, and 41 s. Short tool calls cluster into sustained busy phases lasting tens of seconds.
+
+3.4.
+Mapping Phases to the Memory Hierarchy
+
+The two-phase structure maps naturally to the two-tier memory hierarchy of modern LLM serving systems. Busy-phase programs issue short tool calls and will resume inference shortly, so their KV caches should be preserved in GPU HBM to avoid costly reloads. Idle-phase programs are blocked on long tool calls and will not need their KV caches in the near term, so offloading them to CPU DRAM frees GPU memory for active work. In essence, the goal is to keep programs with short idle times on GPU, minimizing the HBM capacity wasted on idle KV caches. However, realizing this mapping in practice requires addressing three challenges.
+
+Lack of program-aware KV cache control.
+A standard LRU eviction policy, as used in many serving systems
+(
+25
+;
+68
+)
+, evicts whichever program was least recently active regardless of its phase. This can produce pathological decisions: an LRU policy may evict a busy-phase program whose last inference step was a few seconds ago (because it is momentarily in a short tool-call gap) in favor of retaining an idle-phase program whose last step was more recent (because it just entered a tool call that will last tens of seconds). The busy program will return to inference shortly and incur a costly reload or recomputation, while the idle program wastes GPU memory for tens of seconds.
+
+Fixed phase classification does not generalize.
+Even with program-aware placement, a fixed classification function that partitions programs into “busy” and “idle” is not enough. First, programs continuously switch phases and their contexts grow over time, so the aggregate memory demand of the busy and idle contexts changes dynamically. Second, on any given hardware the capacity ratio between GPU HBM and CPU DRAM is fixed, so the dynamically shifting busy/idle demand is likely not to align with the available capacity at either tier. Third, different hardware configurations call for different placement strategies entirely: an H100 DGX node with 8
+\times
+80 GB of HBM and 1 TB of host DRAM has a 1:1.6 GPU-to-CPU ratio, while the same node with 2 TB of DRAM has a 1:3.1 ratio, and a partition that works for one ratio may be wrong for the other. A fixed busy/idle partition produces a split that may not match the available capacity at either tier at any given moment.
+
+Lack of CPU-side admission control.
+Both GPU HBM and CPU DRAM are finite. If the scheduler offloads too many idle programs to CPU DRAM, they will contend for memory and evict one another, causing reload thrashing analogous to GPU-side thrashing
+(
+24
+;
+27
+)
+. The scheduler must therefore enforce
+admission control
+at both tiers, limiting the number of programs that can reside in GPU and CPU memory to their respective capacities. Programs that cannot be admitted to either tier must be evicted entirely and their KV cache recomputed when they eventually resume.
+
+Key insight: idleness as a relative spectrum.
+Together, these challenges call for a placement policy that evaluates each program’s idleness on a
+continuous spectrum
+relative to the other active programs and the hardware configuration. The key question is not whether a program is idle or busy in absolute terms, but whether it is
+more idle
+than others:
+
+•
+
+When multiple programs are in long tool-call gaps, those
+most idle
+, i.e., most likely to remain in tool call for the longest time, should be placed in CPU DRAM, while the remaining programs that will resume inference sooner should be prioritized for GPU HBM.
+
+•
+
+When most programs are issuing short tool calls, the
+more busy
+ones, i.e., those more likely to return to inference imminently, should be prioritized for GPU HBM, since offloading them would be counterproductive: they cycle through inference so quickly that they would need to be reloaded almost immediately.
+
+Next, we detail how
+MORI
+realizes this relative ranking.
+
+4.
+Design
+
+This section describes the design of
+MORI
+. We first give an architectural overview (§
+4.1
+), then define the idleness metric that drives placement decisions (§
+4.2
+). Finally we describe the scheduling policy that moves programs between tiers (§
+4.3
+).
+
+4.1.
+Overview
+
+Figure 6
+.
+MORI
+three-tier queue architecture. Each replica maintains a GPU queue (HBM) and a CPU queue (DRAM); a global Waiting queue is shared across replicas. Programs are colored by their idleness (red = busy, green = idle). Idle programs are
+demoted
+from a higher tier to a lower one (GPU
+\to
+CPU or CPU
+\to
+Waiting), and busy programs are
+promoted
+from a lower tier to a higher one (Waiting
+\to
+CPU or CPU
+\to
+GPU).
+
+MORI
+is a program-aware scheduler that sits between agent clients and a pool of LLM inference engine replicas (
+Figure
+
+6
+). It proxies every request, load-balances across replicas while respecting affinity, and provides hints to the underlying engines for KV cache placement.
+
+Program awareness.
+Each agent client annotates its requests with a
+program ID
+
+(
+27
+;
+24
+;
+33
+)
+that identifies the agent program.
+MORI
+uses this identifier to track each program across its entire lifetime of inference steps and tool calls. A program alternates between two statuses:
+Reasoning
+, when it is actively executing on a GPU, and
+Acting
+, when it is waiting on an external tool call and its KV cache sits idle. Each incoming request transitions a program to Reasoning; each completed response transitions it back to Acting. A program’s status is instantaneous and changes on every request boundary, whereas its phase (§
+3.3
+) is a sustained pattern: a busy-phase program rapidly alternates between both statuses, while an idle-phase program remains Acting for an extended period.
+
+Idleness signal.
+For each program, the scheduler maintains: (i) the current status (reasoning or acting), (ii) the estimated KV cache context size in tokens, and (iii) the durations of recent Reasoning and Acting intervals. The scheduler uses these durations as the raw signal for computing a continuous idleness metric (§
+4.2
+). If a program is gated due to capacity overflow and must wait before resuming inference, the waiting time is excluded from both Reasoning and Acting measurements. Thus, the metric reflects only the program’s behavior rather than delays imposed by the scheduler.
+
+Three-tier queue structure.
+
+MORI
+organizes programs into three tiers, each corresponding to a level of the memory hierarchy (
+Figure
+
+6
+):
+
+•
+
+GPU queue (GPU HBM).
+Holds programs currently classified as busy. Their KV cache resides in GPU HBM, and incoming requests are forwarded directly to the inference engine. The scheduler enforces the invariant that the aggregate KV cache of all GPU-queue programs on a replica does not exceed GPU memory capacity.
+
+•
+
+CPU queue (CPU DRAM).
+Holds programs currently classified as idle. Their KV caches are offloaded to CPU DRAM on the same node; it is preserved on the CPU but must be reloaded to GPU HBM before inference can proceed. Incoming requests are gated until the program is promoted back to the GPU queue. A CPU memory capacity constraint is enforced analogously.
+
+•
+
+Waiting queue.
+Holds programs whose KV cache has been discarded entirely. Promotion back to a replica requires recomputing the KV cache from scratch via a full prefill. Incoming requests are gated until the scheduler promotes the program to a replica with available capacity.
+
+Each inference engine replica maintains its own GPU and CPU queues, while a single global Waiting queue is shared across all replicas. The scheduler communicates these tier assignments to the inference engine via typed offloading hints (§
+4.3.2
+), so that the engine keeps GPU-queue KV caches in HBM, offloads CPU-queue KV caches to DRAM, and evicts Waiting-queue KV caches entirely.
+
+Both the GPU and CPU queues are backed by finite hardware resources (GPU HBM and CPU DRAM respectively). When the number of concurrent programs exceeds tier capacities, the excess must wait in the Waiting queue to avoid overloading either tier. A CPU-queue program resumes relatively cheaply (CPU-to-GPU transfer over PCIe), while a Waiting program must recompute its entire KV cache again.
+
+Because the CPU queue is per-replica, it also provides
+cache affinity
+: a program’s offloaded KV cache resides in the CPU DRAM of the same node that computed it. When the program is later promoted back to the GPU queue, it is preferentially assigned to the same replica, allowing the engine to reload the cache locally over PCIe rather than recomputing it from scratch.
+
+4.2.
+Idleness Metric
+
+Next, we discuss the idleness metric that drives program placement decisions. As argued in §
+3.4
+, the scheduler must rank programs on a continuous idleness spectrum rather than apply a fixed busy/idle classification. The goal is to identify programs that will spend most of their upcoming time on GPU inference (less idle), rather than on tool calls that leave their KV caches idle in HBM, and prioritize those for GPU residency. Conversely, for programs that have entered or are about to enter a long tool call (more idle), the scheduler can use that idle window to offload their KV caches to CPU DRAM, freeing HBM for active work.
+
+Windowed idleness.
+For each program,
+MORI
+tracks the time spent in Reasoning (GPU inference) and Acting (tool-call gaps) over a sliding window of the most recent
+k
+steps. Conceptually, this captures the recent behavior of a program, and since phase transitions are infrequent (§
+3.3
+), recent behavior serves as a reliable proxy for the program’s future behavior. Formally, we define the
+idleness
+of a program as:
+
+(1)
+
+\iota=\frac{T_{\text{acting}}^{(k)}}{T_{\text{reasoning}}^{(k)}+T_{\text{acting}}^{(k)}}
+
+where
+T_{\text{reasoning}}^{(k)}
+and
+T_{\text{acting}}^{(k)}
+are the total time spent in each status over the last
+k
+inference–tool-call cycles (we use
+k{=}5
+in all experiments). As described in §
+4.1
+, any time a program spends waiting on the scheduler (e.g., queued in the CPU or Waiting tier) is excluded from both
+T_{\text{reasoning}}
+and
+T_{\text{acting}}
+, so the metric reflects only the program’s intrinsic behavior. An idleness close to 1 means a program in the idle phase (most time in tool calls), while an idleness close to 0 indicates a program in the busy phase (most time spent in inference).
+
+We use this metric as a local estimation of the current phase of a program. Since programs are non-stationary and switch between phases, a recent-windowed signal provides a better estimate of the current phase than a global average over the program’s entire history. This windowed metric has two desirable properties. First, it is
+responsive
+. When a busy-phase program enters an idle phase, the ongoing tool call’s elapsed time keeps increasing and soon dominates the other terms in the window, causing the idleness score to rise quickly. Conversely, when an idle-phase program resumes active interaction, the burst of short tool calls quickly pushes the long idle tool call out of the sliding window, causing the idleness score to drop. Second, the window provides
+robustness against outliers
+: if a busy-phase program encounters a single unexpectedly long tool call (e.g., a temporarily slow shell command), the window of recent short tool calls dilutes this outlier, preventing a premature reclassification. However, if the program genuinely transitions to an idle phase with sustained long tool calls, the idleness score will rise over successive cycles.
+
+4.3.
+Scheduling Policy
+
+Next, we describe how the scheduler uses the idleness metric to drive program placement decisions. The scheduler runs a periodic control loop that adjusts program placement across the three tiers. At a high level, the scheduling policy performs a
+sticky rebalancing
+of programs across tiers. On each tick, the scheduler examines every program’s current idleness and the capacity of each tier, then moves programs toward the tier that best matches their phase: busy programs toward GPU, idle programs toward CPU.
+
+Crucially, programs are not eagerly reshuffled on every tick. A program
+remains in its current tier
+as long as its idleness does not cross the partition boundary relative to other programs. Tier transitions only occur when there is an actual mismatch between a program’s phase and its tier, e.g., a busy program whose KV cache is sitting idle on CPU, or an idle program occupying GPU HBM while waiting on a long tool call. When such mismatches arise and the scheduler must select candidates to transfer between tiers, it ranks programs by idleness and moves the top-ranked ones first. This stickiness is important because tier transitions are not free: moving a program from GPU to CPU incurs an offload cost, and moving it back incurs a reload cost. By rebalancing only when necessary, the scheduler avoids unnecessary churn while still adapting to phase changes within a few ticks.
+
+4.3.1.
+Tier Management
+
+Next, we detail the scheduler’s tier management policies.
+
+Demotion from GPU.
+When the aggregate KV cache of GPU-queue programs exceeds GPU memory capacity, the scheduler demotes programs until usage fits within the budget, gating demoted programs from the inference engine while preserving the KV caches of the remaining programs. The scheduler prioritizes demoting Acting programs (whose KV caches are idle on GPU) over Reasoning programs (which are actively running inference). Among programs of the same status, it selects the one with the highest idleness
+\iota
+first, as it is most likely to have entered or be entering an idle phase. If only Reasoning programs remain, the scheduler applies
+lazy demotion
+: the victim finishes its current inference step before being moved. Demoted programs move to the CPU queue if CPU capacity permits, or to the Waiting queue otherwise.
+
+Promotion to GPU.
+When GPU capacity becomes available, the scheduler promotes programs in a priority order: (1) CPU-queue programs that have completed their tool call and are waiting for inference; (2) Waiting-queue programs that are waiting for inference, with returning programs preferred over new arrivals; (3) newly arrived programs, smallest context first. Within each priority level, the scheduler selects the program with the lowest idleness
+\iota
+first, as it is most likely to be in or entering a busy phase and will make the most use of GPU residency. For multi-replica deployments, Waiting-queue promotions use Best-Fit-Decreasing bin packing
+(
+23
+)
+across replicas, selecting the replica with the most available capacity first, while CPU-queue promotions preserve replica affinity for cache locality.
+
+4.3.2.
+Typed Offloading on the Inference Engine
+
+The scheduler decides
+which
+programs belong on GPU versus CPU, but the inference engine manages the actual KV cache blocks and must perform its own evictions when memory pressure arises. The goal is to make the engine’s block-level eviction decisions consistent with the scheduler’s program-level placement: busy programs’ KV blocks should be retained in GPU HBM, and idle programs’ KV blocks should be retained in CPU DRAM.
+
+MORI
+achieves this by propagating a
+type label
+from the scheduler to each program’s KV cache tree nodes in the engine. When the scheduler places a program in the GPU queue, it marks the program as
+busy
+; when it offloads a program to the CPU queue, it marks it as
+idle
+; programs in the Waiting queue are marked
+inactive
+. Each request carries its program identifier, and when the engine inserts KV blocks into the radix tree, it stamps them with the program’s type. Because idleness is relative (§
+4.2
+), these labels reflect each program’s position in the continuous ranking relative to all other active programs and the current hardware capacity.
+
+The engine’s eviction policy remains LRU at its core, but uses the type label as a higher-priority sort key. Crucially, the type priority order is
+reversed
+between the two tiers so that each tier preferentially retains the programs assigned to it:
+
+•
+
+GPU HBM:
+evicts inactive first, then idle, then busy, so busy programs’ blocks are evicted last.
+
+•
+
+CPU DRAM:
+evicts inactive first, then busy, then idle, so idle programs’ blocks are evicted last.
+
+Within each type, LRU breaks ties. The same type labels are also used in the engine’s scheduling policy to prioritize which waiting requests are admitted to the next batch: busy-typed requests are scheduled before idle-typed ones, ensuring that programs the scheduler has placed on GPU are served promptly.
+
+5.
+Implementation
+
+We implemented
+MORI
+on top of ThunderAgent
+(
+24
+)
+and SGLang
+(
+68
+)
+(v0.5.10), adding approximately 3,300 lines of Python to ThunderAgent’s scheduler and 500 lines to SGLang’s cache subsystem (via HiCache
+(
+59
+)
+).
+
+User API.
+
+MORI
+exposes a standard OpenAI-compatible chat/completion API augmented with a
+program_id
+field. The agent client tags every request belonging to the same agent program with the same
+program_id
+. When an agent spawns a subagent, the subagent uses a distinct identifier. This is the only client-side requirement; no tool-call annotations or phase hints are needed.
+
+Scheduler.
+The scheduler runs as an asynchronous control loop (default tick: 5 s) in the ThunderAgent router process, implementing the policy from §
+4.3
+. Request handlers for demoted programs block until the scheduler promotes them back, ensuring no inference request reaches the engine before the program’s KV cache is GPU-resident. For multi-replica deployments, CPU-queue promotions naturally preserve per-replica affinity.
+
+6.
+Evaluation
+
+We evaluate
+MORI
+across four hardware configurations spanning three GPU configs, three model sizes, and both single- and multi-replica deployments.
+
+6.1.
+Setup
+
+We use SGLang
+(
+68
+)
+(v0.5.10) as the inference engine for all experiments. For systems with CPU offloading, we use SGLang’s HiCache
+(
+59
+)
+as the offloading backend.
+
+Hardware configurations.
+
+Table
+
+1
+summarizes the hardware and model configurations. We evaluate across three GPU configs (H200 (80 GB), H200, and B200), paired with models of increasing size. Due to limited availability of H100 nodes, the H200 (80 GB) configuration emulates H100-class memory capacity by capping an H200’s available HBM; this is reasonable because the two GPUs share nearly identical compute throughput (FP16/BF16 TFLOPS) and differ primarily in HBM capacity and bandwidth. The H200 configuration is additionally tested with DP=3 to evaluate multi-replica scheduling. For each configuration, we set the CPU-to-GPU memory capacity ratio to
+1\times
+(tight) and
+2\times
+(relaxed) to exercise both tight and relaxed offloading budgets.
+
+Baselines.
+We compare
+MORI
+against the following systems:
+
+•
+
+SGLang Model Gateway (SMG)
+: SGLang’s model gateway, a prefix-aware request scheduler. In the DP=1 configurations, this reduces to directly forwarding requests to the inference engine.
+
+•
+
+ThunderAgent (TA)
+: A program-aware scheduler that tracks agent programs but does not leverage CPU offloading
+(
+24
+)
+.
+
+•
+
+ThunderAgent+Offloading (TA+O)
+: ThunderAgent with CPU offloading enabled via HiCache. The scheduler retains ThunderAgent’s context-length-based GPU eviction policy and is unaware of the CPU tier; the engine’s HiCache layer independently manages CPU DRAM via its own LRU policy, without coordination from the scheduler.
+
+Workload.
+We replay a self-collected trace of Claude Code sessions for a fair, reproducible comparison across all systems. Traces were collected by running Claude Code on the test split of SWE-bench Pro
+(
+22
+;
+10
+;
+37
+)
+with
+claude-sonnet-4-6
+with the default
+high
+effort level
+(
+5
+)
+. To capture traffic without modifying the agent, we route all API calls through an intermediate proxy that logs each request/response pair, recording prompt and completion token counts, tool-call time, and wall-clock durations. A driver script orchestrates collection one task at a time: it clones the repository at the base commit, launches the agent inside a fresh
+tmux
+session, drives the plan/execute lifecycle, and terminates once the trace file has been silent for a timeout or the agent process has exited. Of the first 200 tasks attempted, 186 produced complete traces; the remaining 14 failed due to upstream rate-limit errors or per-phase timeouts and were excluded to avoid biasing the corpus toward easier instances. From these logs we reconstruct each program as a sequence of (input length, output length, tool-call duration) tuples and replay them against each system under identical arrival patterns.
+
+We test concurrency levels of 20, 50, and 80 concurrent programs per DP replica to evaluate how each system scales under increasing memory pressure. Each concurrency slot is a closed-loop client that replays a single Claude Code trace: it sends each inference request to the serving system, waits for the response, then simulates the subsequent tool call by sleeping for the recorded duration before issuing the next request. Once a trace completes, the client immediately starts a new one from the trace corpus. All experiments run for a fixed duration of one hour, and we report metrics aggregated over the entire run.
+
+GPU
+
+Model
+
+DP
+
+TP
+
+H200 (80 GB)
+
+Qwen-2.5 7B
+(
+62
+)
+
+1
+
+1
+
+H200
+
+Qwen-3 30B-A3B (MoE)
+(
+61
+)
+
+1
+
+1
+
+H200
+
+Qwen-3 30B-A3B (MoE)
+(
+61
+)
+
+3
+
+1
+
+B200
+
+Llama-3.1 70B
+(
+14
+)
+
+1
+
+2
+
+Table 1
+.
+Hardware and model configurations.
+
+6.2.
+Results
+
+Metrics.
+We report three metrics for each configuration:
+
+•
+
+End-to-end output throughput
+(tokens/s): total output tokens generated per second across all programs, measuring overall system efficiency.
+
+•
+
+Step throughput
+(requests/s): number of completed steps (§
+3.1
+; each comprising one inference call followed by a tool call) per second. Because output length varies across requests, step throughput provides a token-length-independent view of system performance.
+
+•
+
+TTFT
+(s): average time from request arrival at the scheduler to first generated token, measured end-to-end including any queuing, KV cache reload, and prefill latency. This captures per-request responsiveness and reveals queuing delays introduced by the scheduler.
+
+6.2.1.
+Single Replica Scheduling with Memory Tiering
+
+We first present results for the single-replica (DP=1) configurations, which isolate the effect of phase-aware memory scheduling from load-balancing decisions across replicas.
+Figures
+
+7
+,
+8
+and
+9
+show the results for H200 (80 GB), H200, and B200 with DP=1 serving 7B, 30B, and 70B models, respectively. Across all three configurations,
+MORI
+achieves the highest or comparable throughput and the lowest TTFT. At the highest concurrency level (80 programs),
+MORI
+delivers 20–71% higher output throughput than the offloading baseline TA+O, and 1.6–2.1
+\times
+higher than SMG and TA, while reducing average TTFT by 18–43% relative to TA+O and 33–66% relative to SMG.
+
+Figure 7
+.
+End-to-end performance on H200 (80 GB) with DP=1 and Qwen-2.5 7B.
+
+Figure 8
+.
+End-to-end performance on H200 with DP=1 and Qwen-3 30B-A3B.
+
+Figure 9
+.
+End-to-end performance on B200 with DP=1 and Llama-3.1 70B.
+
+Scalability.
+
+At low concurrency (20 programs), all offloading-capable systems (
+MORI
+, TA+O) perform similarly: the aggregate KV cache working set fits comfortably in the CPU memory tier, so both systems achieve 87–96% cache hit rates and the advantage of phase-aware placement is marginal. For example, on the H200 (80 GB) configuration with 1
+\times
+CPU memory,
+MORI
+and TA+O reach 546 and 534 tokens/s, a gap of only 2%.
+
+As concurrency increases to 50 and 80 programs, the aggregate KV cache exceeds the combined GPU and CPU capacity, making eviction unavoidable and making eviction policy critical to performance. On the H200 (80 GB) configuration at 80 programs,
+MORI
+reaches 853 tokens/s while TA+O achieves only 667 tokens/s (+28%). The effect is more pronounced on larger models: on the B200 configuration with 2
+\times
+CPU memory at 80 programs,
+MORI
+achieves 213 tokens/s versus 124 tokens/s for TA+O, a 71% improvement. This widening gap is a direct consequence of phase-aware placement: as memory pressure grows,
+MORI
+proactively offloads KV caches of programs in tool-call phases while prioritizing GPU residency for programs approaching their next inference step, whereas TA+O evicts without visibility into program phase.
+
+Non-offloading baselines (SMG and TA) scale poorly across all configurations. Without a CPU memory tier, their throughput is bounded by GPU KV cache capacity: the H200 (80 GB) configuration sees SMG plateau at 447 tokens/s and TA at 557 tokens/s at 80 programs, while
+MORI
+reaches 853 tokens/s. The scaling limitation is most severe on the B200 70B configuration, where SMG stalls at 96 tokens/s at 80 programs, half of
+MORI
+’s 189 tokens/s.
+
+Comparison across GPU configurations.
+
+The relative benefit of
+MORI
+varies with model size and GPU memory ratio. On the H200 (80 GB) configuration (7B model), the model footprint is relatively small and leaves ample room for KV caches, so even baselines without offloading can sustain moderate throughput.
+MORI
+’s advantage comes primarily from better cache management at high concurrency.
+
+On the H200 configuration (30B MoE model), the larger model footprint constrains the KV cache budget, amplifying the cost of poor eviction decisions. TA+O’s throughput stalls or decreases at higher concurrency, dropping from 400 tokens/s at 50 programs to 385 tokens/s at 80 programs under 2
+\times
+CPU memory, because its phase-oblivious eviction retains KV caches of idle programs on the GPU, wasting memory that could serve active requests.
+MORI
+, by contrast, continues to scale, reaching 527 tokens/s (+37% over TA+O).
+
+The B200 configuration (70B model, TP=2) presents the tightest memory regime and the largest gains for
+MORI
+. TA+O exhibits non-monotonic throughput: under 1
+\times
+CPU memory, its throughput rises from 147 to 181 tokens/s between 20 and 50 programs, then falls back to 146 tokens/s at 80 programs as eviction thrashing overwhelms the offloading benefit.
+MORI
+avoids this collapse by scheduling offloads during tool-call idle windows, sustaining monotonic throughput growth (136
+\to
+191
+\to
+189 tokens/s). Under 2
+\times
+CPU memory, the gap is even wider:
+MORI
+reaches 213 tokens/s at 80 programs while TA+O manages only 124 tokens/s.
+
+TTFT analysis.
+
+TTFT reflects both queuing delay and prefill cost. At low concurrency all systems achieve TTFT under 15 s (4–13 s depending on model size), but TTFT diverges rapidly under load. At 80 programs on the B200 configuration, SMG’s average TTFT reaches 108 s, indicating that most requests spend the majority of their lifetime waiting in the scheduling queue. TA reduces this to 73 s through program-aware scheduling but still suffers from GPU memory pressure. TA+O further reduces TTFT to 56 s by offloading KV caches to CPU, but its context-length-based eviction is uncorrelated with program phase, so it may evict busy programs with shorter contexts while keeping idle programs with longer contexts GPU-resident, blocking admission of requests that are ready to run.
+MORI
+achieves the lowest TTFT at 38 s, a 2.8
+\times
+reduction from SMG and 31% lower than TA+O, because
+MORI
+’s GPU queue (§
+4.1
+) prioritizes programs whose KV caches are already GPU-resident, minimizing reload stalls in the prefill path.
+
+Doubling CPU memory from 1
+\times
+to 2
+\times
+benefits
+MORI
+but not TA+O: on the B200 configuration at 80 programs,
+MORI
+’s TTFT drops from 38 s to 33 s (13%), while TA+O’s remains flat (56 s to 58 s). Because TA+O delegates CPU management to uncoordinated LRU, the extra capacity provides no placement benefit;
+MORI
+’s coordinated tier management exploits it directly (§
+3.4
+).
+
+System
+
+GPU step avg
+
+CPU avg
+
+TA+O
+
+{\sim}
+29 ms
+
+21.5 ms (
+-
+7.6 ms)
+
+MORI
+
+{\sim}
+32 ms
+
+23.8 ms (
+-
+8.6 ms)
+
+Table 2
+.
+Scheduling overhead on H200, 30B model, DP=1, 50 programs.
+
+Scheduling overhead.
+
+MORI
+’s phase-aware placement logic adds CPU-side work per scheduling step compared to TA+O’s simpler eviction policy (
+Table
+
+2
+). On the H200 configuration with the 30B model at 80 programs, the average CPU scheduling latency increases from 21.5 ms (TA+O) to 23.8 ms (
+MORI
+), an 11% increase. However, this overhead is masked by GPU–CPU overlap: CPU scheduling runs concurrently with the GPU inference step, which takes
+{\sim}
+32 ms. The resulting margin (GPU step minus CPU latency) is 8.6 ms for
+MORI
+and 7.6 ms for TA+O, meaning both systems complete their scheduling work before the GPU step finishes. Because the scheduling decision is fully overlapped with GPU computation,
+MORI
+’s richer placement logic adds no observable latency to the critical path.
+
+6.2.2.
+Multi Replica Scheduling with Load Balancing
+
+We now evaluate the DP=3 configuration on H200 with the 30B MoE model, where the scheduler must jointly manage memory tiering and cross-replica load balancing.
+Figure
+
+10
+shows the results.
+MORI
+achieves 54–79% higher throughput than TA+O and 66–75% higher than SMG at 80 programs, while reducing TTFT by 36–43%.
+
+Baseline collapse at high concurrency.
+
+The multi-replica setting amplifies the weaknesses of phase-oblivious scheduling. At 80 programs per replica, TA’s throughput actually
+decreases
+compared to 50 programs: from 1147 to 798 tokens/s under 1
+\times
+CPU memory. TA+O exhibits a similar regression, dropping from 1395 to 920 tokens/s under 2
+\times
+CPU memory. This throughput collapse is reflected in GPU utilization: TA and TA+O achieve only 59–76% GPU utilization at 80 programs, while
+MORI
+sustains 99%+. Without phase awareness, the scheduler keeps idle programs GPU-resident, reducing the memory available for active requests.
+
+Backend affinity and program churn.
+
+A key factor in multi-replica performance is
+backend affinity
+: keeping a program’s successive inference requests on the same replica to preserve KV cache locality. We measure program churn as the fraction of programs that switch backends during their lifetime.
+
+Figure 10
+.
+End-to-end performance on H200 with DP=3 and Qwen-3 30B-A3B.
+
+TA and TA+O both maintain GPU-level affinity: as long as a program’s KV cache remains on the GPU, subsequent requests are routed to the same replica. However, when a program is evicted from GPU memory, TA and TA+O treat it as having no cached state, because their schedulers are offloading-agnostic and do not track CPU-tier residency. The evicted program is then reassigned to whichever replica has the lightest load, breaking affinity even when the original replica still holds the KV cache in its CPU memory. This leads to high churn: at 20 programs per replica, 14–15% of programs switch backends at least once, with an average of 0.35–0.38 switches per program. Each switch forces the new replica to recompute the full prefix from scratch, discarding the CPU-resident cache on the original replica.
+
+MORI
+reduces churn dramatically: under the same conditions, only 0.3–2.9% of programs switch backends, with an average of 0.00–0.04 switches per program.
+MORI
+achieves this by tracking KV cache residency across both GPU and CPU tiers: when a program returns from a tool call, the scheduler routes it back to the replica where its cache is stored, whether on GPU or in that replica’s CPU memory, avoiding cross-replica migration. At 80 programs per replica with 2
+\times
+CPU memory,
+MORI
+switches only 2.0% of programs (0.02 switches/program) versus 5.5% for TA+O (0.10 switches/program) and 7.6% for TA (0.13 switches/program).
+
+Load balance quality.
+
+SMG also maintains affinity through prefix-aware routing, which directs requests to the replica holding the longest matching cached prefix. However, without program-level tracking, this affinity is fragile: under memory pressure, prefixes are evicted and subsequent requests may match a different replica, causing thrashing. At low concurrency this manifests as pathological load imbalance: at 20 programs with 1
+\times
+CPU memory, SMG concentrates traffic on a single replica (13.8 average running requests) while the other two are nearly idle (1.4 and 1.5 running requests), resulting in only 51% GPU utilization despite having three replicas available. TA and
+MORI
+both avoid this imbalance through program-aware routing, achieving balanced per-engine loads (9–10 running requests each) and 99%+ GPU utilization at the same concurrency level.
+
+7.
+Discussion
+
+7.1.
+Extending to More Offloading Tiers
+
+MORI
+is described and evaluated on a two-tier memory hierarchy (GPU HBM and CPU DRAM),
+but the design generalizes naturally to more hierarchies.
+We leave extending
+MORI
+to future work, but discuss two natural extensions below.
+
+SSD Offloading.
+A modern serving node typically attaches several terabytes of NVMe SSD with high bandwidth, making it usable for KV cache offloading
+(
+12
+)
+.
+This new layer is often slower than CPU DRAM but has much larger capacity.
+This is a natural fit for offloading long tool calls and we could extend
+MORI
+’s ranking-based placement to this setting by introducing a second idleness threshold: programs with
+\iota
+between the two thresholds would be offloaded to SSD.
+
+Across-node transfer.
+When a node’s local CPU DRAM is saturated,
+remote DRAM on a peer node, reachable over RDMA or NVMe-oF, becomes another offload target.
+Recent disaggregated KV cache systems
+(
+41
+;
+31
+)
+demonstrate that the bandwidth of modern interconnects (200 Gb/s and above)
+is sufficient to make remote DRAM a viable tier for KV cache that is idle for hundreds of milliseconds or more.
+
+MORI
+’s ranking-based placement could extend to this setting by treating remote DRAM as an intermediate tier between local DRAM and local SSD.
+
+7.2.
+Heterogeneous Hardware
+
+There is an increasing trend of deploying heterogeneous accelerators or different host DRAM capacity side by side in a cluster
+(
+34
+;
+15
+)
+.
+
+MORI
+extends naturally to this setting:
+each replica maintains its own GPU and CPU queues, and because the idleness ranking is relative,
+replicas with very different HBM sizes apply the same rule of filling from the busiest end of the ranking until local capacity is reached.
+The same signal can also guide cross-replica admission by routing the lowest-
+\iota
+(busiest) programs to the fastest available replica
+and higher-
+\iota
+programs to slower replicas. We leave a full implementation for future work.
+
+8.
+Related Work
+
+8.1.
+LLM Inference
+
+There has been much work on large language model serving. Orca
+(
+67
+)
+introduced continuous batching, paged attention
+(
+25
+)
+and radix attention
+(
+68
+)
+improved throughput for general inference by optimizing GPU memory usage. Nanoflow
+(
+70
+)
+, Flashinfer
+(
+66
+)
+, Sarathi-serve
+(
+2
+)
+focused on kernel-level optimizations to improve GPU utilization for general LLM workloads. Disaggregated prefill
+(
+69
+;
+39
+)
+, Preble
+(
+47
+)
+, and Llumnix
+(
+49
+)
+optimized scheduling on a cluster level, while MemServe
+(
+20
+)
+unifies context caching with disaggregated inference through an elastic memory pool. Other work addresses KV cache management
+(
+32
+;
+64
+;
+29
+;
+12
+;
+41
+)
+and load balancing
+(
+11
+;
+42
+;
+57
+)
+. However, previous work mainly focused on creating a memory hierarchy for applications instead of scheduling resources within the memory hierarchy with applications. With the new agentic workloads,
+MORI
+optimizes the resource management based on emerging properties.
+
+8.2.
+Agent Paradigms
+
+Researchers in artificial intelligence have been studying ways to build better agents. The first batch of agents were built in fixed workflows
+(
+44
+;
+18
+;
+40
+)
+. However, ReAct-style agents become the main thread quickly as model capabilities continue to grow. It becomes more beneficial when we let an LLM decide its next step based on the current situation instead of giving hard constraints
+(
+65
+;
+46
+)
+. Moreover, although multi-agent systems had many pitfalls
+(
+9
+;
+17
+)
+, they have also been more and more popular due to their capabilities to accomplish tasks in parallel while achieving higher solve rate for complex tasks
+(
+28
+;
+8
+;
+4
+)
+.
+
+We discuss agent serving systems and their limitations in
+section
+
+2.3
+.
+MORI
+addresses these gaps through coordinated two-tier placement driven by a continuous idleness ranking, requiring only program IDs and timing information.
+
+9.
+Conclusion
+
+This paper addressed KV cache management for agentic LLM workloads, where tool-call durations vary by orders of magnitude and are unknown ahead of time. Through trace analysis of coding-agent programs, we showed that agentic programs exhibit a two-phase structure of busy and idle periods, and that idleness is best treated as a continuous, relative spectrum rather than a binary label. Based on this insight, we built
+MORI
+, which ranks programs by idleness and dynamically places them across GPU HBM and CPU DRAM, adapting to any hardware capacity ratio while enforcing admission control at each tier. Across coding-agent workloads on three GPU tiers and model sizes,
+MORI
+achieves 20–71% higher throughput and 18–43% lower TTFT than the strongest baseline with offloading.
+

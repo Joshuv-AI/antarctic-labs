@@ -1,0 +1,808 @@
+A 35B Hybrid-Attention Mixture-of-Experts Model on a 6 GB 2011 GPU: Hand-Written 4-bit CUDA Inference for Fermi ( sm_20 )
+A. C. Opus, J. Q. Lu
+
+Abstract
+We report end-to-end inference of Qwen3.6-35B-A3B —a 35-billion-parameter, ∼ \sim 3B-active Mixture-of-Experts (MoE) model with a hybrid gated-delta-net / full-attention backbone—on a 2011 NVIDIA Tesla C2075 (Fermi, compute capability sm_20 , 6 GB), a GPU that predates tensor cores, native FP16 arithmetic, the DP4A integer dot-product instruction, and support in every modern CUDA toolchain. Because the 4-bit model ( ≈ \approx 10.5 GB) is roughly twice the device memory, we adopt a hybrid execution strategy: the GPU performs batched prompt prefill with expert weights streamed layer-by-layer from host RAM, while decode runs on the host CPU using a hand-written W4A8 integer GEMV built on the SSSE3 pmaddubsw instruction. The entire engine—GEMM, hybrid-attention recurrence, MoE routing, and a from-scratch vision tower—is written by hand for sm_20 and compiled with the legacy CUDA 8.0 toolchain. On a 947-token prompt we reduce prefill latency from 57.2 s to 37.5 s ( − 34 % -34\% ) through expert pinning, single-pass prefill, and NUMA interleaving, and we raise decode throughput from 2.8 to 8.6 tok/s ( ≈ 3 × \approx 3\times ) with the integer-SIMD kernel. A position-indexed snapshot cache for the recurrent (gated-delta-net) state restores prefix reuse on a recurrent architecture, cutting a repeated 78 s prefill to 0.5 s. We also report a set of negative results—offloading the language-model head to the idle GPU, hyper-threading, and three GPU-kernel rewrites all fail to help—which together pin down the practical floor of this hardware. Our aim is not a speed record but a careful account of what it takes, and where the walls are, to run a contemporary frontier-class MoE on fourteen-year-old silicon.
+
+
+
+1
+Introduction
+
+The hardware demands of large language models are usually framed as a frontier
+problem: newer accelerators, more memory, faster interconnects. This paper asks
+the opposite question.
+How far down the hardware stack can a modern
+Mixture-of-Experts (MoE) model be pushed, and what exactly breaks along the
+way?
+Concretely, we take a 35-billion-parameter MoE with a hybrid
+linear/full-attention backbone and run it, in 4-bit, on an NVIDIA Tesla C2075:
+a Fermi-generation GPU released in 2011 with 6 GB of GDDR5, 448 CUDA cores, a
+peak of roughly 1 TFLOP of FP32, and—critically—
+none
+of the
+primitives that modern inference stacks assume. It has no tensor cores
+(introduced with Volta), no high-throughput FP16 arithmetic, and no
+DP4A
+
+4-element 8-bit integer dot product (introduced with Pascal,
+sm_61
+).
+Its compute capability,
+sm_20
+, was dropped from the CUDA toolkit years ago;
+the last toolchain that targets it is CUDA 8.0.
+
+This combination of constraints makes almost every off-the-shelf component
+unusable. Modern kernels assume
+mma
+tensor-core intrinsics or at least
+
+DP4A
+; modern toolchains will not emit
+sm_20
+code; and the model
+itself—roughly 10.5 GB even at 4 bits per weight—does not fit in 6 GB of
+device memory. We therefore build the inference engine from first principles. It
+is a fork of a minimal single-file CUDA port
+[
+11
+]
+of Karpathy’s
+
+llama2.c
+
+[
+9
+]
+, extended into a complete MoE engine with a
+hand-written 4-bit GEMM, a hybrid-attention recurrence kernel, host-side
+expert offload, and a multimodal vision path. The contributions are:
+
+1.
+
+A working hybrid GPU-prefill / CPU-decode engine for
+sm_20
+.
+Expert weights live in host RAM; the GPU streams them layer-by-layer for
+batched prefill, and the CPU computes single-token decode with a hand-written
+W4A8 integer kernel. The split is dictated by the device-memory ceiling and
+the absence of fast integer GPU dot products.
+
+2.
+
+An integer-SIMD decode path
+. We pack 4-bit weights and 8-bit
+activations into the SSSE3
+pmaddubsw
+multiply-add, mirroring the
+
+\mathrm{Q4\_0}\times\mathrm{Q8\_0}
+scheme of
+llama.cpp
+
+[
+10
+]
+,
+on a host CPU that lacks AVX. This takes decode from 2.8 to 8.6 tok/s.
+
+3.
+
+A prefix cache for a recurrent architecture
+. Gated-delta-net
+state is only valid at the end of a sequence, which defeats naive
+prefix-KV reuse. We take position-indexed boundary snapshots of the recurrent
+state during both prefill and decode, enabling partial reuse; a repeated
+prompt’s prefill drops from 78 s to 0.5 s.
+
+4.
+
+Prefill optimizations and an honest hardware floor
+. Expert
+pinning, single-pass prefill, and NUMA interleaving cut prefill by
+
+\sim
+35%. We then show, with measurements, that the remaining cost is
+structural: a thin-
+M
+MoE GEMM and an inherently sequential recurrence sit
+near the practical limit of Fermi, and three further kernel rewrites,
+GPU-offloading the LM head, and hyper-threading all fail to help.
+
+5.
+
+Multimodality
+. A from-scratch vision tower for
+sm_20
+
+reproduces a reference implementation to
+\sim
+4\times 10^{-4}
+per element
+and correctly discriminates simple shapes and colors.
+
+We emphasize that this is an engineering and measurement study on a single
+machine, not a claim of a new algorithm or a throughput record. The value is in
+the constraints: each one forces a design decision, and the negative results
+are as informative as the positive ones.
+
+2
+Background
+
+2.1
+The target hardware
+
+The NVIDIA Tesla C2075 is a Fermi-architecture (GF110) compute card from 2011:
+448 CUDA cores, 6 GB GDDR5 (
+\approx
+5.2 GB usable with ECC) at
+\sim
+144 GB/s,
+
+\sim
+1.03 TFLOP FP32 peak, compute capability
+sm_20
+, and a PCIe 2.0 host
+link. Relative to any accelerator a modern stack targets, it lacks tensor
+cores, fast FP16,
+DP4A
+, and asynchronous-copy/residency features; it is
+limited to 48 KB of shared memory per block and a 65,535 grid-dimension cap.
+The host is a dual-socket Intel Xeon X5690 (Westmere-EP,
+2\times 6
+physical
+cores / 24 threads, 3.47 GHz) with two NUMA nodes and DDR3 memory; notably it
+predates AVX, so host SIMD is limited to SSE4.2/SSSE3. We compile device code
+with CUDA 8.0—the last toolkit supporting
+sm_20
+—inside a container, and
+the host decode loops with a modern GCC restricted to
+-march=westmere
+.
+
+2.2
+The model
+
+Qwen3.6-35B-A3B belongs to the Qwen3 series
+[
+1
+]
+. It is a sparse MoE
+with
+\sim
+35B total and
+\sim
+3B active parameters: 40 transformer blocks, each
+with a sparsely-gated MoE feed-forward layer
+[
+4
+]
+(256 experts,
+top-8 routing, plus a shared always-on expert) and a small per-block hidden
+width. Its backbone is
+hybrid
+: 30 of the 40 blocks use a gated-delta-net
+(GDN) linear-attention layer
+[
+2
+]
+—a gated extension of the
+delta rule in the state-space/linear-attention lineage of
+Mamba
+[
+3
+]
+—and the remaining 10 use standard softmax
+attention
+[
+8
+]
+. The GDN layer carries a recurrent state
+
+S\in\mathbb{R}^{H_{k}\times H_{v}}
+per value head that is updated token-by-token; in
+our configuration there are 32 value heads with
+H_{k}=H_{v}=128
+. This recurrence
+is the source of both the architecture’s efficiency and, as we show, its
+prefix-caching difficulty.
+
+2.3
+Weight quantization
+
+Weight-only 4-bit quantization is now standard for LLM
+deployment
+[
+6
+,
+7
+]
+. We use a group-wise symmetric 4-bit format in the
+
+\mathrm{Q4\_0}
+family
+[
+10
+]
+: each weight is an integer in
+
+\{-7,\dots,7\}
+with one FP32 scale per group, packed two values per byte. For decode we pair
+4-bit weights with 8-bit activations (W4A8) so the inner product can be issued
+as an integer multiply-add. The active model after pruning (below) is
+
+\approx
+10.5 GB on disk, about twice the device memory.
+
+2.4
+Expert pruning
+
+To shrink the resident footprint we apply REAP (Router-weighted Expert
+Activation Pruning)
+[
+5
+]
+, a one-shot MoE compression method that ranks
+experts by a combination of router gate-values and expert activation norms and
+
+removes
+(rather than merges) the least useful ones. We use a 50%
+pruning ratio, taking the model from 256 to 128 experts per layer. REAP reports
+near-lossless behavior at 50% on generative tasks
+[
+5
+]
+; consistent with
+this, our downstream task accuracy is unchanged after pruning (Section
+5
+).
+
+3
+System Design
+
+3.1
+Why hybrid GPU-prefill / CPU-decode
+
+Two facts determine the architecture. First, the experts do not fit in device
+memory, so they reside in host RAM and are moved to the GPU on demand. Second,
+the cost of that movement is amortized very differently between the two phases
+of inference. During
+prefill
+the model processes hundreds of prompt
+tokens at once, so streaming a layer’s experts into a 6 GB-resident scratch
+buffer and running a batched GEMM pays off: the host
+\to
+device transfer is
+shared across all tokens in the chunk. During
+decode
+only one token is
+produced per step; streaming a layer’s experts across PCIe 2.0 to multiply a
+single activation vector is dominated by transfer latency. We therefore keep
+decode on the host CPU, reading the 4-bit experts directly from RAM. The
+production binary is, accordingly, a
+GPU-prefill, CPU-decode
+engine
+(Figure
+1
+).
+
+Host
+(2
+\times
+Xeon, DDR3, 2 NUMA nodes)
+
+GPU
+(Tesla C2075, 6 GB,
+sm_20
+)
+4-bit experts
+\sim
+9 GB
+(page-locked, NUMA-interleaved)
+CPU thread pool
+W4A8
+pmaddubsw
+GEMV
+per-layer expert scratch
+grouped 4-bit GEMM
+GDN recurrence
++
+attention
+prefill
+stream / layer
+PCIe 2.0
+decode
+(host-resident,
+1 token / step)
+
+Figure 1:
+Hybrid execution. The 4-bit experts reside in page-locked,
+NUMA-interleaved host memory.
+Prefill
+streams each layer’s experts across
+PCIe 2.0 into a 6 GB-resident scratch buffer and runs the batched GPU kernels;
+
+decode
+keeps the single-token computation on the host CPU (W4A8 integer
+SIMD), avoiding a per-token PCIe round trip. Pruning and the prefix cache act on
+the prefill (GPU) path; the integer kernel acts on the decode (CPU) path.
+
+3.2
+GPU prefill
+
+For each layer the engine (i) streams that layer’s expert block host
+\to
+device,
+(ii) runs the GDN recurrence or softmax-attention kernel, and (iii) runs the MoE
+feed-forward as a single
+grouped
+4-bit GEMM over all routed
+token–expert pairs. The GEMM is a standard register-tiled kernel
+(
+64\times 64
+output tiles,
+4\times 4
+register micro-tiles, 256 threads/block)
+that dequantizes the 4-bit weight tile into shared memory before accumulation;
+grouping all experts into one launch avoids the low occupancy of one launch per
+expert. Attention uses an online-softmax formulation in the spirit of
+FlashAttention
+[
+8
+]
+but written for
+sm_20
+(no tensor
+cores, no
+cp.async
+). The GDN recurrence is a custom kernel that carries
+the per-head state through the token loop.
+
+3.3
+CPU decode: W4A8 with
+pmaddubsw
+
+On the host, decode is a pthread pool (one thread per physical core) running a
+W4A8 GEMV. Activations are quantized per group to 8-bit with an FP32 scale; each
+4-bit weight is mapped to an unsigned value in
+\{1,\dots,15\}
+, and the dot product is
+accumulated with the SSSE3
+pmaddubsw
+instruction, which performs sixteen
+unsigned
+\times
+signed 8-bit multiply-adds per issue. This is the same
+arithmetic
+llama.cpp
+
+[
+10
+]
+uses for
+
+\mathrm{Q4\_0}\times\mathrm{Q8\_0}
+, specialized here for a CPU without AVX.
+Replacing the scalar FP32 inner loop with this integer-SIMD kernel is the single
+largest decode win (Section
+5
+).
+
+3.4
+Resident process and prefix cache
+
+Earlier iterations reloaded the 10.5 GB model per request; we instead keep the
+model resident and serve requests over a pipe, which removes a
+\sim
+15 s
+per-request reload. On top of this we add a prefix cache. The difficulty is the
+GDN recurrence: unlike a softmax-attention KV cache, which is valid at every
+position, the recurrent state is only meaningful at the end of the processed
+sequence, so a new prompt cannot simply reuse a prefix unless it continues the
+old one exactly. We borrow the idea of
+boundary snapshots
+: we checkpoint
+the full recurrent state at block boundaries during both prefill and decode, and
+index these snapshots by absolute token position. A new request scans for the
+largest snapshot whose position is a prefix of the request and resumes from
+there. Because the snapshots are position-indexed (not tied to a fixed grid),
+the same mechanism supports both exact continuation (multi-turn) and partial
+prefix reuse, degrading gracefully to a full recompute on a miss.
+
+4
+Optimizations
+
+4.1
+Expert pinning
+
+The expert block is moved from a pageable file mapping into page-locked host
+memory (a single
+\sim
+9 GB pinned allocation), which roughly halves the
+effective host
+\to
+device bandwidth cost: the per-prompt expert-transfer time
+falls from 16.0 s to 6.4 s. (Page-locking the file mapping directly is
+rejected by the driver, so the experts are copied once into a pinned buffer at
+load time.)
+
+4.2
+Single-pass prefill
+
+The boundary-snapshot machinery originally chunked prefill into 256-token
+segments, which had an unintended cost: each segment re-streamed the full expert
+set and ran the GEMM at a small batch size. Processing the whole prompt in one
+pass eliminates the redundant streaming and raises GEMM occupancy. The effect is
+large and is the dominant prefill win; Table
+1
+shows prefill
+latency as a function of segment size on a 947-token prompt. We retain
+position-indexed snapshots (Section
+3.4
+) so that single-pass prefill
+does not sacrifice prefix reuse.
+
+Table 1:
+Prefill latency vs. prefill segment size (947-token prompt). One pass
+(
+\geq
+prompt length) eliminates per-segment expert re-streaming and maximizes
+GEMM batch size.
+
+Segment size (tokens)
+
+256
+
+512
+
+\geq
+947 (single pass)
+
+Prefill latency (s)
+
+51.9
+
+40.7
+
+35.0
+
+MoE GEMM share (s)
+
+32.6
+
+22.1
+
+16.9
+
+Expert transfer (s)
+
+7.2
+
+3.6
+
+1.8
+
+4.3
+NUMA interleaving
+
+The host is a two-socket NUMA machine. Allocating the pinned experts on a single
+node forces half the decode threads to read across the inter-socket link. We set
+an interleaved memory policy at startup so the expert block and the weight
+mapping are spread across both memory controllers, which yields a small but free
+decode improvement (
+\sim
+5%). The modest size of this effect is itself
+informative: decode is not bottlenecked on cross-socket bandwidth.
+
+4.4
+Pruning as a prefill, not decode, lever
+
+REAP halves the expert count, which shrinks load and prefill time (fewer experts
+to stream and to route over). It does
+not
+change decode latency: decode
+reads only the top-8 routed experts per layer, a quantity independent of the
+total expert count. We confirm this empirically—decode throughput is identical
+at 256 and 128 experts—and it clarifies that pruning and the decode kernel are
+orthogonal levers.
+
+5
+Evaluation
+
+All measurements are on the single C2075 workstation described above, using the
+REAP-pruned 128-expert model in the group-wise 4-bit format, with the W4A8
+decode kernel enabled.
+
+5.1
+Latency
+
+Table
+2
+summarizes prefill and end-to-end latency before and after
+the optimization stack (pinning
++
+single-pass prefill
++
+NUMA interleaving).
+Prefill falls by 34–36%. On a 947-token prompt, a single forward pass spends
+17.8 s in the MoE GEMM (47%), 11.9 s in the GDN recurrence (31%), and 7.0 s
+in softmax attention (18%) (Figure
+2
+); all three are GPU kernels, and after single-pass
+prefill the expert transfer is only 1.8 s. Prefill therefore dominates
+end-to-end latency for these prompt lengths, and the system is, in steady state,
+a GPU-bound prefill engine feeding a CPU-bound decoder.
+
+Table 2:
+Prefill and end-to-end latency, before vs. after the
+pinning
++
+single-pass
++
+NUMA optimization stack. “e2e” includes 60
+generated tokens. Prompt lengths are 947 (“1K”) and 1,871 (“2K”) tokens.
+
+Prefill (s)
+
+End-to-end (s)
+
+Prompt
+
+before
+
+after
+
+before
+
+after
+
+1K (947 tok)
+
+57.2
+
+37.5
+(
+-34\%
+)
+
+63.7
+
+45.1
+
+2K (1,871 tok)
+
+122.9
+
+78.4
+(
+-36\%
+)
+
+130.1
+
+86.5
+
+0
+5
+10
+15
+attention
+7.0 s
+GDN recurrence
+11.9 s
+MoE
+17.8 s
+expert transfer (1.8 s)
+MoE 4-bit GEMM (16.0 s)
+prefill time (s)
+
+Figure 2:
+Where prefill time goes (single-pass, 947-token prompt; all three are
+GPU kernels). The MoE GEMM dominates and, after single-pass prefill, carries only
+1.8 s of expert host
+\to
+device transfer. The GDN recurrence (a sequential scan)
+and softmax attention account for the rest; the three components sum to
+
+\approx
+36.7 s of the 37.5 s prefill.
+
+5.2
+Decode throughput
+
+The W4A8 integer-SIMD kernel takes decode from a scalar-FP32 baseline of
+2.8 tok/s to
+\sim
+6.1 tok/s, and NUMA interleaving brings it to
+
+\sim
+8.6 tok/s—roughly a
+3\times
+improvement end-to-end on the decode
+path. A per-component decode profile shows that the routed experts account for
+only about a quarter of decode time (reducing top-
+k
+from 8 to 4 changes
+per-token latency from 116 to 103 ms); the remainder is the dense per-layer
+projections and the language-model head, read from host RAM. This is why pruning
+does not help decode and why lower-bit
+experts
+alone would not move it
+much.
+
+5.3
+Prefix reuse
+
+With the position-indexed snapshot cache, a request that shares a long prefix
+with a prior one resumes from the nearest snapshot instead of recomputing. On a
+repeated 1,871-token prompt, prefill drops from 78.4 s to 0.5 s and
+end-to-end latency from 86.5 s to 6.1 s. Reuse requires the shared prefix to
+reach a snapshot boundary; short prompts and certain multi-turn chat templates
+(which rewrite earlier turns) miss and fall back to a full pass, losslessly.
+
+5.4
+Correctness and multimodality
+
+Outputs are coherent and task-correct: on a small held-out exam-grading task the
+pruned 4-bit model reproduces the reference rubric score, and the W4A8 path is
+bit-stable against the scalar path on short generations (it diverges only on
+long greedy chains, as expected from accumulated low-bit activation error). The
+engine is also multimodal: we port a vision-transformer tower to
+sm_20
+for
+a 9B vision-language sibling model, reproducing the reference image embeddings to
+
+\sim
+4\times 10^{-4}
+per element and correctly distinguishing, e.g., a red
+circle from a blue square via image-embedding injection into the language model.
+
+5.5
+Negative results: the hardware floor
+
+A central finding is what
+does not
+work, because it locates the practical
+limit of the platform.
+
+•
+
+Offloading the LM head to the (idle) GPU is slower
+, not faster:
+
+116\to 139
+ms/token. Although the GPU is idle during decode, a per-token
+round trip over PCIe 2.0 plus a Fermi-speed GEMM costs more than the host
+integer kernel it replaces.
+
+•
+
+Hyper-threading is catastrophic.
+Using all 24 logical cores
+instead of 12 physical cores raises per-token latency from 116 to
+1,722 ms, as the busy-wait thread pool oversubscribes each physical core’s
+issue ports. Twelve threads (one per physical core) is optimal.
+
+•
+
+Three prefill-kernel rewrites do not help.
+Splitting the GDN
+recurrence across more blocks for occupancy is neutral; moving the recurrent
+state into shared memory is slightly slower (the larger shared-memory
+footprint reduces occupancy more than it saves on global traffic, because the
+Fermi caches already serve the per-head state well); and enlarging the GEMM
+
+K
+-tile is slightly slower. The MoE GEMM runs well below FP32 peak because it
+is a
+thin
+-
+M
+problem (
+\approx
+59 tokens per expert), and the GDN
+layer is an inherently sequential recurrence. Both are structural, not tuning,
+limits.
+
+Pushing prefill substantially below the reported
+-35\%
+would require
+algorithmic changes—a chunked/parallel scan for the recurrence, or a different
+MoE batching strategy—rather than kernel tuning. We also did not pursue
+multi-token (speculative) decoding: at batch size one on a sparse MoE, the
+expert-loading overhead makes it net-negative, consistent with reports for this
+class of model.
+
+6
+Related Work
+
+Our engine descends from
+llama2.c
+
+[
+9
+]
+and its CUDA
+port
+[
+11
+]
+, and adopts the 4-bit weight / 8-bit activation arithmetic
+of
+llama.cpp
+
+[
+10
+]
+, whose CPU-with-GPU-offload design is the
+closest in spirit to ours. The model follows the Qwen3 series
+[
+1
+]
+and
+its sparsely-gated MoE layers
+[
+4
+]
+; its linear-attention blocks are
+gated-delta-net layers
+[
+2
+]
+in the state-space/linear-attention
+line opened by Mamba
+[
+3
+]
+, and its softmax-attention blocks are
+computed with an online-softmax kernel in the FlashAttention
+style
+[
+8
+]
+. Weight-only 4-bit quantization follows the
+now-standard PTQ literature
+[
+6
+,
+7
+]
+, and expert pruning uses
+REAP
+[
+5
+]
+. Our contribution is not any of these techniques individually
+but their composition under an extreme hardware constraint, together with the
+recurrent-state prefix cache and the measured account of the platform’s floor.
+
+7
+Conclusion
+
+A 35B hybrid-attention MoE—a 2026-class frontier architecture—can be made to
+run, in 4-bit, with both text and vision, on a 6 GB GPU from 2011, by writing
+the entire engine by hand for an unsupported compute capability and splitting
+work between a streaming GPU prefill and an integer-SIMD CPU decode. Careful
+systems work (expert pinning, single-pass prefill, NUMA interleaving, a
+recurrent-state prefix cache) cuts prefill by about a third and triples decode,
+and an equally careful set of negative results shows where the silicon’s
+ceiling lies. Beyond the novelty, the exercise is a reminder that the
+assumptions baked into modern inference stacks—tensor cores, fast integer dot
+products, device memory that holds the model—are conveniences, not
+requirements, and that a surprising amount of contemporary capability is
+reachable on hardware that the software ecosystem abandoned long ago.
+
+Artifact and reproducibility
+
+The engine is a single CUDA/C source compiled with CUDA 8.0 for
+sm_20
+(in
+a container) plus a host decode object compiled with GCC under
+
+-march=westmere
+. All experiments run on one workstation; we report
+wall-clock latency and tokens/second directly, and avoid derived FLOP-efficiency
+figures that depend on undisclosed internal dimensions. No hostnames, addresses,
+or file paths are part of the artifact.
+

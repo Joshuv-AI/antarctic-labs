@@ -1,0 +1,2881 @@
+Training-Inference Kernel Contracts: Bounding Divergence in Post-Training and Deployment
+Bruce Changlong Xu, Lan Wu
+
+Abstract
+A modern post-training pipeline writes one symbol for its policy, π θ \pi_{\theta} , and evaluates it through two different programs: a training kernel running autograd with high-precision accumulators against fixed shapes, and an inference kernel that fuses low-precision operators behind a paged key–value cache and adapts attention tiles to the workload. In finite precision the two programs compute measurably different functions of the same weights, with the gap concentrated on slices that aggregate benchmarks under-represent. Off-policy bias in reinforcement-learning rollouts, slice-level regressions under FP8 deployment, calibration drift between fine-tuning and serving, and benchmark scores that fail to reproduce across hardware fleets are facets of this same gap. We formalize the gap as a missing index on π θ \pi_{\theta} and propose a small specification that names it: a kernel contract 𝒞 = ( 𝒩 , 𝒮 , ℛ , 𝒪 , Π ) \mathcal{C}=(\mathcal{N},\mathcal{S},\mathcal{R},\mathcal{O},\Pi) of numerical, statistical, runtime, and observability clauses with an escalation policy from violations to routing actions. We derive a chain of Lipschitz-style bounds connecting the four families: a single numerical clause on logit drift propagates through total-variation distance into a bound on any bounded reward, with explicit constants. Specialising the chain to RL post-training, we show that a per-token bound on the importance ratio w = π θ K train ​ ( y ∣ x ) / π θ K inf ​ ( y ∣ x ) w=\pi^{K_{\mathrm{train}}}_{\theta}(y\mid x)/\pi^{K_{\mathrm{inf}}}_{\theta}(y\mid x) bounds the bias of the standard policy-gradient estimator under explicit support and norm assumptions, and reinterprets PPO-style ratio clipping as a budget on the train–infer kernel pair rather than only on the policy update. A four-stage promotion pipeline (offline CI, shadow, canary, full) and an online routing loop enforce the contract once a model is deployed. A minimal YAML DSL with a sketched reference implementation ( Appendices A and C ) shows what a deployable artifact of this form looks like. This is a framework and vocabulary paper: we do not report empirical validation at production scale, and we do not claim that kernel divergence is the sole cause of the failure modes the framework addresses.
+
+
+
+1
+Introduction
+
+In a modern post-training pipeline, the symbol
+\pi_{\theta}
+denotes two different functions in finite precision. The training path evaluates
+\pi_{\theta}
+through a program built around autograd: high-precision accumulators, fixed-shape batches, reference attention, and an operator graph optimised for differentiability. The serving path evaluates it through fused low-precision kernels
+[
+15
+,
+5
+,
+14
+]
+, a paged key–value cache
+[
+13
+]
+, and attention tiles whose sizes depend on the workload
+[
+2
+,
+3
+,
+22
+]
+. The two programs share parameter tensors and almost nothing else, and the resulting numerical difference is not uniform across inputs: aggregate benchmarks can move within noise while a long-context slice or a safety-critical prompt class moves an order of magnitude more.
+
+Reinforcement-learning post-training exposes the same gap. Pipelines such as PPO
+[
+21
+,
+17
+]
+and GRPO
+[
+23
+]
+generate rollouts on an inference engine and apply gradients computed on a training engine; the standard estimator’s derivation treats the two as the same policy. The implied per-token importance ratio between rollout time and gradient time is assumed equal to one and is absorbed without flag when it is not, which biases the gradient in a way that does not appear in the training loss and surfaces only later as KL collapse, reward hacking, or sudden reward degradation. The documented fragility of large-scale RLHF to implementation detail
+[
+8
+,
+4
+,
+1
+,
+11
+]
+is consistent with this mechanism.
+
+The same conflation surfaces wherever the training and inference paths run different programs against the same weights: calibration schedules tuned with
+K_{\mathrm{train}}
+misfire on probabilities produced by
+K_{\mathrm{inf}}
+; benchmark scores diverge across hardware fleets whose unit tests all pass; red-team prompts that fail on one stack pass on the other. We treat them as facets of one specification gap: no pipeline says, in machine-readable form, what divergence between
+K_{\mathrm{train}}
+and
+K_{\mathrm{inf}}
+it is willing to tolerate, on which slices.
+
+This paper develops the object that specifies the gap. A
+kernel contract
+is a tuple
+\mathcal{C}=(\mathcal{N},\mathcal{S},\mathcal{R},\mathcal{O},\Pi)
+of numerical, statistical, runtime, and observability clauses with an escalation policy that maps violations to routing actions. The contract sits next to the model checkpoint and the kernel build, is versioned with them, and travels with the artifact through CI and into deployment. Bit-level equivalence is not the target; the inference kernel exists to trade low-level equivalence for throughput, and the trade is worth making. The target is to specify which equivalences are required, where, and what to do when they fail.
+
+Section
+
+2
+fixes notation and makes the kernel index on
+\pi_{\theta}
+explicit.
+Section
+
+3
+collects four failure modes whose shared structure motivates the framework.
+Section
+
+4
+introduces the contract formally.
+Section
+
+5
+derives the Lipschitz-style chain that turns a clause on logit drift into a clause on reward drift.
+Section
+
+6
+specialises the chain to RL post-training.
+Section
+
+7
+describes the four-stage promotion pipeline;
+Section
+
+8
+lays out an experimental protocol against which the framework’s predictions can be tested.
+
+Three contributions follow. (i)
+Conceptual
+: the right specifiable object in a modern LLM pipeline is the pair
+(K_{\mathrm{train}},K_{\mathrm{inf}})
+together with the slice scope on which they are required to agree, not the checkpoint or the engine alone. (ii)
+Technical
+: the chain of
+Section
+
+5
+lets contract authors specify at the level they can measure and inherit guarantees at the level they care about. (iii)
+Applied
+: under explicit support and norm assumptions (
+Section
+
+6
+), a per-token bound on the importance ratio bounds the policy-gradient bias of the standard estimator, and the PPO clipping range
+\epsilon
+acquires a second interpretation as a budget on the train–infer kernel pair.
+
+Scope.
+
+This paper proposes a framework and vocabulary. It does not claim that kernel divergence is the sole cause of the failure modes it discusses, does not report empirical validation at production scale, and does not provide a deployable open-source implementation.
+Section
+
+8
+lays out the protocol against which the framework’s predictions can be tested;
+Appendices
+
+A
+and
+C
+specify, in sketch form, what an implementation that consumes its declarative artifacts would look like.
+
+2
+Preliminaries
+
+The central notational move of this paper is to give
+\pi_{\theta}
+the index it has been missing. A
+kernel
+
+K
+is the concrete program that, given parameters
+\theta\in\mathbb{R}^{d}
+and input
+x\in\mathcal{X}
+, computes logits
+z^{K}_{\theta}(x)\in\mathbb{R}^{V}
+over a vocabulary of size
+V
+and, when used for optimisation, gradients
+\nabla_{\theta}\ell
+. The induced predictive distribution
+
+\pi^{K}_{\theta}(\cdot\mid x)\;=\;\mathrm{softmax}\!\bigl(z^{K}_{\theta}(x)/T\bigr)
+
+(1)
+
+at temperature
+T>0
+depends on
+K
+as well as
+\theta
+. Two kernels with the same
+\theta
+generally induce two different
+\pi^{K}_{\theta}
+, and that index is what the rest of the paper insists on carrying along.
+
+We specialise to two kernels.
+K_{\mathrm{train}}
+is the optimisation-time kernel (typically a PyTorch graph under FSDP with BF16 compute and FP32 accumulators, fixed batch shape, reference attention).
+K_{\mathrm{inf}}
+is the deployment-time kernel (typically vLLM
+[
+13
+]
+with a paged KV cache, FP8 or INT4 quantisation
+[
+15
+,
+5
+,
+14
+]
+, an attention variant such as FlashAttention-3
+[
+22
+]
+, and dynamic batching). Both operate on the same
+\theta
+; their relationship is what is unspecified. Let
+D_{\mathrm{eval}}
+be an evaluation distribution over
+\mathcal{X}
+, partitioned at serving time into slices
+\{S_{i}\}
+corresponding to product surfaces, length buckets, language groups, or safety categories.
+
+2.1
+Drift quantities
+
+The framework is parameterised by a small set of measurable disagreements between
+\pi^{K_{\mathrm{train}}}_{\theta}
+and
+\pi^{K_{\mathrm{inf}}}_{\theta}
+at fixed
+\theta
+. The
+logit drift
+is raw numerical disagreement,
+\Delta_{\mathrm{logit}}(x)=\lVert z^{K_{\mathrm{train}}}_{\theta}(x)-z^{K_{\mathrm{inf}}}_{\theta}(x)\rVert_{2}
+. The
+distributional drifts
+translate that into policy disagreement,
+
+\Delta_{\mathrm{KL}}(x)\;=\;\mathrm{KL}\!\bigl(\pi^{K_{\mathrm{train}}}_{\theta}(\cdot\mid x)\,\|\,\pi^{K_{\mathrm{inf}}}_{\theta}(\cdot\mid x)\bigr),\qquad\Delta_{\mathrm{TV}}(x)\;=\;\tfrac{1}{2}\sum_{v\in\mathcal{V}}\!\bigl|\pi^{K_{\mathrm{train}}}_{\theta}(v\mid x)-\pi^{K_{\mathrm{inf}}}_{\theta}(v\mid x)\bigr|.
+
+(2)
+
+The
+top-
+k
+agreement
+captures the often more directly observable rank-level behaviour,
+
+A_{\mathrm{top}k}(x)\;=\;\frac{\bigl|\mathrm{TopK}_{k}(z^{K_{\mathrm{train}}}_{\theta}(x))\cap\mathrm{TopK}_{k}(z^{K_{\mathrm{inf}}}_{\theta}(x))\bigr|}{k}.
+
+(3)
+
+The
+calibration gap
+
+\Delta_{\mathrm{ECE}}=|\mathrm{ECE}(\pi^{K_{\mathrm{train}}}_{\theta};D_{\mathrm{eval}})-\mathrm{ECE}(\pi^{K_{\mathrm{inf}}}_{\theta};D_{\mathrm{eval}})|
+compares the two induced predictors with
+\mathrm{ECE}
+as in
+[
+7
+]
+. The
+reward drift
+closes the loop with downstream objectives: for a reward
+r
+,
+
+\Delta_{r}\;=\;\mathbb{E}_{x\sim D_{\mathrm{eval}},\,y\sim\pi^{K_{\mathrm{train}}}_{\theta}(\cdot\mid x)}[r(x,y)]\;-\;\mathbb{E}_{x\sim D_{\mathrm{eval}},\,y\sim\pi^{K_{\mathrm{inf}}}_{\theta}(\cdot\mid x)}[r(x,y)].
+
+(4)
+
+The
+runtime drift
+captures operational deltas (latency, throughput, memory, failure rate) measured under live serving conditions rather than micro-benchmarks.
+Section
+
+5
+chains
+\Delta_{\mathrm{logit}}\to\Delta_{\mathrm{TV}}\to\Delta_{r}
+, so a clause on the first transitively controls the third.
+
+2.2
+Contracted convergence and violation levels
+
+A contract
+\mathcal{C}
+is a structured collection of clauses, each constraining one of these drift quantities on a designated slice. Convergence is defined relative to
+\mathcal{C}
+rather than to any single scalar.
+
+Definition 1
+
+(Contracted convergence)
+.
+
+Let
+\mathcal{C}
+have hard-clause set
+\mathcal{H}
+and soft-clause set
+\mathcal{S}
+with exceedance budgets
+\{\rho_{i}\}_{i\in\mathcal{S}}
+. The pair
+(K_{\mathrm{train}},K_{\mathrm{inf}})
+is
+\mathcal{C}
+-convergent on
+D_{\mathrm{eval}}
+if every
+h\in\mathcal{H}
+holds on every slice it applies to, and every
+s\in\mathcal{S}
+satisfies
+\Pr_{x\sim D_{\mathrm{eval}}}[m_{s}(x)>\tau_{s}]\leq\rho_{s}
+.
+
+The definition gives a contract-relative, slice-aware, behaviour-tied answer to the implicit question of when an inference build is
+equivalent
+to a training build for the purpose of shipping a model. Each violation is then assigned one of three severity levels:
+L1
+(informational) is logged;
+L2
+(quality-impacting) triggers a guarded route or promotion freeze;
+L3
+(safety- or correctness-critical) triggers immediate fallback to a known-good kernel. The three-level vocabulary is the minimum required to turn telemetry into action;
+Sections
+
+4
+and
+7
+embed it inside the full specification and serving pipeline.
+
+3
+Where the gap matters
+
+The four cases below are facets of the same conflation, each in a different sub-area. Each maps to a clause family introduced in
+Section
+
+4
+.
+
+3.1
+Off-policy bias in RL post-training
+
+Policy-gradient methods such as PPO
+[
+21
+]
+and GRPO
+[
+23
+]
+sample actions from the current policy and update with respect to that same policy,
+
+\nabla_{\theta}J(\theta)\;=\;\mathbb{E}_{x\sim D,\,y\sim\pi_{\theta}(\cdot\mid x)}\!\bigl[\nabla_{\theta}\log\pi_{\theta}(y\mid x)\,A(x,y)\bigr].
+
+(5)
+
+In modern pipelines, sampling and updating use different kernels: rollouts come from an inference engine (vLLM, SGLang, TensorRT-LLM) chosen for throughput, and gradients from a training engine (FSDP, Megatron, DeepSpeed) chosen for differentiability. At identical
+\theta
+they do not induce the same policy; paged attention, FP8 conversions, kernel fusion, and tile-size routing each perturb the logits. What the pipeline actually computes is
+
+\widehat{\nabla_{\theta}J(\theta)}\;=\;\mathbb{E}_{x\sim D,\,y\sim\pi^{K_{\mathrm{inf}}}_{\theta}(\cdot\mid x)}\!\bigl[\nabla_{\theta}\log\pi^{K_{\mathrm{train}}}_{\theta}(y\mid x)\,A(x,y)\bigr],
+
+(6)
+
+which differs from the on-policy gradient by an importance ratio the standard estimator assumes equal to one:
+
+w(x,y)\;=\;\frac{\pi^{K_{\mathrm{train}}}_{\theta}(y\mid x)}{\pi^{K_{\mathrm{inf}}}_{\theta}(y\mid x)}.
+
+(7)
+
+The bias accumulates across millions of rollout tokens, surfacing as training instability, KL collapse, or reward hacking. The symptom looks algorithmic; the cause is the unindexed
+\pi_{\theta}
+at the engine interface.
+Section
+
+6
+shows that a per-token bound of the form
+\mathbb{E}[w\log w]\leq\epsilon
+bounds the resulting gradient bias.
+
+3.2
+FP8 deployment of a BF16-trained model
+
+Casting a BF16-trained model to FP8 at deployment is routine
+[
+15
+]
+. The choice of FP8 format (E4M3 vs E5M2), per-tensor vs per-channel scaling, and cast placement inside fused operators each shift the output distribution. A model within noise of its BF16 reference on aggregate benchmarks can still drift on rare safety prompts (refusal flips), on structured outputs (JSON parseability, tool-call schemas), and on long-context tasks where per-step errors accumulate. The cast does not change
+\theta
+but it changes the kernel that evaluates
+\theta
+, and the deployed function differs from the one the eval was run on. Slice-aware clauses in
+\mathcal{N}
+and
+\mathcal{S}
+make the difference visible.
+
+3.3
+Attention kernel substitution
+
+The FlashAttention family
+[
+2
+,
+3
+,
+22
+]
+is mathematically equivalent to standard scaled dot-product attention in exact arithmetic, but variants differ in summation order, tile sizes, and accumulator precision. In finite precision the resulting logits disagree by amounts small in
+\ell_{2}
+norm but capable of flipping the top-1 token at low-margin steps. In autoregressive generation a single flipped token alters the conditioning for every subsequent step, so a small numerical disagreement compounds into a large behavioural one. The framework treats this as a numerical clause whose threshold is set by the margin distribution on the relevant slices.
+
+3.4
+Heterogeneous serving fleets
+
+A deployed model is served by a fleet of heterogeneous accelerators (H100, MI300X, B200) with slightly different kernel builds. Two replicas can return different outputs for the same request, and the replica is chosen by routing and capacity rather than request content. Without a contract over cross-kernel agreement, A/B tests, evaluations, and safety audits become non-reproducible in ways difficult to attribute. The fleet is effectively serving from a family
+\{\pi^{K_{1}}_{\theta},\dots,\pi^{K_{m}}_{\theta}\}
+while reporting metrics as if from a single
+\pi_{\theta}
+. A contract makes the equivalence class of acceptable kernels explicit so that routing is a certified action.
+
+Common pattern.
+
+In each case a single notational object
+\pi_{\theta}
+papers over a kernel-indexed family
+\{\pi^{K}_{\theta}\}_{K}
+whose members, in finite precision, compute different functions of the same weights. The phenomenon each case names is the family viewed from a different angle; the rest of the paper develops one specification that addresses all four.
+
+4
+The kernel contract
+
+The cases of
+Section
+
+3
+share a missing piece: an explicit specification of acceptable train–infer divergence and the operational response to its violation. A
+kernel contract
+is a tuple
+
+\mathcal{C}\;=\;(\mathcal{N},\mathcal{S},\mathcal{R},\mathcal{O},\Pi),
+
+(8)
+
+with
+\mathcal{N},\mathcal{S},\mathcal{R},\mathcal{O}
+clause sets covering numerical, statistical, runtime, and observability properties of
+(K_{\mathrm{train}},K_{\mathrm{inf}})
+and
+\Pi
+the escalation policy mapping violations to routing actions. Each clause is a record
+
+\gamma\;=\;\bigl(\,\mathrm{id},\;m,\;\tau,\;\Sigma,\;\rho,\;\lambda,\;\pi\,\bigr),
+
+(9)
+
+with
+\mathrm{id}
+a stable identifier,
+m
+a drift metric from
+Section
+
+2
+,
+\tau
+its threshold,
+\Sigma\subseteq\{S_{i}\}
+the slices it applies to,
+\rho\in[0,1]
+the allowed exceedance rate (
+\rho=0
+marks the clause hard),
+\lambda\in\{\mathrm{L1,L2,L3}\}
+its violation level, and
+\pi
+the remediation drawn from
+\Pi
+. Every clause must be reproducible from logged inputs and traces alone: a clause that cannot be re-evaluated post hoc on the same request cannot underwrite a deployment decision.
+
+4.1
+The four families
+
+The four-family split corresponds to the four axes along which one program can differ from another while both execute the same weights: type level (what each program computes), behavioural level (how the induced distributions act under realistic decoding), environmental level (how the program behaves under real batch shapes, concurrency, and capacity), and epistemic level (what the program must reveal about itself so the other three remain checkable). Drop any one and the framework loses an axis large-scale deployments are already paying for.
+
+Numerical
+(
+\mathcal{N}
+) owns percentile bounds on
+\Delta_{\mathrm{logit}}
+,
+\Delta_{\mathrm{KL}}
+,
+\Delta_{\mathrm{TV}}
+; bounds on
+\mathbb{E}[w\log w]
+for the RL importance ratio of
+Section
+
+3.1
+; and deterministic-replay equivalence on a controlled input subset. It catches failure modes originating in low-level numerics (FP8 casts, attention-tile changes, kernel substitution).
+Statistical
+(
+\mathcal{S}
+) owns top-
+k
+agreement on critical slices, calibration drift
+\Delta_{\mathrm{ECE}}
+, reward and refusal-rate deltas within
+\Delta_{r}
+, and structured-output parseability gaps—failure modes invisible at the logit level but visible after sampling.
+Runtime
+(
+\mathcal{R}
+) owns latency percentiles, throughput floors, memory ceilings (including the KV cache), failure-rate ceilings, and a determinism window—identical inputs in the same shard must produce identical outputs within tolerance
+\delta
+.
+Observability
+(
+\mathcal{O}
+) owns required trace fields, replay signatures, kernel fingerprints, and event schemas; a contract without it is unenforceable, since unattributable violations are operationally indistinguishable from no violation.
+
+4.2
+Hard and soft clauses, escalation, and promotion
+
+A clause with
+\rho=0
+is
+hard
+: any observed violation blocks promotion. A clause with
+\rho>0
+is
+soft
+: violations are admissible at rate at most
+\rho
+. The split mirrors the SRE distinction between objectives we spend budget against and invariants we do not—refusal-rate drift on safety slices is usually hard, p95 latency under load is usually soft.
+
+The escalation policy maps clause violations to runtime actions, in its minimal form
+
+\Pi:\{\mathrm{L1,L2,L3}\}\;\longrightarrow\;\{\,\text{log},\;\text{guard},\;\text{fallback}\,\}.
+
+(10)
+
+A richer policy parameterises guard and fallback by the violating clause family, so a numerical L2 routes to a higher-precision kernel, a statistical L2 routes to a different decoding strategy, and an observability L3 triggers an immediate rollback regardless of measured drift.
+
+A candidate pair
+(\theta,K_{\mathrm{inf}}^{\prime})
+replaces incumbent
+(\theta,K_{\mathrm{inf}})
+only if it is
+\mathcal{C}
+-convergent on
+D_{\mathrm{eval}}
+in the sense of
+Definition
+
+1
+. The same test applies uniformly whether the change is a weight update, a kernel build update, or a hardware-fleet rebalance, so a team shipping a new model and a team shipping a new kernel use the same noun.
+
+4.3
+Contracts as versioned artifacts
+
+A contract is itself a versioned artifact that travels with both checkpoints and kernel builds. The artifact register stores
+(\theta\text{-hash},K_{\mathrm{inf}}\text{-hash},\mathcal{C}\text{-hash})
+triples, and every promotion records the triple it was evaluated against. This makes deployment decisions auditable and lets post-incident analysis distinguish a contract that was too loose from a kernel build that regressed from a model update that interacted badly with an existing contract—three failure modes with three different fixes.
+
+5
+What the contract bounds
+
+This section is the algebra behind the vocabulary of
+Section
+
+4
+: a decomposition of the kernel error and a chain of Lipschitz-style bounds connecting the lowest-level numerical clause to the highest-level reward clause. The chain justifies authoring at the numerical layer: a single threshold on
+\Delta_{\mathrm{logit}}
+propagates, with explicit constants, into a guarantee on any bounded downstream reward.
+
+5.1
+Additive decomposition
+
+For input
+x
+, define the kernel error
+
+\varepsilon(x)\;=\;z^{K_{\mathrm{inf}}}_{\theta}(x)-z^{K_{\mathrm{train}}}_{\theta}(x)\;\in\;\mathbb{R}^{V},
+
+(11)
+
+and decompose along the principal sources of
+Section
+
+3
+,
+
+\varepsilon(x)\;=\;\varepsilon_{\mathrm{approx}}(x)+\varepsilon_{\mathrm{quant}}(x)+\varepsilon_{\mathrm{sched}}(x)+\varepsilon_{\mathrm{route}}(x),
+
+(12)
+
+where
+\varepsilon_{\mathrm{approx}}
+collects operator approximation and fusion (FlashAttention tile size, softmax fusion, RoPE implementation),
+\varepsilon_{\mathrm{quant}}
+collects precision and quantisation (BF16 vs FP8, INT4 weight quantisation),
+\varepsilon_{\mathrm{sched}}
+collects batch-shape and scheduler effects (paged KV cache, dynamic batching, packing), and
+\varepsilon_{\mathrm{route}}
+collects routing among kernel variants (FA2 vs FA3, fallback paths). The decomposition is not unique; its value is operational: each term maps to a clause family and an owning subsystem.
+
+5.2
+From logit drift to reward drift
+
+The softmax is
+1/T
+-Lipschitz in the
+\ell_{\infty}
+sense, and a standard cumulant-generating-function argument yields a clean bound.
+
+Lemma 1
+
+(Logit-to-distribution drift)
+.
+
+Let
+p=\mathrm{softmax}(z/T)
+and
+q=\mathrm{softmax}((z+\varepsilon)/T)
+over a vocabulary of size
+V
+. Then
+
+\Delta_{\mathrm{TV}}(x)\;\leq\;\frac{\lVert\varepsilon\rVert_{\infty}}{T},\qquad\Delta_{\mathrm{KL}}(x)\;\leq\;\frac{\lVert\varepsilon\rVert_{\infty}^{2}}{2T^{2}}+O\!\bigl(\lVert\varepsilon\rVert_{\infty}^{3}/T^{3}\bigr).
+
+(13)
+
+For a bounded reward
+r:\mathcal{X}\times\mathcal{Y}\to[-R,R]
+, total variation controls expected-reward difference.
+
+Proposition 1
+
+(Reward drift bound)
+.
+
+For each
+x
+,
+\bigl|\mathbb{E}_{y\sim\pi^{K_{\mathrm{train}}}_{\theta}(\cdot\mid x)}[r(x,y)]-\mathbb{E}_{y\sim\pi^{K_{\mathrm{inf}}}_{\theta}(\cdot\mid x)}[r(x,y)]\bigr|\leq 2R\cdot\Delta_{\mathrm{TV}}(x).
+
+Proofs and tighter constants are in
+Sections
+
+B.1
+and
+B.2
+. Composing yields
+
+\lVert\varepsilon\rVert_{\infty}\to\Delta_{\mathrm{TV}}\to\Delta_{r}
+:
+a clause at the bottom of the chain implies a guarantee at the top, so contract authoring can begin at the level closest to the hardware and inherit guarantees at the level closest to the user.
+
+5.3
+Per-source bounds and sliced attribution
+
+The decomposition of
+Equation
+
+12
+admits per-source bounds for clause authoring rather than tight numerical analysis. Symmetric per-tensor FP8 quantisation with scale
+s
+contributes
+\lVert\varepsilon_{\mathrm{quant}}\rVert_{\infty}\leq\tfrac{s}{2}\,u_{\mathrm{fp8}}
+
+[
+15
+]
+; attention with
+L
+layers and per-head Lipschitz constant
+L_{h}
+contributes drift bounded by
+L\cdot L_{h}\cdot\lVert\varepsilon_{h}\rVert
+
+[
+2
+,
+22
+]
+; batch-shape effects scale with the maximum number of accumulation chunks that differ between
+K_{\mathrm{train}}
+and
+K_{\mathrm{inf}}
+. These bounds are loose by design: they give a defensible upper envelope for proposing a threshold. Combined with slice-aware clauses, they support attribution: when slice
+S_{i}
+shows an L2 violation, the operator asks which of
+\varepsilon_{\mathrm{approx}},\varepsilon_{\mathrm{quant}},\varepsilon_{\mathrm{sched}},\varepsilon_{\mathrm{route}}
+could, under its known bound, suffice to explain the violation, producing a short candidate list confirmable by targeted ablations.
+Section
+
+6
+uses this chain to bound the policy-gradient bias of
+Section
+
+3.1
+.
+
+6
+Application: RL post-training
+
+The chain of
+Section
+
+5
+specialises sharply to reinforcement-learning post-training, where the conflation of
+\pi^{K_{\mathrm{train}}}_{\theta}
+and
+\pi^{K_{\mathrm{inf}}}_{\theta}
+becomes an estimator bias rather than a quality drift. The same kernel mismatch that costs a few benchmark points in supervised deployment biases the policy-gradient signal that is supposed to steer the model away from those losses. This section makes the bias explicit, bounds it under stated assumptions, and reads the standard literature through the resulting lens.
+
+6.1
+Assumptions and scope
+
+Throughout this section we work at the
+per-token
+level. Let
+x
+be a prompt-and-history context and
+y\in\mathcal{V}
+the next token. The behaviour and target policies are the next-token distributions
+\pi_{b}(\cdot\mid x)=\pi^{K_{\mathrm{inf}}}_{\theta}(\cdot\mid x)
+and
+\pi_{t}(\cdot\mid x)=\pi^{K_{\mathrm{train}}}_{\theta}(\cdot\mid x)
+, and the importance ratio
+w(x,y)=\pi_{t}(y\mid x)/\pi_{b}(y\mid x)
+is the per-token ratio that appears inside PPO-style updates. Trajectory-level ratios are products of
+T
+per-token ratios whose variance grows multiplicatively in
+T
+; the bounds below do not control the trajectory ratio directly, and any pipeline that sums per-token gradients along long rollouts inherits the standard variance-vs-bias trade-off of token-level importance correction.
+
+We further assume: (A1)
+support overlap
+,
+\pi_{b}(y\mid x)>0
+whenever
+\pi_{t}(y\mid x)>0
+on the support of the rollout distribution; (A2)
+bounded advantage
+,
+|A(x,y)|\leq A_{\max}
+; (A3)
+bounded score norm
+,
+\lVert\nabla_{\theta}\log\pi_{t}(y\mid x)\rVert_{2}\leq G
+for all
+(x,y)
+in that support. (A1) is the usual prerequisite for importance correction; (A2) holds for any rewards clipped or normalised in standard RLHF pipelines; (A3) is conservative and can be tightened under standard concentration assumptions on the score (
+Section
+
+B.3
+).
+
+6.2
+Gradient bias under kernel mismatch
+
+The unbiased importance-weighted estimator is
+
+g^{\star}(\theta)\;=\;\mathbb{E}_{x\sim D,\,y\sim\pi_{b}(\cdot\mid x)}\!\bigl[w(x,y)\,\nabla_{\theta}\log\pi_{t}(y\mid x)\,A(x,y)\bigr].
+
+(14)
+
+The estimator implemented in most contemporary pipelines silently sets
+w=1
+:
+
+\hat{g}(\theta)\;=\;\mathbb{E}_{x\sim D,\,y\sim\pi_{b}(\cdot\mid x)}\!\bigl[\nabla_{\theta}\log\pi_{t}(y\mid x)\,A(x,y)\bigr].
+
+(15)
+
+This substitution is rarely written down: it is implicit in any code path that calls into the inference engine for sampling and into the training engine for
+\nabla_{\theta}\log\pi
+, and trusts the two to agree. The bias
+b(\theta)=\hat{g}(\theta)-g^{\star}(\theta)
+is controlled by how far
+w
+is from one, and through it by the total-variation distance between
+\pi_{t}
+and
+\pi_{b}
+, which the chain of
+Section
+
+5
+ties back to logit drift.
+
+Proposition 2
+
+(Per-token policy-gradient bias from kernel mismatch)
+.
+
+Under
+(A1)–(A3)
+of
+Section
+
+6.1
+,
+
+\lVert b(\theta)\rVert_{2}\;\leq\;A_{\max}\,G\cdot\mathbb{E}_{x\sim D}\!\bigl[\,\lVert\pi_{t}(\cdot\mid x)-\pi_{b}(\cdot\mid x)\rVert_{1}\,\bigr]\;=\;2A_{\max}\,G\cdot\mathbb{E}_{x}\!\bigl[\Delta_{\mathrm{TV}}(x)\bigr].
+
+(16)
+
+The proof is in
+Section
+
+B.3
+. Composing with
+Lemma
+
+1
+closes the chain: a numerical clause on
+\Delta_{\mathrm{logit}}
+bounds the per-token RL gradient bias. The conflation that appears as a 0.04 reward gap in supervised deployment appears in RL as a biased update direction that, in the worst case, determines whether the run converges to the intended objective or to something else.
+
+6.3
+A contract-aware correction
+
+Proposition
+
+2
+suggests a constructive remedy. The bias vanishes when the importance weight is restored, at the cost of one extra forward pass per rollout in
+K_{\mathrm{train}}
+to compute
+\log\pi_{t}(y\mid x)
+exactly. The resulting estimator
+
+\tilde{g}(\theta)\;=\;\mathbb{E}_{x,\,y}\!\bigl[\mathrm{clip}\!\bigl(w(x,y),\,1-c,\,1+c\bigr)\,\nabla_{\theta}\log\pi_{t}(y\mid x)\,A(x,y)\bigr]
+
+(17)
+
+trades clip width
+c
+against bias. With
+c=0
+it enforces strict policy equivalence at the price of higher rollout cost; with large
+c
+it admits more bias and tolerates looser kernel agreement. PPO-style ratio clipping
+[
+21
+]
+corresponds to
+c=\epsilon
+with
+\epsilon\in[0.1,0.3]
+, and the contract framing extends its interpretation. The PPO
+\epsilon
+has been taught for a decade as a trust-region width on the policy update; read through the contract, it is
+also
+a budget on the train–infer kernel pair. A pipeline whose kernels disagree by more than
+\epsilon
+in per-token importance ratio may, under the assumptions above, be applying trust-region machinery to an already biased gradient estimate.
+
+6.4
+Stability clauses for RL pipelines
+
+Recasting standard RL stability heuristics as contract clauses gives them auditable semantics and ties them directly to
+Proposition
+
+2
+.
+
+•
+
+N-RLHF-1.
+
+\Pr_{x}\!\bigl[\mathbb{E}_{y\sim\pi_{b}}\,|\log w(x,y)|>\tau_{w}\bigr]\leq\rho_{w}
+on a fresh rollout sample.
+
+•
+
+N-RLHF-2.
+
+\mathbb{E}[w\log w]\leq\epsilon_{\mathrm{KL}}
+, a one-sided KL surrogate aligned with
+Proposition
+
+2
+.
+
+•
+
+S-RLHF-1.
+Reward and KL-to-reference trajectories under
+K_{\mathrm{inf}}
+rollouts match those under a
+K_{\mathrm{train}}
+audit rollout within
+\Delta_{r}
+on critical slices.
+
+•
+
+R-RLHF-1.
+Rollout throughput remains above
+T_{\min}
+tokens per second at the contracted KV-cache memory budget.
+
+Under (A1)–(A3), a pipeline that respects N-RLHF-1 and N-RLHF-2 has a per-token gradient bias bounded by the corresponding
+\tau_{w}
+and
+\epsilon_{\mathrm{KL}}
+, regardless of which inference engine produced its rollouts. A pipeline that violates them is operating in a regime where reported reward improvements may be artifacts of gradient bias rather than genuine learning.
+
+6.5
+Reading the RL literature through this lens
+
+Two persistent observations in the RL literature become legible through the contract framing. The first is the documented fragility of large-scale RLHF to implementation detail
+[
+8
+,
+4
+,
+1
+]
+: reward hacking, KL collapse, sudden drops in eval scores. Much of this catalogue is consistent with silent violation of N-RLHF-2 as the policy drifts away from the inference engine’s calibrated regime, and the standard remedies (smaller batches, lower learning rates, more frequent reference resets) all reduce the magnitude of
+\mathbb{E}[w\log w]
+without naming what they are doing. The second is that organisations who pin their RL stack to a single kernel build often report stable training: they are operating inside an implicit contract they happen to satisfy. Writing the contract down is what separates a working recipe from a transferable engineering practice, and it is what makes the next kernel migration auditable rather than terrifying.
+
+With the contract defined, its guarantees established, and its scope made explicit, the remaining question is operational.
+Section
+
+7
+describes how a pipeline evaluates and enforces a contract once a model is deployed.
+
+7
+Enforcement
+
+A contract that nothing checks is a document, not an interface. The four families have different evaluation needs:
+\mathcal{N}
+checks offline because it does not depend on traffic;
+\mathcal{S}
+needs representative traffic because behaviour depends on what is sampled;
+\mathcal{R}
+requires live serving conditions because micro-benchmarks do not predict tail behaviour under contention;
+\mathcal{O}
+is the precondition that makes the other three checkable. A four-stage promotion pipeline allocates each family to its venue, and an online routing loop converts continuous measurements into actions.
+
+7.1
+Four-stage promotion
+
+Every change under review—weight update, kernel build, routing change, hardware rebalance—traverses the same four stages.
+Offline CI:
+all hard
+\mathcal{N}
+clauses and a deterministic subset of
+\mathcal{S}
+,
+\mathcal{R}
+,
+\mathcal{O}
+are evaluated against a fixed evaluation set with pinned slice definitions; any hard violation blocks promotion and returns the candidate with a named clause and per-slice breakdown.
+Shadow:
+a fraction of live traffic is mirrored through the candidate
+K_{\mathrm{inf}}
+without exposing its responses to users, catching workload-dependent regressions the fixed eval set under-represents.
+Canary:
+a small live traffic fraction
+\alpha\in(0,\alpha_{\max}]
+is routed to the candidate with
+\Pi
+active; L2 triggers guarded routing, L3 triggers rollback.
+Full promotion
+occurs only after sustained compliance over a stability window of duration
+W
+at the canary fraction, catching slow-onset regressions (for example, KV-cache fragmentation that takes hours to surface). The four stages catch four different failure classes; skipping any leaves that class unmonitored.
+
+7.2
+Online monitoring and routing
+
+At serving time, contract health is summarised by a scalar
+
+h_{t}\;=\;1-\max_{i\in\mathcal{H}\cup\mathcal{S}}\,\mathrm{normalize}\bigl(m_{i}(\cdot)_{[t-w,t]},\,\tau_{i}\bigr),
+
+(18)
+
+where
+\mathrm{normalize}
+maps the recent measurement window for clause
+i
+to a non-negative deviation from threshold. The runtime routing policy selects from
+\Pi
+according to
+
+\pi_{t}\;=\;\begin{cases}\pi_{\mathrm{primary}}&\text{if }h_{t}\geq\eta_{2},\\[1.00006pt]
+\pi_{\mathrm{guarded}}&\text{if }\eta_{3}\leq h_{t}<\eta_{2},\\[1.00006pt]
+\pi_{\mathrm{safe}}&\text{if }h_{t}<\eta_{3},\end{cases}
+
+(19)
+
+with
+\eta_{2}>\eta_{3}
+tuned so
+\pi_{\mathrm{guarded}}
+activates on L2 events and
+\pi_{\mathrm{safe}}
+on L3 events.
+Algorithm
+
+1
+sketches the complete loop.
+
+Algorithm 1
+
+Contract-driven promotion and online routing
+
+1:
+
+Contract
+\mathcal{C}=(\mathcal{N},\mathcal{S},\mathcal{R},\mathcal{O},\Pi)
+, candidate
+(\theta^{\prime},K^{\prime})
+, incumbent
+(\theta,K)
+
+2:
+
+Offline:
+for each
+h\in\mathcal{H}
+, evaluate
+h
+on
+(\theta^{\prime},K^{\prime})
+; abort if any fails
+
+3:
+
+Shadow:
+for window
+W_{s}
+, mirror traffic and log
+\{m_{i}\}
+for clauses in
+\mathcal{N}\cup\mathcal{S}
+; abort on L2/L3
+
+4:
+
+Canary:
+route fraction
+\alpha
+of traffic to
+(\theta^{\prime},K^{\prime})
+
+5:
+
+for
+each request
+x
+during canary
+do
+
+6:
+
+Serve from
+(\theta^{\prime},K^{\prime})
+with probability
+\alpha
+, else from
+(\theta,K)
+
+7:
+
+Update health
+h_{t}
+from logged metrics
+
+8:
+
+Apply routing
+\pi_{t}
+per the escalation policy
+
+9:
+
+end
+
+for
+
+10:
+
+if
+
+h_{t}\geq\eta_{2}
+holds over a stability window
+W
+at fraction
+\alpha_{\max}
+
+then
+
+11:
+
+Promote
+(\theta^{\prime},K^{\prime})
+
+12:
+
+else
+
+13:
+
+Roll back to
+(\theta,K)
+and record the failing clause for postmortem
+
+14:
+
+end
+
+if
+
+7.3
+Observability and continuous re-evaluation
+
+Observability is what makes the rest auditable. Kernels emit build fingerprints (compiler version, FA variant, quantisation configuration, hardware target), per-request shape, RNG seed, sampling parameters, and replay signatures hashing intermediate tensors at audit points. Given those artifacts, any flagged request can be replayed under both
+K_{\mathrm{train}}
+and
+K_{\mathrm{inf}}
+and the per-source decomposition of
+Section
+
+5
+attributed to a specific subsystem. Pre-deployment validation is necessary but not sufficient: hardware drivers, kernel libraries, and traffic distributions all evolve, so a subset of
+\mathcal{C}
+is re-evaluated continuously in shadow against live traffic, and any change to
+\mathcal{C}
+itself traverses the same four-stage path as a code change.
+
+8
+Experimental protocol
+
+A framework that cannot be tested is a framework that cannot be wrong. The five families below each make a falsifiable prediction. E1 tests the assumptions of
+Section
+
+5
+; E2 stresses them across hardware and shape; E3 tests the central RL bound of
+Proposition
+
+2
+and its corrective clause; E4 and E5 test two of the directions of
+Section
+
+9
+.
+
+8.1
+E1. Numerical drift baseline
+
+Goal.
+Map the unconditional distribution of
+\Delta_{\mathrm{logit}}
+,
+\Delta_{\mathrm{KL}}
+, and
+A_{\mathrm{top}k}
+between
+K_{\mathrm{train}}
+and
+K_{\mathrm{inf}}
+on a fixed corpus, with slice-level concentration.
+Setup.
+Identical
+\theta
+, deterministic sampling, pinned seeds, fixed batch shape; vary one perturbation at a time across precision, attention kernel, and quantisation.
+Reporting.
+Per-slice histograms and (p50, p95, p99) of each metric; cumulative top-1 and top-5 disagreement curves. The framework is falsified if the marginal distribution of
+\Delta_{\mathrm{logit}}
+on any user-facing slice is uncontrolled by any combination of perturbations.
+
+8.2
+E2. Hardware and shape sensitivity
+
+How does clause pass-rate degrade as hardware, batch size, and sequence length vary at fixed
+\theta
+and fixed
+K_{\mathrm{inf}}
+source build? Hold
+(\theta,K_{\mathrm{inf}}\text{-build})
+fixed and sweep over device family, batch size, sequence length, and concurrency. Report pass-rate heatmaps over (slice
+\times
+regime); cells that narrowly pass or fail are the most important, because they predict where the contract will fail next. Output: slice-scope refinements for
+\Sigma
+and routing rules for
+\Pi
+.
+
+8.3
+E3. RL post-training stability
+
+Does the bound of
+Proposition
+
+2
+hold empirically, and what does the importance-correction clause N-RLHF-2 buy at the cost of an extra forward pass per rollout? Run identical PPO and GRPO recipes
+[
+21
+,
+23
+]
+under three rollout configurations: (a) on-policy with
+K_{\mathrm{inf}}=K_{\mathrm{train}}
+; (b) standard inference-engine rollouts with no correction; (c) inference-engine rollouts with the contract-aware correction of
+Section
+
+6
+. Track learning curves, KL-to-reference, win-rates against a held-out reward model, and
+\mathbb{E}[w\log w]
+. For each failure case (KL collapse, reward hacking, sudden eval drop) identify the clause whose violation preceded it. The bound is falsified if (b) and (c) differ by less than the noise floor on the trajectories the bound predicts will differ most.
+
+8.4
+E4. Contract-aware distillation
+
+Can a distillation objective that includes contract penalties produce students with measurably better compliance at neutral or improved task quality? Distil a fixed teacher with
+
+\mathcal{L}=\mathcal{L}_{\mathrm{task}}+\lambda_{\mathrm{KD}}\,\mathcal{L}_{\mathrm{KD}}+\lambda_{\mathcal{C}}\,\mathcal{L}_{\mathcal{C}}
+,
+varying
+\lambda_{\mathcal{C}}\in\{0,0.1,1.0\}
+. Report Pareto frontiers of task quality against clause pass-rate, plus latency, memory, and per-clause sensitivity. The direction claim is falsified if the frontier shifts the wrong way for any
+\lambda_{\mathcal{C}}>0
+.
+
+8.5
+E5. Self-healing routing under fault injection
+
+What does contract-aware routing buy over a fixed-kernel baseline under controlled perturbations? Inject synthetic faults (kernel-build regressions, increased quantisation error, hardware degradation) and compare a fixed-kernel deployment against the routing policy of
+Section
+
+7
+. Report MTTR, failed-request fraction, quality preservation during incidents, and false-positive route-switch rate. A policy that recovers faster at a higher false-positive rate is not obviously better; the trade-off is the result.
+
+8.6
+A common reporting template
+
+Across all five we report baseline and candidate clause pass-rates per slice, task-quality and reward deltas with confidence intervals, runtime cost deltas, incident metrics (detection lag, rollback success, MTTR), and the contract version evaluated against. A reference implementation following
+Appendix
+
+C
+can produce all of these artifacts from a single contract file, so reports across experiments and teams remain comparable.
+
+9
+Open questions and research directions
+
+The framework is deliberately the smallest object that specifies the gap of
+Section
+
+1
+: four clause families, three violation levels, a four-stage pipeline, and a chain of bounds. Real deployments press on it in four predictable ways, ordered here as a deployed system encounters them: specifying contracts that adapt to context (§
+9.1
+), training models that satisfy them (§
+9.2
+), proving that they hold (§
+9.3
+), and operating gracefully when they do not (§
+9.4
+).
+
+9.1
+Dynamic contracts
+
+Static thresholds are easy to audit but brittle. A dynamic contract replaces a fixed
+\tau_{i}
+with a context-conditioned envelope
+\tau_{i}(c(x))
+, where
+c(x)
+summarises prompt class, sequence length, hardware target, and time of day. One natural instantiation treats threshold selection as a contextual bandit: for each context bucket, learn an envelope that minimises an incident-cost model
+C(\cdot)
+subject to a quality-of-service constraint
+Q(\cdot)
+,
+
+\tau_{i}^{\star}(c)\;=\;\mathop{\mathrm{arg\,max}}_{\tau}\;-\,C\!\bigl(\Pr[\text{violation}\mid\tau,c]\bigr)\;-\;\lambda\,Q(\tau,c),
+
+(20)
+
+with
+\lambda
+a Lagrange multiplier on quality regression and the search restricted to a vetted hypothesis class so that the resulting envelopes remain auditable. The hardness lives in three places: keeping the controller stable under non-stationary traffic, learning fair envelopes for rare slices that have too little data to support a per-bucket estimate, and governing policy updates that are themselves model artifacts. The third is the most underrated. A dynamic threshold that learns is also a model that ships, and a contract that protects a deployed system from drift cannot be allowed to drift in private.
+
+9.2
+Contract-aware distillation
+
+Distillation
+[
+9
+]
+aligns a student to a teacher. A contract-aware student additionally satisfies the contract that will govern its deployment:
+
+\mathcal{L}_{\mathrm{total}}\;=\;\mathcal{L}_{\mathrm{task}}+\lambda_{\mathrm{KD}}\,\mathcal{L}_{\mathrm{KD}}+\sum_{i}\lambda_{i}\,\phi_{i}\!\bigl(m_{i}(\theta_{s},K_{\mathrm{inf}})\bigr),
+
+(21)
+
+where
+\phi_{i}
+is a smooth surrogate for the indicator
+\mathbf{1}[m_{i}>\tau_{i}]
+(softplus, hinge). The training objective explicitly accounts for the kernel that will execute the student, which is the level at which the standard distillation literature has consistently underspecified its targets. Three risks shape the research agenda: Goodhart-style overfitting to proxy clauses; the engineering cost of backpropagating through surrogates that depend on the inference kernel; and combining contract terms with preference-based objectives
+[
+19
+]
+without destabilising either signal. The first risk is the deepest, because a contract whose clauses can be gamed in training is a contract whose clauses can be gamed at serving time too.
+
+9.3
+Formal verification of clause subsets
+
+For a restricted but useful subset of clauses, empirical evidence can be replaced by formal guarantees. Bounded numerical properties such as “for all
+x
+in slice
+S
+and all weights in a region around
+\theta_{0}
+,
+\Delta_{\mathrm{logit}}(x)\leq\tau
+” are amenable to interval arithmetic and abstract interpretation in the style of
+[
+12
+,
+6
+]
+. A workable plan has three steps: compile contract clauses to a small DSL with first-order semantics over kernel outputs, as sketched in
+Appendix
+
+A
+; translate clauses into properties checkable by interval-bound propagation or SMT, using over-approximations of nonlinearities and quantisation noise; and attach machine-checkable certificates to deployable artifacts, so the serving register holds
+(\theta,K_{\mathrm{inf}},\mathcal{C},\text{proof})
+tuples rather than only hashes.
+
+The hard problem is scale. Existing verifiers reach only small networks and short sequences, and the gap to deployed transformers is several orders of magnitude on every relevant axis. Compositional and modular verification, in which each block carries a local certificate that composes into a global one, is the only plausible path that does not require a fundamental breakthrough in verifier capacity. Even there, the open questions are real: deriving compositional rules across attention, MLP, and quantisation blocks; treating context-dependent KV-cache states without unrolling the entire history; and propagating certificates through continuous training without re-verifying from scratch after every gradient step.
+
+9.4
+Self-healing kernel routing
+
+When contract health degrades, the operational question is not only “roll back?” but also “where do we route now?”. Self-healing routing treats kernel selection as a control problem: given a pool of certified kernels
+\{K_{1},\dots,K_{m}\}
+with known per-clause profiles, route each request to a kernel that satisfies the most stringent clauses applicable to it, subject to capacity and latency. A natural formulation is a constrained MDP whose state is contract health
+h_{t}
+and current capacity, whose actions are routing weights over the pool, and whose reward trades quality against contract margin. Existing fleet-management heuristics can then be replaced by policies learned offline from logged incident data and verified to respect hard clauses by construction. The research-level risks are oscillation control under fluctuating health signals, safe exploration when a new kernel is added to the pool with limited prior data, and explainability of routing decisions to safety reviewers whose mental model still treats the fleet as serving a single
+\pi_{\theta}
+.
+
+9.5
+How the four directions interlock
+
+Dynamic contracts choose the envelope; contract-aware distillation trains models that fit it; formal verification certifies the parts that admit proofs; self-healing routing operates underneath when the envelope is exceeded. Each is incrementally adoptable on top of the static framework.
+
+10
+Related work
+
+The framework presented here sits at the intersection of several literatures that have largely run in parallel. RL post-training reasons about policies and gradients but mostly assumes the sampling kernel is the training kernel. High-throughput serving reasons about kernels and hardware but rarely about the gradient consequences of its design choices. Verification reasons about properties but at scales that deployed pipelines exceed by orders of magnitude. Software contracts and SLOs reason about interfaces but were not designed for systems whose outputs are probability distributions over tokens. The kernel contract is a thin specification layer that lets these literatures speak to one another, and the rest of this section positions the paper within each.
+
+RL from human and verifier feedback.
+
+The PPO-style pipeline of
+[
+21
+,
+17
+]
+, the trust-region formulation of
+[
+20
+]
+, the preference objective of DPO
+[
+19
+]
+, and the group-relative variant GRPO
+[
+23
+]
+all assume an on-policy or near-on-policy sampling regime. Recent expository work on the engineering practice of RL post-training
+[
+18
+]
+catalogues the implementation choices that govern stability but stops short of naming the train–infer kernel pair as a first-class object.
+Section
+
+6
+formalises the bias these methods incur when rollouts come from
+K_{\mathrm{inf}}
+and gradients from
+K_{\mathrm{train}}
+, and proposes contract clauses that bound it.
+
+Reproducibility and implementation matters in RL.
+
+A line of work documents the fragility of deep RL results to implementation detail:
+[
+8
+]
+on benchmark reproducibility,
+[
+4
+]
+on the dependence of PPO performance on code-level choices,
+[
+1
+]
+on a systematic study of on-policy choices, and
+[
+11
+]
+on a reproducible baseline library. The framework here reads these phenomena as a symptom of an unspecified contract between rollout and update kernels; making the contract explicit converts implementation choices from folk knowledge into auditable artifacts.
+
+High-throughput LLM inference.
+
+FlashAttention
+[
+2
+]
+and its successors
+[
+3
+,
+22
+]
+change accumulation order and tile sizes to maximise hardware utilisation. vLLM
+[
+13
+]
+introduces paged KV caches and dynamic batching to maximise throughput. Each is equivalent to a textbook attention or generation algorithm in exact arithmetic but produces non-equivalent outputs in finite precision; they are precisely the sources of
+\varepsilon_{\mathrm{approx}}
+and
+\varepsilon_{\mathrm{sched}}
+in
+Equation
+
+12
+.
+
+Quantisation and low-precision compute.
+
+FP8 formats are standardised in
+[
+15
+]
+. Post-training weight quantisation is studied in GPTQ
+[
+5
+]
+and AWQ
+[
+14
+]
+. These methods consistently report aggregate quality preservation, but their per-slice and per-task behaviour, which is exactly what contract clauses target, is less systematically reported. The framework gives a vocabulary for that reporting.
+
+Calibration and behavioural drift.
+
+[
+7
+]
+documents the calibration problems of modern networks; label smoothing
+[
+16
+]
+is one mitigation. Calibration drift between
+K_{\mathrm{train}}
+and
+K_{\mathrm{inf}}
+is a natural statistical clause in
+\mathcal{S}
+.
+
+Neural network verification.
+
+Reluplex
+[
+12
+]
+and AI2
+[
+6
+]
+pioneered formal verification of small neural networks via SMT and abstract interpretation. Scaling these methods to modern transformers is open;
+Section
+
+9.3
+proposes the contract DSL as the bridge between operational invariants and what current verifiers can prove.
+
+Hardware lottery and systems-aware ML.
+
+[
+10
+]
+argues that research ideas succeed partly because they happen to match the hardware of their era. Kernel contracts are one way to make the dependence of ML behaviour on the underlying hardware and software stack visible and governable rather than implicit.
+
+Software contracts and SLOs.
+
+The contract metaphor is borrowed from design-by-contract programming and the SRE practice of service-level objectives. The contribution of this paper is to instantiate the metaphor for the specific structure of train-infer kernel pairs and to connect it to concrete ML failure modes, including RL gradient bias and quantisation-induced behavioural drift.
+
+11
+Limitations
+
+The framework adds machinery, and that machinery has its own failure modes. Six are worth naming explicitly.
+
+Measurement and enforcement overhead.
+
+Evaluating clauses, shadowing traffic, and emitting observability artifacts cost compute, storage, and engineering time. The cost is justified at scale and on safety-critical surfaces. It is not justified for small models with non-critical deployments, where simpler regression testing suffices.
+
+Goodhart risk on proxy clauses.
+
+Any metric that becomes a target risks being optimised for its own sake
+[
+7
+,
+16
+]
+. Aggressive contract-aware distillation (
+Section
+
+9.2
+) may produce students that satisfy proxy clauses while regressing on the underlying behaviour the clauses were meant to protect. Mitigations include holdout clauses that are never used during training, periodic recalibration of
+\tau
+, and explicit review of clause provenance.
+
+Incomplete observability.
+
+On latency-critical paths, emitting full observability artifacts may be infeasible. The contract framework then operates on a sampled subset of traffic, and soft-clause exceedance estimates inherit the bias of that subset. This is tolerable for
+\mathcal{S}
+but problematic for
+\mathcal{N}
+, where post-incident attribution becomes harder.
+
+Verification scope.
+
+The bounds in
+Section
+
+5
+are loose, and formal verification
+[
+12
+,
+6
+]
+currently covers only small slices of the system. We do not claim full proofs of correctness for production-scale transformers; we claim a path along which incrementally more of the system can be brought under formal guarantees.
+
+Recovery logic as a target itself.
+
+The routing policy of
+Section
+
+9.4
+is itself a piece of software that can fail. Self-healing systems can oscillate, mis-route, or fail in correlated ways across the fleet. The routing policy should be subject to its own contracts, a meta-contract over
+\Pi
+, and tested with the same rigour as the kernels it routes between.
+
+Cultural debt.
+
+The largest practical risk is not technical. Adopting a contract framework requires research, infrastructure, and product teams to share a vocabulary for what they will and will not tolerate from a deployed model. Without that alignment, the contract becomes a document that no one owns.
+
+12
+Conclusion
+
+This paper has developed a framework for specifying acceptable divergence between
+K_{\mathrm{train}}
+and
+K_{\mathrm{inf}}
+at identical weights
+\theta
+. A kernel contract
+\mathcal{C}=(\mathcal{N},\mathcal{S},\mathcal{R},\mathcal{O},\Pi)
+packages four clause families that name what divergence is tolerated and where, three violation levels that prescribe a response when bounds fail, a four-stage promotion pipeline that allocates clauses to the venues where they can be checked, and a chain of Lipschitz-style bounds that connects numerical perturbations to behavioural distance and to reward error. None of these pieces is individually novel; the contribution is their composition into an artifact that is versioned and audited together with the model weights and the kernel build.
+
+Several consequences follow from making the contract explicit. RL post-training pipelines can bound the bias of the standard policy-gradient estimator with a single clause on the importance ratio (
+Section
+
+6
+), and the PPO clipping range
+\epsilon
+acquires a second interpretation as a budget on
+(K_{\mathrm{train}},K_{\mathrm{inf}})
+. Distillation objectives can be written against the kernel that will execute the student. Verification certificates (
+Section
+
+9.3
+) can attach to deployable artifacts, so that the serving register holds
+(\theta,K_{\mathrm{inf}},\mathcal{C},\text{proof})
+tuples rather than only hashes. Routing policies can respond to contract health rather than only to post-incident signals.
+Appendix
+
+C
+sketches how each of these artifacts can be produced from a single contract file.
+
+The remaining work is empirical. Instantiating the framework on deployed systems, measuring how often pipelines violate their implicit contracts, and quantifying the reliability gain per unit of engineering investment for each of the directions of
+Section
+
+9
+are the natural next steps;
+Section
+
+8
+specifies the protocol against which those measurements would be made.
+
+Appendix A
+Appendix A: Contract DSL specification
+
+This appendix gives a minimal YAML-based contract DSL designed to be consumed by a reference implementation of the form sketched in
+Appendix
+
+C
+. The DSL is deliberately small. It is meant to be auditable by a reviewer in a single sitting and to compile, for a restricted subset of clauses, into a property checkable by a formal verifier (
+Section
+
+9.3
+).
+
+A.1
+Schema
+
+A contract document has the following top-level structure:
+
+⬇
+
+contract
+:
+
+id
+:
+
+string
+
+#
+
+stable
+
+contract
+
+identifier
+
+version
+:
+
+string
+
+#
+
+semver
+
+applies_to
+:
+
+model_hashes
+:
+
+[
+string
+]
+
+#
+
+weight
+
+artifact
+
+hashes
+
+kernel_hashes
+:
+
+[
+string
+]
+
+#
+
+inference
+
+kernel
+
+build
+
+hashes
+
+slices
+:
+
+#
+
+slice
+
+definitions
+
+used
+
+by
+
+clauses
+
+-
+
+id
+:
+
+string
+
+filter
+:
+
+string
+
+#
+
+boolean
+
+expression
+
+over
+
+request
+
+fields
+
+clauses
+:
+
+#
+
+list
+
+of
+
+clauses
+
+(see
+
+below)
+
+-
+
+id
+:
+
+string
+
+family
+:
+
+numerical
+
+|
+
+statistical
+
+|
+
+runtime
+
+|
+
+observability
+
+metric
+:
+
+string
+
+#
+
+name
+
+of
+
+a
+
+registered
+
+metric
+
+function
+
+threshold
+:
+
+number
+
+exceedance
+:
+
+number
+
+#
+
+0
+
+for
+
+hard,
+
+>0
+
+for
+
+soft
+
+level
+:
+
+L1
+
+|
+
+L2
+
+|
+
+L3
+
+slice_ids
+:
+
+[
+string
+]
+
+remediation
+:
+
+string
+
+#
+
+one
+
+of
+
+the
+
+actions
+
+in
+
+escalation_policy
+
+escalation_policy
+:
+
+-
+
+level
+:
+
+L1
+
+|
+
+L2
+
+|
+
+L3
+
+action
+:
+
+log
+
+|
+
+guard
+
+|
+
+fallback
+
+target_kernel
+:
+
+string
+
+#
+
+optional;
+
+required
+
+for
+
+guard/fallback
+
+A.2
+Example: minimal train-infer contract
+
+⬇
+
+contract
+:
+
+id
+:
+
+train_infer_v1
+
+version
+:
+
+0.1.0
+
+applies_to
+:
+
+model_hashes
+:
+
+[
+"sha256:abc..."
+]
+
+kernel_hashes
+:
+
+[
+"vllm-fp8-h100-2026.04"
+]
+
+slices
+:
+
+-
+
+id
+:
+
+all
+
+filter
+:
+
+"true"
+
+-
+
+id
+:
+
+safety
+
+filter
+:
+
+"request.category
+
+==
+
+’safety’"
+
+clauses
+:
+
+-
+
+id
+:
+
+N1_logit_drift
+
+family
+:
+
+numerical
+
+metric
+:
+
+p99_logit_l2
+
+threshold
+:
+
+0.15
+
+exceedance
+:
+
+0
+
+level
+:
+
+L2
+
+slice_ids
+:
+
+[
+"all"
+]
+
+remediation
+:
+
+guard
+
+-
+
+id
+:
+
+S1_topk_agreement
+
+family
+:
+
+statistical
+
+metric
+:
+
+top5_overlap
+
+threshold
+:
+
+0.98
+
+exceedance
+:
+
+0
+
+level
+:
+
+L3
+
+slice_ids
+:
+
+[
+"safety"
+]
+
+remediation
+:
+
+fallback
+
+-
+
+id
+:
+
+R1_p95_latency
+
+family
+:
+
+runtime
+
+metric
+:
+
+p95_latency_ms
+
+threshold
+:
+
+120
+
+exceedance
+:
+
+0.01
+
+level
+:
+
+L1
+
+slice_ids
+:
+
+[
+"all"
+]
+
+remediation
+:
+
+log
+
+escalation_policy
+:
+
+-
+
+level
+:
+
+L1
+
+action
+:
+
+log
+
+-
+
+level
+:
+
+L2
+
+action
+:
+
+guard
+
+target_kernel
+:
+
+vllm
+-
+bf16
+-
+h100
+
+-
+
+level
+:
+
+L3
+
+action
+:
+
+fallback
+
+target_kernel
+:
+
+pytorch
+-
+bf16
+-
+reference
+
+A.3
+Example: RL post-training stability contract
+
+⬇
+
+contract
+:
+
+id
+:
+
+rlhf_rollout_v1
+
+version
+:
+
+0.1.0
+
+applies_to
+:
+
+model_hashes
+:
+
+[
+"sha256:def..."
+]
+
+kernel_hashes
+:
+
+[
+"vllm-bf16-h100-2026.04"
+]
+
+clauses
+:
+
+-
+
+id
+:
+
+NRLHF1_logw
+
+family
+:
+
+numerical
+
+metric
+:
+
+mean_abs_log_ratio
+
+threshold
+:
+
+0.05
+
+exceedance
+:
+
+0.05
+
+level
+:
+
+L2
+
+slice_ids
+:
+
+[
+"all"
+]
+
+remediation
+:
+
+guard
+
+-
+
+id
+:
+
+NRLHF2_wlogw
+
+family
+:
+
+numerical
+
+metric
+:
+
+mean_w_log_w
+
+threshold
+:
+
+0.01
+
+exceedance
+:
+
+0.0
+
+level
+:
+
+L3
+
+slice_ids
+:
+
+[
+"all"
+]
+
+remediation
+:
+
+fallback
+
+escalation_policy
+:
+
+-
+
+level
+:
+
+L2
+
+action
+:
+
+guard
+
+target_kernel
+:
+
+audit
+-
+train
+-
+kernel
+-
+rollout
+
+-
+
+level
+:
+
+L3
+
+action
+:
+
+fallback
+
+target_kernel
+:
+
+audit
+-
+train
+-
+kernel
+-
+rollout
+
+Clauses are evaluated independently on their slices. A clause passes on a slice if the measured metric does not exceed its threshold, or, for soft clauses, if the exceedance rate over the evaluation window is within budget. Promotion requires every hard clause to pass on every slice it applies to. Online routing selects the action of the most severe currently-violated clause.
+
+Appendix B
+Appendix B: Proofs
+
+B.1
+Proof of
+Lemma
+
+1
+
+Write
+p=\mathrm{softmax}(z/T)
+and
+q=\mathrm{softmax}((z+\varepsilon)/T)
+over a vocabulary
+\mathcal{V}
+of size
+V
+. Let
+\delta=\varepsilon/T
+and
+\Delta=\lVert\delta\rVert_{\infty}
+.
+
+Total variation bound.
+
+For any
+v\in\mathcal{V}
+,
+
+\displaystyle q(v)
+
+\displaystyle\;=\;\frac{e^{z_{v}/T+\delta_{v}}}{\sum_{u}e^{z_{u}/T+\delta_{u}}}\;=\;p(v)\cdot\frac{e^{\delta_{v}}}{\sum_{u}p(u)\,e^{\delta_{u}}}.
+
+(22)
+
+Since
+e^{-\Delta}\leq e^{\delta_{v}}\leq e^{\Delta}
+and the denominator is a convex combination of the same range, the ratio
+q(v)/p(v)
+lies in
+[e^{-2\Delta},e^{2\Delta}]
+. Hence
+|q(v)-p(v)|\leq p(v)(e^{2\Delta}-1)
+, and
+
+\Delta_{\mathrm{TV}}\;=\;\tfrac{1}{2}\sum_{v}|q(v)-p(v)|\;\leq\;\tfrac{1}{2}(e^{2\Delta}-1)\;\leq\;\Delta+O(\Delta^{2}),
+
+(23)
+
+giving the first-order bound
+\Delta_{\mathrm{TV}}\leq\lVert\varepsilon\rVert_{\infty}/T+O(\lVert\varepsilon\rVert_{\infty}^{2}/T^{2})
+.
+
+KL bound.
+
+Using
+\mathrm{KL}(p\|q)=\sum_{v}p(v)\log(p(v)/q(v))
+and expanding
+\log(p(v)/q(v))=\log(\sum_{u}p(u)\,e^{\delta_{u}})-\delta_{v}
+, we obtain
+
+\mathrm{KL}(p\|q)\;=\;\log\mathbb{E}_{p}[e^{\delta}]\;-\;\mathbb{E}_{p}[\delta].
+
+(24)
+
+This is the cumulant-generating function of
+\delta
+under
+p
+minus its mean, i.e. a centered log-mgf. A standard Hoeffding/Hoeffding-Azuma argument bounds this by the variance term:
+
+\mathrm{KL}(p\|q)\;\leq\;\tfrac{1}{2}\,\Delta^{2}\;+\;O(\Delta^{3})\;=\;\frac{\lVert\varepsilon\rVert_{\infty}^{2}}{2T^{2}}\;+\;O(\lVert\varepsilon\rVert_{\infty}^{3}/T^{3}).\qquad\square
+
+(25)
+
+B.2
+Proof of
+Proposition
+
+1
+
+By the variational characterization of total variation,
+
+\Delta_{\mathrm{TV}}(x)\;=\;\tfrac{1}{2}\lVert\pi^{K_{\mathrm{train}}}_{\theta}(\cdot\mid x)-\pi^{K_{\mathrm{inf}}}_{\theta}(\cdot\mid x)\rVert_{1}\;=\;\sup_{f:\mathcal{Y}\to[0,1]}\left|\mathbb{E}_{\pi^{K_{\mathrm{train}}}}[f(y)]-\mathbb{E}_{\pi^{K_{\mathrm{inf}}}}[f(y)]\right|.
+
+(26)
+
+For a reward
+r:\mathcal{X}\times\mathcal{Y}\to[-R,R]
+we have
+r(x,\cdot)/(2R)+1/2\in[0,1]
+. Plugging this in yields
+
+\left|\,\mathbb{E}_{\pi^{K_{\mathrm{train}}}}[r(x,y)]-\mathbb{E}_{\pi^{K_{\mathrm{inf}}}}[r(x,y)]\,\right|\;\leq\;2R\cdot\Delta_{\mathrm{TV}}(x).\qquad\square
+
+(27)
+
+B.3
+Proof of
+Proposition
+
+2
+
+Recall
+
+\displaystyle g^{\star}(\theta)
+
+\displaystyle\;=\;\mathbb{E}_{x,\,y\sim\pi_{b}}\!\left[\tfrac{\pi_{t}(y\mid x)}{\pi_{b}(y\mid x)}\,\nabla_{\theta}\log\pi_{t}(y\mid x)\,A(x,y)\right],
+
+(28)
+
+\displaystyle\hat{g}(\theta)
+
+\displaystyle\;=\;\mathbb{E}_{x,\,y\sim\pi_{b}}\!\left[\nabla_{\theta}\log\pi_{t}(y\mid x)\,A(x,y)\right].
+
+(29)
+
+Hence
+
+\displaystyle\hat{g}(\theta)-g^{\star}(\theta)
+
+\displaystyle\;=\;\mathbb{E}_{x}\!\left[\,\sum_{y}\bigl(\pi_{b}(y\mid x)-\pi_{t}(y\mid x)\bigr)\,\nabla_{\theta}\log\pi_{t}(y\mid x)\,A(x,y)\,\right].
+
+(30)
+
+Using
+\lVert v\rVert_{2}\leq\sum|c_{y}|\cdot\lVert v_{y}\rVert_{2}
+and the assumptions
+|A|\leq A_{\max}
+,
+\lVert\nabla_{\theta}\log\pi_{t}\rVert_{2}\leq G
+,
+
+\lVert\hat{g}(\theta)-g^{\star}(\theta)\rVert_{2}\;\leq\;A_{\max}G\cdot\mathbb{E}_{x}\!\left[\sum_{y}\left|\pi_{b}(y\mid x)-\pi_{t}(y\mid x)\right|\right]\;=\;2A_{\max}G\cdot\mathbb{E}_{x}[\Delta_{\mathrm{TV}}(x)].\qquad\square
+
+(31)
+
+B.4
+Comments on tightness
+
+The constants
+A_{\max}
+and
+G
+are conservative. In practice
+A
+is centered with bounded variance and
+\lVert\nabla_{\theta}\log\pi_{t}\rVert_{2}
+is concentrated; sharper bounds are available under those assumptions. The first-order
+\Delta_{\mathrm{TV}}\leq\lVert\varepsilon\rVert_{\infty}/T
+is tight up to lower-order terms; the
+\mathrm{KL}
+bound is tight up to a factor of
+\tfrac{1}{2}
+in the leading term. The point of
+Lemma
+
+1
+,
+Proposition
+
+1
+, and
+Proposition
+
+2
+is not to be tight but to give a defensible chain of inequalities that a contract author can cite when proposing thresholds.
+
+Appendix C
+Appendix C: Reference implementation
+
+This appendix sketches a small Python library,
+kcc
+(kernel contract convergence), that maps one-to-one onto the definitions of
+Section
+
+4
+. It is not a production system, nor is it released alongside this paper; the listings below specify the data model, public API, and CLI surface so that a reader can reconstruct the implementation in an afternoon.
+
+C.1
+Package structure
+
+⬇
+
+src
+/
+kcc
+/
+
+__init__
+.
+py
+
+#
+
+public
+
+API
+
+surface
+
+contracts
+.
+py
+
+#
+
+Contract,
+
+Clause
+
+dataclasses;
+
+YAML
+
+loader
+
+metrics
+.
+py
+
+#
+
+registered
+
+drift
+
+and
+
+runtime
+
+metrics
+
+evaluator
+.
+py
+
+#
+
+ContractEvaluator:
+
+runs
+
+clauses
+
+against
+
+kernels
+
+policies
+.
+py
+
+#
+
+escalation
+
+policies
+
+and
+
+routing
+
+decisions
+
+cli
+.
+py
+
+#
+
+command-line
+
+entry
+
+point:
+
+‘kcc
+
+evaluate
+
+...‘
+
+C.2
+Core API
+
+⬇
+
+from
+
+kcc
+
+import
+
+Contract
+,
+
+ContractEvaluator
+
+contract
+
+=
+
+Contract
+.
+from_yaml
+(
+"examples/contracts/train_infer_v1.yaml"
+)
+
+evaluator
+
+=
+
+ContractEvaluator
+(
+
+train_kernel
+=
+train_logits_fn
+,
+
+#
+
+callable:
+
+x
+
+->
+
+logits
+
+inference_kernel
+=
+infer_logits_fn
+,
+
+runtime_meter
+=
+runtime_meter_fn
+,
+
+#
+
+callable:
+
+x
+
+->
+
+{latency_ms,
+
+memory_mb}
+
+dataset
+=
+eval_dataset
+,
+
+slice_definitions
+=
+contract
+.
+slices
+,
+
+)
+
+report
+
+=
+
+evaluator
+.
+evaluate
+(
+contract
+)
+
+print
+(
+report
+.
+summary
+())
+
+report
+.
+to_json
+(
+"artifacts/contract_report.json"
+)
+
+decision
+
+=
+
+contract
+.
+escalation_policy
+.
+decide
+(
+report
+)
+
+print
+(
+decision
+)
+
+#
+
+one
+
+of:
+
+promote,
+
+log,
+
+guard:<kernel>,
+
+fallback:<kernel>
+
+C.3
+Registered metrics
+
+The library ships with a small registry of drift metrics:
+
+•
+
+p{50,95,99}_logit_l2
+: percentile bounds on
+\Delta_{\mathrm{logit}}
+.
+
+•
+
+mean_kl
+,
+p99_kl
+: distributional drift.
+
+•
+
+top{1,5,10}_overlap
+: top-
+k
+agreement
+A_{\mathrm{top}k}
+.
+
+•
+
+mean_abs_log_ratio
+,
+mean_w_log_w
+: importance-ratio diagnostics for RL contracts (
+Section
+
+6
+).
+
+•
+
+ece_gap
+: calibration drift
+\Delta_{\mathrm{ECE}}
+.
+
+•
+
+p95_latency_ms
+,
+p99_latency_ms
+,
+peak_memory_mb
+: runtime metrics.
+
+New metrics are registered by decorating a callable with
+@register_metric(name)
+; this makes contract YAML files self-describing.
+
+C.4
+Command-line usage
+
+The CLI runs a contract against a candidate kernel and emits a structured report:
+
+⬇
+
+kcc
+
+evaluate
+
+\
+
+--
+contract
+
+examples
+/
+contracts
+/
+train_infer_v1
+.
+yaml
+
+\
+
+--
+train
+-
+kernel
+
+mypkg
+.
+kernels
+:
+train_logits
+
+\
+
+--
+inference
+-
+kernel
+
+mypkg
+.
+kernels
+:
+infer_logits
+
+\
+
+--
+dataset
+
+mypkg
+.
+datasets
+:
+eval_split
+
+\
+
+--
+output
+
+artifacts
+/
+report
+.
+json
+
+The output JSON contains per-clause pass/fail records, per-slice exceedance rates, the computed health score
+h_{t}
+, and the recommended escalation action.
+
+C.5
+Tests
+
+An implementation following this sketch is naturally accompanied by unit tests covering metric correctness, exceedance accounting, escalation-policy semantics, and YAML round-tripping; those tests double as executable documentation of the framework’s semantics.
+

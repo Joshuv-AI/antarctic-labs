@@ -1,0 +1,988 @@
+Gefen: Optimized Stochastic Optimizer
+Nadav Benedek, Tomer Koren, Ohad Fried
+
+Abstract
+AdamW is a default optimizer for modern deep learning, but its first and second moment states add roughly two parameter-sized buffers to training memory. We propose Gefen, a memory-efficient optimizer that automatically shares second-moment estimates across parameter blocks and quantizes the first moment using a learned codebook, thereby reducing AdamW’s memory footprint by ∼ 8 × \mathord{\sim}8\times while maintaining the same performance, corresponding to a reduction of 6.5 GiB per billion parameters. The method is motivated by a theoretical result showing that large mixed Hessian entries constrain the ratio of squared gradients toward one, suggesting that Hessian-aligned parameters are natural candidates for sharing second-moment statistics. Since computing Hessians is impractical at scale, Gefen infers block structure from the initial squared gradients, requiring no architecture-specific metadata or hyperparameters beyond AdamW defaults. Gefen learns an exact histogram-based dynamic-programming quantization codebook and reuses the same blocks for first-moment scaling. Across diverse experiments, Gefen achieves the lowest peak optimizer memory among the compared AdamW-like methods while maintaining AdamW-level performance. In FSDP and DDP training, the reduced memory footprint enables larger microbatches and improves throughput significantly over AdamW, providing a practical drop-in replacement with lower memory usage that can increase throughput and enable training larger models or using larger batch sizes. We provide the complete Python implementation, including fused CUDA kernels at https://github.com/ndvbd/Gefen .
+
+
+
+1
+Introduction
+
+Adam
+(
+Kingma & Ba 2014
+)
+and AdamW
+(
+Loshchilov & Hutter 2017
+)
+are widely used workhorse optimizers in deep learning due to their strong and consistent performance across a broad range of architectures and datasets. However, because they store both first and second moment moving averages, their optimizer state alone adds roughly twice the parameter memory.
+
+Reducing optimizer memory can enable training larger models or using larger batch sizes, which can in turn improve training throughput and final model quality. Therefore, we are motivated to design an optimizer that maintains AdamW-like performance while reducing memory usage.
+
+For example, Adam-mini
+(
+Zhang et al. 2025
+)
+is a recent variant of Adam that reduces optimizer memory by
+sharing
+second-moment values using manual rules that mimic the block diagonal structure of parameters’ Hessians, but a theoretical justification for
+why
+Hessian-aligned grouping is beneficial remains missing. In practice, users may need to provide architecture-specific information (e.g., the number of attention heads), and grouping rules depend on tensor names, which may vary across implementations. Quantized optimizers
+(
+Dettmers et al. 2021
+;
+Li et al. 2023
+)
+reduce memory, but rely on manually crafted, suboptimal codebooks and introduce an implicit hyperparameter through the quantization block size.
+
+Inspired by these methods, our goal is to remove manual grouping requirements, avoid Adam-mini’s tensor-name-dependent decisions, provide stronger theoretical grounding for grouping parameters with high Hessian-related affinity, validate on both LLMs and non-LLM networks, and further reduce the memory footprint beyond Adam-mini while maintaining general applicability and AdamW-level performance.
+
+In
+, we describe the desiderata for an ideal optimizer, which we use to guide our design and evaluation. In
+section
+
+3
+, we provide theoretical analysis showing that high Hessian affinity implies similar squared gradients, which justifies our grouping strategy. In
+section
+
+4
+, we present our algorithm, which automatically groups parameters and shares second moments within these groups.
+Empirically, our method achieves the lowest memory footprint among the compared methods across a variety of models and datasets, while maintaining comparable or improved quality and throughput, as shown in
+section
+
+5
+. Readers familiar with AdamW may wish to skip directly to
+section
+
+3
+.
+
+2
+Preliminaries and Related Work
+
+Adam and AdamW.
+
+Combining ideas from AdaGrad
+(
+Duchi et al. 2011
+)
+and RMSProp
+(
+Tieleman & Hinton 2012
+)
+, Adam is an adaptive first-order optimizer that maintains exponential moving averages of the gradient and squared gradient. At step
+t
+, with gradient
+g_{t}=\nabla_{\theta}\mathcal{L}(\theta_{t})
+, Adam computes
+
+\displaystyle m_{t}
+
+\displaystyle=\beta_{1}m_{t-1}+(1-\beta_{1})g_{t}
+
+(EMA of first moment; momentum term)
+
+(1)
+
+\displaystyle v_{t}
+
+\displaystyle=\beta_{2}v_{t-1}+(1-\beta_{2})g_{t}^{2}
+
+(EMA of second raw moment)
+
+(2)
+
+then applies bias correction, which is needed because both EMAs are initialized at zero and are therefore biased toward zero at early steps,
+
+\displaystyle\hat{m}_{t}
+
+\displaystyle=\frac{m_{t}}{1-\beta_{1}^{t}},\qquad\hat{v}_{t}=\frac{v_{t}}{1-\beta_{2}^{t}}
+
+(Bias correction)
+
+(3)
+
+and updates parameters as
+
+\displaystyle\theta_{t+1}=\theta_{t}-\eta\frac{\hat{m}_{t}}{\sqrt{\hat{v}_{t}}+\epsilon}
+
+(4)
+
+AdamW uses the same adaptive moments, but applies weight decay directly in parameter space rather than injecting an
+L_{2}
+penalty term into the gradient:
+
+\displaystyle\theta_{t+1}=\theta_{t}-\eta\frac{\hat{m}_{t}}{\sqrt{\hat{v}_{t}}+\epsilon}-\eta\lambda\theta_{t}
+
+(5)
+
+This decoupling avoids interactions between adaptive gradient scaling and regularization strength, and typically yields better generalization and more stable hyperparameter tuning.
+In modern deep learning practice, Adam and AdamW are the de facto standard optimizers. They keep first and second moment states, typically in FP32, so optimizer-state memory is roughly
+8
+bytes per parameter. For example, for a 13B-parameter model, Adam-style optimizer states alone require about
+13\times 10^{9}\times 8\approx 97
+GiB; this can make training more difficult on memory-constrained GPUs and force smaller batch sizes, which may also reduce training throughput.
+
+Quantized optimizer states.
+
+Recent work reduces optimizer memory by quantizing Adam-style moment states. Adam8bit
+(
+Dettmers et al. 2021
+)
+flattens tensors into fixed-size blocks (
+B=2048
+), quantizes both first and second moments, and stores per-block absolute-max scaling (recomputed each step) together with 8-bit values per element. Its Dynamic Tree Quantization encodes normalized values in
+[-1,1]
+, providing higher precision near zero while still representing larger magnitudes. However, this design has practical limitations: (1) the dynamic-tree quantizer can be wasteful due to duplicated codebook entries, (2) in practice the method is not applicable to all tensor types (e.g., embeddings should not be quantized), so it is not fully plug-and-play as a universal drop-in, and (3) the fixed user-chosen block size introduces an additional hyperparameter burden. Adam4bit
+(
+Li et al. 2023
+)
+pushes state quantization to 4 bits with improved handling of outliers (including finer-grained and asymmetric treatments for moment statistics), further reducing memory while preserving competitive accuracy in many settings. The method uses linear quantization and includes a block-size hyperparameter, which defaults to
+128
+in the authors’ implementation.
+
+See
+for an extended related work discussion, including additional optimizers and gradient communication compression methods. In this work, we focus on general-purpose optimizers that require no manual configuration, additional hyperparameters, or learning-rate retuning, and that can be used as drop-in replacements for AdamW across training regimes while achieving a significantly lower memory footprint.
+
+3
+Theoretical Analysis
+
+AdamW maintains, for each parameter, an exponential moving average of its
+squared gradient. We analyze conditions under which two weights with a
+large-magnitude mixed Hessian entry also have similar squared-gradient
+magnitudes, making them natural candidates for sharing their second-moment
+estimates. Specifically, for parameter entries indexed by
+
+(k,l)
+and
+(k^{\prime},l^{\prime})
+, we study when
+
+\left(\frac{\partial L}{\partial W[k,l]}\right)^{2}\quad\text{and}\quad\left(\frac{\partial L}{\partial W[k^{\prime},l^{\prime}]}\right)^{2}
+
+are close. Such a relationship motivates grouping parameter pairs with
+large Hessian-based coupling and sharing their second-moment estimates.
+
+Theorem 3.1
+
+(Large Hessian entries contract squared-gradient ratios)
+.
+
+The theorem implies that for feasible
+|H|\leq A
+, increasing the mixed Hessian magnitude
+tightens the admissible range of the squared-gradient ratio toward
+1
+.
+The same form of contraction also holds for second-layer weights that share
+the same output coordinate and for hidden-bias terms, whereas output-bias Hessian
+entries are either zero or constant. The theoretical derivation above is presented for a simple two-layer MLP in
+.
+However, the same behavior is also observed empirically in tensors from
+real network architectures, including attention tensors and convolutional
+layers, as shown in Appendix
+A
+.
+
+4
+Algorithm
+
+Algorithm 1
+
+Gefen: our proposed algorithm for optimized stochastic optimization. Default settings are identical to AdamW.
+All operations on vectors are element-wise. The algorithm has a fused CUDA implementation to avoid unnecessary temporary memory allocations.
+
+1:
+
+Require:
+
+\alpha,\lambda\in\mathbb{R}
+: Stepsize and Weight decay,
+\beta_{1},\beta_{2}\in[0,1)
+: Decay rates for moment estimates.
+f(\theta)
+: Stochastic objective function with parameters
+\theta
+. Initialize
+t\leftarrow 0
+,
+\bm{G}_{0}=\nabla_{\theta}f_{t}(\bm{\theta}_{0})
+
+2:
+
+for
+each parameter-tensor
+\theta
+run
+Automatic Block Partitioning
+using
+\bm{G}_{0}
+
+3:
+
+Run
+Exact DP Quantization Codebook Learning
+.
+
+4:
+
+for
+each parameter-tensor
+\theta
+
+do
+
+5:
+
+Initialize quantized 1
+st
+momentum codebook
+\bm{\bar{m}}_{0}\leftarrow\bm{0}
+per weight and
+||\bm{m}_{0}||_{\infty}
+per block
+
+6:
+
+Initialize a single 2
+nd
+moment scalar
+\bar{\bm{v}}_{0}\leftarrow 0
+per block
+
+7:
+
+repeat
+
+8:
+
+t\leftarrow t+1
+
+9:
+
+for
+each parameter-tensor
+\theta
+
+do
+
+10:
+
+\bm{g}_{t}\leftarrow\nabla_{\theta}f_{t}(\bm{\theta}_{t-1})
+
+\triangleright
+Get gradients for the current parameter
+
+11:
+
+\bm{m}_{t}\leftarrow\beta_{1}\cdot\textsc{dequantize}(\bm{\bar{m}}_{t-1},||\bm{m}_{t-1}||_{\infty})+(1-\beta_{1})\cdot\bm{g}_{t}
+
+\triangleright
+Update biased momentum estimate
+
+12:
+
+\bm{\bar{m}}_{t},||\bm{m}_{t}||_{\infty}\leftarrow\textsc{Quantize}(\bm{m}_{t})
+
+\triangleright
+Quantize and recalculate absmax per block
+
+13:
+
+\hat{\bm{m}}_{t}\leftarrow\bm{m}_{t}/(1-\beta_{1}^{t})
+
+\triangleright
+Bias correction for momentum
+
+14:
+
+\bm{v}_{t}\leftarrow\beta_{2}\cdot\bm{v}_{t-1}+(1-\beta_{2})\cdot mean(\bm{g}^{2}_{t})
+
+\triangleright
+Update biased second moment using a mean per block
+
+15:
+
+\hat{\bm{{v}}}_{t}\leftarrow\bm{v}_{t}/(1-\beta_{2}^{t})
+
+\triangleright
+Bias correction of compact second moment estimate
+
+16:
+
+\bm{\theta}_{t}\leftarrow\bm{\theta}_{t-1}-\alpha\cdot\left(\hat{\bm{m}}_{t}/(\sqrt{\hat{\bm{v}}_{t}}+\epsilon)+\lambda\bm{\theta}_{t-1}\right)
+
+\triangleright
+Compact
+\hat{\bm{{v}}}_{t}
+are broadcasted to full shape
+
+17:
+
+until
+
+stopping criterion is met
+
+18:
+
+return
+optimized parameters
+\bm{\theta}_{t}
+
+Algorithm 2
+
+Automatic Block Partitioning
+
+1:
+
+Require:
+first-step gradient
+\bm{g}_{0}
+for a parameter tensor,
+n=|\bm{g}_{0}|
+
+2:
+
+Flatten
+\bm{g}_{0}
+and let
+\mathcal{P}
+be all proper divisors of
+n
+, sorted increasingly
+
+3:
+
+E_{\mathrm{prev}}\leftarrow\emptyset
+,
+\Delta^{\star}\leftarrow 10^{-12}
+,
+p^{\star}\leftarrow 1
+
+4:
+
+for
+each candidate period
+p\in\mathcal{P}
+
+do
+
+5:
+
+Reshape
+\bm{g}_{0}^{2}
+into
+\bm{B}\in\mathbb{R}^{(n/p)\times p}
+
+6:
+
+E(p)\leftarrow\sqrt{\operatorname{mean}_{i}\left(\mathrm{Var}(\bm{B}_{i,:})\right)}
+
+\triangleright
+
+eq.
+
+6
+
+7:
+
+if
+
+E_{\mathrm{prev}}\neq\emptyset
+
+then
+
+8:
+
+\Delta\leftarrow E(p)-E_{\mathrm{prev}}
+
+9:
+
+if
+
+\Delta<\Delta^{\star}
+
+then
+
+10:
+
+\Delta^{\star}\leftarrow\Delta
+,
+p^{\star}\leftarrow p
+
+11:
+
+E_{\mathrm{prev}}\leftarrow E(p)
+
+12:
+
+return
+
+p^{\star}
+if
+p^{\star}\geq 8
+, otherwise
+1
+
+Algorithm 3
+
+Exact DP Quantization Codebook Learning
+
+1:
+
+Require:
+gradients
+\{\bm{g}^{(\theta)}_{0}\}
+, automatic periods
+\{p_{\theta}\}
+, number of codebook entries
+k
+
+2:
+
+Initialize histogram counts
+\bm{c}\in\mathbb{R}^{16k}
+over
+[-1,1]
+
+3:
+
+for
+each parameter tensor
+\theta
+
+do
+
+4:
+
+Reshape
+\bm{g}^{(\theta)}_{0}
+into blocks
+\bm{B}\in\mathbb{R}^{(n_{\theta}/p_{\theta})\times p_{\theta}}
+
+5:
+
+Normalize each nonzero block by its maximum absolute value:
+\bm{Z}_{i,:}\leftarrow\bm{B}_{i,:}/\|\bm{B}_{i,:}\|_{\infty}
+
+6:
+
+Accumulate all entries of
+\bm{Z}
+into histogram counts
+\bm{c}
+
+7:
+
+Let
+\{(m_{i},c_{i})\}_{i=1}^{b}
+be the nonempty histogram bin centers and counts, sorted by
+m_{i}
+
+8:
+
+Compute prefix sums of
+c_{i}
+,
+c_{i}m_{i}
+, and
+c_{i}m_{i}^{2}
+
+9:
+
+Define interval squared error cost
+C(b_{\ell},b_{r},k^{\prime})
+using center
+-1
+if
+k^{\prime}=1
+, center
+1
+if
+k^{\prime}=k
+, and otherwise the weighted mean of bins
+b_{\ell},\ldots,b_{r}
+as codebook center
+
+\triangleright
+Force extreme codebook entries
+
+10:
+
+D_{b_{r},k^{\prime}}:=
+the cost for quantizing the first
+b_{r}
+bins using the first
+k^{\prime}
+codepoints; initialize
+D_{0,0}\leftarrow 0
+and all other entries to
+\infty
+
+11:
+
+for
+
+k^{\prime}=1,\ldots,k
+
+do
+
+12:
+
+for
+
+b_{r}=k^{\prime},\ldots,b
+
+do
+
+13:
+
+D_{b_{r},k^{\prime}}\leftarrow\min_{b_{\ell}\leq b_{r}}\;D_{b_{\ell}-1,k^{\prime}-1}+C(b_{\ell},b_{r},k^{\prime})
+
+14:
+
+Store the minimizing split point
+
+15:
+
+Backtrack the stored splits to recover the
+k
+codebook entries
+
+16:
+
+return
+the sorted codebook
+
+Computing the Hessian directly in large models is not tractable. Therefore, we present
+algorithm
+
+1
+, a
+method that partitions each parameter tensor into blocks whose squared gradients
+are similar, and shares the moving average of the second moment within each block
+in a fully automatic way, without relying on user-specified configuration.
+We further reduce the memory footprint of the first moment using a
+
+learnable
+and
+exact
+dynamic programming quantization, which
+
+reuses
+the same block partitioning and therefore does not introduce an
+additional scaling constant.
+
+4.1
+Automatic Partitioning
+
+As shown in
+fig.
+
+1
+and by
+Collobert 2004
+, the Hessians of some parameters exhibit block-diagonal structure. Splitting this parameter into 4 blocks, corresponding to the number of attention heads in this example, groups together parameters with stronger Hessian coupling, which, as suggested by the theorem and empirical evidence, leads to more similar squared gradients. Splitting into 16 groups provides finer granularity, as shown in the figure. However, computing the two-dimensional Hessian of mixed gradients is not tractable in large models. We therefore use the observed structure of the squared gradients: the same 16-block partition produces regions with more similar squared-gradient magnitudes. This observation motivates our one-dimensional squared-gradient-based algorithm for partitioning parameters into blocks, without computing the Hessian directly.
+
+Figure 1:
+Hessian of a toy transformer attention-query parameter, showing block-diagonal structure, and the corresponding squared gradients of the same parameter below. Qualitatively, both exhibit a visible 16-block structure.
+
+For each parameter tensor, Gefen infers the sharing pattern from the first iteration gradient
+only. Let
+\bm{g}_{0}\in\mathbb{R}^{n}
+be the
+flattened
+gradient of a parameter tensor at
+the first optimization step. For every proper divisor
+p
+of
+n
+, we reshape
+
+\bm{g}_{0}^{2}
+into consecutive blocks of size
+p
+and measure their within-block heterogeneity:
+
+E(p)=\sqrt{\frac{p}{n}\sum_{i=1}^{n/p}\mathrm{Var}\!\left(\left[g_{0,(i-1)p+1}^{2},\ldots,g_{0,ip}^{2}\right]\right)}.
+
+(6)
+
+The number-of-divisors function
+\tau(n)
+satisfies the classical bound
+
+\tau(n)\leq n^{(\ln 2+o(1))/\ln\ln n}
+, showing that the number of divisors grows subpolynomially in
+n
+
+(
+Landau 1909
+)
+, so the number of candidate periods is low.
+Small values of
+E(p)
+indicate that the squared gradients inside each candidate
+block are close, and therefore that replacing the element-wise second moment by a
+single shared scalar is expected to introduce little distortion. Ideally, we want
+large
+p
+for reduced memory and small
+E(p)
+for better optimization, but these
+two goals are in tension.
+
+One might expect
+E(p)
+to increase as
+p
+grows, since larger blocks impose
+more sharing. Surprisingly, however, some larger divisors align better with the
+structure of the Hessian and therefore produce a sharp drop in
+E(p)
+.
+Instead of choosing the smallest value of
+E(p)
+directly, which would over-favor
+tiny blocks, Gefen chooses the first pronounced improvement in this curve.
+
+We sort the candidate periods in increasing order and choose the period with the
+largest drop, falling back to
+p=1
+if no meaningful drop is found or if the
+selected period is smaller than
+8
+, since such small blocks provide little
+memory benefit.
+
+The selected period is fixed for the remainder
+of training.
+algorithm
+
+2
+provides the pseudocode of the algorithm. The period we found has dual use: it is used to share the second moment, and also to quantize the first moment, as described in the next section.
+
+4.2
+Quantization
+
+In our quest for a better optimizer, we seek to further reduce the memory footprint of the first moment through quantization. Unlike Adam8bit and Adam4bit, which rely on fixed, hand-designed quantization schemes, with a block-size hyperparameter for storing the scale factor, and a quantization technique that is not guaranteed to be optimal, we design a
+learnable
+and
+exact
+dynamic programming quantization that automatically
+reuses
+the block partitioning described earlier, thereby not introducing an additional constant for the quantization block size.
+
+4.2.1
+Lloyd-Max
+
+Lloyd-Max
+(
+Lloyd 1982
+;
+Max 1960
+)
+is a classical algorithm for scalar quantization. It iteratively alternates between assigning each value to the nearest codebook entry and updating each codebook entry to be the mean of the values assigned to it. However, we identify two major problems with this approach.
+
+The first problem is
+contraction
+. Because Lloyd-Max (LM) learns its codebook from the observed values, the two extreme codebook entries are not necessarily fixed at the endpoints of the normalized range
+[-1,1]
+. If we recompute the quantization scale at every optimizer step, this can create an undesirable feedback loop: after dequantization, the largest stored value is bounded by the largest learned codebook entry, which may be strictly smaller than
+1
+. The next absmax estimate is then smaller as well, causing the effective quantization range to shrink over time. To solve this problem, we force the codebook to always include the two extreme entries
+-1
+and
+1
+, which guarantees that the quantization range is preserved and prevents contraction.
+
+However, another issue is that we found LM to be sensitive to the codebook initialization strategy: linear spacing or initialization by quantiles can lead to different results, with no consistent winner. See
+for more details.
+
+4.2.2
+Exact Quantization of Momentum Using Histogram-Based Dynamic Programming
+
+One dimensional Lloyd-Max quantization is not guaranteed to converge to the optimal codebook solution, and is sensitive to the codebook initialization strategy (
+). We therefore seek to find an optimal solution. The quantization problem in general is NP-hard
+(
+Aloise et al. 2009
+;
+Dasgupta & Freund 2009
+;
+Mahajan et al. 2012
+)
+, however, inspired by
+Wang & Song 2011
+we design an optimal dynamic programming solution that operates on the histogram of the first step gradients and runs in
+O(b^{2}k)
+, where
+b
+is the number of bins in the histogram and
+k
+is the number of quantization levels. Histogram calculation is performed in CUDA kernels, and dynamic programming is performed on the CPU using Numba
+(
+Lam et al. 2015
+)
+allowing the codebook learning process, which takes place only once at the beginning of the training, to finish quickly.
+See
+algorithms
+
+3
+and
+for more details on the algorithm.
+See
+for comparison of the exact method vs the Lloyd-Max heuristic, and
+section
+
+6
+for ablations.
+
+5
+Experiments
+
+We evaluate Gefen across the desiderata presented above: peak memory footprint, performance, throughput, and distributability, using a variety of model architectures, model sizes, and datasets. Both in theory and in implementation, Gefen reduces the peak and persistent memory footprint of the optimizer state by
+8\times
+, while achieving performance similar to AdamW. In the evaluated distributed-training configurations, Gefen improves FSDP throughput by 56% compared to AdamW and enables the DDP setting where AdamW cannot fit even a microbatch size of 1. Alternatively, one can use the reduced memory footprint to increase model size. Implementation details and hyperparameters are found in
+appendix
+
+B
+.
+
+5.1
+Throughput and Distributability
+
+(a) Llama 3-1.5B with FSDP
+
+(b) GPT2-1B
+
+Figure 2:
+Training throughput in two distributed settings. (a) With FSDP, Gefen increases throughput by 56%. (b) For GPT2-1B, Gefen enables training where AdamW is infeasible and improves throughput by 21% over Adam-mini; similar behavior is observed in single-machine training.
+
+We next evaluate whether the reduced memory footprint translates into practical
+throughput gains and whether the method is compatible with distributed training schemes. Since optimizer-step time is only one component of the full
+training iteration, we measure end-to-end training throughput in tokens per
+second under fixed global batch size and sequence length. In both distributed
+settings, the lower optimizer-state memory of Gefen allows a larger
+microbatch to fit on each GPU, reducing gradient accumulation overhead and
+increasing throughput. As shown in
+fig.
+
+2
+, this yields a 56%
+throughput improvement over other methods for Llama 3-1.5B with FSDP sharding on C4, by allowing the microbatch size per GPU to increase from 1 to 2, which is not possible with the other methods due to their larger memory footprint. Adam4bit and Adam8bit implementations do not support FSDP sharding
+(
+Liang et al. 2025
+)
+.
+For the GPT2-1B model, under both DDP on two 24GiB GPUs and single-machine training, AdamW is infeasible even with a microbatch size of 1. Adam-mini supports a microbatch size of 1, whereas Gefen supports a microbatch size of 2, yielding a 21% throughput improvement over Adam-mini while making this setting feasible relative to AdamW.
+
+6
+Ablation Study
+
+7
+Conclusion
+
+fig.
+
+3
+summarizes the main results of this work. Among the baselines that reduce AdamW’s peak memory footprint by
+2\times
+or more, Gefen satisfies the desiderata of a practical optimizer: it matches AdamW’s performance, requires no learning-rate adjustment or additional hyperparameters, and achieves the lowest memory footprint (
+8\times
+less than AdamW) and the highest throughput.
+
+Figure 3:
+Left: qualitative comparison of optimizer desiderata. Middle: peak optimizer memory relative to model size, where lower is better; Gefen uses
+0.25\times
+model size, an
+88\%
+reduction compared with AdamW. Right: end-to-end training throughput, where higher is better; the reduced optimizer memory of Gefen enables a larger microbatch, achieving a
+56\%
+improvement over AdamW in the FSDP setting and enabling the DDP setting with a microbatch size of 2, where AdamW cannot fit even a microbatch size of 1.
+
+Appendix A
+Empirical Evidence That High Hessian Implies Close Squared Gradients
+
+We trained small models and examined the relationship between the squared
+gradients of selected weight entries within several parameter tensors and the
+corresponding Hessian entries. The models are intentionally small, since
+computing the Hessian for large models is difficult, but they all tell the same
+empirical story. This matches the theory in
+
+theorem
+
+3.1
+: when the Hessian magnitude between two
+weights is high, the ratio between their squared gradients tends to be close to
+
+1
+.
+
+In
+fig.
+
+5
+, as the Hessian entry moves away from
+zero in either direction, the ratio of the squared gradients, shown on a log
+scale, approaches one, marked by the horizontal dashed line. The same phenomenon
+appears both when the two weights share the same first dimension and when they
+do not.
+
+(a)
+
+(b)
+
+Figure 4:
+Squared-gradient ratio on a log scale vs. Hessian for GPT-toy at the beginning of
+training: (a) first-layer query matrix; (b) fourth-layer value matrix. As the Hessian entry moves away from zero, the squared-gradient ratio approaches one, as predicted by the theorem.
+
+(a)
+
+(b)
+
+Figure 5:
+Squared-gradient ratio on a log scale vs. Hessian for CNN on MNIST at the
+beginning of training: (a)
+conv1.weight
+; (b)
+conv1.bias
+. The same phenomenon appears in both the weight and bias parameters, as in the transformer model.
+
+Another example, this time for a convolutional architecture, is shown in
+fig.
+
+5
+. The same phenomenon appears there, even though the networks are very different.
+
+Appendix B
+Hyperparameters
+
+Llama Pre-training.
+
+For
+we pre-trained Llama 3-1.5B using the TorchTitan codebase
+(
+Liang et al. 2025
+)
+on the C4 dataset
+(
+Raffel et al. 2020
+)
+. We use weight decay coefficient
+\lambda=0.0
+,
+\epsilon=10^{-8}
+,
+\beta_{1}=0.9
+,
+\beta_{2}=0.999
+, and learning rate
+=10^{-4}
+. For the learning-rate schedule, we use warmup for 1% of the total training steps, followed by linear decay. This matches the default scheduler used in the TorchTitan codebase. We use sequence length 2048 and global batch size 256, with per-GPU batch size 2 and 64 gradient accumulation steps on 2 GeForce RTX 3090 GPUs.
+
+GPT-2 training on OpenWebText.
+
+We use the nanoGPT codebase
+1
+1
+
+1
+
+nanoGPT repository
+to train GPT-2-125M on OpenWebText (
+). We use the recommended hyperparameters:
+seq_len = 1024
+, batch size
+=480
+, weight decay coefficient
+\lambda=0.1
+,
+\epsilon=10^{-8}
+,
+\beta_{1}=0.9
+, and
+\beta_{2}=0.95
+. We use a cosine-decay learning-rate schedule with 2000 warmup iterations. For GPT-2-small, we use the peak learning rate recommended by
+Liu et al. 2024
+, which is reported to be optimal based on grid search. The chosen peak learning rate is
+6\times 10^{-4}
+. The minimum learning rate is
+3\times 10^{-5}
+. For SM3, this learning rate caused divergence, so we switched to a more stable learning rate of 0.225. For Adafactor and SM3, we added momentum with the same value for a fair comparison. In general, SM3 and Adafactor use different learning rates than AdamW, which makes them less suitable as drop-in replacements, but we report them for completeness. More accurate learning rates for SM3 and Adafactor may bring these optimizers closer to AdamW.
+
+ResNet.
+
+For
+we use the official PyTorch implementation codebase
+2
+2
+
+2
+
+PyTorch torchvision ResNet implementation
+to train ResNet18
+(
+He et al. 2016
+)
+on ImageNet
+(
+Deng et al. 2009
+)
+. We use a cosine-decay learning-rate schedule, 90 epochs,
+\beta_{1}=0.9
+,
+\beta_{2}=0.999
+,
+\epsilon=10^{-8}
+, and weight decay
+10^{-4}
+. For ResNet18, we use batch size
+=256
+and peak learning rate
+=0.005
+.
+
+CNN for MNIST.
+
+We use the official PyTorch implementation codebase
+3
+3
+
+3
+
+PyTorch MNIST example implementation
+to train a CNN on MNIST on an RTX PRO 6000 Blackwell Max-Q GPU (
+). The network consists of two convolutional layers with ReLU activations,
+followed by max pooling and dropout, and then two fully connected layers ending in a 10-class digit classifier. We use batch size
+=64
+, test batch size
+=1000
+, and train for 4 epochs. For all optimizers, we use
+\beta_{1}=0.9
+,
+\beta_{2}=0.999
+, and learning rate
+=0.001
+. We use a
+StepLR
+scheduler with step size
+1
+and
+\gamma=0.7
+, decaying the learning rate after each epoch. Standard deviations are computed over three consecutive seeds.
+
+Throughput.
+
+For FSDP in
+fig.
+
+2
+we used Llama 3-1.5B on C4 with the default sequence length 2048, global batch size 256, and two RTX 3090 GPUs. In this setting, AdamW and Adam-mini support a microbatch size of 1, whereas Gefen supports a microbatch size of 2.
+For DDP in
+fig.
+
+2
+we used GPT2-1B on OpenWebText with the default sequence length 1024, global batch size 120, and two RTX 3090 GPUs. In this setting, AdamW cannot fit a microbatch size of 1, Adam-mini supports a microbatch size of 1, and Gefen supports a microbatch size of 2.
+

@@ -1,0 +1,2092 @@
+Eliminating Hidden Serialization in Multi-Node Megakernel Communication
+Byungsoo Oh, Rachee Singh
+
+Abstract
+Recent megakernel designs for Mixture-of-Experts (MoE) inference fuse expert computation with fine-grained, GPU-initiated communication into a single persistent GPU kernel, and outperform collective-based MoE on a single node by overlapping data transfer with compute at tile granularity. This benefit does not carry over cleanly to multi-node inference, where experts span many nodes connected by an RDMA fabric. Communication-bound MoE models regress by up to 10 × 10\times on 8 nodes, and the regression worsens with node count. We trace this regression to hidden serialization in proxy-based RDMA transports. The ordering requirement between each tile transfer and its completion signal forces a fence that drains the NIC pipeline, and its cost grows with the number of concurrent transfers. As a result, models whose per-expert compute is too small to absorb this inflated network latency expose communication on the critical path. We present Perseus, which eliminates this serialization through two techniques. Decoupled signaling batches fences at per-destination granularity, reducing fence count by 8 × 8\times . NIC-side ordering replaces proxy stalls with hardware fence flags, so the proxy never blocks. On proxy-based transports, Perseus achieves up to 10.3 × \times end-to-end speedup. Perseus on IBRC matches or exceeds IBGDA GPU-direct by up to 1.2 × \times , which shows that serialization, rather than the choice between proxy-based and GPU-direct transport, is what bounds multi-node megakernel performance.
+
+
+
+1
+Introduction
+
+Mixture-of-Experts (MoE) has become the dominant architecture for large language models. Frontier models including Qwen3
+[
+53
+]
+, DeepSeek-V3
+[
+28
+]
+, and Llama4
+[
+33
+]
+all adopt it. MoE activates only a subset of parameters per token, which lets models scale parameter counts without a proportional increase in inference compute. This property has enabled the recent progress in model quality under practical serving budgets. This architectural efficiency comes with an underlying challenge. Expert parallelism partitions the experts in an MoE model across GPUs, so every token must travel to the GPU that holds its assigned expert and its output must return before the next layer can proceed
+[
+24
+,
+44
+]
+. The resulting all-to-all exchange lies on the inference critical path, and its cost governs how MoE systems scale in production.
+
+Existing MoE implementations shuffle tokens with all-to-all collective communication primitives from libraries like NCCL
+[
+10
+]
+, invoking one collective before expert computation and another after
+[
+24
+,
+44
+]
+. A collective is a bulk synchronous operation that requires all GPUs to receive tokens before any one can begin computation. This layer-wide serialization between communication and computation rules out overlap at any finer granularity, which is where most of the recoverable performance lies
+[
+3
+,
+9
+,
+58
+,
+49
+]
+.
+
+A recent line of work replaces the collective all-to-all with asynchronous point-to-point transfers issued from inside the MoE GPU kernel
+[
+3
+,
+9
+,
+58
+,
+49
+]
+. In this
+megakernel
+design, the unit of work is a
+tile
+of expert output. As soon as a GPU produces a tile, a thread on that GPU issues a one-sided asynchronous transfer to the destination GPU and a signal that marks the tile as ready. The receiver polls the signal, and any tile whose signal has arrived can enter the next stage of computation while the rest of the exchange is still in flight. GPU-initiated communication frameworks, including NVSHMEM
+[
+38
+]
+and the NCCL device APIs
+[
+15
+,
+13
+]
+, expose the primitives that make this pattern expressible inside a kernel. Within a single multi-GPU node, the megakernel design significantly outperforms collective-based MoE
+[
+3
+]
+.
+
+(a) Llama4
+
+(b) Qwen3
+
+Figure 1
+:
+Top: Weak scaling (ideal = 1.0
+\times
+). Llama4 uses 16 experts, limiting EP-only scaling to 4 nodes (16 GPUs). Bottom: GPU streaming multiprocessor (SM) traces at 4 nodes. Llama4 shows dense overlap; Qwen3 shows frequent stalls due to delayed signals.
+
+Frontier-scale MoE models require an expert-parallel degree larger than the GPU count of a single node, and these models therefore place experts across multiple nodes connected by a network fabric. Extending MoE megakernels to this setting is harder than prior work suggests. Figure
+1
+reports the end-to-end latency of forward pass on state-of-the-art MoE megakernels sharded across increasing node counts in our experiments. Performance degrades relative to single-node baselines and continues to worsen as node count grows. The degradation depends on model architecture. Compute-bound models like Llama4 scale near-linearly with node count, whereas communication-bound models like Qwen3-30B run up to 10
+\times
+slower on 8 nodes than the single-node trend would predict.
+
+The root cause of this regression is the inflated latency of communication over the inter-node RDMA transport. Megakernels hide communication behind computation at tile granularity, and this hiding works only when the per-tile compute runs long enough to absorb the per-tile network latency. When the transport itself becomes slow, the budget for this overlap shrinks. Figure
+1
+b makes this visible. Qwen3, whose expert compute is small, has little headroom to absorb inflated transport latency, and its streaming multiprocessor (SM) trace shows frequent stalls where processors wait for signals that arrive late. Llama4, with much larger per-expert compute, retains enough slack to hide the same transport cost, and its trace remains densely packed.
+
+We find that the transport slowdown happens due to hidden serialization in the RDMA path. Recall that megakernels signal the remote GPU after every tile transfer so the receiver can begin computing immediately. Correct ordering requires a
+fence
+between each transfer and its signal so the signal becomes visible only after the data. On proxy-based transports, where a CPU thread mediates GPU-initiated RDMA operations, this fence drains every in-flight data transfer from the NIC pipeline before the proxy submits the signal. A single dispatch phase in MoE models triggers one drain per expert transfer, which amounts to 96 drains in our Qwen3-30B configuration, and the per-drain cost grows with node count as concurrent transfers accumulate. We show that signaled transfer throughput falls to as little as 2% of its unsignaled counterpart at 96 concurrent transfers across 8 nodes.
+
+Figure 2
+:
+Proxy–NIC interaction for 3 signaled transfers
+(p
+i
+= PUT, s
+i
+= signal).
+(a)
+Vanilla
+: each coupled put+signal inserts a proxy fence (3 proxy stops).
+(b)
+Decoupled signaling
+: PUTs submitted back-to-back; one proxy fence precedes all signals (1 proxy stop).
+(c)
+NIC-side ordering
+: proxy delegates ordering to NIC via per-signal fence flags (s
+i
+F
+); proxy never blocks but each fence flag serializes the NIC pipeline (0 proxy stops, 3 NIC stalls).
+(d)
+Perseus (both)
+: only the first signal carries the fence flag (0 proxy stops, 1 NIC stall).
+
+We present
+Perseus
+1
+1
+
+1
+
+Perseus is named after the Greek hero who slays Medusa, whose gaze freezes everything to stone.
+, a system that eliminates hidden serialization in megakernel communication while preserving tile-level overlap of compute and communication. Perseus introduces two complementary techniques, one at the megakernel layer and one at the transport layer (Figure
+2
+). Perseus’s
+Decoupled signaling
+separates data transfer from the signal that announces its arrival. GPU thread blocks issue transfers back-to-back without blocking, and a designated leader per group issues a single fence followed by all signals for that group. Grouping signals by destination GPU reduces the number of fences from one per expert to one per remote GPU—an 8
+\times
+reduction in our running Qwen3 example—while preserving transfer concurrency.
+NIC-side ordering
+addresses the remaining per-fence cost at the transport level. Rather than blocking the proxy to drain the NIC pipeline, Perseus attaches a hardware fence flag to the signal submission and delegates ordering enforcement to the NIC. The proxy never blocks, and only the first signal per group carries the flag.
+
+We evaluate Perseus on two platforms: Perlmutter (A100, Slingshot-11, up to 64 GPUs) and a commercial GPU cloud (H100, ConnectX-7, up to 32 GPUs). Our evaluation spans three RDMA transport backends (Libfabric proxy, IBRC proxy, IBGDA GPU-direct), three MoE models that span the compute-to-communication spectrum (Qwen3-30B, GPT-OSS-120B, and DeepSeek-v3), and sequence lengths from 256 to 64K tokens. On proxy-based transports, Perseus achieves up to 10.3
+\times
+end-to-end speedup on Libfabric and up to 2.47
+\times
+on IBRC. Perseus on IBRC matches or exceeds vanilla IBGDA GPU-direct by up to 1.2
+\times
+, which shows that serialization, rather than the choice between proxy-based and GPU-direct transport, is what bounds multi-node megakernel performance. Perseus’s transport-level optimization is portable to various ML frameworks. We apply it to Triton-Distributed’s
+AllToAll
+benchmark without any application-level changes, where Perseus achieves up to 79
+\times
+speedup by eliminating 99% of synchronization overhead.
+
+2
+The Rise of Distributed Megakernels
+
+Distributed Mixture-of-Experts (MoE) inference exposes the inefficiencies of the CPU-driven execution model that ML frameworks rely on. In this model, the host CPU launches GPU tasks, called kernels, one at a time onto GPU streams, and each kernel runs to completion across all of the GPU’s streaming multiprocessors (SMs) before the next kernel begins. Inter-GPU communication uses host-initiated collectives that impose a global synchronization barrier across every participating GPU. These coarse-grained synchronization points in both compute and communication kernels leave SMs idle for large fractions of time. A new class of
+megakernel
+designs has emerged in response. A megakernel fuses an entire MoE layer, or even an entire model, into one persistent GPU kernel and overlaps compute with GPU-initiated communication at tile granularity
+[
+3
+,
+9
+,
+58
+,
+55
+,
+48
+]
+. This section provides background on how megakernels address the performance bottlenecks of distributed MoE inference.
+
+2.1
+Mixture-of-Experts and expert parallelism
+
+A standard Transformer block in a large-language model consists of a self-attention module followed by a dense feed-forward network (FFN)
+[
+51
+]
+. A Mixture-of-Experts (MoE) block replaces the single FFN with a collection of
+E
+identically shaped FFNs, called
+experts
+, together with a lightweight gating network that selects a small subset of experts for each token
+[
+45
+,
+24
+,
+28
+,
+33
+,
+53
+]
+. For each token, the gate produces affinity scores over all experts and routes the token to its top-
+k
+experts, with
+k
+much smaller than
+E
+. The MoE layer’s output is a weighted combination of the selected experts’ outputs. This conditional computation decouples parameter count from per-token FLOPs, so adding experts grows model capacity without proportionally growing inference cost. Most modern frontier models use the MoE architecture
+e.g.,
+DeepSeek-V3 uses
+E{=}256
+experts with top-8 routing
+[
+28
+]
+, Qwen3-235B uses
+E{=}128
+
+[
+53
+]
+, and Llama4 Maverick uses
+E{=}128
+
+[
+33
+]
+.
+
+Expert parallelism (EP).
+
+The aggregate expert weights in frontier MoE models far exceed the memory of a single GPU, so experts are partitioned across GPUs using
+expert parallelism
+
+[
+24
+,
+44
+]
+. Let
+P
+denote the number of GPUs (processing elements or PEs) in the expert-parallel group; each PE hosts
+E/P
+experts. Since the gate assigns tokens dynamically at runtime, any PE may send tokens to any other PE. Each MoE layer therefore consists of four steps:
+(1) a local
+gate
+compute that assigns each token to
+k
+experts, (2) a
+dispatch
+
+AllToAll
+that moves each token to the PE(s) hosting its selected experts, (3) an
+expert compute
+step, two General Matrix Multiplications (GEMMs) and an activation, on the received tokens, and (4) a
+combine
+
+AllToAll
+that returns expert outputs to the originating PEs for weighted aggregation. Dispatch and combine are on the critical path of every layer, and their latency scales with both
+E
+and
+P
+.
+
+2.2
+The conventional CPU-driven execution model
+
+GPU workloads in modern ML frameworks like PyTorch
+[
+39
+]
+are expressed as sequences of short-lived kernels submitted by the host CPU to GPU streams. PyTorch code for a matrix multiplication, an activation, a reduction, compiles into one or more GPU kernel launches. The host CPU enqueues each kernel into a GPU stream and returns immediately, while the GPU executes enqueued kernels in FIFO order. This execution model is attractive because it is composable (operators can be combined as library calls) and debuggable (each kernel is an independent failure unit). For dense models at modest scale, it is also efficient, because kernels are large enough that the overhead of launching kernels amortizes.
+
+Two properties of the CPU-driven model limit MoE inference performance. The first is the launch overhead that the model imposes on every kernel. A single MoE layer, implemented naively, dispatches hundreds of short-lived kernels. Recent work reports up to 550 kernel launches per layer for DeepSpeedMoE and 261 for Megatron-LM
+[
+3
+]
+. Each launch carries a fixed submission cost from the host, and when kernels are this short and this numerous, the host may not keep the GPU’s stream populated ahead of consumption causing GPU SMs to be idle. The second is the all-or-nothing dependency that the CPU-driven model enforces at collective boundaries. Collective primitives including
+AllToAll
+complete as a single unit, so the entire dispatch must finish before
+any
+token can enter expert compute, and the entire expert compute must finish before combine can begin.
+
+These two properties compound for communication-bound workloads like MoE inference. The critical path is dominated by collectives, and the collectives are themselves punctuating hundreds of short kernels whose launch gaps lead to idle GPU SMs. Recent measurements on two A100 GPUs show GPUs idle 60–90% of the time during MoE forward passes, with kernel launch gaps and non-overlapped
+AllToAll
+each contributing a large fraction of the idleness
+[
+3
+]
+.
+
+Figure 3
+:
+Megakernel execution model. Each GPU runs a persistent kernel launched once by the host. CTAs specialize as processors or OS (subscriber + scheduler). Symmetric memory on both GPUs forms a PGAS address space (green dashed) enabling one-sided communication. Workflow: ❶ processor on one GPU issues
+Put-with-Signal
+to peer’s symmetric memory; ❷ subscriber polls flag and notifies scheduler; ❸–❹ scheduler enqueues and assigns tasks; ❺–❻ processor dequeues, reads the arrived tile, and computes. The left GPU’s OS internals, task queue, and host CPU are omitted for clarity; both GPUs run identical megakernel code.
+
+2.3
+Megakernels: persistent GPU kernels
+
+Megakernels attack both costs of the CPU-driven execution model simultaneously by fusing an entire subgraph of operators (each conventionally a separate kernel) into a single, persistent GPU kernel that never returns control to the host mid-computation
+[
+11
+,
+3
+,
+9
+,
+48
+,
+55
+,
+58
+]
+. For instance, recent work replaces the 260–550 kernels of a conventional MoE layer with only a single kernel
+[
+3
+]
+.
+
+Tile-level parallelism.
+
+A megakernel operates at the granularity of
+tiles
+, fixed-size sub-matrices of the input chosen at compile time (
+e.g.,
+
+128{\times}64
+
+[
+3
+]
+), rather than over whole input tensors. After the gate routes each token to its top-
+k
+experts, megakernels group tokens into tiles, and each tile traverses the dependency graph consisting of a dispatch, a GEMM, an activation, a second GEMM, combine, and accumulation. Megakernels track dependencies per tile, so a tile advances to its next stage the moment its inputs are ready, regardless of the progress of any other tile.
+
+Managing tile dependencies.
+
+Since a megakernel never returns control to the host, it must manage its own execution on the GPU. It does this by specializing cooperative thread arrays (CTAs), the parallelizable unit of GPU computation, into distinct roles (Figure
+3
+). Most CTAs serve as
+processors
+that execute computation (
+e.g.,
+GEMMs) on individual tiles. A small number of CTAs, or warps within a CTA, play the role of an
+operating system
+that orchestrates the dependency pipeline. This operating system includes a
+subscriber
+that decodes tile-arrival notifications from peer GPUs and a
+scheduler
+that maintains a ready queue of tile-level tasks and assigns them to idle processors
+[
+3
+,
+9
+]
+. Because the scheduler runs on the GPU and observes readiness directly, a tile transitions from
+arrived
+to
+under compute
+without a host round-trip. The resulting megakernel designs report over 93% SM utilization under this organization, compared to 9–60% for CPU-driven baselines
+[
+3
+]
+.
+
+GPU-initiated communication.
+
+A megakernel runs entirely on the GPU and does not return control to the host until completion, so host-launched collectives including
+AllToAll
+are unreachable from inside the megakernel
+[
+50
+]
+. Even if they were reachable, tile-level scheduling is only useful if communication can be issued and observed at tile granularity, yet a collective’s unit is an entire layer of the model and its completion is a global barrier, which is the coarse-grained synchronization the megakernel was designed to eliminate. Megakernels therefore require communication that is both
+device-initiated
+and
+one-sided
+. Device-initiated means that a GPU thread, rather than the host CPU, issues the data transfer, which is what allows communication to be expressed from inside a persistent kernel. One-sided means that a sender can write directly into the receiver’s memory without the receiver posting a matching receive, which is what allows a producer CTA in the megakernel to hand a tile to its consumer at the moment the tile is ready, rather than waiting for the consumer to reach a rendezvous point.
+
+Global addressing enables one-sided communication.
+
+One-sided communication requires the sender to know where on the receiver GPU’s memory the data should land, because the receiver is not involved in the transfer and cannot supply a destination. The Partitioned Global Address Space (PGAS) model
+[
+8
+]
+gives the sender this knowledge. Every PE allocates a
+symmetric
+memory region at the same virtual offset, so the union of these regions forms a single logical address space in which a sender can name any location on any remote PE using ordinary pointer arithmetic, with no prior coordination. GPU-initiated communication libraries including NVSHMEM
+[
+38
+]
+, rocSHMEM
+[
+5
+]
+, NCCL device APIs
+[
+15
+,
+13
+]
+, NCCLX
+[
+47
+]
+, and PyTorch Symmetric Memory
+[
+42
+]
+expose this model to code, giving a CTA on a PE the ability to write into a symmetric buffer on another PE with a single library call.
+
+Signaling in one-sided communication.
+
+The communication primitive that binds PGAS to tile-level scheduling in megakernels is called
+put-with-signal
+. A processor CTA that has finished staging tokens for one remote expert calls
+\texttt{putmem\_signal\_nbi}()
+(Figure
+3
+❶), which performs two operations that appear atomic from the programmer’s point of view: (1) a non-blocking write of the tokens into the remote symmetric buffer or
+Put
+, and (2) a write to a small flag variable on the remote PE after the data is guaranteed to be visible there or
+Signal
+. The remote subscriber CTA polls the flag; when the flag flips, the subscriber enqueues the dependent compute tasks and processor CTAs pick them up. This entire exchange takes place without host participation or collective barriers, and the sender CTA moves on to its next task the instant the call returns, making this approach highly efficient.
+
+3
+Scaling Megakernels Beyond a Single Node
+
+State-of-the-art distributed MoE megakernels achieve up to
+6\times
+lower latency and
+9\times
+higher SM utilization than kernel-based MoE baselines on one multi-GPU server with 8
+\times
+H100 GPUs
+[
+3
+]
+, and related megakernel systems report comparable gains in single-node configurations
+[
+9
+,
+55
+,
+58
+]
+. Frontier MoE models, however, cannot be served on a single node. The aggregate expert weights exceed the HBM of any single 8-GPU server, with DeepSeek-V3 activating 37B of 671B parameters per token
+[
+28
+]
+and Qwen3-235B and Llama4 Maverick each using 128 experts per layer
+[
+53
+,
+33
+]
+. Production deployments therefore run expert parallelism across multiple nodes, typically 16–64 GPUs spanning 2–16 nodes
+[
+28
+,
+27
+,
+37
+]
+. Existing research leaves open the question of whether the single-node megakernel gains carry over to multi-node deployments.
+
+3.1
+Performance collapse in multi-node weak scaling
+
+We answer this question by distributing a state-of-the-art MoE megakernel
+[
+3
+]
+across eight nodes of the NERSC Perlmutter supercomputer
+[
+34
+]
+. Each Perlmutter GPU node contains four NVIDIA A100 GPUs, and each GPU has a dedicated HPE Cassini NIC that exposes RDMA through libfabric
+[
+14
+]
+. The NICs connect into a three-level dragonfly fabric, which provides all-to-all connectivity between nodes with at most three hops on the worst-case path.
+
+To characterize how the megakernel behaves as deployment size grows, we adopt weak scaling, a standard technique in which the per-GPU workload is held constant while GPUs are added, so that the total problem size grows in proportion to the resources provisioned. Under ideal weak scaling, per-iteration latency would stay almost flat because each added GPU contributes compute and network bandwidth proportional to its share of the work, and any deviation from this flat curve isolates overheads that grow with scale rather than with problem size. We apply this method to our Perlmutter deployment by fixing the per-GPU workload (
+i.e.,
+tokens sent per device) and sweeping node count from one to eight. We evaluate scaling megakernels of three state-of-the-art MoE models that span the compute-communication spectrum. Qwen3-30B
+[
+53
+]
+is communication-bound, GPT-OSS-120B
+[
+1
+]
+is balanced, and Llama4-Scout-17B
+[
+33
+]
+is compute-bound.
+2
+2
+
+2
+
+Computed as TFLOPs/GB from per-token FLOPs (including the gated MLP factor
+\times 6
+) over communication volume. Qwen3 achieves 4.6, GPT-OSS 17.3, and Llama4 49.2.
+
+Slowdown in communication-bound models.
+Figure
+1
+(top) shows that megakernel performance degrades as we increase node count, and the degradation is worse for models with higher communication-to-compute ratio. Communication-bound Qwen3-30B slows down by up to
+10\times
+at 8 nodes relative to the single-node baseline. Balanced GPT-OSS degrades by
+1.3
+–
+1.7\times
+with each doubling of node count. Compute-bound Llama4 scales near-linearly, with only a
+1.1
+–
+1.3\times
+slowdown. This correlation between the slowdown and the communication-to-compute ratio is our first indication that the bottleneck lies on the inter-node communication path rather than in the compute pipeline. SM traces confirm this hypothesis (Figure
+1
+, bottom). Processor CTAs stall between tile computations, waiting on signals that arrive late, and the SMs that tile-level parallelism was designed to keep busy end up waiting on the network transport.
+
+The performance collapse is surprising because the megakernel abstraction itself does not change as the deployment grows from one node to many. The scheduler still dispatches on flag flips, and the sender still issues
+Put-with-Signal
+into a symmetric buffer. What changes is how the
+Put
+is realized underneath. Within a node, a
+Put
+is a write over NVLink that completes at NVLink latency, and prior work has shown NVLink transfers to scale near-linearly with concurrency
+[
+25
+]
+. Across nodes, a
+Put
+traverses an RDMA transport, and the structure of that transport is what we examine next.
+
+3.2
+Device-initiated RDMA and its submission paths
+
+Remote Direct Memory Access (RDMA) lets a sender transfer data into the memory of a remote machine without involving either machine’s CPU on the data path. The sender names the local source and the remote destination memory regions, and the two NICs cooperate to copy the bytes between them. The sending NIC reads the source region from local memory and emits network transfers, and the receiving NIC writes the arriving bytes into the destination region on the remote host. In ML servers these memory regions reside in GPU HBM, and each NIC reaches its local GPU’s HBM over PCIe
+[
+36
+]
+.
+
+Submission paths of device-initiated RDMA.
+
+Megakernels use
+device-initiated
+RDMA, in which a GPU thread triggers a transfer from inside a GPU kernel through a call like
+putmem_signal_nbi()
+. Device-initiated RDMA is a property of the programming model that allows a GPU to be the semantic initiator of the data transfer. A separate axis determines which processor forwards the request to the NIC hardware, which we call the
+submission path
+of the RDMA transfer. Device-initiated RDMA has two submission paths. In the
+GPU-direct
+submission path, exemplified by NVIDIA’s IBGDA on InfiniBand
+[
+32
+]
+, GPU threads submit requests to the NIC through a hardware interface the NIC exposes to the GPU, and no CPU thread participates in the process. In the
+proxy-based
+submission path, GPU threads cannot reach the NIC and instead write requests into a host-resident queue. A dedicated CPU proxy thread drains the queue and forwards each request to the NIC on the GPU’s behalf.
+
+Most production fabrics rely on proxy-based submission.
+The GPU-direct submission path requires NIC hardware support that is absent on several network fabrics, including AWS EFA
+[
+6
+]
+, HPE Slingshot-11
+[
+12
+]
+, and Broadcom-based cloud deployments
+[
+31
+]
+. The NVSHMEM communication library supports two proxy-based transport backends, Libfabric and InfiniBand Reliable Connection (IBRC)
+[
+14
+,
+32
+]
+. A portable multi-node megakernel must work correctly and perform well over both proxy-based and GPU-direct RDMA transport.
+
+Figure 4
+:
+Proxy-based RDMA submission path. GPU threads enqueue network requests into a host-resident buffer that a dedicated CPU proxy drains into the NIC. NVSHMEM uses a single proxy channel per PE, and requests from every CTA on a GPU are funneled through one shared submission path.
+
+Figure 5
+:
+Signaling overhead across message sizes, node counts, and concurrency levels. (a) Signaling efficiency, defined as coupled put+signal throughput normalized to pipelined put-only, collapses with increasing concurrency and node count. (b) Fence cost at 96 concurrent transfers grows with both node count and message size. (c) Fence overhead accounts for up to 98% of total communication time and grows with node count at 96 concurrent transfers. Signal cost is negligible (
+<
+0.2% of total time) and included in the transfer portion.
+
+The proxy submission path under megakernel traffic.
+Figure
+4
+shows how a proxy-based transport handles device-initiated requests. The NVSHMEM library, which is the communication library megakernels commonly use, allocates one proxy channel per PE, and every CTA on the GPU writes its requests into the host-resident queue for that channel. The proxy thread drains the queue in FIFO order and forwards one request at a time to the NIC. The number of concurrent requests that traverse this single channel follows from how a megakernel distributes expert computation. With
+E
+experts sharded across
+P
+PEs, each PE hosts
+E/P
+experts. The proxy carries inter-node traffic only, because intra-node transfers use NVLink rather than the NIC, so each PE issues one transfer per
+remote
+expert per dispatch. Denoting the number of PEs on the sender’s own node as
+P_{\text{local}}
+, a PE issues
+(P-P_{\text{local}})\cdot(E/P)
+concurrent transfers through its proxy channel in the worst case. In our Qwen3-30B configuration at 4 nodes and 16 GPUs, each Perlmutter node hosts 4 PEs, which leaves 12 remote PEs holding 8 experts each, so one PE sends 96 concurrent transfers per dispatch through the single proxy channel.
+
+3.3
+Root cause: fence-induced serialization
+
+Large number of concurrent data transfers required by megakernels (
+e.g.,
+96 per dispatch to a single proxy channel) would not impose a performance bottleneck if the proxy could pipeline these transfers. We find that it cannot, and the reason lies in how the proxy honors the ordering semantics of
+putmem_signal_nbi
+. Each
+putmem_signal_nbi
+call guarantees that when the signal becomes visible at the receiver, the payload of the corresponding
+Put
+has already been transferred. The proxy enforces this guarantee by expanding the call into a three-step sequence on its channel: a
+Put
+, a
+Fence
+that waits for every prior
+Put
+on the channel to complete, and the
+Signal
+. The fence keeps the
+Signal
+behind its
+Put
+at the NIC to ensure that the data transfer is complete. Within a node the proxy is not on the path and this
+Fence
+does not apply, which is why
+Put-with-Signal
+carries no observable cost over NVLink. Across nodes, the
+Fence
+forces the proxy to stop draining new requests until every in-flight
+Put
+on the channel has returned a completion from the NIC.
+
+Isolating fence cost.
+We measure the cost of the fence with a microbenchmark that strips away application-level complexity of the experiment in Figure
+1
+. Each PE issues
+N
+concurrent RDMA transfers to remote PEs, and we compare a put-only upper bound, which issues
+PUT
+s without signals, against the coupled
+Put-with-Signal
+primitive that megakernels invoke. We sweep concurrency from 1 to 128 transfers and message sizes from 4 KB to 4 MB across 2–8 Perlmutter nodes. Figure
+5
+summarizes the results. Coupled
+Put-with-Signal
+throughput falls to 2% of the
+Put
+-only ceiling at 96 concurrent transfers across 8 nodes (Figure
+5
+a). The mechanism designed to enable fine-grained overlap becomes the bottleneck that prevents it, and the performance collapse stems from two compounding effects that we isolate next.
+
+Concurrent fences interleave in the shared channel.
+Concurrent CTAs submit
+Put
+
+\to
+Fence
+
+\to
+Signal
+triples into one shared proxy FIFO queue (Figure
+6
+a). Each fence waits for every work request ahead of it, including
+PUT
+s posted by other CTAs, so as concurrency grows each fence encounters more preceding PUTs and the aggregate drain cost climbs (Figure
+5
+a). The effect peaks at small message sizes, where fence cost dominates transfer time, and persists at 1 MB, where efficiency stays below 50% at 8 nodes (Figure
+5
+b).
+
+A single fence’s drain grows with node count.
+A fence waits until every
+Put
+ahead of it has returned a completion. As the deployment adds nodes, those PUTs target more distinct remote destinations, and the drain waits for the slowest completion across all of them, a tail latency that grows with destination count. Figure
+5
+b quantifies this effect. At 96 concurrent transfers, aggregate fence time grows from
+0.96
+ms at 2 nodes to
+6.1
+ms at 8 nodes for 4 KB messages, and from
+3.5
+ms to
+9.2
+ms for 1 MB messages. Figure
+5
+c shows that fence overhead accounts for up to 98% of total communication time at small message sizes and remains above 19% even at 4 MB. Megakernels operate in this regime, sending many concurrent per-expert transfers so that the receiver can begin dependent compute early at tile granularity (
+e.g.,
+
+128\times 64
+BF16 tiles of 16 KB each). The regime in which megakernels expect to gain the most is therefore the regime in which proxy-based signaling degrades the most.
+
+3.4
+Why strawman solutions fail
+
+Two natural approaches fail to remove the serialization bottleneck while preserving fine-grained overlap. Bulk batching reduces fence count by consolidating many small transfers into fewer large ones, and it does so by reverting to the coarse-grained synchronization that megakernels were designed to eliminate. Raising proxy parallelism through multiple proxy threads or channels removes the single-FIFO bottleneck but requires a cross-channel ordering mechanism to preserve put-with-signal semantics, which reintroduces synchronization with added complexity (§
+8
+).
+
+These strawmen expose the tension at the heart of the problem. Fine-grained, per-expert signaling is what lets the receiver’s scheduler learn tile dependencies at CTA granularity, and coarsening it forfeits the overlap that motivates megakernels. Every fine-grained signal, however, requires a fence, and on a proxy-based RDMA transport every fence serializes the entire submission channel. Removing this bottleneck therefore requires redesigning both the signaling protocol and the proxy transport so that serialization disappears and fine-grained overlap survives.
+
+4
+Perseus Design
+
+Perseus eliminates the
+Fence
+-induced serialization identified in §
+3
+through two complementary mechanisms that attack the problem at different layers. At the protocol layer,
+decoupled signaling
+(§
+4.1
+) restructures how CTAs submit
+PUT
+s and
+Signal
+s so that the proxy FIFO no longer interleaves fences with data transfers.
+At the transport layer,
+NIC-side ordering
+(§
+4.2
+) delegates ordering enforcement to the NIC hardware so the proxy never blocks on a
+Fence
+. Together, the two mechanisms remove both the frequency and the per-
+Fence
+cost of serialization while preserving the fine-grained
+Put-with-Signal
+interface that megakernels depend on.
+
+Figure 6
+:
+CTA-to-proxy interaction for 96 remote experts across 12 remote PEs.
+(a)
+Vanilla
+: each CTA issues
+Put
++
+Fence
++
+Signal
+, serializing all 96 transfers.
+(b)
+Perseus
+:
+Phase 1
+pipelines 96
+PUT
+s back-to-back, which the NIC pipelines freely.
+Phase 2
+issues 96 signals, of which only 12 carry NIC fence flags (one per group).
+Leader CTAs (★) issue flagged
+Signal
+; others proceed to compute.
+
+4.1
+Decoupled signaling
+
+In the coupled
+Put
+
+\to
+Fence
+
+\to
+Signal
+sequence that vanilla
+Put-with-Signal
+issues, the
+Fence
+is the serialization point. Each
+Fence
+blocks the proxy until all prior
+PUT
+s on the channel complete, so the proxy cannot submit new
+PUT
+s while one
+Fence
+is draining. In our running example (Qwen3-30B, 4 nodes, 16 GPUs), each PE dispatches tokens to 96 remote experts and therefore drains the proxy 96 times per dispatch (Figure
+6
+a). Merging multiple small transfers into larger ones will amortize the
+Fence
+cost but will also shrink transfer concurrency and delay signals, eliminating the tile-level overlap that motivates megakernels (§
+3
+).
+
+Key insight.
+
+The
+Fence
+is only required before the
+Signal
+, not after each
+Put
+. If all CTAs submit their
+PUT
+s first and defer fencing until a single leader CTA issues the
+Signal
+s, the proxy FIFO sees a burst of
+PUT
+s followed by one
+Fence
+followed by a batch of
+Signal
+s, rather than a tightly interleaved sequence of triples. This reordering delivers two benefits. It allows the NIC to pipeline the
+PUT
+s concurrently, because no
+Fence
+is between them.
+It also reduces the number of
+Fence
+s from one per expert to one per group of experts, because a single
+Fence
+now orders all signals in the group.
+
+Algorithm 1
+
+Decoupled signaling
+
+1:
+
+Expert index
+e
+, group
+g=\lfloor e/\textit{group\_size}\rfloor
+
+2:
+
+Phase 1: Data transfer (all CTAs)
+
+3:
+
+Stage tokens for expert
+e
+to local buffer
+
+4:
+
+put_nbi
+(dst, src, size, peer)
+
+\triangleright
+no signal
+
+5:
+
+atomic_add
+(counter[
+g
+], 1)
+
+\triangleright
+notify leader
+
+6:
+
+if
+
+\neg
+is_leader(
+g
+)
+then
+
+7:
+
+resume as schedulable
+
+\triangleright
+free for compute
+
+8:
+
+end
+
+if
+
+9:
+
+10:
+
+Phase 2: Signaling (leader CTA only)
+
+11:
+
+wait_until
+(counter[
+g
+]
+=
+group_size)
+
+12:
+
+fence
+( )
+
+\triangleright
+one per group
+
+13:
+
+for
+each expert
+e^{\prime}
+in group
+g
+
+do
+
+14:
+
+signal
+(sig[
+e^{\prime}
+], peer)
+
+15:
+
+end
+
+for
+
+Mechanism.
+
+Perseus realizes this insight with a two-phase protocol (Algorithm
+1
+, Figure
+6
+b). Phase 1 performs data transfers. Each CTA stages its tokens, issues a non-blocking
+Put
+without a
+Signal
+, and increments a per-group atomic counter to announce completion to the leader (Lines 1–3). Non-leader CTAs then return to the megakernel scheduler and become available for compute tasks, including expert compute for tokens routed locally or over NVLink (Line 5). This overlap of communication with compute improves CTA utilization (§
+6
+). Phase 2 performs signaling. The leader CTA waits until the counter reaches the group size, which guarantees that every
+Put
+in the group has entered the proxy FIFO (Line 7). It then issues a single
+Fence
+followed by the signals for every expert in the group (Lines 8–11).
+
+Correctness.
+
+Algorithm
+1
+preserves the
+Put-with-Signal
+ordering by construction. The atomic counter ensures that all
+PUT
+s in the group enter the proxy FIFO before the leader submits the
+Fence
+. The single proxy thread then preserves submission order, so the
+Fence
+follows every
+Put
+in the group. The
+Fence
+guarantees that all
+PUT
+s complete at the NIC before any
+Signal
+is processed. By transitivity, every
+Signal
+in the group is ordered after every
+Put
+in the group.
+
+Choosing group granularity.
+
+The size of the group exposes a tradeoff between
+Fence
+amortization and intra-
+Fence
+waiting. Small groups retain many
+Fence
+s, while large groups force each
+Fence
+to wait on more outstanding
+PUT
+s. To characterize this tradeoff, we expose group size as a tunable parameter and sweep across all divisors of the remote expert count
+3
+3
+
+3
+
+Group size = number of remote experts sharing one fence,
+e.g.,
+group size 4 with 112 remote experts yields 28 fences.
+. Figure
+7
+shows results at
+S{=}1K
+on 8 Perlmutter nodes and separates the total speedup into two components. The first is
+submission reordering
+(❶). Even at group size 1, where
+Fence
+count matches the coupled baseline, decoupling alone reduces latency by 12% (22.7
+\to
+19.9 ms) because the NIC pipelines
+PUT
+s back-to-back instead of processing them behind interleaved
+Fence
+s. The second is
+Fence
+count reduction
+(❷). Increasing group size from 1 to 28 cuts
+Fence
+s from 112 to 4 and delivers an additional 38% latency reduction (19.9
+\to
+12.3 ms).
+Further coarsening has diminishing returns, aligning with the knee in the
+Fence
+-count curve (Figure
+7
+, left).
+
+Perseus defaults to per-PE grouping, in which one group consists of the experts destined for one remote PE. Per-PE grouping is at the knee of the decoupling benefit curve (Figure
+7
+, left) and captures most of the
+Fence
+reduction benefit while bounding the number of transfers each
+Fence
+must wait for. Our sweep confirms that this default is within 2% of the optimal group size across sequence lengths from 1K to 64K. The exposed configuration allows further tuning for specific workloads and hardware environments.
+
+Figure 7
+:
+Effect of decoupled signaling (
+S{=}1K
+, 8 nodes).
+Left:
+Fence
+count vs. group size. Right: latency vs. group size with coupled baseline (dashed red). Contribution to speedup can be decomposed to: ❶ submission reordering (coupled
+\to
+decoupled at group size 1), ❷
+Fence
+count reduction from 112 (group size 1)
+\to
+4 (group size 28).
+
+4.2
+NIC-side ordering
+
+While decoupled signaling reduces
+Fence
+frequency, each remaining
+Fence
+still pays the full cost of draining the proxy. A
+Fence
+polls a completion counter until all outstanding requests on the channel have returned a completion, and throughout this drain the proxy is idle and cannot submit new requests (Figure
+2
+a–b). This drain cost grows with the number of in-flight transfers and with destination count (§
+3
+).
+
+Key insight.
+
+Proxy-side drain is not the only way to enforce
+Put-with-Signal
+ordering. Modern RDMA NICs expose a per-request
+Fence
+flag
+(
+e.g.,
+
+FI_FENCE
+in Libfabric and
+IBV_SEND_FENCE
+in InfiniBand verbs) that shifts ordering enforcement from software polling into NIC hardware. When the NIC encounters a flagged request, it defers that request until all prior requests on the same connection have completed, tracked through internal hardware registers rather than a software counter. In this way, the NIC absorbs the ordering cost in hardware while the proxy continues submitting requests.
+
+Mechanism.
+
+Perseus replaces the proxy’s blocking drain with the NIC
+Fence
+flag.
+When a
+Fence
+is requested, the proxy sets a pending flag rather than polling for completions and continues submitting work. The next
+Signal
+sent to the NIC carries the flag, which instructs the NIC to defer that
+Signal
+until every prior request on its connection has completed (Figure
+2
+c). Thus, the proxy does not stall, and the ordering guarantee is preserved by the NIC itself.
+
+Correctness.
+
+The NIC
+Fence
+flag provides the same ordering guarantee as a proxy-side drain. No operation submitted after the flag can be processed by the NIC before all prior operations on that connection complete. Since the proxy submits
+PUT
+s before the flagged
+Signal
+in submission order, the NIC completes all
+PUT
+s before processing the
+Signal
+. On multi-queue pair transports, peer-hash routing (§
+5
+) pins a peer’s
+PUT
+s and its
+Signal
+to the same connection, so per-connection ordering is enough for per-peer correctness.
+
+Figure 8
+:
+Combined effect of decoupled signaling and NIC-side ordering (4 nodes, Qwen3-30B).
+Baselines: vanilla (red) and coupled + NIC ordering (green) as horizontal lines; decoupled curves swept across group sizes with NIC-side ordering enabled.
+(a)
+S{=}1K
+: NIC-side ordering dominates; group size has minimal impact.
+(b)
+S{=}64K
+: all three effects contribute.
+
+4.3
+Why the two mechanisms are complementary
+
+Applied alone to vanilla coupled signaling, NIC-side ordering removes every proxy stop; the NIC absorbs the ordering cost rather than blocking the proxy (Figure
+2
+c).
+Combined with decoupled signaling, only the first signal per group needs the flag, since the proxy submits signals sequentially and the NIC preserves that order (Figure
+2
+d).
+
+Figure
+8
+exposes the division of labor between the two mechanisms.
+At small messages (
+S{=}1K
+), NIC-side ordering drives per-fence cost to near-zero and flattens sensitivity to group size; the speedup comes from NIC ordering plus submission reordering, and fence count is irrelevant (Figure
+8
+a).
+At large messages (
+S{=}64K
+), the NIC must defer each flagged
+Signal
+until preceding PUTs complete, and larger transfers take longer to finish, so per-fence cost is no longer negligible and fence count reduction regains value (Figure
+8
+b).
+All three effects then contribute to the combined speedup.
+
+The two mechanisms are complementary. Decoupling reduces fence frequency and matters most when fence count dominates. NIC-side ordering eliminates per-fence blocking and matters most when per-fence overhead dominates. Together they cover the full regime from overhead-dominated to transfer-dominated workloads.
+
+5
+Implementation
+
+Decoupled signaling.
+
+We implement decoupled signaling on top of FlashMoE
+[
+3
+]
+, the state-of-the-art open-source MoE megakernel with multi-node support, modifying only the RDMA request logic and leaving core megakernel components (symmetric tensor layout, subscriber, scheduler, worker modules) untouched. Dispatch to intra-node experts remains unchanged. For inter-node communication, we implement two passes. In the first pass, each CTA stages tokens to the local heap, issues
+nvshmem_putmem_nbi()
+without signaling, and notifies the per-PE group leader by incrementing an atomic counter (
+cuda::atomic::fetch_add()
+). In the second pass, each group leader CTA calls
+nvshmem_fence()
+followed by
+nvshmemx_signal_op()
+.
+
+NIC-side ordering.
+
+Our NIC-side ordering modifies fewer than 100 lines in NVSHMEM’s transport modules (v3.5.21). It replaces the proxy’s
+quiet
+-based drain (
+fi_cntr_wait
+for Libfabric,
+check_poll_avail
+for IBRC) with per-request NIC fence flags (
+FI_FENCE
+for Libfabric,
+IBV_SEND_FENCE
+for IBRC). The change is entirely in the transport shared library (
+nvshmem_transport_*.so
+). Users swap in the new library without modifying application code or recompiling the host application.
+4
+4
+
+4
+
+We plan to upstream this optimization to NVSHMEM.
+Any system that uses NVSHMEM as its communication backend inherits the optimization through this swap. For example, we achieve up to 79
+\times
+speedup on Triton-distributed’s
+[
+58
+]
+
+AllToAll
+benchmark without touching its application code (§
+6.5
+).
+
+Multi-QP transport adaptation.
+
+On IBRC with multiple Queue Pairs (QPs), the default round-robin policy spreads operations to a given peer across QPs, but
+IBV_SEND_FENCE
+enforces ordering only within a QP. Dependent
+Put
+and signal operations therefore may land on different QPs, which breaks the intended ordering. Perseus pins all operations targeting a peer to a deterministic QP (
+qp = pe % num_qps
+). Dependent operations now share a QP and inherit its FIFO ordering, while different peers still spread across QPs to preserve aggregate bandwidth. This design makes
+IBV_SEND_FENCE
+effective for NIC-side ordering on multi-QP transports.
+
+6
+Evaluation
+
+In this section, we answer the following questions:
+
+\bullet
+
+How much does Perseus reduce megakernel latency across transports and scales (§
+6.2
+)?
+
+\bullet
+
+What is the contribution of each optimization (§
+6.3
+)?
+
+\bullet
+
+Is Perseus robust to expert routing skew (§
+6.4
+)?
+
+\bullet
+
+Is Perseus generally applicable (§
+6.5
+)?
+
+6.1
+Experimental setup
+
+Hardware environment.
+
+We evaluate on three transport configurations: (1) Libfabric (proxy-based, Slingshot-11
+[
+12
+]
+Cassini NIC) on NERSC Perlmutter
+[
+34
+]
+(4
+\times
+A100 per node, up to 16 nodes, 200 Gb/s, dragonfly), (2) IBRC (proxy-based, ConnectX-7
+[
+35
+]
+NIC), and (3) IBGDA (GPU-direct, ConnectX-7 NIC) on a commercial GPU cloud (8
+\times
+H100 per node, up to 4 nodes, InfiniBand NDR (400 Gb/s). IBRC uses 4 Queue Pairs per device, a standard multi-QP configuration for bandwidth scaling that requires explicit cross-QP fencing (§
+5
+); IBGDA uses its default configuration.
+5
+5
+
+5
+
+We swept Reliable Connection (RC) Queue Pair configuration for IBGDA and checked no variance in latencies.
+These configurations cover 64 A100 GPUs (Perlmutter) and 32 H100 GPUs (cloud cluster), spanning typical expert-parallel scale for multi-node MoE inference
+[
+37
+]
+.
+
+Base systems.
+
+Our prototype builds on FlashMoE
+[
+3
+]
+and NVSHMEM
+[
+38
+]
+(v3.5.21). Unmodified versions are referred to as
+vanilla
+. Perseus modifies FlashMoE’s signaling protocol and NVSHMEM’s transport layer. We also evaluate on Triton-distributed for generality (§
+6.5
+).
+
+Table 1:
+MoE model configurations. H: hidden dimension, I: intermediate dimension, E: experts, k: top-k.
+
+Model
+
+H
+
+I
+
+E
+
+k
+
+Qwen3-30B-A3B
+[
+53
+]
+
+2048
+
+768
+
+128
+
+8
+
+DeepSeek-V3
+[
+28
+]
+
+7168
+
+2048
+
+256
+
+8
+
+GPT-OSS-120B
+[
+1
+]
+
+2880
+
+2880
+
+128
+
+4
+
+Workloads.
+
+We evaluate three MoE models with varying compute-to-communication ratios (Table
+1
+). Sequence lengths (
+S
+) range from 256 to 64K tokens
+6
+6
+
+6
+
+We report
+S\in\{256,1K,4K,16K\}
+in Figure
+8
+due to space constraints; results up to
+S{=}64K
+are discussed in text.
+, covering both overhead-dominated (small
+S
+) and transfer-dominated (large
+S
+) regimes. We use balanced expert routing with expert capacity
+EC=S\times k/E
+and evaluate skewed routing in §
+6.4
+.
+
+Figure 9
+:
+End-to-end forward latency: vanilla FlashMoE vs. Perseus.
+(a)–(c) Perlmutter (A100, Slingshot-11, Libfabric), 2–16 nodes (8–64 GPUs): Perseus achieves up to 10.3
+\times
+speedup.
+(d)–(e) Commercial GPU cloud (H100, ConnectX-7, InfiniBand), 2–4 nodes (16–32 GPUs): Perseus on IBRC achieves up to 2.47
+\times
+8
+8
+
+8
+
+IBRC speedup continues to grow at larger
+S
+, reaching 2.47
+\times
+at
+S{=}64K
+on 4 nodes (Qwen3).
+while matching or exceeding IBGDA GPU-direct. Annotations show speedup of Perseus over vanilla.
+
+6.2
+End-to-end performance
+
+Overview.
+
+Figure
+8
+shows that Perseus achieves up to 10.3
+\times
+speedup on Libfabric and up to 2.47
+\times
+speedup on IBRC. On IBRC, Perseus matches or exceeds vanilla IBGDA GPU-direct (up to 1.2
+\times
+). The relative performance of proxy-based and GPU-direct transports depends on workload: at per-expert message sizes in our workloads (45 KB–28 MB), proxy submission rate is not the bottleneck
+[
+32
+]
+. Meanwhile, IBGDA consumes SM cycles for NIC submission, which in megakernels competes with concurrent compute; the CPU proxy avoids this interference but is bottlenecked by fence-induced serialization. Perseus removes this bottleneck, allowing proxy-based IBRC to match or exceed GPU-direct performance.
+
+Correctness.
+
+All results on Perseus pass correctness verification with error rate below 1% across all configurations, matching vanilla error rates under BF16 precision.
+
+# Fence
+
+Cost / Fence
+
+Spdup
+
+Vanilla
+
+112
+
+\uparrow
+
+1.0
+\times
+
+NIC
+
+112
+
+\downarrow
+
+1.3–2.6
+\times
+
+Decoup.
+
+28
+
+\uparrow
+
+1.2–1.6
+\times
+
+Perseus
+
+28
+
+\downarrow
+
+1.5–3.5
+\times
+
+8-node ablation breakdown
+
+Figure 10
+:
+Left: Ablation of speedup over vanilla for Qwen3-30B on Perlmutter.
+At larger node counts, per-fence cost increases and fence reduction is proportionally smaller, so NIC-side ordering contributes more; at smaller node counts, the opposite holds.
+Right: 8-node breakdown showing fence count and per-fence cost (
+\uparrow
+= full pipeline drain,
+\downarrow
+= lightweight NIC-side flag).
+
+Speedup across nodes.
+
+Recall the poor weak-scaling performance of vanilla on Qwen3 in Figure
+1
+. Perseus enables near-linear scaling across models and transports, achieving higher speedups at larger node counts. As identified in §
+3.3
+, vanilla’s overhead grows with node count because more remote peers increase fence frequency and proxy stalls.
+
+Speedup across workloads.
+
+Speedup is generally higher on communication-bound configurations: on Libfabric, peak speedup is 10.3
+\times
+for Qwen3 vs. 2.8
+\times
+for GPT-OSS and 2.2
+\times
+for DeepSeek-V3. At larger
+S
+, speedups across models converge as per-transfer cost dominates. Speedup trends also differ across transports: on Libfabric, speedups peak at small
+S
+; on IBRC, speedups grow with
+S
+, reflecting different fence cost structures (Appendix
+A
+).
+
+Figure 11
+:
+Triton-distributed
+AllToAll
+microbenchmark (H=2048, Perlmutter).
+(a) Latency: vanilla is flat regardless of message size.
+(b) Overhead fraction (
+\alpha/T
+): vanilla remains above 65%.
+(c)
+\alpha
+comparison: Perseus achieves
+{\sim}
+99% reduction in serialization overhead.
+
+Figure 12
+:
+Robustness to skewed expert routing (Qwen3-30B, 2–8 nodes on Perlmutter).
+Speedup of Perseus over vanilla under Zipf-distributed
+[
+61
+]
+token-to-expert routing with increasing skew exponent (0–1.5).
+
+6.3
+Ablation
+
+We compare three configurations: (1) decoupled signaling only, (2) NIC-side ordering only, and (3) the full Perseus. Figure
+10
+shows results across node counts. At 2 nodes, decoupled signaling (1.2–1.5
+\times
+) outperforms NIC-side ordering (1.1–1.4
+\times
+): per-fence cost is small at 2 nodes, so reducing fence count (64 to 4) has more impact. At 8 nodes, the relationship reverses: NIC-side ordering (1.3–2.6
+\times
+) surpasses decoupled signaling (1.2–1.6
+\times
+), as the 28 remaining fences are each expensive. Combined, Perseus achieves 1.5–3.5
+\times
+speedup at 8 nodes, confirming that the two techniques are complementary: decoupled signaling reduces fence
+frequency
+, while NIC-side ordering reduces per-fence
+cost
+.
+
+6.4
+Robustness to expert routing skew
+
+We inject Zipf-distributed
+[
+61
+]
+routing with skew exponent from 0 (uniform) to 1.5 (top 10 out of 128 experts receive 82% of tokens), with expert capacity set to avoid token drops. Figure
+12
+shows Perseus maintains substantial speedup across all skew levels on Qwen3-30B (2–8 nodes): at
+S{=}1K
+, speedup ranges from 2.7
+\times
+to 2.0
+\times
+at 8 nodes; at
+S{=}8K
+, speedup increases with skew (1.5
+\times
+at uniform to 2.1
+\times
+at Zipf 1.5), consistent with Perseus’s per-byte cost advantage amplifying under larger transfers (Appendix
+A
+).
+
+Figure 13
+:
+GPU-initiated
+AllToAll
+of Triton-distributed vs. NCCL collective
+AllToAll
+(
+H{=}2048
+, Perlmutter). Triton-vanilla suffers from serialization overhead, losing to NCCL at
+S\leq 512
+. Perseus eliminates this overhead, making GPU-initiated
+AllToAll
+up to 11
+\times
+faster than NCCL. 4-node results limited to
+S{=}2048
+due to memory constraints.
+
+6.5
+Generality: Triton-distributed case study
+
+We apply NIC-side ordering to Triton-distributed
+[
+58
+]
+’s
+AllToAll
+kernel, a communication-only workload with no compute to overlap.
+9
+9
+
+9
+
+Mega-EP
+, Triton-distributed’s megakernel, only supports intra-node.
+Figure
+11
+shows that vanilla latency stays nearly flat regardless of message size, with
+\alpha
+accounting for 65–100% of total latency. Perseus reduces
+\alpha
+by
+{\sim}
+99% (68.8
+\to
+0.7 ms at 4 nodes), bringing latency close to transfer-dominated behavior. Without modifying application code, this yields up to 79
+\times
+speedup (59.6
+\times
+on average at 4 nodes).
+
+Comparison with NCCL.
+
+Without Perseus, GPU-initiated
+AllToAll
+is on average 18.7
+\times
+slower than NCCL (Figure
+13
+).
+10
+10
+
+10
+
+4-node results limited to
+S{=}2
+K due to memory constraints.
+Perseus makes it up to 11
+\times
+faster than NCCL, restoring the latency advantage of fine-grained communication at small message sizes. The scaling behaviors contrast: NCCL’s collective overhead grows with data volume, while Perseus incurs near-zero fixed overhead, demonstrating that once serialization is removed, GPU-initiated communication consistently outperforms bulk-synchronous collectives in multi-node deployment.
+
+Figure 14
+:
+Scalability recovery with Perseus.
+Top: microbenchmark throughput at 8 nodes, revisiting Figure
+5
+a.
+Bottom: end-to-end weak scaling normalized to 1-node baseline (
+S
+=1024), revisiting Figure
+1
+.
+
+6.6
+Scalability recovery
+
+We revisit the microbenchmark from Figure
+5
+a with Perseus applied (Figure
+14
+top). At 96 concurrent transfers with 4 KB messages, Perseus recovers throughput from 2% to 74% of the
+Put
+-only baseline; at larger messages, Perseus matches the baseline. Figure
+14
+(bottom) shows Perseus reduces Qwen3’s 16-node weak scaling degradation from 19
+\times
+to 3.5
+\times
+and achieves near-flat scaling on GPT-OSS. Perseus also restores TensorCore utilization to 95–98% of single-node levels (Table
+2
+), up from 31% under vanilla for Qwen3.
+
+Table 2:
+TensorCore utilization at 4 nodes (
+S{=}1K
+), normalized to each workload’s single-node execution (100% = single-node utilization).
+
+Vanilla
+
+Perseus
+
+GPT-OSS-120B
+
+75%
+
+98% (+23%p)
+
+Qwen3-30B
+
+31%
+
+95% (+64%p)
+
+7
+Related Work
+
+Systems for distributed MoE.
+
+Collective-based systems
+[
+52
+,
+44
+,
+60
+,
+20
+,
+16
+,
+29
+,
+26
+,
+22
+,
+46
+]
+optimize EP based on
+AllToAll
+primitives. GPU-initiated EP libraries
+[
+56
+,
+4
+,
+2
+,
+54
+,
+13
+]
+replace collectives with GPU-initiated point-to-point communication for fine-grained overlap. Recent work optimizes kernels to further increase the overlap
+[
+55
+,
+7
+,
+21
+,
+59
+,
+40
+,
+41
+,
+43
+,
+18
+]
+. Perseus is complementary to these systems: it addresses transport-level serialization that arises when GPU-initiated communication traverses proxy-based RDMA, a bottleneck that existing systems inherit from the underlying transport.
+
+Megakernels.
+
+FlashMoE
+[
+3
+]
+, Spector et al.
+[
+48
+]
+, MPK
+[
+9
+]
+, and Triton-distributed
+[
+58
+]
+fuse LLM operators into persistent GPU kernels for low-latency inference, achieving strong single-node performance but not addressing multi-node scaling. Perseus complements this work by characterizing and optimizing transport behavior at multi-node scale.
+
+GPU-initiated communication.
+
+NVSHMEM
+[
+38
+]
+, NCCL device APIs
+[
+15
+]
+, NCCLX
+[
+47
+]
+, and MSCCL++
+[
+19
+]
+provide building blocks for GPU-initiated communication. TransferEngine
+[
+27
+]
+and UCCL-EP
+[
+31
+]
+target portable inter-node communication across heterogeneous GPUs and NICs, avoiding sender-side fence overhead through WriteImm-based notification
+[
+30
+]
+, but require a different interface from the memory-based
+Put-with-Signal
+model megakernels rely on (§
+8
+). Perseus instead preserves this interface and eliminates fence-induced serialization within it, enabling drop-in adoption without application or interface changes.
+
+8
+Discussion
+
+Why memory-based put+signal?
+
+Receiver CTAs detect data arrival by polling GPU memory with a single load instruction; alternatives such as CQ polling
+[
+27
+,
+31
+]
+add latency that undermines fine-grained overlap at megakernel level.
+
+Multi-threaded proxy.
+
+Multiple proxy threads enable concurrent submission but do not remove the ordering requirement. A single thread enforces this via FIFO drain; multiple threads require cross-thread synchronization that reintroduces serialization. Even with one thread, multi-QP IBRC requires cross-QP drains (§
+6.2
+). Perseus addresses ordering cost directly, regardless of thread or connection count.
+
+Broader applicability.
+
+Perseus applies to any GPU-initiated
+Put-with-Signal
+over proxy-based transports; the bottleneck is architectural, not implementation-specific. We demonstrate this across two transports (Libfabric on Slingshot, IBRC on InfiniBand), using only standard RDMA APIs. Decoupled signaling applies to any megakernel using per-transfer
+Put-with-Signal
+. Our Triton-distributed case study achieves 79
+\times
+speedup without application changes (§
+6.5
+). Integration with serving engines (
+e.g.,
+vLLM
+[
+23
+]
+, SGLang
+[
+57
+]
+) and training frameworks (
+e.g.,
+Megatron
+[
+52
+]
+) is future work.
+
+Prefill vs. decode.
+
+Our sweep on
+S
+spans both regimes: small
+S
+resembles decode (overhead-dominated), while large
+S
+resembles prefill (transfer-dominated). Perseus improves both: up to 10.3
+\times
+at small
+S
+where
+\alpha
+dominates, and 1.8
+\times
+at large
+S
+where
+\beta
+reduction remains beneficial (Figure
+8
+).
+
+GPU-direct transports.
+
+Perseus’s decoupled signaling with adaptation yields modest gains on IBGDA (up to 1.25
+\times
+), where proxy serialization is absent (Appendix
+B
+).
+
+9
+Conclusion
+
+We present Perseus, a system that eliminates hidden serialization in multi-node megakernel communication. By decoupling signaling from data transfers and delegating ordering to NIC hardware, Perseus achieves up to 10.3
+\times
+speedup on Libfabric and 2.47
+\times
+on IBRC, matching GPU-direct performance without requiring GPU-direct hardware support. Our results demonstrate that the proxy-based transport architecture is not inherently inferior for fine-grained GPU-initiated communication in megakernels; the bottleneck was in the ordering mechanism, not the proxy itself. As megakernel designs scale to larger deployments and new RDMA fabrics, Perseus’s transport-level optimizations provide a foundation for efficient multi-node GPU-initiated communication.
+
+Appendix
+
+Appendix A
+\alpha
+-
+\beta
+analysis: latency decomposition
+
+Figure 15
+:
+Latency decomposition into overhead (
+\alpha
+) and transfer cost (
+\beta
+) on Libfabric.
+Left: vanilla
+\alpha
+grows with node count; Perseus stays flat.
+Right: Perseus also reduces
+\beta
+by 25–38%.
+
+Computing
+\alpha
+-
+\beta
+cost.
+
+To better understand where our performance gains come from, we decompose communication latency using the
+\alpha
+-
+\beta
+model
+[
+17
+]
+.
+The cost to send a message of size
+M
+is:
+T=\alpha+\beta\times M
+, where
+\alpha
+captures fixed overhead independent of message size and
+\beta
+is the per-byte transfer cost.
+We compute
+\alpha
+and
+\beta
+of both vanilla and Perseus across node configurations by fitting linear regression using our sweep results on multiple
+S
+values (
+R^{2}>0.99
+for all configurations).
+We compute
+M=EC\times H\times 2
+bytes where
+EC=S\times k/E
+.
+In our setup,
+M=S\times 256
+bytes for Qwen3 and
+M=S\times 180
+bytes for GPT-OSS.
+
+Latency decomposition.
+
+Our
+\alpha
+-
+\beta
+decomposition demonstrates Perseus reduces both fixed overhead (
+\alpha
+) and per-byte transfer cost (
+\beta
+), with different transports exhibiting different reduction profiles.
+On Libfabric,
+\alpha
+reduction dominates: vanilla’s
+\alpha
+grows with node count due to increasing fence overhead, while Perseus’s
+\alpha
+remains nearly flat (Figure
+15
+).
+For Qwen3, Perseus reduces
+\alpha
+by up to 90% (22.28 ms
+\to
+2.21 ms at 16 nodes).
+For GPT-OSS, the reduction is up to 79% (40.3 ms
+\to
+8.37 ms at 16 nodes).
+On IBRC,
+\alpha
+is inherently small (1–5 ms) because hardware completion queue polling is lightweight compared to Libfabric’s software counter drain.
+Instead, the multi-QP drain cost inflates
+\beta
+: Perseus reduces
+\beta
+by up to 60% on Qwen3 and 44% on GPT-OSS, closely matching or even outperforming IBGDA’s
+\beta
+across all configurations.
+Eliminating proxy drains allows the NIC to pipeline transfers without waiting for prior completions, reducing per-transfer cost that scales with message size.
+
+Explaining speedup trends across sequence lengths.
+
+The
+\alpha
+-
+\beta
+decomposition explains the different speedup trends observed across transports.
+The speedup of Perseus over vanilla can be expressed as:
+
+\frac{\alpha_{v}+\beta_{v}\cdot M}{\alpha_{b}+\beta_{b}\cdot M}
+
+where subscripts
+v
+and
+b
+denote vanilla and Perseus respectively.
+On Libfabric, where
+\alpha_{v}\gg\alpha_{b}
+and the
+\beta
+gap is moderate, speedup is highest at small
+S
+(small
+M
+) where
+\alpha
+dominates, and decreases at larger
+S
+as
+\beta\cdot M
+dominates both numerator and denominator.
+On IBRC, where
+\alpha_{v}\approx\alpha_{b}
+but
+\beta_{v}\gg\beta_{b}
+, speedup grows with
+S
+: at small
+M
+the similar
+\alpha
+values yield modest speedup, while at large
+M
+the
+\beta
+gap widens the advantage, peaking at
+S{=}64K
+(2.47
+\times
+for Qwen3, 1.70
+\times
+for GPT-OSS).
+
+Appendix B
+Optimizing GPU-direct transports
+
+While we focus on proxy-based transports, we briefly examine IBGDA, which avoids proxy serialization via NIC-level in-QP ordering.
+With RC QPs (one per peer), Perseus’s decoupled signaling applies directly:
+Put
+and
+Signal
+WQEs are issued to the same QP, and in-QP ordering ensures correctness without
+Fence
+s.
+Decoupling changes the submission pattern: pipelining
+PUT
+s before
+Signal
+s, allowing the NIC to process transfers without interleaved ordering points.
+Additionally, we enable warp-parallel signaling within each group, where multiple warps issue signals concurrently.
+This optimization is specific to GPU-direct transports, as proxy-based transports serialize all signals through a single proxy thread.
+In preliminary evaluation (2 nodes, 16 H100 GPUs), this yields up to 1.25
+\times
+speedup on Qwen3 (1.06
+\times
+mean).
+While modest, these gains are notable on a transport that already avoids proxy serialization.
+Further analysis and large-scale evaluation are future work.
+

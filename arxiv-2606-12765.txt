@@ -1,0 +1,1249 @@
+Rigel : Reverse-Engineering the Metal 4.1 Tensor Compute Path on the Apple M4 Max GPU
+Ramchand Kumaresan
+
+Abstract
+Apple’s Metal 4.1 exposes a tensor compute path: the Metal Performance Primitives (MPP) matmul2d operation over cooperative_tensor fragments, whose interface is documented but whose hardware behavior is deliberately hidden . The specification states which data-type rows are supported, never whether they are hardware-accelerated, where the operation physically executes, what its accumulator width is, or how it partitions matrix fragments across threads. We present Rigel , an empirical characterization of this path on a single Apple M4 Max (a pre–neural-accelerator generation). Using a checksum-gated, provenance-tracked microbenchmark harness, Rigel recovers eleven facts the v4.1 specification hides or contradicts. The headline finding: the Metal 4.1 fp8 (E4M3) matmul2d is emulated , not accelerated: it sustains 0.94 × 0.94\times the throughput of fp16 despite reading half the operand bytes, so on M4 it is a memory-footprint feature, not a performance feature. We further show, via a three-signal triangulation (throughput ceiling, comparison against simdgroup_matrix , and per-rail power attribution), that matmul2d executes entirely on the GPU shader cores with no dedicated matrix datapath and no evidence of Apple Neural Engine routing; that it accumulates in ≥ \geq fp32; and we reconstruct the opaque 8 × 8 8{\times}8 cooperative_tensor fragment layout Apple documents nowhere. Acting on the characterization, a hand-fused GEMM + bias + GELU kernel beats the decomposed path by + 6.5 +6.5 – 12.9 % 12.9\% in the cache-resident regime. All findings are reproducible from committed MIT-licensed code and per-cell CSVs.
+
+
+
+1
+Introduction
+
+Quantized and attention-heavy machine-learning workloads increasingly run on consumer Apple Silicon
+GPUs. Metal 4.1 (shipping in Xcode 27 / macOS 27.0) adds a tensor compute path (the Metal
+Performance Primitives (MPP)
+matmul2d
+operation, which contracts two
+tensor
+operands
+through device-distributed
+cooperative_tensor
+fragments) and a low-precision frontier of
+fp8, fp4, and block-scaled MXFP4 formats. For anyone deploying an LLM or vision model on a Mac, three
+questions decide everything:
+where
+does a tensor op execute,
+how fast
+is each
+low-precision format, and
+what
+numerical guarantees does it provide. The Metal Shading Language
+Specification
+[
+1
+]
+answers none of them.
+
+The problem:
+The specification documents the
+interface
+but hides the
+hardware
+behavior
+. Its feature tables state that a data-type row is
+supported
+; they never state whether
+it is
+accelerated
+. It declares the
+cooperative_tensor
+layout “opaque” and “device
+specific” (§2.22.3.1). It is silent on the dispatch target of
+matmul2d
+, on accumulator
+width, and on the microarchitectural alignment constraints a kernel must satisfy. A developer cannot
+tell, from the specification alone, whether fp8 will be twice as fast as fp16 or no faster at all.
+
+The gap:
+No public source characterizes the Metal 4.1 tensor path on a specific Apple GPU.
+Workload-level studies benchmark Apple Silicon end to end
+[
+4
+,
+5
+]
+but do not
+open the tensor primitive itself. The community is split on a load-bearing question: whether Apple’s
+only “tensor core” is the legacy
+simdgroup_matrix
+instruction (an ALU-utilization
+optimization) or a dedicated matrix unit analogous to NVIDIA tensor cores
+[
+8
+,
+12
+]
+.
+The M4 Max sits
+before
+the GPU “Neural Accelerators” Apple reports for the A19/M5 family.
+
+The insight:
+These hidden facts are
+recoverable empirically
+, in the microbenchmarking
+tradition that dissected NVIDIA GPUs
+[
+7
+,
+6
+]
+, and on a pre–neural-accelerator chip
+the strong prior is that the fp8/fp4 rows are functionally supported but
+emulated
+. We adopt a
+discovery bar: a result counts only if it is
+hidden
+or
+contradicted
+relative to the
+specification; facts a careful reader could derive from the specification are controls, not contributions.
+
+Contributions:
+
+1.
+
+A checksum-gated, provenance-tracked harness (
+Section
+
+3
+) that turns each claim into a
+reproducible cell with a float64 reference and a pre-registered cheap-baseline falsification gate.
+
+2.
+
+The
+headline
+: fp8 (E4M3)
+matmul2d
+is
+emulated
+on M4 Max (
+0.94\times
+
+fp16 throughput), making it a footprint feature, not a perf feature (
+Section
+
+5
+).
+
+3.
+
+A three-signal dispatch-target result (
+Section
+
+4
+):
+matmul2d
+runs on the GPU shader
+cores via the legacy
+simdgroup_matrix
+path, with no dedicated matrix unit and no evidence of
+ANE routing.
+
+4.
+
+Reconstruction of the opaque
+8{\times}8
+
+cooperative_tensor
+fragment layout
+(
+Section
+
+7
+), plus the accumulator width (
+\geq
+fp32) and the fp8/fp4 numeric semantics.
+
+5.
+
+A
+contradicted
+-class version gate: Metal 4.1 requires Xcode 27
+and
+macOS 27.0 (not
+the specification’s “Xcode 26.1+”), and a 4.1 binary refuses to load on macOS 26.5 (
+Section
+
+2
+).
+
+6.
+
+The eleven hidden/contradicted findings as a single legible catalog (
+Table
+
+1
+), the
+natural home for low-visibility constraints (the 128-byte alignment, the SFINAE footgun, the version gate).
+
+7.
+
+An optimization study (
+Section
+
+8
+): a hand-fused GEMM+bias+GELU kernel beats the decomposed
+path by
++6.5
+–
+12.9\%
+in the cache-resident regime (the win decays as
+O(n^{3})
+compute dominates),
+while a fused-attention study shows the win does not extend to operations that forgo the matrix units.
+
+Table 1:
+The eleven findings that meet our discovery bar: each is either
+hidden
+by the
+Metal 4.1 specification or directly
+contradicts
+it, and none can be derived from the document
+alone. Eight are hidden (H) and three are contradicted (C). Controls, such as the OCP-conformant fp8 and
+fp4 grids, are excluded. The “Spec. basis” column names what the specification says, or fails to say,
+about each point.
+
+Finding
+
+Class
+
+Spec. basis
+
+Evidence
+
+fp8 (E4M3)
+matmul2d
+is emulated, not accelerated (
+0.94\times
+fp16)
+
+H
+
+feature table
+
+Figure
+
+3
+
+matmul2d
+runs on the GPU shader cores; no dedicated matrix unit
+
+H
+
+silent
+
+Figure
+
+2
+
+Accumulator width is at least fp32
+
+H
+
+silent
+
+Figure
+
+5(a)
+
+cooperative_tensor
+layout is an
+8{\times}8
+fragment, unified across
+A
+/
+B
+/
+C
+
+H
+
+§2.22.3.1
+
+Figure
+
+6
+
+Metal 4.1 needs Xcode 27
+and
+macOS 27.0; a 4.1 binary will not load on 26.5
+
+C
+
+“Xcode 26.1+”
+
+Section
+
+2
+
+A host-bound
+tensor_inline
+inner stride must be 128-byte aligned
+
+H
+
+SFINAE note
+
+Section
+
+6
+
+tensor_inline
+cannot tile a GEMM (
+slice()
+does not offset reads)
+
+H
+
+silent
+
+Section
+
+8
+
+A device
+tensor
+is host-bound only (no pointer constructor)
+
+H
+
+silent
+
+Section
+
+2
+
+Tensors are gated on
+__HAVE_TENSOR__
+and deployment target
+\geq
+26.2
+
+H
+
+silent
+
+Section
+
+2
+
+The 4.1 low-precision float formats are absent under the 4.0 toolchain
+
+C
+
+feature table
+
+Section
+
+2
+
+int2b
+and block-scaled
+tensor_blockwise
+(MXFP4) are absent
+
+C
+
+feature table
+
+Section
+
+2
+
+2
+Background
+
+This section gives the reader the three things needed to follow the results: what the Metal 4.1 tensor
+path actually is, the version gate that controls access to it, and the device on which we measure.
+
+The Metal 4.1 tensor path:
+The primitive at the centre of this paper is the Metal Performance
+Primitives operation
+matmul2d
+, which multiplies two matrices into a result,
+C=A\cdot B
+. Its
+operands are
+tensor
+objects, and Metal offers two flavours that matter here. A
+
+tensor_inline
+is a lightweight, non-owning view over an ordinary
+device
+buffer,
+created inside the shader and describing only a contiguous region; a host-bound
+tensor_handle
+
+is instead constructed on the CPU and can carry explicit strides. The destination may additionally be
+declared a
+cooperative_tensor
+, a register fragment that the threads of an execution scope
+hold collectively, never writing it to device memory, and whose internal layout the specification
+deliberately leaves opaque. Each call is shaped by a descriptor,
+matmul2d_descriptor(m,n,k)
+,
+that fixes the output tile a single threadgroup produces. Passing
+dynamic_extent
+as the
+contraction length
+k
+tells the operation to loop over that dimension internally, rather than expecting
+the caller to drive it. The execution scope, written
+execution_simdgroups<N>
+, then binds
+N
+
+SIMD-groups of 32 threads each to compute one tile cooperatively. These few types, and the hardware behaviours the specification omits for
+them, are the entire subject of the paper.
+
+The version gate:
+Before any tensor feature can be measured, a binary that uses it must compile
+
+and
+run, and here the specification is already inaccurate. It states that Metal 4.1 is available
+from Xcode 26.1 onward, but we found access to be gated on both the toolchain and the operating system.
+Xcode 26.5 and the 26.6 release candidate still emit Metal 4.0; only Xcode 27 produces the
+language-version marker
+__METAL_VERSION__ 410
+. A library compiled at version 4.1 under
+Xcode 27 then refuses to load on macOS 26.5, failing at runtime with “language version 4.1 is not
+supported on this OS.” Exercising the fp8 and fp4 paths therefore requires Xcode 27 and macOS 27.0
+together, not Xcode 26.1 as documented. This is the first of the contradicted-class findings catalogued
+in
+Table
+
+1
+.
+
+Device under test:
+All measurements are taken on a single Apple M4 Max (40 GPU cores, 64 GB of
+unified memory, in a Mac Studio) running macOS 27.0, build 26A5353q. The M4 generation predates the GPU
+“Neural Accelerators” that Apple introduced with the A19 and M5 parts, so the expectation going in is a
+chip that supports the low-precision formats functionally but does not accelerate them; the results bear
+this out. Every number is reported “on M4 Max”, we make no claim about other Apple GPUs, and we treat
+cross-generation behaviour as future work.
+
+3
+Methodology
+
+A characterization is only as trustworthy as its defences against fooling itself, so before presenting
+any result we describe how
+Rigel
+earns confidence in a measurement. The harness is split across two
+languages on purpose. Thin Objective-C++ hosts do nothing but allocate buffers, dispatch a Metal kernel,
+and time it, while a dependency-light Python layer owns everything that has to be checked: the schema of
+a measurement cell, the per-data-type error tolerances, the correctness gate, and the provenance record.
+A number reaches this paper only after passing the four disciplines below.
+
+The checksum gate:
+The first question about any GPU kernel is whether it computed the right
+answer, and low precision makes that question subtle. An fp8 result differs from a double-precision
+reference for two reasons (the
+inputs
+were quantized, and the
+accumulation
+lost
+precision), but only the second tells us anything about the hardware. We therefore compute the reference
+in float64 from the exact same quantized bytes the GPU consumed, so the input-quantization error cancels
+and the residual bounds the kernel’s accumulation error alone. Any cell whose error exceeds its
+per-data-type tolerance is marked
+garbage
+and dropped from every average rather than quietly
+blended in. As an independent cross-check, a separate Python re-verifier re-derives each pass or fail
+verdict directly from the committed CSV; run against real harness output, it agreed on all fifty cells
+with zero mismatches.
+
+Provenance:
+For a result to be citable months later it has to be reconstructible, so before a run
+begins the harness records a configuration hash, the code commit, a hash of the input-generation recipe,
+the random seed, and a full capture of the environment (device, GPU core count, OS build, and toolchain
+versions). A run that is missing any of these is not used. Every figure in the paper is then regenerated
+from its committed CSV by a single
+make reproduce
+target that needs no GPU, so a reader can
+redraw our plots from our data.
+
+The cheap-baseline gate:
+The central risk in any “the tensor path is fast” story is that the
+speed comes from something mundane (a better loop, or simply the ordinary ALU) rather than from
+special hardware. We guard against this by refusing to make a performance claim until the simplest
+non-mechanism explanation has actually been run and has failed to account for the effect. Four baselines
+stand in for those mundane explanations: (A) the scalar-ALU roofline, (B) a naive threadgroup-tiled GEMM
+that uses no tensor primitive, (C) the legacy
+simdgroup_matrix
+instruction, and (D) the stock
+fp16 MPP path. The thresholds are fixed in advance: a kernel must beat the strongest baseline by at least
+
+1.10\times
+to count as a win, and a low-precision format must reach
+1.5\times
+its matched fp16
+throughput to count as
+accelerated
+rather than merely
+emulated
+.
+
+Reporting:
+Each throughput cell is measured over at least thirty repetitions (here
+R{=}300
+)
+after discarding warm-up runs, and we report the median together with a bootstrapped
+95\%
+confidence
+interval (seed-fixed,
+10^{4}
+resamples); a single-threadgroup “does it run” timing is never reported as
+throughput. The confidence interval is not boilerplate. As the next paragraph shows, the M4 GPU clock is
+bimodal at small problem sizes, and there the width of the interval is itself the finding.
+
+That bimodality is itself worth characterizing. Per-rep throughput splits at cache-resident sizes
+(
+Figure
+
+1
+). At
+512^{3}
+the
+R{=}300
+samples
+split into two near-equal clusters at
+\sim
+4.65 and
+\sim
+6.5 TFLOP/s (145 vs. 155 reps), giving a wide
+bootstrapped CI of
+[5.21,5.96]
+TFLOP/s;
+1024^{3}
+runs stably at
+\sim
+12.7 TFLOP/s with a rare low-clock tail
+(
+8/300
+reps at
+\sim
+6.4 TFLOP/s);
+2048^{3}
+holds a stable max clock (
+14.80
+TFLOP/s, CI
+[14.79,14.80]
+). The
+mechanism is clock-state: a short kernel finishes around the GPU’s clock ramp and lands in either a low
+or high P-state, while a long kernel sustains the high state. This clock-state cliff is why every throughput claim in the paper carries a bootstrapped CI rather than
+a bare median: a point estimate at
+512^{3}
+would silently report either
+4.65
+or
+6.5
+TFLOP/s depending on luck.
+
+Figure 1
+:
+Clock-state bimodality.
+(a) Median fp16 throughput with bootstrapped
+95\%
+CI:
+the interval is wide at
+512^{3}
+and razor-thin once the clock is stable. (b) Per-rep distributions
+(
+R{=}300
+):
+512^{3}
+is bimodal (two clock states), larger sizes are unimodal.
+
+4
+Where does
+matmul2d
+execute?
+
+The dispatch target is the load-bearing question: if
+matmul2d
+lowers onto the existing GPU
+ALU/
+simdgroup_matrix
+pipeline, the fp8 rows cannot be accelerated without dedicated silicon.
+We triangulate with three independent signals, the bar the specification’s own discovery problem demands.
+
+Signal 1, throughput ceiling:
+A checksum-verified tiled fp16
+matmul2d
+sustains
+
+14.8
+TFLOP/s at
+2048^{3}
+(
+Figure
+
+2(a)
+),
+\approx 46\%
+of the
+\sim
+32 TFLOP/s scalar-ALU fp16
+roofline, never above it, so there is no hidden datapath beating the ALU ceiling.
+
+Signal 2, comparison:
+A four-way GEMM shootout (
+Figure
+
+4
+) shows MPP beats a naive
+threadgroup-tiled GEMM by
+2.9
+–
+5.5\times
+(the primitive matters), but beats
+
+simdgroup_matrix
+by only
+1.05
+–
+1.21\times
+. Such proximity is consistent with MPP lowering
+onto the
+simdgroup_matrix
+and FP32-ALU path rather than onto a separate unit.
+
+Signal 3, power attribution:
+Under a sustained
+matmul2d
+load, the GPU rail draws
+
+\sim
+42 W while the GPU hardware-active-residency hits
+100\%
+(
+Figure
+
+2(b)
+); read via a
+root-free IOReport “Energy Model” reader, the GPU energy rail rises
+0.27{\to}47.6
+W. The
+
+caveat
+: on this macOS 27.0 beta neither
+powermetrics
+nor IOReport meters CPU/ANE power
+(a CPU at
+84\%
+residency still reads
+0
+mW), and no CoreML workload would execute on the ANE
+(vision-tower ANE compilation fails), so the ANE-exclusion half of the argument is indirect (it rests
+on Signal 2: an ANE offload would
+add
+throughput beyond what the GPU-only path delivers, and it
+does not).
+
+Taken together, these three signals settle the question. On M4 Max,
+matmul2d
+executes on the GPU shader cores, on the same
+
+simdgroup_matrix
+and FP32-ALU path used by any other shader, with no dedicated matrix datapath. This converts the
+contested community claim into a measured fact
+on this chip
+and is the mechanism behind the fp8
+result below.
+
+(a)
+
+fp16 throughput (Signal 1).
+
+(b)
+
+GPU power + residency (Signal 3).
+
+Figure 2
+:
+Dispatch-target signals.
+(a) Tiled fp16
+matmul2d
+peaks at
+14.8
+TFLOP/s,
+
+\approx
+46% of the scalar-ALU roofline; nothing beats the ALU ceiling. Plotted points are medians; the
+
+512^{3}
+value is clock-state-dependent (see
+Figure
+
+1
+for the bimodality). (b) Under a sustained
+
+matmul2d
+load the GPU rail draws
+\sim
+42 W at
+100\%
+hardware-active residency.
+
+Figure 3
+:
+The headline: fp8 is emulated.
+fp8 (E4M3)
+matmul2d
+tracks
+below
+fp16 at every
+size (peaks at
+0.94\times
+), far under the
+1.5\times
+acceleration threshold: it is emulated.
+
+5
+Is fp8 accelerated or emulated?
+
+We build identical tiled GEMMs differing only in operand dtype (fp16 vs. E4M3), same layout, tile,
+and execution scope, both checksum bit-exact. fp8 sustains
+0.871
+/
+0.927
+/
+0.941\times
+fp16 at
+
+512
+/
+1024
+/
+2048
+(
+Figure
+
+3
+), peaking at
+0.94\times
+, nowhere near the pre-registered
+
+1.5\times
+acceleration bar. The argument is decisive: fp8 operands are one byte versus fp16’s two, so
+a memory-bound kernel would be
+faster
+in fp8; fp8 is
+slower
+, so the matmul is
+compute-bound and fp8 carries pure unpack overhead with no low-precision datapath. This is exactly the
+prediction for pre–neural-accelerator silicon, and contrasts sharply with Hopper, where fp8 tensor
+cores roughly double fp16 throughput
+[
+11
+]
+.
+On M4 Max, the Metal 4.1 fp8
+
+matmul2d
+is a memory-footprint and dynamic-range feature, not a throughput feature
+; the
+speedup waits for M5. Per the specification’s own framing, a falsified “faster” claim is a publishable
+characterization finding, and it is the practical result that most changes how a quantized model should
+be deployed on M4.
+
+Figure 4
+:
+Four-way GEMM shootout.
+Against the deprecated
+
+simdgroup_matrix
+path, MPP wins by only
+1.05
+to
+1.21\times
+; against a naive tiled GEMM, by
+
+2.9
+to
+5.5\times
+.
+
+6
+Numeric semantics and hidden constraints
+
+Beyond throughput, a developer needs to know how the tensor path behaves numerically: how wide its
+accumulator is, what its low-precision formats can represent, and what undocumented constraints a kernel
+must satisfy to compile at all. This section settles each in turn.
+
+The width of the internal accumulator is invisible in an ordinary GEMM, so we expose it with a
+deliberately hostile cell. The contraction has depth
+K{=}128
+and consists of one large term,
+448
+,
+followed by
+127
+small terms of
+0.0625
+, whose exact sum is
+455.9375
+. That sum cannot be represented
+as a final fp16 value, and a kernel that accumulated in fp16 would lose every small term: the spacing
+between representable fp16 values near
+448
+is
+0.25
+, larger than the terms being added, so the running
+total would stay pinned at
+448
+, a
+1.74\%
+error. The fp8
+matmul2d
+instead returns
+455.9375
+
+bit-exactly (
+Figure
+
+5(a)
+), which is only possible if it accumulates in at least fp32. This matches
+the at-least-fp32 convention documented for NVIDIA tensor cores
+[
+12
+]
+, but Apple’s
+specification never states it for Metal.
+
+The low-precision formats themselves are well behaved. On M4 the fp8 (E4M3, E5M2) and fp4 (E2M1)
+representable sets match the OCP specifications
+[
+9
+,
+10
+]
+exactly, with no divergence across all
+
+256
+bit patterns. The one behaviour worth flagging is saturation. E5M2 is the only float format whose
+default saturation mode is
+none
+, so on overflow it yields
+\pm\infty
+; E4M3, by contrast, has no
+infinity encoding and is forced to clamp to
+\pm 448
+, saturating even an
++\infty
+input to
+448
+
+(
+Figure
+
+5(b)
+).
+
+A more practical surprise is an undocumented alignment rule. A host-bound
+tensor_inline
+requires
+its inner stride to be aligned to
+128
+
+bytes
+, which means the contracted dimension must be a
+multiple of
+128
+for fp8 (one byte per element), of
+64
+for half, and of
+32
+for float. The constraint
+is enforced only through a SFINAE note in the headers and appears nowhere in the specification, so a naive
+fp8 port of a working half kernel fails to compile, with a misleading “no matching constructor” error.
+
+Finally, the specification’s own advice deserves scrutiny. It tells developers to abandon
+
+simdgroup_matrix
+in favour of tensors and MPP, but offers no evidence. We find that MPP does win
+at every size, yet by only
+1.05
+to
+1.21\times
+(
+Figure
+
+4
+); the deprecated path stays within
+about
+20\%
+and ties at small problems. The guidance is therefore directionally correct but overstated.
+
+(a)
+
+Accumulator
+\geq
+fp32.
+
+(b)
+
+E4M3 saturation.
+
+Figure 5
+:
+Numeric semantics.
+(a) The fp8
+matmul2d
+recovers a sum a sequential fp16
+accumulator collapses, so it accumulates in
+\geq
+fp32. (b) E4M3 clamps to
+\pm 448
+(no infinity),
+even saturating an
++\infty
+input.
+
+Figure 6
+:
+The reconstructed fragment layout.
+The opaque
+cooperative_tensor
+
+partition is an
+8{\times}8
+base fragment tiled across the output; each lane owns the same cell in every
+
+8{\times}8
+block. Inputs and output share this swizzle.
+
+7
+The opaque fragment layout
+
+The specification declares the
+cooperative_tensor
+partition “device specific” and documents
+no layout, unlike NVIDIA’s, whose WMMA fragment layout has been recovered by
+microbenchmarking
+[
+12
+]
+. We recover Apple’s by a pure layout query: instantiating the
+destination fragment and dumping
+get_capacity
+,
+is_valid_element
+, and
+
+get_multidimensional_index
+per lane, with no GEMM. For a single SIMD-group the partition is
+an exact tiling: per-lane capacity
+2\,(M/8)(N/8)
+, the layout a repeating
+8{\times}8
+base fragment
+(
+Figure
+
+6
+) in which a lane owns two vertically adjacent rows of one column of its quadrant,
+replicated across every
+8{\times}8
+tile. The input (A and B) fragments share the identical
+
+8{\times}8
+swizzle: the partition is
+unified
+across operands and output. This is the
+Apple-Silicon analog of a documented tensor-core fragment layout, and it is the lever for layout-aware
+optimization.
+
+8
+Acting on the characterization
+
+The characterization is not an end in itself; it tells us where a hand-written kernel can beat the stock
+path and where it cannot. This section turns three of the findings into concrete kernel decisions: the
+contiguity limits of
+tensor_inline
+, the cooperative-tensor destination, and the recovered
+fragment layout. It reports one optimization that clears our win bar and one that, instructively, does
+not.
+
+The first decision concerns layout.
+tensor_inline
+is contiguous-only and cannot express a
+strided GEMM sub-tile: its
+slice()
+does not offset the operation’s reads, so only the
+(0,0)
+
+tile computes correctly. A full tiled GEMM is nevertheless reachable without the host-bound MTLTensor and
+MTL4 stack, by choosing a contiguous-tile
+nt
+layout in which
+B
+is pre-transposed and
+C
+is written
+tile-contiguously; this is how we obtain the
+14.8
+TFLOP/s baseline of
+Figure
+
+2(a)
+.
+
+The optimization that wins is epilogue fusion. Routing a
+bare
+GEMM through a
+
+cooperative_tensor
+destination matches the host-bound path exactly, because there is no
+per-contraction round trip to skip. The payoff is instead in the epilogue: fusing the bias and GELU
+in-register on the fragment, using the recovered fragment layout, and storing the result once beats the
+decomposed GEMM-then-bias-then-GELU path by
++12.9\%
+at
+1024^{3}
+and
++6.5\%
+at
+2048^{3}
+
+(
+Figure
+
+7
+), which clears our
+1.10\times
+bar in the size range that matters for LLM inference;
+two fused operations beat one at every size. Each epilogue round trip avoided is
+O(n^{2})
+of memory
+traffic, so the win is largest for cache-resident problems and shrinks as
+O(n^{3})
+compute comes to
+dominate. This is the same IO-avoidance principle behind tiled-kernel compilers
+[
+13
+]
+and
+FlashAttention
+[
+2
+]
+.
+
+The same principle does not extend to attention, and the reason is instructive. A correct scalar
+FlashAttention that uses online softmax and never materializes the
+S{\times}S
+score matrix turns out to
+be about
+9\times
+
+slower
+than a decomposed path that keeps the
+simdgroup_matrix
+GEMMs
+(
+Figure
+
+8
+), because fusing the softmax forces the matmuls off the matrix units and onto scalar
+code. The matrix-unit and split-K FlashAttention variants we then built are correct and progressively
+faster, but all remain
+3.6
+to
+5\times
+slower than the decomposed path: at these sequence lengths the
+M4’s ample unified-memory bandwidth makes the
+S{\times}S
+round trip cheap, and our flash kernels are
+overhead-bound by small tiles and barriers. The lesson sharpens the paper’s thesis. Cooperative-tensor
+fusion pays off for cheap epilogues that keep the matrix units busy, not for fusions that replace them,
+and a production-grade FlashAttention for Apple Silicon
+[
+3
+,
+11
+]
+remains
+open work.
+
+Figure 7
+:
+Epilogue fusion.
+Fusing bias
++
+GELU via a
+cooperative_tensor
+
+destination beats the decomposed path; two fused ops beat one and clear the
+1.10\times
+ship bar at
+
+D\leq 1024
+.
+
+Figure 8
+:
+Attention: a negative result.
+Scalar, matrix-unit, and split-K flash each improve, but
+all lose to a decomposed path on M4 at
+S\leq 8192
+: the
+S{\times}S
+round trip is cheap on unified
+memory and our flash kernels are overhead-bound.
+
+9
+Related work
+
+GPU microarchitecture reverse-engineering:
+
+Rigel
+extends a microbenchmarking lineage that
+recovers undocumented GPU internals: Jia
+et al.
+dissect NVIDIA Volta
+[
+7
+]
+and
+Turing
+[
+6
+]
+via microbenchmarks and ISA disassembly. We apply the same empirical stance to
+Apple’s Metal tensor path, where the obstacle is not an undocumented ISA but a deliberately opaque
+high-level primitive.
+
+Tensor-core characterization:
+The closest prior art characterizes NVIDIA tensor cores:
+Markidis
+et al.
+
+[
+8
+]
+quantify WMMA programmability, performance, and mixed-precision loss;
+Sun
+et al.
+
+[
+12
+]
+dissect tensor-core latency, throughput, and—most relevant to us—the
+numeric behavior and per-thread fragment layout of the MMA. Our results are the Apple-Silicon
+counterpoint: where these works characterize a dedicated matrix unit, we find M4 Max has none
+(
+Section
+
+4
+), recover the analogous
+cooperative_tensor
+fragment layout Apple documents
+nowhere (
+Section
+
+7
+), and show the fp8 row is emulated rather than accelerated (
+Section
+
+5
+).
+
+Apple Silicon characterization:
+Recent work benchmarks Apple Silicon at the workload level:
+Feng
+et al.
+
+[
+4
+]
+profile end-to-end ML training and attribute the NVIDIA gap to system
+factors; Hübner
+et al.
+
+[
+5
+]
+evaluate M1–M4 for HPC with STREAM and SGEMM FLOPS. These
+measure delivered performance; none opens the Metal 4.1 tensor primitive itself—its dispatch target,
+low-precision acceleration, accumulator width, or fragment layout—which is
+Rigel
+’s contribution.
+
+Low-precision formats and kernel generation:
+M4 implements the OCP FP8
+[
+9
+]
+and
+Microscaling
+[
+10
+]
+representable sets exactly; our contribution is to quantify whether the
+hardware
+accelerates
+them (it does not, on M4). Tiled-kernel compilers
+[
+13
+]
+and the
+FlashAttention line
+[
+2
+,
+3
+,
+11
+]
+motivate our optimization study;
+FA-3 in particular exploits Hopper fp8 tensor cores, precisely the hardware support M4 lacks.
+
+10
+Discussion and limitations
+
+Results are on a
+single
+M4 Max under a
+beta
+OS; cross-generation claims are out of scope
+and are the natural M5 follow-up. The macOS 27.0 beta blocks direct ANE attribution (CPU/ANE power
+unreported by both available tools; the ANE compiler rejects test models), so
+Section
+
+4
+’s
+ANE-exclusion is indirect pending a stable OS. The attention kernels are research-grade; a production
+FlashAttention (register tiling, multiple SIMD-groups per block) may yet win, though M4’s strong
+decomposed path and ample bandwidth set a high bar.
+
+11
+Conclusion
+
+Rigel
+reverse-engineers what Metal 4.1 hides on M4 Max:
+matmul2d
+runs on the GPU shader path
+with no dedicated matrix unit; fp8 is emulated (
+0.94\times
+fp16), a footprint feature not a perf
+feature; the accumulator is
+\geq
+fp32; the opaque
+8{\times}8
+fragment layout is recovered; and
+epilogue fusion built on that layout wins by
++6.5
+–
+12.9\%
+in the cache-resident regime. The vendor
+documents an interface; we document the hardware, reproducibly, from committed code. To that end, the
+microbenchmark harness, the Metal kernels, the per-cell CSVs, and the figure-regeneration scripts are all
+released under the MIT license, and every figure in this paper redraws from a committed CSV through a
+single
+make reproduce
+target.
+

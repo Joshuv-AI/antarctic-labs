@@ -1,0 +1,3391 @@
+Requests of a Feather Must Flock Together: Batch Size vs. Prefix Homogeneity in LLM Inference
+Saksham Rathi, Preeti, Mythili Vutukuru
+
+Abstract
+. Auto-regressive token generation in large language models is memory-bound because it requires “attending to” key and value tensors (KV cache) of all previous tokens. Prior work aims to improve the efficiency of this decode process by batching multiple requests together, and maximizing batch size subject to GPU memory constraints. The key observation of our work is that with prefix-sharing workloads, smaller, prefix-homogeneous batches – where all requests share a common prefix – can achieve higher decode throughput than larger, heterogeneous batches, due to better spatial and temporal locality during KV cache accesses. However, prefix-aware schedulers in state-of-the-art inference engines maximize prefix reuse within a batch only to reduce KV cache memory footprint, but do not stop batch formation at smaller homogeneous batches that could have performed better. Further, we show that shared prefix detection in existing schedulers relies on radix-tree traversals, incurring substantial CPU overhead that is often comparable to GPU execution time. This paper presents Feather , a prefix-aware scheduler that uses reinforcement learning (RL) to learn the optimal tradeoff between batch size and prefix homogeneity. We also introduce Chunked Hash Tree (CHT), a lightweight data structure that enables fast prefix detection and efficient request selection for the RL scheduler, avoiding expensive tree traversals. We integrate Feather into vLLM and SGLang, and our evaluation shows that Feather achieves 2–10 × \times higher end-to-end throughput as compared to existing schedulers, while doing no worse than the status quo when the workload does not have enough prefix sharing. Feather achieves these gains by reducing the total number of KV cache accesses, surpassing the performance of prefix-aware attention kernels that have the same goal.
+
+
+
+1.
+Introduction
+
+Large language models (LLMs)
+(
+36
+;
+25
+;
+12
+)
+are rapidly transforming modern computing, powering applications such as conversational assistants
+(
+10
+;
+13
+)
+, code generation
+(
+15
+)
+, and retrieval-augmented generation
+(
+19
+;
+38
+)
+. As these models transition from research to production, cloud AI engines
+(
+26
+;
+4
+;
+14
+)
+must improve serving latency and resource efficiency for both online and offline inference. While prior work has proposed scheduling strategies
+(
+28
+;
+47
+;
+45
+;
+1
+)
+, parallelization techniques
+(
+32
+;
+37
+)
+, memory management methods
+(
+17
+;
+31
+;
+42
+)
+, quantization
+(
+9
+;
+21
+)
+, and kernel-level optimizations
+(
+41
+;
+27
+)
+, efficiently serving LLM workloads, especially under realistic high-throughput conditions, remains an open problem.
+
+(a)
+
+Prefill and Decode
+
+(b)
+
+Radix Tree
+
+Figure 1
+.
+LLM Inference Primitives
+
+An LLM inference request goes through two phases:
+prefill
+and
+decode
+. The prefill phase processes all prompt tokens in parallel to produce the first output token, making it compute-bound. The decode phase, by contrast, generates tokens auto-regressively and is fundamentally memory-bound.
+Each newly generated token attends to the keys and values of all previous tokens, resulting in a sweep of the entire KV cache for each decode iteration, as shown in Figure
+1(a)
+. As context lengths grow, this memory traffic becomes the dominant bottleneck.
+Popular LLM inference engines like vLLM
+(
+17
+)
+adopt batching to improve GPU utilization during the decode phase, scheduling multiple requests together in a batch using policies like First Come First Serve (FCFS). More advanced frameworks explore techniques such as interleaving
+(
+1
+)
+, disaggregation
+(
+47
+)
+, and spatial co-scheduling
+(
+16
+;
+22
+)
+, along with dynamically adjusting batch sizes based on runtime constraints
+(
+28
+)
+, to address this compute-memory mismatch.
+
+Orthogonally, workloads such as few-shot prompting
+(
+8
+;
+30
+)
+, system prompts
+(
+33
+)
+, and RAG
+(
+18
+)
+exhibit significant
+prefix sharing
+across requests. Reusing KV caches for shared prefixes eliminates redundant KV computation and reduces memory footprint. Systems such as SGLang
+(
+44
+)
+and vLLM
+(
+17
+)
+use radix trees (Figure
+1(b)
+) or hashing-based structures to keep track of shared KV caches. While vLLM’s FCFS would have scheduled requests in arrival order (
+R_{1},R_{2},R_{3},R_{4}
+), SGLang performs a depth-first traversal of the radix tree and schedules requests in the order
+R_{1},R_{3},R_{4},R_{2}
+, which reduces KV cache evictions.
+A complementary line of work
+(
+41
+;
+39
+;
+40
+;
+27
+)
+exploits the shared prefix structure within the attention kernel itself by jointly computing attention for groups of queries that share prefixes. Such prefix-aware attention kernels avoid redundant loading of shared KV blocks for each request separately, thereby reducing memory traffic.
+
+Despite these advances, we identify two critical gaps in current scheduling strategies for prefix-shared workloads. First, prior work largely focuses on maximizing batch size during the decode phase. However, we show via controlled experiments that prefix homogeneity — the extent to which
+all
+requests in a batch share a common prefix — has an even stronger impact on performance. Further, we find that the performance gains increase with the length of the prefix shared across all the requests in a batch (§
+3.1
+). This is because when a prefix is shared by all requests, there is significant
+spatial
+and
+temporal
+locality in the memory accesses of the KV cache located in the GPU DRAM, which leads to both higher memory bandwidth utilization and reduced total amount of data fetched from DRAM. As a result, moderately small prefix-homogeneous batches can leverage these locality benefits and perform better than larger heterogeneous batches. For example, Figure
+2
+shows the throughput and execution times of 800 requests, where 8 groups of 100 requests each share a large prefix of 10K tokens between them. Processing these requests in 8 prefix-homogeneous batches of 100 requests each leads to nearly 2
+\times
+higher throughput than when using larger heterogeneous batches, though very small homogeneous batches (32 batches of 25 requests each) perform poorly as well due to sub-optimal compute utilization. Existing prefix-aware schedulers have no mechanism to recognize this tradeoff between batch size and prefix homogeneity (§
+3.2
+); e.g., in Figure
+1(b)
+, a DFS-traversal-based scheduler will use
+R_{2}
+to maximize batch size, even if a smaller batch (only
+R_{1},R_{3},R_{4}
+) could have performed better due to a longer common prefix. The second big gap with current prefix-aware schedulers is that they incur prohibitive CPU overheads in maintaining and traversing radix trees, which can account for 50–90% of total latency (§
+3.3
+).
+
+Figure 2
+.
+Batch Size vs. Prefix Homogeneity
+
+This paper introduces
+Feather
+
+1
+1
+
+1
+
+Please see §
+E
+for an explanation of this name.
+(§
+4
+), a prefix-aware scheduler that improves throughput by efficiently finding an optimal balance between batch size and prefix homogeneity.
+Feather
+is built on two components:
+(i) Chunked Hash Tree (CHT)
+, a lightweight data structure for fast prefix detection, similar in spirit to vLLM’s block table
+(
+17
+)
+. Instead of performing token-level radix tree traversals, CHT represents each request as a vector of cumulative prefix hashes. To efficiently select a request that maximizes the length of the prefix shared across the active batch, CHT maintains a
+min-heap
+, updated lazily, and ordered by per-request
+missing count
+—the number of prefix chunks not yet covered by the batch. This enables the identification of the best candidate in
+\mathcal{O}(\log W)
+time among
+W
+waiting requests, a significant improvement over DFS traversal
+(
+44
+)
+.
+(ii) RL-based batching policy
+. Deciding when to stop adding requests to a batch presents a trade-off: larger batches improve utilization but dilute prefix homogeneity. We cast this as a reinforcement learning problem in which the scheduler observes batch characteristics (e.g., current size, shared prefix length), evaluates the impact of adding another request to the batch, and stops batch formation at a point that maximizes throughput. This adaptive approach consistently outperforms static heuristics across diverse workloads and hardware configurations. Together, these two components enable
+Feather
+to construct prefix-homogeneous batches efficiently, both improving system throughput and reducing scheduling overhead.
+
+We implement
+Feather
+on vLLM
+(
+17
+)
+and SGLang
+(
+44
+)
+and evaluate it across diverse workloads and configurations (§
+5
+). Our results show that
+Feather
+achieves
+2
+-
+10\times
+higher end-to-end throughput over vLLM’s FCFS and other baselines for shared prefix lengths ranging from 1K to 10K tokens, while also improving DRAM bandwidth utilization.
+Feather
+is fully hardware-agnostic and yet performs better than recent prefix-aware kernels that must be tuned to specific hardware configurations.
+Our RL policy ensures that our performance never falls below that of the baselines, even if the workload does not allow for prefix-homogeneous batches, and CHT reduces prefix-detection overhead by up to
+1000\times
+compared to DFS-based approaches for long sequences.
+
+In summary, this paper makes the following contributions: (i) We demonstrate the tradeoff between batch size and prefix homogeneity in the decode phase performance of LLM inference, and identify previously overlooked CPU overheads in prefix-aware scheduling. (ii) We design the Chunked Hash Tree (CHT) data structure for low-overhead prefix detection, and develop a reinforcement learning-based policy for adaptive batch construction. (iii) We build
+Feather
+, a prefix-aware scheduler integrated into vLLM and SGLang, and demonstrate improvements in throughput and latency on diverse workloads. We plan to open-source
+Feather
+by contributing it to both frameworks’ repositories.
+
+2.
+Background and Related Work
+
+We now discuss the background and prior work on batching, scheduling, and prefix-aware optimizations.
+
+2.1.
+Background
+
+LLM Inference and Attention
+
+LLM inference proceeds auto-regressively in two phases: prefill and decode. Their latencies are known as
+time to first token
+(TTFT) and
+time between tokens
+(TBT), respectively. Each decode step comprises self-attention, Query-Key-Value-Output (QKVO) projections, and Multi-Layer Perceptron (MLP) layers. Self-attention captures global token dependencies as:
+
+\text{Attention}(\mathbf{Q},\mathbf{K},\mathbf{V})=\text{softmax}\left(\frac{\mathbf{Q}\mathbf{K}^{T}}{\sqrt{d}}\right)\mathbf{V}
+
+where
+d
+denotes the head dimension. During the decode phase, the query
+\mathbf{Q}
+of the current token attends to all prior keys
+\mathbf{K}
+and values
+\mathbf{V}
+. These are cached in GPU memory as the
+KV cache
+, eliminating redundant computation at the cost of increased memory usage. The asymmetry between prefill and decode, together with the growing memory footprint of the KV cache, motivates much of the prior work.
+
+GPU Execution Model
+
+GPUs are hierarchically organized for parallelism across hundreds of thousands of threads. The basic compute unit is the Streaming Multiprocessor (SM), and modern GPUs typically contain a few hundred SMs. Each SM includes an L1 cache, shared memory, tensor cores for matrix multiplication (GEMM), and execution units. SMs access global memory through a shared L2 cache. This hierarchy, from small, fast on-chip memory to large, high-latency global memory, is critical for LLM serving, as KV cache access patterns directly influence memory bandwidth utilization. Like CPUs, GPUs use hardware prefetching and benefit from regular, sequential memory access patterns
+(
+29
+)
+.
+
+2.2.
+Related Work
+
+Batching and Scheduling
+
+vLLM
+(
+17
+)
+adopts a first-come, first-served (FCFS) scheduling policy as a practical baseline for LLM serving. Sarathi-Serve
+(
+1
+)
+reduces prefill-decode interference through
+chunked prefills
+and stall-free batching, while DistServe
+(
+47
+)
+eliminates it by disaggregating the two phases across GPUs. At the kernel level, POD-Attention
+(
+16
+)
+overlaps prefill and decode on a single GPU via fused attention with SM-aware scheduling, and Bullet
+(
+22
+)
+enables fine-grained resource sharing through dynamic SM allocation. At the request level, BucketServe
+(
+45
+)
+groups requests by sequence length to improve batching efficiency, and
+28
+dynamically adapts the batch size to runtime constraints. Complementary to prior work,
+Feather
+operates at the scheduler level and learns when to stop batch construction based on prefix homogeneity, introducing a scheduling signal not explicitly exploited in existing systems.
+
+Prefix Sharing
+
+Many real-world LLM workloads
+(
+8
+;
+30
+;
+33
+;
+18
+)
+exhibit substantial prefix overlap, and enabling KV cache reuse avoids redundant computation and reduces memory footprint. However, realizing these benefits requires coordination between serving and memory management. SGLang
+(
+44
+)
+formalizes prefix sharing via
+RadixAttention
+, which uses a radix tree to hierarchically organize token sequences, and enables KV reuse across shared prefixes. Similarly, vLLM
+(
+17
+)
+implements prefix caching
+(
+34
+)
+using a Merkle-tree-inspired hashing scheme (Figure
+3
+), where each KV block hash depends on its tokens and preceding prefix hashes, enabling reuse when hash sequences match. BatchLLM
+(
+46
+)
+targets large offline workloads by grouping prefix-sharing requests and reordering them to maximize KV reuse. BlendServe
+(
+43
+)
+combines a resource-aware prefix tree with scheduling to jointly optimize prefix reuse and compute–memory demand.
+Feather
+adopts a lightweight design:
+it uses chunked hashing over radix trees or full hash chains, reducing CPU overhead and steering batch construction toward prefix-homogeneous groups in online and offline settings.
+
+Figure 3
+.
+An Example of a vLLM Merkle Tree
+
+Prefix-Aware Attention Kernels
+
+Prior work
+(
+41
+;
+39
+;
+40
+;
+27
+)
+also optimizes attention kernels by grouping queries with shared prefixes to load KV blocks once and reuse them across queries. These approaches, however, rely on GPU-specific kernel designs. In contrast,
+Feather
+improves inputs to the existing attention kernels by constructing prefix-homogeneous batches upfront, making it hardware-agnostic and naturally composable with kernel-level techniques.
+
+3.
+Motivation
+
+Through a set of controlled experiments (here and in §
+B
+), we validate three hypotheses that underpin the design of
+Feather
+: (i) prefix homogeneity, the extent to which
+all
+requests in a batch share a common prefix, has a strong impact on the decode throughput because it increases the locality of KV cache accesses. Importantly, these gains can be achieved
+without any modifications to existing attention kernels
+. (ii) There is a trade-off between batch size and prefix homogeneity, where moderately sized homogeneous batches
+can
+outperform large heterogeneous batches; and (iii) existing prefix detection approaches incur substantial CPU overhead.
+
+Experimental Setup
+
+All experiments use the Llama 3 8B
+(
+2
+)
+model and are run on an RTX 6000 Ada GPU
+(
+23
+)
+with 48 GB of GDDR6 memory and a 96 MB L2 cache. We use the vLLM
+(
+17
+)
+inference engine with a default maximum batch size of 500 unless stated otherwise. We first focus on decode throughput, measured in output tokens per second. To isolate decode behavior, we perform a warm-up run so that the prefix KV caches are resident in GPU memory. This ensures that per-token compute remains constant within an experiment and differences arise primarily from memory accesses and batching. We also report end-to-end throughput, which includes the time taken to prefill the queries. For this model, a 10k-token request generates 1.2 GB of KV cache data across all layers. Within each layer, vLLM uses its paged memory management system and allocates the KV cache in blocks of 16 tokens contiguously in GPU memory, which is sufficient for locality benefits to kick in. We sample requests from the L-Eval
+(
+3
+)
+dataset and prune the size of each request as required by the experiment. We use the FlashAttention
+(
+11
+)
+backend throughout all the experiments.
+
+3.1.
+Significance of Prefix Homogeneity
+
+We start by observing the impact of prefix homogeneity on decode phase throughput. When
+all
+requests in a batch share a common prefix, their attention operations traverse the same KV cache regions concurrently. This yields two beneficial effects: (i) spatial locality: Sequential access to contiguous KV tensors enables the hardware prefetcher to fetch upcoming cache lines from DRAM into L2; (ii) temporal locality: Cache lines fetched for one request are reused by neighboring requests before eviction. Together, these effects increase L2 hit rates and DRAM utilization, improving throughput. In contrast, heterogeneous prefixes interleave KV accesses across disjoint regions, disrupting locality and reducing effective memory bandwidth. We will now present experiments that validate these claims.
+
+(a)
+
+Throughput
+
+(b)
+
+Bandwidth Utilization
+
+Figure 4
+.
+Prefix Homogeneity - Two Prefix Groups
+
+Experiment 1:
+We consider two prefixes,
+A
+and
+B
+, each 10K tokens long. We form a batch of
+500
+requests, each using the prefix
+A
+or
+B
+, followed by a unique suffix of length
+20
+tokens (§
+A.1
+). Each request generates 50 decode tokens. Let
+f\in[0,1]
+denote the fraction of requests using prefix
+A
+. When
+f
+is 0 or 1, the batch is homogeneous; otherwise, two prefix groups coexist. We perform a warm-up run so that KV caches for both prefixes are resident in GPU memory.
+
+Figure
+4(a)
+shows decode throughput as a function of
+f
+. We see that the throughput is highest for fully homogeneous batches. However, even a single request from the other prefix group (e.g.,
+f=0.002
+) causes throughput to drop by nearly
+2\times
+. This demonstrates that decode throughput is highly sensitive to even minimal prefix heterogeneity. To understand this effect, we capture DRAM bandwidth utilization using DCGMI
+(
+24
+)
+. We first plot the mean bandwidth utilization for each
+f
+, and then we sum the utilization over the entire experiment duration (i.e., compute the area under the memory bandwidth curve) to approximate total memory accesses. As shown in Figure
+4(b)
+, homogeneous batches achieve over 40% higher bandwidth utilization than mixed-prefix batches due to greater spatial locality, enabling more efficient hardware-level prefetching into the GPU cache. Furthermore, greater temporal locality in prefix-homogeneous batches reduces the total data fetched from DRAM. Because most SMs process queries from the dominant prefix even when
+f=0.002
+, we attribute the performance gains primarily to improved L2 cache reuse rather than increased L1 cache locality.
+
+Takeaway 1:
+
+Decode throughput is maximized when all requests share a prefix; even a single divergent prefix disrupts locality and sharply reduces effective bandwidth.
+
+Experiment 2:
+Next, we evaluate the impact of the shared prefix length on performance. For this, we construct a batch of 100 requests, each 2K tokens long and sharing a common prefix of length
+2K\times f
+tokens, where
+f\in[0,1]
+. The remaining
+2K\times(1-f)
+tokens are unique across requests (§
+A.2
+). The KV caches fit into GPU memory for all values of
+f
+. Figure
+3.1
+shows that throughput increases smoothly with
+f
+. It is lowest at
+f=0
+and improves steadily as sharing increases, reaching over 60% higher throughput at
+f=1
+. As
+f
+grows, a larger portion of the KV cache is shared across requests; since decode repeatedly traverses the KV cache, greater spatial and temporal locality improve throughput.
+
+Figure 5
+.
+Fraction of Prefix Shared
+
+Figure 6
+.
+Number of Prefix Groups
+
+Takeaway 2:
+
+In prefix-homogeneous batches, decode throughput increases smoothly with the length of the shared prefix.
+
+Experiment 3:
+Next, we evaluate the effect of the number of prefix groups on performance using an experiment with
+N
+shared prefixes
+P_{1},P_{2},\dots,P_{N}
+, each of length
+10K
+tokens and having same number of requests. Figure
+6
+shows throughput and average batch size as
+N
+increases. As observed earlier, throughput drops from
+N=1
+to
+N=2
+due to reduced temporal and spatial locality arising from prefix heterogeneity. However, from
+N=2
+to
+N=20
+, throughput remains stable, indicating that additional heterogeneity has a limited impact once locality is disrupted. Finally, throughput drops sharply from
+N=20
+to
+N=100
+, as GPU memory can no longer hold KV caches for all active prefixes. The impact is also visible through the reduced average batch size for
+N=50
+and
+N=100
+. Prior work
+(
+46
+;
+44
+)
+mitigates the throughput drop from
+N=20
+to
+N=50
+due to KV cache evictions by maximizing prefix reuse and minimizing memory footprint using depth-first traversal of radix trees. However, to the best of our knowledge, no prior work has observed the drop in performance from
+N=1
+to
+N=2
+prefix groups.
+
+Takeaway 3:
+
+While prefix heterogeneity causes a drop in throughput, the amount of heterogeneity has a marginal impact on the loss of locality. However, very high heterogeneity leads to minimal KV reuse and higher GPU memory evictions.
+
+Figure 7
+.
+Radix Tree Sharing Patterns
+
+Figure 8
+.
+Throughput vs. Batch Size
+
+Figure 9
+.
+Batch Size vs. Homogeneity
+
+Experiment 4:
+Until now, all the experiments have considered requests that have a single level of prefix sharing. We now ask the question: what is the impact of more complicated sharing patterns on performance? For this, we construct radix trees with 1 to 4 levels of shared prefixes (§
+A.3
+). There are two branches in each level, and requests are equally distributed across the leaves. The sequence length per request is fixed at
+4L
+, and Figure
+3.1
+shows the decode throughput for three values of
+L
+. As expected, a single level of radix tree has the highest performance because of maximum locality. Interestingly, radix trees with 2, 3, and 4 levels exhibit similar throughput across different values of
+L
+, despite differing branching structures. Why so? During the initial segment of length
+L
+, all configurations access the same KV region. However, once branching occurs, the batch becomes heterogeneous, locality degrades, and the marginal cost of additional prefix groups is small, as established earlier in Figure
+6
+.
+
+Takeaway 4:
+
+Performance is driven mainly by the length of the top-level prefix shared by all requests, while the number of radix-tree levels and branches has a negligible impact.
+
+3.2.
+Batch Size vs Prefix Homogeneity
+
+So far, we have established that prefix homogeneity has a significant impact on performance. But when the workload does not have enough requests from a prefix group and prefix-homogeneous batches are too small, the compute will remain under-utilized, leading to a loss in throughput. Therefore, there exists a trade-off between batch size and prefix homogeneity. We now explore this trade-off.
+
+Experiment 5:
+We study decode throughput vs. batch size using two workloads: (i) heterogeneous, with requests spread across 5 distinct 10K-token prefixes, and (ii) homogeneous, with all requests sharing one such prefix. Figure
+8
+shows throughput and tensor core utilization as a function of batch size for both workloads. We see that throughput plateaus at a point before the maximum batch size, and the saturation throughput is higher in the homogeneous case due to greater locality. Further, the batch size at which throughput saturates is higher for the homogeneous workload because requests can access the same KV cache without using additional memory bandwidth. Interestingly, the compute utilization is almost exactly the same across both workloads.
+
+Takeaway 5:
+
+Decode is memory bandwidth bound and increasing batch size beyond a point does not necessarily improve throughput. However, the point at which diminishing returns begin depends on prefix homogeneity (and hardware config).
+
+Experiment 6:
+Given that batch size has a diminishing impact on performance, we ask if moderately small homogeneous batches can outperform larger heterogeneous ones. To answer this, we use eight prefix groups with 100 requests each (800 total, each 10K tokens) and evaluate the following batching strategies: (i) 1
+\times
+800 (8 prefix groups/batch); (ii) 2
+\times
+400 (4 prefix groups/batch); (iii) 4
+\times
+200 (2 prefix groups/ batch); (iv) 8
+\times
+100 (homogeneous); (v) 16
+\times
+50 (homogeneous); and (vi) 32
+\times
+25 (homogeneous). We vary the decode length from 1 to 100 tokens and measure the end-to-end throughput, including both the prefill and decode phases for all batches. Figure
+9
+shows this throughput across the different batching strategies. For small decode lengths, throughput is dominated by prefill, and large heterogeneous batches perform the best due to higher tensor core utilization; splitting 1
+\times
+800 into smaller batches slightly reduces throughput due to lower compute efficiency, as locality benefits are not yet dominant. As decode length increases, performance trends reverse: multiple decode iterations repeatedly sweep the KV cache and reap greater benefits due to locality. Therefore, at longer decode lengths, fully homogeneous batches (8
+\times
+100) significantly improve throughput despite smaller batch sizes. Notably, even 16
+\times
+50 continues to outperform 1
+\times
+800 at large decode lengths, showing that locality gains can outweigh reduced tensor core utilization. Only when batches become too small (32
+\times
+25) does throughput decline again, as reduced arithmetic intensity and occupancy dominate.
+
+Takeaway 6:
+
+Moderately small prefix-homogeneous batches can achieve higher throughput than larger heterogeneous ones. Gains increase with longer decode lengths as repeated KV sweeps amplify locality; however, excessively small batches underutilize compute and degrade performance.
+
+Policy
+
+Exec (s)
+
+Batch Time (s, %)
+
+Throughput (toks/s)
+
+vLLM FCFS
+
+229.36
+
+3e-6 (0.00%)
+
+436.25
+
+SGLANG DFS-W
+
+177.78
+
+92.15 (51.8%)
+
+562.61
+
+SGLANG LPM
+
+149.27
+
+46.62 (31.2%)
+
+669.92
+
+PAT (vLLM Block Table)
+
+316.45
+
+91.72 (29.0%)
+
+316.63
+
+vLLM RadixTree
+
+139.33
+
+62.95 (45.2%)
+
+717.35
+
+vLLM User IDs
+
+105.43
+
+0.03 (0.03%)
+
+948.54
+
+Table 1.
+Overhead of Dynamic Prefix Detection
+
+3.3.
+Overhead of Dynamic Prefix Detection
+
+Next, we study how state-of-the-art inference engines identify prefix sharing and the costs involved. Systems such as SGLang
+(
+44
+)
+and BatchLLM
+(
+46
+)
+do not explicitly form prefix-homogeneous batches, but use radix trees to detect sharing, and schedule requests to minimize KV recomputation.
+
+Experiment 7:
+We construct a workload of 2K requests, each with a 10K-token prefix, and compare scheduling CPU time to total execution time. SGLang proposes two prefix-aware policies that use its radix tree:
+Longest Prefix Match
+, which prioritizes requests with the longest matching cached prefixes, and
+DFS-Weight
+, which performs a depth-first traversal and prioritizes branches with more active requests. vLLM uses a much simpler hash-based block table, which is used for grouping requests in the prefix-aware attention kernel implementation of PAT
+(
+41
+)
+. We compare the overheads of this block table along with our own radix-tree-based scheduler implemented on top of vLLM. We also compare against an idealized policy where prefix group identifiers are provided explicitly, eliminating dynamic prefix discovery.
+
+Table
+1
+shows that SGLang’s LPM and DFS-Weight incur scheduler overhead (measured as time taken by all functions invoked during batch formation) comparable to GPU execution time, even though these policies improve performance over vLLM’s FCFS. In contrast, when prefix group identifiers are provided explicitly, CPU overhead drops significantly. This gap arises from the structure of radix trees: they require token-by-token comparisons during insertion, dynamic node splitting on partial matches, and repeated tree traversals for scheduling requests. With long prompts and high concurrency, these operations incur significant overhead. Similarly, vLLM’s block table design is inefficient in this regard. However, these overheads are not sufficiently highlighted in prior work
+(
+46
+;
+43
+)
+, which is mostly based on offline inference.
+
+Takeaway 7:
+
+Existing approaches introduce significant CPU overhead when detecting prefix sharing, which is sometimes even comparable to the GPU execution time.
+
+4.
+Design and Implementation
+
+Our experiments so far have demonstrated that the length of the prefix shared across
+all
+active requests is an important determinant of system performance. However, this metric interacts with batch size in a complex way: larger batches improve GPU utilization but often reduce shared prefix alignment. Further, detecting this shared prefix length incurs high overhead in existing systems. We now describe the design of
+Feather
+, an efficient scheduler that finds the right balance between batch size and prefix homogeneity.
+
+4.1.
+Overview
+
+Feather
+is based on the following two key ideas.
+
+Key Idea 1: Learn the Stopping Decision via RL (§
+4.3
+)
+
+The trade-off between batch size and prefix homogeneity raises a key question: when should the scheduler stop adding requests? The answer depends on both hardware and workload, making fixed heuristics brittle. We model batch construction as a sequential decision process and learn a stopping policy via Reinforcement Learning. At each step, the scheduler evaluates a candidate request using various state features and decides whether it should be added to the batch or if the batch should be dispatched to the GPU for execution.
+
+Key Idea 2: Shared Prefix Detection via Chunked Hash Tree (§
+4.2
+)
+
+Tree-based approaches incur significant overhead (§
+3.3
+), and finding the best waiting request requires a DFS traversal that is
+\mathcal{O}(E)
+, where
+E
+is the number of edges in the radix tree. In the worst case, this can go up to
+\mathcal{O}(W\times T)
+, where
+W
+is the number of waiting requests, and
+T
+is the sequence length. We instead represent each request as a sequence of hashes over fixed-size chunks and maintain a working set of hashes for the active batch. This is similar in spirit to Merkle-style hash chains, but it does not require sequential hash computation, and each chunk can be processed independently without prefix dependencies. Prefix matching is thus reduced to a set-overlap problem: selecting the request with the maximum overlap with the working set. However, a naive implementation that scans all requests and counts overlaps requires
+\mathcal{O}(W\cdot C)
+work per decision, where
+C
+is the number of chunks in a request, which remains too expensive for frequent scheduling. We avoid this by maintaining a missing count per request—the number of chunks absent from the working set—which changes only when the working set changes (i.e., upon request addition or completion). Overlaps are thus updated incrementally, reducing selection to finding the request with the smallest missing count. To do so efficiently, we maintain a min-heap over missing counts, pushing updates and using lazy deletion to discard stale entries, yielding
+\mathcal{O}(\log W)
+selection cost.
+
+System Architecture
+
+Figure
+10
+shows the overall scheduling pipeline. We consider an inference server that continuously receives requests, which are inserted into the waiting queue of CHT. The scheduler builds batches incrementally in a loop. It first finds the best candidate by retrieving the waiting request with the highest overlap with the current working set. Then the RL policy evaluates the current system state and decides whether to
+Add
+the request or
+Stop
+. If
+Add
+is chosen, the request is added to the scheduler batch, and all the data structures, such as the working set and the min-heap, are updated accordingly; otherwise, the batch is dispatched to the GPU for an execution step. The decode throughput measured after the GPU execution is used as a reward for the RL policy. Completed requests are removed from the active batch, and the working set is updated.
+
+Figure 10
+.
+Feather
+Pipeline
+
+(a)
+
+Insertion
+
+(b)
+
+Adding to Batch
+
+(c)
+
+Finding the Best Request
+
+(d)
+
+Request Completion
+
+Figure 11
+.
+Chunked Hash Tree Operations
+
+4.2.
+Chunked Hash Tree (CHT)
+
+We now describe the operations of CHT (a more formal treatment is in §
+C
+). We begin with how token sequences are mapped to a compact representation in our system.
+
+Hash Vectors
+
+Given a request as a token sequence, we partition it into non-overlapping chunks of size
+K
+and build a sequence of hashes, one for each chunk, where each hash is cumulative over all tokens up to that chunk. For example, in Figure
+11(a)
+, a request with tokens A-F and
+K=2
+is represented as three incremental hashes: hash(A-B), hash(A-D), and hash(A-F). Two requests will have the same hash at level
+l
+iff they share the same first
+lK
+tokens. Each request is represented as an ordered hash vector. We use an incremental xxHash-64 state, ensuring each token is processed once, yielding a total cost of
+\mathcal{O}(T)
+, independent of the number of chunk boundaries, where
+T
+is the sequence length.
+
+Insertion
+
+Insert
+is invoked when a new request arrives at the scheduler. We first compute the cumulative prefix-hash vector and store it in a map from request IDs to hash vectors for faster reuse. We also maintain a reverse index that maps each hash to the set of requests containing that hash. For each hash in the hash vector, we insert the request into this reverse index. The overall cost is dominated by the hash computation phase, which runs in
+\mathcal{O}(T)
+.
+
+Working Set, Min-Heap and Shared Prefix Tip
+
+To evaluate how well a request matches the active batch, we maintain a working set that contains (level, hash) tuples representing prefix hashes at that level covered by currently active requests. For each request, we also maintain a missing count, which is the number of levels for which this request’s hashes are not present in the working set. We insert these missing counts into a min-heap, which enables efficient retrieval of the most suitable request for addition to the batch.
+Insert
+updates both of these structures. Moreover, we do not perform in-place updates and use lazy deletion to discard stale entries in the heap. To relate to our key metric, which is the number of chunks shared by all active requests, we also maintain a shared prefix tip, storing the depth and hash of the deepest node that is shared by all the active requests. Figure
+11(b)
+shows the Chunked Hash Tree after the request
+R_{1}
+is added to the batch. The nodes marked in green denote the working set. Since there is just a single request, the shared prefix tip is at Level-3 of
+R_{1}
+. The heap contains the missing counts of the waiting requests along with stale entries.
+
+Finding the Best Request
+
+The goal of
+FindBest
+is to select the waiting request that best complements the active batch, i.e., the one with the minimum missing count, so that we maximize the depth of the shared prefix tip
+2
+2
+
+2
+
+An astute reader might ask why we are choosing a request based on its difference from the working set rather than its impact on the length of the shared prefix tip. A brief explanation is that we want to pick a request that helps us revert back to a longer shared prefix tip sooner, and a request that differs from the working set by the least number of chunks helps us achieve this goal best. We refer the reader to Appendix
+C.9
+for more details.
+. Since the min-heap is keyed by this count, the best candidate appears at the top after skipping stale entries. As shown in Figure
+11(c)
+,
+R_{2}
+appears at the top of the min-heap and is therefore selected as the best request. Note that adding
+R_{2}
+to the batch reduces the shared prefix tip by one level.
+FindBest
+runs in
+\mathcal{O}(\log W)
+, where
+W
+is the number of waiting requests. For the selected request, we compute two metrics that are inputs to the RL policy (§
+4.3
+), which needs to decide whether adding the request to the current batch is beneficial for the overall throughput. One of the metrics is the change in the depth of the shared prefix tip, and the other is the number of additional waiting requests that are present at this new depth, which can all be added to the batch without any further impact on the shared prefix tip in the future.
+
+Adding a Request to the Active Batch
+
+When a request is promoted to the active batch, we update the working set to include its prefixes and recompute the shared prefix tip. We iterate over the hash vector backwards; for each level, if the corresponding prefix hash isn’t present in the working set, it is inserted, and all waiting requests sharing it have their missing count decremented. For the shared prefix tip, admitting a new request can only
+shorten
+the common prefix, so we seek the deepest level where it agrees with the existing tip hash. This corresponds to the least common ancestor of all active request leaves in the hash trie.
+AddToBatch
+runs in
+\mathcal{O}(C\cdot W_{h}\cdot\log W)
+time, where
+C=\lceil T/K\rceil
+is the number of chunks for a request with
+T
+tokens, and
+W_{h}
+is the number of waiting requests that share the same hash (
+W_{h}\ll W
+).
+
+Removing a Request from the Active Batch
+
+Finish
+is called when a request completes, and we remove it from the active batch. It is the symmetric counterpart of
+AddToBatch
+. We iterate over the hash vector from the start. A hash unused by any active request is removed from the working set, and all waiting requests containing it have their missing count incremented. A request completion can only
+lengthen
+the shared prefix tip since the remaining active requests may agree on a longer common prefix. Starting from the tip’s previous position, we scan forward, checking whether all remaining active requests share the same hash at each level. (We do this efficiently by maintaining reference counts of each hash.) The extension stops at the first level of disagreement or at the shortest active request. This scan is inexpensive in practice, as the tip rarely advances more than a few levels.
+Finish
+also runs in
+\mathcal{O}(C\cdot W_{h}\cdot\log W)
+time. Figure
+11(d)
+shows the state after
+R_{1}
+completes: the tip extends to
+R_{2}
+’s final level, and waiting heap costs are updated accordingly.
+
+Optimizations
+
+We employ several optimizations to improve efficiency. First,
+FindBest
+may be invoked multiple times within a scheduling round without state changes, so we cache its last result and reuse it until it is invalidated by any mutation (e.g.,
+AddToBatch
+and
+Finish
+). Second, we use lazy heap updates: when a request’s missing count changes, we push a new entry instead of updating it in place and skip stale entries during
+FindBest
+. Third, we maintain the shared prefix tip incrementally rather than recomputing it. This drops the cost from
+\mathcal{O}(A\cdot C)
+, where
+A
+is the number of active requests, and
+C
+is the number of chunks, to just
+\mathcal{O}(C)
+in the worst case and typically terminates earlier. Finally, all major data structures are pre-allocated at initialization to eliminate rehashing and reallocation overhead.
+
+4.3.
+Batching and Reinforcement Learning
+
+The CHT efficiently identifies the next best request to add, maximizing shared prefix length, but it does not determine
+when to stop
+. While adding requests improves GPU utilization, it can also shrink the shared prefix and degrade locality. We frame this stop/continue decision as a learning problem and present three policies: a heuristic, a contextual bandit, and a Q-learning agent. The scheduler incrementally builds a batch by selecting candidates via the CHT and deciding whether to admit them or dispatch the batch.
+
+State, Actions, and Reward
+
+At each step of batch formation, the scheduler observes the state
+s=(\mathit{b},\;\Delta,\;\mathit{w})
+and takes an action
+a\in\{\textsc{Add},\textsc{Stop}\}
+. Here,
+b
+is the current batch size (a proxy for GPU utilization),
+\Delta
+is the loss in the shared prefix, and
+w
+is the number of waiting requests sharing the prefix up to the new depth, indicating whether the locality cost of this addition will be compensated by future activations. Both RL policies optimize the reward
+\mathcal{R}=\text{throughput}_{\mathrm{decode}}
+. Maximizing this encourages large batches and short decode times (better prefix locality). The state is discretized into
+(\hat{b},\hat{\Delta},\hat{w})
+, where
+b
+and
+w
+use exponential bins, and
+\Delta
+uses coarse thresholds. The resulting table is small, hashable, and converges quickly under moderate load.
+
+Heuristic Policy
+
+As a baseline, we encode domain intuition as simple rules balancing two goals: maximizing GPU utilization (large batches) and preserving prefix locality (avoiding large drops in the shared chain). The heuristic always accepts candidates with zero chunk loss (free additions). When the batch is small, it tolerates higher loss to avoid underutilization. Otherwise, it admits a candidate only if the chunk loss is within a fixed threshold, with slightly relaxed tolerance when many waiting requests share the resulting prefix (anticipating amortization). If none of these conditions hold, it stops and dispatches the batch. This policy requires no training and converges immediately, but its fixed thresholds cannot adapt to workload or hardware changes.
+
+Contextual Bandit
+
+To avoid hand-tuned thresholds, we use a contextual bandit with Upper Confidence Bound (UCB) selection
+(
+5
+)
+. Each batch-construction step is treated as an independent decision: given the discretized state
+\hat{s}=(\hat{b},\hat{\Delta},\hat{w})
+, the policy selects the action that maximizes
+
+\mathrm{UCB}(\hat{s},a)=\frac{\mu(\hat{s},a)}{n(\hat{s},a)}+c\sqrt{\frac{\ln S}{n(\hat{s},a)}}.
+
+Here,
+\mu(\hat{s},a)
+is the cumulative reward,
+n(\hat{s},a)
+is the number of times action
+a
+was taken in
+\hat{s}
+,
+S
+is the total number of decisions, and
+c
+is the exploration coefficient. The first term favors high-reward actions, while the second promotes exploration of under-sampled ones.
+
+Q-Learning Policy
+
+As an alternative to the previous policy, we can also model batch construction as an episodic reinforcement learning problem, where each episode begins when forming a new batch and ends upon
+Stop
+or when the waiting queue is exhausted. The Q-table
+(
+35
+)
+stores values
+Q(s,a)
+for each (discretized state, action) pair and is updated after each episode using:
+
+Q(s,a)\;\leftarrow\;Q(s,a)+\alpha\bigl[r+\gamma\max_{a^{\prime}}Q(s^{\prime},a^{\prime})-Q(s,a)\bigr].
+
+Here,
+r
+is the observed throughput,
+s^{\prime}
+is the next state,
+\alpha
+the learning rate, and
+\gamma
+the discount factor, which biases the agent toward near-term throughput, consistent with real-time inference. We follow an
+\varepsilon
+-greedy exploration strategy: at each step, a random action is selected with probability
+\varepsilon
+, and the greedy action
+\arg\max_{a}Q(s,a)
+otherwise. During training,
+\varepsilon
+decays from
+1.0
+to
+\varepsilon_{\min}
+, transitioning from full exploration to near-deterministic behavior. Qualitatively, we expect this policy to perform better in the long term when actions influence future batch composition.
+
+At each step,
+FindBest
+returns the lowest-cost candidate along with
+(\Delta,w)
+, forming the state
+s
+. The policy (heuristic, bandit, or Q-learning) then selects
+Add
+or
+Stop
+. If
+Add
+, the request is activated and appended to the batch; otherwise, the batch is dispatched. After execution, the observed decode throughput is used as the reward: the bandit updates its statistics and the Q-learning agent applies the Bellman update. This has also been shown in Figure
+10
+.
+
+4.4.
+Integration with vLLM and SGLang
+
+We integrate our scheduler as a lightweight layer on top of both vLLM
+(
+17
+)
+and SGLang
+(
+44
+)
+. The Chunked Hash Tree (implemented in C++) along with shared prefix chain tracking and reinforcement learning policies operates entirely at the scheduler level. We will upstream our changes to these repositories upon acceptance of our publication.
+
+(a)
+
+Throughput
+
+(b)
+
+Average Batch Size
+
+(c)
+
+Time between tokens (TBT)
+
+Figure 12
+.
+Poisson Workload
+
+5.
+Evaluation
+
+We evaluate
+Feather
+across diverse models, GPU configurations, and real-world datasets and scenarios. Our evaluation answers the following questions: (i) Under what workloads do smaller homogeneous batches outperform larger heterogeneous ones? (ii) How effective is
+Feather
+’s Chunked Hash Tree compared to traditional radix-tree-based approaches? (iii) How do different design components of
+Feather
+(RL, CHT) interact to produce end-to-end performance gains?
+
+5.1.
+Experimental Setup
+
+Models and Hardware
+
+We evaluate three model families across multiple sizes: Qwen 0.5B, 1.5B, 8B
+(
+6
+)
+, LLaMA 3 8B
+(
+2
+)
+, and LongChat 13B
+(
+20
+)
+. Experiments are run on an NVIDIA RTX 6000 Ada GPU
+(
+23
+)
+with 48 GB GDDR6, 96 MB L2, and the maximum batch size is fixed at 500, which fits within the GPU memory for most settings. We additionally evaluate on an A100-80GB GPU for comparisons involving PAT
+(
+41
+)
+, as it is specifically optimized for this hardware.
+
+(a)
+
+Throughput
+
+(b)
+
+Average Batch Size
+
+Figure 13
+.
+Varying Number of Prefix Groups
+
+Workloads
+
+Following prior work, request arrivals are modeled as a Poisson process, with length pruning applied as required by each experiment. L-Eval
+(
+3
+)
+is a benchmark of human-labeled query–response pairs spanning tasks such as summarization and question answering, with sequence lengths ranging from 2.7K to 210.5K tokens. LongBench
+(
+7
+)
+is a collection of long-context samples across six task categories: multi-document QA, summarization, and code completion, with context lengths between 4K and 10K tokens.
+
+Baselines
+
+We compare
+Feather
+against state-of-the-art LLM serving systems, all with prefix caching enabled. vLLM
+(
+17
+)
+uses its default FCFS scheduling policy. SGLang
+(
+44
+)
+is evaluated under FCFS, LPM, and DFS-W to cover its design space. We also evaluate DynamicBatching
+(
+28
+)
+and PAT
+(
+41
+)
+, both implemented on top of vLLM: DynamicBatching adjusts batch sizes based on runtime memory utilization and latency constraints, while PAT is a prefix-aware attention kernel that reduces redundant KV cache accesses via query packing.
+
+Metrics
+
+We report three key metrics. Throughput (toks/s) measures the output tokens generated per second, reflecting serving capacity and GPU utilization. Time between tokens (TBT) measures the average interval between decoded tokens, reflecting responsiveness, especially in interactive settings. We also track the average batch size per forward pass to relate scheduling decisions to these metrics.
+
+5.2.
+End-to-End Comparison:
+Feather
+vs Baselines
+
+We evaluate a workload where the default configuration has 5 prefix groups
+3
+3
+
+3
+
+We also evaluate workloads without prefix sharing and show
+Feather
+performs on par with FCFS (§
+D.7
+).
+, each 5K tokens long, with roughly equal request distribution, a request rate of 100 req/s, and 200 output tokens per request. Such workload configurations are common in prior work
+(
+41
+;
+27
+)
+evaluating LLM serving systems. We vary these parameters to examine how
+Feather
+compares to the baselines. The token budget is 32K tokens. For
+Feather
+’s RL policy, we find that bandit and Q-learning approaches perform similarly across most settings; unless stated otherwise, we report results using the bandit policy.
+
+Varying Input Request Rate
+
+Figure
+12(a)
+shows throughput (toks/s) as a function of the request rate. Across all policies, throughput increases with the request rate before saturating.
+Feather
+(on vLLM) consistently outperforms all baselines at every request rate. At 100 req/s,
+Feather
+achieves roughly
+4\times
+the throughput of vLLM (FCFS). Notably, this advantage is not driven by larger batch sizes. As shown in Figure
+12(b)
+,
+Feather
+in general maintains a
+smaller
+average batch size than vLLM (FCFS), and beyond the vertical line shown in the plot,
+Feather
+’s RL policy decides to have completely homogeneous batches. This reinforces a key insight:
+smaller, homogeneous batches outperform larger, heterogeneous ones
+. The gradual growth in
+Feather
+’s batch size with increasing request rate reflects its ability to efficiently aggregate more requests from the same prefix group into the active batch without sacrificing locality. SGLang policies consistently operate at smaller batch sizes than vLLM, as vLLM avoids double-counting shared prefix tokens toward the token budget, allowing more requests per batch. Dynamic Batching performs similarly to vLLM (FCFS), as all KV caches fit within GPU memory. Figure
+12(c)
+shows time between tokens (TBT).
+Feather
+(on vLLM) achieves substantially lower TBT than all baselines except SGLang (FCFS), whose smaller batch sizes yield faster per-token generation. While SGLang’s LPM and DFS-W policies also use small batch sizes, their TBT remains significantly higher than
+Feather
+due to non-trivial scheduling overhead during batch construction.
+Feather
+implemented on SGLang also shows similar qualitative trends and outperforms all other SGLang policies. Unless otherwise stated, all subsequent results refer to
+Feather
+implemented on vLLM.
+
+Varying Number of Prefix Groups
+
+Figures
+13(a)
+and
+13(b)
+show throughput and average batch size as functions of the number of prefix groups. Increasing the number of prefix groups introduces greater request heterogeneity, reducing KV cache locality. This leads to a sharp throughput drop for vLLM (FCFS), even when increasing from 1 to 2 prefix groups. As the number of groups increases further, FCFS degrades rapidly: beyond 20 groups, the KV cache footprint exceeds HBM capacity, causing a sharp reduction in batch size and increased recomputation.
+Feather
+mitigates this by grouping requests with shared prefixes, increasing KV cache reuse and avoiding premature evictions. As a result,
+Feather
+maintains a more stable batch size and throughput across all prefix group configurations, significantly outperforming all baselines. At 100 prefix groups,
+Feather
+achieves
+10\times
+higher throughput than vLLM (FCFS). SGLang’s LPM and DFS-W policies partially mitigate evictions, achieving higher throughput than FCFS (SGLang) at larger group counts.
+
+(a)
+
+Throughput
+
+(b)
+
+Average Batch Size
+
+Figure 14
+.
+Varying Number of Decode Tokens
+
+Varying Number of Decode Tokens
+
+Figures
+14(a)
+and
+14(b)
+show throughput and average batch size as functions of decode tokens per request. Each decode requires a full sweep over the KV cache. The policies exhibit two regimes separated by a crossover around 20 decode tokens. In the prefill-dominated regime (1–20 tokens), all policies behave similarly: throughput increases modestly, and batch sizes converge as prefills limit the impact of locality-aware scheduling. Beyond 20 tokens, the policies diverge sharply.
+Feather
+scales strongly with decode length, reaching
+\sim
+3800 toks/s at 200 tokens—over
+3\times
+higher than SGLang policies. This gain arises from two factors. First, longer decode phases amplify locality across repeated KV cache sweeps. Second, a greater number of decode iterations allows the scheduler to accumulate more same-prefix requests, forming larger, more homogeneous batches. Together, these effects drive the steady increase in
+Feather
+’s batch size and throughput. SGLang policies follow the opposite trajectory in batch size. Because shared prefix tokens count toward the token budget, each prefill consumes
+\sim
+5K tokens, while each decode step contributes only one token. As the decode length increases, fewer prefills occur per step, reducing the number of new requests for batching.
+
+Varying Number of Shared Prefix Tokens
+
+Figure
+16
+shows throughput across the length of the shared prefix. As expected, longer prefixes increase prefill compute and KV cache pressure, reducing throughput across policies.
+Feather
+’s advantage grows with prefix length, driven by higher locality gains as sequences lengthen.
+
+Figure 15
+.
+Varying Shared Prefix Tokens
+
+Figure 16
+.
+Varying Radix Tree Sharing Levels
+
+Varying Models
+
+Feather
+consistently achieves the highest throughput across models and outperforms baselines in nearly all cases. Its relative throughput advantage increases with model size, as larger models spend more time in attention, amplifying the benefits of KV-cache locality exploited by
+Feather
+. All graphs are shown in §
+D.2
+. We also compare
+Feather
+with other policies (§
+D.3
+) for the LongChat 13B model, where we achieve up to 22
+\times
+higher throughput compared to vLLM’s FCFS for larger number of prefix groups.
+
+Figure 17
+.
+Feather
+vs PAT
+
+Figure 18
+.
+CPU overhead
+
+Varying Radix Tree Levels
+
+Figure
+16
+shows throughput under different radix-tree sharing levels (seen in §
+3.1
+). All experiments use a fixed total sequence length of 4000 tokens per request. For baseline policies like vLLM’s FCFS, going from 1 to 2 or more levels of the radix tree reduces the locality in KV cache traversal and, hence, degrades throughput. In contrast,
+Feather
+actively preserves prefix homogeneity within batches, leading to stable throughput at all levels.
+
+Comparison with PAT
+
+Figure
+18
+compares throughput across varying request rates for PAT, vLLM (FCFS), and
+Feather
+on an A100-80GB GPU. PAT is specifically optimized for this hardware through custom prefix-aware kernels. Despite this,
+Feather
+consistently matches or outperforms PAT across all request rates, demonstrating strong performance even on different hardware. This is particularly notable because
+Feather
+operates purely at the scheduling layer, without any kernel-level modifications. A naive integration of
+Feather
+and PAT performs quite similarly to
+Feather
+over most regimes. As future work, we aim to more tightly integrate
+Feather
+with prefix-aware attention kernels, enabling deeper co-design between the scheduler and kernel-level optimizations to further improve performance.
+
+5.3.
+Micro-Benchmarks
+
+Comparing Scheduler Compute Overhead across Different Policies
+
+Figure
+18
+shows the CPU scheduling overhead for each policy across different shared prefix lengths. We include an Oracle policy where the caller supplies prefix group identifiers with each request. This allows the scheduler to batch same-prefix requests without any prefix matching overhead, resulting in effectively zero scheduling cost while preserving locality. We also show the GPU execution time for this Oracle scheduling policy. All three realistic policies—
+Feather
+, LPM, and DFS-W— incur higher overhead as the prefix length increases due to deeper radix-tree traversals and larger key comparisons. However, their growth rates diverge significantly. At 20K tokens, LPM and DFS-W incur roughly 1,000
+\times
+higher overhead than
+Feather
+. At larger sequence lengths, their scheduling overhead exceeds the Oracle GPU execution time by up to 10
+\times
+. This indicates that CPU overhead alone can negate the benefits of cache-aware batching. In contrast,
+Feather
+remains below 1% of GPU execution time across the entire range. We do a detailed analysis of the overheads of LPM and DFS-W policies in §
+D.4
+.
+
+(a)
+
+Mean
+
+(b)
+
+Sum
+
+Figure 19
+.
+DRAM Bandwidth Utilization
+
+(a)
+
+CPU Scheduler Overhead
+
+(b)
+
+Throughput
+
+Figure 20
+.
+Sensitivity to Chunk Size
+
+Mean DRAM Activity across Various Sequence Lengths
+
+Figure
+19(a)
+shows mean DRAM bandwidth utilization, while Figure
+19(b)
+shows the total DRAM usage over the full inference duration (a proxy for total memory accessed) across policies and shared prefix lengths.
+Feather
+consistently achieves the highest bandwidth utilization due to improved spatial locality, leading to more effective prefetching. Furthermore, more homogeneous batches also increase temporal locality, which is reflected in lower total DRAM usage. SGLang’s DFS-W and LPM exhibit lower mean DRAM utilization because of CPU scheduler stalls. However, they also achieve lower normalized total DRAM usage, as their prefix-aware scheduling occasionally forms homogeneous batches, allowing them to partially benefit from memory locality.
+
+Effect of Chunk Size
+
+Figures
+20(a)
+and
+20(b)
+show CPU overhead and throughput across shared prefix lengths for different chunk sizes in
+Feather
+’s CHT. Increasing the chunk size reduces CPU overhead by enabling coarser-grained matching; a chunk size of 1 is equivalent to an exact radix tree. Overhead rises with prefix length due to more hash comparisons, while throughput declines due to higher KV cache memory pressure. At larger prefix lengths, the overhead gap between chunk size 1 and larger sizes widens substantially, yet throughput remains similar across all chunk sizes, suggesting that the CPU scheduling cost, even at the finest granularity, is not the primary bottleneck in our CHT. Overall, CHT is robust against chunk size selection, and even its radix tree-equivalent configuration (chunk size 1) achieves significantly better efficiency than a conventional radix tree.
+
+5.4.
+Ablation Study
+
+What if we Replace the Chunked Hash Tree with a Radix Tree?
+
+Figure
+22
+compares throughput and TBT when replacing CHT with a radix tree under the same RL policy. Across all prefix lengths, the radix tree yields much lower throughput. Despite homogeneous RL batching, higher CPU overhead causes frequent GPU stalls. This appears as higher TBT, indicating GPU idle time due to scheduling delays. CHT avoids this by reducing scheduling overhead, enabling higher GPU utilization and throughput.
+
+Figure 21
+.
+CHT vs. Radix Tree
+
+Figure 22
+.
+Feather
+: with and without RL
+
+What if We Remove RL?
+
+Figure
+22
+compares throughput with and without RL at low input rates. Without RL, CHT still selects the best request, but batching never halts and always maximizes batch size. At <5 req/s, removing RL has little effect. Both fall back to FCFS, adding requests to keep GPUs utilized. Beyond this, the behaviors diverge. With RL,
+Feather
+detects homogeneous requests and stops batching at the right time, achieving higher throughput despite smaller average batch sizes. At higher rates than shown in the figure, large pools enable even non-RL to form
+{\sim}500
+-request homogeneous batches, leading the two curves to converge. These results show that
+Feather
+’s RL policy makes load-aware decisions: it falls back to FCFS under low utilization to avoid GPU starvation, and closes batch formation when homogeneity is achievable, maximizing overall throughput.
+
+Interested readers can see §
+D
+for additional results.
+
+6.
+Conclusion
+
+In this paper, we showed that maximizing batch size alone is not sufficient for efficient LLM serving during the decode phase. Instead, we identified
+prefix homogeneity
+, the extent of the prefix shared across
+all
+requests in a batch, as a more important factor for improving memory locality and reducing redundant KV cache accesses. Higher batch sizes lead to better GPU utilization but also reduce the length of the prefix shared across all requests. Existing approaches ignore this aspect and also rely on expensive prefix detection mechanisms that introduce significant CPU overhead. To address these gaps, we proposed
+Feather
+, a lightweight prefix-aware scheduler that balances this trade-off between batch size and prefix homogeneity. It uses a Chunked Hash Tree (CHT) for fast prefix detection and a reinforcement learning-based batching policy that decides when to stop batch formation based on the loss in prefix homogeneity due to the addition of a new request. Our results show that
+Feather
+consistently improves end-to-end throughput across diverse workloads while keeping scheduling overhead low. As future work, we plan to extend this approach to distributed and multi-GPU settings. We are also looking into more adaptive and lightweight learning policies that can improve robustness across different workloads and deployment scenarios.
+
+Appendix A
+Experimental Setup of §
+3.1
+
+A.1.
+Two Large Prefixes - Heterogeneity
+
+Figure
+23
+shows the visualization of the experiment corresponding to takeaway 1 of §
+3
+. We have a total of 500 requests, each using one of the prefixes
+A
+or
+B
+. These prefixes are 10K tokens long, and each query has a unique 20 token-long suffix.
+f\in[0,1]
+denotes the fraction of requests using prefix
+A
+. When
+f
+is either 0 or 1, the batch is homogeneous; otherwise, two prefix groups coexist.
+
+Figure 23
+.
+Two Large Prefixes
+
+A.2.
+Fractional Sharing
+
+Figure
+24
+shows the visualization of the experiment corresponding to takeaway 2 of §
+3
+. We have a total of 100 requests, each with a length of 2K tokens. Each request shares a common prefix of length
+2K\times f
+tokens, where
+f\in[0,1]
+, with the remaining
+2K\times(1-f)
+unique.
+
+Figure 24
+.
+Fractional Sharing
+
+A.3.
+Radix Tree Sharing Patterns
+
+Figure
+25
+shows the visualization corresponding to takeaway 4 in §
+3
+. We consider four different radix tree sharing patterns. The sequence length in each case is fixed at
+4L
+.
+(i) In Figure
+25(a)
+, the entire
+4L
+prefix is shared across all requests.
+(ii) In Figure
+25(b)
+, the tree has two levels. The first level, of length
+L
+, is shared by all requests, while the second level consists of two branches, each of length
+3L
+.
+(iii) In Figure
+25(c)
+, the tree has three levels with lengths
+L
+,
+L
+, and
+2L
+, and with 1, 2, and 4 branches at each level, respectively.
+(iv) In Figure
+25(d)
+, the tree has four levels, each of length
+L
+, with 1, 2, 4, and 8 branches at successive levels.
+
+(a)
+
+1-level
+
+(b)
+
+2 levels
+
+(c)
+
+3 levels
+
+(d)
+
+4 levels
+
+Figure 25
+.
+Radix Tree Sharing Levels
+
+Appendix B
+Additional Results from §
+3.1
+
+Below, we present a set of experiments to strengthen our observations from §
+3.1
+regarding prefix homogeneity.
+
+B.1.
+Effect of Total KV Cache Size
+
+Figure
+26
+illustrates vLLM’s FCFS throughput alongside the total KV cache memory footprint for prefix tokens in the Qwen 0.5B model, evaluated across varying prefix lengths and numbers of prefix groups. As expected, throughput decreases as the prefix sequence length increases. A more pronounced drop is observed when the number of prefix groups increases from 1 to 2, which can be attributed to a loss of locality. Beyond this point, however, throughput remains relatively stable. This suggests that increasing the number of prefix groups further does not significantly degrade temporal or spatial locality, indicating that most of the locality loss occurs in the transition from a single group to multiple groups. Moreover, this drop from 1 to 2 prefix groups is observable only for larger shared prefix lengths where temporal and spatial locality benefits kick in.
+
+Another question to ask if the high throughput values are correlated with the entire KV cache working set fitting into one of the cache levels. L1 cache size is typically in KBs, which is too small even for tens of tokens. Therefore, we focus on the L2 cache, which is 96 MB in size for the GPU on which these experiments were run. In the top-left region of the heatmap, the entire KV cache fits within this size. However, no clear throughput degradation is observed once this threshold is exceeded. This indicates that effective spatial and temporal locality depend more on whether the subset of KV blocks actively accessed by batched requests at a given time (i.e. the dynamic working set) fits in the L2 cache. It is intuitive that this dynamic working set is smaller in size for prefix-homogeneous batches which explains the higher throughput gains achieved for such batches. Moreover, even for such a small model, the model weights are already large enough to prevent the entire KV cache to reside in L2. Therefore, performance gains due to prefix homogeneity primarily stem from a smaller dynamic working set of the KV cache.
+
+(a)
+
+Throughput
+
+(b)
+
+KV Cache Memory
+
+Figure 26
+.
+Throughput and KV Cache Size
+
+(a)
+
+Visualization
+
+(b)
+
+Throughput
+
+Figure 27
+.
+Key Observations on Prefix Homogeneity
+
+B.2.
+Key Observations on Prefix Homogeneity
+
+We consider an additional experiment where each request has a sequence length of
+10K
+tokens. As illustrated in Figure
+27(a)
+, a fraction
+f_{1}\in[0,1]
+of this sequence is shared as a common prefix across all
+500
+requests in the batch. The remaining
+10K(1-f_{1})
+tokens constitute the suffix of each request. Within the batch, a fraction
+f_{2}\in[0,1]
+of requests share an identical suffix, denoted as
+A
+. The remaining fraction
+(1-f_{2})
+has suffixes drawn from one of
+50
+distinct groups,
+B_{1},\dots,B_{50}
+. Figure
+27(b)
+presents the throughput as we vary
+f_{1}
+and
+f_{2}
+. Consistent with the observations in §
+3.1
+, increasing
+f_{1}
+improves throughput due to enhanced temporal and spatial locality in KV cache accesses. Additionally, we observe a sharp increase in throughput when
+f_{2}
+changes from
+0.8
+to
+1
+. This occurs because at
+f_{2}=1
+, the entire batch becomes homogeneous, resulting in fully aligned KV cache traversal. Throughput is significantly lower at smaller values of
+f_{1}
+, primarily because limited GPU memory leads to frequent cache evictions. This is further supported by the increase in throughput with rising
+f_{2}
+at low
+f_{1}
+, as more requests share the suffix
+A
+, reducing eviction frequency. However, once the working set fits within GPU memory (around
+f_{1}=0.8
+), throughput remains nearly constant for all
+f_{2}<1
+, indicating that residual heterogeneity has minimal impact. Overall, this experiment consolidates the key insights discussed in §
+3.1
+.
+
+Appendix C
+Operations of Chunked Hash Tree
+
+This section provides pseudo-codes and details of various algorithms used in the Chunked Hash Tree (§
+4.2
+).
+
+C.1.
+Variables and Notations
+
+Table
+2
+provides a list of all the variables and notations used in the following pseudo-codes.
+
+Variable
+
+Explanation
+
+T
+
+Sequence length in tokens
+
+C
+
+Number of chunks in a sequence
+
+K
+
+Chunk size
+
+H
+
+Hash vector
+
+r
+
+Request
+
+W
+
+Number of waiting requests
+
+W_{h}
+
+Average number of waiting requests sharing a hash
+
+(l^{*},h^{*})
+
+Shared prefix tip
+
+h_{l}^{r}
+
+Hash at level
+l
+of request
+r
+
+working_set
+
+Working set
+
+waiting
+
+Reverse index from hashes to waiting requests
+
+waiting_heap
+
+Min-heap
+
+request_hashes
+
+Map from request to its hash vector
+
+miss
+
+Map from request to its missing count
+
+active
+
+Set of requests present in the current batch
+
+waiting_requests
+
+Set of waiting requests
+
+ref
+
+Map from hash to number of active requests sharing it
+
+Table 2.
+Variables and Notations Used
+
+C.2.
+Prefix Hash Computation
+
+The goal is to efficiently compute prefix-aligned hashes at fixed chunk boundaries. Algorithm
+1
+computes the hash vector for a token sequence using an incremental hashing scheme (Figure
+28
+). Instead of recomputing hashes for each prefix independently, the algorithm maintains a streaming hash state that is updated once per token. The algorithm processes each token exactly once and performs constant-time updates to the hash state. As a result, it runs in
+\mathcal{O}(T)
+time and produces
+C=\lceil T/K\rceil
+hash values, yielding
+\mathcal{O}(C)
+output space. While Algorithm
+1
+processes tokens sequentially, the prefix-hash vector can equivalently be computed in parallel across chunks. The key property we want is that all requests sharing the first
+c\cdot K
+tokens produce an identical
+h_{c}
+. This is achieved by partitioning the token sequence into chunks
+S_{c}=(t_{(c-1)K+1},\dots,t_{cK})
+, hashing each chunk independently in parallel, and then chaining the results via
+h_{c}=\textsc{Hash}(h_{c-1}\,\|\,\textsc{Hash}(S_{c}))
+, with
+h_{0}
+set to a fixed initialization constant (Algorithm
+2
+). With parallel workers, the dominant hashing phase runs in
+\mathcal{O}(K)
+per worker rather than
+\mathcal{O}(T)
+sequentially, reducing overall wall-clock time to
+\mathcal{O}(K+C)
+; the subsequent chaining pass costs only
+\mathcal{O}(C)
+and is negligible in practice. This parallelization is most beneficial when
+K
+is large, as each chunk contains more tokens and therefore represents a heavier independent unit of work, allowing parallel workers to amortize scheduling overhead across a larger payload and yielding greater absolute speedup over the sequential baseline. Both algorithms produce a hash vector satisfying the prefix-consistency property—all requests sharing the first
+c\cdot K
+tokens yield the same
+h_{c}
+, yet the two vectors differ in their actual hash values, as Algorithm
+2
+is a distinct formulation rather than a parallelized execution of Algorithm
+1
+.
+
+Algorithm 1
+
+ComputeHashes
+(S, K)
+
+1:
+
+Token sequence
+(t_{1},\dots,t_{T})
+; chunk size
+K
+
+2:
+
+Cumulative prefix-hash vector
+H=(h_{1},\dots,h_{C})
+
+3:
+
+H\leftarrow[]
+;
+C\leftarrow\lceil T/K\rceil
+
+4:
+
+Initialise incremental
+xxHash-64
+state
+s
+
+5:
+
+for
+
+i\leftarrow 1
+
+to
+
+T
+
+do
+
+6:
+
+Feed
+t_{i}
+into
+s
+
+7:
+
+if
+
+i\bmod K=0
+
+or
+
+i=T
+
+then
+
+8:
+
+H.\textsc{Append}(\textsc{Digest}(s))
+
+9:
+
+end
+
+if
+
+10:
+
+end
+
+for
+
+11:
+
+return
+
+H
+
+Algorithm 2
+
+ComputeHashesParallel
+(S, K)
+
+1:
+
+Token sequence
+(t_{1},\dots,t_{T})
+; chunk size
+K
+
+2:
+
+Cumulative prefix-hash vector
+H=(h_{1},\dots,h_{C})
+
+3:
+
+C\leftarrow\lceil T/K\rceil
+
+4:
+
+h_{0}\leftarrow\textsc{InitConst}
+
+5:
+
+parallel for
+
+c\leftarrow 1
+
+to
+
+C
+
+do
+
+\triangleright
+Independent per-chunk hashes
+
+6:
+
+S_{c}\leftarrow(t_{(c-1)K+1},\dots,t_{\min(cK,\,T)})
+
+7:
+
+\ell_{c}\leftarrow\textsc{Hash}(S_{c})
+
+\triangleright
+Each chunk hashed independently
+
+8:
+
+end parallel for
+
+9:
+
+for
+
+c\leftarrow 1
+
+to
+
+C
+
+do
+
+\triangleright
+Sequential prefix chaining
+
+10:
+
+h_{c}\leftarrow\textsc{Hash}(h_{c-1}\,\|\,\ell_{c})
+
+11:
+
+end
+
+for
+
+12:
+
+return
+
+H=(h_{1},\dots,h_{C})
+
+Figure 28
+.
+Hash Computation in Chunked Hash Tree
+
+C.3.
+Insertion
+
+Algorithm
+3
+provides the pseudo-code for the
+Insert
+procedure. Given a request with a token sequence, we compute its cumulative prefix-hash vector using
+ComputeHashes
+and store it in a dictionary that maps each request to its hashes for easier reuse later (lines 1-2). For each level, we retrieve the corresponding hash and check whether the tuple is present in the working set; if not, the missing count is incremented (lines 6-7). Simultaneously, the request is inserted into the reverse index (line 9), which maps each hash to the set of waiting requests containing it and supports efficient lookup of prefix-sharing candidates. After processing all levels, we store the miss count in a map and insert the tuple of miss count and the request into the min-heap, which is keyed by missing count, enabling efficient retrieval of the most compatible request (lines 11-12). The design avoids any updates to the working set or reference counts during insertion, ensuring low overhead.
+
+Algorithm 3
+
+Insert
+(r, S)
+
+1:
+
+r
+; token sequence
+S
+;
+\mathit{working\_set}
+;
+\mathit{waiting}
+;
+\mathit{waiting\_heap}
+
+2:
+
+r
+registered and ready for scheduling
+
+3:
+
+H_{r}\leftarrow\textsc{ComputeHashes}(S,K)
+
+4:
+
+\mathit{request\_hashes}[r]\leftarrow H_{r}
+
+5:
+
+m_{r}\leftarrow 0
+
+6:
+
+for
+
+\ell\leftarrow 1
+
+to
+
+|H_{r}|
+
+do
+
+7:
+
+h\leftarrow h_{\ell}^{r}
+
+8:
+
+if
+
+(\ell,h)\notin\mathit{working\_set}
+
+then
+
+9:
+
+m_{r}\leftarrow m_{r}+1
+
+10:
+
+end
+
+if
+
+11:
+
+\mathit{waiting}[h]\leftarrow\mathit{waiting}[h]\cup\{r\}
+
+12:
+
+end
+
+for
+
+13:
+
+\mathit{miss}[r]\leftarrow m_{r}
+
+14:
+
+\mathit{waiting\_heap}.\textsc{Push}(m_{r},\;r)
+
+C.4.
+Finding the Best Request
+
+The
+FindBest
+procedure selects the most compatible waiting request by querying the min-heap while skipping stale entries arising from lazy updates until a valid minimum is found (lines 6-8). Once a candidate is identified, it is reinserted into the heap for future activations in case the RL policy decides to add this request to the batch (line 9), and three quantities are computed without modifying the system state: the current tip depth, the prospective depth, and the number of peers sharing the resulting prefix. The prospective depth is obtained via a backward scan over the cumulative hash vector, selecting the deepest level such that the corresponding level-hash tuple exists in the working set, which corresponds to the least common ancestor with the active set under the current state. The peer count is computed by counting waiting requests whose hash at that level matches that of the candidate request. The result is cached and reused until either the working set or the waiting queue changes, avoiding redundant recomputation across repeated calls. If no valid request is found, the procedure returns
+\bot
+.
+
+Algorithm 4
+
+FindBest
+()
+
+1:
+
+\mathit{waiting\_heap}
+;
+\mathit{miss}
+;
+\mathit{active}
+; tip
+(\ell^{*},h^{*})
+;
+\mathit{working\_set}
+;
+\mathit{request\_hashes}
+
+2:
+
+(r^{*},\;\ell^{*}_{\mathit{before}},\;\ell^{*}_{\mathit{after}},\;\mathit{peers})
+or
+\bot
+
+3:
+
+if
+
+\mathit{waiting\_requests}=\emptyset
+
+then
+
+return
+
+\bot
+
+4:
+
+end
+
+if
+
+5:
+
+if
+
+\mathit{cache\_valid}
+
+then
+
+return
+
+\mathit{cached\_result}
+
+6:
+
+end
+
+if
+
+7:
+
+while
+
+\mathit{waiting\_heap}\neq\emptyset
+
+do
+
+8:
+
+(m,r)\leftarrow\mathit{waiting\_heap}.\textsc{Pop}()
+
+9:
+
+if
+
+r\in\mathit{active}
+
+or
+
+r\notin\mathit{miss}
+
+or
+
+\mathit{miss}[r]\neq m
+
+then
+
+continue
+
+10:
+
+end
+
+if
+
+11:
+
+r^{*}\leftarrow r
+;
+\mathit{waiting\_heap}.\textsc{Push}(m,r^{*})
+
+\triangleright
+restore for future calls
+
+12:
+
+\ell^{*}_{\mathit{before}}\leftarrow\ell^{*}
+
+13:
+
+\ell^{*}_{\mathit{after}}\leftarrow\ell
+where
+\ell
+is the largest
+\ell\leq\min(\ell^{*},|H_{r^{*}}|)
+s.t.
+(\ell,h_{\ell}^{r^{*}})\in\mathit{working\_set}
+
+14:
+
+\mathit{peers}\leftarrow|\{w\in\mathit{waiting\_requests}:h_{\ell^{*}_{\mathit{after}}}^{w}=h_{\ell^{*}_{\mathit{after}}}^{r^{*}}\}|
+
+15:
+
+Cache and
+return
+
+(r^{*},\;\ell^{*}_{\mathit{before}},\;\ell^{*}_{\mathit{after}},\;\mathit{peers})
+
+16:
+
+end
+
+while
+
+17:
+
+return
+
+\bot
+
+C.5.
+Adding a Request to the Active Batch
+
+Given a request with its prefix-hash vector, the
+AddToBatch
+procedure promotes it to the active set (line 1) and updates the working set, reference counts, and other metadata in a single backward pass over the prefix-hash vector. For each level, if the reference count of the corresponding hash is zero (no other active request shares it), the level-hash tuple is inserted into the working set, and all corresponding waiting requests have their miss counts decremented and are reinserted into the waiting heap (lines 7-12). The reference counts are incremented at all levels (line 14). In parallel, the shared prefix tip is recomputed by tracking the deepest level at which the level-hash tuple remains in the working set; the first such match during the backward traversal determines the new tip (lines 15-17), while the loop continues to ensure that all state updates are applied. If this is the first active request, the tip is initialized directly to the end of its prefix-hash vector.
+
+Algorithm 5
+
+AddToBatch
+(r)
+
+1:
+
+H_{r}
+;
+\mathrm{ref}
+;
+\mathit{working\_set}
+;
+\mathit{waiting}
+;
+\mathit{miss}
+;
+\mathit{waiting\_heap}
+; tip
+(\ell^{*},h^{*})
+;
+\mathit{active}
+
+2:
+
+Updated
+\mathrm{ref}
+,
+\mathit{working\_set}
+,
+\mathit{miss}
+,
+(\ell^{*},h^{*})
+
+3:
+
+\mathit{active}\leftarrow\mathit{active}\cup\{r\}
+;
+\mathit{waiting\_requests}\leftarrow\mathit{waiting\_requests}\setminus\{r\}
+
+4:
+
+if
+
+|\mathit{active}|=1
+
+then
+
+5:
+
+(\ell^{*},h^{*})\leftarrow(|H_{r}|,\;h_{|H_{r}|}^{r})
+;
+return
+
+6:
+
+end
+
+if
+
+7:
+
+\ell_{\mathrm{tip}}\leftarrow\min(\ell^{*},\;|H_{r}|)
+;
+(\ell^{*},h^{*})\leftarrow(0,\bot)
+
+8:
+
+for
+
+\ell\leftarrow|H_{r}|
+
+downto
+
+1
+
+do
+
+9:
+
+if
+
+\mathrm{ref}[h_{\ell}^{r}]=0
+
+then
+
+10:
+
+\mathit{working\_set}\leftarrow\mathit{working\_set}\cup\{(\ell,h_{\ell}^{r})\}
+
+11:
+
+for
+
+w\in\mathit{waiting}[h_{\ell}^{r}],\;w\notin\mathit{active}
+
+do
+
+12:
+
+\mathit{miss}[w]\mathrel{-}=1
+;
+
+13:
+
+\mathit{waiting\_heap}.\textsc{Push}(\mathit{miss}[w],w)
+
+14:
+
+end
+
+for
+
+15:
+
+end
+
+if
+
+16:
+
+\mathrm{ref}[h_{\ell}^{r}]\mathrel{+}=1
+
+17:
+
+if
+
+\ell^{*}=0
+
+and
+
+\ell\leq\ell_{\mathrm{tip}}
+
+and
+
+(\ell,h_{\ell}^{r})\in\mathit{working\_set}
+
+then
+
+18:
+
+(\ell^{*},h^{*})\leftarrow(\ell,\;h_{\ell}^{r})
+
+\triangleright
+Least common ancestor found; continue loop for remaining working set updates
+
+19:
+
+end
+
+if
+
+20:
+
+end
+
+for
+
+C.6.
+Removing a Request from the Active Batch
+
+Given a completed request, the
+Finish
+procedure removes it from the active set (line 1) and updates the working set, reference counts, and other metadata. A forward pass over the prefix-hash vector decrements the reference count at each level (line 3); if it drops to zero, the level-hash tuple is removed from the working set, and all the corresponding waiting requests have their miss counts incremented and are reinserted into the min-heap (lines 4-10). After updating the working set, the shared prefix tip is recomputed by attempting to extend it forward: starting from the previous tip level, we check successive levels up to the minimum length among active requests and extend the tip whenever the reference count at that level equals the number of active requests, indicating agreement across all of them; the scan terminates at the first disagreement (lines 19-26). If the active set becomes empty, the tip is reset to
+(0,\bot)
+(lines 12-14), and if only one request remains, the tip is set to its full length (lines 15-18). Finally,
+Remove
+is invoked to clean auxiliary structures such as the reverse index and the stored hash vector (line 27).
+
+Algorithm 6
+
+Finish
+(r)
+
+1:
+
+H_{r}
+;
+\mathrm{ref}
+;
+\mathit{working\_set}
+;
+\mathit{waiting}
+;
+\mathit{miss}
+;
+\mathit{waiting\_heap}
+; tip
+(\ell^{*},h^{*})
+;
+\mathit{active}
+
+2:
+
+Updated
+\mathrm{ref}
+,
+\mathit{working\_set}
+,
+\mathit{miss}
+,
+(\ell^{*},h^{*})
+
+3:
+
+\mathit{active}\leftarrow\mathit{active}\setminus\{r\}
+
+4:
+
+for
+
+\ell\leftarrow 1
+
+to
+
+|H_{r}|
+
+do
+
+5:
+
+\mathrm{ref}[h_{\ell}^{r}]\mathrel{-}=1
+
+6:
+
+if
+
+\mathrm{ref}[h_{\ell}^{r}]=0
+
+then
+
+7:
+
+\mathit{working\_set}\leftarrow\mathit{working\_set}\setminus\{(\ell,h_{\ell}^{r})\}
+
+8:
+
+for
+
+w\in\mathit{waiting}[h_{\ell}^{r}],\;w\notin\mathit{active}
+
+do
+
+9:
+
+\mathit{miss}[w]\mathrel{+}=1
+;
+
+10:
+
+\mathit{waiting\_heap}.\textsc{Push}(\mathit{miss}[w],w)
+
+11:
+
+end
+
+for
+
+12:
+
+end
+
+if
+
+13:
+
+end
+
+for
+
+14:
+
+if
+
+\mathit{active}=\emptyset
+
+then
+
+15:
+
+(\ell^{*},h^{*})\leftarrow(0,\bot)
+;
+return
+
+16:
+
+end
+
+if
+
+17:
+
+if
+
+|\mathit{active}|=1
+
+then
+
+18:
+
+let
+q
+be the sole element of
+\mathit{active}
+
+19:
+
+(\ell^{*},h^{*})\leftarrow(|H_{q}|,\;h_{|H_{q}|}^{q})
+;
+return
+
+20:
+
+end
+
+if
+
+21:
+
+while
+
+\ell^{*}+1\leq\min_{q\in\mathit{active}}|H_{q}|
+
+do
+
+\triangleright
+try to extend tip forward
+
+22:
+
+\ell\leftarrow\ell^{*}+1
+
+23:
+
+if
+
+\mathrm{ref}[h_{\ell}^{q_{0}}]=|\mathit{active}|
+for arbitrary
+q_{0}\in\mathit{active}
+
+then
+
+\triangleright
+all active requests agree at level
+\ell
+
+24:
+
+(\ell^{*},h^{*})\leftarrow(\ell,\;h_{\ell}^{q_{0}})
+
+25:
+
+else
+
+26:
+
+break
+
+27:
+
+end
+
+if
+
+28:
+
+end
+
+while
+
+29:
+
+Remove
+(r)
+
+\triangleright
+cleans reverse index and request hashes
+
+C.7.
+Batch Formation
+
+BuildBatch
+describes the entire pipeline, where we incrementally construct a batch by repeatedly querying
+FindBest
+to obtain the most compatible candidate, along with summary statistics, which are combined with the current batch size to form the RL state (lines 3-6). A policy (heuristic, bandit, or Q-learning) maps this state to an action, either
+Add
+or
+Stop
+(line 7); if
+Add
+is selected, the request is activated via
+AddToBatch
+and appended to the batch; otherwise, the loop terminates (lines 8-10). The procedure continues until the waiting queue is exhausted or the policy decides to stop, after which the constructed batch is executed for one decode iteration to obtain the observed throughput (line 12). This throughput serves as the reward signal used to update the policy (line 13), with bandit methods updating their statistics and Q-learning applying a Bellman update with parameters
+\alpha
+and
+\gamma
+, while heuristic policies incur no update.
+
+Algorithm 7
+
+BuildBatch
+()
+
+1:
+
+Waiting queue
+Q
+; policy
+\pi
+(heuristic, bandit, or Q-learning); discount
+\gamma
+; learning rate
+\alpha
+
+2:
+
+Batch
+B
+ready for one decode iteration
+
+3:
+
+B\leftarrow\emptyset
+
+4:
+
+while
+
+Q\neq\emptyset
+
+do
+
+5:
+
+(r^{*},c_{\mathrm{before}},c_{\mathrm{after}},w)\leftarrow\textsc{FindBest}()
+
+6:
+
+if
+
+r^{*}=\bot
+
+then
+
+break
+
+7:
+
+end
+
+if
+
+8:
+
+s\leftarrow(|B|,\;\Delta=c_{\mathrm{before}}-c_{\mathrm{after}},\;w)
+
+9:
+
+a\leftarrow\pi(s)
+
+\triangleright
+heuristic rule / UCB look-up /
+\varepsilon
+-greedy Q-table
+
+10:
+
+if
+
+a=\textsc{Stop}
+
+then
+
+break
+
+11:
+
+end
+
+if
+
+12:
+
+AddToBatch
+(
+r^{*}
+);
+B\leftarrow B\cup\{r^{*}\}
+
+13:
+
+end
+
+while
+
+14:
+
+\text{throughput}_{\mathrm{decode}}\leftarrow\textsc{ExecuteBatch}(B)
+
+15:
+
+Update
+
+\pi
+with observed reward
+\text{throughput}_{\mathrm{decode}}
+
+\triangleright
+no-op for heuristic
+
+16:
+
+return
+
+B
+
+C.8.
+Complexity Analysis
+
+Table
+3
+summarizes the time complexity of each operation. Tip maintenance in
+AddToBatch
+and
+Finish
+is subsumed within their
+\mathcal{O}(C\cdot W_{h}\cdot\log W)
+passes and adds no asymptotic cost. In practice, the dominant cost is miss-count propagation, which updates all affected waiting requests per working-set change. Result caching avoids redundant
+FindBest
+traversals between mutations, keeping scheduling overhead low. We present the time taken by individual functions for a particular experimental setup in §
+D.1
+.
+
+Operation
+
+Complexity
+
+Insert
+
+\mathcal{O}(T+C\log W)
+
+AddToBatch
+
+\mathcal{O}(C\cdot W_{h}\cdot\log W)
+
+Finish
+
+\mathcal{O}(C\cdot W_{h}\cdot\log W)
+
+FindBest
+
+\mathcal{O}(\log W)
+amortized;
+\mathcal{O}(1)
+cached
+
+Remove
+
+\mathcal{O}(C)
+
+Table 3
+.
+Time complexity of CHT scheduler operations
+
+C.9.
+Find Best Request - Alternative Heuristic
+
+An intuitive alternative to using the missing count (which is based on the difference with the working set) is to select a waiting request that maximizes the depth of the current shared prefix tip. However, this approach has a subtle flaw: the tip is inherently bottlenecked by the most divergent active request, limiting future extension. Consider a scenario where Level 1 is shared by all requests, but Level 2 splits into three branches: one for
+R_{1}
+, one shared by
+R_{2}
+and
+R_{3}
+, and one for
+R_{4}
+(Figure
+29
+). If the active batch contains
+R_{1}
+and
+R_{2}
+, the shared prefix tip is restricted to Level 1. Selecting based only on this tip makes
+R_{3}
+and
+R_{4}
+appear equally viable. If the scheduler admits
+R_{4}
+, the tip remains at Level 1; when
+R_{1}
+finishes, the remaining requests (
+R_{2}
+and
+R_{4}
+) lie on divergent branches, leaving the tip still stuck. Our Chunked Hash Tree avoids this by evaluating candidates against the full working set using the missing count
+m_{r}
+, rather than anchoring to the bottlenecked tip. The working set tracks all prefix chunks present in any active request. In the example, since
+R_{2}
+is active, its Level 2 chunk is already in the working set. Thus,
+R_{3}
+requires fewer missing chunks than
+R_{4}
+, i.e.,
+m_{R_{3}}<m_{R_{4}}
+. Selecting
+R_{3}
+preserves future overlap: although the immediate tip remains bottlenecked, once
+R_{1}
+finishes and is removed via
+Finish
+, the remaining batch
+\{R_{2},R_{3}\}
+shares a deeper prefix, and the tip extends to Level 2.
+
+So, we have two ways to find the best waiting request to be added to the batch. One is based on the difference from the working set, and the other is based on the shared prefix tip. Next, we try to formalize the metrics on which both of these ways are based. Let
+W
+be the hashes in the current working set, which can be defined as:
+\cup_{r\in A}H^{r}
+, where
+A
+is the active set of requests and
+H^{r}
+is the set of hashes for request
+r
+. CHT selects the request that has the minimum miss-count, which can be defined as
+m_{W}(r)=|H^{r}\setminus W|
+. The shared prefix tip is the deepest level shared by all the requests of the active batch, which can be defined as
+\max\{\ell:\forall r\in A,(\ell,h_{\ell}^{r})\in W\}
+. The alternative heuristic selects the request that leads to the maximum depth of the shared prefix tip, which is equivalent to minimizing the number of hashes missing from the working set at or above the current tip for that request. Let
+m_{S}(r)=|S\setminus H^{r}|
+, where
+S
+is the set of all hashes at or above the current tip level in the working set, i.e.,
+S=\{h:(\ell,h)\in W,\ell\leq\ell^{*}\}
+, where
+\ell^{*}
+is the current tip level. That is,
+m_{S}(r)
+denotes the number of hash chunks present in
+S
+, but not present in the request
+r
+. Therefore, we explore the alternative heuristic that minimizes
+m_{S}(r)
+instead of
+m_{W}(r)
+.
+
+Let us assume that all the requests have a length of
+C
+chunks, and the best requests emitted from the two metrics are
+r_{W}
+and
+r_{S}
+, respectively. Let us also assume that the shared prefix tip is at level
+\ell^{*}
+. We aim to show that
+m_{S}(r_{W})=m_{S}(r_{S})
+, that is, the working set metric causes equal loss in the shared prefix tip, implying that
+r_{W}
+does not lead to less depth in the shared prefix tip compared to
+r_{S}
+. Let us assume, to the contrary, that
+m_{S}(r_{S})<m_{S}(r_{W})
+. Now, we compare
+m_{W}(r_{W})
+and
+m_{W}(r_{S})
+and aim to show that
+m_{W}(r_{W})>m_{W}(r_{S})
+, which contradicts the fact that
+r_{w}
+minimizes the metric
+m_{W}
+.
+
+Since
+S
+represents the shared prefix of all active requests up to depth
+\ell^{*}
+, the working set
+W
+contains exactly one unique hash per level for all levels
+\ell\leq\ell^{*}
+, which constitutes the set
+S
+. This property dictates that if any request
+x
+misses a hash in
+S
+at some level
+k<\ell^{*}
+, its prefix diverges from the
+entire
+active batch at level
+k
+. Consequently, due to the cumulative nature of the chunked hashes,
+x
+cannot share any hashes with
+W
+at any level
+\geq k
+. Specifically, if a request does not fully match the shared tip (i.e.,
+m_{S}(x)>0
+), it cannot overlap with any deeper divergent branches in
+W
+. For such a request, its overlap with the working set is exactly its overlap with the shared tip:
+|H^{x}\cap W|=|H^{x}\cap S|=\ell^{*}-m_{S}(x)
+. Using our contrary assumption
+m_{S}(r_{S})<m_{S}(r_{W})
+, we evaluate the cost of both requests under the working set metric,
+m_{W}(x)=C-|H^{x}\cap W|
+. We consider two cases for
+r_{S}
+:
+
+Case 1:
+
+r_{S}
+fully matches the shared prefix tip (
+m_{S}(r_{S})=0
+). Since
+r_{S}
+matches
+S
+entirely,
+|H^{r_{S}}\cap S|=\ell^{*}
+. It may also overlap with deeper branches in
+W
+, meaning
+|H^{r_{S}}\cap W|\geq\ell^{*}
+. Therefore, its cost is
+m_{W}(r_{S})\leq C-\ell^{*}
+. Because
+m_{S}(r_{W})>m_{S}(r_{S})=0
+,
+r_{W}
+diverges before the tip. As established, this means
+|H^{r}_{W}\cap W|=\ell^{*}-m_{S}(r_{W})<\ell^{*}
+. Thus,
+m_{W}(r_{W})=C-|H^{r}_{W}\cap W|>C-\ell^{*}
+. Combining these inequalities yields:
+m_{W}(r_{S})<m_{W}(r_{W})
+(Figure
+30(a)
+).
+
+Case 2:
+
+r_{S}
+diverges before the shared prefix tip (
+m_{S}(r_{S})>0
+). Since
+m_{S}(r_{W})>m_{S}(r_{S})>0
+, both requests diverge before
+\ell^{*}
+. Their overlap with the working set is strictly limited to their overlap with
+S
+. Thus,
+|H^{r_{S}}\cap W|=\ell^{*}-m_{S}(r_{S})
+and
+|H^{r}_{W}\cap W|=\ell^{*}-m_{S}(r_{W})
+. Because
+m_{S}(r_{S})<m_{S}(r_{W})
+, it logically follows that
+|H^{r_{S}}\cap W|>|H^{r}_{W}\cap W|
+. Consequently:
+m_{W}(r_{S})<m_{W}(r_{W})
+(Figure
+30(b)
+).
+
+In both cases, assuming
+m_{S}(r_{S})<m_{S}(r_{W})
+unavoidably leads to
+m_{W}(r_{S})<m_{W}(r_{W})
+. However, this directly contradicts our initial premise that
+r_{W}
+is the optimal request chosen by the Chunked Hash Tree metric (which guaranties
+m_{W}(r_{W})\leq m_{W}(q)
+for all waiting requests
+q
+). Therefore, our assumption must be false, proving that
+m_{S}(r_{W})\leq m_{S}(r_{S})
+. Because
+r_{S}
+is defined as the absolute minimum for
+m_{S}
+, it must strictly hold that
+m_{S}(r_{W})=m_{S}(r_{S})
+. This completes the proof that optimizing for the working set metric is mathematically guaranteed to be at least as optimal as the shared prefix tip metric for preserving the immediate tip depth while simultaneously exposing deeper amortization opportunities in
+W\setminus S
+.
+
+Figure 29
+.
+FindBest
+- Alternative Heuristic Example
+
+(a)
+
+Case 1
+
+(b)
+
+Case 2
+
+Figure 30
+.
+FindBest
+cases:
+r_{1}
+and
+r_{2}
+are both present in the active batch, and hence the working set is the union of all of their chunks. The shared prefix tip is at the third level, and the set
+S
+of all shared prefix chunks are marked in red. In the first case,
+r_{S}
+fully matches the shared prefix tip, whereas
+r_{W}
+hangs from the middle. For this case,
+m_{W}(r_{W})=2,m_{W}(r_{S})=1,m_{S}(r_{W})=1,m_{S}(r_{S})=0
+. In the second case, both the requests
+r_{S}
+and
+r_{W}
+do not fully match the shared prefix tip, however
+r_{W}
+hangs off from an earlier chunk. For this case,
+m_{W}(r_{W})=3,m_{W}(r_{S})=2,m_{S}(r_{W})=2,m_{S}(r_{S})=1
+. Therefore, for both the cases,
+m_{W}
+and
+m_{S}
+exhibit similar behaviour.
+
+(a)
+
+Throughput
+
+(b)
+
+Average running batch size
+
+(c)
+
+Time between tokens (TBT)
+
+Figure 31
+.
+Different Models
+
+(a)
+
+Throughput
+
+(b)
+
+Average Batch Size
+
+(c)
+
+Time between tokens (TBT)
+
+Figure 32
+.
+Varying number of prefix groups for LongChat 13B
+
+Appendix D
+Additional Results of
+Feather
+
+Below, we present additional evaluation results of
+Feather
+that could not be included in the main body due to space constraints.
+
+D.1.
+Time Taken by Individual Functions of CHT
+
+Table
+4
+profiles CHT operations over an inference workload of
+5K
+requests, each
+5K
+tokens long.
+Insert
+,
+AddToBatch
+, and
+Finish
+are each invoked
+5K
+times, once per request.
+FindBest
+, however, is called
+26{,}405
+times because it is queried repeatedly during batch construction. The RL policy may reject candidates and trigger fresh lookups, and the scheduler may inspect the queue multiple times before committing to a
+Stop
+.
+Insert
+dominates total time because hash computation scans every token once, making it proportional to prompt length.
+Finish
+is more expensive than
+AddToBatch
+, despite their symmetric roles. This gap arises from
+Finish
+’s additional forward tip-extension scan. After updating the working set, it traverses forward, level by level, to check if the shared prefix can be extended. In contrast,
+AddToBatch
+performs an early-terminating backward LCA scan, avoiding this overhead.
+FindBest
+is the cheapest per-call operation due to result caching and lazy heap traversal.
+
+Function
+
+Number of Calls
+
+Average Time (ns)
+
+Total Time (ns)
+
+Insert
+
+5,000
+
+153,714
+
+768,570,573
+
+AddToBatch
+
+5,000
+
+11,143
+
+55,715,469
+
+Finish
+
+5,000
+
+38,952
+
+194,760,111
+
+FindBest
+
+26,405
+
+6,641
+
+175,372,986
+
+Table 4.
+Time taken by individual functions of CHT
+
+D.2.
+Performance of
+Feather
+across Models
+
+Figures
+31(a)
+,
+31(b)
+,
+31(c)
+present throughput, average batch size, and time between tokens (TBT) across models of varying sizes. The overall trend is consistent with expectations: smaller models achieve higher throughput owing to lower per-token compute costs.
+Feather
+outperforms all baselines across all models. The sole exception is Qwen-1.5B, where SGLang FCFS achieves marginally higher throughput; however,
+Feather
+compensates on the latency axis, exhibiting substantially lower TBT for the same model. A key structural observation is that
+Feather
+’s relative throughput advantage over the baselines grows with model size. As model size increases, a larger fraction of the total execution time is spent on attention computation, which amplifies the benefits of temporal and spatial KV-cache locality that
+Feather
+exploits. This effect is visible in Figure
+31(a)
+: the gap between
+Feather
+and the next-best baseline widens from Qwen-0.5B to the 8B-scale models. The performance of SGLang’s LPM and DFS-W schedulers degrades noticeably for smaller models. Both policies rely on CPU-side tree traversal, whose overhead scales with sequence length rather than model size; as the model shrinks, GPU execution time decreases while scheduler overhead remains roughly constant, causing the CPU to become an increasing bottleneck.
+Feather
+avoids this through its Chunked Hash Tree, which reduces per-step scheduler complexity and keeps CPU overhead negligible relative to GPU execution time across all model scales. Finally, Figure
+31(c)
+highlights that vLLM’s FCFS and DB baselines incur substantially higher TBT at larger model sizes, whereas Feather keeps TBT low and stable.
+
+D.3.
+Results across LongChat Model
+
+Figure
+32
+presents throughput, average batch size, and time between tokens (TBT) as the number of prefix groups varies for the LongChat 13B model. Overall, vLLM’s FCFS and Dynamic Batching behave similarly across most configurations. For FCFS, there is a sharp drop in throughput when moving from 1 to 2 prefix groups, accompanied by an increase in TBT. This is largely due to the loss of locality benefits. The further decline from 2 to 5 prefix groups is driven by KV cache evictions, which is also reflected in the steep reduction in average batch size. Beyond this point, TBT stabilizes at a lower value, primarily because the batches have become much smaller. In contrast,
+Feather
+maintains stable and consistent throughput across all settings. At 100 prefix groups, it achieves up to 22
+\times
+higher throughput than FCFS. By forming prefix-homogeneous batches,
+Feather
+not only improves scheduling efficiency but also significantly reduces KV cache evictions through more effective immediate cache reuse.
+
+(a)
+
+Throughput
+
+(b)
+
+Average Batch Size
+
+(c)
+
+Time between tokens (TBT)
+
+Figure 33
+.
+Workload with No Prefix Sharing
+
+D.4.
+Complexity Analysis of LPM and DFS-W
+
+We provide a detailed complexity analysis of the two SGLang cache-aware scheduling policies discussed in §
+5
+: Longest Prefix Match (LPM) and Depth-First Search with Weighting (DFS-W). Let
+W
+denote the number of requests in the waiting queue and
+T
+the maximum prefix length. For each request, LPM performs prefix matching on the global radix tree, costing
+\mathcal{O}(T)
+per request, and then sorts the queue by matched prefix length, adding
+\mathcal{O}(W\log W)
+. The total per-round cost is therefore
+\mathcal{O}(W\cdot T+W\log W)
+. The result is overhead that scales
+multiplicatively
+with both queue size and context length. LPM implicitly acknowledges this by falling back to FCFS when
+W>128
+(which was disabled in our experiments). DFS-W avoids per-request traversal; instead, it performs a full traversal of the radix tree in each scheduling round. Let
+B
+be the total number of radix tree nodes. DFS-W first propagates subtree request counts upward in
+\mathcal{O}(B)
+, then re-traverses in a depth-first manner, sorting children by weight at every level. The total cost is
+\mathcal{O}(W+B\log B)
+. The key problem is that
+B
+reflects the server’s accumulated history, not the current workload. The radix tree grows monotonically and is only pruned under memory pressure, so DFS-W’s overhead increases over time, regardless of the current load. A server with a large accumulated cache (
+B\gg W
+) will incur high scheduling costs even during quiet periods. In summary, a burst of long-context requests penalizes LPM through the
+W\cdot T
+term, while a large accumulated cache penalizes DFS-W through the
+B\log B
+term. Either way, scheduling overhead can reach the same order of magnitude as GPU execution time. This demonstrates that identifying shared prefixes at runtime is fundamentally expensive and naive cache-aware scheduling can become the dominant bottleneck.
+
+D.5.
+Convergence of Bandit Policy
+
+We also evaluate how quickly
+Feather
+’s bandit-based policy converges to a stable and efficient batching configuration. We construct a workload with five prefix groups, each containing 5K tokens, and issue requests at a rate of 5 per second. Figure
+34
+illustrates how the running batch size evolves over time for
+Feather
+under its bandit-based policy. At the beginning, the system enters an exploration phase, during which
+Feather
+experiments with different configurations and reaches relatively large batch sizes (around 500). However, these batches are heterogeneous. After this phase concludes (around 100 seconds), the system shifts to homogeneous batching, which yields higher throughput. As a result,
+Feather
+converges to a significantly smaller batch size and maintains it for the remainder of the experiment.
+
+Figure 34
+.
+Convergence of Bandit Policy
+
+D.6.
+RL Policy across Varying Workload
+
+We generate a workload consisting of five prefix groups, each containing 5K tokens. The input request rate varies over time—from 5 to 10 to 20 requests per second—and we measure the average batch size as a function of time for
+Feather
+using its Bandit policy (Figure
+35
+). From 0 to 200 seconds, the request rate is 5, and the batch size remains relatively low. Between 200 and 300 seconds, the rate increases to 10, leading to a noticeable rise in batch size. Finally, from 300 to 350 seconds, the request rate reaches 20, and the batch size peaks. (Fluctuations in the plot are due both to RL exploration and the workload being Poisson.) These results show that
+Feather
+dynamically adapts the batch size in response to both prefix homogeneity (i.e., the number of requests sharing the same prefix group) and the current workload intensity.
+
+Figure 35
+.
+Performance of Bandit across Varying Workload
+
+D.7.
+Workloads with No Prefix Sharing
+
+We next evaluate
+Feather
+and compare it against other scheduling policies on a workload without prefix sharing; that is, no two requests share a common prefix. Figure
+33
+reports throughput, average batch size, and time between tokens (TBT) across a range of input rates. At higher input rates, vLLM-based policies begin to outperform SGLang policies, primarily due to their ability to form larger batches. Notably, even in the absence of prefix sharing,
+Feather
+, powered by its adaptive RL-based policy—matches the performance of vLLM’s FCFS scheduler. In contrast, SGLang policies achieve lower TBT, which can be attributed to their smaller batch sizes.
+
+D.8.
+Tensor Core Utilization across Policies
+
+Figure
+36
+compares tensor core utilization and average batch size across different request rates and scheduling policies.
+Feather
+shows slightly lower utilization at low request rates due to forming smaller batches, but it still delivers higher throughput at these points (as seen earlier in Figure
+12(a)
+). As the workload increases,
+Feather
+gradually builds larger batches from prefix-homogeneous requests, and its utilization rises to match vLLM’s FCFS. In contrast, SGLang’s FCFS maintains relatively low utilization because it operates with consistently small batch sizes. Interestingly, even though SGLang’s DFS-W and LPM achieve larger batch sizes, their utilization remains low. This is mainly due to CPU-side stalls between GPU executions, during which the GPU stays idle, effectively reducing overall utilization.
+
+(a)
+
+Tensor Core Utilization
+
+(b)
+
+Average Batch Size
+
+Figure 36
+.
+Input Workload
+
+Appendix E
+Why the name
+Feather
+?
+
+Feather
+is named after the structural pattern of prefix-homogeneous batches in our system: a shared prefix forms a central shaft, from which individual requests branch out as they diverge, much like the barbs of a
+Feather
+. The metaphor captures both the visual structure of our batches and the functional benefit of keeping prefix sharing requests together for better performance.
+

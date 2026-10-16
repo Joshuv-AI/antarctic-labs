@@ -1,0 +1,5829 @@
+DSL-LLaDA: Scaling Continuous Denoising to 8B Masked Diffusion LMs
+Longxuan Yu, Yunshu Wu, Yu Fu, Siheng Xiong, Rob Brekelmans, Hui Liu, Yue Dong, Greg Ver Steeg
+
+Abstract
+Discrete Masked diffusion language models generate text by iterative parallel decoding, but few-step decoding suffers from a tradeoff between length and quality: with a fixed step budget, standard methods can generate a short, high-quality output, or they can produce long but repetitive text. Continuous denoising can sidestep this tradeoff by evolving all positions jointly in embedding space, but building such a model from scratch at scale remains an open problem. We show that a pretrained masked DLM can instead be lightly adapted to support continuous embedding-space denoising. Starting from LLaDA-8B-Instruct, we continue-pretrain for only 1,000 steps with Discrete Stochastic Localization (DSL), replacing binary masking with continuous per-token Gaussian noise as a soft mask. The adapted model supports continuous inference that evolves all positions jointly in embedding space and defers hard token commitment to the final step. On zero-shot summarization at low step budgets ( ≤ \leq 16 forward passes), DSL-LLaDA-SDE achieves the best ROUGE-1 on all four benchmarks and largely avoids the premature-termination / repetition tradeoff of iterative unmasking. The same adaptation also yields selective noisy-state robustness: the model corrects corrupted tokens while preserving clean ones. Control experiments using standard masked diffusion training with the same compute demonstrate neither behavior.
+
+
+
+1
+Introduction
+
+Masked diffusion language models (DLMs) have recently scaled to billions of parameters and begun to approach autoregressive quality on standard benchmarks
+22
+;
+29
+;
+30
+, yet their iterative unmasking inference degrades sharply at low step budgets, producing truncated outputs, repetition loops, and incoherent text
+14
+. The root cause is that each position is decoded independently from its context-conditioned marginal distribution, neglecting inter-token correlations
+14
+: this factorization introduces little error when each step changes only a few positions, but becomes severe at low step budgets, where each step must commit many positions at once.
+
+Figure 1:
+DSL-LLaDA replaces binary masking with continuous per-token noise, enabling SDE-style continuous inference from a pretrained masked DLM. (A) Original LLaDA uses discrete masked diffusion, where each token is either fully visible or replaced by a
+[MASK]
+token. (B) DSL-LLaDA introduces continuous per-token noise at varying SNR. A softmax converter maps each noisy embedding back to the backbone’s input space, producing three phases: unknown (mask-like at low SNR), unreliable (random tokens at mid SNR), and clear (gold token at high SNR), as shown by the per-position probability distributions.
+
+These failures motivate methods that improve few-step generation. Improved discrete samplers
+26
+;
+12
+;
+23
+and consistency distillation
+16
+;
+13
+reduce the step cost of discrete inference, but they still operate in the discrete token space. Continuous denoising offers a complementary route: it sidesteps the token-space factorization by evolving all positions jointly in a shared embedding space
+14
+;
+17
+, and recent work confirms that continuous flows can match or exceed discrete diffusion in the few-step regime
+14
+;
+4
+. However, building a continuous DLM from scratch at scale remains an open design problem, as embedding geometry, noise scheduling, and training objectives are still actively explored
+7
+;
+4
+;
+14
+, and no continuous DLM has been trained beyond moderate scale.
+
+Rather than training a continuous DLM from scratch, we show that an existing masked DLM can be lightly adapted to accept continuous inputs (Figure
+1
+). Starting from LLaDA-8B-Instruct, we continue-pretrain for only 1,000 steps with Discrete Stochastic Localization (DSL;
+28
+), replacing the binary clean-or-mask input with a soft mixture over token embeddings that encodes graded per-position uncertainty. The resulting model, DSL-LLaDA, supports a stochastic differential equation (SDE) based continuous denoising sampler with delayed hard token commitment.
+
+Empirically, the adapted model shows three behaviors absent in iterative unmasking. On open-ended generation, the SDE sampler’s delayed token commitment keeps repetition below 9% at all step budgets, while discrete baselines either truncate early or exceed 60% repetition (Section
+4.2
+). On zero-shot summarization, continuous inference achieves the best ROUGE-1 on all four benchmarks at
+\leq
+16 forward passes without length-control heuristics (Section
+4.2
+). On error correction, the model corrects most corrupted tokens while leaving
+{>}
+98% of clean tokens untouched, whereas XDLM-style random-token training preserves fewer than half (Section
+4.1
+). A same-compute binary-masking control experiment acquires none of these behaviors, confirming that continuous-noise exposure, not additional training alone, drives the improvement.
+
+Our contributions are:
+
+1.
+
+We show that a pretrained 8B masked DLM can be converted to support continuous-space denoising through lightweight DSL adaptation.
+
+2.
+
+We demonstrate that continuous SDE inference avoids the low-NFE failure modes of iterative unmasking on generation and summarization tasks.
+
+3.
+
+We identify a selective noisy-state robustness induced by continuous-noise training, absent from same-compute discrete baselines.
+
+2
+Background
+
+2.1
+Masked Diffusion Language Models
+
+Notation.
+
+Let
+x_{1:L}
+denote a token sequence over a vocabulary of size
+V
+. The backbone maps each token to an embedding
+via a learned matrix
+W_{\text{backbone}}\in\mathbb{R}^{(V+1)\times d_{\text{model}}}
+, where the extra row corresponds to a dedicated
+[MASK]
+token.
+
+Training.
+
+A masked diffusion language model defines a forward process that independently replaces each token with
+[MASK]
+. At diffusion step
+t
+, position
+i
+is either fully visible (
+x_{i}^{t}=x_{i}
+) or fully masked (
+x_{i}^{t}=\texttt{[MASK]}
+). No intermediate state exists. The model is trained to predict the original token at every position using cross-entropy loss.
+
+Inference.
+
+Generation starts from a fully masked sequence and proceeds by iterative
+unmasking
+: at each of
+T
+steps the model predicts token probabilities at all masked positions in parallel, samples tokens from these distributions, and commits (unmasks) a subset of positions. Uncommitted positions are re-masked for the next step. This generative process induces two sources of error relevant to this work: (1) each position is decoded independently given the current state, factorizing the reverse transition across positions and neglecting inter-token correlations
+14
+, and (2) sampling tokens from an imperfect model creates a mismatch with the training data, which cannot be corrected after unmasking.
+
+2.2
+Continuous Denoising for Discrete Tokens
+
+An alternative to iterative unmasking is to maintain a continuous state for each token position throughout generation
+8
+;
+28
+. Every position holds a soft, noisy representation rather than a committed token, and a denoiser iteratively recovers clean-token estimates until hard tokens are read out at the final step. Since the denoiser conditions on the full noisy sequence, the update is coupled across positions, avoiding the independent-position error described above
+4
+. However, continuous denoising requires a backbone trained to process soft inputs, a capability that standard masked diffusion models lack.
+
+When the continuous state lives in token embedding space, Stochastic Localization
+28
+offers a natural formulation: as a per-token signal-to-noise ratio (SNR) increases from zero, the model’s belief about which token occupies each position sharpens from uniform (completely uncertain) to concentrated on the correct token. Constraining the token embeddings to the unit sphere makes the optimal denoiser depend only on the noisy state and not on explicit parameters such as the SNR
+28
+. This SNR-invariance has two practical consequences: the model does not need an explicit timestep input, which is what makes it possible to adapt a pretrained masked DLM without any architectural changes; and each token position may follow its own SNR schedule, which we exploit during training (§
+3.1
+) and which gives the associated generative SDE a time-free drift (§
+3.3
+). In Section
+3
+we show how to adapt a pretrained masked DLM to serve as the denoiser in this framework.
+
+3
+Method
+
+We adapt LLaDA-8B-Instruct to process continuous DSL states and then use the adapted model as a denoiser for continuous response generation.
+The training and sampling parts of the method are conceptually separate: during training, we expose the backbone to noisy token states and train with the standard token cross-entropy; during sampling, we maintain a continuous response state, query the adapted backbone for a clean-token estimate, and update the state without committing to hard tokens until the final step.
+
+Throughout this section,
+x_{i}
+denotes the clean token at position
+i
+and
+\gamma
+denotes SNR. The method involves two separate embedding matrices:
+W_{\text{token}}\in\mathbb{R}^{(V+1)\times d}
+, a learned noise embedding table whose rows
+e_{v}\in\mathbb{R}^{d}
+(
+d{=}100
+) are constrained to the unit sphere and used to construct DSL noise states; and
+W_{\text{backbone}}\in\mathbb{R}^{(V+1)\times d_{\text{model}}}
+, initialized from the pretrained LLaDA input embedding matrix (including the mask row) and trainable during DSL adaptation. The converter bridges these two spaces.
+
+3.1
+DSL Adaptation
+
+DSL replaces binary clean-or-mask inputs with continuous noisy states that encode how much information each position carries about its token. For a clean token
+x_{i}
+, we sample an SNR value
+\gamma_{i}\geq 0
+and construct
+
+z_{i}=\gamma_{i}\cdot e_{x_{i}}+\sqrt{\gamma_{i}}\cdot\epsilon_{i},\quad\epsilon_{i}\sim\mathcal{N}(0,I_{d}).
+
+At
+\gamma_{i}{=}0
+this gives
+z_{i}{=}0
+, equivalent to a fully masked position. As
+\gamma_{i}
+increases, the state carries progressively more information about the clean token.
+
+The LLaDA backbone expects token-like input embeddings, so we map each DSL state
+z_{i}
+through a softmax converter:
+
+h_{i}=\operatorname{softmax}\bigl(\beta\cdot z_{i}^{\top}W_{\text{token}}^{\top}+b^{\top}\bigr)\,W_{\text{backbone}}
+
+where
+\beta
+is a learnable temperature parameter that controls the sharpness of the softmax distribution.
+W_{\text{token}}\in\mathbb{R}^{(V+1)\times d}
+reuses the noise embedding table for its first
+V
+rows and appends a learned mask embedding for the
+(V{+}1)
+-th slot (initialized from the pretrained mask embedding and trainable). The zero-SNR state maps to a mask-like input, while high-SNR states become increasingly token-like, converging to the corresponding row of
+W_{\text{backbone}}
+, which is initialized from the pretrained embedding (Figure
+1
+B; detailed converter behavior in Appendix
+C
+).
+
+Given the converted inputs
+h_{1:L}
+, the backbone predicts token logits at all positions. We train with the standard token cross-entropy:
+
+\mathcal{L}=-\sum_{i=1}^{L}\log p_{\theta,i}(x_{i}\mid h_{1:L}).
+
+The target is always the original clean token. Thus DSL adaptation changes the input states seen by the backbone, but not the prediction target.
+
+SNR values
+\gamma_{i}
+are drawn from a mixed distribution that combines continuous noise levels with mask-like endpoint states, so the model sees a range of inputs from fully uncertain to fully clean during training. We continue-pretrain LLaDA-8B-Instruct for 1,000 steps on FineWeb-Edu. The SNR distribution, logit scale
+\beta
+, and all other hyperparameters are detailed in Appendix
+B
+and
+D.1
+.
+
+3.2
+Clean-Token Embedding Estimate
+
+After DSL adaptation, the backbone predicts a probability distribution over tokens at each position. For sampling, we convert this distribution into a single embedding vector that represents the model’s best guess of the clean token. Let
+S_{i}
+be the top-
+M
+most likely tokens under
+p_{\theta,i}(\cdot)
+. We renormalize over this set and compute a weighted average of their embeddings:
+
+\hat{e}_{i}=\sum_{v\in S_{i}}\tilde{p}_{\theta,i}(v)\cdot e_{v},\quad\tilde{p}_{\theta,i}(v)=\frac{p_{\theta,i}(v)}{\sum_{u\in S_{i}}p_{\theta,i}(u)}.
+
+This is the only model output used by the continuous sampler. We use
+M{=}512
+in all experiments.
+
+3.3
+Continuous Sampling
+
+The DSL localization channel admits unconditional generative dynamics whose drift is the posterior-mean denoiser
+28
+:
+
+\mathrm{d}z_{i}=\hat{x}_{i}(z)\,\mathrm{d}t+\mathrm{d}W_{i},
+
+Because token embeddings lie on the unit sphere, the denoiser
+\hat{x}_{i}(z)
+depends only on
+z
+and not on
+\gamma_{i}
+(Section
+2
+), so the drift has no explicit time dependence and each token may follow its own SNR path.
+
+We sample by advancing the normalized state
+y_{i}=z_{i}/\gamma_{i}
+with Heun steps over an increasing SNR schedule
+\gamma_{0}<\cdots<\gamma_{N/2}
+. At each step, the current state is converted to a DSL input
+z_{i}=\gamma\cdot y_{i}
+, passed through the converter and backbone, and the clean-token embedding estimate
+\hat{e}_{i}
+from Section
+3.2
+is used to update
+y
+:
+
+y_{i}\;\leftarrow\;y_{i}+\Delta\gamma\cdot\frac{\hat{e}_{i}-y_{i}}{\gamma}.
+
+Each Heun step queries the backbone twice (predict then correct), and no hard token decisions are made until the final step (Algorithm
+2
+). The full derivation from the SDE to this update rule, along with the SNR schedule and other sampler details, are in Appendix
+B
+and
+D.4
+.
+
+3.4
+Conditional Generation and Decoding
+
+For instruction following and summarization, we concatenate a context
+c_{1:m}
+(prompt or source document) with a response region of length
+L
+. Context positions are clamped to their clean backbone embeddings throughout the trajectory; the continuous update runs only on response positions. Because the backbone attends bidirectionally to the full sequence, each denoiser call is conditioned on both the clean context and the current noisy response state. At the final SNR
+\gamma_{N/2}
+, we decode by
+\hat{x}_{i}=\arg\max_{v}p_{\theta,i}(v)
+and truncate at the first EOS token.
+
+4
+Experiments
+
+DSL adaptation expands the input states seen by LLaDA from binary clean/mask tokens to continuous uncertain token mixtures. We evaluate this expanded state support in two complementary ways: (1) noisy-state probes test whether the adapted backbone can distinguish unreliable from reliable context (§
+4.1
+), and (2) generation experiments test whether the same adapted backbone can use an SDE-style continuous sampler to avoid the low-NFE failure modes of iterative unmasking (§
+4.2
+).
+
+Setup.
+
+All experiments share LLaDA-8B-Instruct
+22
+as the backbone. DSL-LLaDA is continue-pretrained for 1,000 steps on FineWeb-Edu with
+\beta{=}1
+and random unit-norm noise embeddings. We compare against five baselines:
+LLaDA
+(default iterative unmasking);
+LLaDA
+⋆
+(our strongest length-controlled discrete setting, with EOS suppression and block remasking; Appendix
+E.2
+);
+MDM-CPT
+and
+XDLM
+
+18
+(same backbone, data, steps, and compute as DSL-LLaDA, but with standard binary masking and random-token corruption respectively, isolating the effect of continuous-noise exposure); and
+LLaDA ReMDM
+
+26
+(confidence-based remasking applied to the original LLaDA weights at inference only, without additional training, so its remaining gap to DSL-LLaDA indicates that discrete rescheduling alone is insufficient). Context-robustness and error-correction evaluations use 100 texts from WikiText-103; generation and summarization setups are in §
+4.2
+. Full hyperparameters appear in Appendix
+B
+.
+
+4.1
+Context Robustness and Selective Correction
+
+We probe whether DSL adaptation gives the backbone selective noisy-state capability, then show that it also enables correction of corrupted tokens.
+
+Robustness to corrupted context.
+
+We mask 30% of tokens, corrupt
+c
+% of the remaining visible context with random tokens, and measure masked-position accuracy (Figure
+2
+).
+
+Figure 2:
+Context robustness (mask=30%, 100 texts). Models trained with noisy context (solid) degrade at roughly half the rate of mask-only models (dashed). Training with corruption determines robustness; the type of corruption (continuous Gaussian vs. discrete random-token) matters less.
+
+As Figure
+2
+shows, models trained with noisy context (XDLM, DSL-LLaDA) degrade at roughly half the rate of mask-only models (LLaDA, MDM-CPT), which overlap almost perfectly despite different training durations. The gap widens with corruption: at 50% corruption, noisy-context models retain 23–30% accuracy while mask-only models fall to
+{\sim}
+12%. Notably, MDM-CPT tracks LLaDA rather than the noisy-context models, confirming that robustness stems from exposure to corrupted context during training, not from additional pretraining compute.
+
+Selective correction of noisy tokens.
+
+This robustness has a practical consequence: the model can identify and correct corrupted tokens rather than reproducing them unchanged. Table
+1
+measures two complementary metrics:
+Fix
+, the percentage of corrupted positions correctly recovered, and
+Clean
+, the percentage of uncorrupted positions that the model leaves unchanged.
+
+Table 1:
+Random-token error correction (single forward pass, 100 texts). Fix = corrupted positions correctly predicted; Clean = uncorrupted positions preserved. XDLM achieves the highest fix rate yet damages
+{\sim}
+1 in 5 clean tokens at 30% corruption. DSL-LLaDA (
+\beta{=}1
+) preserves
+{>}
+98% clean tokens at every level.
+
+Random @10%
+
+Random @30%
+
+Random @50%
+
+Model
+
+Fix
+
+Clean
+
+Fix
+
+Clean
+
+Fix
+
+Clean
+
+LLaDA
+
+13.1
+
+90.9
+
+5.9
+
+89.3
+
+1.1
+
+87.4
+
+MDM-CPT
+
+17.2
+
+92.0
+
+10.4
+
+90.6
+
+3.5
+
+87.3
+
+XDLM
+
+70.8
+
+82.0
+
+55.7
+
+71.0
+
+33.3
+
+45.7
+
+DSL-LLaDA (
+\beta{=}1
+, ours)
+
+64.3
+
+99.0
+
+48.5
+
+98.7
+
+21.5
+
+98.1
+
+DSL-LLaDA selectively corrects corrupted tokens while preserving 98%+ clean tokens. MDM-CPT acquires only marginal error correction, with fix rates barely exceeding LLaDA’s. XDLM achieves the highest fix rate yet damages clean tokens severely, preserving only 45% of clean positions at 50% corruption. DSL-LLaDA at
+\beta{=}1
+closes most of the fix-rate gap while maintaining clean-token preservation above 98% at every corruption level. A direct measure of selectivity is the number of corrupted tokens corrected per clean-token error, Fix
+/(100-
+Clean
+)
+: at 50% corruption DSL-LLaDA obtains 11.3, compared with 0.61 for XDLM. Selective correction does not compromise the original mask-filling objective: at 30% masking the
+\beta{=}1
+model reaches 67.0% accuracy vs. LLaDA’s 65.1%, and ECE
+improves
+(0.026 vs. 0.039; Appendix
+D.3
+).
+
+On random-replacement corruptions, DSL variants match XDLM’s fix rate while preserving
+>
+98% of clean tokens. On semantic or factual substitutions, the primary
+\beta{=}1
+model preserves context rather than rewriting. We therefore frame DSL-LLaDA as a selective noisy-context model, not a general factual corrector (Appendix
+D.1
+).
+
+Figure 3:
+DSL-LLaDA-SDE avoids the low-NFE failure modes of iterative unmasking, maintaining sub-10% repetition and full-length outputs at all step budgets (200 prompts, gen=256).
+
+(a)
+Fluency (perplexity; hollow markers indicate unreliable estimates due to high repetition).
+
+(b)
+Repetition: DSL-LLaDA-SDE stays below 10% at all NFE, while length-controlled discrete variants exceed 60% at NFE
+{\leq}
+16 (vanilla LLaDA avoids repetition only by terminating early).
+
+(c)
+Output length: vanilla LLaDA truncates to
+<
+60 words due to premature termination, whereas DSL-LLaDA-SDE consistently produces
+>
+150 words.
+
+Summary.
+
+DSL adaptation gives the backbone a selective noisy-state capability that does not arise from binary continued pretraining (MDM-CPT tracks LLaDA despite matched compute) and is qualitatively different from XDLM-style random-token corruption (DSL-LLaDA preserves clean tokens far better than XDLM at comparable fix rates).
+
+4.2
+Continuous Generation via SDE
+
+Setup.
+
+Open-ended generation uses 200 instruction-style prompts (gen=256); long-form generation extends to 512 and 1,024 tokens. Zero-shot summarization uses 1,000 examples (seed 42) from XSum
+21
+(21w, gen
+=
+128), CNN/DailyMail
+20
+(55w, gen
+=
+256), arXiv
+5
+(163w, gen
+=
+256), and PubMed
+5
+(205w, gen
+=
+256). Metrics include perplexity (GPT-2 Large), repetition rate (Rep: fraction of adjacent word pairs that are identical; Appendix
+B
+), ROUGE F1, BERTScore, and LLM-as-judge (GPT-5.4). Full metric definitions and dataset sourcing appear in Appendix
+B
+.
+
+Table 2:
+Zero-shot summarization ROUGE-1 F1 across NFE budgets (1,000 samples per benchmark, seed=42). SDE leads at every NFE on XSum and CNN/DM, and at NFE
+\leq
+16 on all four benchmarks; LLaDA reaches comparable scores on long-reference tasks at NFE
+\geq
+32 once sufficient refinement steps suppress its premature-termination artifacts. LLaDA
+⋆
+underperforms vanilla LLaDA on long references and produces 7–25% degenerate endings on short references (Appendix
+E.4
+,
+E.1
+). LLaDA ReMDM improves over vanilla LLaDA at low NFE but still suffers from premature termination at high NFE. A dev sweep confirms that tuning does not remove this tradeoff (Appendix
+E.2
+). AR references and full metric tables: Appendix
+E.8
+.
+
+Dataset (ref)
+
+Method
+
+NFE=8
+
+16
+
+32
+
+64
+
+XSum (21w)
+
+DSL-LLaDA-SDE
+(ours)
+
+28.4
+
+30.4
+
+32.0
+
+32.4
+
+LLaDA
+
+25.2
+
+29.0
+
+28.8
+
+24.8
+
+LLaDA ReMDM
+
+24.9
+
+27.8
+
+25.6
+
+14.9
+
+LLaDA
+⋆
+
+9.9
+
+14.1
+
+20.2
+
+24.1
+
+CNN/DM (55w)
+
+DSL-LLaDA-SDE
+(ours)
+
+28.1
+
+33.0
+
+35.1
+
+35.8
+
+LLaDA
+
+23.1
+
+28.2
+
+25.4
+
+18.2
+
+LLaDA ReMDM
+
+23.3
+
+27.1
+
+20.9
+
+9.2
+
+LLaDA
+⋆
+
+8.6
+
+8.3
+
+18.7
+
+28.4
+
+PubMed (205w)
+
+DSL-LLaDA-SDE
+(ours)
+
+29.4
+
+32.2
+
+36.9
+
+39.5
+
+LLaDA
+
+11.9
+
+20.2
+
+36.5
+
+42.2
+
+LLaDA ReMDM
+
+11.5
+
+19.7
+
+36.3
+
+42.2
+
+LLaDA
+⋆
+
+6.1
+
+7.5
+
+20.9
+
+37.8
+
+arXiv (163w)
+
+DSL-LLaDA-SDE
+(ours)
+
+27.3
+
+28.6
+
+32.9
+
+34.9
+
+LLaDA
+
+10.6
+
+16.2
+
+33.8
+
+40.8
+
+LLaDA ReMDM
+
+10.3
+
+15.9
+
+34.3
+
+41.0
+
+LLaDA
+⋆
+
+7.8
+
+6.6
+
+15.9
+
+34.7
+
+NFE-efficiency and failure modes.
+
+We track perplexity, repetition, and output length jointly because they trade off against each other: a model can achieve low perplexity by repeating fluent phrases, low repetition by terminating early, or long output by looping. Only a method that scores well on all three avoids degenerate generation.
+Iterative unmasking exhibits three failure modes that Figure
+3
+traces across NFE budgets: premature termination (truncated outputs), token repetition loops, and degenerate endings. At NFE
+\leq
+32, default iterative unmasking avoids repetition only by terminating early, while length-controlled discrete variants exceed 60% repetition at NFE
+\leq
+16. DSL-LLaDA-SDE stays below 9% without either failure mode. At NFE
+=
+64, DSL-LLaDA-SDE reaches perplexity 5.1 at 3.7% repetition. At NFE
+=
+128, discrete methods close the repetition gap and DSL-LLaDA-SDE’s repetition slightly exceeds the best discrete variant, though DSL-LLaDA-SDE retains a perplexity advantage (4.5 vs. 6.7 for LLaDA+EOS).
+The DSL-trained model performs
+worst
+under iterative unmasking at low NFE (60–66% repetition at NFE
+\leq
+16), confirming that DSL optimizes the backbone for continuous-space inputs. DSL-LLaDA-SDE is the inference mode the DSL-trained backbone requires (Appendix
+F
+).
+
+Long-form generation.
+
+The repetition problem worsens with generation length: at 512 tokens, length-controlled LLaDA variants exceed 68% repetition and DSL-LLaDA under iterative unmasking reaches 43%, while DSL-LLaDA-SDE stays at 11%. At 1,024 tokens the pattern persists with DSL-LLaDA-SDE at 28% (Appendix
+F.1
+).
+
+Zero-shot summarization.
+
+ROUGE-1 F1 across NFE budgets appears in Table
+2
+. BERTScore appears in Appendix
+E.3
+; failure-mode rates and length statistics are in Appendix
+E.4
+; R-2/R-L against AR baselines are in Appendix
+E.8
+.
+
+The strongest regime for DSL-LLaDA-SDE is low-NFE anchored generation. Four patterns emerge: (1) SDE leads R-1 at NFE
+\leq
+16 on all four benchmarks and at every NFE on XSum and CNN/DM, with scores improving monotonically, whereas LLaDA peaks at NFE
+=
+16 on CNN/DM and decays to 18.2 at NFE
+=
+64 as premature termination worsens. (2) LLaDA ReMDM tracks vanilla LLaDA closely but does not close the gap to SDE: on short-reference tasks (XSum, CNN/DM), RMDM peaks at NFE
+=
+16 and then collapses even more severely than vanilla LLaDA (14.9 and 9.2 R-1 at NFE
+=
+64), confirming that confidence-based remasking does not resolve the premature-termination problem. On long-reference tasks, RMDM matches vanilla LLaDA at all NFE budgets. (3) LLaDA
+⋆
+becomes competitive only at NFE
+\geq
+32 and still lags vanilla LLaDA on long references at NFE
+=
+64 (Appendix
+E.2
+tunes iterative unmasking on development subsets and finds the same tradeoff). (4) The trend reverses on long references: at NFE
+=
+64, LLaDA leads SDE on PubMed (
+-
+2.7 R-1) and arXiv (
+-
+5.9) once outputs reach reference length. SDE matches reference lengths without any length control and emits
+\leq
+4% degenerate endings, while LLaDA’s short-reference outputs collapse to 12–14 words (Appendix
+E.4
+). Compared to same-scale AR models (Appendix
+E.8
+), SDE exceeds both Qwen2.5-7B and Llama-3.1-8B by 4–6 R-1 on XSum; on long references the AR models lead by 2–10 R-1.
+
+LLM-as-judge evaluation.
+
+We complement ROUGE with pairwise preference judgments (GPT-5.4, 100 samples/dataset, positions randomized; Table
+17
+in Appendix
+E.5
+). At NFE=16, the judge prefers SDE over vanilla LLaDA in aggregate (mean 57.9% vs. 26.6%; SDE wins three of four benchmarks, with CNN/DM nearly tied at 45.7% vs. 46.9%) and decisively over LLaDA
+⋆
+(mean 83.6% vs. 1.5%). At NFE=64, SDE retains its lead over LLaDA
+⋆
+(mean 59.8% vs. 29.4%). Vanilla LLaDA wins only on long references at high NFE where premature termination no longer occurs.
+
+Summarization aligns with SDE’s strengths: the source document anchors the denoising trajectory to source semantics, reducing the attractor collapse (all positions converging on high-frequency tokens) observed in open-ended creative generation (24% degenerate on creative prompts vs.
+\leq
+4% on summarization; Appendix
+F.4
+). SDE produces well-structured outputs without length control or termination heuristics. Wall-clock measurements appear in Appendix
+E.8
+.
+
+5
+Related Work
+
+Diffusion language models.
+
+Discrete DLMs
+22
+;
+29
+;
+24
+;
+25
+;
+19
+train on clean context and use iterative unmasking at inference. Continuous approaches
+15
+;
+6
+;
+8
+;
+9
+;
+4
+;
+14
+operate in embedding or simplex space but have not been scaled beyond moderate size. Soft-MDLM
+3
+replaces hard masking with soft mixtures but does not include SDE generation. BD3-LMs
+1
+and Mercury
+11
+combine autoregressive blocks with within-block discrete diffusion. Our work does not propose a new diffusion framework; instead we ask whether an existing 8B masked DLM can be lightly converted to support continuous inference via DSL
+28
+.
+
+Noisy-context training.
+
+Several methods expose masked DLMs to noisy rather than clean context during training. Scheduled sampling
+2
+addresses the train-test gap for autoregressive models; XDLM
+18
+adapts this idea to MDLMs by replacing tokens with random vocabulary words; Soft-MDLM
+3
+uses soft token mixtures instead of hard masks; EvoToken-DLM
+31
+replaces hard masks with evolving soft token distributions for progressive refinement. DSL
+28
+takes a different approach by adding continuous Gaussian noise in embedding space. Our work scales DSL to 8B and evaluates whether the converted backbone supports effective low-NFE continuous inference.
+
+Inference-time improvements.
+
+ReMDM
+26
+, PRISM
+12
+, ADLM
+23
+, CD4LM
+16
+, and CDLM
+13
+speed up discrete inference without changing the factorized transition structure. We include LLaDA ReMDM as an inference-only baseline in our summarization experiments (Table
+2
+); it tracks vanilla LLaDA closely and does not close the gap to SDE at low NFE. DSL instead changes the training objective to enable continuous generation; the two approaches are complementary.
+
+6
+Discussion
+
+Evaluating DLMs beyond single metrics.
+
+Standard generation benchmarks report a single quality score such as perplexity or MAUVE, each inflatable by a different failure mode: early termination lowers perplexity while looping inflates output length. Our three-panel evaluation (Section
+4
+) detects these pathologies jointly; no existing DLM benchmark explicitly checks for all three, which may explain why the length–quality tradeoff at low NFE has received limited attention.
+
+Per-token time allocation and effective parallelism.
+
+Existing continuous DLMs assign the same SNR schedule to every position, implicitly treating all tokens as equally difficult. In practice, function words are low-entropy decisions while content-bearing tokens need more refinement. Discrete MDLMs can partially address this through confidence-based unmasking that resolves easier tokens first, though the per-step capacity remains shared. DSL’s SNR-invariant denoiser (Section
+2
+) removes the timestep dependence, letting each position follow its own SNR path in principle. A related question is how many tokens can be effectively denoised in parallel. SDE performs best on XSum, where summaries are short and tightly source-constrained, and the advantage narrows on longer targets, suggesting that effective parallelism depends on both model capability and task difficulty. We leave adaptive per-token scheduling and adaptive parallel block sizing to future work.
+
+7
+Conclusion
+
+We show that a pretrained 8B masked DLM can be converted to support continuous embedding-space inference through 1,000 steps of DSL adaptation. The converted model achieves the best ROUGE-1 on all four summarization benchmarks at NFE
+\leq
+16 while avoiding the length–quality tradeoff of iterative unmasking, and acquires selective noisy-state robustness absent from same-compute discrete controls. These results suggest that continuous-noise adaptation is a general-purpose conversion procedure for masked DLMs.
+
+Limitations
+
+All results are on LLaDA-8B; other MDLMs and model scales are untested. SDE generation is sensitive to converter sharpness (
+\beta{=}1
+works best; higher
+\beta
+degrades). We scope evaluation to anchored generation; open-ended creative writing shows higher degeneration (24% vs.
+\leq
+4% on summarization). On long-reference tasks at high NFE, vanilla LLaDA matches or exceeds SDE. We do not claim parity with same-scale AR models (Appendix
+E.8
+). Human evaluation remains future work.
+
+Appendix A
+Algorithms
+
+Algorithm
+1
+shows one DSL training step. Algorithm
+2
+shows the stochastic Heun-solver inference loop used in the main experiments.
+
+Sampler derivation.
+
+Forward density.
+
+The forward process defines a per-position Gaussian conditional:
+
+\displaystyle z_{i}\mid e_{x_{i}}
+
+\displaystyle\;\sim\;\mathcal{N}\!\bigl(\gamma_{i}\cdot e_{x_{i}},\;\gamma_{i}\cdot I_{d}\bigr),
+
+\displaystyle p_{\gamma}(z\mid e_{v})
+
+\displaystyle=(2\pi\gamma)^{-d/2}\exp\!\Bigl(-\frac{\|z-\gamma e_{v}\|^{2}}{2\gamma}\Bigr).
+
+The marginal over the token distribution
+p(v)
+is
+p_{\gamma}(z)=\sum_{v}p(v)\,p_{\gamma}(z\mid e_{v})
+.
+
+Denoiser.
+
+The optimal denoiser is the posterior mean:
+
+\hat{e}\;=\;\mathbb{E}[e_{x}\mid z]\;=\;\sum_{v}p(v\mid z)\,e_{v},
+
+where the posterior weights are
+p(v\mid z)\propto p(v)\,\exp\!\bigl(-\|z-\gamma e_{v}\|^{2}/(2\gamma)\bigr)
+. Writing
+y=z/\gamma
+, the denoiser residual
+\hat{e}-y
+points from the current normalized state toward the posterior mean.
+
+Normalized state.
+
+We reparameterize to
+y=z/\gamma
+. At SNR
+\gamma
+,
+y=e_{x}+\epsilon/\sqrt{\gamma}
+: as
+\gamma
+increases from
+\gamma_{0}
+to
+\gamma_{\max}
+, the noise contribution shrinks and
+y
+converges to
+e_{x}
+. Generation proceeds by advancing
+\gamma
+from low to high.
+
+Update rule.
+
+Our sampler uses the
+\gamma
+-time vector field
+
+v_{y}(y,\gamma)=\frac{\hat{e}-y}{\gamma}.
+
+At each step, the denoiser estimates the clean embedding
+\hat{e}
+and the vector field nudges the current state
+y
+toward it, with
+1/\gamma
+scaling the step size relative to the current noise level. The Heun solver discretizes this vector field with a predictor-corrector scheme (Algorithm
+2
+). Our empirical claims do not require interpreting this update as an exact reverse-time SDE; the sampler is a continuous denoising procedure enabled by DSL adaptation.
+
+Stochastic term and coordinate choice.
+
+The DSL localization SDE
+28
+is natively written in the
+z
+-space coordinate with an Euler discretization. We instead integrate in the normalized coordinate
+y=z/\gamma
+, which keeps the state magnitude bounded as
+\gamma
+grows and is more stable for long LLaDA sequences. The denoising direction is algebraically the same; only the coordinate and solver order differ. In
+y
+-space the noise injection acquires an additional
+1/\gamma
+factor: the stochastic term at each Heun step is
+\frac{1}{2}\bigl(\frac{\eta}{\gamma_{s}}+\frac{\eta}{\gamma_{s+1}}\bigr)\sqrt{|\Delta\gamma|}\,\xi
+(Algorithm
+2
+). This injection improves sample diversity and prevents mode collapse at low NFE. Setting
+\eta=0
+yields a deterministic denoising trajectory. We find
+\eta>0
+beneficial at low NFE and negligible at high NFE (Table
+11
+).
+
+Algorithm 1:
+DSL Training (one step)
+
+1:
+
+Token sequence
+x_{1:L}
+, noise embeddings
+\{e_{v}\}
+, converter params
+W_{\text{token}},b,\beta
+, backbone
+f_{\theta}
+
+2:
+
+for
+each position
+i=1,\dots,L
+
+do
+
+3:
+
+\gamma_{i}\sim 0.9\cdot\text{LogNormal (per-seq)}+0.1\cdot\text{ROAR (per-tok)}
+
+\triangleright
+SNR
+
+4:
+
+\epsilon_{i}\sim\mathcal{N}(0,I_{d})
+
+\triangleright
+sample noise
+
+5:
+
+z_{i}=\gamma_{i}\cdot e_{x_{i}}+\sqrt{\gamma_{i}}\cdot\epsilon_{i}
+
+\triangleright
+noisy embedding
+
+6:
+
+\pi_{i}=\text{softmax}(\beta\cdot z_{i}^{\top}W_{\text{token}}^{\top}+b^{\top})
+
+\triangleright
+soft token dist.
+
+7:
+
+h_{i}=\pi_{i}\cdot W_{\text{backbone}}
+
+\triangleright
+token mixture
+
+8:
+
+end
+
+for
+
+9:
+
+Logits
+=f_{\theta}(h_{1:L})
+
+\triangleright
+backbone forward
+
+10:
+
+Loss
+=\text{CrossEntropy}(\text{Logits},x_{1:L})
+
+11:
+
+Update
+\theta,W_{\text{token}},b,\beta
+via gradient descent
+
+Algorithm 2:
+SDE Inference (Heun solver)
+
+1:
+
+Context
+c_{1:m}
+, response length
+L
+, steps
+N/2
+, converter params
+W_{\text{token}},b,\beta_{\text{inf}}
+, backbone
+f_{\theta}
+, noise scale
+\eta
+, SNR schedule
+\gamma_{0}<\gamma_{1}<\cdots<\gamma_{N/2}
+
+2:
+
+h_{i}^{\text{ctx}}=W_{\text{backbone}}[c_{i}]
+for context positions
+i\leq m
+
+\triangleright
+clamp context
+
+3:
+
+Sample
+\tilde{y}_{i}\sim\mathcal{N}(0,I_{d})
+; set
+y_{i}^{(0)}=\tilde{y}_{i}/\|\tilde{y}_{i}\|
+for response positions
+i=m{+}1,\dots,m{+}L
+
+4:
+
+for
+
+s=0,\dots,N/2-1
+
+do
+
+5:
+
+// Predict
+
+6:
+
+z_{i}=\gamma_{s}\cdot y_{i}^{(s)}
+
+\triangleright
+construct converter input
+
+7:
+
+h_{i}=\text{softmax}(\beta_{\text{inf}}\cdot z_{i}^{\top}W_{\text{token}}^{\top}+b^{\top})\,W_{\text{backbone}}
+for response positions
+\triangleright
+convert
+
+8:
+
+Logits
+=f_{\theta}([h^{\text{ctx}};h]_{1:m+L})
+
+\triangleright
+backbone forward (full sequence)
+
+9:
+
+\hat{e}_{i}^{(s)}=\sum_{v\in\text{top-}M}\tilde{p}(v)\cdot e_{v}
+
+\triangleright
+denoiser from Logits
+
+10:
+
+v_{i}^{(s)}=(\hat{e}_{i}^{(s)}-y_{i}^{(s)})/\gamma_{s}
+
+\triangleright
+
+\gamma
+-time vector field
+
+11:
+
+\tilde{y}_{i}^{(s+1)}=y_{i}^{(s)}+\Delta\gamma_{s}\cdot v_{i}^{(s)}
+
+\triangleright
+Euler predict
+
+12:
+
+// Correct
+
+13:
+
+\tilde{z}_{i}=\gamma_{s+1}\cdot\tilde{y}_{i}^{(s+1)}
+;
+\tilde{h}_{i}=\text{softmax}(\beta_{\text{inf}}\cdot\tilde{z}_{i}^{\top}W_{\text{token}}^{\top}+b^{\top})\,W_{\text{backbone}}
+
+14:
+
+\tilde{\text{Logits}}=f_{\theta}([h^{\text{ctx}};\tilde{h}]_{1:m+L})
+; compute
+\hat{e}_{i}^{(s+1)}
+,
+v_{i}^{(s+1)}=(\hat{e}_{i}^{(s+1)}-\tilde{y}_{i}^{(s+1)})/\gamma_{s+1}
+
+15:
+
+\xi_{i}\sim\mathcal{N}(0,I_{d})
+
+16:
+
+y_{i}^{(s+1)}=y_{i}^{(s)}+\frac{\Delta\gamma_{s}}{2}\bigl(v_{i}^{(s)}+v_{i}^{(s+1)}\bigr)+\frac{1}{2}\!\left(\frac{\eta}{\gamma_{s}}+\frac{\eta}{\gamma_{s+1}}\right)\sqrt{|\Delta\gamma_{s}|}\,\xi_{i}
+
+\triangleright
+Heun update
+
+17:
+
+end
+
+for
+
+18:
+
+z_{i}=\gamma_{N/2}\cdot y_{i}^{(N/2)}
+;
+h_{i}=\text{softmax}(\beta_{\text{inf}}\cdot z_{i}^{\top}W_{\text{token}}^{\top}+b^{\top})\,W_{\text{backbone}}
+
+\triangleright
+final convert
+
+19:
+
+Logits
+=f_{\theta}([h^{\text{ctx}};h]_{1:m+L})
+
+\triangleright
+backbone forward
+
+20:
+
+\hat{x}_{i}=\arg\max_{v}\text{Logits}_{i}
+for response positions
+\triangleright
+decode
+
+21:
+
+Truncate at first EOS token
+
+22:
+
+return
+
+\hat{x}_{m+1:m+L}
+
+Appendix B
+Experimental Details
+
+B.1
+Training
+
+All models start from LLaDA-8B-Instruct
+22
+, continued-pretrained on FineWeb-Edu (sample-10BT, streaming) for 1,000 steps. The primary DSL-LLaDA configuration uses
+\beta{=}1
+with random unit-norm noise embeddings (the primary setting for continuous SDE sampling). Appendix-only ablation runs use
+\beta\in\{0.3,1,2,3,4,5\}
+, semantic noise embeddings (3,000 steps), or ROAR-only SNR.
+
+Table 3:
+Training hyperparameters.
+
+Hardware
+
+8
+\times
+A100-80GB
+
+Parallelism
+
+DeepSpeed ZeRO-2, bf16 mixed precision
+
+Optimizer
+
+AdamW (
+\beta_{1}{=}0.9
+,
+\beta_{2}{=}0.999
+, wd
+=
+0.1)
+
+Learning rate
+
+2\times 10^{-5}
+, constant w/ warmup 100 steps
+
+Batch size
+
+32 (per-GPU
+=
+1, grad. accum.
+=
+4,
+\times
+8 GPU)
+
+Sequence length
+
+2,048 tokens
+
+Gradient clipping
+
+1.0
+
+DSL-specific (primary,
+\beta{=}1
+, random embed)
+
+Noise embedding
+
+d{=}100
+, unit-norm (iid
+\mathcal{N}(0,I)
+, row-normalized), trainable (re-normalized each forward pass)
+
+Converter
+\beta
+init
+
+1.0 (learnable,
+\beta{=}1
+at convergence)
+
+Converter softmax
+
+float32
+
+Converter LR
+
+25\times
+backbone (
+5\times 10^{-4}
+)
+
+SNR distribution
+
+90% per-sequence LogNormal(
+\mu{=}1.69
+,
+\sigma{=}0.9
+, clip 40) + 10% smoothed ROAR (clear
+\sim U[80,100]
+, unknown
+\sim U[0,1)
+)
+
+SNR granularity
+
+Per-sequence (LogNormal) / per-token (ROAR)
+
+Appendix ablations (Appendix
+D.1
+)
+
+Other
+\beta
+
+0.3, 2, 3, 4, 5 (all random embed, 1K steps)
+
+Semantic embed
+
+d{=}100
+, AE+contrastive from wte;
+\beta{=}0.5
+, 3K steps
+
+B.2
+SDE Inference Hyperparameters
+
+Table
+4
+lists the inference settings used by DSL-LLaDA-SDE. The main experiments use the sensitive SNR schedule and
+M{=}512
+for the denoiser expectation. The stochastic noise scale is tied to the NFE budget: higher noise helps very small NFE runs avoid early collapse, while NFE
+=64
+uses only a small perturbation.
+
+Table 4:
+Default SDE inference hyperparameters. The Heun solver uses
+N/2
+solver steps and two model evaluations per step, for
+N
+total forward evaluations.
+
+Parameter
+
+Value
+
+Solver
+
+Heun predictor-corrector
+
+NFE
+
+8, 16, 32, 64 (128 in generation appendix)
+
+SNR range
+
+0.01 to 100
+
+SNR schedule
+
+5% steps: 0.01–7; 90%: 7–74; 5%: 74–100
+
+Stochastic scale
+\eta
+
+0.10 (NFE
+\leq
+8), 0.05 (NFE
+\leq
+16), 0.01 (NFE
+\leq
+32), 0.005 otherwise
+
+Denoiser top-
+M
+
+512
+
+Inference converter multiplier
+
+2.0 unless otherwise stated
+
+Decode
+
+argmax over backbone token logits
+
+B.3
+ReMDM Inference Hyperparameters
+
+Table
+5
+lists the inference settings for the LLaDA ReMDM baseline. We use the ReMDM-conf-loop variant
+26
+: the denoising trajectory is divided into three phases by the loop window
+[t_{\text{off}},t_{\text{on}}]
+. In the early phase (
+t>t_{\text{on}}
+) and late phase (
+t\leq t_{\text{off}}
+), standard unmasking is applied without remasking. In the middle loop phase (
+t_{\text{off}}<t\leq t_{\text{on}}
+), the noise schedule is held constant at
+\alpha=\alpha(t_{\text{on}})
+: for each already-unmasked token, an uncertainty score
+1-\text{confidence}
+is computed and normalized via softmax across all unmasked positions, yielding a per-token probabilistic remask probability. Low-confidence tokens are stochastically re-masked and re-predicted while high-confidence tokens are retained. There is no fixed confidence threshold.
+
+Table 5:
+LLaDA ReMDM inference hyperparameters (ReMDM-conf-loop).
+
+Parameter
+
+Value
+
+Weights
+
+LLaDA-8B-Instruct (original, no extra training)
+
+Method flag
+
+--method rmdm
+(internal:
+remdm_conf
+)
+
+Loop window on (
+t_{\text{on}}
+)
+
+0.55
+
+Loop window off (
+t_{\text{off}}
+)
+
+0.05
+
+Loop alpha (
+\alpha_{\text{loop}}
+)
+
+0.9
+
+Temperature
+
+0.0
+
+CFG
+
+0.0
+
+EOS suppression
+
+not enabled
+
+Block length
+
+256 (clamped to gen length if smaller)
+
+NFE
+
+8, 16, 32, 64
+
+Summarization generation lengths
+
+XSum
+
+128
+
+CNN/DM, PubMed, arXiv
+
+256
+
+Long-form
+
+512, 1,024
+
+Samples
+
+1,000 per benchmark, seed 42
+
+Methods compared.
+
+To avoid naming ambiguity across tables, we fix the following shorthand throughout the paper. Baselines use the
+LLaDA-…
+prefix; our DSL-trained model uses the
+DSL-LLaDA-…
+prefix; the suffix indicates inference mode.
+
+•
+
+LLaDA
+: LLaDA-8B-Instruct
+22
+with default discrete remasking inference.
+
+•
+
+LLaDA+EOS
+: LLaDA with the EOS logit forced to
+-\infty
+during sampling (prevents EOS cascade).
+
+•
+
+LLaDA+EOS+Block
+(denoted
+LLaDA
+⋆
+in the main text): LLaDA+EOS combined with block remasking (block
+=
+32 tokens). This is our strongest length-controlled discrete heuristic among the settings we tested: EOS suppression prevents premature truncation, while block remasking unmasks 32 contiguous tokens per step to encourage local coherence. We use this as an engineered discrete comparison throughout the paper.
+
+•
+
+LLaDA+Block
+: LLaDA with block remasking only (no EOS suppression).
+
+•
+
+MDM-CPT
+: our
+discrete control
+: LLaDA-8B continue-pretrained on the same data and compute as DSL, but with standard MDLM random-time binary masking (per-sequence
+t\sim U(0,1)
+, mask probability
+p=(1{-}\epsilon)t+\epsilon
+,
+\epsilon{=}10^{-3}
+, loss on masked positions weighted by
+1/p
+). Isolates the effect of continuous noise vs. continued pretraining.
+
+•
+
+XDLM
+
+18
+: a re-implementation of the XDLM/XDM forward process as continued pretraining of LLaDA (same data, steps, batch size, and learning rate as DSL-LLaDA and MDM-CPT). At each training step, a random diffusion time
+t\sim U(0,1)
+determines the keep probability
+\alpha_{t}=1-(1-\epsilon)t-\epsilon
+(
+\epsilon{=}10^{-3}
+); among non-kept positions,
+k_{1}{=}10\%
+of the corruption mass is random-vocabulary replacement and the remainder is
+[MASK]
+. We also evaluate the publicly released XDLM Base checkpoint with its native xDM sampler in Appendix
+E.9
+; its weaker summarization scores reflect the lack of instruction tuning rather than a sampler limitation.
+
+•
+
+LLaDA ReMDM
+: LLaDA-8B-Instruct with ReMDM confidence-loop remasking
+26
+(
+remdm_conf
+). This baseline changes inference only and does not update the original LLaDA weights; it uses the same NFE budget, generation length, prompt format, temperature (0.0), and CFG (0.0) as the corresponding LLaDA discrete baselines. Hyperparameters are listed in Table
+5
+.
+
+•
+
+DSL-LLaDA-Remask
+: our DSL-trained model using discrete remasking at inference (converter sharpness
+\beta{=}1
+unless otherwise noted).
+
+•
+
+DSL-LLaDA-Remask+EOS
+/
+DSL-LLaDA-Remask+Block
+: DSL-LLaDA-Remask combined with EOS suppression / block remasking (appendix only, to show the DSL model’s discrete-inference failures are not EOS artifacts).
+
+•
+
+DSL-LLaDA-SDE
+(ours, primary): our DSL-trained model with continuous SDE inference in embedding space (Heun solver,
+\beta{=}1
+training configuration).
+
+•
+
+\beta
+/ embedding ablations
+: alternate DSL configurations (large-
+\beta
+random embedding, small-
+\beta
+semantic embedding, ROAR-only SNR) explored in Appendix
+D.1
+; these support discrete remasking but degrade the pure SDE solver, so DSL-LLaDA-SDE in the main text always refers to the
+\beta{=}1
+random-embedding configuration.
+
+Column headers in dense tables (e.g., Table
+25
+) may use abbreviations “SDE”
+=
+DSL-LLaDA-SDE, “Rmk”
+=
+DSL-LLaDA-Remask, “Orig”
+=
+LLaDA, “MDM”
+=
+MDM-CPT.
+
+B.4
+Evaluation Settings
+
+All evaluations use seed 42 and bf16 inference. The evaluation corpus comprises 100 texts from WikiText-103 (test split, 20–80 words each), cached as
+texts_100.json
+. Corruption, calibration, and generation evaluations share this fixed corpus.
+
+Error correction.
+
+100 texts. Random corruption: replace
+r
+% of positions with random token IDs
+\in[100,126000)
+. Single forward pass. Metrics: fix rate (corrupted
+\to
+correct) and clean preserved (uncorrupted
+\to
+unchanged). The primary
+\beta{=}1
+DSL-LLaDA model targets random corruption only (the
+\beta{=}1
+converter cannot reliably distinguish semantic neighbors); semantic-corruption results for higher-
+\beta
+ablations appear in Appendix
+D.1
+.
+
+Surface corruption.
+
+Tokenizer-aligned spelling, OCR, and homophone corruptions (26 corrupted tokens across 26 cases, 324 clean tokens). Construction details and the expanded 1,000-text noisy-edit evaluation appear in Appendix
+D.1
+.
+
+Context robustness.
+
+100 texts, 30% masked, corrupt
+c
+% of unmasked positions. Metric: top-1 accuracy on masked positions.
+
+Generation quality.
+
+200 prompts, chat template, gen=256, seed 42. GenPPL: GPT-2 Large perplexity truncated to 128 words. D2 (Distinct-2): fraction of unique bigrams across all generated texts (higher = more diverse). Rep: the fraction of adjacent generated word pairs with identical whitespace-delimited forms, a local unigram analogue of the
+n
+-gram repetition diagnostics commonly used to study neural text degeneration
+(
+10
+;
+27
+)
+(lower = less degenerate). Len: average word count of generated text.
+
+Summarization dataset sourcing.
+
+XSum
+21
+is loaded from the
+EdinburghNLP/xsum
+HuggingFace repository. CNN/DailyMail
+20
+uses
+cnn_dailymail
+v3.0.0. For PubMed and arXiv
+5
+the original
+scientific_papers
+dataset ships as a deprecated dataset-script and was replaced with
+ccdv/pubmed-summarization
+and
+ccdv/arxiv-summarization
+, which pre-parse the same papers into parquet; reference summaries are slightly longer than in the original (PubMed 205 vs. 146 words, arXiv 163 vs. 129). Source documents longer than 1,500 words are truncated. All splits are the official
+test
+split and we take 1,000 examples uniformly at random with seed 42.
+
+Metrics.
+
+We report ROUGE-1/2/L F1 against reference summaries following standard summarization evaluation. Per-sample word counts (Len), degenerate-ending rate (Degen%), and automated failure-mode tagging are computed post-hoc from the generated text.
+
+BERTScore.
+
+Appendix
+E.3
+reports BERTScore (roberta-large, rescaled with baseline) for the NFE=64 runs. BERTScore is monotone-consistent with ROUGE: SDE leads on XSum and CNN/DM, LLaDA leads on PubMed and arXiv.
+
+LLM-as-judge.
+
+We use Azure OpenAI GPT-5.4 as a pairwise judge, with A/B positions randomized per sample to eliminate order bias. Each call returns four 1–5 scores (factuality, coverage, fluency, conciseness) plus an overall preference. About 0.3% of samples are filtered by Azure’s content policy (news articles containing sensitive topics); these contribute “no judgment” rather than a biased score.
+
+Appendix C
+Converter Output Examples
+
+Table 6:
+Converter output for “Paris” and digit “7” at each SNR (20 random seeds). Three phases: unknown (mask-like), unreliable (random), clear (gold + neighbors).
+
+“Paris”
+
+“7”
+
+SNR
+
+top-1
+
+gold cos
+
+hit
+
+top-1
+
+top-2
+
+top-3
+
+hit
+
+1
+
+[MASK]
+
++.15
+
+0
+
+—
+
+—
+
+—
+
+0
+
+10
+
+random
+
++.16
+
+1
+
+random
+
+—
+
+—
+
+0
+
+25
+
+Paris
+(9)
+
++.43
+
+9
+
+7
+(14)
+
+6
+
+8
+
+14
+
+40
+
+Paris
+(15)
+
++.75
+
+15
+
+7
+(19)
+
+6
+
+8
+
+19
+
+50
+
+Paris
+(20)
+
++.96
+
+20
+
+7
+(20)
+
+6
+
+8
+
+20
+
+Appendix D
+Ablations and Sensitivity Analysis
+
+This section consolidates all ablation studies and sensitivity analyses. We first examine the converter design space and training-time choices (§
+D.1
+), then present controlled ablations on error correction (§
+D.2
+), verify that DSL training preserves the original mask-filling capability (§
+D.3
+), and finally sweep inference-time hyperparameters (§
+D.4
+).
+
+D.1
+Converter Design Space
+
+Two knobs determine what the backbone sees at low SNR:
+\beta
+(logit sharpness) and noise embedding geometry.
+
+Illustrative example.
+
+Consider a corrupted sentence where two tokens have been replaced with random words:
+
+Ground truth :
+
+The
+cat
+is
+on
+the laptop.
+
+Corrupted :
+
+The
+lemon
+is
+tree
+the laptop.
+
+XDLM :
+
+The
+cat
+is
+on
+the
+fridge
+.  [changes an uncorrupted token]
+
+DSL :
+
+The
+cat
+is
+under
+the laptop.  [incorrect change to corrupted token]
+
+XDLM fixes both corrupted tokens but also overwrites the clean token “laptop” (low Clean). DSL preserves all clean tokens but replaces “on” with a plausible but incorrect alternative (high Clean, imperfect Fix). This tradeoff between fix rate and clean-token preservation is precisely what the Fix/Clean metrics in Table
+1
+capture.
+
+Random embedding + large
+\beta
+.
+
+The primary configuration uses random embedding with
+\beta{=}1
+; ablations use
+\beta{=}2{-}5
+. At low SNR the law of large numbers averages 126K near-orthogonal token embeddings into a single MASK-like point, creating a binary “unknown or clear” signal. The binary signal trains the backbone to detect random corruptions but not semantically plausible errors.
+
+Semantic embedding + small
+\beta
+.
+
+With e.g.
+\beta{=}0.5
+and AE+contrastive embeddings, semantic neighborhoods emerge gradually as SNR increases, creating a graded reliability signal. The backbone learns to detect contextually implausible tokens even when they are embedding neighbors.
+
+ROAR-only SNR.
+
+Dropping the LogNormal mixture, each position independently receives either low SNR
+{\sim}\,U[0,1)
+or high SNR
+{\sim}\,U[80,100]
+, creating explicit within-sequence context/target structure with soft corruption. This produces a model that detects both random and semantic errors at
+\beta{=}2
+(Table
+9
+: 64% + 77%).
+
+Large
+\beta
++ semantic embedding fails because semantic neighbors receive deterministic logit boosts at low SNR, breaking the law of large numbers (training loss plateaus at 4.6 vs. 2.0 for the random-embedding configuration).
+
+Table 7:
+Realistic selective-correction probes (Fix/Clean, %). Surface = 26 aligned typo/OCR/homophone cases; entity/number and semantic-neighbor cases are manually constructed plausible substitutions. The primary
+\beta{=}1
+model is highly clean-preserving and fixes some surface errors, but semantic or factual substitutions require separate correction-oriented variants.
+
+Model
+
+Random@30
+
+Surface
+
+Entity/Num.
+
+Semantic
+
+LLaDA
+
+5.7 / 89.4
+
+26.9 / 78.8
+
+15.1 / 91.2
+
+10.2 / 91.3
+
+MDM-CPT
+
+10.3 / 90.6
+
+26.9 / 88.5
+
+9.1 / 92.9
+
+6.8 / 93.4
+
+XDLM
+
+55.7
+/ 71.1
+
+46.2 / 87.2
+
+30.3
+/ 92.0
+
+29.7
+/ 90.6
+
+DSL-LLaDA (
+\beta{=}1
+)
+
+48.5 /
+98.7
+
+46.2 / 98.4
+
+3.0 / 99.0
+
+3.4 / 98.0
+
+DSL-LLaDA (
+\beta{=}2
+)
+
+54.3 / 98.4
+
+46.2 /
+99.9
+
+1.5 /
+99.4
+
+1.7 / 98.4
+
+DSL-LLaDA (semantic)
+
+20.2 / 98.0
+
+46.2 / 98.9
+
+24.2 / 98.6
+
+6.8 /
+98.5
+
+Expanded evaluation (1,000 texts).
+
+The main-text correction table uses 100 texts for consistency with the development probes. Table
+8
+reports the same random-token evaluation on 1,000 WikiText texts alongside an automatic noisy-edit benchmark. Noisy edits are tokenizer-aligned spelling corruptions (single-character deletion or adjacent swap), OCR-like confusions (e.g.,
+rn
+\to
+m
+), and homophone substitutions, retaining only replacements that map to a single token. The generator yields 770 valid texts with 2,659 corrupted tokens.
+
+Table 8:
+Random-token and noisy-edit correction on 1,000 WikiText texts (single forward pass). Random columns report Fix/Clean at 10%, 30%, and 50% corruption rates. Noisy-edit reports Fix/Clean over 770 valid texts (2,659 corrupted tokens). DSL-LLaDA preserves
+>
+93% clean tokens under random corruption and
+>
+99% under noisy edits.
+
+Random @10%
+
+Random @30%
+
+Random @50%
+
+Noisy-Edit
+
+Model
+
+Fix
+
+Clean
+
+Fix
+
+Clean
+
+Fix
+
+Clean
+
+Fix
+
+Clean
+
+LLaDA
+
+15.0
+
+87.7
+
+7.5
+
+85.5
+
+1.6
+
+81.3
+
+34.7
+
+92.9
+
+XDLM
+
+69.3
+
+80.8
+
+59.7
+
+72.1
+
+41.9
+
+54.1
+
+58.5
+
+89.4
+
+DSL-LLaDA (
+\beta{=}1
+)
+
+66.1
+
+95.0
+
+55.1
+
+94.4
+
+36.5
+
+93.2
+
+49.4
+
+99.1
+
+The expanded random-token results are consistent with the 100-text development set: DSL-LLaDA closes most of the fix-rate gap with XDLM while preserving substantially more clean tokens. On noisy edits, DSL-LLaDA’s clean-token preservation rises to 99.1%, reflecting the model’s conservatism on subtle corruptions that resemble valid tokens. XDLM achieves a higher fix rate (58.5% vs. 49.4%) but overcorrects 10.6% of clean tokens.
+
+D.2
+Training Ablations
+
+SDE inference operates in a continuous embedding space, which requires a model trained to denoise continuous inputs; standard masked diffusion models such as LLaDA and MDM-CPT only see discrete tokens and therefore cannot be evaluated under SDE. The ablations below instead isolate design choices
+within
+the DSL framework. Table
+9
+reports two ablations: (i) converter sharpness
+\beta
+with random embedding (top group), and (ii) embedding type, SNR distribution, and architecture at
+\beta{=}2
+(bottom group). All runs use the primary mixed SNR scheme (per-sequence LogNormal + per-token smoothed ROAR) unless otherwise noted, with
+d{=}100
+and 1,000 training steps (Sem
+\beta{=}0.5
+uses 3K).
+
+Table 9:
+Ablations on error correction. Top:
+\beta
+sweep (random embedding). Bottom: embedding/architecture variants at
+\beta{=}2
+(except Sem
+\beta{=}0.5
+, 3K steps). Random fix increases monotonically with
+\beta
+; semantic fix is governed by embedding geometry and SNR distribution.
+
+Variant
+
+Rand Fix
+
+Sem Fix
+
+Clean
+
+ECE
+
+\beta
+sweep (random embedding, 1K steps)
+
+\beta{=}0.3
+
+8.5
+
+23.8
+
+99.1
+
+0.043
+
+\beta{=}1.0
+
+64.3
+
+32.2
+
+99.0
+
+0.026
+
+\beta{=}2.0
+(base)
+
+64.8
+
+19.5
+
+99.0
+
+0.023
+
+\beta{=}3.0
+
+65.5
+
+18.4
+
+98.5
+
+0.025
+
+\beta{=}4.0
+
+67.0
+
+20.0
+
+98.7
+
+0.029
+
+\beta{=}5.0
+
+69.2
+
+22.5
+
+98.6
+
+0.032
+
+Embedding / architecture (relative to
+\beta{=}2
+base)
+
++ frozen embed
+
+63.2
+
+21.6
+
+99.2
+
+0.031
+
++ ROAR 100%
+
+64.4
+
+77.4
+
+98.5
+
+0.022
+
++ highpass SNR
+
+37.5
+
+34.7
+
+98.5
+
+0.028
+
++ residual
+
+15.1
+
+29.3
+
+99.1
+
+0.031
+
+Sem embed
+\beta{=}2
+(1K)
+
+65.3
+
+70.3
+
+97.3
+
+0.037
+
+Sem embed
+\beta{=}0.5
+(3K)
+
+42.0
+
+66.7
+
+98.8
+
+0.038
+
+\beta
+sweep.
+
+\beta
+controls logit sharpness and thus the SNR threshold at which the gold token emerges. Higher
+\beta
+sharpens the MASK-to-token transition, giving the backbone a clearer signal about “obviously wrong” tokens, explaining the monotonic increase in random fix rate (8.5%
+\to
+69.2%). Semantic fix shows no consistent
+\beta
+dependence; ECE is best at
+\beta{=}2
+.
+
+Frozen embedding
+
+performs nearly identically to the trained baseline, confirming DSL’s value comes from the converter and continuous noise rather than learned embedding geometry.
+
+ROAR 100%
+
+(pure per-position binary SNR, no LogNormal) achieves the highest semantic fix (77.4%) while maintaining the random-embedding
+\beta{=}2
+random fix rate (64.4%). Each position independently receives either low SNR (soft noise) or high SNR (clear token), creating explicit within-sequence context/target structure with soft corruption.
+
+Highpass and residual
+
+both degrade random fix substantially, suggesting that the standard SNR distribution and the direct converter-to-backbone path are important.
+
+Semantic embed +
+\beta{=}2
+
+achieves strong semantic fix (70.3%) at only 1K steps despite its high training loss (4.6 vs. 2.0 for the random-embedding setting), suggesting room for further improvement with longer training.
+
+D.3
+Mask Prediction and Calibration
+
+Table 10:
+Mask prediction accuracy and ECE at 30%/50%/70% masking. All models preserve LLaDA’s mask-filling ability; ECE improves for most DSL variants.
+
+30%
+
+50%
+
+70%
+
+Model
+
+Acc
+
+ECE
+
+Acc
+
+ECE
+
+Acc
+
+ECE
+
+LLaDA
+
+65.1
+
+.039
+
+52.2
+
+.037
+
+30.4
+
+.049
+
+MDM-CPT
+
+65.2
+
+.020
+
+51.3
+
+.016
+
+29.0
+
+.030
+
+XDLM
+
+65.3
+
+.026
+
+51.3
+
+.020
+
+29.6
+
+.029
+
+DSL (
+\beta{=}1
+, primary)
+
+67.0
+
+.026
+
+52.2
+
+.032
+
+30.2
+
+.030
+
+DSL (
+\beta{=}2
+, ablation)
+
+66.6
+
+.023
+
+52.5
+
+.021
+
+31.2
+
+.021
+
+DSL (ROAR-only,
+\beta{=}2
+)
+
+65.3
+
+.022
+
+51.6
+
+.019
+
+29.8
+
+.025
+
+DSL (sem embed,
+\beta{=}0.5
+)
+
+64.8
+
+.038
+
+50.5
+
+.032
+
+29.4
+
+.037
+
+DSL (frozen embed,
+\beta{=}2
+)
+
+66.9
+
+.031
+
+52.3
+
+.017
+
+30.6
+
+.027
+
+All DSL variants maintain mask-prediction accuracy within 2% of LLaDA. ECE improves consistently across the board: the primary
+\beta{=}1
+DSL-LLaDA achieves accuracy 67.0% at 30% masking (best in the table) while reducing ECE from 0.039 (LLaDA) to 0.026; the
+\beta{=}2
+ablation reaches the lowest ECE among DSL variants (0.023). The semantic-embedding variant (
+\beta{=}0.5
+) lands closer to LLaDA’s calibration (0.038), reflecting its weaker random-token detection.
+
+D.4
+SDE Inference Sensitivity
+
+We run a low-cost sensitivity sweep on the primary
+\beta{=}1
+checkpoint to verify that the SDE sampler does not depend on a single narrow hyperparameter setting. Open-ended generation uses 100 prompts at NFE=64 and gen=256; summarization uses 100 XSum examples at NFE=64. Table
+11
+reports the main trends.
+
+Table 11:
+SDE implementation sensitivity. Open-ended metrics are GenPPL / D2 / Rep / Len; XSum reports R-1/R-2/R-L. Top-
+M
+and inference
+\beta
+have broad usable ranges, while the sensitive SNR schedule is important.
+
+Sweep
+
+Setting
+
+GenPPL
+
+D2
+
+Rep
+
+Len
+
+R-1
+
+R-2
+
+R-L
+
+top-
+M
+
+128
+
+5.19
+
+.320
+
+.030
+
+181.6
+
+33.40
+
+11.84
+
+26.16
+
+256
+
+4.88
+
+.315
+
+.025
+
+183.6
+
+32.68
+
+11.75
+
+25.22
+
+512
+
+4.77
+
+.321
+
+.031
+
+182.3
+
+33.22
+
+12.04
+
+25.99
+
+1024
+
+4.74
+
+.313
+
+.035
+
+182.1
+
+32.69
+
+11.63
+
+25.70
+
+schedule /
+\eta
+
+sensitive, 0.000
+
+4.68
+
+.314
+
+.059
+
+183.2
+
+32.83
+
+12.06
+
+25.74
+
+sensitive, 0.005
+
+4.77
+
+.321
+
+.031
+
+182.3
+
+33.22
+
+12.04
+
+25.99
+
+sensitive, 0.010
+
+4.98
+
+.326
+
+.024
+
+181.8
+
+33.06
+
+12.15
+
+26.01
+
+uniform, 0.000
+
+6.08
+
+.204
+
+.223
+
+152.1
+
+31.61
+
+11.18
+
+25.00
+
+uniform, 0.005
+
+6.66
+
+.216
+
+.188
+
+153.0
+
+31.89
+
+10.69
+
+25.07
+
+uniform, 0.010
+
+6.73
+
+.224
+
+.183
+
+153.2
+
+31.82
+
+10.68
+
+25.17
+
+inference
+\beta
+
+1.5
+
+5.07
+
+.297
+
+.074
+
+173.6
+
+32.74
+
+11.69
+
+25.90
+
+2.0
+
+4.63
+
+.321
+
+.028
+
+183.9
+
+32.63
+
+11.77
+
+25.24
+
+2.5
+
+5.28
+
+.345
+
+.003
+
+199.2
+
+32.09
+
+11.43
+
+25.16
+
+Two conclusions are useful for reproducibility: (1) top-
+M
+is not a sensitive hyperparameter, as values from 128 to 1024 keep both open-ended and summarization metrics in the same range, and (2) the SNR schedule matters. Replacing it with a uniform log-SNR schedule increases open-ended repetition by roughly 6–9
+\times
+and shortens generations. The stochastic scale and inference
+\beta
+show moderate sensitivity rather than sharp failure points:
+\eta{=}0.005
+balances repetition and XSum quality at NFE=64, and
+\beta{=}2.0
+gives the best overall profile among the three tested inference multipliers.
+
+Appendix E
+Summarization Analysis Details
+
+We provide the full per-sample analysis underlying Table
+17
+in the main text. All numbers are at NFE=64 on the same 1,000-sample test subsets; the LLM-judge evaluation uses 100 prompt-randomized samples per dataset.
+
+E.1
+LLaDA+EOS+Block: a third baseline
+
+Table
+12
+adds LLaDA+EOS+Block to the comparison at every NFE. Two findings: (1) block-remasking underperforms at low NFE (R-1 below 15 at NFE
+\leq
+16 on all benchmarks), and (2) at NFE=64 it introduces degenerate dot/comma-spam endings in 7–25% of short-reference outputs (Appendix
+E.4
+). Table
+13
+shows SDE wins by wider margins against LLaDA
+⋆
+than against vanilla LLaDA (mean 59.8% vs. 46.7% at NFE=64), driven by fluency.
+
+Table 12:
+Four-way comparison at NFE
+\in\{8,16,32,64\}
+(1,000 samples, ROUGE-1 F1). Bold marks per-cell maxima. LLaDA+EOS+Block underperforms vanilla LLaDA on the long-reference benchmarks at NFE=64 and produces high degenerate-ending rates on the short-reference benchmarks (Appendix
+E.4
+). XDLM Base + xDM is the publicly released XDLM checkpoint with its native xDM sampler (
+k_{1}{=}0.1
+, plain prompt); it lacks instruction tuning and trails all instruction-tuned methods (see Appendix
+E.9
+).
+
+Dataset (ref)
+
+Method
+
+NFE=8
+
+NFE=16
+
+NFE=32
+
+NFE=64
+
+XSum (21w)
+
+DSL-LLaDA-SDE
+
+28.4
+
+30.4
+
+32.0
+
+32.4
+
+LLaDA
+
+25.2
+
+29.0
+
+28.8
+
+24.8
+
+LLaDA+EOS+Block
+
+9.9
+
+14.1
+
+20.2
+
+24.1
+
+XDLM Base + xDM
+
+4.5
+
+7.6
+
+14.4
+
+15.4
+
+CNN/DM (55w)
+
+DSL-LLaDA-SDE
+
+28.1
+
+33.0
+
+35.1
+
+35.8
+
+LLaDA
+
+23.1
+
+28.2
+
+25.4
+
+18.2
+
+LLaDA+EOS+Block
+
+8.6
+
+8.3
+
+18.7
+
+28.4
+
+XDLM Base + xDM
+
+3.3
+
+4.6
+
+11.0
+
+23.0
+
+PubMed (205w)
+
+DSL-LLaDA-SDE
+
+29.4
+
+32.2
+
+36.9
+
+39.5
+
+LLaDA
+
+11.9
+
+20.2
+
+36.5
+
+42.2
+
+LLaDA+EOS+Block
+
+6.1
+
+7.5
+
+20.9
+
+37.8
+
+XDLM Base + xDM
+
+7.5
+
+7.7
+
+10.9
+
+18.9
+
+arXiv (163w)
+
+DSL-LLaDA-SDE
+
+27.3
+
+28.6
+
+32.9
+
+34.9
+
+LLaDA
+
+10.6
+
+16.2
+
+33.8
+
+40.8
+
+LLaDA+EOS+Block
+
+7.8
+
+6.6
+
+15.9
+
+34.7
+
+XDLM Base + xDM
+
+6.0
+
+6.3
+
+8.8
+
+14.6
+
+Table 13:
+LLM-as-judge per-axis means: DSL-LLaDA-SDE vs. LLaDA+EOS+Block (100 samples/dataset, GPT-5.4, 1–5 scale). SDE wins fluency on every benchmark (gains from 0.68 to 1.81 points), helping explain the consistent preference gap over the length-controlled baseline.
+
+DSL-LLaDA-SDE
+
+LLaDA+EOS+Block
+
+Dataset
+
+fact
+
+cov
+
+flu
+
+conc
+
+fact
+
+cov
+
+flu
+
+conc
+
+SDE-win%
+
+XSum
+
+3.04
+
+2.66
+
+4.60
+
+4.60
+
+2.71
+
+3.24
+
+2.79
+
+2.64
+
+61.0
+
+CNN/DM
+
+3.12
+
+2.73
+
+3.14
+
+3.23
+
+2.66
+
+3.25
+
+1.54
+
+1.57
+
+59.1
+
+PubMed
+
+2.66
+
+2.85
+
+2.89
+
+2.45
+
+2.44
+
+2.53
+
+1.86
+
+2.11
+
+59.0
+
+arXiv
+
+2.46
+
+2.59
+
+2.34
+
+2.11
+
+2.22
+
+2.16
+
+1.66
+
+1.91
+
+60.0
+
+E.2
+Tuned discrete baselines
+
+We sweep discrete-remasking hyperparameters (block size, EOS handling, temperature) at NFE=16 to check whether the SDE gains come from undertuned baselines (Table
+14
+).
+
+Table 14:
+Discrete-remasking development sweep at NFE=16. Default full-sequence remasking with mild temperature gives the best ROUGE but short outputs; EOS forcing lengthens outputs but increases repetition or lowers ROUGE.
+
+Task
+
+Config
+
+Temp
+
+Len
+
+Rep/Degen
+
+Score
+
+sec/ex
+
+Open
+
+B=256, default
+
+0.5
+
+31.7
+
+9.3 Rep
+
+0.646 D2
+
+0.64
+
+Open
+
+B=256, default
+
+0.0
+
+32.1
+
+17.9 Rep
+
+0.508 D2
+
+0.69
+
+Open
+
+B=256, EOS-inf
+
+0.5
+
+137.0
+
+52.5 Rep
+
+0.291 D2
+
+0.64
+
+Open
+
+B=32, EOS-inf
+
+0.0
+
+163.3
+
+85.8 Rep
+
+0.084 D2
+
+0.61
+
+XSum
+
+B=256, default
+
+0.5
+
+17.2
+
+0.0 Deg
+
+24.33 R-1
+
+1.23
+
+XSum
+
+B=64, default
+
+0.0
+
+17.4
+
+0.0 Deg
+
+23.84 R-1
+
+1.13
+
+XSum
+
+B=256, EOS-inf
+
+0.5
+
+85.6
+
+0.0 Deg
+
+14.44 R-1
+
+1.24
+
+XSum
+
+B=64, EOS-inf
+
+0.0
+
+63.7
+
+6.0 Deg
+
+13.71 R-1
+
+1.13
+
+CNN/DM
+
+B=256, default
+
+0.5
+
+20.3
+
+0.0 Deg
+
+22.36 R-1
+
+1.98
+
+CNN/DM
+
+B=256, default
+
+0.0
+
+20.0
+
+0.0 Deg
+
+21.96 R-1
+
+1.83
+
+CNN/DM
+
+B=256, EOS-inf
+
+0.5
+
+159.4
+
+2.0 Deg
+
+16.85 R-1
+
+1.98
+
+CNN/DM
+
+B=64, default
+
+0.5
+
+49.6
+
+0.0 Deg
+
+16.26 R-1
+
+2.01
+
+The sweep does not reveal a hidden discrete configuration that removes the tradeoff. The best ROUGE settings are very short full-sequence outputs, while EOS-forced settings better match target length but reintroduce repetition or degenerate endings. We therefore keep LLaDA+EOS+Block as an engineered comparison, not as a claimed optimum over all possible discrete samplers.
+
+E.3
+BERTScore
+
+Table
+15
+reports BERTScore (roberta-large, rescaled with baseline) for each (dataset, method) at NFE=64. BERTScore is monotone-consistent with ROUGE: SDE leads on XSum/CNN/DM; LLaDA leads on PubMed/arXiv. The rescaled values are negative on long-reference scientific datasets because the rescaling baseline (semantic similarity of random pairs) is high in those domains.
+
+Table 15:
+BERTScore F1 at NFE=64 (1,000 samples, roberta-large with rescale-with-baseline).
+
+Dataset
+
+DSL-LLaDA-SDE
+
+LLaDA
+
+LLaDA+EOS+Block
+
+XSum
+
+34.08
+
+28.78
+
+19.41
+
+CNN/DM
+
+14.33
+
+9.44
+
+2.10
+
+PubMed
+
+-
+1.72
+
+2.15
+
+-
+6.45
+
+arXiv
+
+-
+7.15
+
+-
+0.62
+
+-
+11.76
+
+E.4
+Automated failure-mode tagging
+
+Table
+16
+reports per-sample failure-mode rates. We tag a sample as
+premature_eos
+if its word count is below 40% of the reference;
+severe phrase repetition
+if the most-frequent 4-gram covers
+\geq
+15% of all 4-grams (distinct from the word-level consecutive-repetition rate “Rep” in §
+4.2
+);
+degen_ending
+if the last 40 characters contain
+\geq
+8 periods or commas, or the text contains “…….”. The most striking contrast is that LLaDA+EOS+Block produces degenerate endings on 23.8% of XSum outputs and 7.1% of CNN/DM outputs, while DSL-LLaDA-SDE is at 0% and 3.6% on the same datasets. Vanilla LLaDA’s failure mode is opposite: 82% of XSum outputs and 92% of CNN/DM outputs are
+below
+40% of the reference length, reflecting the EOS cascade.
+
+Table 16:
+Automated failure-mode rates (% of 1,000 samples, NFE=64).
+
+DSL-LLaDA-SDE
+
+LLaDA
+
+LLaDA+EOS+Block
+
+Dataset
+
+preEOS
+
+4g-rep
+
+degen
+
+preEOS
+
+4g-rep
+
+degen
+
+preEOS
+
+4g-rep
+
+degen
+
+XSum
+
+14.9
+
+2.9
+
+0.0
+
+82.3
+
+22.1
+
+0.0
+
+0.3
+
+1.3
+
+23.8
+
+CNN/DM
+
+0.9
+
+14.3
+
+3.6
+
+91.6
+
+17.9
+
+0.0
+
+1.9
+
+13.8
+
+7.1
+
+PubMed
+
+5.2
+
+6.7
+
+0.2
+
+1.7
+
+1.6
+
+0.1
+
+4.1
+
+6.4
+
+0.6
+
+arXiv
+
+1.0
+
+11.5
+
+0.4
+
+0.8
+
+1.4
+
+0.0
+
+4.2
+
+11.3
+
+0.1
+
+E.5
+LLM-as-judge: pairwise preference and per-axis means
+
+Table
+17
+reports the pairwise preference rates between SDE and the two discrete baselines at NFE=16 and NFE=64.
+
+Table 17:
+LLM-as-judge pairwise preference rate (%, 100 samples/dataset, GPT-5.4) at NFE=16 and NFE=64. SDE wins in aggregate against vanilla LLaDA at NFE=16 and decisively against LLaDA
+⋆
+at both budgets; vanilla LLaDA matches or beats SDE on long-reference targets at NFE=64.
+
+vs. LLaDA
+
+vs. LLaDA
+⋆
+
+NFE=16
+
+NFE=64
+
+NFE=16
+
+NFE=64
+
+Dataset
+
+SDE
+
+base
+
+SDE
+
+base
+
+SDE
+
+base
+
+SDE
+
+base
+
+XSum
+
+66.3
+
+21.7
+
+51.0
+
+39.0
+
+87.5
+
+3.8
+
+61.0
+
+30.0
+
+CNN/DM
+
+45.7
+
+46.9
+
+58.8
+
+26.8
+
+90.5
+
+2.4
+
+59.1
+
+23.7
+
+PubMed
+
+56.6
+
+22.9
+
+45.0
+
+51.0
+
+84.1
+
+0.0
+
+59.0
+
+33.0
+
+arXiv
+
+63.0
+
+14.8
+
+32.0
+
+61.0
+
+72.2
+
+0.0
+
+60.0
+
+31.0
+
+mean
+
+57.9
+
+26.6
+
+46.7
+
+44.5
+
+83.6
+
+1.5
+
+59.8
+
+29.4
+
+Table
+18
+reports the per-axis means (1–5 scale) from GPT-5.4 pairwise judgment, comparing DSL-LLaDA-SDE against vanilla LLaDA. The pattern follows the regime split in the main text: on XSum and CNN/DM, SDE wins fluency and coverage; on PubMed and arXiv, LLaDA wins coverage and factuality because its longer outputs cover more reference content (without the EOS-cascade collapse seen on shorter references).
+
+Table 18:
+LLM-as-judge per-axis means: DSL-LLaDA-SDE vs. vanilla LLaDA (100 samples/dataset, GPT-5.4, 1–5 scale).
+
+DSL-LLaDA-SDE
+
+LLaDA
+
+Dataset
+
+fact
+
+cov
+
+flu
+
+conc
+
+fact
+
+cov
+
+flu
+
+conc
+
+XSum
+
+2.83
+
+2.86
+
+4.65
+
+4.22
+
+2.89
+
+2.44
+
+3.86
+
+4.29
+
+CNN/DM
+
+3.09
+
+3.22
+
+3.08
+
+2.85
+
+3.14
+
+1.57
+
+3.40
+
+4.40
+
+PubMed
+
+2.50
+
+2.74
+
+2.70
+
+2.49
+
+2.80
+
+3.05
+
+2.53
+
+2.60
+
+arXiv
+
+2.33
+
+2.36
+
+2.25
+
+2.12
+
+2.88
+
+3.07
+
+2.51
+
+2.60
+
+E.6
+Judge reliability checks
+
+Table
+19
+reports bootstrap 95% CIs and position-bias checks (shown-A) for representative comparisons.
+
+Table 19:
+Representative GPT-5.4 judge reliability checks. Win rates report bootstrap 95% CIs over judged samples; shown-A is the fraction of non-tie judgments selecting the answer displayed first. Large shown-A deviations are flagged as residual position-bias risk.
+
+Dataset
+
+Comparison
+
+NFE
+
+SDE win
+
+Other win
+
+95% CI (SDE)
+
+shown-A
+
+XSum
+
+SDE vs LLaDA
+
+16
+
+66.3
+
+21.7
+
+[56.6, 75.9]
+
+53.4
+
+CNN/DM
+
+SDE vs LLaDA
+
+16
+
+45.7
+
+46.9
+
+[34.6, 56.8]
+
+58.7
+
+PubMed
+
+SDE vs LLaDA
+
+16
+
+56.6
+
+22.9
+
+[45.8, 67.5]
+
+54.5
+
+arXiv
+
+SDE vs LLaDA
+
+16
+
+63.0
+
+14.8
+
+[51.8, 72.8]
+
+57.1
+
+XSum
+
+SDE vs EOS+Block
+
+64
+
+61.0
+
+30.0
+
+[51.0, 70.0]
+
+62.6
+
+CNN/DM
+
+SDE vs EOS+Block
+
+64
+
+59.1
+
+23.7
+
+[49.5, 68.8]
+
+46.8
+
+PubMed
+
+SDE vs EOS+Block
+
+64
+
+59.0
+
+33.0
+
+[49.0, 68.0]
+
+39.1
+
+arXiv
+
+SDE vs EOS+Block
+
+64
+
+60.0
+
+31.0
+
+[50.0, 69.0]
+
+49.5
+
+XSum
+
+SDE vs Qwen-AR
+
+64
+
+37.0
+
+53.0
+
+[28.0, 46.0]
+
+61.1
+
+CNN/DM
+
+SDE vs Qwen-AR
+
+64
+
+20.2
+
+77.7
+
+[12.8, 28.7]
+
+47.8
+
+PubMed
+
+SDE vs Qwen-AR
+
+64
+
+31.6
+
+66.3
+
+[22.1, 41.0]
+
+49.5
+
+arXiv
+
+SDE vs Qwen-AR
+
+64
+
+21.9
+
+71.9
+
+[13.5, 30.2]
+
+56.7
+
+Most shown-A values stay within
+\pm
+10 points of 50%; XSum shows residual first-position preference in some comparisons. We interpret judge results as supporting evidence rather than ground truth.
+
+E.7
+Qualitative case studies
+
+To show what the per-sample numbers mean in practice, we present one representative comparison per dataset, sampled from the top of the SDE-wins bucket (large
++\Delta
+R-1) or loses bucket. All outputs are exactly what the model produced; no editing was applied.
+
+XSum (id=195,
+\Delta
+R-1=+60).
+
+Reference (15w):
+“Worcestershire’s Daryl Mitchell has been elected as the new chairman of the Professional Cricketers’ Association.”
+SDE (18w):
+“Worcestershire captain Daryl Mitchell has been elected as the new chairman of the Professional Cricket Players Association (PCA).”
+LLaDA+EOS+Block (91w):
+“D Worcestershire opener Daryl Mitchell has been elected as the new chairman of the Professional Cricket Players Association (PCA), taking over from Markorgan wicketkeeper Mark Wallace. […] Mitchell will be the third Worcestershire captain to fulfill the role, following Tim Curtis and Vikram Solanki.”
+SDE matches reference length and content; Block fills the 128-token budget with fabricated biographical details (“Markorgan wicketkeeper” is not in the source).
+
+CNN/DM (id=853,
+\Delta
+R-1=+64).
+
+Reference (35w):
+“Jenrry Mejia suspended for 80 New York Mets games without pay. Mejia tested positive for banned substance stanozolol. […]”
+SDE (36w):
+“New York Mets closer Jenrry Mejia was suspended for 80 games without pay after testing positive for the banned substance stanozolol. The 25-year-old right hander will not be able to play again until […]”
+Block (189w) enters repetition:
+“[…] Mejia, he is unaware of how the substance entered his body. Mejia, Mejia, […]”
+. SDE delivers a clean 36-word news-lead; Block pads to 189 words and enters a repetitive loop on the subject’s name.
+
+arXiv (id=537,
+\Delta
+R-1=+60).
+
+Reference is a technical abstract on radio-frequency-dressed atom traps. SDE (210w) produces a coherent abstract-style summary:
+“The paper discusses the use of radio frequency dressed potentials (rf-dressed potentials) to trap and manipulate ultra-cold atoms […]”
+. Block (12w) collapses into repetition of a single token after 10 words:
+“The paper paper potentials, proposed by Zobayay Garraway, are used to manipulate
+old
+old
+old
+old
+[…]”
+. This is the severe block-remasking failure mode on long scientific prompts.
+
+arXiv (id=491,
+\Delta
+R-1=
+-
+37).
+
+A representative case where SDE loses on a long-reference scientific abstract. Reference is a 273-word abstract on a
+\gamma
+-ray quasar 4C+55.17 observed by Fermi-LAT. SDE (206w) opens coherently but enters a repetition loop on a high-energy acronym:
+“[…] MAGIC VHE
+HE
+HE
+HE
+HE
+HE
+HE
+…”
+. Block (179w) maintains a coherent abstract structure:
+“Gamma-ray astronomy has grown rapidly due to the development of High Energy Cherenkov telescopes (IHECTS) […]”
+. On long, technical-acronym-heavy text, the block-remasking schedule’s commitment rhythm helps the model avoid the semantic-attractor repetition that SDE’s parallel updates can fall into on extended sequences.
+
+E.8
+Autoregressive reference baseline
+
+To put the diffusion results in context, we run
+Qwen2.5-7B-Instruct
+(the closest publicly available 7–8B AR LLM in our local cache) on the same 1,000-sample test sets, with greedy decoding, the same chat-template prompts, and matched generation lengths. AR is a different paradigm and a strong reference, not a like-for-like comparison; we report it to ground the diffusion numbers and to characterize the wall-time cost of each inference mode.
+
+ROUGE.
+
+Table
+20
+reports R-1/R-2/R-L for all four datasets against both AR references. Mean R-1: 38.5 (Llama-3.1-8B), 37.0 (Qwen2.5-7B), 35.7 (DSL-LLaDA-SDE NFE=64), 31.5 (LLaDA NFE=64). SDE exceeds both AR references by 4–6 R-1 on XSum and is within 1–10 points elsewhere; the two AR baselines agree within 0.0–2.7 points except on PubMed (Llama-3 leads by 2.7) and arXiv (Llama-3 leads by 2.2). Vanilla LLaDA at NFE=64 sits between SDE and the AR references on long-reference benchmarks. The 8B-scale diffusion approach is therefore competitive with strong AR baselines on this surface metric, despite running parallel rather than sequential decoding.
+
+Table 20:
+ROUGE F1 vs. AR baselines and public XDLM Base (1,000 samples per benchmark, seed=42). Mean R-1: Llama-3.1 38.5, Qwen2.5 37.0, SDE 35.7, LLaDA 31.5, XDLM Base 18.0. XDLM Base + xDM uses the official released checkpoint with its native sampler (
+k_{1}{=}0.1
+, plain prompt); all others use chat-template prompts.
+
+Dataset
+
+Method
+
+R-1
+
+R-2
+
+R-L
+
+XSum (21w)
+
+DSL-LLaDA-SDE
+(NFE=64)
+
+32.4
+
+11.0
+
+25.0
+
+Llama-3.1-8B AR
+
+27.8
+
+8.0
+
+19.7
+
+Qwen2.5-7B AR
+
+26.6
+
+6.9
+
+19.1
+
+LLaDA (NFE=64)
+
+24.8
+
+7.7
+
+20.6
+
+XDLM Base + xDM (NFE=64)
+
+15.4
+
+4.3
+
+11.9
+
+CNN/DM (55w)
+
+Llama-3.1-8B AR
+
+37.8
+
+14.3
+
+23.6
+
+Qwen2.5-7B AR
+
+37.8
+
+13.1
+
+23.6
+
+DSL-LLaDA-SDE (NFE=64)
+
+35.8
+
+14.9
+
+24.3
+
+LLaDA (NFE=64)
+
+18.2
+
+6.5
+
+14.4
+
+XDLM Base + xDM (NFE=64)
+
+23.0
+
+9.5
+
+15.8
+
+PubMed (205w)
+
+Llama-3.1-8B AR
+
+45.1
+
+16.5
+
+24.5
+
+Qwen2.5-7B AR
+
+42.4
+
+14.2
+
+22.6
+
+LLaDA (NFE=64)
+
+42.2
+
+15.8
+
+23.2
+
+DSL-LLaDA-SDE (NFE=64)
+
+39.5
+
+14.9
+
+22.8
+
+XDLM Base + xDM (NFE=64)
+
+18.9
+
+4.9
+
+12.4
+
+arXiv (163w)
+
+Llama-3.1-8B AR
+
+43.5
+
+15.3
+
+23.4
+
+Qwen2.5-7B AR
+
+41.3
+
+13.1
+
+21.2
+
+LLaDA (NFE=64)
+
+40.8
+
+14.3
+
+21.7
+
+DSL-LLaDA-SDE (NFE=64)
+
+34.9
+
+12.4
+
+20.5
+
+XDLM Base + xDM (NFE=64)
+
+14.6
+
+2.6
+
+11.2
+
+LLM-as-judge against AR baselines.
+
+GPT-5.4 strongly prefers both AR baselines’ outputs to SDE’s (Table
+21
+): against Qwen2.5-7B, mean preference is 67%/28%/5% (AR/SDE/tie) at NFE=64 and 91%/6%/3% at NFE=16. Llama-3.1-8B is preferred even more decisively (73%/22%/5% at NFE=64; 93%/4.5%/2.6% at NFE=16), consistent with its 1.5-point ROUGE lead. The gap is driven primarily by fluency: at the same scale, AR remains the stronger generator under modern LLM evaluators, and DSL-LLaDA does not close that gap. We do not claim quality parity with AR; what diffusion provides is a different mechanism (parallel updates, error-correction-aware training) that wins decisively against the discrete-diffusion alternative (Section
+4.1
+, §
+4.1
+) and that exhibits a complementary wall-time profile (below).
+
+Table 21:
+LLM-as-judge pairwise preference against AR baselines (100 samples/dataset, GPT-5.4). Both AR models are preferred over SDE on every dataset; Llama-3.1 is preferred more decisively than Qwen2.5. AR is the natural quality reference for 7–8B models; we do not claim parity.
+
+vs. Qwen2.5-7B AR
+
+vs. Llama-3.1-8B AR
+
+NFE=16
+
+NFE=64
+
+NFE=16
+
+NFE=64
+
+Dataset
+
+SDE
+
+AR
+
+Tie
+
+SDE
+
+AR
+
+Tie
+
+SDE
+
+AR
+
+Tie
+
+SDE
+
+AR
+
+Tie
+
+XSum
+
+21.0
+
+73.0
+
+6.0
+
+37.0
+
+53.0
+
+10.0
+
+13.2
+
+80.3
+
+6.6
+
+32.0
+
+62.7
+
+5.3
+
+CNN/DM
+
+4.1
+
+94.8
+
+1.0
+
+20.2
+
+77.7
+
+2.1
+
+3.6
+
+94.0
+
+2.4
+
+9.7
+
+86.1
+
+4.2
+
+PubMed
+
+0.0
+
+96.9
+
+3.1
+
+31.6
+
+66.3
+
+2.1
+
+1.3
+
+97.3
+
+1.3
+
+30.7
+
+65.3
+
+4.0
+
+arXiv
+
+0.0
+
+98.9
+
+1.1
+
+21.9
+
+71.9
+
+6.2
+
+0.0
+
+100.0
+
+0.0
+
+15.6
+
+79.2
+
+5.2
+
+mean
+
+6.3
+
+90.9
+
+2.8
+
+27.7
+
+67.2
+
+5.1
+
+4.5
+
+92.9
+
+2.6
+
+22.0
+
+73.3
+
+4.7
+
+Wall-time benchmark.
+
+We measure end-to-end inference time per sample on a single H100 (80GB), 20 prompts per dataset (80 total), single GPU, model loaded once. Qwen-AR is run with KV cache enabled (default) and disabled (to characterize the structural cost of incremental decoding without caching); SDE is run at NFE
+\in\{8,16,32,64\}
+. Wall times are reported in Table
+22
+.
+
+Table 22:
+Wall time per sample (median seconds, single H100), 80 prompts (20/dataset). Qwen-AR and Llama-3.1-AR use KV cache by default; with cache disabled they scale quadratically in output length. SDE uses NFE forward passes over the full sequence; cost is roughly linear in NFE. The two AR baselines have similar wall-time profiles; Llama-3.1 is slightly slower due to longer average outputs.
+
+Method
+
+XSum
+
+CNN/DM
+
+PubMed
+
+arXiv
+
+mean
+
+SDE NFE=8
+
+0.76
+
+1.32
+
+2.21
+
+2.24
+
+1.63
+
+SDE NFE=16
+
+1.38
+
+2.38
+
+3.97
+
+4.02
+
+2.94
+
+Qwen-AR (KV on)
+
+1.36
+
+2.64
+
+7.13
+
+7.25
+
+4.59
+
+Llama-3.1-AR (KV on)
+
+1.80
+
+3.89
+
+7.95
+
+6.75
+
+5.10
+
+SDE NFE=32
+
+2.44
+
+4.22
+
+7.07
+
+7.14
+
+5.22
+
+SDE NFE=64
+
+4.87
+
+8.44
+
+14.14
+
+14.27
+
+10.43
+
+Qwen-AR (KV off)
+
+2.54
+
+7.19
+
+36.97
+
+40.30
+
+21.75
+
+Llama-3.1-AR (KV off)
+
+3.33
+
+10.11
+
+42.13
+
+37.34
+
+23.23
+
+Two efficiency observations follow: (1) SDE at the few-step regime is not slower than either AR baseline, as NFE=16 matches Qwen-AR / Llama-3.1-AR with KV cache on XSum and CNN/DM and is 1.7–2.0
+\times
+faster on PubMed and arXiv (3.97–4.02s for SDE vs. 7.13–7.95s for the AR baselines), because AR’s incremental decoding still carries an attention cost over the full prompt at every output token, and (2) NFE=8 is uniformly 1.8–3.6
+\times
+faster than the AR baselines at the cost of the quality drop reported above. The KV-off rows show the quadratic blow-up that AR avoids only because of the cache; SDE’s continuous-noise dynamics do not admit an analogous incremental shortcut, but in exchange they fix the number of forward passes at a small NFE, which is cheaper than
+L
+token-level decodes for long outputs over long prompts.
+
+E.9
+Public XDLM Base + xDM Reference
+
+For completeness, we evaluate the publicly released XDLM Base checkpoint
+1
+1
+
+1
+
+https://huggingface.co/GSAI-ML/LLaDA-8B-XDLM
+with its native xDM sampler (
+generate_xdm
+,
+k_{1}{=}0.1
+) on the same four summarization benchmarks (1,000 samples, seed 42, temperature 0.0, plain prompt format). This checkpoint is continual pretraining from LLaDA-8B-
+Base
+(not the instruction-tuned variant) and the official repository evaluates it on reasoning/coding tasks (GSM8K, MATH, HumanEval, MBPP, BBH) rather than zero-shot summarization.
+
+Table
+23
+compares ROUGE-1 F1 across NFE budgets, placing the public XDLM Base + xDM alongside DSL-LLaDA-SDE and LLaDA from Table
+2
+. The public checkpoint is substantially weaker at every operating point: its best result (23.01 R-1 on CNN/DM at NFE=64) is still below LLaDA’s worst (24.8 on XSum) and roughly half of DSL-LLaDA-SDE at the same budget. Qualitative inspection shows that many outputs begin with a plausible summary sentence but then drift into copied source text, dialogue-style continuations, or repetition—consistent with a base LM receiving a task prompt without instruction tuning. XDLM Base + xDM does improve substantially with more NFE (e.g., CNN/DM rises from 3.27 to 23.01), suggesting the xDM sampler functions correctly but the base checkpoint lacks the instruction-following ability needed for competitive summarization.
+
+Setting differences from our re-implemented XDLM.
+
+The XDLM baseline used throughout the main text is a matched-compute re-implementation: we continue-pretrain LLaDA-8B-Instruct with the XDLM/XDM forward process on the same data, steps, and learning rate as DSL-LLaDA (Section
+4
+), then decode with discrete remasking. The public checkpoint differs in three ways: (1) it starts from LLaDA-8B-Base rather than the instruction-tuned variant, (2) it uses the official xDM continuous sampler rather than discrete remasking, and (3) its training budget and data may differ from ours. We include these numbers as a reference for the published XDLM method’s zero-shot summarization performance; the low scores should not be read as an indictment of the xDM sampler but as a reflection of the base-only checkpoint’s limited instruction-following ability.
+
+Table 23:
+ROUGE-1 F1 comparison: public XDLM Base + xDM vs. instruction-tuned baselines from Table
+2
+(1,000 samples, seed=42). The public checkpoint uses the native xDM sampler (
+k_{1}{=}0.1
+, plain prompt); DSL-LLaDA-SDE and LLaDA use the same chat-template prompts and settings as the main text. The large gap reflects the lack of instruction tuning in the public XDLM checkpoint, not a sampler limitation.
+
+Dataset (ref)
+
+Method
+
+NFE=8
+
+16
+
+32
+
+64
+
+XSum (21w)
+
+DSL-LLaDA-SDE
+
+28.4
+
+30.4
+
+32.0
+
+32.4
+
+LLaDA
+
+25.2
+
+29.0
+
+28.8
+
+24.8
+
+XDLM Base + xDM
+
+4.5
+
+7.6
+
+14.4
+
+15.4
+
+CNN/DM (55w)
+
+DSL-LLaDA-SDE
+
+28.1
+
+33.0
+
+35.1
+
+35.8
+
+LLaDA
+
+23.1
+
+28.2
+
+25.4
+
+18.2
+
+XDLM Base + xDM
+
+3.3
+
+4.6
+
+11.0
+
+23.0
+
+PubMed (205w)
+
+DSL-LLaDA-SDE
+
+29.4
+
+32.2
+
+36.9
+
+39.5
+
+LLaDA
+
+11.9
+
+20.2
+
+36.5
+
+42.2
+
+XDLM Base + xDM
+
+7.5
+
+7.7
+
+10.9
+
+18.9
+
+arXiv (163w)
+
+DSL-LLaDA-SDE
+
+27.3
+
+28.6
+
+32.9
+
+34.9
+
+LLaDA
+
+10.6
+
+16.2
+
+33.8
+
+40.8
+
+XDLM Base + xDM
+
+6.0
+
+6.3
+
+8.8
+
+14.6
+
+Table
+24
+provides the full ROUGE-2, ROUGE-L, and average output length for the public XDLM Base + xDM checkpoint.
+
+Table 24:
+Full metrics for public XDLM Base + xDM (1,000 samples, seed=42, plain prompt,
+k_{1}{=}0.1
+).
+
+Dataset
+
+NFE
+
+ROUGE-1
+
+ROUGE-2
+
+ROUGE-L
+
+Avg. words
+
+XSum
+
+8
+
+4.52
+
+0.60
+
+4.02
+
+103.30
+
+16
+
+7.55
+
+1.57
+
+6.41
+
+94.32
+
+32
+
+14.37
+
+4.01
+
+11.36
+
+87.09
+
+64
+
+15.41
+
+4.34
+
+11.88
+
+90.92
+
+CNN/DM
+
+8
+
+3.27
+
+0.40
+
+2.83
+
+210.23
+
+16
+
+4.62
+
+0.86
+
+3.86
+
+196.35
+
+32
+
+10.97
+
+3.74
+
+7.87
+
+182.19
+
+64
+
+23.01
+
+9.54
+
+15.82
+
+183.79
+
+PubMed
+
+8
+
+7.45
+
+0.94
+
+5.44
+
+190.65
+
+16
+
+7.71
+
+1.12
+
+5.57
+
+192.24
+
+32
+
+10.88
+
+2.31
+
+7.48
+
+200.78
+
+64
+
+18.85
+
+4.87
+
+12.42
+
+198.87
+
+arXiv
+
+8
+
+5.95
+
+0.26
+
+5.45
+
+204.75
+
+16
+
+6.27
+
+0.46
+
+5.65
+
+204.46
+
+32
+
+8.83
+
+1.21
+
+7.36
+
+197.17
+
+64
+
+14.55
+
+2.55
+
+11.21
+
+187.14
+
+Appendix F
+Full Generation Quality Comparison
+
+Table
+25
+reports all methods and NFE budgets tested (200 prompts, gen=256). Three EOS suppression variants are included: LLaDA+EOS (EOS logit forced to
+-\infty
+), LLaDA+EOS+Block (block remasking with EOS suppression), and DSL-LLaDA-Remask+EOS (DSL model with EOS suppression). All three degenerate into high repetition, confirming that SDE’s advantage comes from continuous dynamics, not from suppressing EOS.
+
+Table 25:
+Complete generation quality comparison (200 prompts, gen=256).
+\dagger
+: GenPPL unreliable at Rep
+{>}
+30%.
+
+NFE
+
+Method
+
+GenPPL
+\downarrow
+
+D2
+\uparrow
+
+Rep
+\downarrow
+
+Len
+\uparrow
+
+8
+
+LLaDA (default)
+
+63.1
+
+0.470
+
+0.248
+
+27
+
+LLaDA+EOS
+
+7.2
+†
+
+0.132
+
+0.777
+
+113
+
+LLaDA+EOS+Block
+
+6.3
+†
+
+0.064
+
+0.895
+
+116
+
+DSL-LLaDA-Remask
+
+12.5
+†
+
+0.164
+
+0.663
+
+92
+
+DSL-LLaDA-Remask+EOS
+
+3.2
+†
+
+0.064
+
+0.855
+
+183
+
+DSL-LLaDA-Remask+Block
+
+3.6
+†
+
+0.036
+
+0.930
+
+171
+
+DSL-LLaDA-SDE
+
+12.9
+
+0.342
+
+0.083
+
+174
+
+16
+
+LLaDA (default)
+
+39.1
+
+0.474
+
+0.216
+
+32
+
+LLaDA+EOS
+
+7.5
+†
+
+0.225
+
+0.593
+
+123
+
+LLaDA+EOS+Block
+
+5.1
+†
+
+0.086
+
+0.845
+
+143
+
+DSL-LLaDA-Remask
+
+11.4
+†
+
+0.221
+
+0.600
+
+92
+
+DSL-LLaDA-Remask+EOS
+
+3.7
+†
+
+0.117
+
+0.656
+
+184
+
+DSL-LLaDA-Remask+Block
+
+2.9
+†
+
+0.046
+
+0.918
+
+211
+
+DSL-LLaDA-SDE
+
+8.3
+
+0.299
+
+0.087
+
+174
+
+32
+
+LLaDA (default)
+
+20.3
+
+0.504
+
+0.168
+
+45
+
+LLaDA+EOS
+
+7.0
+†
+
+0.310
+
+0.353
+
+156
+
+LLaDA+EOS+Block
+
+5.3
+†
+
+0.140
+
+0.718
+
+163
+
+DSL-LLaDA-Remask
+
+10.7
+†
+
+0.291
+
+0.304
+
+119
+
+DSL-LLaDA-Remask+Block
+
+3.5
+†
+
+0.095
+
+0.774
+
+206
+
+DSL-LLaDA-SDE
+
+6.1
+
+0.322
+
+0.064
+
+185
+
+64
+
+LLaDA (default)
+
+12.8
+
+0.489
+
+0.095
+
+62
+
+LLaDA+EOS
+
+8.1
+
+0.422
+
+0.053
+
+194
+
+LLaDA+EOS+Block
+
+7.6
+
+0.305
+
+0.200
+
+182
+
+LLaDA+Block
+
+7.6
+
+0.305
+
+0.227
+
+188
+
+DSL-LLaDA-Remask
+
+9.6
+
+0.405
+
+0.058
+
+140
+
+DSL-LLaDA-Remask+EOS
+
+6.8
+
+0.379
+
+0.104
+
+193
+
+DSL-LLaDA-Remask+Block
+
+6.8
+
+0.243
+
+0.244
+
+200
+
+DSL-LLaDA-SDE
+
+5.1
+
+0.334
+
+0.037
+
+187
+
+128
+
+LLaDA (default)
+
+11.5
+
+0.512
+
+0.003
+
+49
+
+LLaDA+EOS
+
+6.7
+
+0.459
+
+0.009
+
+198
+
+LLaDA+EOS+Block
+
+6.8
+
+0.408
+
+0.015
+
+179
+
+LLaDA+Block
+
+6.8
+
+0.397
+
+0.014
+
+204
+
+DSL-LLaDA-Remask
+
+7.5
+
+0.421
+
+0.009
+
+142
+
+DSL-LLaDA-Remask+EOS
+
+6.2
+
+0.423
+
+0.019
+
+201
+
+DSL-LLaDA-Remask+Block
+
+7.0
+
+0.361
+
+0.017
+
+208
+
+DSL-LLaDA-SDE
+
+4.5
+
+0.300
+
+0.075
+
+154
+
+Key observations: (1) All EOS suppression variants (LLaDA+EOS, LLaDA+EOS+Block) trade short output for massive repetition: LLaDA+EOS+Block achieves GenPPL
+=
+5.1 at NFE
+=
+16 but 85% repetition. (2) The
+\beta{=}1
+model with eos_inf degenerates just as badly (66–86% repetition at NFE
+\leq
+16), confirming that the DSL-trained model’s iterative-unmasking failure is not an EOS artifact. (3) SDE is the only method that achieves low PPL, low repetition, and long output simultaneously at every NFE budget.
+
+F.1
+Long-form generation
+
+Table
+26
+reports all five methods at gen=512 and gen=1024 (100 prompts, NFE=64). Iterative unmasking’s repetition scales with generation length; SDE degrades gracefully. LLaDA ReMDM produces very short outputs (50–69 words) with high repetition, indicating that confidence-based remasking does not alleviate the length–quality tradeoff at long generation horizons.
+
+Table 26:
+Long-form generation (100 prompts, NFE=64). D2 = fraction of unique bigrams (higher = more diverse).
+\dagger
+: GenPPL unreliable (Rep
+{>}
+30%).
+
+gen
+
+Method
+
+GenPPL
+\downarrow
+
+D2
+\uparrow
+
+Rep
+\downarrow
+
+Len
+\uparrow
+
+512
+
+LLaDA+EOS
+
+4.6
+†
+
+0.107
+
+0.686
+
+330
+
+LLaDA+EOS+Block
+
+3.5
+†
+
+0.056
+
+0.891
+
+371
+
+LLaDA ReMDM
+
+19.3
+†
+
+0.414
+
+0.351
+
+50
+
+DSL-LLaDA-Remask
+
+8.6
+†
+
+0.159
+
+0.434
+
+206
+
+DSL-LLaDA-SDE
+
+5.4
+
+0.212
+
+0.111
+
+292
+
+1024
+
+LLaDA+EOS
+
+4.2
+†
+
+0.034
+
+0.827
+
+608
+
+LLaDA+EOS+Block
+
+3.3
+†
+
+0.022
+
+0.965
+
+663
+
+LLaDA ReMDM
+
+31.9
+†
+
+0.230
+
+0.647
+
+69
+
+DSL-LLaDA-Remask
+
+6.3
+†
+
+0.034
+
+0.649
+
+580
+
+DSL-LLaDA-SDE
+
+5.6
+
+0.139
+
+0.284
+
+451
+
+F.2
+Generation Diversity
+
+Iterative unmasking with temperature
+=
+0 is fully deterministic; SDE, by contrast, injects stochastic noise at every step and produces different outputs on each run. On 20 prompts at NFE
+=
+64 across 5 random seeds, LLaDA and DSL-LLaDA-Remask yield bit-identical outputs (PPL constant at 9.01 and 9.63 respectively to two decimal places), while DSL-LLaDA produces PPL in the range 5.98–6.99, reflecting genuinely different generated text. This stochastic diversity is a direct consequence of continuous dynamics and is unavailable to iterative unmasking at zero temperature.
+
+F.3
+Block SDE: Untapped Inference Headroom
+
+The main paper uses pure SDE, which updates all
+L
+positions in parallel and is best suited to tasks with strong informational anchors. We separately ask whether the same DSL-trained backbone has additional inference headroom on tasks where sequential dependency dominates and parallel updates struggle. The natural inference variant is
+Block SDE
+: run SDE within
+B
+-token blocks left-to-right, committing each block before proceeding to the next. This re-introduces left-to-right credit assignment while keeping the within-block continuous denoising that DSL training was designed for.
+
+Table
+27
+reports the GSM8K development sweep used to select the Block-SDE schedule (100 problems, gen=256, seed=42, regex answer extraction). The sweep includes three reference points: full-sequence discrete remasking (
+B{=}256
+, 40%), discrete block remasking (
+B{=}32
+, 58%), and pure SDE without blocks (28%). Table
+28
+then reports the full-set confirmation on GSM8K and MATH-500.
+
+Table 27:
+Development sweep for Block SDE on 100 GSM8K problems (gen=256). NFE
+=(256/B)\times 2S
+(Heun solver). The 77% result selected
+B{=}8
+,
+S{=}4
+for the full GSM8K run, but the small development set overestimates absolute accuracy; Table
+28
+gives the full-set result.
+
+B
+
+S
+
+NFE
+
+Acc.
+
+Notes
+
+Reference points
+
+256
+
+—
+
+64
+
+40%
+
+Discrete remask (full sequence)
+
+32
+
+—
+
+64
+
+58%
+
+Discrete block remask
+
+—
+
+32
+
+64
+
+28%
+
+Pure SDE (no blocks)
+
+Block SDE
+
+8
+
+2
+
+160
+
+58%
+
+8
+
+4
+
+288
+
+77%
+
+Selected for full GSM8K
+
+8
+
+8
+
+544
+
+70%
+
+More steps
+\not\Rightarrow
+better
+
+16
+
+2
+
+80
+
+30%
+
+16
+
+4
+
+144
+
+59%
+
+16
+
+8
+
+272
+
+72%
+
+16
+
+16
+
+528
+
+69%
+
+32
+
+4
+
+72
+
+42%
+
+32
+
+8
+
+136
+
+58%
+
+32
+
+16
+
+264
+
+56–66%
+
+High variance
+
+64
+
+16
+
+132
+
+57%
+
+Table 28:
+Full reasoning-set confirmation. GSM8K uses the development-selected
+B{=}8
+,
+S{=}4
+schedule with gen=256. MATH-500 uses
+B{=}32
+,
+S{=}16
+with gen=512. All rows use the same 1k-step DSL-LLaDA checkpoint; results are exact-match after regex/boxed-answer extraction.
+
+Dataset
+
+Method
+
+NFE
+
+Correct
+
+Acc. (%)
+
+Time (s)
+
+GSM8K
+
+Discrete block remask (
+B{=}32
+)
+
+64
+
+759/1319
+
+57.54
+
+3512.9
+
+GSM8K
+
+Pure SDE (
+S{=}32
+)
+
+64
+
+509/1319
+
+38.59
+
+5202.2
+
+GSM8K
+
+Block SDE
+(
+B{=}8
+,
+S{=}4
+)
+
+288
+
+838/1319
+
+63.53
+
+15965.4
+
+MATH-500
+
+Discrete block remask (
+B{=}32
+)
+
+64
+
+45/500
+
+9.00
+
+2067.2
+
+MATH-500
+
+Pure SDE (
+S{=}32
+)
+
+64
+
+83/500
+
+16.60
+
+3342.0
+
+MATH-500
+
+Block SDE
+(
+B{=}32
+,
+S{=}16
+)
+
+528
+
+139/500
+
+27.80
+
+17602.1
+
+The full GSM8K run reduces the apparent gain from the 100-problem development sweep, but preserves the direction: Block SDE improves by +5.99 points over discrete block remasking and +24.94 over pure SDE. MATH-500 shows a larger separation, with Block SDE improving by +18.80 over remasking and +11.20 over pure SDE. The result is therefore not a new low-budget sampler claim. The improvement is evidence that the DSL-trained backbone can support a broader inference family when sequential structure is restored.
+
+Implication.
+
+The DSL-trained backbone contains reasoning capacity that pure parallel SDE cannot extract because parallel updates lack sequential structure. Restoring block-wise left-to-right scheduling improves full-set GSM8K and MATH-500, but at substantially higher NFE than the primary summarization runs. Block SDE occupies one point in a broader scheduling space: AR commits one token at a time, multi-token prediction commits several tokens per step, pure SDE updates all positions in parallel, and Block SDE commits local chunks after continuous denoising. Designing task- and model-aware schedules that choose between these regimes, or interpolate among them, is a natural next step.
+
+F.4
+Qualitative Examples
+
+We first show two paired examples at NFE
+=
+16 (gen
+=
+256), the low-step regime where Figure
+3
+shows the strongest contrast. We then present NFE
+=
+64 examples that illustrate the failure modes quantified in Table
+25
+.
+
+Low-step qualitative comparison (NFE
+=
+16, gen
+=
+256)
+
+Prompt 1:
+“Write a short paragraph explaining the internet.”
+
+LLaDA (32 words, premature termination + collapse)
+
+The internet is a global network of interconnected computers that allows people to communicate and access information, access, and share data. It is a powerful tool for communication, entertainment, and, and and.
+
+DSL-LLaDA-SDE (200 words, full-length)
+
+The internet is a global network of computers that allows people to communicate and share information, resources, and services online. It is also a network of that connects between a computer and a server that, as a web server and each other. The internet was created as a computer network, or the, in the 1960s, which was created as a way to the the internet. The server was connected to the internet, the internet as a web server, which was known as a server. […]
+
+Prompt 2:
+“Explain the concept of blockchain technology.”
+
+LLaDA (32 words, damaged fragment)
+
+Blockchain technology is a decentralized, distributed ledger system that records transactions to verify transactions across a network of computers.. It is a secure of secure and that and and and and and.
+
+DSL-LLaDA-SDE (215 words, on-topic)
+
+Blockchain technology is a distributed ledger system that allows transactions to be recorded across a network in a secure manner. It is essentially a ledger stored in a network of computers, in a form of computers, and in the, in a blockchain. Each transaction is recorded as a copy of the network. When a transaction is recorded in the form of a block. The block contains information as well as the time of the transaction and the identity of the parties […]
+
+Caveat case:
+“Describe plate tectonics in simple terms.”
+
+LLaDA (20 words, immediate collapse)
+
+Plate tectonics is the process that explains Earth Earth Earth Earth Earth Earth Earth Earth.. It is the the Earth..
+
+DSL-LLaDA-SDE (206 words, phrase-level repetition)
+
+Plate tectonics is the study of the Earth Earth’s crust. It is made up of rigid plates that is broken into smaller plates called tectonic plates. These plates move on a liquid layer of the Earth called the plate the plates. The plate plate the plate plate plates plate plate plate plate plate plate plate, plate the plate is plate. […]
+
+Summary:
+At NFE
+=
+16, vanilla LLaDA exhibits premature termination (20–42 words) and word-level collapse on all three prompts. DSL-LLaDA-SDE eliminates these catastrophic failures and produces full-length answers. The plate-tectonics caveat (yellow) shows that phrase-level repetition can still occur at very low NFE.
+
+Higher-step examples (NFE
+=
+64).
+
+Prompt: “Provide a brief overview of climate change.”
+
+DSL-LLaDA-SDE (191 words) produces a two-paragraph answer covering causes (fossil fuels, CO
+2
+) and impacts (warming, ice melt), ending with a natural sentence. LLaDA (17 words) emits one incomplete sentence before EOS. MDM-CPT (118 words) starts coherently then degenerates into comma-and repetition (“and, and, and, and…”).
+
+Prompt: “Explain the French Revolution.”
+
+DSL-LLaDA-SDE (122 words) covers the Enlightenment influence, monarchy overthrow, Declaration of Rights, Republic establishment, Reign of Terror, and Napoleon’s rise. XDLM (84 words) produces a decent opening paragraph followed by 28 consecutive periods. MDM-CPT (72 words) repeats “of of the Enlightenment” three times.
+
+Prompt: “Explain the Cold War.”
+
+DSL-LLaDA-SDE (119 words) covers the timeframe (1940s–1990s), ideological divide, and specific events (Korean War, Berlin Wall, nuclear proliferation). LLaDA (62 words) provides accurate but minimal information. XDLM (58 words) produces a good first half followed by 48 periods.
+
+Prompt: “Describe the Industrial Revolution.”
+
+DSL-LLaDA-SDE (173 words) produces a structured overview covering industrialization, manufacturing, and transportation. LLaDA (26 words) emits two sentences. MDM-CPT (102 words) begins coherently then fills the second half with “factories factories factories factories…”.
+
+In these examples, SDE avoids the catastrophic EOS and punctuation-spam failures seen in the discrete baselines, while every discrete baseline fails on at least one prompt. MDM-CPT achieves the lowest GenPPL (4.7) but produces the most degenerate text (44% failure rate), illustrating why GenPPL alone is an unreliable quality metric.
+
+SDE performs best on knowledge-grounded tasks (expository, summarization, instruction) where informational anchors prevent the parallel-update attractor problem. On creative writing, the lack of a target causes all positions to converge on high-frequency tokens. This task-dependent behavior (
+\leq
+4% degenerate endings on summarization vs. 24% on creative) suggests SDE is best suited for knowledge-grounded generation. The creative failure mode may be addressable via temperature sampling or hybrid SDE
+\to
+unmasking strategies, which we leave to future work.
+
+Quantitative summarization results are reported in Section
+4.2
+and Table
+2
+.
+
