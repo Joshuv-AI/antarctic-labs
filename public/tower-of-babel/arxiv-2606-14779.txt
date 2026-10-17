@@ -1,0 +1,1034 @@
+Unified KV Pooling to Accelerate Long-Context LLM Serving
+Minchul Kang 1 , Changyong Shin 1 , Jinwoo Jeong 1 , Jaerim Park 1 , Woohyun Kim 2 , Bonyul Gu 2 , Dongwoo Kang 2 , Gyeongsik Yang 3 , Chuck Yoo 1
+
+Abstract
+Long-context LLM serving requires offloading KV caches to host-memory and SSDs, but existing mechanisms are not designed for such long contexts. We observe significant inefficiencies in current KV caching in long contexts: high serving latency ∼ \sim 30.7 s, exceeding the typical TTFT requirement of 10 s by more than 3 × \times . Our in-depth analysis explains two major reasons: (1) retrieval is serialized through host-memory and SSD, leaving other host-memory modules and SSDs underutilized, and (2) SSD-based KV retrieval spends 84% of its time in the kernel filesystem rather than actual device access. To address the problems, we propose unified KV pooling, which aggregates multiple host-memory modules and SSDs into a single logical pool and distributes KV caches across devices based on their bandwidth. To eliminate the filesystem overhead, we design KV-passthrough, which bypasses the kernel filesystem and directly accesses SSD-resident KV caches from user space via SPDK. Across evaluations on LLaMA 3.1-8B, GPT-OSS-20B, and Qwen3-30B-A3B, unified KV pooling reduces TTFT in long-contexts ∼ \sim 4.1 × \times over state-of-the-art techniques, all making under 10 s. It also reduces blocked I/O time by up to 23.2 × \times by eliminating filesystem overhead.
+
+
+
+I
+Introduction
+
+Long-context request serving has become a common scenario in large language model (LLM) services. In LLM serving, the context of a request is the combined sequence of input and output tokens; a request whose context exceeds 16K tokens is generally considered a long-context request
+[
+29
+,
+7
+,
+27
+]
+. Such requests increasingly appear in real-time applications that process extensive chat histories, retrieved documents, code repositories, or agent trajectories. Examples include conversational agents
+[
+21
+,
+26
+]
+, retrieval-augmented search
+[
+14
+]
+, and code generation services
+[
+2
+,
+20
+]
+. Furthermore, the maximum context lengths of LLMs are expanding rapidly. For instance, LLaMA 3.1
+[
+5
+]
+offers approximately 64
+\times
+larger context capacity than its initial release, while GPT 4.5
+[
+1
+]
+provides 250
+\times
+larger context length.
+
+A key mechanism that makes such serving practical is KV caching in the attention layers. During decoding, the serving engine stores previously computed key and value vectors and reuses them for subsequent tokens, thereby avoiding recomputation of past attention states
+[
+25
+,
+12
+]
+. But the problem is that the KV cache grows linearly with the context length. As a result, the memory footprint becomes large even for a single request. For example, LLaMA-3.1-405B in FP32 requires 0.98 GB of KV cache at 1K context but 123.05 GB at 128K context
+[
+9
+]
+.
+
+Because GPU memory cannot hold such large KV caches for long contexts, modern serving systems offload them to host-memory or SSD-backed storage. When a decoding step needs an offloaded KV cache, the engine must retrieve it and transfer it back to GPU memory before computation can proceed. As a result, KV retrieval lies on the critical path of decoding latency. In particular, for long-context requests, the KV cache often extends to SSD-backed storage because host-memory alone is insufficient. Therefore, we focus on KV cache offloading on both host-memory and SSDs.
+
+Our motivating experiments (§
+III
+) reveal two problems with existing KV cache offloading under long contexts.
+First, serving latency increases significantly with context length: time-to-first-token (TTFT) reaches 30.7 s at 128K context, exceeding the typical requirement of real-world serving systems (10 s
+[
+28
+]
+) by more than 3
+\times
+.
+The primary cause is that existing engines serialize KV retrieval through the host-memory and SSD I/O path, using only a small subset of the available host-memory modules and SSDs while leaving the rest underutilized.
+Second, SSD-based KV retrieval suffers from the substantial filesystem overhead. Our profiling shows that 84% of the total KV retrieval time is spent in filesystem processing, even though the serving engine already knows the target KV objects and does not require general-purpose file operations.
+
+To address both problems, we propose “unified KV pooling.” Unified KV pooling aggregates multiple host-memory modules and SSDs into one logical KV pool and distributes offloaded KV caches across pool devices according to each device’s bandwidth. This enables parallel KV offloading and retrieval across devices, rather than routing all KV traffic through the serialized storage path. We also design KV-passthrough, which bypasses the kernel filesystem and accesses SSD-resident KV caches directly from user space through SPDK
+[
+31
+]
+.
+
+The contributions of this paper are as follows.
+
+•
+
+Show that the current KV cache offloading suffers from two problems in long-context serving: increased serving latency due to the serialized I/O path and large filesystem overhead in SSD-based retrieval.
+
+•
+
+Introduce unified KV pooling that 1) distributes KV caches across multiple host-memory and SSD devices and 2) removes filesystem overhead through direct user-space SSD access.
+
+•
+
+Demonstrate
+\sim
+4.1
+\times
+TTFT reduction and
+\sim
+23.2
+\times
+lower blocked I/O time under long-context workloads compared to existing KV cache offloading techniques.
+
+Fig. 1
+:
+KV cache offloading workflow.
+
+II
+Background
+
+II-A
+
+KV Cache Offloading
+
+LLM serving engines first reserve GPU memory regions for KV caches. During decoding, each attention layer appends newly generated KV states to the cache and reuses previously stored states for subsequent tokens. As the context length increases, however, the KV cache may exceed the available GPU memory. To avoid out-of-memory failures, modern serving systems offload a portion of the KV cache to SSD-backed storage
+[
+22
+,
+4
+]
+.
+
+Fig.
+1
+illustrates the offloading and retrieval workflow.
+1
+1
+
+1
+
+We base this explanation on LMCache
+[
+4
+]
+, a representative engine, when it offloads values on both host-memory and SSD offloading.
+During the offloading phase,
+1
+evicted KV caches are first transferred from GPU memory to host-memory and
+2
+subsequently written to the SSD through the kernel filesystem,
+3
+which maps the data to logical block addresses (LBAs) on the storage device. During retrieval, the reverse path is traversed:
+4
+the engine reads the corresponding LBAs from the SSD through the filesystem,
+5
+stages the data in host-memory, and then
+6
+transfers it to GPU memory for decoding. Because the SSD path involves both device I/O and kernel-level filesystem processing, restoring SSD-resident KV caches incurs higher latency than restoring host-memory-resident ones. This directly increases KV retrieval latency, which becomes critical in long contexts where the volume of offloaded KV caches is large.
+
+(a)
+
+Without layerwise pipelining.
+
+(b)
+
+With layerwise pipelining.
+
+Fig. 2
+:
+Layerwise pipelining example. Black box: GPU computation, gray box: KV cache lookup (I/O), Blocked: GPU stall time awaiting KV cache retrieval.
+
+II-B
+
+Optimizations in KV Cache Offloading
+
+To reduce KV cache retrieval latency, two representative techniques have been proposed: layerwise pipelining and asynchronous KV loading. Recent KV cache management frameworks, including LMCache
+[
+4
+]
+, support the techniques.
+
+II-B
+1
+Layerwise Pipelining
+
+Layerwise pipelining reduces KV retrieval latency by overlapping GPU computation and I/O across layers. Without pipelining, the GPU starts computation of the next layer only after the required KV cache I/O completes (Fig.
+2(a)
+). With layerwise pipelining, the serving engine computes layer
+N
+while prefetching the KV cache for layer
+N{+}1
+, thereby hiding part of the I/O latency (Fig.
+2(b)
+).
+
+However, pipelining is effective only when the KV retrieval time is shorter than or comparable to the compute time. Once retrieval takes longer than GPU computation, an uncovered portion appears. We refer to this uncovered portion as blocked I/O time, denoted as
+blocked
+(Fig.
+2(b)
+): the duration during which only I/O for KV retrieval proceeds, with no overlapping GPU computation. Blocked I/O time directly adds to decoding latency.
+
+II-B
+2
+Asynchronous KV Loading
+
+Asynchronous KV loading is a widely used approach
+[
+4
+,
+22
+]
+to reduce latency by prefetching offloaded KV caches ahead of decoding. In conventional KV caching, KV values are retrieved synchronously in decoding order—each value is fetched only when the corresponding token is about to be processed—making I/O a significant component of decoding time.
+In contrast, asynchronous KV loading issues retrieval requests as soon as a new request arrives and leverages the queuing period before decoding begins. In typical serving systems, incoming requests wait in a queue until they are processed; during this time, the system can identify existing KV caches (e.g., from shared or similar prefixes with previous requests) and prefetch them in advance. So, KV retrieval on some prefix tokens is decoupled from decoding.
+
+Fig. 3
+:
+TTFT.
+
+Fig. 4
+:
+Blocked I/O
+
+time.
+
+Fig. 5
+:
+Unutilized
+
+SSD.
+
+Fig. 6
+:
+Disk
+
+bottleneck.
+
+Fig. 7
+:
+Filesystem
+
+overhead.
+
+III
+Motivating Experiments
+
+This section demonstrates why the current KV cache offloading becomes inefficient for long-context serving. We identify two problems through motivating experiments: (1) high serving latency stems from a serialized IO path for KV cache (§
+III-B
+) and (2) filesystem overhead that dominates SSD-based KV retrieval (§
+III-C
+).
+
+III-A
+
+Setup
+
+We use Qwen3-30B-A3B
+[
+30
+]
+on a server equipped with an NVIDIA H100-80GB GPU, two 64 GB DDR4 host-memory modules with a combined peak bandwidth of 21.3 GB/s, and two 2 TB NVMe SSDs connected through PCIe 5.0
+\times
+16 with a combined peak bandwidth of 63 GB/s.
+
+We use vLLM v0.13.0
+[
+12
+]
+as serving engine and LMCache v0.3.10
+[
+4
+]
+for KV cache framework. We allocate 20 GB of host memory and 200 GB of SSD storage for offloading and enable LMCache’s layerwise pipelining and asynchronous KV loading (§
+II-B1
+). We evaluate on the Long Doc QA benchmark
+[
+17
+]
+and vary the input length from 1K to 128K tokens to cover both short- and long-context requests. We fix the maximum output length to 100 tokens to control variation and enable a fairer comparison across different context lengths. This is consistent with prior work that varies input length under a capped output length
+[
+10
+,
+32
+,
+33
+]
+.
+
+III-B
+
+Problem 1: High Serving Latency
+
+We measure TTFT, the time required to generate the first output token. Fig.
+7
+shows TTFT across different context lengths. TTFT increases by
+\sim
+205.3
+\times
+as the context length grows from 1K to 128K, reaching
+\sim
+30.7 s at 128K—more than 3
+\times
+higher than the typical serving requirement of 10 s
+[
+28
+]
+. The increase is modest for short contexts but becomes much steeper in long contexts (16K–128K).
+
+To understand the cause, we examine blocked I/O time.
+2
+2
+
+2
+
+As GPU computation and I/O are largely overlapped by layerwise pipelining (§
+II-B1
+), the isolated I/O bottleneck is captured by blocked I/O time.
+Fig.
+7
+shows that blocked I/O time grows from 7.1 ms to 13.8 s as the context length increases from 1K to 128K. The I/O path for retrieving offloaded KV caches is therefore the dominant source of the latency increase.
+
+We further analyze why I/O time grows so steeply. Fig.
+7
+shows that, on our server with two SSDs, only one SSD is heavily utilized
+while the other remains idle. KV retrieval requests thus accumulate on a single device. Fig.
+7
+confirms the consequence: as context length increases, the average SSD request completion time grows by
+\sim
+15.4
+\times
+, while the number of requests waiting in the SSD hardware queue grows by
+\sim
+132
+\times
+.
+The root cause is that although the server has multiple host-memory modules and SSDs, existing engines are designed to serialize the requests. Furthermore, the current version of LMCache uses a single set of host-memory module and SSD. In short, the current KV cache offloading has an inherent limitation to exploit retrieval parallelism across devices.
+
+III-C
+
+Problem 2: Significant Filesystem Overhead
+
+Fig.
+7
+shows that reading offloaded KV caches from SSD takes
+\sim
+11
+\times
+longer than reading them from host-memory. To identify the source of this overhead, we profile the SSD retrieval path using
+bpftrace
+
+[
+24
+]
+. The result shows that the filesystem processing accounts for 84% of the total time.
+
+This overhead arises because existing KV cache offloading accesses SSD-resident KV caches through the kernel filesystem, which performs general-purpose operations such as file abstraction, metadata handling, and block management. However, offloaded KV caches are internal data objects managed by the serving engine. When the engine retrieves a KV cache entry, it already knows which object to fetch and can identify the stored location from its own metadata. KV retrieval, therefore, does not require the full filesystem path used for general file access. Nevertheless, the current offloading still traverses the entire filesystem stack, adding substantial latency to SSD-based KV retrieval.
+
+In summary, current KV cache offloading is inefficient for long-context serving because it lacks the parallelism across available devices and incurs large filesystem overhead for SSD-resident KV caches.
+
+Fig. 8
+:
+Unified KV pooling structure.
+
+IV
+Design
+
+To address the two problems identified in §
+III
+, we propose unified KV pooling. The design achieves two goals: (1) to exploit device-level parallelism during KV cache offloading and retrieval, and (2) to remove filesystem overhead from SSD-resident KV cache access.
+
+Fig.
+8
+shows the overall architecture. Unified KV pooling aggregates multiple host-memory modules and SSDs into one logical “KV pool” for offloaded KV caches. We refer to each host-memory module or SSD in the pool as a
+pool device
+.
+Unified KV pooling has two components: the KV orchestrator (§
+IV-A
+) and KV-passthrough (§
+IV-B
+). The KV orchestrator manages KV placement and retrieval across pool devices, ensuring that offloaded KV caches are distributed across multiple devices. KV-passthrough removes the filesystem overhead from SSD-resident KV caches by bypassing the kernel filesystem and issuing direct user-space SSD accesses.
+
+IV-A
+
+KV Orchestrator
+
+The KV orchestrator manages offloaded KV caches in the unified KV pool with bandwidth-aware distribution. Instead of concentrating KV traffic on a single device, it assigns KV caches to pool devices in proportion to their bandwidth, preventing any single device from becoming a bottleneck.
+It consists of three parts: the global lookup table (GLT), the pool organizer, and the bandwidth-aware KV allocator. The GLT records the placement of each KV cache.
+The pool organizer determines the amount of KV traffic each pool device should receive. The bandwidth-aware KV allocator performs offloading and retrieval based on that information.
+
+IV-A
+1
+Global Lookup Table (GLT)
+
+The GLT records the location of each offloaded KV cache in the unified KV pool. When the serving engine initializes the model, the KV orchestrator enumerates all pool devices and assigns each one a unique device index. It then initializes the GLT.
+
+Each GLT entry stores four fields: (1) a lookup key for the KV cache, (2) the device index of the assigned pool device, (3) the type of the pool device, and (4) the location of the KV cache inside that device. The location is represented as a pointer for host-memory and as a logical block address (LBA) for SSD. Table
+I
+summarizes the fields.
+
+TABLE I
+:
+Fields of the global lookup table (GLT).
+
+Field
+
+Description
+
+key
+
+Hash of the KV cache identifier used for lookup
+
+device_idx
+
+Index of the assigned pool device
+
+type
+
+Pool-device type (
+MEM
+or
+SSD
+)
+
+location
+
+KV cache location inside the pool device:
+
+1) if
+type
+is
+MEM
+: pointer
+
+2) if
+type
+is
+SSD
+: logical block address (LBA)
+
+IV-A
+2
+Pool Organizer
+
+The pool organizer determines how much of the offloaded KV cache should be assigned to each pool device. The goal is to prevent KV traffic from being concentrated on a single device. Instead of using a uniform distribution, the pool organizer distributes KV caches in proportion to device bandwidth, so that faster pool devices receive a larger share of KV I/O.
+
+Let
+N
+be the number of pool devices, and let
+b_{i}
+be the measured bandwidth of pool device
+i
+. The placement ratio
+p_{i}
+of pool device
+i
+is defined as:
+
+p_{i}=\frac{b_{i}}{\sum_{j=1}^{N}b_{j}}.
+
+(1)
+
+p_{i}
+determines the fraction of offloaded KV caches assigned to each pool device. A larger
+p_{i}
+means that the corresponding device receives a larger share of KV traffic.
+
+IV-A
+3
+Bandwidth-aware KV Allocator
+
+The bandwidth-aware KV allocator uses the placement ratios to partition and dispatch offloaded KV caches. At decoding step
+t
+, let
+\mathcal{K}^{(t)}
+denote the set of KV caches that must be offloaded. The allocator decomposes
+\mathcal{K}^{(t)}
+into per-device offload sets and issues writes to the corresponding pool devices in parallel.
+
+Let
+\mathit{offload\_set}_{i}^{(t)}
+denote the offload set assigned to pool device
+i
+at step
+t
+. Its target size is:
+
+|\mathit{offload\_set}_{i}^{(t)}|=\left\lfloor p_{i}\cdot|\mathcal{K}^{(t)}|\right\rfloor+r_{i}^{(t)}
+
+(2)
+
+where
+r_{i}^{(t)}
+is the number of remaining KV caches additionally assigned to pool device
+i
+after flooring, subject to:
+
+\sum_{i=1}^{N}\left(\left\lfloor p_{i}\cdot|\mathcal{K}^{(t)}|\right\rfloor+r_{i}^{(t)}\right)=|\mathcal{K}^{(t)}|.
+
+The allocator first assigns
+\lfloor p_{i}\cdot|\mathcal{K}^{(t)}|\rfloor
+KV caches to each pool device and then distributes the remainder to the devices with larger
+p_{i}
+.
+Specifically, the KV caches in
+\mathcal{K}^{(t)}
+are enumerated in layerwise order and assigned to offload sets in that same sequence.
+Each pool device has its own worker thread, so the resulting writes are issued as independent I/O streams rather than as one serialized path.
+
+IV-B
+
+KV-passthrough
+
+KV-passthrough is designed to remove the filesystem overhead from SSD-resident KV cache access. Once an offloaded KV cache is represented in the GLT by its device index and LBA, it no longer needs to be managed through the filesystem as a regular file.
+To implement this path, we use SPDK
+[
+31
+]
+, a user-space NVMe I/O framework. KV-passthrough issues NVMe commands directly from user space and bypasses the kernel filesystem. It exposes two primitives:
+SSD_Direct_Store
+and
+SSD_Direct_Retrieve
+.
+
+SSD_Direct_Store
+writes an SSD-bound offload set to the target pool device. Once the bandwidth-aware KV allocator assigns an offload set to an SSD pool device, KV-passthrough allocates a contiguous LBA range on the target device and writes the KV caches to that range through asynchronous NVMe write commands. The LBA range length is
+\lceil|\mathit{offload\_set}_{i}^{(t)}|\cdot\text{KV\_size}\;/\;\text{sector\_size}\rceil
+blocks. Writes are issued asynchronously, so command submission is decoupled from completion handling. The resulting LBA information is returned to the bandwidth-aware KV allocator and stored in the GLT.
+
+SSD_Direct_Retrieve
+reads back a KV cache from SSD using the
+device_idx
+and
+location
+fields stored in the GLT. From this metadata, KV-passthrough identifies the target LBA range and issues an asynchronous NVMe read. Completion is handled via SPDK polling on a dedicated CPU core, which ensures that KV caching operations are not interfered with by polling overhead. As this path bypasses the filesystem, it removes the overhead identified in §
+III-C
+.
+
+IV-C
+
+Workflow Summary
+
+IV-C
+1
+KV Offloading
+
+Algorithm 1
+
+KV cache offloading in unified KV pooling
+
+1:
+
+Input:
+offload-required KV set
+\mathcal{K}^{(t)}
+, pool devices
+\mathcal{U}=\{u_{1},\dots,u_{N}\}
+, placement ratios
+\mathcal{P}=\{p_{1},\dots,p_{N}\}
+, GLT
+
+2:
+
+Output:
+updated GLT entries
+
+3:
+
+procedure
+
+ParallelOffload
+(
+\mathcal{K}^{(t)},\mathcal{U},\mathcal{P},GLT
+)
+
+4:
+
+for
+
+i\leftarrow 1
+
+to
+
+N
+
+do
+
+5:
+
+target\_count_{i}\leftarrow\lfloor p_{i}\cdot|\mathcal{K}^{(t)}|\rfloor
+
+6:
+
+offload\_set_{i}^{(t)}\leftarrow\emptyset
+
+7:
+
+end
+
+for
+
+8:
+
+remaining\_count\leftarrow|\mathcal{K}^{(t)}|-\sum_{i=1}^{N}target\_count_{i}
+
+9:
+
+for
+
+j\leftarrow 1
+
+to
+
+remaining\_count
+
+do
+
+10:
+
+select pool device
+u_{i}
+with the largest
+p_{i}
+
+11:
+
+target\_count_{i}\leftarrow target\_count_{i}+1
+
+12:
+
+end
+
+for
+
+13:
+
+for all
+
+kv\in\mathcal{K}^{(t)}
+
+do
+
+14:
+
+select pool device
+u_{i}
+such that
+|offload\_set_{i}^{(t)}|<target\_count_{i}
+
+15:
+
+offload\_set_{i}^{(t)}\leftarrow offload\_set_{i}^{(t)}\cup\{kv\}
+
+16:
+
+end
+
+for
+
+17:
+
+for all
+
+u_{i}\in\mathcal{U}
+
+in parallel
+
+do
+
+18:
+
+if
+
+u_{i}.\texttt{type}=\texttt{MEM}
+
+then
+
+19:
+
+loc\_map_{i}\leftarrow\textsc{MemStore}(i,offload\_set_{i}^{(t)})
+
+20:
+
+else
+
+21:
+
+loc\_map_{i}\leftarrow
+
+22:
+
+\textsc{SSDDirectStore}(i,offload\_set_{i}^{(t)})
+
+23:
+
+end
+
+if
+
+24:
+
+UpdateGLT
+(offload\_set_{i}^{(t)},i,u_{i}.type,loc\_map_{i})
+
+25:
+
+end
+
+for
+
+26:
+
+end
+
+procedure
+
+Algorithm
+1
+summarizes the parallel offloading procedure. Lines 4–7 compute the target number of KV caches for each pool device from its placement ratio and initialize the per-device offload sets. Lines 8–12 distribute the remaining KV caches after flooring, prioritizing devices with larger placement ratios. Lines 13–16 partition the KV caches into per-device offload sets. Lines 17–23 issue parallel writes to all pool devices: host-memory pool devices receive writes through direct memory store, while SSD pool devices receive writes through KV-passthrough. After each write completes, the GLT is updated with the device index, device type, and in-device location of each offloaded KV cache.
+
+IV-C
+2
+KV Retrieval
+
+When a decoding step requests offloaded KV caches, the bandwidth-aware KV allocator first looks up their GLT entries to identify the pool device and in-device location of each KV cache. It then groups the requests by pool device and issues parallel reads to the relevant devices.
+
+For host-memory entries, the bandwidth-aware KV allocator retrieves KV caches through direct memory access using the stored pointers. For SSD-resident entries, the allocator invokes
+SSD_Direct_Retrieve
+to read the corresponding LBAs directly from the SSD without traversing the filesystem. The retrieved KV caches are then returned to the serving engine and transferred to GPU memory for decoding. As the KV caches for each request are grouped and dispatched by pool device, retrieval proceeds in parallel across multiple host-memory modules and SSDs.
+
+(a)
+
+LLaMA 3.1-8B.
+
+(b)
+
+GPT-OSS-20B.
+
+(c)
+
+Qwen3-30B-A3B.
+
+Fig. 8
+:
+TTFT comparison (§
+V-B1
+).
+
+(a)
+
+LLaMA 3.1-8B.
+
+(b)
+
+GPT-OSS-20B.
+
+(c)
+
+Qwen3-30B-A3B.
+
+Fig. 9
+:
+I/O overhead (§
+V-B2
+).
+
+V
+Evaluation
+
+V-A
+
+Setup
+
+We follow a similar experiment setup explained in §
+III-A
+.
+We conduct experiments on three different models: LLaMA-3.1-8B
+[
+5
+]
+, GPT-OSS-20B
+[
+1
+]
+, and Qwen3-30B-A3B
+[
+30
+]
+.
+We compare three SOTA techniques with unified KV pooling: (1) LMCache, (2) LMCache with layerwise pipelining (LMCache+LP), and (3) LMCache with layerwise pipelining and asynchronous KV cache loading (LMCache+LP+AsyncKV). Layerwise pipelining and asynchronous KV cache loading are recent KV caching optimization techniques (§
+II-B
+). We focus on LMCache-based systems as they represent the dominant KV offloading approach in current LLM serving frameworks.
+
+The evaluation consists of three parts.
+
+•
+
+Main results (§
+V-B
+): report TTFT and blocked I/O time, as defined in §
+III
+.
+
+•
+
+Ablation study (§
+V-C
+): report TTFT with individual components enabled (e.g., KV orchestrator or KV passthrough) and with the full unified KV pooling design.
+
+•
+
+Overhead (§
+V-D
+): present delay from KV orchestrator
+
+V-B
+
+Main Results
+
+V-B
+1
+TTFT
+
+Fig.
+9
+reports TTFT across request lengths. Unified KV pooling consistently achieves the best (lowest) TTFT than all baselines, and the gap widens as the request length increases.
+Specifically, on LLaMA 3.1-8B, unified KV pooling achieves a TTFT of 5.6 s at 128K, which is
+\sim
+2.9
+\times
+lower (better) than LMCache,
+\sim
+2.6
+\times
+lower than LMCache+LP, and
+\sim
+2.1
+\times
+lower than LMCache+LP+AsyncKV.
+On GPT-OSS-20B, it achieves 5.2 s, corresponding to
+\sim
+4.1
+\times
+,
+\sim
+3.7
+\times
+, and
+\sim
+3.3
+\times
+reductions over LMCache, LMCache+LP, and LMCache+LP+AsyncKV.
+On Qwen3-30B-A3B, it achieves 9.8 s, corresponding to
+\sim
+3.7
+\times
+,
+\sim
+3.5
+\times
+,and
+\sim
+3.1
+\times
+reductions over LMCache, LMCache+LP, and LMCache+LP+AsyncKV.
+The results show that reducing retrieval bottlenecks improves end-to-end serving latency across all context lengths, with larger gains in long-context scenarios.
+
+V-B
+2
+Blocked I/O time
+
+Fig.
+9
+presents blocked I/O time across context lengths.
+
+Unified KV pooling achieves the lowest blocked I/O time among all baselines.
+On LLaMA 3.1-8B, unified KV pooling achieves 0.6 s, which is
+\sim
+7.8
+\times
+lower than LMCache,
+\sim
+2.7
+\times
+lower than LMCache+LP, and
+\sim
+1.7
+\times
+lower than LMCache+LP+AsyncKV.
+On GPT-OSS-20B, unified KV pooling achieves
+\sim
+23.2
+\times
+lower blocked I/O time than LMCache,
+\sim
+19.9
+\times
+lower than LMCache+LP, and
+\sim
+19.2
+\times
+lower than LMCache+LP+AsyncKV.
+Also, on Qwen3-30B-A3B, unified KV pooling achieves
+\sim
+17.9
+\times
+lower time than LMCache,
+\sim
+13.2
+\times
+lower than LMCache+LP, and
+\sim
+11.5
+\times
+lower than LMCache+LP+AsyncKV.
+The results show that unified KV pooling further alleviates the retrieval bottleneck beyond recent KV cache optimization.
+
+Fig. 10
+:
+Ablation study (§
+V-C
+).
+
+Fig. 11
+:
+Overhead (§
+V-D
+).
+
+V-C
+
+Ablation Study
+
+We evaluate the effect of each component in unified KV pooling by comparing three configurations: (1) KV orchestrator only, which distributes KV caches across pool devices but accesses SSDs through the filesystem; (2) passthrough-only, which bypasses the filesystem but does not distribute KV caches across devices; and (3) the full unified KV pooling, which enables both.
+
+Fig.
+10
+shows the results. Across all context lengths, the full design outperforms both partial configurations. At 128K, the full design reduces TTFT by
+\sim
+1.8
+\times
+compared to orchestrator only and by
+\sim
+2.3
+\times
+compared to passthrough-only. This result is consistent with the motivation in §
+III
+: both KV pooling and KV-passthrough are necessary and removing either significantly degrades performance.
+
+V-D
+
+Overhead
+
+Fig.
+11
+shows the overhead of the KV orchestrator for managing KV placement. Note that this excludes KV cache I/O time and thus reflects only the overhead of unified KV pooling in utilizing memory and storage. As the context length increases, the overhead increases due to increased metadata management and coordination across devices; however, all values remain below 84 ms, which is
+\sim
+0.8% of TTFT.
+Note that, despite the overhead reported here, unified KV pooling remains effective for low-latency serving, as demonstrated in §
+V-B
+for long-context scenarios, while introducing negligible interference to the overall serving overhead.
+
+VI
+Discussion
+
+CPU usage of SPDK.
+
+Our current implementation relies on SPDK polling for SSD I/O completion. While polling eliminates the kernel interrupt path and reduces I/O latency, it increases CPU utilization due to continuous queue checking. This trade-off is inherent in filesystem-bypassing approaches
+[
+11
+,
+23
+,
+18
+]
+. We dedicate a separate CPU core to polling, so KV caching is not interfered with by polling overhead
+This overhead can be mitigated by techniques such as user-level interrupts
+[
+15
+]
+or hybrid polling. We do not incorporate these techniques, as our focus is on analyzing the KV cache retrieval bottleneck, and leave it to future work.
+
+Multi-turn request serving.
+
+In this paper, we analyze the limitations of existing techniques and evaluate unified KV pooling on a per-request basis to clearly attribute overheads to KV retrieval from I/O. This setup allows us to exclude interference from request-level concurrency and focus on the fundamental I/O bottleneck in KV cache offloading. In future work, we will extend unified KV pooling to multi-tenant settings where multi-turn requests arrive concurrently.
+
+VII
+Related Work
+
+Various studies have been proposed to improve the performance of KV cache offloading in long-context serving. IMPRESS
+[
+3
+]
+mitigates the KV I/O overhead of transferring SSD-resident prefix KVs to the GPU by selectively loading only high-importance KVs identified based on attention weights. InstInfer
+[
+19
+]
+mitigates the KV I/O bottleneck between SSD and GPU by computing attention directly on a computational storage device, thereby avoiding KV cache transfers to the GPU. InfiniGen
+[
+13
+]
+reduces the KV cache transfer overhead in long-context serving by estimating the required KV caches for the next layer from the current layer’s input and selectively loading them into the GPU. KVQuant
+[
+8
+]
+reduces the memory and bandwidth burden of long-context inference by quantizing the KV cache to low-bit precision, while CacheGen
+[
+16
+]
+mitigates KV cache I/O overhead by compressing and transmitting the KV cache.
+
+While these studies primarily focus on reducing the amount of KV cache that must be transferred to the GPU—through selection
+[
+3
+,
+13
+,
+6
+]
+, compression
+[
+8
+,
+16
+]
+, or avoiding GPU transfer
+[
+19
+]
+—they do not address the bottlenecks targeted in this work, including filesystem overhead in SSD access and limited device-level parallelism in offloaded KV retrieval.
+Therefore, they are largely orthogonal to our work.
+
+VIII
+Conclusion
+
+This paper proposes unified KV pooling for long-context LLM serving. We show that existing KV caching suffers from severe serving latency degradation in long-context LLM serving due to the serialized I/O path across devices and from filesystem bottlenecks. To address the problems, unified KV pooling aggregates distinct host-memory and SSD devices into a single logical pool and distributes KV caches on the pool, enabling parallel offloading and retrieval. Also, KV-passthrough of unified KV pooling eliminates redundant filesystem overhead. Our evaluation shows that unified KV pooling outperforms existing KV cache offloading techniques, reducing TTFT by
+\sim
+4.1
+\times
+and blocked I/O time by
+\sim
+23.2
+\times
+under long-context workloads.
+

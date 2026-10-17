@@ -1,0 +1,1171 @@
+MiniPIC: Flexible Position-Independent Caching in <100LOC Thanks: Code available at https://github.com/IBM/vllm , from commit 6631ff3 onwards
+Nathan Ordonez, Thomas Parnell
+
+Abstract
+Retrieval-augmented and agentic workloads repeatedly prefill recurring predictable structured inputs (which we call ’spans’) such as documents and code files. Yet, prefix caching in engines such as vLLM cannot reuse their KV entries unless they share identical prefixes with another request, while Position-Independent Caching (PIC) implementations within production-grade inference servers typically either require substantial server code changes or keep KV state outside the server, incurring host-to-device transfer overhead. We present Minimalistic PIC (MiniPIC): a minimal, flexible and fast vLLM design built from two ingredients: positional-encoding-free KV cache and user-controlled cache-reuse primitives. MiniPIC stores unrotated K vectors in the KV cache, applies RoPE to K tiles inside attention using per-request logical positions, and exposes three user-facing and token-level primitives: block-aligned padding, SSep , and PDep , that modify hashing behavior and effective block-level causal attention structure. With fewer than 100 lines of core-engine changes plus a custom attention backend, these primitives are sufficient to realize multiple PIC methods, including Block-Attention, EPIC, and Prompt Cache, within the same running vLLM instance, while natively integrating with KV cache CPU offload implementations. On 2WikiMultihopQA, MiniPIC with interleaved scheduling improves prefill throughput by 49% over baseline vLLM, reduces cached-span time-to-first-token by up to two orders of magnitude, preserves the linear prefill scaling of uncached spans, and incurs only 5.7% worst-case overhead.
+
+
+
+1
+Introduction
+
+Modern LLM inference is increasingly dominated by long-context prefill.
+In retrieval-augmented generation (RAG), a query is expanded with multiple retrieved documents before generation
+[
+10
+]
+.
+In agentic workloads, prompts repeatedly include tool descriptions, memory state, and execution traces
+[
+11
+]
+.
+These repeated segments recur across requests but not necessarily at the same absolute position or after the same prefix.
+
+Production inference systems already exploit KV reuse through prefix caching.
+vLLM
+[
+9
+]
+, followed by SGLang’s radix-attention ideas
+[
+29
+]
+, hashes fixed-size KV-cache blocks together with their preceding prefix.
+This is powerful when many requests share the same initial prompt, but it misses an important locality pattern: two prompts may share the same document while differing in system prompt, document ordering, or surrounding context.
+In those cases prefix caching treats the shared document as a cache miss.
+
+A growing line of work proposes to prefill semantically independent prompt segments separately and later compose their KV states
+[
+6
+,
+15
+,
+3
+,
+28
+,
+16
+,
+12
+]
+.
+We call such segments
+spans
+.
+Span techniques can dramatically increase cache hit rates, but implementing them inside a production inference server raises a systems question:
+
+Should the KV cache contain positional encodings?
+
+For RoPE-based models, standard inference stores keys after applying their positional rotation.
+If a span prefilled at offset 0 is later reused at offset 2048, its cached K vectors carry the wrong rotation.
+A single isolated request can be repaired by re-rotating the stored keys, but a serving system
+shares physical KV blocks across concurrent requests
+.
+If the same span is needed at two different offsets simultaneously, the same physical block cannot hold both rotations: this creates a fundamental concurrency conflict.
+
+Recent work tackles PIC in vLLM-based serving through different approaches. MEPIC
+[
+25
+]
+identifies RoPE as a PIC barrier, stores position-free keys, fuses RoPE into attention, and introduces a chunk cache coordinator with its own eviction policy and a canonicalization module for page-aligned placement. SPNL
+[
+1
+]
+implements PIC through a procedural request interface that submits spans as individual prefills, but requires a full block repositioning and duplication engine with its CIDRA algorithm: a scheduler module that detects positional mismatches, generates block copy-or/and-reposition requests, and resolves cyclic memory movement dependencies with CPU scratch space.
+
+Both prior implementations introduce significant new engine components. We instead frame flexible PIC as a
+separation-of-responsibilities
+problem: which responsibilities belong inside the inference engine, and which can be left to the user or orchestration layer?
+We argue that a flexible PIC implementation needs only two ingredients: (1) a positional-encoding-free KV cache inside the server, and (2) user-controlled cache-reuse mechanisms outside it.
+The first removes shared-memory positional conflicts.
+The second keeps the engine primitive small: rather than asking vLLM to pad chunks, recompute fixed interior blocks, or maintain dedicated chunk-cache state, we expose three user-facing primitives (padding,
+SSep
+, and
+PDep
+) that can be set by users or higher-level schedulers.
+Our goals of performance, compatibility, and ease of deployment constrained us to find a solution that is easy to maintain while still supporting multiple span techniques.
+
+Contributions.
+
+1.
+
+Systems analysis of positional-encoding conflicts.
+
+We provide a detailed study of cascading problems (memory races, amplification, copy cycles, and accounting hazards) that arise when an inference server attempts PIC while retaining positional encodings in the KV cache (§
+2.3
+).
+
+2.
+
+Minimal, flexible position-free KV implementation.
+
+Our position-free KV implementation stores unrotated keys and applies RoPE in attention; excluding the modular attention backend, it requires only 78 LOC of vLLM core changes, of which only 61 LOC constitute new functionality (§
+4.4
+).
+
+3.
+
+User-controlled cache reuse via three special tokens.
+
+We show that three user-facing primitives (block-aligned padding,
+SSep
+, and
+PDep
+) are sufficient to express multiple span techniques while keeping vLLM simple. This gives control to the user or a higher-level scheduler/orchestrator rather than requiring engine-managed chunk canonicalization and mid-prompt recomputation policy (§
+3.1
+).
+
+4.
+
+PIC-aware interleaved scheduling.
+
+We introduce a scheduling policy that pipelines span prefill and final-prompt requests without synchronization barriers, achieving 49% throughput improvement over baseline vLLM and 9% over a barrier-separated baseline (§
+3.4
+).
+
+2
+Background and Problem Statement
+
+2.1
+High-Performance LLM Inference and PIC
+
+High-performance inference servers such as vLLM
+[
+9
+]
+, SGLang
+[
+29
+]
+, and TensorRT-LLM
+[
+19
+]
+are optimized for throughput and latency in production deployments, distinguishing them from research-focused frameworks like HuggingFace Transformers
+[
+8
+]
+or embedded engines like llama.cpp
+[
+5
+]
+.
+The previously mentioned production systems (vLLM and SGLang) partition the KV cache into fixed-size blocks managed via paged attention
+[
+9
+]
+, with prefix caching assigning to each block a hash chained through the preceding block
+[
+29
+]
+.
+This enables cache hits only when both the block tokens
+and all preceding tokens
+match exactly, enforcing correctness for ordinary causal attention but preventing reuse of repeated non-prefix spans.
+
+A growing line of work proposes to prefill semantically independent prompt segments (spans) separately and later compose their KV states
+[
+6
+,
+15
+,
+3
+,
+28
+,
+16
+,
+12
+]
+.
+Implementing span techniques inside a production inference server has led to diverse strategies with varying trade-offs.
+Some approaches store spans outside the GPU accelerator, incurring host-to-device transfer overhead
+[
+28
+,
+3
+]
+.
+Others implement PIC entirely within the inference engine but require extensive modifications to the scheduler, block memory mangement, and kernel execution pipeline
+[
+25
+,
+1
+]
+.
+Many proposed PIC methods do not provide high-performance implementations suitable for production deployment
+[
+15
+,
+16
+,
+12
+]
+.
+These complications raise a fundamental systems question: should the KV cache contain positional encodings?
+
+Many of the latest decoder-only LLMs use Rotary Position Embeddings (RoPE)
+[
+22
+]
+, which standard implementations apply
+before
+the attention kernel, storing already-rotated keys in the KV cache.
+Separating positional encodings from the KV cache by storing unrotated keys and applying RoPE inside the attention kernel has been proposed in recent architectures
+[
+13
+,
+25
+]
+and in SPNL
+[
+1
+]
+.
+This separation solves a fundamental conflict with PIC: if the same span is reused at different positions simultaneously, the shared KV block cannot hold multiple positional encodings at once.
+SPNL tackles this problem directly with its CIDRA (Cycle-Independent Duplicate Resolution Algorithm) method, which performs block-by-block copy and repositioning with graph-based cycle detection
+[
+1
+]
+.
+This sophisticated mechanism is necessary when performing KV block duplication because memory copies imply that the source and target destinations may overlap, which makes them dependent upon the order in which a set of operations is applied.
+
+2.2
+Properties of a PIC Implementation
+
+Implementing position-independent caching (PIC) inside a production inference server requires two capabilities: (1) controlling the effective attention mask to specify which tokens share the same attention window, and (2) ensuring that cached KV entries for a span can be reused regardless of where that span appears in a later prompt.
+Both requirements push against the design assumptions of engines that assume a single causal prefix structure and store keys with baked-in positional encodings.
+
+The alignment principle.
+
+We argue that a flexible PIC implementation should be
+aligned
+with the inference engine’s architecture: it should work within the existing logical components of the codebase rather than adding new subsystems.
+This mirrors the information-hiding criterion for modular decomposition, an influential software engineering principle
+[
+20
+]
+: design decisions that are likely to change should be encapsulated in modules such that changes made to them are hidden from the rest of the system.
+Specifically: by keeping the hash-function modification (special tokens in the block hasher) and position-free cache (on-the-fly RoPE in the attention kernel) as the only new engine components, padding, attention mask modification, and specific scheduling of span-prefill and span-loading requests are hidden from the engine and thus are entirely up to a layer above and outside of the inference engine.
+We quantify the resulting footprint of the implementation, which we see as a sign of success in accomplishing this, in §
+4.4
+.
+
+2.3
+Why Positional KV Caches Are Brittle
+
+The conflict between position-dependent KV caches and PIC manifests when the same span must serve concurrent requests at different offsets.
+SPNL addresses this positional-encoding conflict through its CIDRA (Cycle-Independent Duplicate Resolution Algorithm) method, which performs block-by-block copy and repositioning with graph-based cycle detection
+[
+1
+]
+.
+However, CIDRA introduces significant overhead, for example from memory amplification (each concurrent user requires a separate copy) and copy cycles (overlapping source-destination ranges potentially requiring CPU scratch space).
+Furthermore, CIDRA’s repositioning operations are unfused and batched: all layers’ KV blocks must be repositioned before attention can proceed, consuming memory bandwidth without interleaving with compute.
+We claim these are not incidental bugs but structural consequences of storing position-dependent data in shared memory while allowing multi-position reuse. Such problems and complexity can be avoided by removing positional encodings from the shared cache entirely.
+
+Problem statement.
+
+Achieving flexible PIC inside a production inference server thus requires an implementation that simultaneously (a) removes positional conflicts from the shared KV cache, (b) gives users control over the effective attention mask, and (c) keeps the engine changes small enough to be maintainable and aligned with the existing architecture: it should not introduce new scheduler request types, new memory management subsystems, or external caching services.
+We call this property
+alignment
+: the degree to which an implementation fits within the existing logical components of the inference codebase.
+
+3
+Methods
+
+We present MiniPIC, a minimal PIC substrate built from two ingredients: user-controlled cache-reuse primitives (special tokens that modify the engine’s block-hashing behavior) and a positional-encoding-free KV cache (unrotated keys with RoPE applied inside the attention kernel). We first describe the special-token interface that gives users control over the effective attention mask, then the position-free cache that enables concurrent span reuse, and finally the request-submission and scheduling procedures used in our benchmarks.
+
+3.1
+User-Controlled Cache Reuse with Special Tokens
+
+3.1.1
+Three User-Facing Primitives
+
+We intentionally keep the server-side contract minimal.
+Rather than asking the inference engine to canonicalize and pad spans, recompute fixed middle blocks, or manage specialized chunk-cache state, we expose three user-facing primitives implemented as special tokens from the model’s vocabulary (configured via environment variables):
+
+•
+
+Padding
+: the user pads spans to KV-block boundaries.
+
+•
+
+SSep
+(
+span separator
+): detaches the block from its preceding hash chain.
+
+•
+
+PDep
+(
+prompt depend
+): forces the block hash to depend on the
+entire
+preceding prompt.
+
+The latter two primitives modify the engine’s block-hashing behavior
+only when they appear at the start of a KV block
+:
+The modified hash rule is:
+
+h_{i}=\begin{cases}H(h_{0},\,x_{i})&\text{if }x_{i}\text{ starts with }\textsc{SSep},\\
+H(h_{0},\,x_{\leq i})&\text{if }x_{i}\text{ starts with }\textsc{PDep},\\
+H(h_{i-1},\,x_{i})&\text{otherwise,}\end{cases}
+
+(1)
+
+where
+h_{0}
+is a global seed constant and
+H
+is a cryptographic hash function.
+
+Padding gives each span a canonical block-aligned layout by appending padding tokens to spans, so that future special tokens can reliably appear at the beginning of a block and trigger special hashing behavior.
+
+SSep
+makes a span independently cacheable regardless of prefix, enabling the position-independent attention masks required by Block-Attention
+[
+15
+]
+, EPIC
+[
+3
+]
+, and Prompt Cache
+[
+6
+]
+.
+
+PDep
+prevents false hits for suffix blocks (e.g., a query after several detached documents) whose KV vectors genuinely depend on all previous context.
+
+3.1.2
+User Contract and Safety
+
+This approach extends the contract between the user and the inference server: incorrect padding or marker placement can cause false cache hits.
+We intentionally keep validation outside the engine, placing the additional complexity of span technique management on the user (or a higher-level orchestration layer such as in SPNL
+[
+1
+]
+), which allows the inference server to keep its central focus on LLM inference.
+
+3.2
+Position-Free KV Implementation
+
+3.2.1
+Mechanism
+
+MiniPIC stores unrotated key vectors
+\tilde{k}_{j}
+and value vectors
+v_{j}
+in the KV cache.
+Query vectors follow the standard path: they are rotated once by the model’s
+RotaryEmbedding
+layer before entering attention.
+The attention kernel receives per-request logical positions and applies RoPE to K tiles on-the-fly:
+
+\mathrm{score}(t,j)=\frac{(R_{t}\,q_{t})^{\top}\;(R_{\pi(j)}\,\tilde{k}_{j})}{\sqrt{d}},
+
+(2)
+
+where
+\pi(j)
+is the logical position of cached key
+j
+in the
+current
+request.
+The physical KV block no longer has a unique position; the same block can be referenced by many concurrent requests at different offsets.
+Position exists only as per-request metadata consumed inside attention.
+
+Conceptually, this moves positional encodings from shared HBM-resident KV memory to temporary SRAM/registers inside the attention computation.
+Under a fixed span-attention mask and without counting concurrency, it is algebraically equivalent to re-rotating every cache hit, but without mutating or duplicating shared blocks.
+
+3.2.2
+Kernel Modification
+
+Baseline FlashAttention receives pre-rotated
+Q_{\text{rot}},K_{\text{rot}}
+and computes
+\text{softmax}(Q_{\text{rot}}K_{\text{rot}}^{\top}/\sqrt{d})\,V
+.
+MiniPIC leaves K unrotated in memory and extends the kernel:
+
+// Baseline Flash-Attention
+for tile in K_tiles:
+// K already rotated
+scores += dot(Q_rot, K_rot_tile)
+
+// MiniPIC Flash-Attention
+for tile in K_tiles:
+K_tile = load(tile) // no RoPE
+c, s = cos_sin[pos[tile]] // lookup
+K_rot = rotate(K_tile,c,s) // fused
+scores += dot(Q_rot, K_rot)
+
+The added work is a
+\cos/\sin
+table lookup and two fused multiply-adds per K element, a small linear term within the
+O(n^{2})
+attention computation.
+V vectors are unchanged.
+
+3.2.3
+Native Offloading Compatibility
+
+Because cached blocks are position-free and PIC is managed through vLLM’s native hashing functionality, MiniPIC composes naturally with KV movement across memory tiers.
+vLLM’s native CPU/storage offload path
+[
+24
+]
+can move unrotated span blocks between GPU and host without needing to track or adjust positions.
+This contrasts with approaches that rely on external services (e.g., LMCache
+[
+4
+]
+) which introduce additional host
+\leftrightarrow
+device transfer overhead.
+
+3.3
+Expressing Span Techniques through the Interface
+
+3.3.1
+Request-Submission Procedure for Block-Attention
+
+To reproduce a standard Block-Attention
+[
+15
+]
+PIC scheme using MiniPIC, the user follows these steps for a RAG prompt with
+N
+documents:
+
+1.
+
+Tokenize the system prompt, then pad to a block boundary (16 tokens).
+
+2.
+
+For each retrieved document, tokenize it, insert
+SSep
+at the first token, then pad to a block boundary.
+
+3.
+
+Prefill each padded document and the system prompt as a separate request. Because
+SSep
+resets the hash chain, each document’s KV blocks are cached independently of the document’s position in any later prompt.
+
+4.
+
+For the final prompt, construct the full token sequence:
+[system][
+SSep
+,doc1][
+SSep
+,doc2]...[
+PDep
+,task]
+. Insert
+PDep
+before the task instruction so that the task’s hash depends on the entire preceding context, preventing false cache hits.
+
+5.
+
+Submit the final prompt as a single request. The inference engine loads the independently cached document blocks from the KV cache; only the system prompt and task instruction are prefilled.
+
+When multiple concurrent requests reuse the same document at different prompt offsets, MiniPIC’s position-free KV cache serves all concurrent accesses from the same physical blocks, avoiding the duplication overhead described in §
+2.3
+.
+
+3.3.2
+Other Span Techniques
+
+The same three primitives generalize to another PIC method, namely EPIC/LegoLink
+[
+3
+]
+. To implement EPIC using our scheme, omit
+SSep
+for the first
+k
+tokens of each document so those tokens hash-depend on preceding context and are recomputed, while the remainder cache-hits via
+SSep
+; with block-level granularity,
+k
+rounds to a block multiple.
+
+3.4
+PIC-Aware Interleaved Scheduling
+
+Span caching is only useful if missing spans are computed before final requests need them.
+Naïvely inserting a barrier between span-prefill and final-prompt batches wastes GPU cycles.
+We propose an
+interleaved
+scheduling policy:
+
+Interleaved Span-Prefill Scheduling (ISPS)
+
+Input:
+logical requests
+\{r_{i,k}\}
+grouped into mini-batches indexed by
+k
+, each with spans
+\{s_{i,j}\}
+and suffix
+q_{i}
+, populating a final ordered list of requests
+out
+.
+We do, per mini-batch:
+
+1.
+
+Tokenize all spans; prepend
+SSep
+token to each, pad to block boundaries.
+
+2.
+
+Deduplicate: identify spans that occur multiple times, and evict duplicates.
+
+3.
+
+Append one prefill-only request per span to
+out
+
+4.
+
+Emit final-prompt requests (with
+SSep
+/
+PDep
+markers) for cache-hit composition.
+
+Once
+out
+is populated, control concurrency via
+max_num_seqs
+: vLLM’s FIFO scheduling guarantees that short span prefills complete before their dependent final prompts are dispatched. Then, submit
+out
+as a single ordered batch of requests to vLLM.
+
+Figure 1
+:
+MiniPIC interleaved scheduling eliminates barriers and overlaps span prefill with ongoing inference.
+
+Why interleaving helps.
+
+Under the barriered (
+batched
+) strategy, the GPU idles between the span-prefill phase and the final-prompt phase.
+Interleaving allows vLLM’s continuous-batching engine to overlap short span prefills with decode steps from other in-flight requests, keeping the GPU saturated.
+The concurrency cap (
+max_num_seqs
+) prevents final prompts from being scheduled before their dependencies are met.
+
+Throughput analysis.
+
+Let
+U
+be the number of unique spans,
+N
+the total number of requests,
+T_{s}
+the average span prefill time, and
+T_{f}
+the full-prompt prefill time without PIC.
+With cache-hit rate
+r
+(the fraction of spans served from cache):
+
+•
+
+Baseline
+: cost
+\propto N\cdot T_{f}
+.
+
+•
+
+Batched PIC
+:
+U\cdot T_{s}+N\cdot T_{f}(1{-}r)
+plus barrier idle time.
+
+•
+
+ISPS
+: same asymptotic cost but eliminates barrier overhead and enables overlap, effectively increasing
+r
+by reducing span eviction under concurrency.
+
+When span redundancy is high (
+r\to 1
+), total cost approaches
+U\cdot T_{s}
+, independent of corpus size
+N
+.
+Recent work on structured prompt languages demonstrates automated correctness enforcement for span-based scheduling
+[
+1
+]
+.
+
+4
+Experiments
+
+4.1
+Setup
+
+All experiments use a single NVIDIA H100 80 GB GPU (CUDA 13.2, PyTorch 2.9.1) on a node with dual Intel Xeon Platinum 8474C CPUs (96 cores) and 2 TB DDR5 DRAM.
+We evaluate using the
+Tulu3-block-ft
+model
+[
+15
+]
+, the same model used in the Block-Attention study, which is architecturally identical to Llama-3-8B
+[
+17
+]
+but fine-tuned for span-style RAG attention.
+All configurations use the Triton attention backend
+[
+23
+]
+, as our position-free RoPE implementation is written in Triton.
+
+For throughput measurements we process 12,576 samples from the 2Wiki dataset
+[
+7
+]
+; each sample contains exactly 10 retrieved documents of
+{\sim}
+100 tokens each, following the dataset construction methodology from the SPNL study
+[
+1
+]
+. Each sample is preceded by a system prompt and followed by a task instruction.
+Since span techniques target prefill, we measure prefill-only throughput (disaggregated prefill scenario): a
+2\times
+speedup corresponds to halving the required prefill GPUs.
+
+We evaluate two baselines and two variants of our implementation.
+The baselines are: (1) vanilla vLLM with prefix caching (using the Triton backend), and (2) SPNL with its CIDRA repositioning algorithm
+[
+1
+]
+.
+We focus on PIC implementations that live inside the inference server, excluding approaches like EPIC
+[
+3
+]
+and CacheBlend
+[
+28
+]
+which manage KV vectors outside the GPU in CPU/host memory.
+Such external caching approaches have fundamentally different computational characteristics due to host
+\leftrightarrow
+device transfer overhead, making direct comparison less informative.
+We were unable to evaluate MEPIC
+[
+25
+]
+due to time limitations stemming from the complexity of their implementation and the lack of publicly available code at the time of writing.
+
+Our implementation variants are: (1) MiniPIC with position-free KV active but no span signaling (worst-case overhead), and (2) MiniPIC batched with span prefills in one batch followed by a barrier and then final prompts.
+Our full system, MiniPIC with ISPS (interleaved scheduling), is evaluated separately with varying
+max_num_seqs
+settings.
+For baseline and PIC-disabled configurations, we use full-batch strategy where each sample is a request and all samples are submitted as a single batch at once.
+
+4.2
+Performance
+
+Table 1
+:
+End-to-end prefill throughput on 12,576 2Wiki samples. Batched and ISPS configurations use batch size 64. The first two rows use full-batch strategy where each sample is a request and all samples are submitted as a single batch.
+
+Implementation
+
+Strategy
+
+max_num_seqs
+
+Samples/s
+
+Speedup
+
+Baseline vLLM
+
+full-batch
+
+1024
+
+32.21
+
+1.00
+\times
+
+MiniPIC
+
+PIC disabled
+
+1024
+
+30.37
+
+0.94
+\times
+
+SPNL (CIDRA)
+
+batched
+
+1024
+
+36.14
+
+1.12
+\times
+
+MiniPIC
+
+batched
+
+1024
+
+44.07
+
+1.37
+\times
+
+MiniPIC
+
+ISPS
+
+64
+
+44.51
+
+1.38
+\times
+
+MiniPIC
+
+ISPS
+
+1024
+
+48.01
+
+1.49
+\times
+
+MiniPIC
+
+ISPS
+
+2048
+
+47.67
+
+1.48
+\times
+
+Table
+1
+shows that MiniPIC with ISPS achieves 48.01 samples/s, a
+49% improvement
+over baseline vLLM and a
+33% gain
+over SPNL (36.14).
+Key observations:
+
+•
+
+PIC disabled overhead
+: only 5.7% (30.37 vs. 32.21), confirming minimal RoPE-in-kernel cost.
+
+•
+
+MiniPIC vs. SPNL
+: MiniPIC significantly outperforms SPNL (44.07 vs. 36.14), validating that removing positional encodings eliminates the overhead of CIDRA’s unfused copy and reposition operations.
+
+•
+
+ISPS vs. batched
+: eliminating the barrier yields a consistent additional gain (48.01 vs. 44.07).
+
+•
+
+Scheduling sensitivity
+:
+max_num_seqs
+=1024 is optimal; too few limits concurrency, too many causes memory pressure, where cached spans are more likely to be overwritten.
+
+4.3
+Microbenchmarks
+
+Figure 2
+:
+Left
+: Document preload time vs prompt length (no spans).
+Middle
+: Document preload time vs document count (1000-token synthetic documents prefilled in parallel).
+Right
+: Time-to-first-token (TTFT) vs document count, showing MiniPIC’s significant improvement over SPNL and vanilla vLLM. The small differences between implementations in the left and middle plots indicate that worst-case slowdown is negligible, as reflected in Table
+1
+’s PIC-disabled row.
+
+Figure
+2
+(left and middle) compares preload times across implementations.
+The differences between vanilla vLLM, SPNL, and MiniPIC are small, indicating that the worst-case overhead of position-aware PIC is negligible.
+This is consistent with the PIC-disabled row in Table
+1
+, which shows only 5.7% overhead for MiniPIC’s position-free approach.
+
+The right panel shows TTFT as cached documents are reused in a final prompt.
+Vanilla vLLM suffers quadratic latency growth since it cannot reuse non-prefix documents.
+SPNL achieves linear scaling through block duplication and repositioning, but MiniPIC significantly outperforms it (reflecting the throughput gains in Table
+1
+) by eliminating CIDRA’s memory-copy overhead entirely.
+
+4.4
+Implementation Footprint and Alignment
+
+We now quantify the alignment of MiniPIC with vLLM’s architecture by examining its implementation footprint. Table
+2
+categorizes every modified line of code as new functionality, routing, optional, or bug fix.
+
+Table 2
+:
+Source-code modifications for MiniPIC, categorized by change type.
+New functionality
+implements the core algorithm;
+routing
+passes existing objects without new logic;
+optional
+can be reverted without affecting correctness;
+bug fix
+addresses a pre-existing issue. Attention-backend changes are separated because vLLM supports modular backends.
+
+File / Component
+
+LOC
+
+Category
+
+Core?
+
+envs.py
+
+23
+
+New feature
+
+Yes
+
+rotary_embedding/base.py
+
+5
+
+New feature
+
+Yes
+
+core/kv_cache_utils.py
+
+33
+
+New feature
+
+Yes
+
+core/block_pool.py
+
+4
+
+Bug fix
+
+Yes
+
+worker/gpu_model_runner.py
+
+11
+
+Routing
+
+Yes
+
+platforms/cuda.py
+
+2
+
+Optional
+
+Yes
+
+Attention backend (modular, interchangeable)
+
+attention/backend.py
+
+2
+
+Routing
+
+No
+
+attention/backends/triton_attn.py
+
+13
+
+Routing
+
+No
+
+attention/ops/triton_unified_attention.py
+
+251
+
+New feature
+
+No
+
+Total core
+
+78
+
+New core functionality
+
+61
+
+Total (incl. backend)
+
+344
+
+Outside the modular attention backend, MiniPIC requires 78 LOC of core changes, of which only 61 LOC constitute genuinely new functionality. The routing lines only pass information without introducing new logic. For example, in
+gpu_model_runner.py
+we simply pass the rotary embedding layer reference to attention metadata. The optional change (
+cuda.py
+) sets Triton as the default attention backend; and the 4 LOC bug fix in
+block_pool.py
+prevents a double-free when the same block appears twice in one prompt, a pre-existing vulnerability exposed by span techniques.
+
+For comparison, prior PIC implementations for vLLM introduce significantly larger engine changes.
+SPNL
+[
+1
+]
+implements PIC through a procedural request interface with a full repositioning engine, including a scheduler module for block copying, graph-based cycle detection, and modifications to block allocation and reference-counting.
+MEPIC
+[
+25
+]
+introduces canonicalization, a new hybrid KV manager with its own eviction policy, and scheduling modifications for “prefill-in-the-middle” operations, though their code is not publicly available at the time of writing.
+Both implementations depart from the standard vLLM inference flow in multiple logical components, whereas MiniPIC touches only two: the block-hashing function and the attention kernel.
+
+Note that the SPNL baseline in Table
+1
+was built on vLLM 0.10.2, while MiniPIC uses vLLM 0.15.01.
+While this version difference could introduce bias, our benchmarking shows negligible TTFT differences between these vLLM versions when running single requests of increasing size (as shown in the right panel of Figure
+2
+).
+The relative advantage of the position-free approach over CIDRA is therefore attributable to the algorithmic differences rather than version effects.
+All our measurements use the Triton attention backend for fair comparison.
+
+5
+Discussion and Related Work
+
+Design implications.
+
+Our experiments show that flexible PIC needs only two ingredients: position-free KV cache keys and user-controlled reuse mechanisms. Retaining positional encodings introduced the requirement of advanced memory management features (e.g., CIDRA’s copy cycle detection). Pushing padding and reuse policy to the request/orchestration layer avoids engine-managed canonicalization and specialized caches. MiniPIC is therefore simpler (78 LOC core), faster (no copy/reposition overhead), and compatible with vLLM’s CPU offload. ISPS contributes an additional
+\sim
+6% throughput over batched submission by eliminating barriers. The same three primitives generalize to multi-turn conversations, agent frameworks, few-shot templates, or hierarchical documents.
+
+Related work.
+
+Block-Attention
+[
+15
+]
+, Prompt Cache
+[
+6
+]
+, EPIC
+[
+3
+]
+, CacheBlend
+[
+28
+]
+, Superposition Prompting
+[
+16
+]
+, REFRAG
+[
+12
+]
+, and PICASO
+[
+14
+]
+exploit independent span prefill with different composition strategies. Our work asks what inference-server primitives make such algorithms practical in vLLM. vLLM’s PagedAttention
+[
+9
+]
+and SGLang’s RadixAttention
+[
+29
+]
+manage block-level caching; LMCache
+[
+4
+]
+and Mooncake
+[
+21
+]
+externalize KV storage for cross-instance sharing. Recent systems expose native offload APIs
+[
+24
+,
+27
+]
+. MiniPIC is complementary: it changes the representation of GPU-resident blocks so offload and reuse mechanisms no longer need position-specific copies. MEPIC
+[
+25
+]
+also proposes position-free keys, RoPE-in-attention fusion, and introduces a dedicated chunk cache; we take a smaller-surface approach, keeping vLLM’s core changes minimal and moving responsibilities to a layer above vLLM. MEPIC’s chunk-residency and eviction policies could thus be layered atop MiniPIC. StreamingLLM
+[
+26
+]
+reapplies RoPE on-the-fly but without integration into production batching or caching. NoPE architectures
+[
+18
+]
+omit explicit positional encodings. MEPIC’s code is not publicly available; our implementation is open-source at
+https://github.com/IBM/vllm
+.
+
+Limitations and future work.
+
+MiniPIC targets RoPE-based transformers; extending to ALiBi or NoPE requires different handling. Incorrect marker placement can cause false cache hits, motivating pairing with a higher-level orchestration layer
+[
+1
+]
+. Span techniques approximate full causal attention, causing a reduction in accuracy which requires more future work. We keep vLLM’s eviction policy unchanged; MEPIC’s span-preserving two-queue policy
+[
+25
+]
+is complementary under high cache pressure. Public RAG traces with full timing and tokenized prompts are needed to evaluate online PIC benefits, and we were not able to find such traces despite our best efforts. MiniPIC does not guarantee a cached span remains in GPU memory until its dependent prompt is scheduled; under high concurrency, span eviction is possible, which MEPIC’s chunk management or a cache-aware higher-level orchestrator as in SPNL could address. Integrating MiniPIC with sparse attention mechanisms
+[
+2
+]
+could combine linear-time prefill with effectively linear decode complexity, yielding end-to-end linear scaling for long-context inference.
+
+6
+Conclusion
+
+Span-based KV reuse can substantially reduce long-context prefill cost, but a flexible production implementation does not require a large engine-managed PIC stack.
+We argue that two ingredients suffice: position-free keys in the KV cache, and a minimal user-controlled reuse interface built from padding,
+SSep
+, and
+PDep
+.
+If shared KV blocks retain fixed positional encodings, in-place repositioning is incorrect under concurrency and CIDRA-style copy operations introduce memory amplification, copy cycles, and allocator complexity.
+MiniPIC removes the root cause by storing unrotated K vectors and applying RoPE inside attention using per-request logical positions.
+Combined with user-controlled reuse and PIC-aware interleaved scheduling, MiniPIC achieves 49% higher prefill throughput on a large RAG workload and up to two orders-of-magnitude lower cached-span TTFT, with modest no-span overhead and 78 lines of core changes outside the modular attention backend.
+For RoPE-based span-aware serving, we conclude that the simplest flexible PIC design is position-free in the cache and user-controlled at the interface boundary.
+
+Appendix A
+CIDRA: Analysis of Copy-Based Repositioning
+
+When two requests share a span at different positions, SPNL’s CIDRA algorithm allocates a fresh destination block, copies the source, and applies the RoPE delta.
+This approach requires cycle detection and CPU scratch space for resolving overlapping copy dependencies.
+CIDRA’s throughput is limited because copy operations consume memory bandwidth without advancing generation, and its unfused, batched execution prevents interleaving with compute.
+This confirms that copy-based repositioning introduces significant overhead compared to position-free approaches.
+
+Appendix B
+Abandoned Design Alternatives
+
+Automatic padding and token replacement.
+
+An early prototype detected span markers anywhere in the prompt, padded spans inside the engine, and replaced markers with benign tokens.
+Removed due to invasive frontend–scheduler state management.
+
+Generalized
+n
+-back dependency tokens.
+
+A token grammar where a marker is followed by integer
+n
+specifying how many preceding tokens enter the hash.
+Subsumes both
+SSep
+and
+PDep
+.
+Rejected because recovering
+n
+requires detokenization during hashing.
+
+Key-vector zeroing.
+
+Zeroing K vectors of special tokens would prevent the model from attending to markers.
+Deferred due to attention-backend complexity.
+
+Appendix C
+Hardware Details
+
+Table 3
+:
+Hardware platform for all reported experiments.
+
+Component
+
+Specification
+
+GPU
+
+NVIDIA H100 80 GB HBM3 (
+\times
+1 used)
+
+Host CPU
+
+2
+\times
+Intel Xeon Platinum 8474C, 96 cores total
+
+Host DRAM
+
+2 TB DDR5
+
+Interconnect
+
+NVLink full mesh (available, not used)
+
+CUDA
+
+13.2
+
+PyTorch
+
+2.9.1 (CUDA backend)
+

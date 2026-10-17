@@ -1,0 +1,1744 @@
+LifeTrain: Training-State Lifecycle Scheduling for Large Language Model Training on Bandwidth-Constrained Heterogeneous Supercomputers
+Yao Lu, Shiqing Ma, Zhongzhi Luan, Gen Li, Jiaxing Qi, Bin Han, Hailong Yang, Depei Qian
+
+Abstract
+. Production heterogeneous supercomputing platforms are increasingly used to host large language model (LLM) training workloads. However, existing GPU-oriented training runtimes typically rely on high-bandwidth device memory, fast interconnects, and mature collective communication libraries, making them difficult to directly adapt to MT-3000, a platform with an explicit memory hierarchy, limited usable DDR capacity, and constrained inter-cluster communication. This paper presents RATrain, a resource-aware training runtime for dense LLMs on bandwidth-constrained heterogeneous supercomputing platforms. RATrain formulates standard non-interleaved 1F1B training as a training-state lifecycle scheduling problem, and schedules gradient synchronization, parameter update, parameter-view prefetching, and activation recovery at layer-level and stage-local granularity. RATrain further combines an MT-3000-aware execution backend for efficient and predictable FP16 GEMM, Attention Backward, and explicit data movement with a resource-aware planner that selects feasible training configurations under the 20GB usable-DDR constraint per compute cluster. We implement RATrain on a real MT-3000 platform and evaluate it using LLaMA-2-7B, Baichuan2-13B, Qwen2.5-32B, and LLaMA-2-70B configurations. Results show that RATrain achieves up to 1.35 × \times end-to-end speedup over MT-3000-adapted GPU-style training strategies. For LLaMA-2-7B, RATrain scales to 1024 compute clusters, reaches 112,790.55 tokens/s, and achieves 97.0% scaling efficiency. A further 1.028B-token correctness run shows that RATrain preserves the loss trajectory of a semantically equivalent Baseline-1F1B run, with a maximum relative loss deviation of 0.081%.
+
+
+
+1.
+Introduction
+
+Supercomputing infrastructures are evolving from platforms primarily designed for numerical simulation into integrated infrastructures that support both scientific computing and intelligent computing
+(
+10
+;
+1
+;
+11
+)
+. As AI for Science, scientific foundation models, and large language model (LLM) training move into production supercomputing environments, heterogeneous supercomputing platforms are increasingly expected to host Transformer training workloads
+(
+21
+;
+15
+)
+. MT-3000 is a representative heterogeneous processor used in exascale supercomputing platforms. Its compute clusters provide high FP16 compute capability, but are also constrained by an explicit memory hierarchy, limited local memory capacity, and limited inter-cluster communication bandwidth. This raises a fundamental systems question: can LLM training runtimes designed for GPU clusters still run effectively on such bandwidth-constrained heterogeneous supercomputing platforms?
+
+Existing LLM training systems are primarily designed around GPU clusters, typically assuming high-bandwidth device memory, fast interconnects, mature collective communication libraries, and highly optimized software stacks
+(
+21
+;
+15
+;
+19
+)
+. On bandwidth-constrained heterogeneous platforms with explicit memory management, such as MT-3000, these assumptions are difficult to satisfy directly. GPU-oriented strategies such as TP-heavy execution, ZeRO-style sharding, and activation checkpointing can expose intra-layer communication, parameter-view reconstruction, and backward-time recovery overheads, respectively
+(
+18
+;
+5
+;
+13
+;
+3
+;
+7
+;
+16
+;
+28
+;
+6
+)
+. Meanwhile, existing GEMM optimizations on multi-core DSPs mainly target FP32 general GEMM or single-operator scenarios
+(
+27
+)
+, and cannot directly provide efficient FP16 GEMM, Attention Backward, and explicit data movement support for the LLM training critical path. Therefore, the bottleneck of dense LLM training on the target platform comes from the coupling among critical-path execution, parallel organization, training-state lifecycles, and platform resource constraints.
+The key observation of this paper is that, on MT-3000, the asymmetry between forward and backward execution time creates stage-local scheduling windows in the standard non-interleaved 1F1B pipeline. At the same time, training states have deterministic lifecycle dependencies induced by the layer-wise structure of Transformers: gradients are produced following the backward layer order, updated parameter views are consumed by the next forward pass in layer order, and activation recovery can be completed in local windows before the corresponding backward computation arrives. Thus, dense LLM training should be modeled as training-state lifecycle scheduling, rather than coarse-grained step-end state processing.
+
+Based on this observation, this paper presents RATrain, a resource-aware training runtime for dense LLMs on bandwidth-constrained heterogeneous supercomputing platforms. RATrain preserves the standard non-interleaved 1F1B main schedule and manages training states as runtime objects with explicit lifecycles. RATrain uses a layer-wise training-state pipeline to decompose bulk state processing at the accumulation boundary into per-layer state tasks; next-iteration update–prefetch scheduling to prepare updated parameter views according to the next forward access order; and forward-side activation recovery to move part of activation recovery from the backward critical path into local available windows. RATrain further integrates an MT-3000-aware execution backend with a resource-aware configuration planner: the former provides efficient and predictable FP16 GEMM, Attention Backward, and explicit data movement implementations for the training critical path, while the latter selects resource-feasible training configurations under the per-cluster usable-DDR constraint.
+
+We implement and evaluate RATrain on a real MT-3000 heterogeneous supercomputing platform, using dense decoder-only configurations corresponding to LLaMA-2-7B, Baichuan2-13B, Qwen2.5-32B, and LLaMA-2-70B. Results show that RATrain can execute resource-feasible dense LLM training configurations under the 20GB usable-DDR constraint per cluster, and achieves up to 1.35
+\times
+end-to-end speedup over MT-3000-adapted GPU-style training strategies. For LLaMA-2-7B, RATrain scales from 256 to 1024 compute clusters, reaching 112,790.55 tokens/s with 97.0% scaling efficiency. A further 1.028B-token correctness run shows that RATrain preserves the loss trajectory of a semantically equivalent Baseline-1F1B run, with a maximum relative loss deviation of 0.081%.
+
+This paper makes the following contributions:
+
+•
+
+We identify a systematic mismatch between GPU-oriented LLM training runtimes and bandwidth-constrained heterogeneous supercomputing platforms, showing that dense LLM training is bottlenecked by the coupling among critical-path execution, parallel execution, training-state lifecycles, and platform resource constraints.
+
+•
+
+We propose training-state lifecycle scheduling, which models gradient synchronization, parameter update, parameter-view prefetching, and activation recovery in standard non-interleaved 1F1B training as layer-level and stage-local schedulable runtime tasks.
+
+•
+
+We design and implement RATrain, which unifies stage-local state scheduling, an efficient training-critical-path backend, and resource-aware configuration planning in a single runtime framework to support resource-feasible dense LLM training under the per-cluster usable-DDR constraint.
+
+•
+
+We evaluate RATrain on a real MT-3000 platform and demonstrate its benefits in end-to-end performance, scalability, mechanism effectiveness, resource feasibility, and training-semantics preservation.
+
+2.
+Background and Motivation
+
+2.1.
+LLM Training Constraints on MT-3000 Acceleration Clusters
+
+Figure 1
+.
+MT-3000 platform organization.
+The platform consists of autonomous acceleration clusters connected through the CPU/GP Zone; each cluster contains 24 DSPs with an explicit SM/AM–GSM–DDR memory hierarchy.
+These constraints motivate resource-aware training-state scheduling.
+
+This paper targets MT-3000-based bandwidth-constrained heterogeneous supercomputing platforms, and uses the acceleration cluster as the basic unit for resource modeling and runtime scheduling. As shown in Fig.
+1
+, an MT-3000 platform contains multiple autonomous acceleration clusters, where inter-cluster data sharing is coordinated through the CPU/GP Zone and memory bridge. Our runtime-level profiling shows that the MPI point-to-point bandwidth between clusters is about 3.7GB/s, indicating that inter-cluster communication is a constrained resource that must be explicitly modeled for dense LLM training.
+
+A single MT-3000 acceleration cluster contains 24 DSPs. DSPs within a cluster share data through GSM and exchange data with off-chip DDR through DMA; each DSP further provides a 64KB scalar memory (SM) and a 768KB array memory (AM). Hardware profiling shows that an acceleration cluster has a theoretical FP16 peak of about 8.1 TFLOPS at 1.8GHz, but only a 20GB training memory budget and an effective DDR bandwidth of about 30GB/s. These characteristics indicate that dense LLM training on MT-3000 is not limited only by operator compute throughput, but also by local state residency, DDR data movement, and exposed inter-cluster communication.
+
+2.2.
+Training-State Lifecycles in Dense LLM Training
+
+Figure 2
+.
+Motivation for training-state lifecycle scheduling on MT-3000.
+Bandwidth and memory constraints expose intra-layer communication, activation recovery, and step-end state-processing costs.
+RATrain mitigates them through resource-aware parallelization and layer-wise state scheduling.
+
+Dense decoder-only LLMs consist of sequentially stacked Transformer layers, whose forward and backward passes follow stable and opposite layer-wise access orders
+(
+23
+;
+2
+;
+22
+)
+. This structure gives training states naturally layered lifecycles: the residency time, access order, and dependencies of different states are jointly determined by the layer order and the 1F1B pipeline, creating exploitable stage-local scheduling windows.
+
+On GPU clusters, high device-memory bandwidth, large device-memory capacity, and fast interconnects can partially absorb state access and communication overheads. On MT-3000, however, limited local memory, limited DDR bandwidth, and constrained inter-cluster communication amplify state residency, data movement, and synchronization exposure. Therefore, dense LLM training should not be treated merely as an operator acceleration problem, but as a training-state lifecycle scheduling problem.
+
+2.3.
+Limitations of GPU-Oriented Training Strategies
+
+Directly porting a GPU-oriented training runtime to MT-3000 does not provide robust benefits. Tensor parallelism scales training by introducing intra-layer collectives
+(
+21
+;
+15
+)
+, ZeRO-style state partitioning reduces memory redundancy through parameter-view reconstruction
+(
+18
+;
+19
+)
+, and activation checkpointing trades activation memory for backward-time recomputation
+(
+3
+;
+7
+;
+28
+;
+6
+)
+. On bandwidth-constrained heterogeneous platforms, these costs are more likely to be exposed on the critical path.
+
+Fig.
+2
+summarizes three representative mismatches. First, TP-heavy execution inserts intra-layer collective communication into the critical path of each Transformer layer. Second, the standard non-interleaved 1F1B pipeline creates activation residency imbalance: full-save activations increase the memory pressure on input-side stages, while backward-time recovery exposes recomputation overhead. Third, if state tasks such as GradSync, UpdateShard, and PrefetchW are delayed to the accumulation boundary, a visible finalization tail appears at the end of each step.
+
+These observations show that the bottleneck on the target platform is not a single GEMM, Attention, or communication kernel, but the coupling among parallel execution, training-state lifecycles, and platform resource constraints. RATrain therefore formulates dense LLM training as a training-state lifecycle scheduling problem under the standard non-interleaved 1F1B pipeline. Together with an MT-3000-aware operator backend, RATrain reduces exposed overhead through layer-level and stage-local state scheduling.
+
+3.
+RATrain Design Overview
+
+3.1.
+Design Overview
+
+RATrain is a resource-aware training runtime for dense LLMs on bandwidth-constrained heterogeneous supercomputing platforms. It preserves the standard non-interleaved 1F1B execution order, but does not treat training-state processing as centralized step-end work. Instead, it schedules training-state lifecycles around the layer order and stage-local windows. The key design choice of RATrain is to make state operations locally schedulable while preserving training semantics. By moving communication, parameter preparation, and activation recovery into overlappable windows, RATrain reduces their exposure at the step boundary or on the backward critical path.
+
+3.2.
+System Architecture
+
+Figure 3
+.
+RATrain overview: profile-guided planning, stage-local lifecycle scheduling, and MT-3000-aware backend execution.
+
+Fig.
+3
+shows the overall architecture of RATrain. The system mainline consists of three stages. First, RATrain builds unified profiles from model structure, platform resources, and execution costs, and uses the planner to select a resource-feasible training plan. Second, the stage-local runtime performs lifecycle scheduling while preserving the standard 1F1B main path. Finally, the MT-3000 backend maps scheduled tasks to platform-aware operators, explicit data movement, and local memory management.
+
+This architecture connects configuration selection, runtime scheduling, and platform execution. The planner defines the resource boundary of the training plan, the runtime determines when state tasks are issued within local windows, and the backend provides predictable operator and data-movement support. Together, these components allow RATrain to coordinate model scale, memory capacity, communication bandwidth, and the 1F1B timing structure.
+
+3.3.
+Execution Abstraction
+
+RATrain targets dense decoder-only LLM training. It partitions the model into consecutive pipeline stages along the layer dimension. Each stage is mapped to one or more MT-3000 acceleration clusters and manages the forward pass, backward pass, state tasks, and memory resources for its local layers. Different data-parallel replicas use the same stage partitioning.
+During execution, RATrain preserves the standard non-interleaved 1F1B order: the forward pass propagates from the input-side stage to the output-side stage, and the backward pass returns in the opposite direction. Meanwhile, the stage-local scheduler triggers lifecycle-related state tasks only after local dependencies are satisfied. For example, state processing for a layer becomes schedulable only after local gradient accumulation for that layer completes; the corresponding parameter view must be ready before the next forward pass accesses the layer; and for a micro-batch whose backward pass is about to reach the current stage, the runtime can recover the required intermediate activations in the previous available stage-local window.
+
+Therefore, RATrain decouples training semantics from state scheduling: the main training path remains unchanged, while state tasks are scheduled within layer-level and stage-local control spaces. The next section describes the concrete mechanisms.
+
+4.
+Design
+
+This section presents the concrete mechanisms of RATrain. Following the system mainline in Fig.
+3
+,
+Section
+4.1
+introduces the MT-3000-aware backend that provides stable execution-latency profiles for the planner and runtime;
+Section
+4.2
+presents the layer-wise state pipeline and update–prefetch scheduling;
+Section
+4.3
+describes FSR;
+and Section
+4.4
+introduces the resource-aware configuration planner.
+
+4.1.
+MT-3000-aware FP16 GEMM and Attention Backward Backend
+
+RATrain’s lifecycle scheduling relies on stable and predictable layer-level execution latency. On MT-3000, the cost of a Transformer layer is not determined only by MAC computation, but is also affected by explicit data movement among DDR, GSM, AM, and SM. Therefore, RATrain implements an MT-3000-aware operator backend beneath the runtime, providing stable latency profiles for the planner and the stage-local runtime. This backend mainly covers two training-critical paths: the FP16 GEMM assembly pipeline and memory-resident Attention Backward. The former provides stable primitives for linear layers, FFN layers, and internal matrix multiplications in Attention BP, while the latter reorganizes Attention BP into a tile schedule aware of the explicit memory hierarchy to reduce execution latency on the backward path.
+
+Figure 4
+.
+FP16 GEMM dataflow on MT-3000. RATrain stages
+A
+through GSM/SM, broadcasts
+B
+to AM, and accumulates
+C
+in AM during VMAC execution.
+
+FP16 GEMM assembly pipeline.
+
+The QKV projection, output projection, FFN projection, and internal matrix multiplications in Attention BP can all be reduced to GEMM primitives. RATrain decomposes the GEMM backend into cluster-level dataflow and a DSP-local assembly pipeline. The former organizes tile movement and reuse around DDR, GSM, AM, and SM, while the latter uses VLIW instruction-level scheduling to reduce functional-unit conflicts. Fig.
+4
+shows the GEMM dataflow of RATrain on MT-3000. RATrain first loads
+A_{g}[M_{g},K_{g}]
+from DDR into GSM, and then stages
+A_{2}[M_{2},K_{2}]
+into SM. Meanwhile,
+B_{2}[K_{2},N_{2}]
+is broadcast from DDR to AM, and the output tile
+C_{2}[M_{2},N_{2}]
+is loaded from DDR into AM as the accumulation buffer. The VMAC micro-kernel then consumes operands from SM and AM to perform FP16 MAC, accumulates the result in AM, and finally writes it back to DDR through DMA.
+
+Algorithm 1
+
+Memory-resident Attention Backward Tile Schedule
+
+1:
+
+Query tile
+Q_{i}
+, output gradient
+GO_{i}
+, saved probability tiles
+\{P_{ij}\}
+, key/value tiles
+\{K_{j},V_{j}\}
+
+2:
+
+Query gradient
+GQ_{i}
+, key/value gradients
+\{GV_{j},GK_{j}\}
+
+3:
+
+Outer-resident setup:
+
+(Q_{i},GO_{i})\leftarrow\textsc{LoadAM}(Q_{i},GO_{i})
+
+4:
+
+Allocate
+AM buffer for
+GQ_{i}
+and initialize it to zero
+
+5:
+
+for
+each key/value tile
+j
+
+do
+
+6:
+
+Inner-loop broadcast:
+
+(K_{j},V_{j})\leftarrow\textsc{BcastAM}(K_{j},V_{j})
+
+7:
+
+Forward-state load:
+
+P_{ij}\leftarrow\textsc{LoadAM}(P_{ij})
+
+8:
+
+AM-resident compute:
+
+GP_{ij}\leftarrow GO_{i}V_{j}^{T}
+,
+
+GS_{ij}\leftarrow\mathrm{SoftmaxBackward}(P_{ij},GP_{ij})
+
+9:
+
+SM staging for
+GV_{j}
+:
+
+\widetilde{P}_{ij}^{T}\leftarrow\textsc{StageSM}(P_{ij}^{T})
+
+10:
+
+GV_{j}^{\mathrm{part}}\leftarrow\widetilde{P}_{ij}^{T}GO_{i}
+
+11:
+
+GSM reduction:
+
+GV_{j}\leftarrow\textsc{ReduceAddGSM}(GV_{j},GV_{j}^{\mathrm{part}})
+
+12:
+
+SM staging for
+GQ_{i}
+:
+
+\widetilde{GS}_{ij}\leftarrow\textsc{StageSM}(GS_{ij})
+
+13:
+
+GQ_{i}\leftarrow GQ_{i}+\widetilde{GS}_{ij}K_{j}
+
+14:
+
+SM staging for
+GK_{j}
+:
+
+\widetilde{GS}_{ij}^{T}\leftarrow\textsc{StageSM}(GS_{ij}^{T})
+
+15:
+
+GK_{j}^{\mathrm{part}}\leftarrow\widetilde{GS}_{ij}^{T}Q_{i}
+
+16:
+
+GSM reduction:
+
+GK_{j}\leftarrow\textsc{ReduceAddGSM}(GK_{j},GK_{j}^{\mathrm{part}})
+
+17:
+
+end
+
+for
+
+18:
+
+Writeback:
+
+WriteBack
+(
+GQ_{i}
+)
+
+In the DSP-local assembly pipeline, RATrain interleaves address generation, load, half-precision extraction, broadcast, and FP16 MAC, so that the preparation of the next
+A_{\mathrm{next}}/B_{\mathrm{next}}
+operands overlaps with the current MAC. This reduces VLIW functional-unit conflicts and memory-access bubbles. Table
+1
+gives the complete micro-kernel pipeline.
+
+Table 1
+.
+Complete assembly pipeline organization of the GEMM micro-kernel.
+
+VMAC
+
+SMAC1/2
+
+SLDST
+
+VLDST1/2
+
+SIEU
+
+SBR
+
+vfmulas32 A[0,1,2][0], B[0][0]
+
+smvaga A_next
+
+vldw B[1][2,3]
+
+vfmulas32 A[0,1,2][0], B[0][1]
+
+sbale A[0][1]
+
+vfmulas32 A[0,1,2][0], B[0][2]
+
+svbcast A[0][1]
+
+sldh A_next[0][0]
+
+sbale A[1][1]
+
+vfmulas32 A[0,1,2][0], B[0][3]
+
+svbcast A[1][1]
+
+sldh A_next[1][0]
+
+sbale A[2][1]
+
+vfmulas32 A[3,4,5][0], B[0][0]
+
+svbcast A[2][1] | sadd B_next
+
+sldh A_next[2][0]
+
+sbale A[3][1]
+
+vfmulas32 A[3,4,5][0], B[0][1]
+
+svbcast A[3][1] | smvaga B_next
+
+sldh A_next[3][0]
+
+sbale A[4][1]
+
+vfmulas32 A[3,4,5][0], B[0][2]
+
+svbcast A[4][1]
+
+sldh A_next[4][0]
+
+sbale A[5][1]
+
+vfmulas32 A[3,4,5][0], B[0][3]
+
+svbcast A[5][1]
+
+sldh A_next[5][0]
+
+vldw B_next[0][0,1]
+
+vfmulas32 A[0,1,2][1], B[1][0]
+
+vldw B_next[0][2,3]
+
+seq
+
+vfmulas32 A[0,1,2][1], B[1][1]
+
+sbale A_next[0][0]
+
+sbr
+
+vfmulas32 A[0,1,2][1], B[1][2]
+
+svbcast A_next[0][0]
+
+sldh A_next[0][1]
+
+sbale A_next[1][0]
+
+vfmulas32 A[0,1,2][1], B[1][3]
+
+svbcast A_next[1][0]
+
+sldh A_next[1][1]
+
+sbale A_next[2][0]
+
+vfmulas32 A[3,4,5][1], B[1][0]
+
+svbcast A_next[2][0]
+
+sldh A_next[2][1]
+
+sbale A_next[3][0]
+
+vfmulas32 A[3,4,5][1], B[1][1]
+
+svbcast A_next[3][0]
+
+sldh A_next[3][1]
+
+sbale A_next[4][0]
+
+vfmulas32 A[3,4,5][1], B[1][2]
+
+svbcast A_next[4][0]
+
+sldh A_next[4][1]
+
+sbale A_next[5][0]
+
+vfmulas32 A[3,4,5][1], B[1][3]
+
+svbcast A_next[5][0] | sadd A_next
+
+sldh A_next[5][1]
+
+vldw B_next[1][0,1]
+
+Memory-resident Attention Backward.
+
+Attention BP includes the computation of
+dV
+,
+dP
+,
+dS
+,
+dQ
+, and
+dK
+, tile transposition, softmax backward, and cross-DSP gradient accumulation. If these operations are split into multiple independent kernels and intermediate states such as
+P_{ij}
+,
+P_{ij}^{T}
+,
+GP_{ij}
+,
+GS_{ij}
+, and
+GS_{ij}^{T}
+are passed through DDR, the backward path incurs substantial off-chip traffic and extra latency. RATrain therefore organizes Attention BP as a memory-resident tile schedule, as shown in Algorithm
+1
+.
+
+This schedule adopts a query-outer and K/V-inner loop structure. For an outer query tile,
+Q_{i}
+,
+GO_{i}
+, and necessary forward states are kept resident in AM as much as possible during the inner K/V loop, reducing repeated query-side movement. For an inner K/V tile,
+K_{j}/V_{j}
+is broadcast from DDR to 24 AMs and consumed by multiple DSPs. RATrain directly loads the probability tile
+P_{ij}
+saved during the forward pass, instead of recomputing it on the backward critical path. In tile-local computation,
+P_{ij}^{T}
+,
+GS_{ij}
+, and
+GS_{ij}^{T}
+are micro-tiled and staged into SM as GEMM left operands. The partial sums of
+GV_{j}
+and
+GK_{j}
+are then reduced across 24 DSPs through GSM and written back to DDR.
+
+RATrain uses explicit capacity constraints to select executable tile configurations. For a candidate tile shape, the AM working set, SM micro-staging buffer, and GSM reduction block must satisfy:
+
+(1)
+
+\displaystyle D_{\mathrm{size}}(B_{r}B_{c}+2B_{r}d+2B_{c}d)
+
+\displaystyle\leq C_{\mathrm{AM}},
+
+\displaystyle D_{\mathrm{size}}B_{c}^{\prime}B_{r}
+
+\displaystyle\leq C_{\mathrm{SM}},
+
+\displaystyle D_{\mathrm{size}}B_{r}^{\prime}B_{c}
+
+\displaystyle\leq C_{\mathrm{SM}},
+
+\displaystyle D_{\mathrm{size}}B_{c}d
+
+\displaystyle\leq C_{\mathrm{GSM}}.
+
+These constraints bound the attention tile and resident operands in AM, the micro-staged left operands in SM, and the cross-DSP reduction block in GSM, respectively. This schedule differs from FlashAttention, which primarily optimizes GPU HBM access. RATrain instead targets the MT-3000 backward path, where the key issues are K/V broadcast reuse, SM-limited left-operand staging, and GSM-based local gradient reduction.
+
+4.2.
+Layer-wise State Pipeline and Update–Prefetch Scheduling
+
+In conventional data-parallel or ZeRO-style training, gradient synchronization, parameter update, and preparation of the next-round parameter view are usually deferred to the accumulation boundary, forming a bulk state-processing phase at the end of a step. RATrain exploits the layer-wise order of Transformer backward execution to decompose these state operations into layer-level, stage-local lifecycle tasks, and schedules them according to the access order of the next forward pass.
+
+Figure 5
+.
+Layer-wise state pipeline and update–prefetch scheduling.
+\mathrm{GradSync}
+overlaps with later backward/slack, while
+\mathrm{UpdateShard}
+and
+\mathrm{PrefetchW}
+are queue-managed to prepare
+W_{\mathrm{view}}
+before the next forward access.
+
+Fig.
+5
+shows the layer-wise state pipeline in RATrain. For layer
+l
+,
+\mathrm{GradSync}(l)
+becomes schedulable only after the local gradient accumulation of this layer completes within the current accumulation window. It is not triggered immediately after a single micro-batch
+\mathrm{Backward}(l)
+. The stage-local scheduler then tries to overlap
+\mathrm{GradSync}(l)
+with subsequent backward computation or stage-local slack, reducing the finalization tail at the end of the step.
+
+After
+\mathrm{GradSync}(l)
+completes, the layer enters the following state-task chain:
+
+(2)
+
+\mathrm{UpdateShard}(l)\rightarrow\mathrm{PrefetchW}(l).
+
+Here,
+\mathrm{UpdateShard}(l)
+updates the parameter shard and optimizer states of the layer, while
+\mathrm{PrefetchW}(l)
+prepares the updated working weight view for the next forward pass. This task chain only changes where state tasks are scheduled after their dependencies are satisfied; it does not change the forward/backward order, gradient accumulation rule, or optimizer update semantics.
+To avoid stalling the next forward pass on parameter-view preparation, RATrain treats update–prefetch as a deadline-aware scheduling problem. Let
+t_{\mathrm{sync}}(l)
+denote the completion time of
+\mathrm{GradSync}(l)
+, and let
+t_{\mathrm{use}}(l)
+denote the expected time when the next
+\mathrm{Forward}(l)
+accesses
+W_{\mathrm{view}}(l)
+. The effective scheduling window is:
+
+(3)
+
+t_{\mathrm{sync}}(l)\leq t<t_{\mathrm{use}}(l).
+
+Within this window, RATrain schedules
+\mathrm{UpdateShard}(l)
+and
+\mathrm{PrefetchW}(l)
+in order. If
+\mathrm{PrefetchW}(l)
+finishes before
+t_{\mathrm{use}}(l)
+, the next forward pass can directly use
+W_{\mathrm{view}}(l)
+; otherwise, the uncovered portion appears as a next-forward stall. The exposed latency is estimated as:
+
+(4)
+
+\displaystyle E_{\mathrm{upd}}(l)
+
+\displaystyle=\max\bigl(0,T_{\mathrm{upd}}(l)-W_{\mathrm{upd}}(l)\bigr),
+
+\displaystyle E_{\mathrm{pref}}(l)
+
+\displaystyle=\max\bigl(0,T_{\mathrm{pref}}(l)-W_{\mathrm{pref}}(l)\bigr).
+
+Here,
+T_{\mathrm{upd}}
+and
+T_{\mathrm{pref}}
+denote the update and prefetch latency, while
+W_{\mathrm{upd}}
+and
+W_{\mathrm{pref}}
+denote the stage-local windows available for hiding them. In this way, RATrain converts bulk state processing at the accumulation boundary into layer-wise lifecycle scheduling, reducing the finalization tail.
+
+4.3.
+Forward-Side Activation Recovery
+
+Besides parameter and gradient states, activations are also a major source of memory consumption in 1F1B training. In non-interleaved 1F1B, input-side stages usually need to keep forward activations for more in-flight micro-batches. A full-save policy avoids recovery overhead but incurs high peak memory usage. Conventional checkpointing reduces the amount of resident activations, but missing intermediate states are typically recovered only after backward reaches the current stage, exposing the recovery latency on the backward critical path.
+
+RATrain proposes FSR. The key idea is to move activation recovery to an available window before backward arrives, while preserving the standard 1F1B forward/backward order. For layers using recovery, RATrain keeps only necessary checkpoints after forward and releases recoverable temporary activations. When the backward of a micro-batch is about to return to the current stage, the runtime recovers the intermediate states required by backward in a previous available forward-side or idle slot. As a result, when the current stage starts the corresponding backward computation, the required activations are already ready, and the recovery latency is no longer fully added to the backward critical path.
+
+Figure 6
+.
+FSR on standard non-interleaved 1F1B. RATrain keeps only checkpoints after forward and recovers missing activations in a forward-side or idle slot before the corresponding backward reaches the stage.
+
+Fig.
+6
+shows FSR on the standard non-interleaved 1F1B schedule. RATrain does not change the main 1F1B execution order. Instead, it changes the placement of recovery tasks: missing activations are recovered before backward arrives and are delivered to the subsequent backward computation through a short-lived recovery buffer.
+
+Let
+N_{\mathrm{act}}(p)
+denote the number of micro-batches whose activations must be resident at stage
+p
+under 1F1B. Let
+M_{\mathrm{full}}
+be the full activation size of one micro-batch,
+M_{\mathrm{ckpt}}
+be the checkpoint size, and
+M_{\mathrm{rec}}
+be the recovery-buffer size. The activation peak of full-save can be approximated as:
+
+(5)
+
+M_{\mathrm{act,full}}(p)\approx N_{\mathrm{act}}(p)M_{\mathrm{full}}.
+
+With FSR, long-lived full activations are replaced by multiple checkpoints and one short-lived recovery buffer. The peak memory is approximated as:
+
+(6)
+
+M_{\mathrm{act,FSR}}(p)\approx N_{\mathrm{act}}(p)M_{\mathrm{ckpt}}+M_{\mathrm{rec}}.
+
+Since
+M_{\mathrm{ckpt}}
+is usually much smaller than
+M_{\mathrm{full}}
+, FSR reduces the activation peak of input-side stages. RATrain does not assume that recovery can always be fully hidden. When the forward-side recovery window is insufficient or local resources are unavailable, the runtime can fall back to backward-time recovery. This fallback preserves training semantics, while the uncovered recovery latency is included in the step-time estimate:
+
+(7)
+
+E_{\mathrm{rec}}(p)=\max\bigl(0,T_{\mathrm{rec}}(p)-W_{\mathrm{rec}}(p)\bigr).
+
+Here,
+T_{\mathrm{rec}}(p)
+denotes the activation recovery latency of stage
+p
+, and
+W_{\mathrm{rec}}(p)
+denotes the stage-local window available for hiding the recovery task.
+
+4.4.
+Resource-Aware Configuration Planner
+
+RATrain’s runtime mechanisms do not work in isolation; their benefits depend on the match between training configurations and platform resources. Different parallelization choices and runtime policies jointly affect stage memory pressure, the 1F1B timing structure, and the windows in which state tasks can be hidden. Fixed heuristics are therefore difficult to apply robustly across different model sizes and resource constraints. RATrain uses a resource-aware configuration planner to filter memory-feasible training plans from the candidate space and select the configuration with the lowest estimated step time.
+
+RATrain represents a candidate training configuration as:
+
+(8)
+
+c=(P,D,Z,b,A,\pi_{\mathrm{act}},\pi_{\mathrm{pref}}),
+
+where
+P
+is the pipeline degree,
+D
+is the data-parallel degree,
+Z
+is the ZeRO stage,
+b
+is the local micro-batch size,
+A
+is the number of gradient accumulation steps, and
+\pi_{\mathrm{act}}
+and
+\pi_{\mathrm{pref}}
+denote the activation recovery policy and parameter prefetch policy, respectively. The planner takes the model profile, platform profile, and execution profile as input, and searches the candidate space
+\mathcal{C}
+for a configuration that satisfies the resource constraints and minimizes the estimated step time.
+
+The planner first performs memory-feasibility pruning. For a candidate configuration
+c
+, the peak memory of stage
+p
+is estimated as:
+
+(9)
+
+M_{p}(c)=M_{\mathrm{state}}^{p}(c)+M_{\mathrm{act}}^{p}(c,\pi_{\mathrm{act}})+M_{\mathrm{buf}}^{p}(c,\pi_{\mathrm{pref}},\pi_{\mathrm{act}}).
+
+Here,
+M_{\mathrm{state}}^{p}(c)
+includes local parameter shards, gradient states, and optimizer states;
+M_{\mathrm{act}}^{p}(c,\pi_{\mathrm{act}})
+captures the activation residency under full-save, checkpointing, or FSR; and
+M_{\mathrm{buf}}^{p}(c,\pi_{\mathrm{pref}},\pi_{\mathrm{act}})
+includes short-lived buffers for communication, prefetching, recovery, and operator execution. A candidate is feasible only if:
+
+(10)
+
+\max_{p}M_{p}(c)\leq M_{\mathrm{budget}}.
+
+For memory-feasible configurations, the planner estimates the step time. RATrain uses an exposed-latency decomposition to capture how stage-local tasks affect the end-to-end step time. For any schedulable task
+x
+, its exposed latency is defined as:
+
+(11)
+
+E_{x}(c)=\max\bigl(0,T_{x}(c)-W_{x}(c)\bigr),
+
+where
+T_{x}(c)
+is the task latency from the execution profile, and
+W_{x}(c)
+is the time that can be covered by the 1F1B timing structure, stage-local slack, or bounded scheduling windows. If a task is fully covered by computation overlap, communication overlap, prefetch windows, or recovery windows, its exposed latency is zero; otherwise, the uncovered portion contributes to the step time.
+
+Based on this definition, the step time of a candidate configuration is estimated as:
+
+(12)
+
+T_{\mathrm{step}}(c)=T_{\mathrm{1F1B}}(c)+E_{\mathrm{comm}}(c)+E_{\mathrm{upd}}(c)+E_{\mathrm{pref}}(c)+E_{\mathrm{rec}}(c).
+
+Here,
+T_{\mathrm{1F1B}}(c)
+denotes the main execution time of standard non-interleaved 1F1B, including forward/backward slot time, pipeline bubbles, and stage imbalance.
+E_{\mathrm{comm}}(c)
+captures exposed communication from stage-boundary transfers and GradSync. Under this decomposition, the residual tail near the accumulation boundary is represented by the uncovered communication, update, and prefetch costs, rather than being counted as a separate term.
+
+Finally, the planner solves the following constrained selection problem:
+
+(13)
+
+c^{\star}=\arg\min_{c\in\mathcal{C}}T_{\mathrm{step}}(c),\quad\mathrm{s.t.}\quad\max_{p}M_{p}(c)\leq M_{\mathrm{budget}}.
+
+Algorithm
+2
+summarizes the planning procedure. The planner is not intended to replace end-to-end measurement. Instead, it uses profiles collected on the same platform before training to prune the large configuration space and passes the selected training plan to the runtime. The plan includes the PP/DP/ZeRO combination, stage partitioning, micro-batch and accumulation settings, activation policy, prefetch policy, and necessary runtime scheduling hints.
+
+Algorithm 2
+
+Resource-aware Configuration Planning
+
+1:
+
+Model profile, platform profile, execution profile, search space
+\mathcal{C}
+
+2:
+
+Selected training plan
+c^{\star}
+
+3:
+
+\mathcal{V}\leftarrow\emptyset
+
+4:
+
+for
+each candidate
+c\in\mathcal{C}
+
+do
+
+5:
+
+Partition layers according to the pipeline degree
+P
+
+6:
+
+Estimate stage memory
+M_{p}(c)
+for each stage
+p
+
+7:
+
+if
+
+\max_{p}M_{p}(c)>M_{\mathrm{budget}}
+
+then
+
+8:
+
+continue
+
+9:
+
+end
+
+if
+
+10:
+
+Estimate
+T_{\mathrm{1F1B}}(c)
+from forward/backward profiles
+
+11:
+
+Estimate exposed latencies
+E_{\mathrm{comm}}
+,
+E_{\mathrm{upd}}
+,
+E_{\mathrm{pref}}
+, and
+E_{\mathrm{rec}}
+
+12:
+
+T_{\mathrm{step}}(c)\leftarrow T_{\mathrm{1F1B}}(c)+E_{\mathrm{comm}}(c)+E_{\mathrm{upd}}(c)+E_{\mathrm{pref}}(c)+E_{\mathrm{rec}}(c)
+
+13:
+
+Insert
+(c,T_{\mathrm{step}}(c))
+into
+\mathcal{V}
+
+14:
+
+end
+
+for
+
+15:
+
+return
+
+c^{\star}\leftarrow\arg\min_{(c,T)\in\mathcal{V}}T
+
+5.
+Implementation
+
+5.1.
+Stage-Local Runtime
+
+RATrain implements each pipeline stage as a lightweight stage-local runtime. Each runtime is bound to one or more MT-3000 acceleration clusters and executes local forward, backward, and state tasks according to the selected training plan generated by the planner. Global synchronization is kept only at necessary points, such as step initialization, stage-boundary communication, and the accumulation boundary. Layer-level state tasks and activation recovery tasks are scheduled independently by each stage according to local dependencies.
+
+Each runtime maintains local task queues for the 1F1B main path,
+\mathrm{GradSync}
+,
+\mathrm{UpdateShard}
+,
+\mathrm{PrefetchW}
+, and activation recovery. Queue entries are triggered by local events, such as layer backward completion, local gradient accumulation completion, parameter update completion, next-forward access deadline, and backward-arrival deadline. This design avoids global fine-grained scheduling and matches the MT-3000 hardware organization, where the acceleration cluster is the basic execution unit.
+
+5.2.
+Memory and Communication Management
+
+MT-3000 exposes an explicit memory hierarchy and limited per-cluster memory. RATrain therefore implements a memory manager in each stage-local runtime to manage data objects with different lifetimes. Long-lived objects include parameter shards, optimizer states, and metadata; medium-lived objects include checkpoints, gradient buckets, and working-weight buffers; short-lived objects include temporary activations, communication staging buffers, recovery buffers, and operator workspaces. The runtime pre-allocates major buffers according to the selected training plan and reuses short-lived memory across recovery, prefetch, and operator execution.
+
+The communication layer mainly handles stage-boundary activation transfer, data-parallel
+\mathrm{GradSync}
+, and parameter-view materialization. RATrain does not assume that these transfers can proceed without resource conflicts. When the communication channel or staging buffers are contended, the runtime prioritizes stage-boundary transfers on the 1F1B critical path, while other communication tasks are scheduled only when their dependencies are satisfied and resources are available.
+
+5.3.
+Operator Integration and Semantics
+
+RATrain materializes the selected training plan into stage-local execution descriptors. Each layer descriptor records the tensor shape, parameter shard layout, gradient bucket layout, activation policy, prefetch policy, and workspace requirement. The runtime generates forward/backward tasks,
+\mathrm{GradSync}
+tasks,
+\mathrm{UpdateShard}
+tasks,
+\mathrm{PrefetchW}
+tasks, and recovery tasks from these descriptors, and attaches them to the corresponding local queues.
+
+Backend binding is also driven by the layer descriptor. The runtime invokes MT-3000-aware GEMM, Attention Backward, and memory movement primitives, and allocates the required workspace across DDR, GSM, AM, and SM. RATrain does not change the model computation graph, micro-batch order, gradient accumulation rule, or optimizer update formula. It only changes the materialization time, buffer residency, and dispatch order of training-state tasks.
+
+6.
+Evaluation
+
+6.1.
+Experimental Setup
+
+We evaluate RATrain on a real MT-3000 heterogeneous supercomputing platform
+(
+12
+)
+. Except for the resource-aware planner, which uses execution profiles collected on the same platform for configuration selection, all performance, memory, and correctness results are obtained from actual runs on the target platform. Unless otherwise specified, the sequence length is set to 2048 and the available training memory budget per cluster is limited to 20GB.
+
+Our experiments cover dense decoder-only configurations corresponding to LLaMA-2-7B/13B/70B
+(
+22
+)
+, Baichuan2-13B
+(
+25
+)
+, and Qwen2.5-32B
+(
+26
+)
+. We use an English C4 fixed token stream
+(
+17
+;
+4
+)
+as the training data. For each controlled comparison, all methods use the same data order, global-batch semantics, optimizer settings, learning-rate schedule, and gradient accumulation rules.
+To isolate the effect of runtime scheduling, all MT-3000 baselines use the same operator backend, communication implementation, and explicit data-movement implementation. We compare RATrain with representative GPU-style training strategies, including TP-heavy
+(
+21
+;
+15
+)
+, ZeRO-3-heavy
+(
+18
+;
+19
+)
+, Backward Ckpt
+(
+3
+)
+, Full-save, and Tuned PP/DP/ZeRO
+(
+5
+;
+13
+;
+18
+)
+. Full RATrain enables layer-wise state pipeline, next-iteration update–prefetch scheduling, and FSR.
+
+We report tokens/s, step time, training time, peak memory, scaling efficiency, and loss correctness. All end-to-end performance comparisons are conducted under the same MT-3000 backend and hardware constraints. A800 runs are used only for correctness validation and reference-scale comparison, rather than as strict cross-hardware performance baselines.
+
+6.2.
+Correctness Validation and Reference-Scale Comparison
+
+RATrain reschedules the execution of training state tasks without altering the standard training semantics of dense LLMs. To validate this, we conducted a 1.028B-token correctness run and compared RATrain with a semantically equivalent Baseline-1F1B. The experiments used the LLaMA-2-7B configuration with a sequence length of 2048 and a global batch of 2048. Both methods employed the same tokenizer, initial weights, data order, optimizer settings, learning-rate schedule, and gradient accumulation semantics.
+
+Figure 7
+.
+
+Correctness validation and reference throughput of RATrain versus Baseline-1F1B.
+Left: training loss and per-step relative loss difference.
+Right: throughput comparison under the same token budget; HF+DS, FSDP, and Megatron denote 8×A800 references.
+
+Figure
+7
+presents the training loss trajectory, per-step relative loss difference, and the reference throughput under the same token budget. RATrain and Baseline-1F1B loss curves nearly overlap entirely. The maximum, mean, and final per-step relative loss differences are 0.081%, 0.030%, and 0.035%, respectively. The final losses are 1.8306 and 1.8312, with an absolute difference of only 0.00064. This result indicates that RATrain’s core mechanisms change where schedulable state tasks are placed, rather than altering the computation or update semantics of dense LLM training.
+
+To illustrate the actual scale of the correctness run, we also present reference training results on 8
+\times
+A800. All reference runs used the same sequence length, global batch, and 1.028B-token budget. Note that the A800 results serve only as numerical and reference-scale context, not as strict cross-hardware performance baselines. Under this setting, RATrain achieves 29,069.73 tokens/s on 256 MT-3000 compute clusters, while the three A800 reference runs reach 24,084.54, 25,702.36, and 20,914.00 tokens/s. Despite differences in architecture, memory hierarchy, and interconnect organization between MT-3000 and A800, these results indicate that MT-3000, under RATrain’s resource-aware scheduling, can achieve throughput comparable to the 8
+\times
+A800 reference stack at the 1B-token scale.
+
+6.3.
+End-to-End Comparison with GPU-Style Training Strategies
+
+This section evaluates a core system question: on the same MT-3000 backend, if the RATrain training-state lifecycle scheduling is not used and common GPU-style training strategies are adapted with tuned configurations, can comparable end-to-end training efficiency be achieved? The baselines are not direct runs of the original Megatron-LM or DeepSpeed GPU implementations, but representative strategies constructed on the MT-3000 backend with identical operator, explicit data movement, and communication implementations. Therefore, the comparison focuses on parallel organization, state sharding, activation policy, and runtime scheduling, rather than low-level kernel differences.
+
+We consider two model configurations: LLaMA-2-13B and Qwen2.5-32B, both with sequence length 2048, 256 MT-3000 compute clusters, global batch 4096, and 204.8M-token-equivalent training budget. Compared strategies include TP-heavy, ZeRO-3-heavy, Backward checkpointing (Ckpt), Full-save, Tuned PP/DP/ZeRO, and full RATrain. Tuned PP/DP/ZeRO allows searching P, D, Z, b, and A, but disables RATrain’s layer-wise state pipeline, next-iteration update–prefetch scheduling, and FSR.
+
+Table 2
+.
+End-to-end comparison of GPU-style strategies on MT-3000.
+
+Model
+
+Method
+
+Best Config
+
+Peak Mem.(GB)
+
+Step Time (s)
+
+Tokens/s
+
+Slowdown
+
+LLaMA-2-13B
+
+RATrain
+
+P=2,D=128,T=1,Z=2,b=1,A=32, FSR
+
+15.84
+
+688.09
+
+12191.13
+
+1.00
+\times
+
+LLaMA-2-13B
+
+TP-heavy
+
+P=2,D=64,T=2,Z=2,b=1,A=64, FSR
+
+16.51
+
+826.53
+
+10149.20
+
+1.20
+\times
+
+LLaMA-2-13B
+
+ZeRO-3-heavy
+
+P=2,D=128,T=1,Z=3,b=1,A=32, FSR
+
+14.73
+
+717.93
+
+11684.48
+
+1.04
+\times
+
+LLaMA-2-13B
+
+Backward Ckpt
+
+P=2,D=128,T=1,Z=2,b=1,A=32, Ckpt
+
+15.73
+
+937.04
+
+8952.21
+
+1.36
+\times
+
+LLaMA-2-13B
+
+Full-save
+
+OOM
+
+–
+
+–
+
+–
+
+–
+
+LLaMA-2-13B
+
+Tuned PP/DP/ZeRO
+
+P=2,D=128,T=1,Z=2,b=1,A=32, Ckpt
+
+15.73
+
+945.84
+
+8868.90
+
+1.37
+\times
+
+Qwen2.5-32B
+
+RATrain
+
+P=8,D=32,T=1,Z=2,b=1,A=128, FSR
+
+14.71
+
+1592.51
+
+5267.52
+
+1.00
+\times
+
+Qwen2.5-32B
+
+TP-heavy
+
+P=8,D=16,T=2,Z=2,b=2,A=128, FSR
+
+19.45
+
+1922.66
+
+4363.01
+
+1.21
+\times
+
+Qwen2.5-32B
+
+ZeRO-3-heavy
+
+P=8,D=32,T=1,Z=3,b=2,A=64, FSR
+
+16.54
+
+1798.78
+
+4663.50
+
+1.13
+\times
+
+Qwen2.5-32B
+
+Backward Ckpt
+
+P=8,D=32,T=1,Z=2,b=1,A=128, Ckpt
+
+14.50
+
+2162.54
+
+3879.06
+
+1.36
+\times
+
+Qwen2.5-32B
+
+Full-save
+
+OOM
+
+–
+
+–
+
+–
+
+–
+
+Qwen2.5-32B
+
+Tuned PP/DP/ZeRO
+
+P=8,D=32,T=1,Z=2,b=1,A=128, Ckpt
+
+14.50
+
+2167.81
+
+3869.62
+
+1.36
+\times
+
+Figure 8
+.
+Normalized step time for LLaMA-2-13B and Qwen2.5-32B, with RATrain as baseline. TP-heavy, ZeRO-3-heavy, Backward Ckpt, and Tuned PP/DP/ZeRO illustrate alternative GPU-style strategies. Full-save triggers OOM.
+
+Table
+2
+shows that RATrain achieves the lowest step time on both LLaMA-2-13B and Qwen2.5-32B, reaching 12,191.13 and 5,267.52 tokens/s, respectively. RATrain chooses PP+DP+ ZeRO-2+FSR with T=1 in both models. Figure
+8
+shows the RATrain-normalized step time, highlighting end-to-end efficiency gaps across GPU-style strategies.
+
+Results indicate that, under MT-3000’s limited cross-cluster bandwidth, reducing intra-layer collectives is more critical than further splitting single-layer computation. TP-heavy is 1.20
+\times
+and 1.21
+\times
+slower than RATrain for the two models, because tensor parallelism reduces local compute but introduces intra-layer activation collectives and limits data-parallel degree. ZeRO-3-heavy is 1.04
+\times
+and 1.13
+\times
+slower, showing that aggressive state sharding adds extra parameter-view materialization and synchronization, while PP+ZeRO-2 already satisfies 20GB per-cluster memory. Full-save triggers OOM on both models, indicating full activation save is unsuitable for this memory budget.
+
+Backward Ckpt uses the same PP/DP/ZeRO configuration as RATrain, but places activation recovery on the backward critical path, causing 1.36
+\times
+slowdown on both models. Tuned PP/DP/ZeRO demonstrates that tuning PP/DP/ZeRO alone cannot match RATrain: disabling layer-wise state pipeline, update–prefetch scheduling, and FSR yields step times close to Backward Ckpt. Overall, RATrain’s gains derive from combined parallel configuration and layer-level lifecycle scheduling, not a single mechanism; GPU-style empirical strategies cannot be directly applied to bandwidth-limited heterogeneous supercomputers.
+
+6.4.
+Resource-Constrained Training Capability
+
+This section evaluates RATrain’s ability to support dense LLM training under the 20GB per-cluster memory constraint. This section examines whether the resource-aware planner can find the minimum executable resource configuration for each model. For each model, RATrain searches for the minimum number of clusters that satisfies the memory constraint, and then runs a 20.48M-token short validation under the selected configuration to verify resource feasibility.
+
+Table
+3
+reports the minimum feasible configurations at sequence length 2048. RATrain supports dense LLM training from LLaMA-2-7B to LLaMA-2-70B under the 20GB per-cluster memory constraint. As model size increases, the planner gradually increases the pipeline degree to reduce per-stage residency of parameters, activations, and optimizer states: LLaMA-2-7B uses
+P=2
+, Baichuan2-13B uses
+P=8
+, Qwen2.5-32B uses
+P=16
+, and LLaMA-2-70B uses
+P=48
+. This trend indicates that pipeline parallelism is the primary mechanism for scaling model size under strict per-cluster memory constraints.
+
+Table 3
+.
+Minimum feasible training configurations under the 20GB per-cluster memory constraint.
+
+Model
+
+Min.
+
+Config
+
+Peak Mem.
+
+Step Time
+
+Tokens/s
+
+Clusters
+
+(GB)
+
+(s)
+
+LLaMA-2-7B
+
+8
+
+P=2,D=4,A=128
+
+19.57
+
+1304.13
+
+804.04
+
+Baichuan2-13B
+
+16
+
+P=8,D=2,A=128
+
+19.06
+
+743.15
+
+705.50
+
+Qwen2.5-32B
+
+64
+
+P=16,D=4,A=128
+
+18.14
+
+873.85
+
+1199.96
+
+LLaMA-2-70B
+
+96
+
+P=48,D=2,A=16
+
+19.46
+
+281.32
+
+232.96
+
+All configurations in Table
+3
+keep
+T=1
+and use PP+DP+ ZeRO-2+FSR. This is consistent with the observation in Section
+6.3
+: on a platform with limited inter-cluster communication bandwidth, avoiding intra-layer tensor-parallel collectives is often more effective than further splitting single-layer computation. Meanwhile, ZeRO-2 already provides sufficient state partitioning for these configurations, avoiding the additional parameter-view materialization and synchronization overheads introduced by ZeRO-3.
+
+Overall, RATrain’s planner adapts pipeline degree and data-parallel degree according to model size and memory constraints, while using FSR to control activation residency. Even for LLaMA-2-70B, RATrain completes short validation on 96 MT-3000 compute clusters, demonstrating that it can provide a practically executable training configuration for 70B-class dense LLMs under the 20GB per-cluster memory constraint.
+
+6.5.
+Planner Accuracy
+
+RATrain’s resource-aware planner uses model, platform, and execution profiles to select a training configuration that satisfies the memory constraint and minimizes the predicted step time. This section evaluates the planner’s prediction accuracy by comparing its predicted step time with the measured execution time on MT-3000.
+
+Table 4
+.
+Planner prediction accuracy on representative configurations.
+
+Model
+
+Clusters
+
+Pred. Step (s)
+
+Meas. Step (s)
+
+Error
+
+LLaMA-2-7B
+
+256
+
+140.92
+
+144.28
+
+2.33%
+
+Baichuan2-13B
+
+256
+
+268.74
+
+276.61
+
+2.85%
+
+Qwen2.5-32B
+
+256
+
+441.83
+
+455.21
+
+2.94%
+
+Qwen2.5-32B
+
+512
+
+225.47
+
+231.36
+
+2.55%
+
+Table
+4
+reports the prediction results under representative model sizes and resource budgets. After the planner selects a configuration according to its cost model, we run the selected configuration on the real MT-3000 backend and measure its actual step time. The prediction error ranges from 2.33% to 2.94%, with an average error of 2.67%. These results indicate that RATrain’s execution profiles capture the dominant execution costs across different model sizes and resource scales, thereby reducing the configuration search overhead. All subsequent end-to-end performance, ablation, and scalability results are based on measurements on the MT-3000 platform.
+
+6.6.
+Sequence-Length Sensitivity and Compute Utilization
+
+This section evaluates the impact of sequence length on RATrain’s training time and compute utilization. Sequence length changes the attention computation, activation residency, checkpoint/recovery cost, and stage-local memory pressure, and therefore serves as an important dimension for testing whether RATrain is tuned only for a fixed input length. The experiments are conducted on 256 MT-3000 compute clusters with a global batch size of 4096, covering sequence lengths of 512, 1024, 2048, 3072, and 4096. The evaluated models include LLaMA-2-7B, Baichuan2-13B, and Qwen2.5-32B. Training time is normalized to the time required to process 204.8M tokens, and compute utilization is reported using a MAC-only metric.
+
+Figure 9
+.
+
+Sequence-length sensitivity of RATrain.
+(a) 204.8M-token-equivalent training time under different sequence lengths.
+(b) MAC-only compute utilization under different sequence lengths.
+Experiments use 256 MT-3000 compute clusters and global batch size 4096.
+
+Figure
+9
+shows the training time and MAC-only utilization under different sequence lengths. Overall, the training time of Baichuan2-13B and Qwen2.5-32B decreases from 512 to 2048 and increases again at longer sequences; LLaMA-2-7B performs well around 1024 and 2048. The MAC-only utilization of all three models increases from 512 to 2048 and slightly decreases at 3072 and 4096. This indicates that medium sequence lengths better amortize fixed scheduling, communication, and state-task overheads, while overly long sequences increase attention, activation, and recovery pressure.
+
+Table 5
+.
+Representative FP16 GEMM backend profile at sequence length 2048.
+
+GEMM Shape
+
+MAC Util. (%)
+
+Throughput (T MAC/s)
+
+Latency (ms)
+
+4096
+\times
+4096
+
+64.96
+
+5.26
+
+6.53
+
+4096
+\times
+11008
+
+66.16
+
+5.36
+
+17.23
+
+11008
+\times
+4096
+
+65.13
+
+5.28
+
+17.50
+
+6656
+\times
+6656
+
+67.35
+
+5.46
+
+16.63
+
+8192
+\times
+8192
+
+68.13
+
+5.52
+
+24.90
+
+To explain the backend basis of utilization, Table
+5
+reports representative FP16 GEMM profiles at sequence length 2048. RATrain’s GEMM backend maintains 64.96%–68.13% MAC utilization on projection, FFN, and larger hidden-size square GEMMs, corresponding to 5.26–5.52 T MAC/s effective throughput. The end-to-end MAC-only utilization is lower than the per-GEMM utilization mainly because a full training step also includes non-GEMM overheads, such as attention, activation recovery, state synchronization, parameter update, and data movement.
+
+Figure 10
+.
+Memory-resident Attention BP speedup over the DDR-staged baseline.
+
+Beyond GEMM, Attention BP is the part of backward computation most sensitive to memory access and intermediate-state movement. Figure
+10
+shows that memory-resident Attention BP consistently outperforms the DDR-staged baseline: it achieves 1.54
+\times
+, 1.34
+\times
+, and 1.24
+\times
+speedups on the LLaMA-2-7B layer at sequence lengths 1024, 2048, and 4096, respectively, and 1.30
+\times
+on the Qwen2.5-32B layer at sequence length 2048, with an average speedup of 1.36
+\times
+. This shows that the memory-resident tile schedule reduces DDR traffic for intermediate states in backward computation.
+
+Overall, RATrain maintains executability and stable efficiency across different input lengths and model scales. Sequence length 2048 generally provides a favorable balance between compute density and memory pressure, but RATrain does not rely on a fixed sequence length. Instead, it uses resource-aware planning to balance compute density, activation residency, and recovery overhead.
+
+6.7.
+Ablation Study
+
+This section analyzes the contribution of RATrain’s core mechanisms to training performance. The experiment uses Qwen2.5-32B with sequence length 2048, 256 MT-3000 compute clusters, and global batch size 4096. All variants use the same configuration,
+P=8,D=32,T=1,Z=2,b=1,A=128
+, and only disable the corresponding mechanism under study. Full RATrain achieves a step time of 1790.13 s with an exposed tail of 14.69 s.
+
+Figure 11
+.
+
+Ablation study on Qwen2.5-32B.
+Step time and exposed tail are normalized to Full RATrain.
+U-P denotes update–prefetch scheduling, and LSP denotes layer-wise state pipeline.
+
+Figure
+11
+shows the normalized step time and exposed-tail amplification. FSR has the largest impact on end-to-end step time: removing FSR increases the step time to 1.33
+\times
+. This indicates that backward-time recomputation exposes activation recovery on the backward critical path, whereas RATrain’s FSR moves part of the recovery cost into pipeline-side windows.
+
+The two state-scheduling mechanisms mainly reduce the exposed tail. Disabling update–prefetch scheduling increases tail amplification to 2.31
+\times
+, indicating that next-iteration parameter-view preparation can cause readiness stalls before forward execution. Disabling the layer-wise state pipeline further increases tail amplification to 4.59
+\times
+, showing that gradient synchronization and the subsequent state update and parameter preparation tasks can form a significant state-processing tail if they are concentrated near the step boundary.
+
+Overall, the ablation results show that RATrain’s gains do not come from a single optimization, but from the coordinated scheduling of activation recovery, state lifecycle management, and next-iteration parameter readiness.
+
+6.8.
+Resource Scalability
+
+This section evaluates RATrain’s throughput scalability as the number of MT-3000 compute clusters increases. The experiment uses LLaMA-2-7B with sequence length 2048, and scales the number of compute clusters from 256 to 512, 768, and 1024. This section adopts a throughput-oriented scale-out setting: the local training configuration of each data-parallel replica is kept unchanged, while the data-parallel degree and global batch size are increased linearly with the number of clusters. Therefore, this experiment focuses on whether RATrain can translate additional resources into higher training throughput, rather than fixed-global-batch strong scaling.
+
+Table 6
+.
+Throughput-oriented scale-out results on LLaMA-2-7B.
+
+Clusters
+
+Global Batch
+
+Step Time
+
+Tokens/s
+
+Speedup
+
+Efficiency
+
+(s)
+
+256
+
+2048
+
+144.28
+
+29,069.73
+
+1.00
+\times
+
+100.0%
+
+512
+
+4096
+
+145.75
+
+57,558.07
+
+1.98
+\times
+
+99.0%
+
+768
+
+6144
+
+147.23
+
+85,465.01
+
+2.94
+\times
+
+98.0%
+
+1024
+
+8192
+
+148.75
+
+112,790.55
+
+3.88
+\times
+
+97.0%
+
+Table
+6
+reports the scale-out results. As the number of compute clusters increases from 256 to 1024, the step time only increases from 144.28 s to 148.75 s, while throughput improves from 29,069.73 tokens/s to 112,790.55 tokens/s, corresponding to a 3.88
+\times
+speedup. Scaling efficiency decreases from 100.0% to 97.0%, mainly due to gradient synchronization, runtime scheduling, and system variability at larger data-parallel group sizes. Overall, these results show that RATrain can effectively convert additional MT-3000 compute clusters into higher training throughput while keeping the local training path stable.
+
+7.
+Related Work
+
+Distributed LLM training systems.
+
+Existing large-model training systems are mainly designed for GPU clusters, and scale Transformer training through tensor parallelism, pipeline parallelism, data parallelism, and state partitioning
+(
+21
+;
+15
+;
+18
+;
+19
+)
+. Megatron-LM combines tensor and pipeline parallelism to train multi-billion-parameter models
+(
+21
+;
+15
+)
+; GPipe, PipeDream, and PipeDream-2BW study pipeline scheduling, bubbles, activation storage, and weight versioning
+(
+5
+;
+13
+;
+14
+)
+; DeepSpeed and ZeRO reduce data-parallel state redundancy by partitioning optimizer states, gradients, and parameters
+(
+18
+;
+19
+)
+. These systems typically assume high-bandwidth device memory, high-speed interconnects, and mature collective libraries, whereas RATrain targets the MT-3000 heterogeneous supercomputing platform with explicit memory hierarchy, limited per-cluster memory, and bandwidth-constrained inter-cluster communication
+(
+12
+)
+. RATrain therefore does not treat tensor parallelism or ZeRO-3 as the default scaling path, but schedules training-state lifecycles around PP/DP/lightweight-ZeRO and standard 1F1B execution.
+
+Automatic parallelism and configuration search.
+
+Automatic parallelism systems generate distributed execution plans through search or compilation-based optimization
+(
+9
+;
+29
+;
+24
+;
+8
+)
+. FlexFlow searches parallelization strategies across operator, sample, attribute, and parameter dimensions
+(
+9
+)
+; Alpa combines inter-operator and intra-operator parallelism for large-scale Transformer models
+(
+29
+)
+; GSPMD provides a general SPMD partitioning abstraction for tensor sharding and device mapping
+(
+24
+)
+; Whale introduces a hardware-aware parallel strategy for heterogeneous GPU clusters
+(
+8
+)
+. Unlike these systems, which mainly focus on computation graph partitioning, tensor sharding, and device placement, RATrain’s planner explicitly models peak memory, exposed communication, activation recovery, parameter prefetching, and step-end state-processing tail, and directly materializes the selected plan as stage-local runtime tasks.
+
+Activation memory optimization and rematerialization.
+
+Activation checkpointing and tensor rematerialization reduce training memory by trading additional computation for lower activation residency
+(
+3
+;
+7
+;
+16
+)
+. Classical checkpointing recomputes missing activations during backward propagation
+(
+3
+)
+; Checkmate formulates rematerialization as an optimization problem between memory and recomputation cost
+(
+7
+)
+; Capuchin combines tensor eviction, prefetching, and recomputation for GPU memory management
+(
+16
+)
+; recent work further studies efficient activation rematerialization and bubble-filling transformations to reduce recomputation overhead in LLM training
+(
+28
+;
+6
+)
+. RATrain is complementary to these techniques: instead of only choosing checkpoint placement, it keeps the standard 1F1B order unchanged while moving recoverable activation reconstruction into stage-local windows before backward arrival, thereby reducing backward-path exposure.
+
+Heterogeneous training and offloading systems.
+
+Prior work also studies large-model training with heterogeneous memory or devices. ZeRO-Offload moves optimizer states and part of the computation to CPU to reduce GPU memory pressure
+(
+20
+)
+; Whale studies automatic parallelism and load balancing for heterogeneous GPUs
+(
+8
+)
+; other systems extend trainable model scale through offloading, eviction, prefetching, or recomputation
+(
+20
+;
+16
+;
+28
+)
+. RATrain targets a different class of platforms: heterogeneous supercomputers organized around autonomous compute clusters, software-managed memory hierarchy, and bandwidth-constrained inter-cluster communication
+(
+12
+)
+. It does not use a slower memory tier merely as a GPU-memory extension; instead, it treats parameters, gradients, optimizer states, activations, and communication buffers as runtime objects with explicit lifecycles, and schedules them at stage-local and layer-level granularity.
+
+8.
+Conclusion
+
+This paper presents RATrain, a resource-aware training runtime for dense LLMs on bandwidth-constrained heterogeneous supercomputing platforms. RATrain models standard 1F1B training as a training-state lifecycle scheduling problem, and reduces exposed overhead through layer-level, stage-local scheduling of state synchronization, parameter preparation, and activation recovery, without changing training semantics. Experiments on a real MT-3000 platform show that RATrain can support 7B–72B dense LLM training configurations and achieves stable behavior in correctness, performance, mechanism effectiveness, and resource scalability.
+

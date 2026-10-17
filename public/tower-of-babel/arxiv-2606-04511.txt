@@ -1,0 +1,3812 @@
+SparDA: Sparse Decoupled Attention for Efficient Long-Context LLM Inference
+Yaosheng Fu 1 , Guangxuan Xiao 2,* , Xin Dong 3,* , Song Han 1,4 , Oreste Villa 1 1 NVIDIA 2 Thinking Machines Lab 3 ByteDance Seed 4 MIT * Work done while working at NVIDIA
+
+Abstract
+Abstract: Sparse attention reduces compute and memory bandwidth for long-context LLM inference. However, two key challenges remain: (1) KV cache capacity still grows with sequence length, and offloading to CPU memory introduces a PCIe transfer bottleneck; (2) the sparse selection step itself retains O ⁡ ( T 2 ) O(T^{2}) complexity and can dominate attention cost at long contexts. We propose SparDA, a decoupled sparse attention architecture that introduces a fourth per-layer projection, the Forecast , alongside Query, Key, and Value. The Forecast predicts the KV blocks needed by the next layer, enabling lookahead selection that overlaps CPU-to-GPU prefetch with current-layer execution. Because Forecast is decoupled from the attention query, our GQA implementation uses one Forecast head per GQA group, reducing selection overhead versus the original multi-head selector. SparDA adds < < 0.5% parameters and trains only the Forecast projections by matching the original selector’s attention distribution. On two sparse-pretrained 8B models, SparDA matches or slightly improves accuracy and delivers up to 1.25 × \times prefill speedup and 1.7 × \times decode speedup over the sparse-attention offload baseline. By enabling larger feasible batch sizes on a single GPU, SparDA further reaches up to 5.3 × \times higher decode throughput than the non-offload sparse baseline. Our source code is available at https://github.com/NVlabs/SparDA .
+
+
+
+Figure 1:
+Overview of SparDA. The Forecast
+\mathbf{F}_{l}
+drives top-
+k
+selection for layer
+l{+}1
+, while
+\mathbf{Q}_{l}
+performs sparse attention, decoupling selection from attention and exposing lookahead KV prefetch from CPU. At 128K, SparDA achieves up to 1.7
+\times
+decode speedup over sparse offload and 5.3
+\times
+higher throughput than non-offload sparse via larger feasible batches.
+
+1
+Introduction
+
+Modern LLM applications increasingly require long context windows, especially for agentic and long-reasoning use cases
+[
+35
+,
+24
+]
+. This imposes three major efficiency challenges on the underlying serving infrastructure: 1) high compute demand for attention in the prefill phase; 2) high memory bandwidth pressure for attention in the decode phase; and 3) high KV cache capacity pressure in the decode phase. Sparse attention
+[
+31
+,
+33
+,
+19
+]
+is a promising technique that has been adopted by recent frontier models
+[
+6
+,
+11
+,
+7
+]
+to improve long-context LLM inference efficiency. However, most sparse attention methods primarily reduce attention compute and memory bandwidth; while some also shrink the KV cache, capacity pressure persists as context lengths continue to grow.
+
+A straightforward solution to this problem is to offload the KV cache to CPU memory and only fetch selected KV blocks to GPU memory for sparse attention dynamically during the decode phase. However, CPU fetching through the PCIe interface is still much slower than fetching from GPU memory, which becomes a bottleneck for long-context decoding. Prior work
+[
+34
+,
+13
+]
+proposes both system- and algorithm-level optimizations to reduce CPU fetching traffic. InfiniGen
+[
+16
+]
+further shows that lookahead prefetching can hide part of this latency, but it relies on the raw hidden state as a proxy for future attention and can be inaccurate when adjacent-layer similarity breaks down.
+
+Meanwhile, sparse attention itself introduces additional overhead from sparse selection. While the complexity of sparse attention has dropped from
+O(T^{2})
+to
+O(T)
+, where
+T
+is the sequence length, sparse selection remains
+O(T^{2})
+and can easily dominate the attention module as context grows. Recent work such as IndexCache
+[
+1
+]
+and HISA
+[
+29
+]
+reduces selection overhead, but typically introduces an accuracy–efficiency trade-off that does not fully preserve the original accuracy.
+
+To address the above issues, we propose SparDA, a decoupled sparse attention architecture that introduces a fourth per-layer projection, the
+Forecast
+, alongside the standard Query, Key, and Value (Figure
+1
+). Rather than treating the previous hidden state as a proxy, SparDA trains this Forecast to predict the sparse selector’s next-layer selection directly. SparDA has three key innovations:
+
+•
+
+Trainable lookahead sparse selection.
+In standard sparse attention, the attention query drives both top-
+k
+selection and sparse attention within the same layer. SparDA decouples these roles: the Forecast generated in layer
+l
+drives top-
+k
+selection for layer
+l{+}1
+, while the attention query still performs sparse attention, enabling CPU-to-GPU KV cache prefetching to overlap with the current layer’s execution.
+
+•
+
+Compact Forecast indexer.
+Once Forecast is decoupled from the attention query, it no longer needs to preserve the full query-head structure for sparse selection. In our GQA implementation, the Forecast indexer uses a single Forecast head per GQA group, substantially reducing sparse-selection overhead and entirely skipping the softmax operation.
+
+•
+
+Asynchronous prefetch with persistent UVA kernel.
+We implement the asynchronous prefetch pipeline with a persistent Unified Virtual Addressing (UVA) Triton kernel that performs high-throughput host-to-device transfers in parallel with the main GPU kernels, making sparse-attention offloading practical for large-batch long-context decoding.
+
+SparDA can be integrated into sparse-pretrained models by training only the lightweight Forecast projections (
+<
+0.5% additional parameters) via Kullback–Leibler (KL) divergence against the original selector’s block-attention distribution, without retraining the base model. We evaluate SparDA on MiniCPM4.1-8B
+[
+20
+]
+and NOSA-8B
+[
+13
+]
+, two sparse-pretrained 8B models, and show that it maintains comparable or slightly better accuracy than the sparse baseline on long-context and long-reasoning benchmarks. In efficiency, SparDA achieves up to 1.25
+\times
+prefill speedup and 1.7
+\times
+decode speedup over the sparse-attention offload baseline; by enabling larger feasible batch sizes on a single GPU, it further reaches up to 5.3
+\times
+higher decode throughput than the non-offload sparse baseline.
+
+2
+Related Work
+
+KV cache compression and training-free sparse attention.
+
+KV cache compression permanently discards or merges tokens to reduce the cache footprint
+[
+32
+,
+17
+,
+25
+]
+, which can cause accuracy loss when discarded context is later needed.
+Training-free sparse attention instead selects a subset of tokens or blocks per query without removing the rest from the KV cache
+[
+23
+,
+21
+,
+3
+]
+. MInference
+[
+14
+]
+, FlexPrefill
+[
+15
+]
+, and XAttention
+[
+28
+]
+further exploit dynamic sparse patterns to accelerate the prefill phase. Preserving the full cache generally incurs less accuracy loss than permanent eviction, but the growing cache footprint remains a challenge.
+
+Trainable sparse attention.
+
+Trainable sparse attention learns the selection structure during pretraining. InfLLM-V2
+[
+33
+]
+, MoBA
+[
+19
+]
+, and SeerAttention
+[
+10
+]
+use parameter-free or self-distilled block selection over mean-pooled keys; Native Sparse Attention (NSA)
+[
+31
+]
+fuses compressed, sparse, and sliding-window branches via learnable gating. DeepSeek Sparse Attention (DSA)
+[
+6
+]
+moves to token-level sparsity, and DeepSeek-V4
+[
+7
+]
+further interleaves Compressed Sparse Attention (CSA) with Heavily Compressed Attention (HCA), cutting per-token KV cache
+\sim 10\times
+over DeepSeek-V3.2; yet its
+8\times
+longer context still leaves absolute capacity a bottleneck. For reducing sparse selection overhead, IndexCache
+[
+1
+]
+reuses top-
+k
+indices across adjacent layers, and HISA
+[
+29
+]
+replaces the flat scan with hierarchical filtering. SparDA extends DSA’s lightning indexer to block-sparse attention, operating one layer ahead and pruning to one Forecast head per GQA group.
+
+Sparse attention with KV cache offloading.
+
+Several methods
+[
+4
+,
+22
+,
+5
+]
+offload the KV cache to CPU and manage GPU-resident entries through eviction, recall, or low-rank proxies. NOSA
+[
+13
+]
+pairs a query-agnostic eviction head with a query-aware selector and issues UVA-based CPU-to-GPU transfers synchronously per layer, reducing volume rather than hiding latency. SparseServe
+[
+34
+]
+and HiSparse
+[
+27
+]
+are sparse-attention serving systems that offload KV cache to host memory and reactively swap entries on demand — SparseServe via working-set-aware batch sizing and fragmentation-aware transfers, HiSparse via LRU eviction and a custom swap kernel; neither targets within-layer transfer-compute overlap. InfiniGen
+[
+16
+]
+is closest to SparDA: it prefetches a subset of CPU-resident KV to GPU before each layer using the raw hidden state as a cross-layer proxy, overlapping DMA-based memory copies with the preceding layer. SparDA instead learns a cross-layer Forecast projection—bridging DSA’s trained decoupled indexer with InfiniGen’s lookahead—and co-designs it with a persistent UVA prefetch kernel for communication-computation overlap.
+
+3
+Preliminary
+
+3.1
+InfLLM-V2
+
+In this paper, we build SparDA on top of InfLLM-V2
+[
+33
+]
+. InfLLM-V2 is architecturally representative of block-sparse attention: it decomposes attention into initial tokens, a local sliding window, and top-
+k
+selected blocks, the same components shared by NSA
+[
+31
+]
+, MoBA
+[
+19
+]
+, QUEST
+[
+23
+]
+, and StreamingLLM
+[
+26
+]
+. Since SparDA modifies only the top-
+k
+selection path, we expect the same design to apply to other methods with this initial/local/top-
+k
+structure. This section recaps the components that SparDA directly extends.
+
+Unified sparse attention.
+
+InfLLM-V2 merges selected attention and sliding-window attention into a single sparse attention module with shared KV projections
+\mathbf{W}_{K}
+and
+\mathbf{W}_{V}
+inherited from the pretrained dense model. At layer
+l
+, the attended block set for a query token at position
+i
+is:
+
+\mathcal{B}_{l}(i)=\mathcal{B}_{\mathrm{init}}\cup\mathcal{B}_{\mathrm{local}}(i)\cup\mathcal{B}_{\mathrm{topk}}(i),
+
+(1)
+
+where
+\mathcal{B}_{\mathrm{init}}
+covers a fixed set of initial blocks,
+\mathcal{B}_{\mathrm{local}}(i)
+covers the local blocks, and
+\mathcal{B}_{\mathrm{topk}}(i)
+contains the top-
+k
+blocks selected by compression scores. Full attention is computed only over the KV entries in
+\mathcal{B}_{l}(i)
+, reducing the per-query attention cost from
+O(T)
+to
+O(|\mathcal{B}_{l}(i)|\cdot B)
+, where
+T
+is the sequence length and
+B
+is the block size.
+
+Three-stage block representation.
+
+InfLLM-V2 uses a parameter-free, coarse-to-fine compression pipeline to compute block-level relevance scores for
+\mathcal{B}_{\mathrm{topk}}
+. In the first stage, keys
+\mathbf{K}_{l}
+are mean-pooled into overlapping compressed representations
+\widetilde{\mathbf{K}}_{l}
+with kernel size
+l_{C_{1}}
+and stride
+s_{C_{1}}
+:
+
+\widetilde{\mathbf{K}}_{l,j}=\mathrm{Mean}(\mathbf{K}_{l,\,j\cdot s_{C_{1}}:j\cdot s_{C_{1}}+l_{C_{1}}}).
+
+(2)
+
+Each GQA group
+m
+contains
+G
+query heads that share one KV head. For head
+h
+in group
+m
+, scoring against the corresponding compressed keys yields per-compressed-key relevance
+\mathbf{S}_{l,m}^{h}
+. Scores are then summed within each group to produce a shared importance score
+\mathbf{S}_{l,m}^{\mathrm{shared}}
+.
+In the final stage, a max-pooling operation over each
+\mathbf{S}_{l,m}^{\mathrm{shared}}
+produces the block-level score used for top-
+k
+selection. This three-stage process computes block scores from several overlapping sub-blocks rather than a single coarse pooling, preserving finer-grained information.
+
+4
+Method
+
+4.1
+SparDA Architecture
+
+As discussed in Section
+1
+, the primary goals of SparDA are twofold: (1) to enable KV cache prefetching that overlaps with layer execution for latency hiding; and (2) to reduce the overhead of sparse selection. SparDA achieves both through a single architectural change: a fourth per-layer projection, the
+Forecast
+
+\mathbf{F}_{l}
+, produced alongside the standard
+\mathbf{Q}_{l},\mathbf{K}_{l},\mathbf{V}_{l}
+, that drives a compact sparse-selection indexer.
+\mathbf{F}_{l}
+decouples sparse selection from the attention query so it can be computed one layer ahead. This decoupling also means the indexer no longer needs the full query-head structure used for attention; in our GQA implementation,
+\mathbf{F}_{l}
+replaces the original per-query-head scoring loop with one Forecast head per GQA group and skips the softmax normalization. Figure
+2
+illustrates the resulting layer structure compared with the InfLLM-V2 baseline.
+
+Figure 2:
+SparDA architecture.
+(a)
+In the baseline (InfLLM-V2),
+\mathbf{Q}_{l}
+drives both top-
+k
+selection and sparse attention within the same layer, so selection sits on the attention critical path.
+(b, c)
+SparDA adds a Forecast
+\mathbf{F}_{l}
+to the linear projection and uses
+\mathbf{F}_{l-1}
+from the previous layer to select blocks for the current layer. This decoupling pays off in two regimes: during prefill
+(b)
+the Forecast replaces the expensive multi-head selector with a Forecast indexer that uses one Forecast head per GQA group; during decode
+(c)
+
+\mathbf{F}_{l}
+predicts
+\mathcal{B}_{l+1}
+early enough to prefetch the selected KV blocks from CPU asynchronously, hiding the PCIe transfer behind the current layer’s compute.
+
+Decoupled sparse selection.
+
+In the original InfLLM-V2 sparse attention (Figure
+2
+a), the query
+\mathbf{Q}_{l}
+is used both for top-
+k
+sparse selection and for the sparse attention computation, and both steps happen within the same layer. SparDA decouples these two roles. The linear projection
+\phi_{l}
+in each layer produces an additional Forecast
+\mathbf{F}_{l}
+besides the standard
+\mathbf{Q}_{l}
+,
+\mathbf{K}_{l}
+,
+\mathbf{V}_{l}
+:
+
+(\mathbf{Q}_{l},\mathbf{K}_{l},\mathbf{V}_{l},\mathbf{F}_{l})=\phi_{l}(\mathbf{X}_{l}).
+
+(3)
+
+For brevity, the equations in this subsection drop the per-query-token index used in Section
+3
+.
+\mathbf{F}_{l}
+is used for top-
+k
+sparse selection while
+\mathbf{Q}_{l}
+is used only for the sparse attention computation. Let
+f_{\mathrm{top}}(\cdot,k)
+denote the InfLLM-V2 block-selection operator, which max-pools compressed-key-grid scores to block-level scores and returns the top-
+k
+blocks. Specifically,
+\mathbf{F}_{l}
+scores against the compressed keys
+\widetilde{\mathbf{K}}_{l+1}
+of layer
+l{+}1
+, and the resulting top-
+k
+blocks are merged with the initial and local blocks to form the attended set for layer
+l{+}1
+:
+
+\mathcal{B}_{l+1}=\mathcal{B}_{\mathrm{init}}\cup\mathcal{B}_{\mathrm{local}}\cup f_{\mathrm{top}}\!\left(\mathbf{F}_{l}\widetilde{\mathbf{K}}_{l+1}^{\top},\;k\right).
+
+(4)
+
+The sparse attention at layer
+l{+}1
+still uses the original query
+\mathbf{Q}_{l+1}
+:
+
+\mathbf{O}_{l+1}=\mathrm{Attn}\!\left(\mathbf{Q}_{l+1},\;\mathbf{K}_{l+1}[\mathcal{B}_{l+1}],\;\mathbf{V}_{l+1}[\mathcal{B}_{l+1}]\right).
+
+(5)
+
+For the first layer (
+l{=}0
+), where no previous Forecast exists, SparDA produces a current-layer Forecast
+\mathbf{F}_{0}^{\mathrm{cur}}
+from
+\mathbf{X}_{0}
+via a separate projection and uses it for same-layer selection.
+\mathbf{F}_{0}^{\mathrm{cur}}
+still uses one Forecast head per GQA group rather than the original attention query, so the selection cost remains lower than the baseline’s even without the one-layer-ahead benefit. For the final layer,
+\mathbf{F}_{L-1}
+is unused since there is no subsequent layer to predict for.
+
+The benefit of decoupled selection differs across inference phases. During prefill (Figure
+2
+b), all keys are already on GPU, so the only saving is the reduced sparse selection cost. During decode (Figure
+2
+c), the KV cache is offloaded to CPU memory and the one-layer-ahead prediction becomes critical:
+\mathbf{F}_{l}
+produces
+\mathcal{B}_{l+1}
+while layer
+l
+is still executing, so the runtime can prefetch the selected KV entries from CPU and overlap the PCIe transfer with layer execution. The compressed keys
+\widetilde{\mathbf{K}}_{l+1}^{\mathrm{cache}}
+are kept on GPU and updated incrementally; because the sparse selection excludes the initial and local blocks,
+\mathcal{B}_{l+1}
+does not depend on the next layer’s newly appended keys. Algorithms
+1
+and
+2
+in Appendix
+A
+summarize the per-layer steps.
+
+Forecast indexer.
+
+The key observation is that once Forecast is decoupled from the attention query, sparse selection no longer has to use the same head layout as attention. Block-sparse selectors such as InfLLM-V2 currently score each GQA group with all
+G
+query heads, because the attention query itself drives selection. DSA’s lightning indexer
+[
+6
+]
+already exploits this decoupling at the token level with fewer heads than the attention query. SparDA brings the same design to block-sparse attention:
+\mathbf{F}_{l}
+has one Forecast head per GQA group (one per KV head) rather than one per query head, eliminating the per-query-head scoring loop and significantly reducing top-
+k
+selection overhead. It also naturally skips the softmax operation that standard block-sparse selectors apply before top-
+k
+ranking, since there is no need for score summation across multiple query heads within a GQA group.
+
+4.2
+Indexer Training
+
+SparDA can be added to existing sparse-pretrained models by training only the Forecast projections, without retraining the base model. On both MiniCPM4.1-8B and NOSA-8B, these projections add only 33.5M parameters (0.41% of the 8B total), making SparDA a lightweight add-on with negligible model-size overhead.
+
+Training objective.
+
+Inspired by DeepSeek DSA
+[
+6
+]
+, the Forecast indexer is trained to match target block-attention scores via Kullback–Leibler (KL) divergence after top-
+k
+restriction and renormalization. Since the models we use are already trained with sparse attention, we only train the Forecast projections and skip the full-model sparse training stage used in DSA’s two-stage pipeline. For target layer
+l
+and GQA group
+m
+, we use the shared importance score before the final max-pooling stage as the target score because max-pooling discards fine-grained ranking information that the indexer needs to learn. For the layer-0 case, we define
+\mathbf{F}_{-1,m}=\mathbf{F}_{0,m}^{\mathrm{cur}}
+, so the same notation covers the current-layer Forecast used when no previous layer exists. The target and predicted scores are:
+
+\mathbf{S}_{l,m}^{\mathrm{tgt}}=\sum_{h=1}^{G}\!\mathrm{softmax}\!\left(\mathbf{Q}_{l,m,h}\widetilde{\mathbf{K}}_{l,m}^{\mathrm{tgt}\top}\!/\tau\right),\quad\mathbf{S}_{l,m}^{\mathrm{pred}}=\mathrm{softmax}\!\left(\mathbf{F}_{l-1,m}\widetilde{\mathbf{K}}_{l,m}^{\mathrm{pred}\top}\!/\tau\right),
+
+(6)
+
+where the predicted branch uses the Forecast
+\mathbf{F}_{l-1}
+from the previous layer’s indexer (or
+\mathbf{F}_{0,m}^{\mathrm{cur}}
+for layer 0), which produces a single score per KV head directly without GQA summation. Here
+\tau
+is the standard attention temperature.
+Stacking over all
+H_{\mathrm{kv}}
+groups gives tensors
+\mathbf{S}_{l}^{\mathrm{tgt}},\mathbf{S}_{l}^{\mathrm{pred}}\in\mathbb{R}^{H_{\mathrm{kv}}\times T\times N_{b}}
+, where
+H_{\mathrm{kv}}
+is the number of KV heads (i.e., the number of GQA groups),
+T
+is the number of query tokens, and
+N_{b}
+is the number of compressed key positions. Following DSA, we compute the KL loss over a top-
+k
+partitioned distribution. Let
+\mathcal{S}_{l}=\mathrm{TopK}(\mathbf{S}_{l}^{\mathrm{tgt}},\,k)
+denote the target’s selected set for each KV head and query token after causal masking and init/local-block exclusion. The training loss is:
+
+\mathcal{L}_{\mathrm{KL}}=\sum_{l}\mathrm{KL}\!\left(\bar{\mathbf{S}}^{\mathrm{tgt}}_{l,\,\mathcal{S}}\,\|\,\bar{\mathbf{S}}^{\mathrm{pred}}_{l,\,\mathcal{S}}\right),
+
+(7)
+
+where
+\bar{\mathbf{S}}_{\cdot,\,\mathcal{S}}
+is the
+(k{+}1)
+-dimensional distribution that keeps the scores of the
+k
+target-selected blocks individually and aggregates the remaining mass into a single rest bucket, renormalized to sum to one. This focuses the indexer on the relative ranking within
+\mathcal{S}_{l}
+while still constraining the total mass on non-selected blocks; out-of-set logits therefore receive a non-trivial gradient through the rest bucket.
+
+Fine-grained training supervision.
+
+The compressed keys
+\widetilde{\mathbf{K}}_{l}^{\mathrm{tgt}}
+and
+\widetilde{\mathbf{K}}_{l}^{\mathrm{pred}}
+in the target and predicted scores above are both computed by mean-pooling the original keys
+\mathbf{K}_{l}
+, but they can use different kernel sizes and strides.
+\widetilde{\mathbf{K}}_{l}^{\mathrm{pred}}
+always uses the standard InfLLM-V2 compression window (
+l_{C_{1}}{=}32
+,
+s_{C_{1}}{=}16
+) to match the inference-time configuration. A natural choice is to use the same window for
+\widetilde{\mathbf{K}}_{l}^{\mathrm{tgt}}
+, but we find that using a smaller kernel size and stride of
+(2,1)
+for the target produces a better indexer. The intuition is that finer-grained compression provides a higher-resolution supervision signal: each compressed key represents a smaller group of tokens, so the target scores are more discriminative and the indexer learns sharper selection decisions. Because the finer
+\widetilde{\mathbf{K}}_{l}^{\mathrm{tgt}}
+produces more compressed positions than
+\widetilde{\mathbf{K}}_{l}^{\mathrm{pred}}
+, we max-pool the resulting target score tensor
+\mathbf{S}_{l}^{\mathrm{tgt}}
+down to the standard
+(32,16)
+grid of
+\mathbf{S}_{l}^{\mathrm{pred}}
+before computing the KL loss, so both distributions live on the same set of block positions used at inference. The ablation in Table
+6
+in Appendix
+D
+confirms that this training-time mismatch improves accuracy.
+
+4.3
+Efficient Implementation
+
+At inference, SparDA’s one-layer-ahead Forecast produces
+\mathcal{B}_{l+1}
+while layer
+l
+is still executing. SparDA exploits this early availability through an asynchronous prefetch pipeline that transfers only the selected KV blocks from CPU to GPU before they are needed.
+
+Persistent UVA kernel for asynchronous prefetch.
+
+Once the sparse pattern for the next layer is predicted, the runtime fetches the selected KV blocks
+\mathcal{B}_{l+1}
+from pinned CPU memory on a dedicated CUDA stream so that the transfer overlaps with layer execution. Instead of relying on many small, irregular memory copies, SparDA uses a persistent Triton kernel based on Unified Virtual Addressing (UVA). The kernel keeps a small fixed set of GPU thread blocks, or Cooperative Thread Arrays (CTAs), active and lets them continuously process block-transfer tasks within a single launch, reducing launch overhead, avoiding frequent synchronization, and limiting interference with the main compute stream. As a result, CPU-to-GPU KV cache transfers can be largely overlapped with layer execution, making prefetching practical even with large-batch, high-throughput decoding.
+
+Batch-adaptive CTA allocation.
+
+The number of CTAs in the persistent kernel controls the trade-off between prefetch throughput and layer execution speed. More CTAs accelerate transfers toward the PCIe bandwidth ceiling but consume Streaming Multiprocessors (SMs) that would otherwise run the attention and FFN kernels. At small batch sizes the GPU is underutilized and layer execution dominates the critical path; a modest CTA budget suffices because the total transfer volume is small. As batch size grows, layer execution time scales sub-linearly (better SM occupancy) while prefetch volume grows linearly. Beyond a crossover point the prefetch becomes the new bottleneck, and allocating additional CTAs is worthwhile despite the marginal slowdown in layer execution. SparDA therefore adopts a simple heuristic to choose the CTA count that maximizes overall throughput for the underlying hardware. The sweep and chosen configurations are reported in Table
+7
+(Appendix
+D
+).
+
+5
+Experiments
+
+5.1
+Experimental Setup
+
+We evaluate SparDA on two 8B models: MiniCPM4.1-8B
+[
+20
+]
+, whose sparse backbone is InfLLM-V2
+[
+33
+]
+, and NOSA-8B
+[
+13
+]
+, which adds a query-agnostic eviction head on top of InfLLM-V2. Accuracy is measured on HELMET
+[
+30
+]
+, LongBench
+[
+2
+]
+, RULER
+[
+12
+]
+, and a long-reasoning suite (MATH-500
+[
+18
+]
+, AIME 2024, AIME 2025). We compare four configurations: dense, sparse, InfiniGen
+[
+16
+]
+, and SparDA. We do not directly compare against DSA-specific accelerators such as IndexCache
+[
+1
+]
+or HISA
+[
+29
+]
+, which target token-level DSA rather than the block-sparse backbones used here. Efficiency is measured on NVIDIA H100 and A100 GPUs using the runtime described in Section
+4.3
+; Dense
+†
+and Sparse
+†
+denote the no-offload configurations, while Sparse, InfiniGen, and SparDA use CPU offloading. The main text reports H100 results; Appendix
+D
+includes A100 results. Full evaluation details are in Appendix
+C
+.
+
+5.2
+Accuracy Results
+
+Aggregate accuracy.
+
+Across all four benchmark families, SparDA matches or improves over the Sparse baseline on the overall average (Table
+1
+). On MiniCPM4.1-8B, SparDA improves the average by +0.3, with gains on RULER (+0.5) and reasoning (+1.1), LongBench essentially flat, and HELMET slightly lower (-0.6). NOSA-8B sees a larger +2.3 average gain, driven mostly by reasoning (+6.5), RULER (+1.7), and HELMET (+1.2). Both models show a noticeable accuracy gap with Dense above Sparse on HELMET and RULER, likely because we evaluate at the models’ maximum sequence lengths (64K for MiniCPM4.1-8B, 32K for NOSA-8B), whereas their sparse-attention pretraining was conducted at shorter lengths (32K and 16K respectively). With fine-grained training supervision on the Forecast indexer, SparDA can improve over the Sparse baseline on most aggregate metrics while reducing the gap toward Dense in selected settings. InfiniGen suffers significant accuracy degradation on both models because, as a training-free method, it relies on hidden-state similarity across adjacent layers, an assumption that does not always hold. Per-task breakdowns are in Appendix
+D
+.
+
+Table 1:
+Aggregated benchmark averages.
+Avg
+is the arithmetic mean of the four benchmark families. Best values among sparse methods (excluding Dense) are highlighted in green.
+
+MiniCPM4.1-8B
+
+NOSA-8B
+
+Method
+
+HELMET
+
+LongBench
+
+RULER
+
+Reasoning
+
+Avg
+
+HELMET
+
+LongBench
+
+RULER
+
+Reasoning
+
+Avg
+
+Dense
+
+41.7
+
+44.8
+
+85.3
+
+82.3
+
+63.5
+
+39.3
+
+42.5
+
+86.2
+
+41.6
+
+52.4
+
+Sparse
+
+38.9
+
+45.0
+
+78.2
+
+83.6
+
+61.4
+
+32.2
+
+42.4
+
+72.2
+
+50.7
+
+49.4
+
+InfiniGen
+
+33.5
+
+45.1
+
+68.4
+
+83.7
+
+57.7
+
+28.1
+
+41.6
+
+65.2
+
+47.6
+
+45.6
+
+SparDA
+
+38.3
+
+45.1
+
+78.7
+
+84.7
+
+61.7
+
+33.4
+
+42.3
+
+73.9
+
+57.2
+
+51.7
+
+Length generalization.
+
+SparDA outperforms Sparse at every sequence length on RULER for both models (Table
+2
+). The advantage is most pronounced on NOSA-8B, where the gap widens steadily from +1.7 at 32K to +4.3 at 128K; MiniCPM4.1-8B shows a more mixed pattern (+1.5 at 32K, +0.5 at 64K, +2.1 at 96K, +1.1 at 128K). This suggests the learned Forecast generalizes at least as well as, and in some regimes better than, the training-free baseline selector.
+
+Table 2:
+RULER average accuracy at extended sequence lengths. SparDA consistently outperforms Sparse across all lengths on both models; the gap widens steadily with sequence length on NOSA-8B.
+
+MiniCPM4.1-8B
+
+NOSA-8B
+
+Method
+
+32K
+
+64K
+
+96K
+
+128K
+
+32K
+
+64K
+
+96K
+
+128K
+
+Sparse
+
+86.1
+
+78.2
+
+68.7
+
+67.7
+
+72.2
+
+56.6
+
+48.8
+
+40.7
+
+SparDA
+
+87.6
+
+78.7
+
+70.8
+
+68.8
+
+73.9
+
+60.5
+
+52.9
+
+45.0
+
+\Delta
+
++1.5
+
++0.5
+
++2.1
+
++1.1
+
++1.7
+
++3.9
+
++4.1
+
++4.3
+
+5.3
+Efficiency Results
+
+Attention breakdown.
+
+To understand where the speedup comes from, we break down per-layer attention time on MiniCPM4.1-8B at batch size 4 into block selection (green) and block-sparse attention (blue) for Sparse and SparDA (Figure
+3
+). We focus on MiniCPM4.1-8B because NOSA-8B includes additional query-agnostic components that obscure the comparison of query-aware sparse attention, the core component shared by most sparse attention methods. During prefill (Figure
+3
+a), block-sparse attention dominates and stays roughly constant across sequence lengths, while block selection grows with length and becomes comparable to attention at 128K. SparDA reduces block-selection cost by up to 2.50
+\times
+at 128K while keeping block-sparse attention time comparable to Sparse. During decode (Figure
+3
+b), the dominant cost flips: with only one query token per step, block-sparse attention is cheap, so Sparse block selection becomes the bottleneck and continues to grow with sequence length, while SparDA’s Forecast indexer keeps decode-time selection nearly flat, cutting the overhead by more than 2
+\times
+at 128K. The near-flat decode profile reflects that the indexer’s compute is small enough to leave the GPU under-utilized, so longer contexts barely affect decode latency.
+
+Figure 3:
+Per-layer attention wall time on MiniCPM4.1-8B at batch size 4.
+(a)
+Prefill (ms).
+(b)
+Decode (
+\mu
+s). Each group contains a Dense bar (gray) and Sparse/SparDA bars (solid/hatched) stacked by block selection (green) and block-sparse attention (blue). SparDA significantly reduces block-selection cost for both prefill and decode.
+
+Prefill throughput.
+
+The selection speedup translates directly into prefill throughput gains (Table
+3
+). We report a single batch size of 4 because prefill throughput is insensitive to batch size, as GPUs are already fully utilized during the compute-heavy prefill phase. Dense attention leads at short sequences but its quadratic scaling causes it to fall behind as sequence length grows. SparDA consistently outperforms all other methods from 64K onward on MiniCPM4.1-8B, achieving up to 1.25
+\times
+speedup over Sparse and 2.11
+\times
+over Dense at 128K. On NOSA-8B, SparDA leads from 96K onward with up to 1.16
+\times
+over Sparse and 1.40
+\times
+over Dense at 128K. All sparse methods are slower on NOSA-8B because its query-agnostic eviction head adds extra work. The main source of SparDA’s speedup is the reduced block-selection cost of its Forecast indexer (Figure
+3
+a), which scales more favorably than the baseline’s multi-head selector as sequence length increases. KV cache offloading itself has negligible impact on prefill throughput: Sparse
+\dagger
+(no offload) and Sparse (with offload) are nearly identical because the only offload-time transfer is the asynchronous CPU writeback of newly created KV cache entries after they are used for attention.
+
+Table 3:
+Prefill throughput (tok/s) on NVIDIA H100 GPU at batch size 4. Sequence length swept from 32K to 128K.
+\dagger
+: no offload. Best value per column is highlighted in green.
+
+MiniCPM4.1-8B
+
+NOSA-8B
+
+Method
+
+32K
+
+64K
+
+96K
+
+128K
+
+32K
+
+64K
+
+96K
+
+128K
+
+Dense
+\dagger
+
+20388.3
+
+13673.7
+
+10228.3
+
+8085.8
+
+20438.9
+
+13701.0
+
+10244.1
+
+8118.0
+
+Sparse
+\dagger
+
+18706.6
+
+16377.3
+
+14774.1
+
+13676.1
+
+12896.5
+
+11418.0
+
+10514.7
+
+9832.5
+
+Sparse
+
+18548.4
+
+16254.4
+
+14707.7
+
+13661.8
+
+12778.3
+
+11359.2
+
+10448.5
+
+9805.2
+
+InfiniGen
+
+18445.3
+
+16249.9
+
+14749.2
+
+13643.9
+
+12838.5
+
+11372.4
+
+10501.6
+
+9749.3
+
+SparDA
+
+19845.6
+
+18379.5
+
+17715.2
+
+17087.6
+
+13456.0
+
+12386.1
+
+11807.3
+
+11332.7
+
+Decode throughput.
+
+Decode is where the lookahead design pays off most, as it lets CPU-to-GPU KV prefetch overlap with the current layer’s compute. Within the offload regime at 128K, SparDA achieves up to 1.69
+\times
+speedup over Sparse on MiniCPM4.1-8B and 1.40
+\times
+on NOSA-8B (Table
+4
+), driven by reduced block-selection overhead (Figure
+3
+b) and overlapped prefetch that hides the otherwise synchronous CPU-to-GPU transfer. The largest speedups appear at middle batch sizes (B8–B16), where prefetch and layer execution are roughly balanced. Against the non-offload baselines (
+\dagger
+), which OOM past B16 at long contexts, offloading lets SparDA run much larger feasible batches and obtain correspondingly larger throughput gains, up to
+5.28\times
+over Sparse
+\dagger
+and
+9.21\times
+over Dense
+\dagger
+on MiniCPM4.1-8B. NOSA-8B shows lower speedups because its query-agnostic eviction head already reduces KV fetch traffic, leaving less room for overlap. InfiniGen is consistently slower than Sparse primarily because it gathers top-
+k
+KV blocks on CPU before transferring them to GPU, making CPU-side gather the bottleneck. Because SparDA retains the layer-0 KV cache on GPU (Appendix
+C
+), it OOMs slightly earlier than Sparse at long contexts; nevertheless, SparDA’s peak throughput exceeds Sparse’s at every context length, even when Sparse runs at a larger batch.
+
+Table 4:
+Decode throughput (tok/s) on NVIDIA H100 GPU. Batch size (B) swept from 4 to 128.
+\dagger
+: no offload. “–”: OOM. Best value per column is highlighted in green.
+
+MiniCPM4.1-8B
+
+NOSA-8B
+
+Context
+
+Method
+
+B4
+
+B8
+
+B16
+
+B32
+
+B64
+
+B128
+
+B4
+
+B8
+
+B16
+
+B32
+
+B64
+
+B128
+
+Dense
+\dagger
+
+248.3
+
+352.2
+
+440.2
+
+–
+
+–
+
+–
+
+252.0
+
+350.7
+
+439.7
+
+–
+
+–
+
+–
+
+Sparse
+\dagger
+
+277.2
+
+550.9
+
+1073.0
+
+–
+
+–
+
+–
+
+241.3
+
+488.1
+
+947.1
+
+–
+
+–
+
+–
+
+32K
+
+Sparse
+
+224.4
+
+420.9
+
+661.5
+
+861.8
+
+1088.4
+
+1225.1
+
+244.0
+
+478.0
+
+795.8
+
+1244.9
+
+1861.6
+
+2145.5
+
+InfiniGen
+
+56.3
+
+75.1
+
+98.8
+
+140.4
+
+184.8
+
+222.4
+
+82.0
+
+120.3
+
+166.0
+
+205.9
+
+269.9
+
+356.5
+
+SparDA
+
+235.7
+
+471.9
+
+918.5
+
+1205.2
+
+1328.0
+
+1358.2
+
+214.7
+
+433.2
+
+873.2
+
+1579.9
+
+2106.6
+
+2312.1
+
+Dense
+\dagger
+
+174.1
+
+218.3
+
+–
+
+–
+
+–
+
+–
+
+174.3
+
+217.6
+
+–
+
+–
+
+–
+
+–
+
+Sparse
+\dagger
+
+246.5
+
+466.2
+
+–
+
+–
+
+–
+
+–
+
+233.2
+
+439.7
+
+–
+
+–
+
+–
+
+–
+
+64K
+
+Sparse
+
+213.1
+
+350.8
+
+549.4
+
+756.1
+
+937.2
+
+1041.9
+
+221.0
+
+397.9
+
+704.6
+
+1071.1
+
+1553.1
+
+1793.1
+
+InfiniGen
+
+55.2
+
+63.3
+
+94.0
+
+129.1
+
+166.5
+
+–
+
+78.1
+
+106.2
+
+139.1
+
+181.0
+
+220.4
+
+–
+
+SparDA
+
+234.9
+
+470.3
+
+811.8
+
+1026.5
+
+1049.9
+
+1159.1
+
+218.8
+
+431.2
+
+870.9
+
+1392.3
+
+1905.2
+
+1996.3
+
+Dense
+\dagger
+
+133.8
+
+159.0
+
+–
+
+–
+
+–
+
+–
+
+130.0
+
+158.3
+
+–
+
+–
+
+–
+
+–
+
+Sparse
+\dagger
+
+215.5
+
+401.4
+
+–
+
+–
+
+–
+
+–
+
+204.1
+
+380.1
+
+–
+
+–
+
+–
+
+–
+
+96K
+
+Sparse
+
+185.7
+
+306.0
+
+489.0
+
+679.4
+
+839.5
+
+934.3
+
+191.5
+
+341.3
+
+605.5
+
+962.4
+
+1354.3
+
+1580.5
+
+InfiniGen
+
+49.4
+
+64.9
+
+86.0
+
+117.9
+
+–
+
+–
+
+75.1
+
+104.0
+
+129.1
+
+165.2
+
+–
+
+–
+
+SparDA
+
+238.6
+
+475.6
+
+752.9
+
+939.2
+
+1076.3
+
+–
+
+215.5
+
+437.6
+
+852.9
+
+1263.7
+
+1694.1
+
+–
+
+Dense
+\dagger
+
+108.6
+
+–
+
+–
+
+–
+
+–
+
+–
+
+108.4
+
+–
+
+–
+
+–
+
+–
+
+–
+
+Sparse
+\dagger
+
+189.5
+
+–
+
+–
+
+–
+
+–
+
+–
+
+179.3
+
+–
+
+–
+
+–
+
+–
+
+–
+
+128K
+
+Sparse
+
+167.8
+
+279.5
+
+447.9
+
+618.6
+
+788.9
+
+–
+
+173.2
+
+285.4
+
+529.2
+
+898.7
+
+1298.3
+
+–
+
+InfiniGen
+
+51.8
+
+66.5
+
+85.6
+
+117.5
+
+–
+
+–
+
+77.5
+
+105.2
+
+131.7
+
+166.9
+
+–
+
+–
+
+SparDA
+
+240.2
+
+471.2
+
+705.3
+
+899.2
+
+1000.1
+
+–
+
+219.0
+
+399.3
+
+735.0
+
+1127.0
+
+1463.3
+
+–
+
+Appendix
+D
+provides a decode speedup breakdown that separates block-selection savings from prefetch overlap, ablations on the compression window and prefetch CTA allocation, and throughput results on NVIDIA A100 GPU.
+
+6
+Limitations
+
+SparDA is not itself a sparse attention method; it is an add-on that builds on an existing sparse attention backbone to improve inference efficiency. The decoupled indexer replaces the selection path but does not change the sparse attention computation or the underlying sparse pattern. As a result, SparDA’s accuracy is bounded by the quality of the base sparse attention method. The decoupled indexer principle is not specific to block-level selection: we expect the same lookahead design to extend to token-level sparse attention such as DSA, which has been adopted by DeepSeek-V3.2
+[
+6
+]
+and GLM-5
+[
+11
+]
+, where the Forecast would predict per-token importance scores instead of per-block scores. The same idea also applies to the Compressed Sparse Attention (CSA) path of DeepSeek-V4
+[
+7
+]
+which is built on top of DSA. We leave applying SparDA to DSA- and CSA-based models as future work, since DeepSeek-V3.2, GLM-5, and DeepSeek-V4 are all significantly larger than the 8B models used here.
+
+7
+Conclusion
+
+SparDA shows that sparse selection can be treated as a trainable, schedulable signal rather than an operation tied to the current attention query. By decoupling selection from attention, the Forecast projection predicts block choices one layer ahead, letting the runtime overlap CPU-to-GPU KV transfer with current-layer execution while reducing selector cost through a compact GQA-level indexer. More broadly, the results suggest that sparse attention mechanisms should expose future memory-access patterns early enough for the serving system to act on them, turning sparsity from a compute-saving device into an offloading-friendly schedule. The approach still inherits the accuracy limits of the base sparse backbone, but it improves long-context inference efficiency without retraining the base model. Extending decoupled lookahead selection to token-level sparse attention and larger sparse-pretrained models is a natural direction for future work.
+
+Appendix A
+Algorithm Pseudocode
+
+Input:
+
+Hidden states
+\mathbf{X}_{l}
+; Forecast
+\mathbf{F}_{l-1}
+from prior layer
+
+Output:
+
+Hidden states
+\mathbf{X}_{l+1}
+; Forecast
+\mathbf{F}_{l}
+for next layer
+
+(\mathbf{Q}_{l},\mathbf{K}_{l},\mathbf{V}_{l},\mathbf{F}_{l})\leftarrow\phi_{l}(\mathbf{X}_{l})
+
+//
+\mathbf{F}_{l}
+is the Forecast
+
+\mathcal{B}_{l}\leftarrow\mathcal{B}_{\mathrm{init}}\cup\mathcal{B}_{\mathrm{local}}\cup f_{\mathrm{top}}(\mathbf{F}_{l-1}\,\widetilde{\mathbf{K}}_{l}^{\top},\;k)
+
+//
+pooled block selection
+
+\mathbf{O}_{l}\leftarrow\mathrm{Attn}(\mathbf{Q}_{l},\,\mathbf{K}_{l}[\mathcal{B}_{l}],\,\mathbf{V}_{l}[\mathcal{B}_{l}])
+
+1
+
+\mathbf{X}_{l+1}\leftarrow\mathrm{FFN}_{l}(\mathbf{O}_{l})
+
+2
+
+return
+
+\mathbf{X}_{l+1},\,\mathbf{F}_{l}
+
+3
+
+Algorithm 1
+
+SparDA prefill step (all tokens, one layer)
+
+For the first layer (
+l{=}0
+), where no previous Forecast exists, SparDA uses the layer-0 Forecast
+\mathbf{F}_{0}^{\mathrm{cur}}
+described in Section
+4
+for same-layer selection. In decode, the layer-0 KV cache remains on GPU, so the prefetch path begins from subsequent layers.
+
+Input:
+
+Hidden state
+\mathbf{X}_{l}
+; selected blocks
+\mathcal{B}_{l}
+and prefetched KV entries from prior layer
+
+Output:
+
+Hidden state
+\mathbf{X}_{l+1}
+; selected blocks
+\mathcal{B}_{l+1}
+for the next layer
+
+(\mathbf{Q}_{l},\mathbf{K}_{l},\mathbf{V}_{l},\mathbf{F}_{l})\leftarrow\phi_{l}(\mathbf{X}_{l})
+
+//
+\mathbf{F}_{l}
+is the Forecast
+
+Append
+(\mathbf{K}_{l},\mathbf{V}_{l})
+to
+(\mathbf{K}_{l}^{\mathrm{cache}},\mathbf{V}_{l}^{\mathrm{cache}})
+
+1
+
+Update
+\widetilde{\mathbf{K}}_{l}^{\mathrm{cache}}
+incrementally from
+\mathbf{K}_{l}^{\mathrm{cache}}
+
+2
+
+\mathcal{B}_{l+1}\leftarrow\mathcal{B}_{\mathrm{init}}\cup\mathcal{B}_{\mathrm{local}}\cup f_{\mathrm{top}}(\mathbf{F}_{l}\,\widetilde{\mathbf{K}}_{l+1}^{\mathrm{cache}\top},\;k)
+
+//
+one-layer-ahead pooled block selection
+
+Launch prefetch of
+\mathcal{B}_{l+1}
+: CPU
+\to
+GPU on prefetch stream
+
+3
+
+Wait for the KV entries of
+\mathcal{B}_{l}
+(if not yet complete)
+
+//
+prefetch launched during layer
+l{-}1
+
+\mathbf{O}_{l}\leftarrow\mathrm{Attn}(\mathbf{Q}_{l},\,\mathbf{K}_{l}^{\mathrm{cache}}[\mathcal{B}_{l}],\,\mathbf{V}_{l}^{\mathrm{cache}}[\mathcal{B}_{l}])
+
+4
+
+\mathbf{X}_{l+1}\leftarrow\mathrm{FFN}_{l}(\mathbf{O}_{l})
+
+5
+
+return
+
+\mathbf{X}_{l+1},\,\mathcal{B}_{l+1}
+
+6
+
+Algorithm 2
+
+SparDA decode step (one token, one layer)
+
+Appendix B
+Training Details
+
+Table
+5
+lists the indexer training hyperparameters used for both the MiniCPM4.1-8B and NOSA-8B experiments. Only the Forecast projection weights are trained; all backbone parameters remain frozen. Training uses 32 NVIDIA H100 GPUs; MiniCPM4.1-8B at 64K completes within 48 hours, and NOSA-8B at 32K completes within 24 hours.
+
+Table 5:
+Indexer training hyperparameters.
+
+Hyperparameter
+
+Value
+
+Optimizer
+
+AdamW (
+\beta_{1}{=}0.9
+,
+\beta_{2}{=}0.95
+,
+\epsilon{=}10^{-6}
+)
+
+Weight decay
+
+0.01
+
+Learning rate
+
+5\times 10^{-4}
+(constant)
+
+Training steps
+
+2 000 optimizer steps
+
+Effective batch size
+
+32 (accumulated across GPUs)
+
+Precision
+
+BF16 mixed precision
+
+Gradient clipping
+
+Max norm 0.5
+
+Training data
+
+ProLong-64K
+[
+9
+]
+
+Sequence length
+
+65 536 tokens
+
+Compression window
+
+Target
+(l_{C_{1}}{=}2,s_{C_{1}}{=}1)
+; prediction
+(l_{C_{1}}{=}32,s_{C_{1}}{=}16)
+
+Appendix C
+Evaluation Details
+
+Model configuration.
+
+Both MiniCPM4.1-8B and NOSA-8B use a block size of 64 tokens, 1 initial block, and a compression kernel of size 32 with stride 16 for mean-pooled keys. Both models are configured with the same overall top-
+k
+block budget of 96 for consistency. MiniCPM4.1-8B uses a local window of 2048 tokens (32 blocks) following its default sparse configuration, with the remaining budget for query-aware top-
+k
+selection. NOSA-8B uses a local window of 1024 tokens (16 blocks) and allocates 24 blocks (25% of 96) for query-aware top-
+k
+selection, following
+13
+. For MiniCPM4.1-8B, the thinking mode is disabled for all benchmarks except the reasoning suite. For the SparDA indexer, the trained Forecast projections (the main projection and the layer-0 same-layer projection) are loaded from the checkpoint; all other model parameters are identical to the sparse baseline.
+
+Long-context extension.
+
+MiniCPM4.1-8B natively supports up to 64K tokens and NOSA-8B up to 32K. For benchmarks that exceed each model’s native maximum, we apply positional-encoding extension at inference time. For MiniCPM4.1-8B we use the official 128K-validated LongRoPE
+[
+8
+]
+frequency factors provided with the model checkpoint, which replace both the long-factor and short-factor tables in the rotary embedding. For NOSA-8B we increase the RoPE base frequency (
+rope_theta
+) from the default 10,000 to 40,000 following
+13
+, a simple scaling that extends the effective context window to 128K. The same positional extension is applied identically across all attention configurations (Dense, Sparse, InfiniGen, SparDA) so that any accuracy differences are attributable solely to the attention method, not the positional encoding.
+
+InfiniGen adaptation.
+
+InfiniGen
+[
+16
+]
+is originally a token-level sparse attention method. To integrate it into the block-sparse framework of InfLLM-V2, we max-pool InfiniGen’s approximate attention scores along the key dimension with a kernel size equal to the block size, converting them to block-level scores. The resulting scores go through the same top-
+k
+selection (96 blocks) and block-sparse attention kernel as Sparse and SparDA. Since the original InfiniGen does not accelerate prefill, we use InfLLM-V2 sparse prefill for InfiniGen and additionally build its partial key cache during prefill by projecting full post-RoPE keys onto a subset of dimensions for decode-time scoring.
+
+HELMET.
+
+We evaluate at each model’s native maximum (64K for MiniCPM4.1-8B, 32K for NOSA-8B) across all seven HELMET categories (recall, RAG, ICL, rerank, citation, long QA, summarization). Each category uses 100 test samples. Decoding is greedy (
+\texttt{temperature}{=}0
+,
+\texttt{do\_sample}{=}\texttt{False}
+). Generation length varies per category (50–200 tokens). For tasks originally designed to be judged by GPT-4, we use GPT-5.2 as the judge.
+
+LongBench.
+
+We evaluate all 14 English tasks at the native maximum. Decoding is greedy with task-specific maximum generation lengths (32–512 tokens depending on the task).
+
+RULER.
+
+We evaluate all 13 synthetic tasks with 50 examples per task. Default sequence length is the native maximum; extended evaluations use 32K, 64K, 96K, and 128K. Decoding is greedy with task-specific generation limits (30–128 tokens).
+
+Reasoning (MATH-500, AIME 2024, AIME 2025).
+
+MATH-500 contains 500 problems; AIME 2024 and AIME 2025 each contain 30 problems. Unlike the other benchmarks, reasoning uses sampling (
+\texttt{temperature}{=}0.9
+,
+\texttt{top\_p}{=}0.95
+for MiniCPM4.1-8B;
+\texttt{temperature}{=}1.0
+,
+\texttt{top\_p}{=}1.0
+for NOSA-8B) with a long generation budget (up to 64K tokens for MiniCPM4.1-8B, 8K for NOSA-8B) to allow chain-of-thought reasoning. NOSA-8B does not support thinking mode, so we use a two-shot prompt that demonstrates step-by-step reasoning via in-context learning, following
+13
+. Final answers are evaluated by a GPT-5.2 judge.
+
+Efficiency.
+
+Throughput is measured on two GPU configurations: (1) NVIDIA H100 GPU with 80 GB HBM3 memory and PCIe Gen5
+\times
+16 CPU-GPU connection, and (2) NVIDIA A100 GPU with 80 GB HBM2e memory and PCIe Gen4
+\times
+16 CPU-GPU connection. Both systems have 2 TB of CPU memory. For each throughput setting, we discard one warmup run and report the average of two measured runs. All methods are implemented on top of the high-throughput NOSI inference engine from
+13
+. NOSI caches the top-
+k
+KV blocks used by the previous decoding step for each layer by default, so each decode step only needs to fetch the newly selected KV blocks that were not in the previous step’s selection. For offloading, the full KV cache resides in pinned CPU memory; only the compressed keys
+\widetilde{\mathbf{K}}_{l}
+(
+{\approx}1/s_{C_{1}}
+the size of
+\mathbf{K}_{l}
+) and the layer-0 cache (no prior Forecast to prefetch from) remain on GPU.
+
+Appendix D
+Additional Results
+
+Compression window ablation.
+
+Using a finer
+(l_{C_{1}}{=}2,s_{C_{1}}{=}1)
+target compression window during indexer training (Section
+4.2
+) improves the average score on both models, with the largest gains on RULER and Reasoning (Table
+6
+). On MiniCPM4.1-8B, the finer window improves RULER by +3.0 and reasoning by +2.2 while leaving HELMET and LongBench nearly unchanged. On NOSA-8B, it improves all four benchmark families, including +2.5 on RULER and +1.8 on Reasoning. Overall, the result confirms that higher-resolution supervision produces a sharper indexer with better overall selection accuracy.
+
+Table 6:
+Ablation on the target compression window
+(l_{C_{1}},s_{C_{1}})
+for indexer training. The prediction window is fixed at
+(32,16)
+to match inference.
+Avg
+is the arithmetic mean of the four benchmark families. Best values per column are highlighted in green.
+
+MiniCPM4.1-8B
+
+NOSA-8B
+
+Target window
+
+HELMET
+
+LongBench
+
+RULER
+
+Reasoning
+
+Avg
+
+HELMET
+
+LongBench
+
+RULER
+
+Reasoning
+
+Avg
+
+(32,16)
+
+38.2
+
+45.1
+
+75.7
+
+82.5
+
+60.4
+
+31.6
+
+42.0
+
+71.4
+
+55.4
+
+50.1
+
+(2,1)
+
+38.3
+
+45.1
+
+78.7
+
+84.7
+
+61.7
+
+33.4
+
+42.3
+
+73.9
+
+57.2
+
+51.7
+
+Prefetch CTA allocation ablation.
+
+Table
+7
+sweeps the number of persistent-kernel CTAs on NVIDIA H100 GPU with MiniCPM4.1-8B at 32K. The optimal count generally grows with batch size — 16 CTAs are best at small batches (B8–B16), while 32 (or 64) CTAs are preferred at larger batches. Our adaptive heuristic uses 16 CTAs when batch size
+<32
+and 32 CTAs otherwise, matching or staying within 4% of the best fixed configuration at every batch size. For the NVIDIA A100 GPU, a similar ablation yields an adaptive scheme of 16 CTAs when batch size
+<64
+and 32 CTAs otherwise.
+
+Table 7:
+Prefetch CTA-count sweep on NVIDIA H100 GPU with MiniCPM4.1-8B at 32K context. Best throughput at each batch size is highlighted in green.
+
+Method
+
+B4
+
+B8
+
+B16
+
+B32
+
+B64
+
+B128
+
+SparDA (8 CTAs)
+
+236.4
+
+439.1
+
+763.3
+
+858.1
+
+904.0
+
+929.5
+
+SparDA (16 CTAs)
+
+235.7
+
+471.9
+
+918.5
+
+1186.3
+
+1255.9
+
+1319.1
+
+SparDA (32 CTAs)
+
+233.5
+
+471.5
+
+813.1
+
+1205.2
+
+1328.0
+
+1358.2
+
+SparDA (64 CTAs)
+
+237.0
+
+471.9
+
+737.3
+
+1123.2
+
+1380.2
+
+1338.4
+
+SparDA (adaptive)
+
+235.7
+
+471.9
+
+918.5
+
+1205.2
+
+1328.0
+
+1358.2
+
+A100 throughput results.
+
+Tables
+8
+and
+9
+report prefill and decode throughput on an NVIDIA A100 GPU, providing a comparison with the H100 results in the main text.
+
+Table 8:
+Prefill throughput (tok/s) on NVIDIA A100 GPU at batch size 4. Sequence length swept from 32K to 128K.
+\dagger
+: no offload. Best value per column is highlighted in green.
+
+MiniCPM4.1-8B
+
+NOSA-8B
+
+Method
+
+32K
+
+64K
+
+96K
+
+128K
+
+32K
+
+64K
+
+96K
+
+128K
+
+Dense
+\dagger
+
+9531.5
+
+6836.1
+
+5260.2
+
+4282.9
+
+9576.2
+
+6870.5
+
+5313.5
+
+4316.0
+
+Sparse
+\dagger
+
+8002.2
+
+7310.1
+
+6776.8
+
+6310.3
+
+5833.2
+
+5364.6
+
+5022.4
+
+4713.5
+
+Sparse
+
+8052.3
+
+7311.0
+
+6765.9
+
+6299.2
+
+5839.7
+
+5365.0
+
+5021.9
+
+4717.1
+
+InfiniGen
+
+7985.5
+
+7268.6
+
+6740.0
+
+6296.3
+
+5815.4
+
+5339.0
+
+5005.2
+
+4711.5
+
+SparDA
+
+8555.9
+
+8191.3
+
+7959.4
+
+7756.8
+
+6097.4
+
+5817.9
+
+5651.5
+
+5477.5
+
+Table 9:
+Decode throughput (tok/s) on NVIDIA A100 GPU. Batch size (B) swept from 4 to 128.
+\dagger
+: no offload. “–”: OOM. Best value per column is highlighted in green.
+
+MiniCPM4.1-8B
+
+NOSA-8B
+
+Context
+
+Method
+
+B4
+
+B8
+
+B16
+
+B32
+
+B64
+
+B128
+
+B4
+
+B8
+
+B16
+
+B32
+
+B64
+
+B128
+
+Dense
+\dagger
+
+160.9
+
+219.7
+
+268.8
+
+–
+
+–
+
+–
+
+161.0
+
+218.6
+
+266.8
+
+–
+
+–
+
+–
+
+Sparse
+\dagger
+
+171.4
+
+348.6
+
+688.7
+
+–
+
+–
+
+–
+
+155.7
+
+307.8
+
+630.3
+
+–
+
+–
+
+–
+
+32K
+
+Sparse
+
+165.6
+
+276.1
+
+405.9
+
+515.7
+
+597.9
+
+649.2
+
+158.5
+
+317.8
+
+572.7
+
+828.2
+
+1097.9
+
+1113.3
+
+InfiniGen
+
+55.2
+
+71.8
+
+75.2
+
+71.3
+
+72.3
+
+27.3
+
+46.8
+
+108.1
+
+154.4
+
+182.3
+
+157.8
+
+119.8
+
+SparDA
+
+160.4
+
+316.4
+
+568.0
+
+649.2
+
+668.9
+
+691.9
+
+148.1
+
+292.4
+
+591.4
+
+988.6
+
+1211.1
+
+1218.1
+
+Dense
+\dagger
+
+109.6
+
+134.8
+
+–
+
+–
+
+–
+
+–
+
+109.5
+
+133.7
+
+–
+
+–
+
+–
+
+–
+
+Sparse
+\dagger
+
+173.2
+
+344.6
+
+–
+
+–
+
+–
+
+–
+
+157.4
+
+310.3
+
+–
+
+–
+
+–
+
+–
+
+64K
+
+Sparse
+
+147.3
+
+236.7
+
+345.6
+
+443.9
+
+516.1
+
+556.6
+
+158.5
+
+284.6
+
+479.8
+
+704.8
+
+911.8
+
+861.3
+
+InfiniGen
+
+54.0
+
+67.5
+
+66.9
+
+63.3
+
+27.2
+
+–
+
+63.3
+
+100.1
+
+133.5
+
+138.1
+
+62.5
+
+–
+
+SparDA
+
+160.3
+
+316.3
+
+457.8
+
+573.7
+
+593.1
+
+578.4
+
+146.9
+
+292.8
+
+577.3
+
+887.8
+
+1042.6
+
+961.3
+
+Dense
+\dagger
+
+83.3
+
+97.4
+
+–
+
+–
+
+–
+
+–
+
+82.9
+
+96.7
+
+–
+
+–
+
+–
+
+–
+
+Sparse
+\dagger
+
+157.8
+
+301.6
+
+–
+
+–
+
+–
+
+–
+
+153.0
+
+294.8
+
+–
+
+–
+
+–
+
+–
+
+96K
+
+Sparse
+
+127.6
+
+208.7
+
+310.7
+
+402.5
+
+467.0
+
+503.1
+
+140.7
+
+253.5
+
+424.0
+
+629.9
+
+814.2
+
+849.0
+
+InfiniGen
+
+50.8
+
+62.0
+
+57.5
+
+53.2
+
+–
+
+–
+
+61.8
+
+97.0
+
+124.7
+
+122.6
+
+–
+
+–
+
+SparDA
+
+158.7
+
+306.6
+
+436.0
+
+522.6
+
+529.4
+
+–
+
+146.1
+
+295.2
+
+568.1
+
+778.4
+
+930.5
+
+–
+
+Dense
+\dagger
+
+67.2
+
+–
+
+–
+
+–
+
+–
+
+–
+
+66.6
+
+75.3
+
+–
+
+–
+
+–
+
+–
+
+Sparse
+\dagger
+
+141.0
+
+–
+
+–
+
+–
+
+–
+
+–
+
+136.5
+
+–
+
+–
+
+–
+
+–
+
+–
+
+128K
+
+Sparse
+
+117.3
+
+195.1
+
+287.3
+
+383.1
+
+447.9
+
+–
+
+127.4
+
+232.4
+
+395.6
+
+585.4
+
+795.9
+
+–
+
+InfiniGen
+
+49.6
+
+62.3
+
+58.1
+
+41.3
+
+–
+
+–
+
+62.8
+
+95.7
+
+70.3
+
+62.2
+
+–
+
+–
+
+SparDA
+
+160.2
+
+303.3
+
+424.4
+
+485.5
+
+501.4
+
+–
+
+148.4
+
+298.2
+
+526.3
+
+691.3
+
+876.9
+
+–
+
+On prefill, SparDA achieves up to 1.23
+\times
+speedup over Sparse and 1.81
+\times
+over Dense on MiniCPM4.1-8B at 128K, and up to 1.16
+\times
+over Sparse on NOSA-8B. These gains are consistent with the H100 results, confirming that the Forecast indexer’s reduced selection cost transfers across GPU generations.
+
+On decode, SparDA achieves up to 1.55
+\times
+speedup over Sparse on MiniCPM4.1-8B (128K, B8) and up to 1.33
+\times
+on NOSA-8B (128K, B16), slightly lower than on H100. The same trends hold: speedups peak at middle batch sizes and NOSA-8B shows lower gains due to its reduced KV fetch traffic. InfiniGen’s CPU-side gather bottleneck is even more pronounced on A100, with throughput degrading sharply at larger batch sizes.
+
+Decode speedup breakdown.
+
+Table
+10
+isolates the two sources of SparDA’s decode speedup on NVIDIA H100 GPU at 128K sequence length: reduced block-selection cost and overlapped CPU-to-GPU prefetch. SparDA (no prefetch) uses the Forecast indexer but fetches KV blocks synchronously as in prefill, without asynchronous overlap. Even without prefetch, this variant already outperforms Sparse at B4 on both models because the Forecast indexer cuts block-selection latency; at this small batch, the prefetch pipeline adds slight overhead that makes the full SparDA marginally slower than the no-prefetch variant. As batch size grows, layer execution scales sub-linearly while KV transfer volume grows linearly, so prefetch overlap becomes increasingly beneficial: by B16 the full SparDA pulls ahead of the no-prefetch variant on both models, and by B64 it is roughly 40% faster. At B64, SparDA (no prefetch) drops below Sparse on both models because the block-selection savings diminish at large batches while the indexer projection cost remains, confirming that prefetch overlap is essential for SparDA’s advantage at high batch sizes.
+
+Table 10:
+Decode throughput (tok/s) breakdown on NVIDIA H100 GPU at 128K sequence length. Batch size (B) swept from 4 to 64. Best value per column is highlighted in green.
+
+MiniCPM4.1-8B
+
+NOSA-8B
+
+Method
+
+B4
+
+B8
+
+B16
+
+B32
+
+B64
+
+B4
+
+B8
+
+B16
+
+B32
+
+B64
+
+Sparse
+
+167.8
+
+279.5
+
+447.9
+
+618.6
+
+788.9
+
+173.2
+
+285.4
+
+529.2
+
+898.7
+
+1298.3
+
+SparDA (no prefetch)
+
+247.3
+
+379.1
+
+505.9
+
+608.2
+
+696.9
+
+226.5
+
+434.9
+
+653.0
+
+884.2
+
+1063.8
+
+SparDA
+
+240.2
+
+471.2
+
+705.3
+
+899.2
+
+1000.1
+
+219.0
+
+399.3
+
+735.0
+
+1127.0
+
+1463.3
+
+Per-task accuracy breakdowns.
+
+Tables
+11
+–
+14
+report per-task scores for each benchmark family, complementing the aggregated results in Table
+1
+.
+
+Table 11:
+Per-category HELMET scores. Best among sparse methods (excluding Dense) is highlighted in green.
+
+MiniCPM4.1-8B (64K)
+
+NOSA-8B (32K)
+
+Category
+
+Dense
+
+Sparse
+
+InfiniGen
+
+SparDA
+
+Dense
+
+Sparse
+
+InfiniGen
+
+SparDA
+
+Recall
+
+84.7
+
+67.8
+
+37.8
+
+61.5
+
+77.9
+
+40.9
+
+19.6
+
+45.6
+
+RAG
+
+55.1
+
+54.7
+
+51.4
+
+54.6
+
+51.4
+
+49.1
+
+47.4
+
+49.4
+
+ICL
+
+84.0
+
+82.2
+
+82.3
+
+81.9
+
+64.3
+
+68.4
+
+69.1
+
+67.9
+
+Citation
+
+2.5
+
+3.5
+
+3.0
+
+3.2
+
+3.4
+
+3.2
+
+2.9
+
+3.9
+
+Rerank
+
+12.5
+
+14.7
+
+13.5
+
+17.0
+
+32.7
+
+22.3
+
+15.9
+
+24.7
+
+LongQA
+
+31.8
+
+30.9
+
+30.2
+
+32.1
+
+28.3
+
+26.9
+
+27.4
+
+26.0
+
+Summ
+
+20.9
+
+18.2
+
+16.4
+
+18.0
+
+17.0
+
+14.8
+
+14.6
+
+16.5
+
+Average
+
+41.7
+
+38.9
+
+33.5
+
+38.3
+
+39.3
+
+32.2
+
+28.1
+
+33.4
+
+Table 12:
+Per-task LongBench scores. Best among sparse methods (excluding Dense) is highlighted in green.
+
+MiniCPM4.1-8B
+
+NOSA-8B
+
+Task
+
+Dense
+
+Sparse
+
+InfiniGen
+
+SparDA
+
+Dense
+
+Sparse
+
+InfiniGen
+
+SparDA
+
+2wikimqa
+
+33.1
+
+35.2
+
+35.4
+
+34.2
+
+37.8
+
+36.8
+
+35.5
+
+35.5
+
+gov_report
+
+28.5
+
+28.2
+
+27.8
+
+28.0
+
+32.8
+
+33.3
+
+32.9
+
+33.6
+
+hotpotqa
+
+48.6
+
+48.9
+
+49.6
+
+49.2
+
+50.5
+
+48.0
+
+47.5
+
+48.2
+
+multifieldqa_en
+
+53.3
+
+53.8
+
+53.5
+
+54.3
+
+50.5
+
+51.4
+
+51.4
+
+51.5
+
+musique
+
+23.7
+
+25.4
+
+24.6
+
+25.2
+
+25.0
+
+23.4
+
+21.0
+
+24.9
+
+narrativeqa
+
+20.7
+
+20.2
+
+22.5
+
+22.6
+
+23.1
+
+23.0
+
+22.0
+
+21.8
+
+passage_count
+
+4.0
+
+3.5
+
+3.5
+
+3.5
+
+3.5
+
+3.0
+
+4.0
+
+3.0
+
+passage_retr.
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+89.0
+
+92.0
+
+87.0
+
+90.5
+
+qasper
+
+42.0
+
+42.0
+
+41.8
+
+41.9
+
+34.8
+
+34.6
+
+33.9
+
+34.3
+
+qmsum
+
+24.2
+
+23.6
+
+24.0
+
+23.7
+
+24.8
+
+25.0
+
+24.5
+
+24.7
+
+repobench-p
+
+50.6
+
+50.9
+
+51.2
+
+50.0
+
+53.9
+
+54.1
+
+53.8
+
+53.6
+
+samsum
+
+39.8
+
+40.8
+
+39.8
+
+40.6
+
+6.9
+
+6.1
+
+6.0
+
+6.1
+
+trec
+
+76.0
+
+74.5
+
+74.5
+
+74.5
+
+74.5
+
+74.5
+
+75.0
+
+75.5
+
+triviaqa
+
+83.0
+
+83.6
+
+83.6
+
+83.6
+
+88.2
+
+88.2
+
+87.7
+
+88.2
+
+Average
+
+44.8
+
+45.0
+
+45.1
+
+45.1
+
+42.5
+
+42.4
+
+41.6
+
+42.3
+
+Table 13:
+Per-task RULER scores at the native maximum (64K for MiniCPM4.1-8B, 32K for NOSA-8B). Best among sparse methods (excluding Dense) is highlighted in green.
+
+MiniCPM4.1-8B (64K)
+
+NOSA-8B (32K)
+
+Task
+
+Dense
+
+Sparse
+
+InfiniGen
+
+SparDA
+
+Dense
+
+Sparse
+
+InfiniGen
+
+SparDA
+
+niah_single_1
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+niah_single_2
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+niah_single_3
+
+100.0
+
+100.0
+
+86.0
+
+100.0
+
+100.0
+
+100.0
+
+98.0
+
+100.0
+
+niah_multikey_1
+
+98.0
+
+94.0
+
+96.0
+
+100.0
+
+100.0
+
+86.0
+
+70.0
+
+90.0
+
+niah_multikey_2
+
+98.0
+
+80.0
+
+44.0
+
+78.0
+
+98.0
+
+50.0
+
+18.0
+
+52.0
+
+niah_multikey_3
+
+98.0
+
+62.0
+
+28.0
+
+56.0
+
+90.0
+
+20.0
+
+8.0
+
+28.0
+
+niah_multivalue
+
+94.5
+
+95.5
+
+90.5
+
+96.5
+
+94.0
+
+92.0
+
+85.0
+
+95.0
+
+niah_multiquery
+
+99.0
+
+97.5
+
+87.5
+
+98.5
+
+95.0
+
+90.0
+
+71.5
+
+95.0
+
+vt
+
+54.8
+
+74.4
+
+73.2
+
+74.8
+
+98.8
+
+97.2
+
+97.2
+
+98.4
+
+cwe
+
+44.4
+
+11.0
+
+23.2
+
+12.4
+
+47.6
+
+31.6
+
+37.8
+
+34.6
+
+fwe
+
+92.0
+
+94.0
+
+79.3
+
+92.7
+
+95.3
+
+89.3
+
+90.7
+
+86.0
+
+qa_1
+
+80.0
+
+64.0
+
+44.0
+
+70.0
+
+56.0
+
+38.0
+
+32.0
+
+40.0
+
+qa_2
+
+50.0
+
+44.0
+
+38.0
+
+44.0
+
+46.0
+
+44.0
+
+40.0
+
+42.0
+
+Average
+
+85.3
+
+78.2
+
+68.4
+
+78.7
+
+86.2
+
+72.2
+
+65.2
+
+73.9
+
+Table 14:
+Per-dataset reasoning accuracy (GPT-5.2 judge, %). Best among sparse methods (excluding Dense) is highlighted in green.
+
+MiniCPM4.1-8B
+
+NOSA-8B
+
+Dataset
+
+Dense
+
+Sparse
+
+InfiniGen
+
+SparDA
+
+Dense
+
+Sparse
+
+InfiniGen
+
+SparDA
+
+MATH-500
+
+96.8
+
+97.6
+
+97.8
+
+97.4
+
+68.2
+
+72.2
+
+72.8
+
+71.6
+
+AIME 2024
+
+80.0
+
+90.0
+
+83.3
+
+86.7
+
+43.3
+
+40.0
+
+40.0
+
+46.7
+
+AIME 2025
+
+70.0
+
+63.3
+
+70.0
+
+70.0
+
+13.3
+
+40.0
+
+30.0
+
+53.3
+
+Average
+
+82.3
+
+83.6
+
+83.7
+
+84.7
+
+41.6
+
+50.7
+
+47.6
+
+57.2
+

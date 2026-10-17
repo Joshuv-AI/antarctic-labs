@@ -1,0 +1,1231 @@
+KVEraser: Learning to Steer KV Cache for Efficient Localized Context Erasing
+Mufei Li, Shikun Liu, Dongqi Fu, Haoyu Wang, Yinglong Xia, Hong Li, Hong Yan, Pan Li
+
+Abstract
+Post-hoc context erasing over the KV cache is challenging because a local edit has a global consequence: once a span has been processed, its influence propagates into the cached states of all subsequent tokens. This issue arises naturally in long-context LLM applications, where stale retrieved facts, incorrect tool observations, retracted user preferences, or harmful prompt injections may be identified only after prefill. Exact erasing must then recompute all tokens after the deleted span, making its computational cost depend on suffix length rather than erased-span length. We introduce KVEraser, a learned KV-cache editing method for efficient localized context erasing. Given a processed context and a span to remove, KVEraser replaces only the KV states of the erased interval with learned steering states while reusing the remaining cache unchanged. To learn a transferable erasing mechanism, we build a two-stage training pipeline: generic span-neighbor pre-training teaches the eraser to suppress the influence of the erased span, while task-specific fine-tuning adapts this capability to downstream scenarios. Experiments show that KVEraser nearly matches full recomputation in post-erasure performance on in-domain tasks across 1K–32K context lengths, while its latency increases by only 24% compared with a 17.6 × \times increase for full recomputation. KVEraser also generalizes to unseen long-document QA tasks with harmful factual distractors, achieving the best performance among approximate baselines with a 3–4 × \times speedup over full recomputation.
+
+
+
+†
+†
+affiliation:
+Georgia Institute of Technology
+†
+†
+affiliation:
+Meta
+†
+†
+date:
+August 9, 2026
+†
+†
+correspondence:
+mufei.li@gatech.edu
+,
+panli@gatech.edu
+
+1
+Introduction
+
+Key-Value (KV) caching is a central optimization for efficient inference in large language models (LLMs). After context processing, the cached keys and values allow each subsequent token to attend to the previous context without recomputing its internal states.
+Modern serving systems therefore rely heavily on KV-cache management to reduce latency and improve throughput
+(
+Kwon et al. 2023
+;
+Zheng et al. 2024
+)
+.
+
+Figure 1:
+Illustration examples of KVEraser application scenarios.
+
+In many long-context applications, the context processed by an LLM is not a static prompt, but a working context assembled online from retrieved documents, tool observations, code snippets, execution logs, and conversational memory
+(
+Lewis et al. 2020
+;
+Schick et al. 2023
+;
+Yao et al. 2023
+)
+. A RAG system may prefill retrieved passages before discovering an out-of-date fact; a tool-augmented assistant may cache an observation before realizing that it contains an incorrect result from a stale tool call; a long-running agent may continue from a cached context before detecting adversarial instructions in an imported skill file
+(
+Shi et al. 2023
+;
+Xie et al. 2024
+;
+Sun et al. 2024
+;
+Greshake et al. 2023
+;
+Schmotz et al. 2025
+)
+. As illustrated in Fig.
+1
+, a user may also retract an earlier preference after the dialogue context has already been processed. In all these cases, a short problematic span is identified only after prefill, when the long context has already been written into the KV cache and can influence future decoding. Such stale, incorrect, or harmful context can lead to incorrect answers, failed actions, or unsafe behavior. The desired inference-time operation is therefore
+context erasing
+: given a processed context and a span to delete, make future decoding behave as if that span had never appeared.
+
+The difficulty of context erasing is rooted in a strict validity condition of KV reuse. Exact KV reuse requires the same preceding context, i.e., the same prefix. Under causal self-attention, the representation of each token depends on all earlier tokens; once an earlier part of the context is edited, the cached states of all later tokens are no longer exact. This makes standard cache reuse effective for shared-prefix workloads
+(
+Jin et al. 2025
+;
+Gim et al. 2024
+)
+, but brittle to post-hoc in-context edits as in context erasing.
+
+The exact solution is to reuse the unchanged prefix cache and rerun prefill over the entire impacted suffix. Its computational cost is therefore governed by suffix length rather than deleted-span length, making it increasingly expensive as context sizes grow. This challenge is especially important because long-context models are sensitive to distracting or misplaced context
+(
+Georgiev et al. 2024
+;
+Hsieh et al. 2024
+;
+Liu et al. 2024
+;
+Yen et al. 2025
+;
+Li et al. 2025
+)
+.
+
+A natural alternative is instruction-only forgetting: keep the cache unchanged and append a request to forget the earlier span before answering the query. Recent evaluations on in-context forgetting
+(
+Qian et al. 2026
+)
+and memory agents
+(
+Hu et al. 2026
+)
+show that models struggle with such instructions. This limitation is architectural: after prefill, the suffix KV states have already been contaminated, so a later instruction can only compete with stored evidence at decoding time rather than rewrite the cached states themselves.
+
+These observations motivate a
+natural question
+: can post-hoc context erasing be performed directly in KV space, without rerunning prefill on the suffix? We study direct KV-space context erasing with a functional goal: rather than reconstructing the edited cache exactly token by token, we aim to make future decoding behave as if the marked span had never appeared. To this end, we introduce
+KVEraser
+, a learned cache-editing method that generates steering KV states to replace the original KV states of the erased span while reusing the rest of the cache unchanged. The eraser module is trained to make decoding from this surrogate cache approximate the counterfactual behavior of the frozen model on the edited prompt with the span deleted. As the eraser is architecturally compatible with the generator, the method is also straightforward to initialize and train with standard recipes. To learn a transferable erasing mechanism, we build a two-stage training pipeline: generic span-neighbor pre-training teaches the eraser to suppress the influence of the erased span, while task-specific fine-tuning adapts this capability to downstream erasing scenarios.
+
+We evaluate KVEraser on two settings: a controlled long-context erasing benchmark that isolates post-hoc deletion from parametric knowledge, and natural long-document question answering (QA) with harmful factual distractors. For the latter, we evaluate on three unseen QA datasets to test the generalizability of the learned eraser. On the controlled benchmark, KVEraser achieves near-perfect post-erasure performance across contexts from 1K to 32K tokens, matching full recomputation. Over the range, its latency increases by only
+24\%
+, compared with
+17.6\times
+for full recomputation. Approximate baselines based on cache deletion, instruction-only forgetting, or limited suffix cache repair either start with substantially lower accuracy or degrade quickly as context grows. On natural long-document QA, KVEraser achieves the best performance among approximate methods at comparable or lower latency, while full recomputation remains 3–4
+\times
+slower, yielding the best practical quality–efficiency tradeoff. These results suggest that learned local KV steering is a promising mechanism for efficient and reliable context erasing in long-context inference.
+
+2
+Background and problem formulation
+
+KV cache.
+LLMs process a context
+\mathbf{x}=(x_{1},\dots,x_{T})
+with causal attention
+(
+Radford et al. 2018
+)
+. For each token at position
+i
+, a transformer layer first computes query, key, and value vectors
+\mathbf{q}_{i},\mathbf{k}_{i},\mathbf{v}_{i}
+. Positional encoding is integrated here to preserve relative token ordering information. The model then performs attention-based aggregation
+\sum_{1\leq j\leq i}w_{ij}\mathbf{v}_{j}
+, where
+\{w_{ij}\}_{1\leq j\leq i}
+is obtained by applying softmax to
+\{\mathbf{q}_{i}^{T}\mathbf{k}_{j}\}_{1\leq j\leq i}
+
+(
+Vaswani et al. 2017
+)
+. By caching previously computed
+key and value vectors
+\{\mathbf{k}_{j}\}_{1\leq j<i},\{\mathbf{v}_{j}\}_{1\leq j<i}
+, we avoid recomputing
+\mathbf{k}_{j}
+and
+\mathbf{v}_{j}
+for
+j<i
+when new
+tokens are appended.
+
+Context erasing
+asks a counterfactual question: after a context has been prefilled, can we make the model behave as if a chosen span had never appeared? We study a clean and general setting in which a single contiguous span is deleted. Deleting multiple spans is outside the scope of this work, but may be handled by iterative one-span deletion; a complete study is left to future work. We decompose the processed context as
+\mathbf{x}=\mathbf{p}\oplus\mathbf{e}\oplus\mathbf{s}
+, where
+\mathbf{p}=\mathbf{x}_{1:m-1}
+is the preserved prefix,
+\mathbf{e}=\mathbf{x}_{m:n}
+is the span to erase, and
+\mathbf{s}=\mathbf{x}_{n+1:T}
+is the suffix. The edited prompt after deleting
+\mathbf{e}
+is
+\tilde{\mathbf{x}}=\mathbf{p}\oplus\mathbf{s}
+.
+
+Let
+\mathbf{KV}(\mathbf{x})
+denote the KV cache of a context
+\mathbf{x}
+. The cached state of each token depends on its entire prefix. Hence the KV cache of the first
+m-1
+tokens remains valid after deleting
+\mathbf{e}
+,
+whereas the cache of the remaining
+T-n
+tokens is contaminated by the erased span. Standard KV reuse is therefore effective for shared-prefix contexts but
+brittle to post-hoc edits within a context. Exact erasing could be performed by reusing the unchanged prefix cache and rerunning the prefill pass on the edited prompt
+\tilde{\mathbf{x}}
+, yielding
+\mathbf{KV}(\tilde{\mathbf{x}})
+. However, the computational cost of this exact solution is governed by the suffix length
+|\mathbf{s}|
+, which can be much larger than the deleted-span length
+|\mathbf{e}|
+in many practical settings. Our goal is therefore to study whether context erasing can be performed without computationally expensive full-suffix recomputation, especially when a short span to erase is followed by a long suffix.
+
+A KV-cache reuse strategy for context erasing can be formalized as a procedure
+
+\pi:\left(\mathbf{x},\mathbf{KV}(\mathbf{x}),m\!:\!n\right)\mapsto\widehat{\mathbf{KV}}(\mathbf{x};m,n),
+
+(1)
+
+which constructs a surrogate KV cache for the edited prompt without re-prefill on
+
+\tilde{\mathbf{x}}
+.
+Given a user request
+\mathbf{u}
+, let
+
+\mathcal{A}_{\mathrm{high}}(\tilde{\mathbf{x}},\mathbf{u})
+denote the set of likely response sequences under
+\mathbf{KV}(\tilde{\mathbf{x}})
+. Reuse is considered successful if the surrogate cache preserves the model’s behavior in this region:
+
+p_{\theta}(\mathbf{a}\mid\mathbf{KV}(\tilde{\mathbf{x}}),\mathbf{u})\;\approx\;p_{\theta}(\mathbf{a}\mid\widehat{\mathbf{KV}}(\mathbf{x};m,n),\mathbf{u}),\quad\forall\mathbf{a}\in\mathcal{A}_{\mathrm{high}}(\tilde{\mathbf{x}},\mathbf{u}).
+
+(2)
+
+3
+Related work
+
+KV cache reuse.
+Prior work accelerates LLM serving by reusing KV states across requests that share context. Systems such as Prompt Cache
+(
+Gim et al. 2024
+)
+and RAGCache
+(
+Jin et al. 2025
+)
+cache repeated prompt modules or retrieved knowledge across requests when those segments recur in reusable forms. More recent methods such as CacheBlend
+(
+Yao et al. 2025
+)
+, EPIC
+(
+Hu et al. 2025
+)
+, and KVLink
+(
+Yang et al. 2026
+)
+push reuse beyond identical-prefix settings by recomposing independently cached chunks and repairing the resulting mismatch through selective recomputation, position-independent linking, or trainable cross-chunk tokens.
+
+KV cache eviction.
+A separate line of work studies KV cache eviction or compression under a fixed memory budget. H2O retains heavy-hitter and recent tokens based on attention statistics
+(
+Zhang et al. 2023
+)
+. StreamingLLM stabilizes streaming inference through attention sinks
+(
+Xiao et al. 2024a
+)
+. Later methods further introduce more advanced techniques for cache selection
+(
+Li et al. 2024
+;
+Cai et al. 2024
+;
+Chen et al. 2024
+;
+Ahn et al. 2026
+;
+Kim et al. 2026
+)
+. The objective throughout this line of studies
+is to discard the least useful states while preserving generation quality.
+
+Both cache reuse and cache eviction rely on assumptions that do not hold in our setting. Cache reuse assumes that the reused chunks remain valid parts of the target prompt, while cache eviction assumes that the removed states are relatively unimportant or redundant. In
+post-hoc context erasing
+, the designated span is invalid but may still be
+highly influential and informative
+for future queries if left in place. Moreover, its effect is not confined to its own KV entries, because later suffix states were computed under a prefix containing that span. Consequently, neither chunk reuse nor KV eviction can recover the counterfactual behavior required for span erasing. As shown in Sec.
+5.4
+, directly removing the erased span’s KV cache and reusing the rest can result in complete failure.
+
+4
+KVEraser
+
+Figure 2:
+Pipelines of KVEraser. Snowflake and fire emojis were generated by GPT 5.2.
+
+The main challenge of context erasing is that the edit is local, but its effect on the KV cache is
+global. This mismatch is central to the practical setting: the short span to erase may be a stale retrieval, faulty tool observation, retracted preference, or unsafe instruction, while the cached suffix that follows it can be much longer. Deleting a short span
+\mathbf{e}=\mathbf{x}_{m:n}
+changes the prefix seen by every token
+in the suffix
+\mathbf{s}
+, so exact erasing requires recomputing the entire suffix cache under the
+edited prompt
+\tilde{\mathbf{x}}=\mathbf{p}\oplus\mathbf{s}
+.
+
+KVEraser addresses this challenge by learning a local cache edit. Instead of reconstructing the
+exact edited cache
+\mathbf{KV}(\tilde{\mathbf{x}})
+, it constructs a surrogate cache
+
+\widehat{\mathbf{KV}}(\mathbf{x};m,n)
+by replacing only the erased interval and reusing the
+remaining cache unchanged. The method consists of a frozen generator
+p_{\theta}
+and a trainable
+eraser module
+E_{\phi}
+. Conditioned on the preserved prefix cache and the erased span, the eraser
+predicts replacement KV states for positions
+m,\dots,n
+. The generator then processes a
+query and continues decoding from the surrogate cache. As a result, the amount of newly constructed
+cache scales with the erased-span length
+|\mathbf{e}|=n-m+1
+, rather than the suffix length
+|\mathbf{s}|=T-n
+.
+
+4.1
+Surrogate cache construction
+
+Let
+\mathbf{KV}_{a:b}(\mathbf{x})
+denote the part of
+\mathbf{KV}(\mathbf{x})
+
+for positions
+a,\dots,b
+. The original cache decomposes as
+
+\mathbf{KV}(\mathbf{x})=\mathbf{KV}_{1:m-1}(\mathbf{x})\oplus\mathbf{KV}_{m:n}(\mathbf{x})\oplus\mathbf{KV}_{n+1:T}(\mathbf{x}).
+
+(3)
+
+Local edits.
+The prefix cache
+\mathbf{KV}_{1:m-1}(\mathbf{x})
+remains valid after deleting
+\mathbf{e}
+, so we keep it unchanged. The exact fix would recompute the suffix cache under the edited prompt, but this is computationally costly for a long suffix. A cheaper alternative is to repair only a short contiguous suffix window, inspired by prior work on KV cache reuse
+(
+Hu et al. 2025
+)
+. Empirically, such partial repair is still insufficient, as detailed in Section
+5
+. These observations shift the target from tokenwise suffix cache reconstruction to functional cache editing, where the goal is to induce desired decoding behavior. We propose to reuse the suffix cache and replace only the erased interval with a learned, length-preserving steering block:
+
+\widehat{\mathbf{KV}}(\mathbf{x};m,n)=\mathbf{KV}_{1:m-1}(\mathbf{x})\oplus\mathbf{KV}^{\mathrm{steer}}(\mathbf{x};m,n)\oplus\mathbf{KV}_{n+1:T}(\mathbf{x}).
+
+(4)
+
+Why can this local edit work?
+The erased span affects future decoding through two routes: a query token or newly decoded token
+i>T
+can attend directly to the original KV states of
+\mathbf{e}
+or suffix states computed under a prefix containing
+\mathbf{e}
+. To expose the role of the steering block, consider one attention layer and focus on the contribution from the erased interval and suffix to token
+i
+. Let
+(w_{ij},\mathbf{v}_{j})
+denote the attention weight and value vector induced by the original cache
+\mathbf{KV}(\mathbf{x})
+, let
+(\tilde{w}_{ij},\tilde{\mathbf{v}}_{j})
+denote those induced by the exact edited cache
+\mathbf{KV}(\tilde{\mathbf{x}})
+, and let
+(\hat{w}_{ij},\hat{\mathbf{v}}_{j})
+denote those induced by the surrogate cache
+\widehat{\mathbf{KV}}(\mathbf{x};m,n)
+. For illustrative comparison, suffix tokens under the edited cache are indexed by their original positions in
+\mathbf{x}
+. Exact erasing would replace the contaminated suffix contribution with the edited-cache suffix contribution, while KVEraser keeps the contaminated suffix cache and uses the erased interval as a learnable compensation interface. A desired effect is
+
+\sum_{m\leq j\leq n}\hat{w}_{ij}\hat{\mathbf{v}}_{j}\approx\sum_{n<j\leq T}\left(\tilde{w}_{ij}\tilde{\mathbf{v}}_{j}-w_{ij}\mathbf{v}_{j}\right),
+
+(5)
+
+where the left-hand side is the steering contribution and the right-hand side compares the exact edited suffix with the suffix as actually used by the surrogate cache. Note that this expression is only a mechanistic intuition: attention weights are jointly normalized over the whole cache, so we do not impose it directly. Instead, the steering block is trained end-to-end so that future decoding from the surrogate cache matches the behavior of the edited prompt.
+
+Design benefits
+. First, the edit is local, avoiding global modification of an arbitrarily long suffix as in exact context erasing. Second, the cache length and positions of the retained states remain unchanged, so the reused suffix stays positionally aligned and avoids degradation from positional shifts.
+
+Information source for the edit.
+
+To construct the steering block, one question remains: what information should the local edit depend on? The erased span
+\mathbf{e}
+and the preserved prefix
+\mathbf{p}
+provide the most direct information for a query-agnostic edit: the KV states of
+\mathbf{e}
+are computed under
+\mathbf{p}
+, and the downstream contamination carried by the suffix arises because suffix tokens were encoded under a prefix containing both
+\mathbf{p}
+and
+\mathbf{e}
+. It is therefore natural to condition the steering block on the preserved prefix cache together with the erased span. By contrast, the downstream query
+\mathbf{u}
+does not define the edit itself; it only probes the edited cache after erasure. Conditioning on
+\mathbf{u}
+would make erasing query-specific, requiring repeated steering-block construction for different future queries and weakening reuse across requests. The suffix
+\mathbf{s}
+is also an undesirable conditioning source: it can be arbitrarily long and is precisely the part whose full processing we seek to avoid. We therefore construct
+\mathbf{KV}^{\mathrm{steer}}(\mathbf{x};m,n)
+from the preserved prefix information and the erased span.
+
+Parameterization.
+We generate
+\mathbf{KV}^{\mathrm{steer}}(\mathbf{x};m,n)
+via a trainable eraser
+E_{\phi}
+. It is implemented as a trainable copy of the generator
+p_{\theta}
+’s backbone, excluding the final language model head. Conditioned on the prefix cache
+\mathbf{KV}_{1:m-1}(\mathbf{x})
+, it processes the erased span
+\mathbf{e}
+to output per-layer, per-head key and value tensors for positions
+m,\cdots,n
+. Fig.
+2
+(a) illustrates the model inference pipeline. This model choice provides high representation power and compatibility with the original generator, allowing straightforward training with standard optimization recipes. Empirically, augmenting the conditioning with query or suffix information does not yield consistent gains, as detailed in Sec.
+5.6
+.
+
+Training objective.
+During training, we obtain the target continuation from the clean edited prompt
+
+\tilde{\mathbf{x}}
+, and optimize the eraser so that the frozen generator produces the same
+continuation when initialized with the surrogate cache
+
+\widehat{\mathbf{KV}}_{\phi}(\mathbf{x};m,n)
+. Let
+\mathbf{u}
+denote the user query, and let
+
+\mathbf{a}=(a_{1},\dots,a_{N})
+be the continuation generated from
+\tilde{\mathbf{x}}
+. We train
+the eraser with the teacher-forced objective:
+
+\mathcal{L}_{\mathrm{erase}}(\phi)=-\sum_{t=1}^{N}\log p_{\theta}\!\left(a_{t}\mid\widehat{\mathbf{KV}}_{\phi}(\mathbf{x};m,n),\mathbf{u},\mathbf{a}_{<t}\right).
+
+(6)
+
+Fig.
+2
+(b) illustrates the training pipeline. The generator parameters
+\theta
+are frozen and only
+\phi
+is updated.
+This objective encourages the surrogate cache to induce the same behavior as the clean edited prompt.
+
+4.2
+Inference-time complexity
+
+Recall that
+\mathbf{x}=\mathbf{p}\oplus\mathbf{e}\oplus\mathbf{s}
+and
+
+\tilde{\mathbf{x}}=\mathbf{p}\oplus\mathbf{s}
+. We compare the post-hoc erasure computational cost of exact full recomputation and KVEraser, excluding the initial prefill of
+\mathbf{x}
+, which is shared by all post-hoc erasing methods. Constructing KV states for
+L
+new tokens after an already cached preserved prefix of length
+
+|\mathbf{p}|
+requires each new token to attend to the prefix and previous new tokens, giving attention cost
+
+\sum_{i=1}^{L}\left(|\mathbf{p}|+i\right)=O\!\left(L(|\mathbf{p}|+L)\right)
+
+(7)
+
+per layer and attention head. Exact erasing reuses the prefix cache
+
+KV_{1:m-1}(\mathbf{x})
+and reruns prefill on the suffix
+\mathbf{s}
+under the edited prompt
+
+\tilde{\mathbf{x}}=\mathbf{p}\oplus\mathbf{s}
+. Its cache-construction cost is therefore
+
+O(|\mathbf{s}|(|\mathbf{p}|+|\mathbf{s}|))
+. Thus, exact erasing is governed by the suffix length rather than the deleted-span length. When a short span is invalidated early in a long processed context, exact erasing must still rebuild the entire suffix.
+
+KVEraser instead constructs the replacement block for the erased interval and reuses the suffix cache. In forward pass, each position in the
+replacement block attends to the prefix cache and previous positions within the erased
+interval, so its cache-construction cost is
+O(|\mathbf{e}|(|\mathbf{p}|+|\mathbf{e}|))
+.
+KVEraser therefore replaces suffix-length dependence with erased-span-length dependence. In practice, the span to erase, such as a misleading retrieved passage or an incorrect tool result, is often short relative to the suffix, i.e.,
+|\mathbf{e}|\ll|\mathbf{s}|
+. This gives KVEraser a latency advantage over exact recomputation.
+
+5
+Experiments
+
+A key challenge in training KVEraser is that large-scale annotated data for context erasing are not readily available. We therefore adopt a two-stage training strategy designed to learn a transferable erasing mechanism. First, we pre-train the eraser on a generic span-neighbor retrieval task, where it learns to generate steering KV states that suppress the influence of the erased span in the reused suffix cache. Second, we fine-tune the eraser on a small set of downstream erasing-based QA tasks, so that this generic cache-editing capability can be adapted to realistic factual-distractor removal.
+
+5.1
+Stage 1: continuous pre-training with span-neighbor retrieval
+
+The pre-training stage leverages easily constructed large-scale data to teach the eraser a generic cache-editing capability. Given a selected span to remove, the eraser learns to generate steering KV states that suppress the influence of that span and compensate for residual contamination in the reused suffix cache. This objective is related in spirit to masked language modeling
+(
+Devlin et al. 2019
+;
+Joshi et al. 2020
+)
+, but with a different goal: instead of reconstructing the removed text, we train the eraser to make decoding match the counterfactual context in which the selected span was never present.
+
+Specifically, to construct each pre-training sample, we randomly insert a retrieved 100-token Wikipedia text chunk (span to erase
+\mathbf{e}
+) into a long Wikipedia document. We then select a unique anchor string either immediately before or after
+\mathbf{e}
+, or elsewhere in the retained context, and ask the model to retrieve the text immediately before or after that anchor. When the anchor is adjacent to
+\mathbf{e}
+, the target neighbor lies across the deleted interval, so successful erasing requires the model to ignore the removed span and recover the surviving neighbor. When the anchor is sampled elsewhere in the retained context, the task instead requires the model to preserve access to non-erased information. This combination discourages degenerate solutions that simply damage the cache around the edit.
+
+To ensure reliable supervision, we retain only samples for which the frozen generator correctly retrieves the target neighboring span under the corresponding clean prompt, i.e., the prompt without the inserted text. We construct 80K pre-training samples from Wikipedia and pre-train the eraser with the teacher-forced objective in Equation
+6
+. See Appendix
+A
+for additional details.
+
+5.2
+Stage 2: erasing-based task-specific fine-tuning
+
+The second stage adapts the generic erasing capability to two downstream tasks: a controlled synthetic benchmark, and a question answering (QA) benchmark with misleading factual distractors.
+
+Erasing needle in a haystack (NIAH).
+We propose a controlled synthetic benchmark designed to isolate the core mechanics of post-hoc context erasing from parametric knowledge and to stress-test it under long-context retrieval. The benchmark is inspired by multi-value needle-in-a-haystack (NIAH) evaluations for
+long-context models
+(
+Hsieh et al. 2024
+)
+, but changes the objective from retrieving all inserted facts to selectively removing one of them after the context has already been prefilled.
+
+Each example is constructed by inserting two needles into irrelevant background text to reach a target context size. A needle has the form “One of the special magic numbers for
+key
+is:
+value
+”, where the key is a random string and the value is a random number. The two needles share the same key but use different values. We insert them at independently sampled, distinct positions in the background text. The earlier needle is designated as the target to erase, while the later needle is retained. We consider context sizes in
+\{1\mathrm{K},2\mathrm{K},4\mathrm{K},8\mathrm{K},16\mathrm{K},32\mathrm{K}\}
+and use
+200
+training samples for each context size.
+
+Erasing factual distractors in QA.
+In retrieval-augmented generation
+(
+Lewis et al. 2020
+)
+, a long context is assembled from retrieved evidence, and one retrieved passage may later turn out to be misleading. Inspired by this failure mode, we consider a natural long document QA setting in which the span to erase is a misleading factual text chunk embedded in long documents. We build training samples from three QA datasets: Natural Questions, TriviaQA, and HotpotQA
+(
+Petroni et al. 2021
+;
+Kwiatkowski et al. 2019
+;
+Joshi et al. 2017
+;
+Yang et al. 2018
+)
+.
+
+We start from questions that the model answers correctly with the original document context. We then randomly insert a 100-token text chunk retrieved from Wikipedia and retain only samples where the added distractor causes the model to answer incorrectly. This filtering ensures that the inserted chunk is harmful rather than merely irrelevant. For example, a query may ask for the name of a star who played a particular role in a movie. A distractor may discuss another star playing a relevant role in the same movie, causing the model to give an incorrect answer. The result training samples span long contexts, with a median context size of
+3.5K
+tokens and a maximum size of
+32K
+tokens. Across NIAH and QA, we use about
+7.5K
+samples in total. Appendix
+B
+provides additional details.
+
+5.3
+Setup
+
+We employ Qwen3-8B, which supports a 32K-token context size
+(
+Yang et al. 2025a
+)
+. The eraser module is initialized from the generator’s transformer backbone, excluding the final language model head. We compare against four baselines that explore different approaches to deletion and KV recomputation. All methods receive the same prefilled context
+\mathbf{x}=\mathbf{p}\oplus\mathbf{e}\oplus\mathbf{s}
+, the same erased interval
+\mathbf{e}
+, and the same downstream query
+\mathbf{u}
+. They differ only in how they perform deletion and cache construction.
+
+1.
+
+Full recompute
+reuses the valid prefix cache
+\mathbf{KV}_{1:m-1}(\mathbf{x})
+and reruns prefill on the suffix
+\mathbf{s}
+under the edited prompt
+\tilde{\mathbf{x}}=\mathbf{p}\oplus\mathbf{s}
+. The resulting cache matches the model’s exact behavior after deleting
+\mathbf{e}
+, so it serves as the quality reference for context erasing.
+
+2.
+
+Delete-and-shift
+
+removes the cached states of the erased span and shifts the suffix cache left by
+|\mathbf{e}|
+positions. Since Qwen3-8B uses RoPE
+(
+Su et al. 2024
+)
+, the positional component of the cached suffix keys can be adjusted by re-rotating them to their new positions. However, the suffix KV states were originally computed while attending to the erased span and hence are still contaminated by it.
+
+3.
+
+Instruction-only forgetting
+
+leaves the cache unchanged and explicitly instructs the model to ignore the erased span when answering the query. It is motivated by selective-forgetting evaluations in LLM memory benchmarks
+(
+Hu et al. 2026
+)
+. Unlike cache-editing methods, it relies entirely on LLM’s instruction following and reasoning capabilities. Appendix
+C
+presents the prompt template.
+
+4.
+
+Local suffix repair
+
+partially recomputes a small contiguous window of suffix tokens while reusing the rest of the cache. It is motivated by prior work on position-independent KV reuse, where limited recomputation can reduce errors introduced by cache reuse across mismatched contexts
+(
+Hu et al. 2025
+)
+. We evaluate two variants that recompute 15% of the suffix:
+(i)
+one immediately after the erased span, where token representations are most directly affected by the deleted span, and
+(ii)
+one near the end of the cache, which is closest to the downstream query. These variants test whether a small amount of targeted exact recomputation can approximate full suffix recomputation for downstream decoding. Prior work on long-context inference suggests that attention behavior is strongly position-dependent, motivating these targeted repair locations
+(
+Xiao et al. 2024a
+;
+Yang et al. 2025b
+)
+.
+
+Figure 3:
+Erasing a needle.
+KVEraser achieves near-perfect exact match across context sizes, matching full-recompute while avoiding its steep latency growth.
+Other baselines either start with poor exact match or degrade quickly as context grows, while their latency increases substantially.
+
+5.4
+Scaling behavior for in-distribution context erasing
+
+We study the scaling behavior of different approaches using a held-out NIAH subset disjoint from the training samples, with 100 samples for each context size. A needle has the form “One of the special magic numbers for
+key
+is:
+value
+”. After erasing, the model is queried for the magic number associated with the key; successful erasing should eliminate the value from the earlier erased needle and preserve the value from the later retained needle. Since needles are inserted at random positions, larger context sizes lead to larger average suffix lengths and therefore a more demanding setting for post-hoc erasing. Because the needles are randomly generated, the model cannot rely on parametric knowledge to produce the correct answer without actually erasing the influence of the earlier needle.
+
+Performance.
+We evaluate performance with exact match, i.e., whether the generated response exactly matches the value of the retained needle. Fig.
+3
+shows that KVEraser achieves near-perfect exact match at every context size, matching full recompute. Although KVEraser replaces only the KV states of the erased span and leaves the suffix cache unchanged, it effectively steers downstream attention and decoding, inducing the same task behavior as exact recompute on the edited prompt. Among approximate methods, KVEraser is the only one that is reliable across the full 1K–32K range. The approximate baselines do not provide a reliable alternative. Their post-erasure performance either starts poor or worsens quickly as context grows, showing that simple cache manipulation, instruction-only forgetting, and limited suffix repair are insufficient for reliable context erasing.
+
+Efficiency.
+
+We report latency summed over all evaluation samples. It excludes the initial prefill of the original context, which is shared by all methods, and includes all subsequent computation: cache editing or recomputation, query processing, and full decoding. With local cache editing, KVEraser is highly scalable and efficient as context size increases. As detailed in Sec.
+4.2
+, by replacing only the KV states of the span
+\mathbf{e}
+and reusing the suffix cache, its cache-construction cost scales as
+O(|\mathbf{e}|(|\mathbf{p}|+|\mathbf{e}|))
+, independent of the suffix length
+|\mathbf{s}|
+. In contrast, full recompute reruns prefill over the suffix under the edited prompt, incurring
+O(|\mathbf{s}|(|\mathbf{p}|+|\mathbf{s}|))
+attention cost with a quadratic term in
+|\mathbf{s}|
+. This difference is increasingly important as the context size and the average suffix length grow. From 1K to 32K, the latency of KVEraser increases by only
+24\%
+, while that of full recompute increases by
+17.6\times
+. The approximate baselines do not offer a favorable alternative. Their latency grows substantially with context size, and local suffix repair can even be slower than full recompute at smaller context sizes: when erasure fails, the model often generates both needle values, increasing the full decoding time included in measurement. Overall, KVEraser preserves the near perfect post-erasure performance of full recompute while avoiding its dominant suffix-recomputation cost.
+
+Failure analysis.
+Manual inspection reveals a clear pattern in the failures of the approximate baselines. Let the erased needle contain value
+A
+and the retained needle contain value
+B
+. Instruction-only forgetting is initially the strongest approximate baseline, but as context size increases, it increasingly outputs both the erased and retained values (“
+A,B
+”), indicating persistent cache contamination. By contrast, delete-and-shift and local suffix repair share a different dominant error pattern: they often output the retained value B together with additional irrelevant values distinct from both
+A
+and
+B
+. This suggests that simple cache manipulation and limited recomputation do not provide reliable control for context erasing. KVEraser also exhibits two isolated failures: at 1K it outputs an irrelevant value distinct from both
+A
+and
+B
+, and at 32K it repeats the retained value
+B
+twice.
+
+5.5
+Erasing factual distractors for unseen long-document question answering datasets
+
+The previous synthetic benchmark isolates the core mechanics of post-hoc erasing under controlled conditions. We next turn to a more realistic setting, in which the span to erase is a misleading factual text chunk embedded in a long natural document. Following the same procedure as in Sec.
+5.2
+, we prepare evaluation sets from three QA datasets unseen during training: 2WikiMultiHopQA
+(
+Ho et al. 2020
+)
+, MuSiQue
+(
+Trivedi et al. 2022
+)
+, and IIRC
+(
+Ferguson et al. 2020
+)
+. Appendix
+D
+provides dataset statistics.
+
+Figure 4:
+Erasing factual distractors in QA.
+Among approximate methods, KVEraser achieves the highest exact match at lower or comparable latency, placing it on the quality–efficiency Pareto frontier. While full recompute achieves the best exact match, it incurs 3–4
+\times
+the latency of KVEraser.
+
+Fig.
+4
+shows that KVEraser remains effective and efficient. Across all datasets, it achieves the highest exact match among approximate baselines while maintaining comparable or lower latency, placing it on the quality–efficiency Pareto frontier. The strongest approximate baseline, local suffix repair (erase), is worse than KVEraser in both exact match and latency. Full recompute attains the highest exact match overall, but its latency is 3–4
+\times
+that of KVEraser. Overall, these results show that learned local KV steering transfers beyond the controlled synthetic setting to realistic factual distractors.
+
+Failure analysis.
+We group the errors into three categories: corrupted-context reliance, partial overlap, and other. The dominant error is corrupted-context reliance, where the model answers using the inserted distractor. This is the main failure mode for instruction-only forgetting, delete-and-shift, local suffix repair (query), and KVEraser. Another category is partial overlap, where the prediction contains only part of the gold answer, such as “1969” instead of “September 8, 1969”. The remaining errors neither rely on the distractor nor partially match the gold answer. Local suffix repair (erase) shows a more balanced mix of the three error types. Appendix
+E
+provides the full breakdown.
+
+5.6
+Ablation study on information sources for KVEraser
+
+Table 1:
+Exact match
+(\uparrow)
+of KVEraser variants. Best bolded; second-best underlined.
+
+Variant
+
+Prefix KV
+
+Erased span
+
+Query
+
+Suffix KV (
+15\%
+)
+
+2WikiMultiHopQA
+
+MuSiQue
+
+IIRC
+
+Average
+
+KVEraser
+
+✓
+
+✓
+
+\underline{0.878}
+
+\underline{0.837}
+
+\mathbf{0.921}
+
+\mathbf{0.879}
+
+No prefix
+
+✓
+
+0.866
+
+\mathbf{0.850}
+
+0.860
+
+0.859
+
+Query conditioned
+
+✓
+
+✓
+
+✓
+
+\mathbf{0.892}
+
+0.827
+
+\underline{0.893}
+
+\underline{0.871}
+
+Suffix conditioned
+
+✓
+
+✓
+
+✓
+
+0.840
+
+\underline{0.837}
+
+0.854
+
+0.844
+
+We study three alternative conditioning variants for KVEraser. (1)
+No prefix
+: we drop the conditioning on prefix KV cache
+\mathbf{KV}_{1:m-1}(\mathbf{x})
+and pass only the erased span
+\mathbf{e}
+to the eraser. (2)
+Query conditioned
+: we insert the query text
+\mathbf{u}
+right before the span
+\mathbf{e}
+and use a special marker to separate them. (3)
+Suffix conditioned
+: motivated by local suffix repair (erase), the strongest approximate baseline in QA, we additionally condition the eraser on
+15\%
+of suffix KV following the erased span.
+
+Table
+1
+shows that our adopted combination of preserved prefix KV and the erased span achieves the best average exact match. Removing the prefix or adding query or suffix information does not yield consistent gains. These results show that our simple, query-agnostic design of KVEraser already captures the most useful information for local cache editing. See Appendix
+F
+for more details.
+
+6
+Conclusion and future work
+
+We introduce KVEraser, a learned KV-cache editing method for context erasing.
+It achieves near-perfect post-erasure performance on the controlled benchmark across 1K–32K contexts, matching full recomputation, and attains the best quality–efficiency tradeoff among approximate methods on long-document QA. These results suggest that learned local KV steering is viable for efficient context erasing in long-context inference. We view the study as an initial step:
+the remaining gap to full recomputation in natural QA may partly reflect the current training data scale and diversity. Scaling with more data and improving data heterogeneity is a promising direction for further closing this gap.
+
+Acknowledgments
+
+M. Li, S. Liu, H. Wang, and P. Li are partially supported by the NSF under awards IIS-2239565, CCF-2402816, IIS-2435957; the Meta Grant; the NVIDIA Academic Grant Program; and the IDEaS Cyberinfrastructure Awards.
+
+Appendix A
+Additional details for pre-training
+
+Data construction for NIAH.
+
+Same as
+(
+Hsieh et al. 2024
+)
+, we use sampled Paul Graham’s essays for irrelevant background text.
+
+Data construction for QA.
+
+We use the 2019-08-01 Wikipedia snapshot. Inspired by the success of hard negative mining in training dense retrievers
+(
+Karpukhin et al. 2020
+)
+, we construct spans to erase via a hybrid retrieval strategy. Specifically, using the first sentence of a long Wikipedia document as the query, we first retrieve candidate Wikipedia documents with BM25 using Anserini
+(
+Robertson et al. 1994
+;
+Robertson and Zaragoza 2009
+;
+Yang et al. 2017
+)
+. We then split top-ranked documents into non-overlapping 100-token spans and rerank them with the bge-small-en-v1.5 dense retriever
+(
+Xiao et al. 2024b
+)
+. The prompt template for sample construction is presented below.
+
+Input prompt for pre-training with span-neighbor retrieval
+
+Read and remember the following context for a later question.
+
+{context}
+
+Copy the exact text immediately {before — after} the span ¡SPAN¿{span_text}¡/SPAN¿ in the previous context. The copied text may be
+normal words or a markup tag such as
+¡TEXT¿. Reply with the copied text only.
+
+Training.
+
+We use a batch size of
+8
+, AdamW
+(
+Loshchilov and Hutter 2019
+)
+for optimization, a learning rate of
+0.00001
+, a weight decay of
+0.01
+, and gradient clipping at
+1
+. We train the eraser for
+1
+epoch.
+
+Appendix B
+Additional dataset details for task-specific fine-tuning
+
+Data construction.
+
+Starting from source samples that the model answers correctly under the clean gold context, we mine harmful distractors from non-gold Wikipedia pages following the same hybrid retrieval strategy described in Appendix
+A
+. We keep a candidate span only if, after insertion, the corrupted prompt yields neither an exact match nor any token overlap with the labeled answers (token F1
+=0
+). This filtering ensures that the retained distractors are genuinely misleading rather than merely irrelevant.
+
+Table 2:
+Size of dataset.
+
+Dataset
+
+Sample size
+
+Natural Questions
+
+1,793
+
+TriviaQA
+
+2,010
+
+HotpotQA
+
+2,488
+
+Table 3:
+Full context size measured with Qwen3-8B tokenizer.
+
+Dataset
+
+25
+th percentile
+
+Median
+
+75
+th percentile
+
+Max
+
+Natural Questions
+
+790
+
+1,880
+
+4,419
+
+25,837
+
+TriviaQA
+
+3,210
+
+7,496
+
+13,711
+
+32,236
+
+HotpotQA
+
+2,046
+
+3,200
+
+5,364
+
+16,858
+
+Table
+2
+reports the dataset size. Table
+3
+presents dataset context size statistics.
+
+Training.
+
+We use a batch size of
+1
+, AdamW
+(
+Loshchilov and Hutter 2019
+)
+for optimization, a learning rate of
+0.00001
+, a weight decay of
+0.01
+, and gradient clipping at
+1
+. We train the eraser for
+1
+epoch.
+
+Prompt templates.
+
+Below we present the prompt templates for NIAH and QA.
+
+Input prompt for NIAH
+
+Extract the requested number(s) from the text.
+
+{context}
+
+Find number(s) in sentence(s) of the form: ”One of the special magic numbers for query is: ¡NUMBER¿.” Output the ¡NUMBER¿(s) in order as digits only, comma-separated, no spaces, no other text.
+
+Input prompt for QA
+
+Read and remember the following context for a later question.
+
+{context}
+
+Answer the question using only the previously provided context. Respond with a short answer only.
+
+Question: {question}
+
+Appendix C
+Instruction-only forgetting
+
+Instruction-only forgetting prompt for NIAH
+
+{previous context}
+
+The following previously seen sentence has been deleted and must be ignored when answering:
+“{deleted_sentence}”.
+
+Find number(s) in sentence(s) of the form: ”One of the special magic numbers for query is: ¡NUMBER¿.” Output the ¡NUMBER¿(s) in order as digits only, comma-separated, no spaces, no other text.
+
+Instruction-only forgetting prompt for QA
+
+{previous context}
+
+The following previously seen passage is distracting and must be ignored when answering:
+“{distractor_text}”
+
+Answer the question using only the previously provided context. Respond with a short answer only.
+
+Question: {question}
+
+Appendix D
+Additional dataset details for QA evaluation
+
+Table
+4
+reports the dataset size for QA evaluation. Table
+5
+presents dataset context size statistics.
+
+Table 4:
+Size of evaluation dataset.
+
+Dataset
+
+Sample size
+
+2WikiMultiHopQA
+
+344
+
+MuSiQue
+
+300
+
+IIRC
+
+178
+
+Table 5:
+Full context size for evaluation datasets, measured with Qwen3-8B tokenizer.
+
+Dataset
+
+25
+th percentile
+
+Median
+
+75
+th percentile
+
+Max
+
+2WikiMultiHopQA
+
+3,754
+
+5,066
+
+8,159
+
+15,674
+
+MuSiQue
+
+3,888
+
+5,828
+
+9,814
+
+15,709
+
+IIRC
+
+4,560
+
+6,713
+
+9,702
+
+15,750
+
+Appendix E
+Breakdown of failure cases over error categories for QA evaluation
+
+See Table
+6
+.
+
+Table 6:
+Breakdown of failure cases over error categories for QA evaluation.
+
+Approach
+
+# Failures
+
+Corrupted-context reliance
+(\%)
+
+Partial overlap
+(\%)
+
+Other (%)
+
+Delete-and-shift
+
+329
+
+51.1\%
+
+24\%
+
+24.9\%
+
+Instruction-only forgetting
+
+625
+
+62.1\%
+
+16.5\%
+
+21.4\%
+
+Local suffix repair (erase)
+
+165
+
+36.4\%
+
+32.1\%
+
+31.5\%
+
+Local suffix repair (query)
+
+325
+
+51.7\%
+
+23.1\%
+
+25.2\%
+
+KVEraser
+
+105
+
+49.5\%
+
+21\%
+
+29.5\%
+
+Appendix F
+Additional details for ablation studies on information sources for KVEraser
+
+Conditioned on the preserved prefix cache, we use the prompt below to pass query in addition to erased span to KVEraser.
+
+Input prompt for query conditioning
+
+<KVERASER_QUERY>
+
+{query}
+
+</KVERASER_QUERY>
+
+<KVERASER_STEERING_SPAN>
+
+{erased_span}
+
+Appendix G
+Compute resource disclosure
+
+We use 2 80G A100 GPUs for training, and 1 80G A100 GPU for inference. The GPUs are available via a cloud provider. The instance we use has 1.7 TiB RAM and 24 CPU cores. Pre-training takes less than a day. Fine-tuning takes about 8 hours.
+

@@ -1,0 +1,1885 @@
+Structured Recurrent Mixers for Massively Parallelized Sequence Generation
+Benjamin L. Badger
+
+Abstract
+Over the last two decades, language modeling has experienced a shift from the use of predominantly recurrent architectures that process tokens sequentially during training and inference to non-recurrent models that process sequence elements in parallel during training, which results in greater training efficiency and stability at the expense of lower inference throughput. Here we introduce the Structured Recurrent Mixer, an architecture that allows for algebraic conversion between a sequence parallel representation at train time and a recurrent representation at inference, notably without the need for specialized kernels or device-specific memory management. We show experimentally that this dual representation allows for greater training efficiency, higher input information capacity, and larger inference throughput and concurrency when compared to other linear complexity models. We postulate that recurrent models are poorly suited to extended sequence length scaling for information-rich inputs typical of language, but are well suited to scaling in the sample (batch) dimension due to their constant memory per sample. We provide Mojo/MAX inference implementations of SRMs exhibiting 12x the throughput and 170x the concurrency of similarly powerful Transformers inferenced on vLLM, increases characteristic of Pytorch implementations resulting in a 30% increase in compute-constant GSM8k Pass@k. We conclude by demonstrating that SRMs are effective reinforcement learning training candidates.
+
+
+
+0
+0
+footnotetext:
+The author would like to that IBM for support during research and the writing of this manuscript. Code for this paper can be found at
+https://github.com/blbadger/mrm
+
+1
+Introduction
+
+Is model speed or accuracy more important for language tasks? The answer usually depends on the task, specifically whether or not it admits a way of quickly checking whether a sample is good or bad. For tasks where samples cannot be quickly verified, model accuracy is typically more important than speed, but for many tasks verification is feasible: for example, unit or functional tests may be applied to code samples, outcome evaluation to agentic workflows, self-verification to mathematical theorem proof generation via Lean. If rapid verification is possible, it is often more efficient (in terms of minimal compute spent per correct output) to generate many samples from smaller and less-capable models than fewer samples from larger, more accurate ones
+(
+Brown et al. 2024
+;
+Chen et al. 2025
+)
+.
+
+Most functional language benchmarks do not focus on efficiency in these terms but instead on the likelihood of a correct answer or correct next token given one or more attempts, although some more recent benchmarks have begun to incorporate efficiency in terms of monetary cost per task (for example Arc-AGI
+(
+Foundation 2026
+)
+). The shift away from recurrent-style architectures (recurrent neural networks
+(
+Rumelhart et al. 1985
+)
+and LSTMs
+(
+Hochreiter and Schmidhuber 1997
+)
+) occurred in the context of next token prediction accuracy as well as their relation to applied benchmarks in which model goodness metrics are based on a model’s accuracy per sample regardless of the compute necessary to generate that sample. For outputs that are easily verified, a metric of accuracy per compute applied seems more appropriate, and the findings that smaller Transformer models
+(
+Vaswani et al. 2023
+)
+can outperform larger ones in this context leads to the question: are architectures that perform more efficient inference than Transformers better suited to this paradigm of accuracy per compute?
+
+For large-scale language modeling one usually wants to train causal models to predict each next token in a context window in parallel via token shifting, with a change in model behavior during inference to remove this sequence parallelism for efficiency so that the model predicts one token at a time with a cache storing information from previous tokens. Sequence parallel models, particularly those with
+\mathcal{O}(n^{2})
+time and
+\mathcal{O}(n)
+space complexity for
+n
+tokens, are efficient and stable to train but inefficient for sequential token generation, whereas recurrent models (in this work defined as those with
+\mathcal{O}(n)
+time and
+\mathcal{O}(1)
+space complexity) are efficient for sequence generation but typically do not admit easy ways to train efficiently and stably, as they are not intrinsically parallelizable over the sequence dimension.
+
+As a result of these complementary deficiencies, and because of the large latency of global device memory access relative to arithmetic operations present in GPUs, there have been numerous attempts to hybridize linear-complexity architectures (Mamba SSMs for Granite 4
+(
+Mishra et al. 2024
+;
+ibm
+)
+and Nemotron 3
+(
+Blakeman and et al. 2025
+)
+, Gated Delta Nets for Qwen 3.5
+(
+Qwen Team 2026
+)
+and Kimi Linear
+(
+Team et al. 2025
+)
+) to transformer backbones. Hybridization, however, introduces a significant challenge: although these models gain the advantages of (smaller) variable-sized caches, they also exhibit the same drawback as Transformers with respect to cache scaling, just with lower constant values.
+
+These observations motivate the introduction of a new architecture, the Structured Recurrent Mixer, that we find exhibits some of the desirable information retention and training efficiency characteristics of quadratic complexity models while improving on the the efficient inference computation of current recurrent models. From an informational perspective we show that recurrent models are ill-suited to unbounded sequence length scaling but are better applied to batch dimension scaling, and show that the SRM exhibits large throughput and concurrency increases relative to other models tested without any effort into optimizing parallelization via device-specific kernels. We address the question of whether designing an architecture that exhibits efficient sample throughput properties could lead to accuracy beyond that seen for a representative Transformer, with both training and inference compute held constant. Finally we investigate the use of reinforcement learning to convert the many-sample efficiency back to single- or few-sample efficiency.
+
+2
+Our Contribution
+
+This paper details experiments testing two primary insights. The first is that masked mixers should be more easily linearizable (in the sequence dimension) than transformers due to their data-independent token mixing operations, allowing for an effective bridge between quadratic complexity and recurrent models. We find that
+
+Designing recurrent model token mixing operations to capture qualitative features of trained higher-complexity models recovers some of those models’ training efficiency and information retention
+
+and secondly we introduce a re-evaluation of the benefits of constant space models when applied to information-dense inputs such as language, proposing that
+
+Recurrent language models are better suited to batch (sample number) dimension rather than sequence length scaling due to their constant-sized, contiguous memory per sample
+
+for which scaling the SRMs are shown to have unparalleled throughput characteristics even among recurrent models by construction, which is desirable characteristic for any task where samples may be quickly tested. We introduce the following:
+
+1.
+
+A qualitative feature mapping method from quadratic-complexity to linear-complexity models
+
+2.
+
+A dual-architecture sequence parallel (at train time) and batch parallel (at inference) recurrent model
+
+3.
+
+A Mojo/MAX inference engine for SRMs with >7x the throughput of Pytorch implementations
+
+4.
+
+A resampling method for applying GRPO to large batches without decreasing exploration
+
+3
+Related Work
+
+Recurrent neural networks were among the first models applied to the problem of variable-length sequence generation
+(
+Rumelhart et al. 1985
+)
+. The Long Short-Term Memory model, a recurrent-like model introducing multiple hidden states and associated memory streams for these sates, was introduced in order to stabilize training and better model long sequences
+(
+Hochreiter and Schmidhuber 1997
+)
+. The greater training efficiency of Transformers compared to LSTMs both with respect to loss per parameter and loss per input context length account in part for why these architectures have been largely supplanted by Transformers for most language modeling tasks
+(
+Kaplan et al. 2020
+)
+.
+
+Attempts to convert Transformers directly into recurrent-like architectures via linearized attention have experienced somewhat limited success: direct swap-ins of linear attention for dot-product attention
+(
+Katharopoulos et al. 2020
+;
+Shen et al. 2018
+)
+results in poor training efficiency and stability for causal modeling
+(
+Poli et al. 2023
+)
+, although progress has been made by reformulating the linear attention operation. Along these lines, the RWKV architecture
+(
+Peng et al. 2023
+)
+was introduced, and these models retain key and value vectors but perform memory mapping operations requiring the use of custom GPU kernels for efficient computation.
+
+The most well-explored model architectures that allow for conversion between sequence parallel and recurrent representations exist in the state space framework, in which a state vector acts as the the recurrent hidden layer and is updated via linear operations. Refined from S2/S3
+(
+Fu et al. 2023
+)
+models, Mamba
+(
+Gu and Dao 2024
+)
+and Mamba 2
+(
+Dao and Gu 2024
+)
+SSM architectures incorporate selectivity at the token level and sophisticated memory management which allows for efficient parallel scan-based state updates and thus conversion between sequence parallel and recurrent-like forms.
+(
+Dao and Gu 2024
+)
+further investigates the nature of SSMs as subsets of structured matrix models via semiseparable matrix representations, where token mixing weight matrices may be formulated in terms of lower-rank sub-matrices.
+
+4
+Method
+
+Structured Recurrent Mixers are structured so that one is able to algebraically convert the sequence parallel representation (which uses matrix multiplication to mix token information) to the recurrent representation (which must read and write to constant-sized memory and use a fixed number of operations per token generated). Training proceeds by structuring token mixing matrices by expanding weight vectors along rows or columns, applying an optional trainable decay rate, and proceeding with shifted next token prediction.
+
+4.1
+Masked Mixer Parameterization
+
+SRMs are based on the Masked Mixer, a transformer-like architecture in which attention is swapped for masked MLPs (matrix multiplications)
+(
+Badger 2025
+)
+. These models apply masked matrix multiplication (or equivalently masked 1-D convolution with a stride size of 1) to the sequence dimension, which can be expressed as
+Y=XM+B
+where
+M\in\mathbb{R}^{n\times n}
+and
+X,Y,B\in\mathbb{R}^{d\times n}
+. Notably the values of
+M
+are triangular masked for both training and inference, and are not data-dependent but are parameterized by trainable values in the model. These architectures exhibit similar time and space complexities to Transformers but form fewer activations (
+d
+per layer) in the token mixing operation, resulting in higher throughput at a fixed number of parameters which is balanced by their lower training efficiency on a per-parameter basis.
+
+4.2
+Trained Masked Mixer Weights: Qualitative Feature Representation
+
+Initial investigations detailed in Table
+S2
+demonstrated that a naive restriction of token mixing matrices to a recurrent form (row repeat matrices) results in relatively inefficient causal language model training. This motivated an analysis on the structure of trained masked mixer token mixing layers, which revealed three notable qualitative features: matrices with columns containing near-identical values, matrices with rows containing near-identical values, and matrices with weight decay with increased distance from the main diagonal (or some combination of these three features) as shown in Figure
+1
+. As we explore in the next section, structuring a recurrent SRM to represent these qualitative features results in substantially higher training efficiency. Curiously, not all features of trained mixer weight matrices are apparently necessary for efficient recurrent modeling: most layers exhibit lower near-constant main diagonal weights compared to off-diagonal weights (Figures
+1
+,
+S1
+), but introducing an independent weight for the main diagonal to SRMs does not result in significantly increased training efficiency for larger models (Table
+S5
+).
+
+Figure 1:
+Causal Masked Mixer token mixing matrix weights, (a) annotated features on whole-matrix maps, (b) weights near the main diagonal. Blue indicates negative, and red positive values.
+
+4.3
+Architecture
+
+As the token mixing layers of the SRM are restricted in order to retain a recurrent representation, we now illustrate what kind of restrictions are required. In brief, the restrictions we explore are relatively simple: rows must contain identical elements or columns must contain identical elements, and optionally a constant factor may be multiplied to each diagonal. Effectively we perform matrix-vector multiplication (with masking), which is why the operation may be converted into a fixed-memory recurrent operation.
+
+To illustrate an example row repeat mixing operation, consider input
+X\in\mathbb{R}^{d\times n}
+with
+d
+hidden dimension and
+n
+tokens, output
+Y\in\mathbb{R}^{d\times n}
+, mixer weight matrix
+W\in\mathbb{R}^{n\times n}
+, bias
+B\in\mathbb{R}^{d\times n}
+, and trainable decay constant
+\lambda\in(0.9,1]
+. We obtain
+Y
+from inputs
+X,B,W
+as shown in Equation
+1
+for the case where
+n=3
+for simplicity. Equation
+1
+may be expressed in its recurrent representation in Equation
+2
+, where the recurrent hidden state (cache) is simply the sum term.
+
+\begin{pmatrix}|&|&|\\
+Y_{0}&Y_{1}&Y_{2}\\
+|&|&|\end{pmatrix}=\begin{pmatrix}|&|&|\\
+X_{0}&X_{1}&X_{2}\\
+|&|&|\end{pmatrix}\begin{pmatrix}\alpha_{0}&\lambda\alpha_{0}&\lambda^{2}\alpha_{0}\\
+0&\alpha_{1}&\lambda\alpha_{1}\\
+0&0&\alpha_{2}\end{pmatrix}+\begin{pmatrix}|&|&|\\
+\beta_{0}&\beta_{1}&\beta_{2}\\
+|&|&|\end{pmatrix}
+
+(1)
+
+\begin{split}Y_{n}&=\alpha_{n}X_{n}+\beta_{n}+\sum_{m=0}^{n-1}\lambda^{n-m}\alpha_{m}X_{m}\end{split}
+
+(2)
+
+Similarly, a column repeat matrix multiplication with per-token biases may be reduced to the recurrent representation given in Equation
+3
+, where again the sum term is the constant-size cache and
+\alpha_{n}
+is factored out upon each update. We implement two methods for combining column and row repeat outputs: linear combinations where each head has one column and one row repeat matrix and the output is linearly combined, as well as what we term ‘mixed’ heads where heads are evenly divided into column and row repeat layers and combined as other headed models are (via concatenation before out projection), which we term ‘head-parallel’ layers. In either case next token prediction is efficient and requires at most two BLAS level 1 operation per recurrent layer at inference, although linearly combined layers with both row and column repeat layers require double the cache size as mixed or row- or column-only layers.
+
+We implement multiple heads per token mixing layer by training unique projections
+I_{h}\in\mathbb{R}^{d_{h}\times d}
+for each head
+0,1,...,h
+, for head dimension
+d_{h}=d/h
+, performing token mixing on these heads independently, and projecting the concatenated outputs via
+P_{out}\in\mathbb{R}^{d\times d}
+as shown in Equation
+4
+. Equivalently, one input projection
+I\in\mathbb{R}^{d\times d}
+may or may not be applied, heads are sliced and token mixing performed and outputs concatenated and optionally projected back.
+
+\begin{split}Y=X\begin{pmatrix}\alpha_{0}&\lambda\alpha_{1}&\lambda^{2}\alpha_{2}&\cdots&\lambda^{n-1}\ \alpha_{n}\\
+0&\alpha_{1}&\lambda\alpha_{2}&\cdots&\lambda^{n-2}\ \alpha_{n}\\
+0&0&\alpha_{2}&\cdots&\lambda^{n-3}\alpha_{n}\\
+\vdots&\vdots&\vdots&\ddots&\vdots\\
+0&0&0&\cdots&\lambda^{0}\alpha_{n}\end{pmatrix}+\beta\implies Y_{n}&=\alpha_{n}X_{n}+\beta_{n}+\alpha_{n}\sum_{m=0}^{m=n-1}\lambda^{n-m}X_{m}\end{split}
+
+(3)
+
+Figure 2:
+SRM architecture overview
+
+Y=P_{out}\bigg((I_{0}X)W_{0}+\beta_{0}\circ(I_{1}X)W_{1}+\beta_{1}\circ\cdots\circ I_{h-1}(X)W_{h-1}+\beta_{h-1}\bigg)
+
+(4)
+
+We also implement the SRM recurrent operation for non-unitary kernels, where each token mixing layer mixes along both sequence and a limited number of hidden dimension elements, with the number of hidden dimension elements mixed equal to the kernel size. We train separate filters for each kernel with weights
+W\in\mathbb{R}^{k\times n\times n}
+parameterized as column repeat matrices (Equation
+3
+). In our implementation, shown in Equation
+5
+, we zero pad
+X\in\mathbb{R}^{d+k\times n}
+and use a stride of size 1.
+
+Y=\sum_{i=0}^{k}X_{(i:d+i,\;:)}\;W_{i}+\beta
+
+(5)
+
+Algebraic equivalence allows the SRM to be represented by either recurrent or sequence parallel operations without any change to the underlying cache structure or model parameters: for instance, we implement an SRM as a Pytorch module can perform either parallel or recurrent forward passes on-demand without modification to the underlying memory, which greatly simplifies pipelines in which fast, parallelized inference needs to be efficiently swapped with sequence parallel forward/backward passes for gradient formation and backpropegation (typical of online reinforcement learning).
+
+4.4
+Computational Complexity
+
+The computational complexity of SRMs at inference, as for other recurrent models, is
+\mathcal{O}(nd^{2})
+time and
+\mathcal{O}(d)
+space. It is notable that SRMs are ‘true’ constant-space models in that contain constant factors which themselves do not scale with sequence length (see for example
+(
+Qin and Zhong 2023
+)
+).
+
+It is worth noting that the quadratic complexity of SRMs at train time is effectively hidden by the much larger constant factors associated with memory transfer and gradient production for token hidden layers, causing these models to resemble
+nd^{2}
+as long as
+n_{ctx}
+is not substantially larger than
+d
+. This is also true of Transformers, and accounts for the lack of increased throughput of models that train with linear complexity (Mamba for example) over SRMs at train time with increased context (Tables
+S9
+-
+S12
+).
+
+Global memory access on device (GPU) typically requires an order of magnitude more clock cycles than matrix arithmetic operations, and as such is limiting for inference throughput for Transformers. Batching inputs allows for more efficient memory access patterns, but still does not typically result in tensor core saturation for transformer models during inference. In the batch dimension
+b
+, for
+n
+tokens the memory scaling characteristics of each transformer layer is
+\mathcal{O}(nbd)
+, whereas for each layer of the SRM the corresponding scaling is
+\mathcal{O}(bd)
+.
+
+5
+Experimental Results
+
+5.1
+SRM architecture optimization
+
+Experimentation shows that multi-headed SRMs are more efficient to causally train than non-headed models, that using both column and row repeat matrices outperforms row repeat alone or column repeat alone, and that models with a decay term are more efficient to train than SRMs without decay terms (Table
+S2
+). The most efficiently trainable architecture we tested consisted of ‘mixed’ heads such that half of the heads are row repeat and half column repeats, each with hidden dimension
+d/h
+such that the total cache size per layer is
+d
+. We find that use of unique projections leads to slightly more efficient training than the use of parallel heads, and that curiously the use of in and out projections results in a decrease in per-step loss despite their redundancy, although there is an approximately 10% training throughput cost to using projections compared to not using them,(Table
+S2
+-
+S7
+). We employ head projections in all models unless otherwise noted. Pytorch-based recurrent and sequence-parallel SRM mixer representation implementations are confirmed to be numerically stable and yield identical outputs even when cache values and decay constants are used in half precision.
+
+5.2
+Causal Training Efficiency
+
+As one of the largest challenges to recurrent models is efficient and stable causal language model training, we measured the training efficiency of SRMs as compared to both quadratic-complexity and other linear-complexity models. For Transformers, we use the Llama 2 architecture
+(
+Touvron et al. 2023
+)
+featuring RoPE, RMS norms and improved parameter initialization which have been shown to outperform early causal Transformer architectures, and models of
+d_{m}=x
+achieve similar training throughputs of Mixers with
+d_{m}=2x
+over the range of
+d_{m}
+observed here
+(
+Badger 2025
+)
+. We observe training efficiency through the lens of real world limitations, specifically GPU throughput and memory required, which can be converted to loss achieved per FLOP applied during training.
+
+We find that the SRM is slightly less efficient to train than
+\mathcal{O}(n^{2}d^{2})
+complexity Transformer and Masked Mixer models of similar sample throughput across diverse language understanding (FineWeb-edu) and mathematics and coding (FineMath) text corpora. For these datasets, we find that SRMs are more efficient to train than Mamba (2) models (Figure
+3
+, Tables
+S3
+,
+S4
+). We note that we find Mamba models to be only slightly less efficiently trainable than Transformers of similar throughput on a per-parameter basis (Table
+S3
+) as reported by
+(
+Dao and Gu 2024
+)
+, but that the substantially lower throughput on device (for H100s see Table
+S6
+,
+S11
+) for parameter-equivalent models results in more efficient SRM training in practice. On older devices (V100s) Mamba models experience a >20x drop in throughput and are virtually untrainable as a result, whereas SRMs perform consistently across all devices tested.
+
+Early in training RWKV (4) models exhibit similar efficiency as SRMs but suffer from catastrophic numerical instabilities across various hyperparameter settings, compute datatypes, and architectural configurations and as such are not explored in detail.
+
+Figure 3:
+SRM causal training on FineWeb. (a) Throughput- and memory-equivalent model training:
+d_{m}=1024
+SRM,
+d_{m}=512
+Transformer,
+d_{m}=256
+Mamba, all
+n_{l}=16
+. (b) SRM sample scaling characteristics for fixed model sizes, (c) SRM training compute (assuming theoretical maximum FLOPs on device as measured by V100 throughput) and loss scaling.
+
+5.3
+Benchmark Evaluations
+
+To assess how the training efficiencies impact benchmark performance, we compare functional characteristics of linear-complexity models by evaluating them on a number of single-sample benchmark tasks without regard to the compute required to generate samples. We benchmark for general question answering via Arc-Easy
+(
+Clark et al. 2018
+)
+, sentence completion using HellaSwag
+(
+Zellers et al. 2019
+)
+and Lambada (OpenAI processed)
+(
+Paperno et al. 2016
+)
+, information retention via SQuAD
+(
+Rajpurkar et al. 2016
+)
+, SQuAD 2
+(
+Rajpurkar et al. 2018
+)
+, Longbench
+(
+Bai et al. 2024
+)
+, IFEval
+(
+Zhou et al. 2023
+)
+, SWDE
+(
+Arora et al. 2024
+)
+, and xWinoGrad
+(
+Tikhonov and Ryabinin 2021
+)
+using Eleuther-AI’s evaluation harness
+(
+Gao et al. 2024
+)
+. In Table
+1
+we detail benchmarks for compute-equivalent Transformer, SRM, and Mamba models, and we find that Transformers top the most benchmarks of all three models and that SRMs outperform Mamba models on most benchmarks observed.
+
+Benchmark
+
+Transformer
+
+Mamba
+
+SRM
+
+IFEval (strict)
+
+12.2
+
+25.66
+
+21.22
+
+SQUAD (completion)
+
+22.96
+
+10.22
+
+1.47
+
+SQUAD v2
+
+5.1
+
+1.69
+
+16.87
+
+LongBench (avg. acc)
+
+4.44
+
+4.96
+
+4.09
+
+SWDE (contains)
+
+21.1
+
+2.34
+
+3.50
+
+xWinoGrad
+
+57.7
+
+51.52
+
+53.41
+
+GSM8k
+
+1.90
+±1.36
+
+1.36
+±0.32
+
+1.44
+±0.33
+
+ARC (easy)
+
+48.11
+±1.03
+
+33.96
+±0.97
+
+50.0
+±1.03
+
+WikiText (BPB,
+\downarrow
+)
+
+1.5192
+
+1.6212
+
+1.2363
+
+GLUE (average acc)
+
+40.3
+
+0.4552
+
+0.4577
+
+Lambada-OpenAI
+
+15.13
+±0.5
+
+1.01
+±0.1
+
+3.05
+±0.24
+
+HellaSwag
+
+29.6
+
+26.74
+
+28.86
+
+Table 1:
+Training compute-matched SRM, Transformer, and Mamba benchmark scores after FineWeb-edu training. All benchmarks are higher is better apart from WikiText.
+
+5.4
+Informational Retention and Capacity
+
+The ability of quadratic-complexity models to retain input information in their hidden layers is of relatively minor importance for causal language modeling for the reason that these models are exposed to a cached representation of each input token upon each prediction step, and the prediction itself typically requires the knowledge of only a small subset of previous tokens. For linear-complexity models, however, the model is only exposed to a fixed-size cache of all previous tokens and cannot simply reference individual token representations separately. SRMs in particular hold a cache size equivalent to one token’s embedding per layer for the entire input. This motivates the measurement of the amount of information present in the hidden states of causal-trained models (which we term ‘information retention’) as well as the ability of these models to store input information in one or more states (‘information capacity’, or equivalently the upper bound of information retention). These questions are especially important to SRMs because Masked Mixers trained for maximum information retention contain qualitatively different token mixing matrices than those of models trained for next token prediction (Figure
+1
+,
+S1
+) and SRMs are by design only reflect those present for next token prediction.
+
+We measure model information retention by testing the capability of a CLM-trained model’s embedding to regenerate input via a trained decoder. Given the output (i.e. the vector directly responsible for a single token prediction, namely the last hidden layer’s last embedding) of token-predicting model
+\mathcal{E}
+applied to input
+x
+,
+y=\mathcal{E}(x,\theta_{e})
+, we seek to invert
+y
+to recover
+x
+. We do this by first freezing
+\theta_{e}
+and then training a decoder to recover
+x
+given an unrolled form of
+y
+, where the decoder yields
+z=\mathcal{D}\left(U(\mathcal{E}(x,\theta_{e}),\theta_{d}\right)
+and the difference in
+x
+and
+z
+in terms of both Cross-Entropy Loss as well as the more interpretable entropy ratio, the fraction of input information the model retains, after
+(
+Badger 2026
+)
+.
+
+We find that causal SRMs exhibit higher information retention than causal Mamba models, and that these differences exist before and after training (Table
+2
+); furthermore comparing our results to previous work
+(
+Badger 2026
+)
+we find that SRMs exhibit similar information retention characteristics to quadratic complexity models. We measure information capacity, or the amount of information a model is capable of retaining from its inputs, in two ways: encoder-decoder style input regeneration and copy task training efficiency. The encoder-decoder input regeneration is identical to that detailed above except the encoder
+\theta_{e}
+is initialized from scratch and is unfrozen during training. The copy task is a measure of a model’s ability to learn to copy 512 tokens in relatively few (10k instead of 200k) training steps. Copying may be thought of as a less information-intensive task than regeneration, such that copy task training illustrates a model’s ability store smaller amounts of information relatively little training whereas input regeneration measures a models’ ability to store more information with more training.
+
+We find that SRMs exhibit higher informational capacity as measured by encoder-decoder input regeneration (Table
+3
+) and similar or slightly better copy task training efficiency when adjusted for compute but not on an equivalent embedding size basis, with variation dependent on SRM architecture (Table
+4
+). To conclude, the qualitative features transferred to SRMs from causal Masked Mixers typically do not reduce information capacity, and SRMs exhibit superior information retention and superior information capacity to Mamba models on a per-compute basis.
+
+SRM
+
+Untrained SRM
+
+Mamba
+
+Untrained Mamba
+
+Loss
+\downarrow
+
+6.169
+
+6.105
+
+7.039
+
+7.290
+
+Entropy Ratio
+\uparrow
+
+0.3168
+
+0.3239
+
+0.2204
+
+0.1926
+
+Table 2:
+Causal pretrained model information retention. All models
+d_{m}=512,n_{l}=16,n_{ctx}=512
+
+Mixed Heads
+
+Decay
+
+Parallel Heads
+
+Head Projections
+
+Loss
+
+Entropy Ratio
+
+SRM, H=4
+
++
+
++
+
+-
+
++
+
+2.011
+
+0.7773
+
+SRM, H=4
+
++
+
+-
+
+-
+
++
+
+4.050
+
+0.5514
+
+SRM, H=4
+
++
+
++
+
+-
+
+-
+
+1.295
+
+0.8565
+
+SRM, H=4
+
+-
+
+-
+
+-
+
++
+
+2.984
+
+0.6695
+
+SRM, H=4
+
++
+
++
+
++
+
++
+
+2.423
+
+0.7316
+
+Mamba, H=8
+
+3.357
+
+0.6282
+
+Masked Mixer
+
+0.440
+
+0.9513
+
+Table 3:
+Architecture Information Capacity, measured via encoder-decoder input reconstruction. All models
+d_{m}=512,n_{l}=16,n_{ctx}=512
+
+Mixed Heads
+
+Decay
+
+Parallel Heads
+
+Head Projections
+
+Accuracy
+
+Loss
+
+SRM, d=1024
+
++
+
++
+
+-
+
+-
+
+0.7474
+
+0.9015
+
+SRM, d=512
+
++
+
++
+
+-
+
+-
+
+0.6886
+
+1.201
+
+SRM, d=256
+
++
+
++
+
+-
+
+-
+
+0.3484
+
+3.592
+
+SRM, d=256
+
+-
+
+-
+
+-
+
++
+
+0.4043
+
+3.084
+
+SRM, d=256, H=0
+
+0.442
+
+2.802
+
+SRM, d=256, k=4
+
+0.4915
+
+2.487
+
+SRM, d=512, k=4
+
+0.7854
+
+0.8273
+
+SRM, d=512, k=8
+
+0.8439
+
+0.5830
+
+Mamba, d=128
+
+0.252
+
+4.46
+
+Mamba, d=256
+
+0.5121
+
+2.437
+
+Mamba, d=512
+
+0.9673
+
+0.133
+
+Table 4:
+Copy accuracy (512 tokens copied at 10k training steps)
+d_{m}=512,n_{l}=16,n_{ctx}=1024
+. ‘k’ denotes kernel number for SRM mixer layers, and H=0 denotes a non-headed model. Most SRM configurations are typically less efficient copy learners per
+d_{m}
+size but more efficient per compute than Mamba models and achieve high copy accuracy with limited training steps.
+
+These experiments suggest that while SRMs are capable of capturing nearly all of the information present in a reasonably sized input, causal-trained SRMs are typically not capable of doing so. This is true for other model architectures trained for causal modeling
+(
+Badger 2026
+)
+, but is particularly detrimental for recurrent models because they store fixed-sized caches. Recurrent models may be thought of as forming a compression of the input in their cache, and in order to retrieve this information accurately the compression must be of high fidelity and therefore scaling
+n_{ctx}
+beyond the limit of compression achievable by the model necessarily leads to information loss and poor performance. Compression limits are highly dataset-dependent, and for low-information data such as DNA sequences are much lower (in terms of bits required per byte of input) than they are for high-information inputs like language. For language, assuming a 0.54 bits per byte (14.8x) compression achieved by recent LLMs
+(
+Deepseek 2025
+)
+a
+d_{m}=1024
+embedding would be expected to be able to losslessly compress up to
+1024\;params*2\frac{bytes}{param}*0.5\frac{tokens}{byte}*14.8=15155
+tokens, although this is likely an overestimation given that it assumes that decoding the cache results in no further compression. We test the idea that scaling recurrent models’ context beyond their compression limit necessarily results in performance degradation by observing copy fidelity as the number of copied tokens increases for a fixed training dataset and SRM model, and find a decline in copy accuracy (from >90% to <30%) as the number of copied tokens increases (Figure
+S2
+). This motivates the following investigation into scaling recurrent models in the batch, rather than the sequence, dimension.
+
+5.5
+Recurrent Throughput and Concurrency
+
+For causal language model inference, tokens must be generated sequentially (or perhaps a few at a time) as the true distribution is not known
+a priori
+, such that parallelization across the sequence dimension is no longer possible. Instead one can parallelize across the batch, or sample, dimension with the relatively safe assumption that the samples are independent. It is clear that the recurrent representation of SRMs is more efficient to parallelize in the sample dimension than linear space models such as the Transformer, as for
+s
+samples and
+l
+layers a recurrent model requires
+sld
+space per layer and at each next token prediction transfers
+sld
+elements from memory, whereas Transformers require
+sldn_{ctx}
+space and transfer
+sldn_{ctx}/2
+elements from memory on average. If memory transfer alone was limiting, this means that one would expect to observe a throughput increase of
+(n_{ctx}/2)
+x in SRMs compared to Transformers of equivalent size. Asymptotically as
+n_{ctx}\to\infty
+this would be true of real devices, but for our context lengths the penalty for larger batch sizes through the token feedforward layers is non-trivial. Even for the relatively small context length sizes used in this work, however, we find that there is an order-of-magnitude increase in throughput (Table
+5
+). Likewise, we would expect for an
+n_{ctx}
+x increase in the memory required in Transformers compared to SRMs as
+n_{ctx}\to\infty
+, and we observe a two orders-of-magnitude increase in maximum concurrency (Table
+5
+).
+
+Transformer
+
+SRM
+
+n_{ctx}
+
+Throughput (t/s)
+
+Max Concurrency
+
+Throughput (t/s)
+
+Max Concurrency
+
+Throughput Increase
+
+512
+
+2908
+
+400
+
+28091
+
+64000
+
+9.66x
+
+1024
+
+1918
+
+200
+
+28298
+
+64000
+
+14.75x
+
+2048
+
+1116
+
+100
+
+27441
+
+32000
+
+24.59x
+
+4096
+
+634
+
+50
+
+27445
+
+32000
+
+43.29x
+
+Table 5:
+Throughput (tokens per second) per context length, 1x V100 (16GB) with Pytorch implementations, SRMs are
+d_{m}=1024
+and Transformers are
+d_{m}=512
+, both
+n_{l}=16,h=4
+. Note that the decrease in batch size for
+n_{ctx}>1024
+for SRMs is not due to the model using more memory, but due to the memory required to store generated tokens via a non-optimized in-memory store.
+
+When we compare throughput and concurrency of the SRM to Mamba models, we find that the former experiences much higher (
+>500x
+) concurrency and approximately
+7x
+the throughput of equivalently powerful models of the latter, although Mamba models are in turn observed to exhibit increased throughput compared to Transformers (Table
+6
+). We attribute this substantial difference to tiny number of transformations SRMs perform during sequence mixing (two vector-scalar multiplications and a vector addition per layer).
+
+SRM
+1024
+
+Mamba
+256
+
+Mamba
+512
+
+Transformer
+256
+
+Transformer
+512
+
+RWKV
+256
+
+RWKV
+512
+
+Throughput
+
+161312
+
+61465
+
+23155
+
+32134
+
+15272
+
+3820
+
+3774
+
+Concurrency
+
+512000
+
+1000
+
+1000
+
+6000
+
+4000
+
+1024
+
+1024
+
+Table 6:
+Maximum throughput (tokens per second) and concurrency (samples) per model, 1x H100 (96GB) with Pytorch implementations, all
+n_{ctx}=512,n_{l}=8
+. RWKV is limited by default to 1024 batch size, and the maximum predicted batch for the
+d_{m}=512
+model is around 2000.
+
+To demonstrate the benefits of building a production-grade inference framework for recurrent models, we implemented recurrent SRMs using Modular MAX inference framework
+(
+Modular
+)
+and verified that implementing an SRM in MAX resulted in substantially higher throughput (7.5x) and concurrency (1.75x) compared to that obtained by Torch implementations using identical hardware. We then compared the throughput of SRMs to those of equivalently capable transformers applied using vLLM, a widely applied efficient inference engine built around paged attention
+(
+Kwon et al. 2023
+)
+. We observe similar efficiency increases in our MAX SRM implementation compared to a Transformer inferenced via vLLM as we did for Pytorch implementations of both models: the SRM exhibits 12x the throughput and 170x the concurrency of a pretraining-matched (26x the throughput and 225x the concurrency of a parameter-matched) Transformer when generating 1k tokens on a single Nvidia H100 (Tables
+7
+,
+S1
+). On the optimized Albatross inference engine, the RWKV exhibits increased throughput compared to the Transformer but still exhibits only a fraction of the throughput of the SRM.
+
+SRM
+1024
+
+SRM
+512
+
+Mamba
+
+Transformer
+
+RWKV
+
+Throughput (k t/s)
+
+1203
+
+2626
+
+44*
+
+101
+
+184
+
+Concurrency (k samples)
+
+800
+
+1200
+
+20*
+
+5.32
+
+50
+
+Table 7:
+Maximum throughput and concurrency per model, 1x H100 (96GB) with optimized engine inferences (SRMs via our Mojo/MAX implementation, Transformers and Mamba on vLLM with optimized kernels if appropriate, RWKV (7) on Albatross). Non-SRM models are all
+d_{m}=512
+, and all are
+n_{l}=8
+with an 8k-size tokenizer. Mamba models exhibit a memory leak and do not reach their theoretical limit of 20k concurrent samples, achieving only 300.
+
+At the throughputs achieved by SRMs, the operation of finding the next tokens given the model’s logits becomes a bottleneck: for example, the throughput of the
+d_{m}=512
+with argmax on the logits to compute the next token is only 63% that of the same model without applying argmax (Table
+S1
+).
+
+We comment that these results illustrate the versatility of the SRM architecture: unlike Mamba and RWKV which specialized device kernels for performant inference, SRMs are easily incorporated into other inference frameworks and do not require substantial rewrites for new hardware. This is a significant problem for training as well as inference: Mamba kernels perform poorly on older hardware (V100s) due to differences in memory management, and both Mamba and RWKV kernels will likely need to be rewritten for new GPU architectures in order to maintain performance as L1/L2/shared cache memory management is likely to change in the future.
+
+5.6
+Verifiable Output Scaling
+
+We next investigated whether the 10-30x throughput increase for SRMs versus Transformers results in materially higher performance on benchmarks in which outputs may be verified, and in particular we focus on GSM8k with verification in the form of an oracle that tests equivalence of the model’s last numerical output for that question with the correct answer. The following question is addressed: given a fixed amount of compute and memory (over both train and test time), what is most efficient for obtaining at least one correct sample per question? Equivalently, how does Pass@k scale with increased
+k
+for SRMs, and in particular does it follow a similar power law found for Transformers across many tasks
+(
+Brown et al. 2024
+)
+? We find that the Pass@k scaling for SRMs is nearly identical to that for Transformers for GSM8k (Figure
+4
+). In practical terms, this means that to reach a given target coverage the transformer requires around 10x the inference compute, and for a constant compute budget the SRM gives a correct answer to around 30% more GSM8k questions than the Transformer. We find that this relationship holds regardless of preparation for the GSM8k dataset: samples from SRMs and Transformers pretrained on 13B tokens of FineMath-4+ followed by SFT on the GSM8k training dataset are by eye more coherent and exhibit higher Pass@k accuracy than those from models trained on FineWeb, but again SRMs exhibit around 30% more coverage per fixed compute.
+
+Figure 4:
+(a) GSM8k Inference Scaling, in compute per SRM sample. ‘Math’ models are pretrained on FineMath 4+ followed by SFT on GSM8k, others are pretrained only on FineWeb. (b) Compute-constant GRPO (50 samples per batch for SRM, 5 for Transformers) on Math-trained models, with balanced resampling for SRMs. SRMs are
+d_{m}=1024
+and Transformer
+d_{m}=512
+
+5.7
+Reinforcement Learning
+
+Greater inference throughput afforded via SRMs would be expected to benefit reinforcement learning methods that make use of parallel generation with the goal of maximizing the probability that one or a few outputs are correct. One class of this criteria is where a model is used to generate multiple token sequences (rollouts) independently in parallel, which are then evaluated and reinforced depending on whether they fulfill some criteria. This class encompasses PPO
+(
+Schulman et al. 2017
+)
+as well as GRPO
+(
+Shao et al. 2024
+)
+and its variants
+(
+Liu et al. 2025
+)
+. With some simplification, GRPO proceeds by first generating a group
+G
+of samples from a model for a given question, verifying the goodness of each sample using reward functions, and then performing gradient descent to change the model’s parameters such that ‘good’ outputs with higher rewards are more likely to be sampled whereas bad outputs are less likely. Parallel generation coupled with random sampling (typically top-p nucleus sampling
+(
+Holtzman et al. 2020
+)
+with temperature) results in distinct samples usually containing non-identical token sequences. In this work we evaluate on outcomes only, such that the reward
+r=1.0
+if evaluation is correct and
+r=0.0
+if incorrect.
+
+\mathcal{J}=\mathbb{E}[q\sim P_{q},\{G_{r}\}\sim\pi_{\theta}(\{o_{i}\}_{i=1}^{G_{r}}|q)]\frac{1}{G_{r}}\sum_{i}\frac{1}{|o_{i}|}\sum_{t=1}^{|o_{i}|}\left(A_{i,t}-\beta\mathbb{D}_{KL}(\pi_{\theta}||\pi_{\theta_{ref}})\right)
+
+(6)
+
+One of the primary challenges with parallelized rollout RL algorithms such as GRPO is the inherent limitation that the model must be capable of generating at least one ‘good’ output of the batch (here where
+r=1.0
+), or the model has no reference with which to better approximate. GRPO is particularly susceptible to decreases in model exploration when few samples are rewarded because an implicit penalty is applied for each incorrect sample which limits exploration relative to SFT-trained models, which manifests in lower Pass@k (k>1) accuracy of GRPO- versus SFT-trained models
+(
+Shao et al. 2024
+)
+, which we find worsens with as the generation batch size
+G
+increases (Figure
+S3
+). To prevent this, we introduce a balanced resampling approach where for each sampled batch
+G
+of generations per question, given a training batch size
+b
+the generations are evaluated and we resample
+G
+to include up to
+b/2
+‘good’ samples, before resampling
+G
+selecting for ‘bad’ samples to make the training batch reach size
+b
+. Denoting this resampled
+G
+as
+G_{r}
+, and simplifying for the case where one training step is taken per generation batch such that
+\pi_{\theta_{old}}=\pi_{\theta}
+then consequently
+\pi_{\theta}(o_{i}|q,o_{i})/\pi_{\theta_{old}}(o_{i}|q,o_{i})=1
+, and thus we maximize the objective function given in Equation
+6
+when batches are large (ie for SRMs) and use the standard GRPO objective for small-batch training. In practice we typically pool samples from multiple questions per
+G
+, such that resampling occurs over these pooled batches.
+
+With FineMath 4+ pretrained models, we performed SFT on GSM8k followed by GRPO and confirmed that balanced resampling substantially increases Pass@k for SRMs (Figure
+S3
+). We then compared GRPO training of SRMs generating 50 samples per question versus Transformers with 5 samples per question, both with a single forward/reverse pass per batch and SRMs using balanced resampling. The results of both Pass@k after GRPO, as well as the difference between models before and after GRPO are shown in Figure
+4
+(b), and we observe that the single-sample accuracy is slightly higher for SRMs than for Transformers. The tradeoff between higher single-sample accuracy and lower exploration is clearly visible for Transformers, but in contrast we find that SRMs with their larger, resampled batches lead to increased successful exploration.
+
+6
+Discussion
+
+6.1
+Limitations of this work
+
+The SRM architecture exhibit a few notable limitations: firstly as implemented it is not suitable for modeling samples where the sequence dimension far exceeds the hidden dimension due to the quadratic complexity (w.r.t. token length) at training, secondly there is no built-in method for context length and candidate methods have yet to be tested, and finally the architecture is most easily optimized for larger parameter numbers with fewer activations compared to Mamba or Transformer models, and is unsuitable for applications requiring minimal parameter counts. This work is limited in scale and also in scope, and does not explore a number of optimizations (parallel scan for recurrent prefill, for example). One of the main outstanding question relates to the benefits or drawbacks one receives for various classes of problems when using a Transformer compared to an SRM: is it better to use a somewhat more capable model yielding fewer samples or a somewhat less capable one that gives >10x the throughput?
+
+6.2
+The Future
+
+Many-threaded versus single-threaded performance has increased exponentially the last couple of decades, as has the ratio of global memory bandwidth to arithmetic operation latency (the ‘memory wall’) on device
+(
+Kirk and Wen-Mei 2016
+;
+Gholami et al. 2024
+)
+, and it is likely that these features will continue for the foreseeable future. Although there is a limit to how parallelizable current inference scaling techniques such as Chain of Thought
+(
+Wei et al. 2023
+)
+are, with some caveats one would expect for the performance (i.e. useful sample production efficiency) of parallel sample generation to far outstrip single-sample sequential generation in the years to come because of the correspondence of parallel sample generation to parallel threads on device. Of the architectures studied in this work, SRMs are the most suitable for parallel generation and furthermore are ideally situated for dealing with the memory wall, as they exhibit a higher ratio of arithmetic operations to memory accesses. If these thread and memory characteristics hold in the future, SRMs will continue to increase their relative efficiency compared to memory-intensive models such as Transformers. Signs of practical aspects of this can be seen in this work: the ratio of SRM to Transformer throughput on V100s at
+n_{ctx}=512
+is 9.66x, whereas for the newer H100 is 10.56x (using compiled Pytorch implementations).
+
+7
+Acknowledgments
+
+The author is grateful to Collin Stedman for many helpful discussions on the nature of modeling bottlenecks and reinforcement learning tradeoffs, and to Matthew Neligeorge for conversations on the utility of recurrent models from an efficiency standpoint.
+
+S1
+Appendix
+
+S1.1
+Training Details
+
+Pretraining proceed as follows: first datasets were pretokenized and padded as necessary, and models were initialized and compiled where possible and optimized via the Pytorch implementation of AdamW with
+\beta_{1}=0.9,\beta_{2}=0.999
+. Most pretraining datasets use a constant token number of
+200,000*512*128=13.1B
+tokens, and this is held constant for longer-context trainings (here we have
+200,000*1024*64=13.1B
+tokens). We use
+\eta=5*10^{-4}
+for SRMs and Mamba models and
+\eta=2*10^{-4}
+for Transformers after optimizing this hyperparameter independently, and use a 4000-step warm-up with linear learning rate decay.
+
+We train for supervised finetuning by masking input tokens and training only on model-generated outputs, minimizing Cross-Entropy Loss between these and the answers provided by the GSM8k training dataset. We train with
+\eta=1*10^{-4}
+, gradient clipping with maximum grad norm of 0.1, weight decay of 0.1, warmup ratio of 0.1, and optimize using the Pytorch implementation of AdamW with
+\beta_{1}=0.9,\beta_{2}=0.999
+, and selected the checkpoint corresponding to the minimum evaluation loss (which invariably corresponded to around the third epoch with these hyperparameters regardless of the model being trained).
+
+GRPO training was performed using the ‘trl‘
+[
+von Werra et al. 2020
+]
+GRPO trainer, and was modified for resampling and SRM-specific cache handling for that model. For all models we use
+\eta=2*10^{-5}
+,
+\beta=0.04
+, gradient clipping with a maximum grad norm of
+0.1
+, warm-up ratio of 0.1, weight decay of 0.1, and top-p sampling (top-p of 0.9, temperature=0.7) and optimize via the Pytorch implementation of AdamW.
+
+For all training runs, Pytorch models were compiled when possible and trained via DDP with automated fp16/fp32 mixed precision, except for Mamba autoencoder models which were trained via bf16/fp32 mixed precision training due to numerical stability issues. The main exceptions to compilation were SRMs with GRPO, where turning on and off the cache for switching between recurrent generation and sequence parallel training causes shape changes that are incompatible with older GPUs (V100s) although not with newer ones, and Mamba models for which we used optimized kernels that are themselves compiled and cannot be trivially re-compiled into the Pytorch graph.
+
+S1.2
+MAX model details
+
+MAX implementations are designed for demonstration only, and use a hybrid graph approach to maintain consistency with Pytorch implementations: the throughputs measured are for implementations of SRM Mojo/MAX static graphs compiled with with embedded dynamic Pytorch tensors for the cache vectors (we provide but did not profile purely static MAX graph implementations due to hardware constraints).
+
+When we profiled MAX SRMs, we found that there existed a significant (around 200ms) delay while calling empty MAX graphs from python driver code, and that this delay persists when calling SRM implementations with our driver code. Observing that forward passes and cache updates may be internally looped inside the forward pass code and thereby avoiding calling the graph multiple times per generation (although notably MAX does not currently support compilation of default argmax operations), we adjust for this delay in Table
+7
+, and provide the raw throughput values in Table
+S1
+.
+
+SRM
+1024
+
+SRM
+1024
++argmax
+
+SRM
+512
+
+SRM
+512
++argmax
+
+Throughput (k t/s)
+
+1231
+
+900
+
+2801
+
+1764
+
+Concurrency (k samples)
+
+800
+
+800
+
+1200
+
+1200
+
+Table S1:
+Raw H100 (NVL) MAX SRM throughputs, with delay from driver code calls.
+
+We found a bug in the current (26.1 and 26.2) MAX open source repository all machines tested: there exists a memory leak in which LLVM exhibits an out-of-memory error that depends on the number of Mojo modules called during model instantiation before compiling, without regard to the tensor size associated with those modules or what modules are called. For architectural consistency with Pytorch-profiled models (meaning that SRMs use four heads per layer, mixed row/column heads, nonparallel heads and input and output projections) this necessitated profiling models with fewer layers, and we chose 8 rather than 16. As the memory error is module call-dependent, we found that parallelized four-headed SRMs without input/output projections were able to be initialized with all 16 layers.
+
+S1.3
+Benchmark Details
+
+Functional benchmarks were performed using modified versions of Eleuther AI’s LM evaluation harness
+[
+Gao et al. 2024
+]
+. Code relating to SRM cache instantiation, updates, and destruction interfacing was added to a fork of the evaluation harness, and is available at https://github.com/blbadger/lm-evaluation-harness. Mamba and Transformer models used Huggingface implementations in that module. All benchmarks are zero-shot unless otherwise noted.
+
+Figure S1:
+Token mixing weights from trained masked mixers. Autoencoders trained for maximum information retention (into the last hidden layer of the last token).
+
+Model
+
+Head Number
+
+Eval Loss
+
+Row Repeat
+
+0
+
+3.465
+
+Column Repeat
+
+0
+
+3.357
+
+Row Repeat
+
+4
+
+3.311
+
+Column Repeat
+
+4
+
+3.275
+
+Combined Repeat
+
+4
+
+3.219
+
+Mixed Repeat
+
+4
+
+3.228
+
+Mixed Repeat +decay
+
+4
+
+3.002
+
+Combined Repeat +decay
+
+4
+
+3.033
+
+Mixed Repeat, +decay, -head projections
+
+4
+
+3.056
+
+Table S2:
+SRM training loss at 200k steps (13.1 B tokens), FineWeb-edu. All models
+d_{m}=512,n_{l}=16
+.
+
+Model
+
+Eval Loss
+
+Mamba
+d_{m}=128
+
+3.41975
+
+Mamba
+d_{m}=256
+
+3.0647
+
+Mamba
+d_{m}=512
+
+2.758
+
+SRM
+d_{m}=512
+
+3.002
+
+SRM
+d_{m}=1024
+
+2.80
+
+Masked Mixer
+d_{m}=1024
+
+2.628
+
+Transformer
+d_{m}=512
+
+2.573
+
+Table S3:
+FineWeb-edu training, 13B tokens,
+n_{ctx}=512
+. SRMs are mixed headed with decay.
+
+Model
+
+Eval Loss
+
+Mamba
+
+2.989
+
+SRM (decay, mixed heads)
+
+1.614
+
+Masked Mixer
+
+1.483
+
+Transformer
+
+1.391
+
+Table S4:
+FineMath 4+ training, 13B tokens, compute-equivalent
+
+Model
+
+Eval Loss
+
++diagonal constant, - decay
+
+3.243
+
++diagonal constant, + decay
+
+2.981
+
+-diagonal constant, - decay
+
+3.228
+
+-diagonal constant, + decay
+
+3.002
+
+Table S5:
+Constant diagonal models offer no consistent training efficiency increase. All
+d_{m}=512,n_{l}=16
+
+d_{m}
+
+Throughput
+
+Memory
+
+Parameter Count (M)
+
+128
+
+17.01
+
+7803
+
+4.76
+
+256
+
+9093
+
+9093
+
+14.69
+
+512
+
+12.58
+
+14663
+
+50.29
+
+1024
+
+6.15
+
+25257
+
+184.40
+
+2048
+
+1.99
+
+53463
+
+704.28
+
+Table S6:
+Training Throughput (samples/sec) and Memory (GB per device) and parameter count for SRM models (
+h=4
+,
+n_{l}=16
+, mixed heads, decay, nonparallel) on 2x H100 GPUs (NVL).
+
+d_{m}
+
+Throughput
+
+Memory
+
+Parameter Count (M)
+
+128
+
+22.46
+
+8839
+
+4.76
+
+256
+
+19.73
+
+12111
+
+14.69
+
+512
+
+13.49
+
+17247
+
+50.29
+
+1024
+
+6.39
+
+27093
+
+184.40
+
+2048
+
+2.03
+
+52431
+
+704.28
+
+Table S7:
+Training Throughput (samples/sec) and Memory (GB per device) for head-parallel SRM models (h=4, mixed heads, decay) on 2x H100s.
+
+d_{m}
+
+Throughput
+
+Memory
+
+Parameter Count (M)
+
+128
+
+22.70
+
+9571
+
+4.23
+
+256
+
+19.33
+
+11561
+
+12.59
+
+512
+
+13.20
+
+15703
+
+41.89
+
+1024
+
+6.67
+
+23959
+
+150.80
+
+2048
+
+2.26
+
+45373
+
+570.00
+
+Table S8:
+Training Throughput (samples/sec) and Memory (GB per device) for parallelized, non-projected SRM models (h=4, mixed heads, decay) on 2x H100s.
+
+d_{m}
+
+Throughput
+
+Memory
+
+Parameter Count (M)
+
+128
+
+22.46
+
+8839
+
+4.76
+
+256
+
+19.73
+
+12111
+
+14.69
+
+512
+
+13.49
+
+17247
+
+50.29
+
+1024
+
+6.39
+
+27093
+
+184.40
+
+2048
+
+2.03
+
+52431
+
+704.28
+
+Table S9:
+Training Throughput (samples/sec) and Memory (GB per device) for head-parallel SRM models (
+h=4,n_{ctx}=512,b=128
+, mixed heads, decay) on 2x H100.
+
+d_{m}
+
+Throughput
+
+Memory
+
+Parameter Count (M)
+
+128
+
+17.29
+
+7297
+
+4.82
+
+256
+
+16.82
+
+9603
+
+14.76
+
+512
+
+12.23
+
+14951
+
+50.36
+
+1024
+
+6.17
+
+25833
+
+184.47
+
+2048
+
+2.05
+
+53327
+
+704.35
+
+Table S10:
+Training Throughput (samples/sec) and Memory (GB per device) for head-parallel SRM models (
+h=4,n_{ctx}=1024,b=64
+, mixed heads, decay) on 2x H100.
+
+d_{m}
+
+Throughput
+
+Memory
+
+Parameter Count (M)
+
+128
+
+8.05
+
+14329
+
+5.85
+
+256
+
+6.11
+
+21713
+
+19.03
+
+512
+
+3.78
+
+34491
+
+69.42
+
+1024
+
+1.82
+
+63295
+
+252.29
+
+2048
+
+*0.693
+
+*170018
+
+974.30
+
+Table S11:
+Training Throughput (samples/sec) and Memory (GB per device) for Mamba 2 models (
+h=8,n_{ctx}=512,b=128
+) on 2x H100. *with gradient accumulation
+
+d_{m}
+
+Throughput
+
+Memory
+
+Parameter Count (M)
+
+128
+
+6.55
+
+19193
+
+5.85
+
+256
+
+5.08
+
+25757
+
+19.03
+
+512
+
+3.34
+
+67733
+
+69.42
+
+1024
+
+1.70
+
+67733
+
+252.29
+
+2048
+
+*0.676
+
+*167570
+
+974.30
+
+Table S12:
+Training Throughput (samples/sec) and Memory (GB per device) for Mamba 2 models (
+h=8,n_{ctx}=1024,b=64
+) on 2x H100. *with gradient accumulation
+
+Figure S2:
+Copy accuracy plummets as the number of tokens to be copied increases. SRM,
+d_{m}=256,n_{l}=16
+, the total context window is double the tokens copied (FineWeb corpus), trained for 10k steps,
+b=64
+samples per step.
+
+Figure S3:
+GRPO exploration on GSM8k. Models are pretrained on 13B tokens of FineMath 4+ followed by SFT on GSM8k training dataset.
+

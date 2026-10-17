@@ -1,0 +1,7733 @@
+Axon : A Synthesizing Superoptimizer for Tensor Programs
+Akash Kothari, Shaowei Zhu, Daniel Kroening, Chungha Sung
+
+Abstract
+. Writing high-performance kernels for AI accelerators requires deep expertise in tiling, instruction selection, data layout, and operator fusion—placing a significant burden on programmers. In this paper, we focus on tile-based AI accelerator programs and present Axon , a synthesizing superoptimizer for tensor programs: it uses program synthesis to automatically generate target instructions from semantics specifications, and explores semantically equivalent program variants to select the best-performing kernel empirically. Axon discovers algebraic transformations by propagating operators through computation graphs and uses SMT over unbounded tensors to guarantee that all transformations preserve semantics—without requiring hand-crafted rewrite rules. It then lowers tensor operations to target ISA instructions, explores tiling configurations constrained by hardware descriptions, and fuses operators and instructions to minimize memory traffic. We evaluate Axon on Amazon’s Trainium across 20 benchmarks spanning individual tensor operators and multi-operator LLM kernels, including Group Query Attention and Gated MLP. Compared to Amazon’s Neuron compiler, Axon achieves speedups of up to 3.7x on individual operators and up to 19x on multi-operator kernels. Axon matches or outperforms hand-optimized NKI kernels by up to 1.35x, and achieves geomean speedups of 2–10% over Mirage, a state-of-the-art search-based compiler, on supported benchmarks—while synthesizing kernels for 16 additional benchmarks that Mirage cannot handle.
+
+
+
+1.
+Introduction
+
+Performance of modern AI accelerators depends critically on the quality of kernels—low-level programs that describe how hardware resources should be orchestrated to execute a workload.
+Even though tile-based kernel languages (e.g., NKI for Amazon’s Trainium
+(
+7
+)
+, Pallas for Google’s TPUs
+(
+25
+)
+, and Triton
+(
+44
+)
+for GPUs) provide easier pathways to good performance by abstracting away many low-level details, it remains challenging to write kernels that achieve high utilization of hardware.
+Kernel programmers still need to understand hardware details such as memory hierarchies and specialized compute and data movement engines to reason about tiling, data layout, operator fusion, and engine selection—tasks that require deep hardware expertise and are out of reach for most ML engineers.
+
+We present
+Axon
+, a synthesizing superoptimizer for tile-based AI accelerator programs: given tensor programs written in a Numpy-like interface
+(
+22
+)
+, it uses program synthesis to automatically generate target instructions from semantics specifications, and explores all semantically equivalent program variants to select the best-performing kernel empirically (Figure
+1
+).
+
+Axon
+discovers algebraic transformations by
+propagating
+operators through computation graphs, reordering operations to expose parallelism and fusion opportunities.
+To guarantee that all transformations preserve semantics,
+Axon
+decomposes tensor operations into granular computations and uses an SMT solver to check equivalence over unbounded tensors—requiring no hand-crafted rewrite rules or operator properties.
+For example, in an RMSNorm+MatMul kernel,
+Axon
+automatically discovers that an element-wise multiply can be reordered past the matrix multiplication, enabling the normalization and matmul to execute on different compute engines in parallel (Section
+2
+).
+
+Figure 1
+.
+Overview of
+Axon
+’s workflow.
+
+Axon
+then lowers each tensor operation to target ISA instructions via sketch-driven program synthesis, using semantics specifications that describe each instruction’s computation and hardware constraints.
+It explores tiling configurations using symbolic parameters constrained by the hardware description, and fuses operators and instructions to minimize memory traffic.
+All valid variants—across algebraic transformations, instruction selections, tiling configurations, and fusion choices—are maintained simultaneously in a
+\nu
+Graph (“nu-graph”), a persistent internal representation that tracks all semantically equivalent program variants through each stage of the synthesis pipeline.
+The best-performing kernel is selected empirically when input shapes are known.
+
+Existing approaches to tensor program optimization either require hand-crafted rewrite rules for algebraic transformations
+(
+26
+;
+54
+;
+49
+)
+, rely on hand-written templates for code generation
+(
+52
+)
+, or target only CPUs and GPUs
+(
+12
+;
+58
+;
+40
+)
+.
+
+Axon
+derives all transformations and instruction selections from semantics specifications, enabling it to automatically generate optimized kernels for tile-based AI accelerators with provable correctness guarantees.
+
+Contributions.
+This paper makes the following contributions:
+
+•
+
+A
+provably correct methodology for algebraic transformations
+through operator propagation, which automatically discovers semantically equivalent computation graphs by decomposing tensor operations into granular computations and using SMT over unbounded tensors. It checks that reordering adjacent operators preserves semantics—requiring no hand-crafted rewrite rules or operator properties.
+
+•
+
+A
+synthesis-based pipeline
+for tile-based AI accelerator programs that automatically lowers high-level tensor operations to target ISA instructions, explores tiling configurations constrained by hardware descriptions, and performs operator and instruction fusion. All semantically equivalent variants are maintained simultaneously and the best-performing kernel is selected empirically.
+
+•
+
+An
+evaluation on Amazon’s Trainium
+across 20 benchmarks spanning individual operators and multi-operator LLM kernels (including Group Query Attention and Gated MLP), demonstrating speedups of up to 3.7x on individual operators and up to 19x on multi-operator kernels over Amazon’s Neuron compiler, up to 1.35x over hand-optimized NKI kernels, and geomean speedups of 2–10% over Mirage
+(
+52
+)
+on all benchmarks it supports—while synthesizing 16 additional kernels that Mirage cannot.
+
+2.
+Motivation
+
+Figure 2
+.
+An
+Axon
+program for RMSNorm+MatMul using NumPy-like interfaces.
+
+We illustrate
+Axon
+’s approach using a kernel composed of RMSNorm
+(
+56
+)
+followed by a matrix multiplication—a computation pattern that appears multiple times per transformer layer in modern LLMs such as LLaMA-3
+(
+20
+)
+, where RMSNorm precedes each linear projection (QKV, output, and FFN layers).
+Figure
+2
+shows how a programmer expresses this kernel in NumPy-like
+(
+22
+)
+interface; the rest of this section walks through how
+Axon
+automatically optimizes it.
+
+RMSNorm normalizes an input tensor
+X
+by its root mean square (RMS) along a particular dimension (typically the last dimension of
+X
+):
+
+(1)
+
+\text{RMSNorm}(X)=X\odot\text{RMS}(X)=X\odot\frac{1}{\sqrt{\frac{1}{N}\sum_{i}X_{i}^{2}+\epsilon}}
+
+where
+\epsilon>0
+is a small constant for numerical stability.
+The output is then matrix-multiplied with a weight tensor
+W
+to produce the final result
+Z
+.
+
+Figure
+3
+(a) shows the computation graph: the input
+X
+is squared, reduced via
+mean
+, passed through
+rsqrt
+, multiplied with the original
+X
+, and finally given to
+matmul
+with weight matrix
+W
+.
+
+\epsilon
+X
+W
+square
+mean
+add
+rsqrt
+multiply
+matmul
+Z
+RMSNorm
+(a)
+2 Independent parallelizable
+subgraphs
+\epsilon
+X
+W
+square
+mean
+add
+rsqrt
+matmul
+multiply
+Z
+(b)
+
+Figure 3
+.
+(a) Computation graph for RMSNorm+MatMul (b) Semantically equivalent RMSNorm+MatMul graph with two independent subgraphs.
+
+Algebraic Transformations.
+
+On accelerators such as Trainium, executing this graph naively requires all operations to execute sequentially—the normalization must complete before the matrix multiplication can begin, underutilizing the available parallel compute engines.
+
+Axon
+discovers that the element-wise
+multiply
+can be reordered with
+matmul
+: instead of computing
+(X\odot\text{rms}(X))\cdot W
+, we can compute
+(X\cdot W)\odot\text{rms}(X)
+.
+This is valid because
+\text{rms}(X)
+reduces along the last dimension of
+X
+—the same dimension contracted by
+matmul
+—so the element-wise scaling commutes with the matrix multiplication.
+
+Axon
+provably checks semantic equivalence by decomposing both operations into granular computations and using SMT over unbounded tensors (Section
+5
+), without requiring any hand-crafted rewrite rules.
+
+The transformed graph in Figure
+3
+(b) exposes two independent subgraphs:
+matmul
+executes on the Tensor Engine while the RMS computation executes on the Scalar and Vector Engines in parallel (Section
+3
+).
+Rather than committing to a single transformation,
+Axon
+maintains both the original and transformed graphs simultaneously in a
+\nu
+Graph (“nu-graph”)—a persistent internal representation that tracks all semantically equivalent program variants through each stage of the synthesis pipeline (Section
+4
+).
+
+Previous works such as TASO
+(
+26
+)
+, Tensat
+(
+54
+)
+, and Constable
+(
+48
+)
+use 91 hand-implemented rewrite rules
+1
+1
+
+1
+
+https://github.com/uwplse/tensat/blob/master/src/rewrites.rs#L12
+to perform graph rewrites.
+However, none of these works support this transformation.
+Although this particular rewrite could be added to the existing set of rules, implementing rewrite rules by hand for different combinations of tensor operators is error-prone, as demonstrated by recent efforts to formally verify such rules
+(
+5
+)
+.
+Mirage
+(
+52
+)
+does support this particular rewrite, but fails on a similar transformation in Softmax+MatMul (Appendix
+B.1
+).
+This is due to a fundamental limitation shared by all graph rewriting systems: they expect operations to appear in specified patterns and do not automatically reason about the semantics of operations to drive algebraic transformations.
+
+Tiling.
+
+After discovering algebraic transformations,
+Axon
+tiles each tensor operation for the target hardware at multiple levels—from the granular units consumed by individual instructions up to the groups of data that reside in on-chip buffer simultaneously (Section
+4.3
+).
+The transformed RMSNorm+MatMul graph now has two parallel branches, and
+Axon
+introduces
+independent
+symbolic tiling parameters for each branch—enabling each to be optimized separately for its respective compute engine and on-chip buffer budget.
+Different compute engines impose different constraints on tile dimensions, and the optimal grouping of tiles depends on the trade-off between data reuse and on-chip buffer capacity.
+
+Axon
+generates multiple versions with different tiling configurations and selects the best empirically (Section
+4.6
+).
+
+ISA Synthesis.
+
+Axon
+then lowers each tiled 2-D tensor operation to target ISA instructions via program synthesis.
+For instance, on Trainium, the
+matmul
+operation must be lowered to the NKI instruction
+nc_matmul
+, which computes
+\mathbf{a}^{\top}\mathbf{b}
+—the first operand is consumed in transposed form.
+The synthesizer discovers that
+matmul(x, y)
+can be implemented as
+nc_matmul(nc_transpose(x), y)
+, and provably checks this using SMT-based equivalence checking (Section
+5
+).
+For the element-wise operations in the RMS branch, the synthesizer explores multiple Trainium instruction choices—
+tensor_tensor
+,
+tensor_scalar
+, or
+activation
+—each with different performance characteristics and tile dimension constraints.
+All valid instruction selections are maintained simultaneously in the
+\nu
+Graph (Section
+4
+).
+
+Fusion.
+
+After ISA synthesis,
+Axon
+identifies opportunities to fuse operations at two levels.
+
+Node fusion
+merges consecutive operations that share compatible tiling dimensions into a single loop nest, so that intermediate results remain in on-chip buffers rather than spilling to HBM.
+For example, in the RMS branch, consecutive element-wise operations (such as
+add_epsilon
+and
+rsqrt
+) can be fused to eliminate an HBM round-trip for the intermediate tensor.
+
+Instruction fusion
+replaces sequences of ISA instructions with fused variants: for example, on Trainium, a
+dma_copy
+followed by
+nc_transpose
+can be replaced with the NKI instruction
+dma_transpose
+, performing the layout transformation on-the-fly during data transfer.
+Additionally, ISA synthesis may introduce new operations (e.g.,
+nc_transpose
+on Trainium to satisfy
+nc_matmul
+’s transposed-input requirement) that create new fusion opportunities not visible in the original graph.
+
+Code Generation and Selection.
+
+Finally,
+Axon
+extracts concrete NKI programs from the
+\nu
+Graph by instantiating symbolic tiling parameters with specific values.
+Each candidate program—encoding a specific combination of algebraic rewrite, instruction selection, tiling configuration, and fusion decisions—is compiled by the Neuron compiler and executed on Trainium.
+
+Axon
+returns the best-performing kernel along with its configuration.
+The full NKI kernel generated by
+Axon
+for this example is shown in Appendix
+D
+.
+
+3.
+Background
+
+AI accelerators differ in architectural details, but they share common patterns, e.g., specialized units for computing matmuls, multi-level memory hierarchies, and a reliance on tiling and tuning to achieve peak performance.
+Tile-based kernel languages exist for various accelerators—NKI for Amazon’s Trainium
+(
+7
+)
+, Pallas for Google’s TPU
+(
+25
+)
+, and cuTile
+(
+35
+)
+or Triton
+(
+44
+)
+for GPUs—that expose architectural features through Python-based interfaces.
+This section introduces these concepts using Amazon’s first-generation Trainium as a concrete example.
+
+Figure 4
+.
+Trainium’s NeuronCore
+(
+8
+)
+.
+
+3.1.
+Trainium Architecture
+
+Figure
+4
+illustrates the architecture of a NeuronCore, the fundamental compute unit in Trainium.
+Each Trainium chip contains two NeuronCores.
+A NeuronCore comprises four specialized compute engines: (1) a
+Tensor Engine
+(systolic array) for matrix multiplications, (2) a
+Vector Engine
+for vector operations, (3) a
+Scalar Engine
+for scalar operations, and (4) a
+Gpsimd Engine
+, a general-purpose SIMD unit.
+All four engines can execute in parallel.
+
+A NeuronCore has High Bandwidth Memory (HBM) and on-chip buffers: State Buffer (SBUF), the primary data buffer accessible by all compute engines, and Partial Sum Buffer (PSUM), an accumulator for the Tensor Engine. DMA engines move data between HBM and SBUF, and can operate in parallel with the compute engines.
+
+3.2.
+Tile-Based Programming in NKI
+
+In tile-based programming, computation is structured around fixed-size sub-arrays called
+tiles
+that are explicitly moved between HBM and on-chip SRAM buffers, with operations expressed at the tile granularity
+(
+44
+;
+50
+)
+.
+Neuron Kernel Interface (NKI)
+(
+7
+)
+is a Python-based tile-based language for implementing custom kernels on Trainium.
+NKI kernels follow three stages: (1) loading tiles from HBM to SBUF via DMA, (2) performing on-chip computations on tiles, and (3) writing result tiles back from SBUF to HBM.
+
+Figure
+5
+shows a tiled matrix multiplication kernel in NKI, adapted from the NKI tutorial
+(
+42
+)
+.
+NKI kernels are Python functions decorated with
+@nki.jit
+(line 1).
+The left-hand operand is provided pre-transposed (
+lhsT
+) because
+nc_matmul
+consumes its stationary operand in transposed form.
+The kernel iterates over output tiles (lines 11–12) and the reduction dimension (line 15), loading input tiles from HBM to SBUF via
+dma_copy
+(lines 17–20), performing the matrix multiplication on the Tensor Engine via
+nc_matmul
+which accumulates results into PSUM (line 23), and storing the result back to HBM via SBUF (lines 26–28).
+
+Each compute engine enforces hardware constraints on tile dimensions: on Trainium, the partition dimension is at most 128 elements (
+T_K
+,
+T_M
+), while the free dimension of the moving operand can be up to 512 (
+T_N
+) (lines 5–7).
+Effective tiling maximizes on-chip data reuse and minimizes DMA traffic between HBM and SBUF.
+
+⬇
+
+1
+
+@nki
+.
+jit
+
+2
+
+def
+
+nki_matmul_tiled
+(
+lhsT
+,
+
+rhs
+):
+
+3
+
+K
+,
+
+M
+
+=
+
+lhsT
+.
+shape
+
+#
+
+[K,M]
+
+pre-transposed
+
+4
+
+K_
+,
+
+N
+
+=
+
+rhs
+.
+shape
+
+#
+
+[K,N]
+
+5
+
+T_M
+
+=
+
+nl
+.
+tile_size
+.
+gemm_stationary_fmax
+
+#TILE_M=128
+
+6
+
+T_K
+
+=
+
+nl
+.
+tile_size
+.
+pmax
+
+#TILE_K=128
+
+7
+
+T_N
+
+=
+
+nl
+.
+tile_size
+.
+gemm_moving_fmax
+
+#TILE_N=512
+
+8
+
+9
+
+out
+
+=
+
+nl
+.
+ndarray
+((
+M
+,
+
+N
+),
+
+dtype
+=
+lhsT
+.
+dtype
+,
+
+buffer
+=
+nl
+.
+shared_hbm
+)
+
+10
+
+11
+
+for
+
+m
+
+in
+
+nl
+.
+affine_range
+(
+M
+
+//
+
+T_M
+):
+
+12
+
+for
+
+n
+
+in
+
+nl
+.
+affine_range
+(
+N
+
+//
+
+T_N
+):
+
+13
+
+acc
+
+=
+
+nl
+.
+ndarray
+((
+T_M
+,
+
+T_N
+),
+
+nl
+.
+float32
+,
+
+buffer
+=
+nl
+.
+psum
+)
+
+14
+
+15
+
+for
+
+k
+
+in
+
+nl
+.
+affine_range
+(
+K
+
+//
+
+T_K
+):
+
+16
+
+#
+
+Load
+
+tiles:
+
+HBM
+
+->
+
+SBUF
+
+17
+
+lT
+
+=
+
+nl
+.
+ndarray
+((
+T_K
+,
+
+T_M
+),
+
+dtype
+=
+lhsT
+.
+dtype
+,
+
+buffer
+=
+nl
+.
+sbuf
+)
+
+18
+
+rT
+
+=
+
+nl
+.
+ndarray
+((
+T_K
+,
+
+T_N
+),
+
+dtype
+=
+rhs
+.
+dtype
+,
+
+buffer
+=
+nl
+.
+sbuf
+)
+
+19
+
+nisa
+.
+dma_copy
+(
+dst
+=
+lT
+,
+
+src
+=
+lhsT
+[
+k
+*
+T_K
+:(
+k
++1)*
+T_K
+,
+
+m
+*
+T_M
+:(
+m
++1)*
+T_M
+])
+
+20
+
+nisa
+.
+dma_copy
+(
+dst
+=
+rT
+,
+
+src
+=
+rhs
+[
+k
+*
+T_K
+:(
+k
++1)*
+T_K
+,
+
+n
+*
+T_N
+:(
+n
++1)*
+T_N
+])
+
+21
+
+22
+
+#
+
+Compute:
+
+matmul
+
+on
+
+Tensor
+
+Engine
+
+23
+
+nisa
+.
+nc_matmul
+(
+dst
+=
+acc
+,
+
+stationary
+=
+lT
+,
+
+moving
+=
+rT
+)
+
+24
+
+25
+
+#
+
+Store:
+
+PSUM
+
+->
+
+SBUF
+
+->
+
+HBM
+
+26
+
+res
+
+=
+
+nl
+.
+ndarray
+(
+acc
+.
+shape
+,
+
+dtype
+=
+out
+.
+dtype
+,
+
+buffer
+=
+nl
+.
+sbuf
+)
+
+27
+
+nisa
+.
+tensor_copy
+(
+dst
+=
+res
+,
+
+src
+=
+acc
+,
+
+dtype
+=
+out
+.
+dtype
+)
+
+28
+
+nisa
+.
+dma_copy
+(
+dst
+=
+out
+[
+m
+*
+T_M
+:(
+m
++1)*
+T_M
+,
+
+n
+*
+T_N
+:(
+n
++1)*
+T_N
+],
+
+src
+=
+res
+)
+
+29
+
+30
+
+return
+
+out
+
+Figure 5
+.
+NKI kernel for tiled matrix multiplication on Trainium. The code iterates over tiles (lines 11–12), loads tiles from HBM to SBUF (lines 17–20), computes on-chip via
+nc_matmul
+(line 23), and stores results back to HBM (lines 26–28). Tile dimensions (
+TILE_K
+=128,
+TILE_N
+=512) are constrained by the hardware.
+
+3.3.
+Beyond Trainium
+
+Adapting
+Axon
+to target a new platform that implements a similar architecture would require providing new ISA semantics and hardware constraints, and modifying the code emitter to generate kernels for the new target; the core algorithms—algebraic transformations, tiling exploration, synthesis, and fusion—would remain unchanged.
+However, not all accelerator programming models are a good fit for
+Axon
+’s current design.
+Many-core accelerators such as Meta’s MTIA
+(
+14
+)
+and Microsoft’s Maia
+(
+53
+)
+follow fundamentally different execution models without the specialized multi-engine architecture that
+Axon
+relies on.
+GPU kernel languages such as Triton
+(
+44
+)
+, while tile-based, expose a thread-block execution model with shared memory and warp-level primitives that differ substantially from the DMA-driven, engine-parallel model of accelerators like Trainium.
+Extending
+Axon
+to these platforms would require rethinking the ISA synthesis and fusion strategies to account for their distinct execution models.
+
+4.
+Design
+
+This section describes the technical details of each stage in
+Axon
+’s synthesis pipeline.
+We first introduce the
+\nu
+Graph (Section
+4.1
+), the persistent internal representation that tracks all semantically equivalent program variants throughout the pipeline.
+We then describe each pipeline stage: algebraic transformations via operator propagation (Section
+4.2
+), symbolic tiling (Section
+4.3
+), ISA instruction synthesis (Section
+4.4
+), operator and instruction fusion (Section
+4.5
+), and code emission with empirical selection (Section
+4.6
+).
+We continue to use the RMSNorm+MatMul kernel introduced in Section
+2
+as our running example.
+
+4.1.
+\nu
+Graph
+
+A key challenge in superoptimization is maintaining multiple semantically equivalent program variants simultaneously—across algebraic reorderings, tiling configurations, instruction selections, and fusion choices—without committing to any single choice prematurely.
+Equality saturation
+(
+51
+)
+addresses a similar problem using
+e-graphs
+, which compactly represent a set of semantically equivalent program terms by grouping equivalent sub-expressions into
+e-classes
+
+(
+48
+)
+.
+
+Axon
+extends this idea to dataflow graphs of tensor operations with a structure we call a
+\nu
+Graph.
+
+Definition 4.1 (
+\nu
+Graph).
+
+A
+\nu
+Graph
+\mathcal{G}=(\mathcal{V},M)
+consists of:
+
+•
+
+\mathcal{V}=\{G_{0},G_{1},\ldots,G_{n}\}
+: a set of semantically equivalent dataflow graph variants, where each
+G_{i}
+is a directed acyclic graph of tensor operations;
+
+•
+
+M
+: metadata associated with each operation, which accumulates as the
+\nu
+Graph is lowered through the synthesis pipeline.
+
+Unlike standard e-graphs, which track equivalence classes of sub-expressions within a single program, a
+\nu
+Graph tracks equivalence classes of
+entire dataflow graphs
+.
+Each variant carries its own copy of metadata
+M
+: when a new variant is created (e.g., by an algebraic transformation or an ISA synthesis choice), it receives a fresh copy of the metadata with its own constraints.
+The metadata
+M
+evolves through the pipeline stages:
+
+•
+
+After
+algebraic transformations
+(Section
+4.2
+): multiple graph variants
+\{G_{0},\ldots,G_{n}\}
+representing different operator orderings.
+
+•
+
+After
+tiling
+(Section
+4.3
+): symbolic tiling parameters—strip dimensions
+[n_{0},n_{1}]
+, block dimensions
+[b_{0},b_{1}]
+, and tile dimensions
+[t_{0},t_{1}]
+—for each operation.
+
+•
+
+After
+ISA synthesis
+(Section
+4.4
+): target ISA instructions, hardware constraints on tile dimensions, and compute engine assignments.
+
+X
+Y
+Z
+matmul
+(a)
+X
+Y
+Z
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}
+,
+b_{1}
+]
+matmul
+[t_{0},t_{1}]
+Perform Tiling
+(b)
+X
+Y
+Z
+X
+Y
+Z
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}
+,
+b_{1}
+]
+nc_matmul
+[t_{0},t_{1}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{r}
+,
+b_{1}^{r}
+]
+dma_transpose
+[t_{0}^{r},t_{1}^{r}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}
+,
+b_{1}
+]
+nc_matmul
+[t_{0},t_{1}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{r}
+,
+b_{1}^{r}
+]
+nc_transpose
+[t_{0}^{r},t_{1}^{r}]
+Constraints:
+t_{0}^{r},t_{1}^{r}
+
+\leq
+128
+Engine: Vector
+Constraints:
+t_{0}
+
+\leq
+128,
+t_{1}
+
+\leq
+512
+Engine: Tensor
+Constraints:
+t_{0}^{r},t_{1}^{r}
+
+\epsilon
+[128, 1024]
+Engine: DMA
+Constraints:
+t_{0}
+
+\leq
+128,
+t_{1}
+
+\leq
+512
+Engine: Tensor
+Synthesize Trainium ISA
+(c)
+
+Figure 6
+.
+Example of lowering of
+\nu
+Graphs from a high-level computational graph in (a) to a hardware-agnostic tiled representation in (b), and to two variants of graphs with Trainium-specific ISA, and information on hardware-specific tiling constraints and engines in (c).
+
+Exploration and extraction.
+
+Like equality saturation, the
+\nu
+Graph follows an
+exploration
+phase and an
+extraction
+phase.
+During exploration, each pipeline stage may expand the set of variants: algebraic transformations generate alternative operator orderings, tiling introduces multiple block size configurations, and ISA synthesis discovers different instruction sequences for the same operation.
+These choices compose multiplicatively—for example, 2 algebraic variants
+\times
+4 tiling configurations
+\times
+3 instruction choices yields 24 candidate programs.
+During extraction (Section
+4.6
+),
+Axon
+instantiates the symbolic parameters, emits concrete programs from the
+\nu
+Graph, and selects the best-performing one through empirical evaluation on the target hardware.
+
+Example.
+
+Figure
+6
+illustrates the
+\nu
+Graph progression on a matmul example.
+In (a), the
+\nu
+Graph is a high-level dataflow graph with a single
+matmul
+operation.
+In (b), after tiling, the operation is annotated with symbolic tiling parameters:
+[n_{0},n_{1}]
+for strip,
+[b_{0},b_{1}]
+for block dimensions, and
+[t_{0},t_{1}]
+for tile dimensions.
+Note that this tiling strategy reflects the two-level memory hierarchy of AI accelerators such as Trainium (HBM and on-chip SRAM), where computations and data movement occur at tile granularity.
+In (c), after ISA synthesis, the single
+matmul
+has been lowered to two variant instruction sequences—one using
+nc_transpose
+on the Vector Engine (with tile constraints
+t_{0}^{r},t_{1}^{r}\leq 128
+) and another using
+dma_transpose
+on the DMA Engine (with tile constraints
+t_{0}^{r},t_{1}^{r}\in[128,1024]
+)—both followed by
+nc_matmul
+on the Tensor Engine.
+Both variants coexist in the
+\nu
+Graph with their respective hardware constraints; the best is selected empirically after code emission.
+
+Benefits and limitations.
+
+By deferring all optimization choices to empirical selection, the
+\nu
+Graph avoids heuristic-based decisions that may be suboptimal for specific input shapes or hardware configurations.
+It enables joint exploration across all optimization dimensions rather than making greedy sequential decisions that foreclose later opportunities.
+However, because the number of variants grows multiplicatively across pipeline stages,
+Axon
+enumerates all valid combinations and relies on the target backend to reject infeasible ones (e.g., programs that exceed on-chip buffer capacity).
+In practice, this approach is tractable for kernel-sized programs: ML kernels typically contain fewer than 10 operators per layer, and the resulting search space (up to
+{\sim}
+30K candidates for complex kernels such as GQA and Gated MLP) can be evaluated within two hours as a one-time cost (Section
+6.5
+).
+
+X
+W_{1}
+W_{2}
+W_{3}
+matmul
+matmul
+silu
+multiply
+matmul
+Z
+(a)
+X
+W_{1}
+W_{2}
+W_{3}
+matmul
+matmul
+silu
+multiply
+silu
+matmul
+Z
+\times
+(b)
+X
+W_{1}
+W_{2}
+W_{3}
+matmul
+matmul
+silu
+multiply
+multiply
+matmul
+Z
+\times
+(c)
+
+Figure 7
+.
+Gated MLP: (a) Original computation graph; (b) and (c) show invalid attempts to propagate
+silu
+and
+multiply
+operations (dotted red edges). Since no valid transformation exists, no new
+\nu
+Graph is generated.
+
+4.2.
+Tensor Computation Graph Mutator
+
+The Tensor Computation Graph Mutator takes a tensor computation graph as input and performs
+provably correct
+, graph-level algebraic transformations to enable better parallelization, ISA fusion, and loop fusion opportunities.
+As illustrated in Section
+2
+, the key insight is that certain operations can be
+reordered
+while preserving semantic equivalence—for example, propagating the
+multiply
+operation past
+matmul
+in the RMSNorm+MatMul kernel enables parallel execution of independent subgraphs.
+Since multiple valid transformations may exist, each exposing different optimization opportunities,
+Axon
+maintains all discovered variants of semantically equivalent
+\nu
+Graphs
+\{G_{0},G_{1},\ldots,G_{n}\}
+.
+
+X
+W_{1}
+W_{2}
+W_{3}
+matmul
+matmul
+silu
+multiply
+matmul
+Z
+(a)
+X
+W_{1}
+W_{2}
+W_{3}
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{0}}
+,
+b_{1}^{m_{0}}
+]
+matmul
+[t_{0}^{m_{0}},t_{1}^{m_{0}}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{1}}
+,
+b_{1}^{m_{1}}
+]
+matmul
+[t_{0}^{m_{1}},t_{1}^{m_{1}}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{s}
+,
+b_{1}^{s}
+]
+silu
+[t_{0}^{s},t_{1}^{s}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m}
+,
+b_{1}^{m}
+]
+multiply
+[t_{0}^{m},t_{1}^{m}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{2}}
+,
+b_{1}^{m_{2}}
+]
+matmul
+[t_{0}^{m_{2}},t_{1}^{m_{2}}]
+Z
+Tiling strategy:
+
+\forall
+op
+\epsilon
+G:
+
+op
+\rightarrow
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}
+,
+b_{1}
+] op
+[t_{0},t_{1}]
+(b)
+
+Figure 8
+.
+Tiling of
+\nu
+Graph for Gated MLP with strip, block,
+and tile dimensions for each operation.
+
+Definition 4.2 (Semantic Equivalence).
+
+Two computation graphs
+G_{1}
+and
+G_{2}
+are
+semantically equivalent
+, denoted
+G_{1}\equiv G_{2}
+, if for all input tensors satisfying the operator preconditions (Section
+4.2.1
+), both graphs produce identical output tensors.
+
+Axon
+preserves all variants where
+G_{0}\equiv G_{1}\equiv\cdots\equiv G_{n}
+and selects the best-performing one empirically when concrete input shapes are known (Section
+4.6
+).
+Although the number of variants is worst-case exponential, in practice most operator pairs are not swappable and ML kernels typically contain < 10 operators.
+
+Operator Propagation.
+
+To discover algebraic transformations,
+Axon
+uses a worklist-based algorithm that attempts to
+propagate
+each operation downward through the computation graph by swapping it with its successors.
+For each operator, the algorithm repeatedly checks whether swapping it with an adjacent successor preserves semantic equivalence (Section
+5
+); if so, the new graph variant is added to the
+\nu
+Graph and propagation continues from the new position.
+The process saturates when no further swaps are possible for any operator, ensuring that all reachable reorderings are explored.
+Note that by pushing operators down, other operators are inevitably moved up; therefore, upward propagation is unnecessary.
+Algorithm
+1
+formalizes this process.
+
+Algorithm 1
+
+Generation of
+\nu
+Graph Variants
+
+1:
+
+Computation graph
+G_{0}
+
+2:
+
+\mathcal{M}\leftarrow\{G_{0}\}
+
+\triangleright
+set of semantically-equivalent graph variants
+
+3:
+
+for all
+
+op_{1}
+in
+G_{0}
+
+do
+
+\triangleright
+try propagating each operator
+
+4:
+
+\mathcal{M}_{\text{next}}\leftarrow\varnothing
+
+5:
+
+for all
+
+G\in\mathcal{M}
+
+do
+
+6:
+
+\mathcal{W}\leftarrow\{(G,\text{pos of }op_{1}\text{ in }G)\}
+
+\triangleright
+worklist of (graph, position)
+
+7:
+
+while
+
+\mathcal{W}\neq\varnothing
+
+do
+
+8:
+
+(G_{\text{cur}},pos)\leftarrow\mathcal{W}.pop()
+;
+advanced\leftarrow\textbf{false}
+
+9:
+
+for all
+immediate successor
+op_{2}
+of
+pos
+in
+G_{\text{cur}}
+
+do
+
+10:
+
+\mathcal{I}\leftarrow\textsf{GetInputs}(G_{\text{cur}},pos)
+;
+accepted\leftarrow\textbf{false}
+
+11:
+
+for
+
+k=1
+to
+|\mathcal{I}|
+
+do
+
+\triangleright
+progressively increase clone degree
+
+12:
+
+for all
+
+S\subseteq\mathcal{I}
+with
+|S|=k
+
+do
+
+13:
+
+(G_{\text{new}},p_{\text{new}})\leftarrow\textsf{SwapWithSuccessor}(G_{\text{cur}},pos,op_{2},S)
+
+14:
+
+if
+
+G_{\text{new}}\neq\textbf{null}
+
+and
+
+\textsf{CheckEquivalence}(op_{1},op_{2},G_{\text{cur}},G_{\text{new}})
+
+then
+
+15:
+
+\mathcal{M}_{\text{next}}\leftarrow\mathcal{M}_{\text{next}}\cup\{G_{\text{new}}\}
+
+\triangleright
+save new variant
+
+16:
+
+\mathcal{W}\leftarrow\mathcal{W}\cup\{(G_{\text{new}},p_{\text{new}})\}
+
+\triangleright
+continue propagating
+
+17:
+
+advanced\leftarrow\textbf{true}
+;
+accepted\leftarrow\textbf{true}
+
+18:
+
+if
+
+accepted
+
+then
+
+19:
+
+break
+
+\triangleright
+stop once equivalent swap found
+
+20:
+
+if
+
+\neg advanced
+
+then
+
+21:
+
+\mathcal{M}_{\text{next}}\leftarrow\mathcal{M}_{\text{next}}\cup\{G_{\text{cur}}\}
+
+\triangleright
+keep if no swap possible
+
+22:
+
+\mathcal{M}\leftarrow\mathcal{M}\cup\mathcal{M}_{\text{next}}
+
+23:
+
+return
+
+\mathcal{M}
+
+Algorithm
+1
+generates the
+\nu
+Graph variants as follows.
+Starting with the original computation graph
+G_{0}
+(line 1), the algorithm iterates over each operator
+op_{1}
+in topological order and attempts to propagate it downward (line 2).
+For each existing graph variant, it initializes a worklist with the current position of
+op_{1}
+(line 5).
+The algorithm repeatedly pops a (graph, position) pair from the worklist (line 7) and examines each immediate successor
+op_{2}
+(line 8).
+For each successor, it retrieves the input operands
+\mathcal{I}
+of
+op_{1}
+(line 9) and attempts swaps with progressively increasing
+clone degree
+
+k
+(lines 10–11):
+k
+determines how many of
+op_{1}
+’s inputs pass through
+op_{2}
+in the swap, preferring the smallest
+k
+that yields a valid transformation (lines 17–18).
+For each subset
+S\subseteq\mathcal{I}
+of size
+k
+,
+SwapWithSuccessor
+constructs the swapped graph, and
+CheckEquivalence
+provably checks whether the swap preserves semantic equivalence (Section
+5
+).
+The algorithm prefers the smallest clone degree that yields a valid swap (lines 17–18).
+If the check passes, the new variant is saved and pushed onto the worklist to continue propagating (lines 13–15); if no swap is possible, the current graph is retained (lines 19–20).
+After processing all operators, the algorithm returns the complete set of semantically equivalent graph variants.
+
+For example, in Figure
+3
+, the algorithm discovers that
+multiply
+can be propagated past
+matmul
+, producing the transformed graph in (b).
+In contrast, Figure
+7
+shows the Gated MLP kernel where propagation attempts fail the equivalence check, so no new variants are generated.
+
+4.2.1.
+Semantics of Tensor Operations
+
+Programmers provide operational semantics for the high-level tensor operations they use in their programs, as shown in Figure
+9
+for the
+matmul
+operation.
+The semantics specification includes three key components:
+
+•
+
+Rank and shape preconditions:
+Requirements on tensor ranks and dimension compatibility for a given tensor operation. In the example,
+a.min_rank() == 2
+requires that the input tensors have at least two dimensions, and
+a.shape[-1] == b.shape[-2]
+ensures the contraction dimensions of the input tensors match.
+
+•
+
+Access maps:
+How input tensors are indexed, defined via symbolic axes (akin to affine maps in MLIR
+(
+29
+)
+). The expression
+a[..., i0, i1]
+uses NumPy-like indexing style to denote accessing an element at given indices.
+
+•
+
+Granular semantics:
+The element-level operations expressed using granular operators. The expression
+mul(a[..., i0, i1], b[..., i1, i2]).sum(axis=i1)
+specifies multiply-accumulate over the contraction axis
+i1
+. These expressions are converted to SMT formulas used for equivalence checking (Section
+5
+).
+
+This allows programmers to define custom high-level, hardware-agnostic tensor operations.
+
+4.3.
+Tensor Graph Tiling Pass
+
+The Tiling Pass prepares the Tensor Computation
+\nu
+Graph for ISA synthesis by introducing symbolic tiling parameters.
+This transformation tiles each operation with symbolic strip, block, and tile dimension sizes, and converts N-D tensor operations into 2-D operations enclosed in loops.
+Loops are not explicitly represented; instead, we use a compact representation showing symbolic dimensions.
+
+Tiling Notation.
+
+Figure
+8
+illustrates the tiling notation using the Gated MLP example, where
+x
+is the input tensor and
+w_{1}
+,
+w_{2}
+,
+w_{3}
+are weight matrices.
+Each operation is annotated with
+[n_{0},n_{1},b_{0},b_{1}]\ op\ [t_{0},t_{1}]
+, where:
+
+•
+
+[t_{0},t_{1}]
+:
+Tile dimensions
+—the size of each 2-D tile processed by a single instruction for a compute engine. These are determined by hardware constraints of the target instructions (described in Section
+4.4
+).
+
+•
+
+[b_{0},b_{1}]
+:
+Block dimensions
+—the number of tiles grouped into a block along each dimension.
+Blocking enables data reuse by keeping data in on-chip SRAM (SBUF/PSUM) across multiple tile operations; larger blocks increase reuse but are constrained by the capacity of on-chip SRAM. Block dimension size selection also impacts DMA utilization, as the DMA engine can move multiple tiles between HBM and SBUF; therefore, small block sizes can lead to DMA bandwidth underutilization.
+
+•
+
+[n_{0},n_{1}]
+:
+Strip dimensions
+—the number of blocks along each dimension in HBM, computed as
+\bigl[\lceil\tfrac{M}{b_{0}t_{0}}\rceil,\ \lceil\tfrac{N}{b_{1}t_{1}}\rceil\bigr]
+for a tensor of shape
+[M,N]
+.
+
+⬇
+
+@semantics
+()
+
+def
+
+matmul
+
+(
+a
+
+:
+
+SymTensor
+,
+
+b
+
+:
+
+SymTensor
+):
+
+#
+
+Rank
+
+and
+
+shape
+
+preconditions
+
+precondition
+(
+a
+.
+min_rank
+()==2)
+
+precondition
+(
+b
+.
+min_rank
+()==2)
+
+precondition
+(
+a
+.
+shape
+[-1]==
+b
+.
+shape
+[-2])
+
+M
+,
+K
+,
+N
+
+=
+
+a
+.
+shape
+[-2],
+a
+.
+shape
+[-1],
+b
+.
+shape
+[-1]
+
+sema
+=
+OpSema
+(
+name
+=
+"matmul"
+)
+
+sema
+.
+operands
+=[
+a
+,
+
+b
+]
+
+#
+
+Access
+
+maps
+
+i0
+
+=
+
+SymAxis
+(
+"i0"
+,
+range
+=[0,
+M
+])
+
+i1
+
+=
+
+SymAxis
+(
+"i1"
+,
+range
+=[0,
+K
+],
+is_contracting
+=
+True
+)
+
+i2
+
+=
+
+SymAxis
+(
+"i2"
+,
+range
+=[0,
+N
+])
+
+#
+
+Computation:
+
+a
+
+@
+
+b
+
+sema
+.
+semantics
+
+=
+
+mul
+(
+a
+[...,
+
+i0
+,
+
+i1
+],
+
+b
+[...,
+
+i1
+,
+
+i2
+]).
+sum
+(
+axis
+=
+i1
+)
+
+return
+
+sema
+
+Figure 9
+.
+Semantics of
+matmul
+tensor operation in
+Axon
+.
+
+For example, in Figure
+8
+, the first
+matmul
+operation (
+X\cdot W_{1}
+) has block dimensions
+[b_{0}^{m0},b_{1}^{m0}]
+and tile dimensions
+[t_{0}^{m0},t_{1}^{m0}]
+, where the superscript
+m0
+identifies these as the first matmul’s parameters.
+Similarly, the
+silu
+operation has its own parameters
+[b_{0}^{s},b_{1}^{s}]
+and
+[t_{0}^{s},t_{1}^{s}]
+, and subsequent matmuls use superscripts
+m1
+,
+m2
+.
+Since the optimal block size depends on the trade-off between data reuse and on-chip buffer capacity,
+Axon
+uses symbolic parameters and generates multiple versions with block sizes ranging from 1 to 32 tiles (bounded by SBUF capacity on Trainium), selecting the best-performing configuration empirically (Section
+4.6
+).
+Strip dimensions along which no reduction occurs are shared across all tensor operators in a computation graph (
+[n_{0},n_{1}]
+) to maximize data reuse of on-chip blocks across operators and facilitate fusion opportunities later in the synthesis pipeline.
+
+Tiling and Operator Reordering.
+
+Figure
+10
+shows how tiling interacts with the algebraic transformations from Section
+4.2
+.
+In the original graph (a), operations execute sequentially:
+square
+,
+mean
+,
+rsqrt
+,
+multiply
+, then
+matmul
+.
+Each operation has its own tiling parameters (e.g.,
+[n_{0},n_{1},b_{0}^{sq},b_{1}^{sq}]
+for
+square
+).
+In the transformed graph (b), propagating
+multiply
+past
+matmul
+creates two parallel branches: the RMS computation (blue) and the matrix multiplication (red).
+Because these branches execute on different compute engines with different hardware constraints—the Tensor Engine for matmul and the Vector/Scalar Engine for RMS—they can have
+independent
+tiling parameters, enabling each branch to be optimized separately for its respective engine and on-chip memory budget.
+
+Table 1
+.
+A subset of supported NKI APIs that are representative of Trainium’s ISA.
+
+API
+
+Description
+
+Engine
+
+Data Movement
+
+dma_copy(dst, src)
+
+Copy data between HBM and SBUF
+
+DMA
+
+tensor_copy(src, engine)
+
+Create a copy of tile within on-chip SRAMs (SBUF/PSUM)
+
+Scalar/Vector/Gpsimd
+
+dma_transpose(src, axes)
+
+Transpose tile via DMA (supports 2D/3D/4D)
+
+DMA
+
+nc_transpose(data, engine)
+
+2D transpose between partition and free axes of tile
+
+Vector/Tensor
+
+Compute
+
+nc_matmul(stationary, moving)
+
+Matrix multiplication:
+\mathbf{stationary}^{\top}\mathbf{moving}
+
+Tensor
+
+activation(op, data, bias, scale)
+
+Apply activation function with optional scale/bias
+
+Scalar
+
+reciprocal(data)
+
+Elementwise reciprocal of tile (
+1.0/x
+)
+
+Vector
+
+tensor_tensor(data1, data2, op, engine)
+
+Elementwise binary operation between two tiles
+
+Vector/Gpsimd
+
+tensor_scalar(data, op0, operand0,
+
+op1, operand1, engine)
+
+Elementwise ops between
+data
+(a tile) and
+operand0
+,
+operand1
+
+(scalars/vectors broadcast along free dim):
+
+(data <op0> operand0) <op1> operand1
+
+Vector/Scalar/Gpsimd
+
+scalar_tensor_tensor(data, op0,
+
+operand0, op1, operand1)
+
+Elementwise ops between
+data
+(a tile),
+operand0
+(scalar/vector
+
+broadcast along free dim), and
+operand1
+(a tile):
+
+(data <op0> operand0) <op1> operand1
+
+Vector
+
+Reduction
+
+tensor_reduce(op, data, axis)
+
+Reduction along free axes of tile
+
+Vector
+
+tensor_partition_reduce(op, data)
+
+Reduction across partitions of tile
+
+Gpsimd
+
+tensor_scalar_reduce(data, op0,
+
+operand0, reduce_op)
+
+Perform reduction (
+reduce_op
+) along free dim of
+
+(data <op0> operand0)
+
+Vector
+
+tensor_tensor_scan(data0, data1,
+
+initial, op0, op1)
+
+Scan operation of two input tiles
+
+Vector
+
+\epsilon
+X
+W
+square
+mean
+add
+rsqrt
+multiply
+matmul
+Z
+\epsilon
+X
+W
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{sq}
+,
+b_{1}^{sq}
+]
+square
+[t_{0}^{sq},t_{1}^{sq}]
+[
+n_{0}
+,
+b_{0}^{m}
+]
+mean
+[t_{0}^{m},1]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{a}
+,
+b_{1}^{a}
+]
+add
+[t_{0}^{a},t_{1}^{a}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{r}
+,
+b_{1}^{r}
+]
+rsqrt
+[t_{0}^{r},t_{1}^{r}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{ml}
+,
+b_{1}^{ml}
+]
+multiply
+[t_{0}^{ml},t_{1}^{ml}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{0}}
+,
+b_{1}^{m_{0}}
+]
+matmul
+[t_{0}^{m_{0}},t_{1}^{m_{0}}]
+Z
+Perform tiling
+
+(a)
+
+Original
+\nu
+Graph.
+
+\epsilon
+X
+W
+square
+mean
+add
+rsqrt
+matmul
+multiply
+Z
+\epsilon
+X
+W
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{sq}
+,
+b_{1}^{sq}
+]
+square
+[t_{0}^{sq},t_{1}^{sq}]
+[
+n_{0}
+,
+b_{0}^{m}
+]
+mean
+[t_{0}^{m},1]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{a}
+,
+b_{1}^{a}
+]
+add
+[t_{0}^{a},t_{1}^{a}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{r}
+,
+b_{1}^{r}
+]
+rsqrt
+[t_{0}^{r},t_{1}^{r}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{ml}
+,
+b_{1}^{ml}
+]
+multiply
+[t_{0}^{ml},t_{1}^{ml}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{0}}
+,
+b_{1}^{m_{0}}
+]
+matmul
+[t_{0}^{m_{0}},t_{1}^{m_{0}}]
+Z
+Perform tiling
+
+(b)
+
+Transformed
+\nu
+Graph.
+
+Figure 10
+.
+Tiling of
+\nu
+Graphs for RMSNorm+MatMul. Each subfigure shows the high-level graph (top) and its tiled representation (bottom). In (b),
+multiply
+is propagated past
+matmul
+, creating two parallel branches that execute on different compute engines (Tensor Engine for matmul, Vector/Scalar Engine for RMS) with independent tiling parameters.
+
+4.4.
+Tensor ISA Synthesizer
+
+The Tensor ISA Synthesizer lowers each 2-D tensor operation in the Tiled
+\nu
+Graph to equivalent sequences of target ISA instructions using program synthesis.
+
+ISA Semantics.
+
+Axon
+uses two levels of semantics specifications.
+
+Tensor operator semantics
+(Section
+4.2.1
+, Figure
+9
+) describe high-level operations such as
+matmul
+and
+reduce_sum
+, and are provided by programmers writing tensor programs.
+
+ISA instruction semantics
+describe hardware-specific instructions such as Trainium’s
+nc_matmul
+and
+nc_transpose
+, and are provided once per target by compiler developers with knowledge of the hardware.
+Both use the same
+@semantics
+interface (preconditions, access maps, granular semantics), but ISA semantics additionally include
+hardware constraints
+that specify valid tile dimension ranges for each instruction.
+This separation means tensor operator semantics can be shared across targets, while ISA semantics are specified per target architecture.
+
+Figure
+11
+shows the ISA semantics for Trainium’s
+nc_matmul
+, which computes
+\mathbf{a}^{\top}\mathbf{b}
+.
+The hardware constraints (
+K <= 128
+,
+M <= 128
+,
+N <= 512
+) reflect the Tensor Engine’s tile dimension limits on Trainium.
+These constraints are imposed on the symbolic tiling parameters from Section
+4.3
+, ensuring that synthesized code respects hardware limitations when emitting code in Section
+4.6
+.
+
+⬇
+
+@semantics
+()
+
+def
+
+nc_matmul
+
+(
+a
+
+:
+
+SymTensor
+,
+
+b
+
+:
+
+SymTensor
+):
+
+#
+
+Shape
+
+preconditions
+
+precondition
+
+(
+a
+.
+rank
+()
+
+==
+
+2)
+
+precondition
+
+(
+b
+.
+rank
+()
+
+==
+
+2)
+
+precondition
+
+(
+a
+.
+shape
+[0]
+
+==
+
+b
+.
+shape
+[0])
+
+K
+,
+M
+,
+N
+
+=
+
+a
+.
+shape
+[0],
+
+a
+.
+shape
+[1],
+
+b
+.
+shape
+[1]
+
+#
+
+Hardware
+
+constraints
+
+precondition
+
+(
+K
+
+<=
+
+128)
+
+precondition
+
+(
+M
+
+<=
+
+128)
+
+precondition
+
+(
+N
+
+<=
+
+512)
+
+sema
+
+=
+
+OpSema
+
+(
+name
+=
+"nc_matmul"
+)
+
+sema
+.
+operands
+
+=
+
+[
+a
+,
+
+b
+]
+
+#
+
+Access
+
+maps
+
+i0
+
+=
+
+SymAxis
+
+(
+"i0"
+,
+
+range
+=[0,
+
+M
+])
+
+i1
+
+=
+
+SymAxis
+
+(
+"i1"
+,
+
+range
+=[0,
+
+K
+],
+
+is_contracting
+=
+True
+)
+
+i2
+
+=
+
+SymAxis
+
+(
+"i2"
+,
+
+range
+=[0,
+
+N
+])
+
+#
+
+Computation:
+
+a.T
+
+@
+
+b
+
+sema
+.
+semantics
+
+=
+
+mul
+(
+a
+[
+i1
+,
+
+i0
+],
+
+b
+[
+i1
+,
+
+i2
+]).
+sum
+(
+axis
+=
+i1
+)
+
+sema
+.
+output_shape
+
+=
+
+[
+M
+,
+
+N
+]
+
+return
+
+sema
+
+Figure 11
+.
+ISA semantics of Trainium’s
+nc_matmul
+instruction. Unlike the tensor operator semantics for
+matmul
+(Figure
+9
+), this specification includes hardware constraints and reflects the transposed access pattern (
+a[i1, i0]
+).
+
+Synthesis Algorithm.
+
+Axon
+uses a two-phase sketch-driven synthesis approach (Algorithm
+2
+).
+In Phase 1,
+Axon
+builds an instruction pool
+\mathcal{P}
+by filtering ISA instructions to those sharing constituent operations with the tensor operation
+T
+being lowered (lines 1–8).
+For example, if
+T
+’s granular semantics (Section
+4.2.1
+) include
+add
+and
+multiply
+operations, only ISA instructions that perform at least one of these operations are added to
+\mathcal{P}
+, reducing the search space.
+Instructions performing data layout transformations such as
+transpose
+are also included.
+The algorithm first retrieves the input operands
+\mathcal{I}
+of
+T
+(line 1)—for example,
+\mathcal{I}=\{x,y\}
+for
+\texttt{matmul}(x,y)
+.
+For each ISA instruction added to
+\mathcal{P}
+,
+Axon
+generates variants with its operand slots filled by either inputs from
+\mathcal{I}
+or holes (
+\square
+) to be resolved during composition in Phase 2 (lines 4–8).
+In Phase 2,
+Axon
+recursively fills holes in sketches with instructions from the pool (lines 9–19): starting from a sketch with a single hole, it pops candidates from a worklist, fills each hole with instructions from
+\mathcal{P}
+, and checks complete candidates for provable equivalence with
+T
+using
+CheckEquivalence
+(Section
+5
+).
+
+Algorithm 2
+
+Axon
+’s Sketch-driven Synthesis Algorithm
+
+1:
+
+Tensor operation
+T
+, depth limit
+d
+
+2:
+
+\mathcal{I}\leftarrow\textsf{GetOperands}(T)
+;
+\mathcal{P}\leftarrow\{\mathcal{I}\}
+
+\triangleright
+Phase 1: build instruction pool
+
+3:
+
+for all
+
+op
+in ISA instructions
+do
+
+4:
+
+if
+
+\textsf{SharesConstituents}(op,T)
+
+then
+
+5:
+
+\mathcal{P}\leftarrow\mathcal{P}\cup\{(op\ \square,\ \square)\}
+
+\triangleright
+
+\square
+= hole
+
+6:
+
+for all
+
+in_{1}\in\mathcal{I}
+
+do
+
+7:
+
+\mathcal{P}\leftarrow\mathcal{P}\cup\{(op\ in_{1},\ \square),\ (op\ \square,\ in_{1})\}
+
+8:
+
+for all
+
+in_{2}\in\mathcal{I}
+
+do
+
+9:
+
+\mathcal{P}\leftarrow\mathcal{P}\cup\{(op\ in_{1},\ in_{2})\}
+
+10:
+
+\mathcal{W}\leftarrow\{(\textbf{return}\ \square)\}
+;
+\mathcal{C}\leftarrow\varnothing
+
+\triangleright
+Phase 2: compose and check
+
+11:
+
+while
+
+\mathcal{W}\neq\varnothing
+
+do
+
+12:
+
+s\leftarrow\mathcal{W}.pop()
+
+13:
+
+if
+
+s
+has no holes
+then
+
+14:
+
+if
+
+|s|\leq d
+
+and
+
+\textsf{CheckEquivalence}(T,s)
+
+then
+
+15:
+
+\mathcal{C}\leftarrow\mathcal{C}\cup\{s\}
+
+\triangleright
+valid candidate
+
+16:
+
+else
+
+17:
+
+for all
+hole
+\square
+in
+s
+
+do
+
+18:
+
+for all
+
+inst\in\mathcal{P}
+
+do
+
+19:
+
+\mathcal{W}\leftarrow\mathcal{W}\cup\{s[\square\mapsto inst]\}
+
+\triangleright
+fill hole
+
+20:
+
+return
+
+\mathcal{C}
+
+For example, when lowering
+MatMul(x, y)
+, the synthesizer explores compositions such as:
+
+\operatorname{MatMul}(x,y)\overset{?}{=}\operatorname{nc\_matmul}\!\big(\operatorname{nc\_transpose}(x),\ y\big)
+
+Since
+nc_matmul(a,b)
+computes
+\mathbf{a}^{\top}\mathbf{b}
+, the transpose is required to match standard matrix multiplication semantics.
+On Trainium, an instruction depth limit of 3 is sufficient to synthesize all supported tensor operations, because the ISA is coarse-grained: each high-level tensor operation lowers to at most 3 ISA instructions.
+
+Synthesis Example.
+
+Figure
+12
+illustrates the synthesis process on the Gated MLP kernel.
+In part (a), the tiled
+\nu
+Graph contains high-level operations like
+matmul
+,
+silu
+, and
+multiply
+.
+Part (b) shows the ISA
+\nu
+Graph after synthesis: notably, each
+matmul
+is lowered to
+transpose
+followed by
+nc_matmul
+, because
+nc_matmul
+expects its first operand to be transposed (as specified in the ISA semantics of Figure
+11
+).
+The annotations show valid tile dimension ranges extracted from hardware constraints (e.g.,
+[1-128, 1-128]
+for
+nc_matmul
+).
+
+DMA Operations and Engine Selection.
+
+After synthesizing compute instructions,
+Axon
+generates DMA copy instructions to transfer data between HBM and on-chip SRAM.
+Additionally, since Trainium allows users to select which compute engine executes each instruction,
+Axon
+represents all valid engine variants in the
+\nu
+Graph, deferring the final selection to empirical evaluation.
+
+4.5.
+ISA Fusion Mutator
+
+The ISA Fusion Mutator performs a second round of algebraic transformations (as described in Section
+4.2
+), but this time at the ISA instruction level to expose ISA and operator (loop nest) fusion.
+This second round is necessary because ISA synthesis (Section
+4.4
+) may introduce new operations that were not present in the original computation graph, and the new operations create transformation opportunities that the Graph Mutator (Section
+4.2
+) could not have discovered.
+
+For example, in the Gated MLP kernel (Figure
+12
+(a)), lowering
+matmul
+introduces a
+transpose
+operation since it is required by
+nc_matmul
+’s semantics (Figure
+12
+(b)).
+
+Axon
+explores valid algebraic transformations on the newly generated ISA
+\nu
+Graph.
+It discovers that the last
+transpose
+operation can be moved past the
+activation
+and
+tensor_tensor
+instructions (Figure
+12
+(c)), since both are element-wise instructions that commute with
+transpose
+.
+Once there are no further algebraic transformations that yield new variants,
+Axon
+looks for fusion opportunities on adjacent nodes of the
+\nu
+Graph.
+It identifies two fusion opportunities: the two
+nc_matmul
+operations and their succeeding
+transpose
+operations are fusible, producing the graph in Figure
+12
+(d).
+
+The mutator performs two types of fusion:
+
+X
+W_{1}
+W_{2}
+W_{3}
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{0}}
+,
+b_{1}^{m_{0}}
+]
+matmul
+[t_{0}^{m_{0}},t_{1}^{m_{0}}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{1}}
+,
+b_{1}^{m_{1}}
+]
+matmul
+[t_{0}^{m_{1}},t_{1}^{m_{1}}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{s}
+,
+b_{1}^{s}
+]
+silu
+[t_{0}^{s},t_{1}^{s}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m}
+,
+b_{1}^{m}
+]
+multiply
+[t_{0}^{m},t_{1}^{m}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{2}}
+,
+b_{1}^{m_{2}}
+]
+matmul
+[t_{0}^{m_{2}},t_{1}^{m_{2}}]
+Z
+(a)
+X
+W_{1}
+W_{2}
+W_{3}
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{0}}
+,
+b_{1}^{m_{0}}
+]
+transpose
+[t_{0}^{m_{0}},t_{1}^{m_{0}}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{0}}
+,
+b_{1}^{m_{0}}
+]
+transpose
+[t_{0}^{m_{0}},t_{1}^{m_{0}}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{0}}
+,
+b_{1}^{m_{0}}
+]
+nc_matmul
+[t_{0}^{m_{0}},t_{1}^{m_{0}}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{1}}
+,
+b_{1}^{m_{1}}
+]
+nc_matmul
+[t_{0}^{m_{1}},t_{1}^{m_{1}}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{s}
+,
+b_{1}^{s}
+]
+activation
+[t_{0}^{s},t_{1}^{s}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m}
+,
+b_{1}^{m}
+]
+tensor_tensor
+[t_{0}^{m},t_{1}^{m}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{t}
+,
+b_{1}^{t}
+]
+transpose
+[t_{0}^{t},t_{1}^{t}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{2}}
+,
+b_{1}^{m_{2}}
+]
+nc_matmul
+[t_{0}^{m_{2}},t_{1}^{m_{2}}]
+Z
+Synthesize Trainium ISA
+propagate
+(b)
+X
+W_{1}
+W_{2}
+W_{3}
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{0}}
+,
+b_{1}^{m_{0}}
+]
+transpose
+[t_{0}^{m_{0}},t_{1}^{m_{0}}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{0}}
+,
+b_{1}^{m_{0}}
+]
+transpose
+[t_{0}^{m_{0}},t_{1}^{m_{0}}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{0}}
+,
+b_{1}^{m_{0}}
+]
+nc_matmul
+[t_{0}^{m_{0}},t_{1}^{m_{0}}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{1}}
+,
+b_{1}^{m_{1}}
+]
+nc_matmul
+[t_{0}^{m_{1}},t_{1}^{m_{1}}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{s}
+,
+b_{1}^{s}
+]
+activation
+[t_{0}^{s},t_{1}^{s}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m}
+,
+b_{1}^{m}
+]
+tensor_tensor
+[t_{0}^{m},t_{1}^{m}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{t}
+,
+b_{1}^{t}
+]
+transpose
+[t_{0}^{t},t_{1}^{t}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{t}
+,
+b_{1}^{t}
+]
+transpose
+[t_{0}^{t},t_{1}^{t}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{2}}
+,
+b_{1}^{m_{2}}
+]
+nc_matmul
+[t_{0}^{m_{2}},t_{1}^{m_{2}}]
+Z
+Algebraic Transformation
+fusible
+(c)
+W_{1}
+X
+W_{2}
+W_{3}
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{0}}
+,
+b_{1}^{m_{0}}
+]
+transpose
+[t_{0}^{m_{0}},t_{1}^{m_{0}}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{0}}
+,
+b_{1}^{m_{0}}
+]
+transpose
+[t_{0}^{m_{0}},t_{1}^{m_{0}}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{1}^{m_{0}}
+,
+b_{0}^{m_{0}}
+]
+nc_matmul
+[t_{1}^{m_{0}},t_{0}^{m_{0}}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{1}^{m_{1}}
+,
+b_{0}^{m_{1}}
+]
+nc_matmul
+[t_{1}^{m_{1}},t_{0}^{m_{1}}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{s}
+,
+b_{1}^{s}
+]
+activation
+[t_{0}^{s},t_{1}^{s}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m}
+,
+b_{1}^{m}
+]
+tensor_tensor
+[t_{0}^{m},t_{1}^{m}]
+[
+n_{0}
+,
+n_{1}
+,
+b_{0}^{m_{2}}
+,
+b_{1}^{m_{2}}
+]
+nc_matmul
+[t_{0}^{m_{2}},t_{1}^{m_{2}}]
+Z
+ISA Fusion
+(d)
+
+Figure 12
+.
+(a) Tiled
+\nu
+Graph for Gated MLP; (b) ISA
+\nu
+Graph after synthesis; (c) Mutated ISA
+\nu
+Graph after moving
+activation
+and
+tensor_tensor
+past
+transpose
+, resulting in discovery of fusible operations;
+(d) ISA
+\nu
+Graph after fusion—the operands of
+nc_matmul
+and their tile and block dimensions are swapped. Instruction-specific tile size constraints and engine choices are omitted for brevity.
+
+Instruction Fusion.
+
+The mutator performs peephole optimizations by replacing two or more instructions in ISA
+\nu
+Graphs with a single, semantically-equivalent instruction.
+This is achieved using the same synthesis algorithm as Section
+4.4
+(Algorithm
+2
+), but with depth 1 since the goal is to fuse two instructions into one.
+In Figure
+12
+,
+nc_matmul
+and the succeeding
+transpose
+operations are fused into a new
+nc_matmul
+but with swapped operands—
+Axon
+discovers via synthesis that
+\operatorname{transpose}(\operatorname{nc\_matmul}(X.t,W))\rightarrow\operatorname{nc\_matmul}(W,X.t)
+.
+This effectively eliminates an intermediate data layout transformation. Superoptimizers such as Mirage
+(
+52
+)
+do not support such a rewrite.
+
+Other examples include fusing
+activation
+and
+tensor_reduce
+to
+activation_reduce
+, and
+tensor_scalar
+and
+tensor_reduce
+to
+tensor_scalar_reduce
+.
+This pass also fuses
+dma_copy
+with
+dma_transpose
+to allow on-the-fly
+transpose
+when reading from or writing to HBM.
+
+Operator/Loop Fusion.
+
+This is more similar to the traditional fusion optimization: consecutive nodes of the
+\nu
+Graphs with the same strip dimensions, across which no reduction occurs, are deemed fusible along those dimensions. (Reductions such as
+mean
+in RMSNorm
+(
+56
+)
+require processing an entire tensor row before normalization, preventing fusion across that dimension.)
+This improves data locality and decreases memory traffic between HBM and SBUF.
+
+Axon
+also fuses nodes of independent subgraphs to enable deep fusion of loop nests, leveraging compute and data movement parallelism across different engines.
+
+4.6.
+NKI Code Emitter
+
+The NKI Code Emitter is the final stage of
+Axon
+’s synthesis pipeline.
+It traverses the mutated ISA
+\nu
+Graph to extract concrete NKI programs, where each program represents a specific combination of algebraic rewrite, instruction selection, tiling configuration, and fusion decisions.
+The symbolic block sizes from Section
+4.3
+are instantiated with concrete values, generating multiple candidates per
+\nu
+Graph.
+
+Each emitted NKI program is then passed to the Neuron compiler
+(
+3
+)
+, which handles on-chip buffer allocation (assigning SBUF and PSUM addresses to intermediate tensors) and produces the final executable.
+Because
+Axon
+does not directly control on-chip SRAM allocation, some candidates that satisfy
+Axon
+’s symbolic tile constraints may still be rejected by the Neuron compiler—for example, when the cumulative size of live tiles in a block exceeds the physical SBUF capacity.
+This is why not all emitted programs are compilable (Section
+6.5
+).
+
+Empirical execution and random testing.
+For the candidates that are successfully compiled to binaries by the Neuron compiler,
+Axon
+executes them on the target hardware, measures latency, and validates numerical correctness against a reference implementation on random inputs.
+We deem the outputs numerically equivalent if they satisfy, elementwise,
+\lvert\mathrm{emitted\_code}-\mathrm{reference}\rvert\leq\texttt{atol}+\texttt{rtol}\,\lvert\mathrm{reference}\rvert
+with
+\texttt{rtol}=10^{-4}
+(relative error) and
+\texttt{atol}=10^{-4}
+(absolute error) on FP32 data type.
+Axon
+then returns the best-performing NKI program along with its configuration (tile sizes, instruction choices, fusion decisions).
+This empirical selection ensures that the final kernel is optimized for the specific input shapes and target hardware.
+
+5.
+Correctness of Transformations
+
+Every transformation that
+Axon
+performs—whether reordering operators in the computation graph (Section
+4.2
+), synthesizing ISA instruction sequences (Section
+4.4
+) or fusing instructions (Section
+4.5
+)—must preserve semantic equivalence.
+This section describes how
+Axon
+leverages SMT-based reasoning to provably check that each transformation is correct.
+
+5.1.
+Equivalence Checking Methodology
+
+Axon
+’s equivalence checking adapts the methodology introduced by TensorRight
+(
+5
+)
+—originally designed to verify XLA rewrite rules—to provably check transformations from operator propagation (Section
+4.2
+) and ISA synthesis (Section
+4.4
+).
+
+Encoding.
+
+To provably check that two tensor expressions are equivalent,
+Axon
+encodes each operation’s computation as SMT constraints and checks two conditions:
+
+(1)
+
+Shape Condition:
+The symbolic shapes of output tensors on both sides must be equivalent.
+
+(2)
+
+Computation Condition:
+The computation performed on each element must be equivalent.
+
+Tensors are encoded as
+uninterpreted functions
+mapping indices to values (e.g., a rank-2 tensor
+X
+becomes
+X:\mathbb{Z}\times\mathbb{Z}\to\mathbb{R}
+), and dimension sizes are symbolic integers.
+This allows reasoning over tensors of
+arbitrary size
+with known rank—the proof holds for any concrete dimension sizes.
+Table
+2
+summarizes how different categories of operations are encoded.
+
+Table 2
+.
+SMT encoding of a subset of tensor operations, following TensorRight’s methodology
+(
+5
+)
+. Element-wise and layout operations are checked directly by the SMT solver. Reductions use arithmetic axioms. Nonlinear functions are treated as uninterpreted and conservatively rejected when swapped.
+
+Category
+
+Operations
+
+SMT Encoding
+
+Axioms
+
+Element-wise
+
+mul, div, add, sub
+
+\forall i,j{:}\;out(i,j)=a(i,j)\circ b(i,j)
+
+None
+
+Unary pointwise
+
+sqrt, relu
+
+\forall i,j{:}\;out(i,j)=f(a(i,j))
+
+None
+
+Reduction
+
+reduce_sum
+
+P(i,0){=}0;\;\;P(i,k{+}1){=}P(i,k){+}a(i,k);\;\;out(i){=}P(i,N)
+
+Arithmetic axioms
+
+Matmul
+
+matmul
+
+P(i,j,0){=}0;\;\;P(i,j,k{+}1){=}P(i,j,k){+}a(i,k){\cdot}b(k,j);\;\;out(i,j){=}P(i,j,K)
+
+Arithmetic axioms
+
+Nonlinear
+
+exp, sigmoid
+
+Uninterpreted function (minimal properties)
+
+Conservative rejection
+
+Layout
+
+transpose
+
+\forall i,j{:}\;out(i,j)=a(j,i)
+
+None
+
+Table
+3
+shows the granular operations for key tensor operations and NKI ISA instructions used in the equivalence checking.
+
+For element-wise and layout operations, the encoding is straightforward and the solver can determine equivalence directly.
+For reductions and matrix multiplications, which involve summation over a contraction dimension, the methodology provides arithmetic axioms—such as the distributivity of multiplication over summation (
+\operatorname{mul}(\sum f(x),\,v)=\sum\operatorname{mul}(f(x),\,v)
+when
+v
+is invariant over the summation)—that enable the solver to reason about equivalence of reduction expressions.
+Nonlinear functions (e.g.,
+exp
+,
+sigmoid
+) are treated as uninterpreted functions: the solver knows only minimal properties (e.g.,
+\exp(x)>0
+) and cannot reason about their algebraic behavior, so swaps involving them are conservatively rejected.
+
+Checking procedure.
+
+Given two adjacent operators
+op_{1}
+and
+op_{2}
+in the computation graph,
+Axon
+checks whether they can be swapped:
+
+(1)
+
+Construct the swapped graph by exchanging
+op_{1}
+and
+op_{2}
+.
+
+(2)
+
+Encode both the original and swapped graphs as SMT constraints using the encodings in Table
+2
+.
+
+(3)
+
+Check the Shape Condition: prove that output shapes are equal under all valid input shapes.
+
+(4)
+
+Check the Computation Condition: prove that for all valid indices, the output values are equal—i.e.,
+\forall\vec{i}{:}\;out_{\text{orig}}(\vec{i})=out_{\text{swap}}(\vec{i})
+.
+
+(5)
+
+If the solver proves both conditions, the swap is accepted. If the solver returns
+unknown
+(e.g., timeout), the swap is conservatively rejected.
+
+Definition 5.1 (Swappable successive tensor operations).
+
+Let
+OP_{1}
+and
+OP_{2}
+be two successive operations in a computation graph
+G
+.
+
+OP_{1}
+and
+OP_{2}
+are deemed
+swappable
+if the solver proves that applying
+OP_{1}
+then
+OP_{2}
+produces the same output as applying
+OP_{2}
+then
+OP_{1}
+:
+
+\llbracket OP_{2}\rrbracket\bigl(\llbracket OP_{1}\rrbracket(\vec{x})\bigr)\;\;\equiv\;\;\llbracket OP_{1}\rrbracket\bigl(\llbracket OP_{2}\rrbracket(\vec{x})\bigr)
+
+where
+\llbracket\cdot\rrbracket
+denotes the semantics of an operation and
+\vec{x}
+represents the input tensors.
+
+Table 3
+.
+Granular operations for a subset of tensor and ISA operations used for equivalence checking.
+
+Operator
+
+Granular Operation
+
+matmul(x, y)
+
+sum(mul(x_{i,k},y_{k,j}),dim=k)
+
+transpose(x)
+
+x_{i,k}\to x_{k,i}
+
+relu(x)
+
+max(0,x_{i,j})
+
+silu(x)
+
+mul(x_{i,j},sigmoid(x_{i,j}))
+
+nc_matmul(x, y)
+
+sum(mul(x_{k,i},y_{k,j}),dim=k)
+
+nc_transpose(x, engine)
+
+x_{i,k}\to x_{k,i}
+
+tensor_tensor(x1, x2, op, engine)
+
+op(x_{i,j},y_{i,j})
+
+tensor_reduce(op, x, axis)
+
+op(x_{i,j,red\_dim=j})
+
+tensor_partition_reduce(op, x)
+
+op(x_{i,j,red\_dim=i})
+
+activation(op, x)
+
+op(x_{i,j})
+
+tensor_scalar(x, op1, y, op2, z, engine)
+
+op2(op1(x_{i,j},y_{i,j}),z_{i,j})
+
+scalar_tensor_tensor(x, op1, y, op2, z)
+
+op2(op1(x_{i,j},y_{i,j}),z_{i,j})
+
+tensor_scalar_reduce(x, op1, y, op2, z)
+
+op2(op1(x_{i,j},y_{i,j}),z_{i,j})
+
+Examples.
+
+Legal swap: multiply past matmul.
+
+In the RMSNorm+MatMul kernel (Section
+2
+),
+Axon
+checks whether
+\operatorname{MatMul}(\operatorname{Multiply}(X,rsqrt),W)\overset{?}{=}\\
+\operatorname{Multiply}(\operatorname{MatMul}(X,W),rsqrt)
+.
+For the Shape Condition: both sides produce shape
+[M,N]
+when
+X
+is
+[M,K]
+,
+rsqrt
+is
+[M,1]
+, and
+W
+is
+[K,N]
+.
+For the Computation Condition: the LHS computes
+\sum_{k}(X_{i,k}\cdot rsqrt_{i})\cdot W_{k,j}
+and the RHS computes
+(\sum_{k}X_{i,k}\cdot W_{k,j})\cdot rsqrt_{i}
+.
+Since
+rsqrt_{i}
+is invariant over
+k
+, the distributivity axiom enables the solver to confirm equivalence. The swap is accepted.
+
+Illegal swap: silu past multiply.
+
+In the Gated MLP kernel (Section
+4.2
+),
+Axon
+checks whether
+\operatorname{Multiply}(\operatorname{Silu}(X),G)\overset{?}{=}\operatorname{Silu}(\operatorname{Multiply}(X,G))
+.
+The Shape Condition is satisfied (both element-wise, same output shape).
+For the Computation Condition: the LHS computes
+X_{i,j}\cdot\sigma(X_{i,j})\cdot G_{i,j}
+and the RHS computes
+X_{i,j}\cdot G_{i,j}\cdot\sigma(X_{i,j}\cdot G_{i,j})
+, where
+\sigma
+is the sigmoid function.
+Since
+\sigma
+is an uninterpreted function, the solver cannot prove these are equal. The swap is rejected.
+
+ISA synthesis: matmul via nc_matmul.
+
+During ISA synthesis (Section
+4.4
+),
+Axon
+checks whether
+\operatorname{MatMul}(x,y)\overset{?}{=}\operatorname{nc\_matmul}(\operatorname{nc\_transpose}(x),y)
+.
+Since
+\operatorname{nc\_matmul}(a,b)
+computes
+a^{T}\cdot b
+(Table
+3
+), transposing
+x
+first recovers standard multiplication.
+The solver confirms both conditions, accepting the synthesized instruction sequence.
+
+5.2.
+Guarantees and Limitations
+
+Axon
+’s equivalence checking guarantees semantic equivalence over all valid inputs for tensors of arbitrary size with known rank.
+The checking is conservative: if the solver cannot prove equivalence, the transformation is rejected, ensuring no incorrect transformations are applied.
+This provides stronger correctness guarantees than probabilistic equivalence testing (as used by Mirage
+(
+52
+)
+), which tests on finite inputs and provides statistical but not provable guarantees.
+
+The approach has two limitations.
+First, the equivalence checking operates over real-valued arithmetic and does not account for floating-point precision—the generated kernels may exhibit small numerical differences due to rounding, which is standard in tensor program optimization.
+We use the solver’s real theory because it is significantly faster than its floating-point theory: as an example, swapping
+multiply
+and
+matmul
+in the RMSNorm+MatMul kernel alone (Figure
+3
+) takes 247.75 s with floating-point theory and 0.15 s with real theory (1650
+\times
+slowdown).
+Floating-point theory is prohibitively slow for program synthesis and verification
+(
+55
+;
+24
+;
+30
+;
+45
+;
+16
+)
+.
+Instead,
+Axon
+uses the real theory for algebraic transformations and ISA synthesis, and validates numerical equivalence via testing on random floating-point inputs (Section
+4.6
+).
+Second, nonlinear functions are treated as uninterpreted, which means the solver may conservatively reject valid swaps involving these functions.
+
+Dynamic shapes are naturally supported by the equivalence checking, since it operates on symbolic dimensions over unbounded tensors and the proofs hold for any concrete dimension sizes.
+
+6.
+Evaluation
+
+6.1.
+Implementation and Experimental Setup
+
+Axon
+is implemented in approximately 16,500 lines of Python 3.10
+(
+46
+)
+.
+The equivalence checking engine (Section
+5
+) reimplements TensorRight’s
+(
+5
+)
+methodology in Python, using Z3 4.12.6
+(
+17
+)
+as the SMT solver.
+
+Axon
+takes NumPy-like tensor programs as input and emits NKI programs
+(
+7
+)
+—the tile-level kernel language for Trainium—which are then processed by the Neuron compiler
+(
+3
+)
+.
+
+Benchmarks.
+Our benchmark suite includes 11 individual operators—MatMul, RMSNorm, Cumsum, Softmax, RoPE, Tensor Multiply, Max Pooling, ReLU, SiLU, SwiGLU, and GLU—and 9 multi-operator kernels: RMSNorm+MatMul, Matmul+Add+RMSNorm, Softmax+MatMul, Transpose+MatMul, QKV Projection, Group Query Attention (GQA), SiLU Gated MLP, SwiGLU Gated MLP, and Matmul+Matmul+SiLU+Mul.
+These cover the core computational kernels in modern LLM architectures such as LLaMA-3
+(
+20
+)
+and Falcon
+(
+2
+)
+, and significantly overlap with the benchmarks evaluated in Mirage
+(
+52
+)
+.
+For each benchmark, we sweep across a range of tensor dimension sizes; since performance depends only on tensor shapes, we repeat each experiment 100 times (and 20 times for warmup) using random inputs and report the average run time.
+
+Baselines.
+We compare
+Axon
+against the following baselines:
+
+•
+
+Amazon’s Neuron compiler.
+The Neuron compiler
+(
+3
+)
+(version
+2.21.18209.0+043b1bf7
+) is the proprietary commercial compiler for Trainium that performs graph-level optimizations and uses hand-tuned heuristics for code generation.
+As the primary production compiler for Trainium, it serves as a key baseline.
+
+•
+
+Hand-optimized NKI kernels.
+Amazon provides hand-optimized NKI kernels in the
+nki-samples
+repository
+(
+6
+)
+.
+Note that hand-optimized NKI kernels are available for only a small subset of operators.
+
+•
+
+Search-based compiler.
+Mirage
+(
+52
+)
+has been recently extended to target Trainium for a handful of kernels (RMSNorm+MatMul and Partial Gated MLP).
+The NKI code generation extension
+2
+2
+
+2
+
+https://github.com/mirage-project/mirage/blob/d669c42174db27bea0455a24e20768b01b7d52e4/docs/transpiler/nki_transpiler.md
+was obtained by contacting the authors directly.
+It uses hand-implemented templates for individual operators such as MatMul and element-wise operators, and composes them based on the kernel specification.
+
+All compilation paths to Trainium go through the Neuron compiler, but enter at different levels:
+Axon
+takes NumPy-like programs and emits NKI; Mirage takes custom kernel specifications implemented in C++ and also emits NKI; the Neuron compiler baseline takes tensor programs written using NumPy
+(
+22
+)
+and handles all transformations and optimizations—tiling, operator fusion, instruction selection—internally with its own heuristics; and hand-optimized NKI kernels are written directly in NKI.
+All emitted NKI programs are processed by the same Neuron compiler backend.
+All baselines use their default configurations.
+For the hand-optimized NKI kernels, we use commit
+7af4e4d
+of the
+nki-samples
+repository
+(
+6
+)
+and the NKI language version is
+2.21.18209.0
+.
+
+Hardware Platform.
+We run all experiments on an Amazon EC2
+trn1.32xlarge
+instance equipped with 16 Trainium chips with 32 Neuron cores and 128 cores of Intel Xeon Platinum 8375C processors (2.90 GHz, 55 MB L3 cache) with hyperthreading disabled.
+We perform our experiments on only one Neuron core to evaluate the effectiveness of
+Axon
+’s optimization and code generation on a single core.
+
+We structure our evaluation around four questions:
+
+•
+
+RQ1:
+How does
+Axon
+perform against existing baselines on individual tensor operators? Although these kernels pass through the full
+Axon
+pipeline, the performance gains are primarily due to tiling (Section
+4.3
+) and ISA instruction selection (Section
+4.4
+): individual operators have limited opportunities for algebraic transformations or inter-operator fusion.
+
+•
+
+RQ2:
+How does
+Axon
+perform on multi-operator kernels, where inter-operator algebraic transformations (Section
+4.2
+) and loop fusion across operators (Section
+4.5
+) provide additional optimization opportunities?
+
+•
+
+RQ3:
+What is the contribution of each optimization (such as algebraic transformations, fusion)?
+
+•
+
+RQ4:
+What is the compilation overhead of
+Axon
+, and how does it scale with kernel complexity?
+
+Not all baselines are available for every benchmark: the Neuron compiler does not support kernels with inter-loop dependencies (e.g., Cumsum); Mirage’s NKI extension only supports MatMul, RMSNorm+MatMul, Softmax+MatMul, and Matmul+Matmul+SiLU+Mul; and hand-optimized NKI kernels are only available for Cumsum and RoPE.
+
+Table 4
+.
+Axon
+speedups on individual tensor operators against the Neuron Compiler and hand-implemented NKI across different input dimension sizes (M
+\times
+N; 1K=1024, 2K=2048, 4K=4096, 8K=8192, 16K=16384). “–” indicates the NKI kernel not supporting that dimension size. Shading:
+<
+1.5x
+,
+1.5–2.5x
+,
+>
+2.5x
+.
+
+Benchmark
+
+1Kx1K
+
+1Kx2K
+
+1Kx4K
+
+1Kx8K
+
+1Kx16K
+
+2Kx1K
+
+2Kx2K
+
+2Kx4K
+
+2Kx8K
+
+2Kx16K
+
+4Kx1K
+
+4Kx2K
+
+4Kx4K
+
+4Kx8K
+
+4Kx16K
+
+8Kx1K
+
+8Kx2K
+
+8Kx4K
+
+8Kx8K
+
+8Kx16K
+
+16Kx1K
+
+16Kx2K
+
+16Kx4K
+
+16Kx8K
+
+16Kx16K
+
+Geomean
+
+vs Neuron Compiler
+
+Multiply
+
+1.0
+
+1.0
+
+1.0
+
+1.0
+
+1.0
+
+1.0
+
+1.0
+
+1.0
+
+1.0
+
+1.5
+
+1.0
+
+1.0
+
+1.0
+
+1.5
+
+1.9
+
+1.0
+
+1.0
+
+1.5
+
+1.9
+
+2.9
+
+1.0
+
+1.5
+
+1.8
+
+2.8
+
+2.8
+
+1.23
+
+RMSNorm
+
+1.0
+
+1.0
+
+1.0
+
+1.0
+
+1.4
+
+1.0
+
+1.0
+
+1.0
+
+1.4
+
+2.2
+
+1.1
+
+1.0
+
+1.3
+
+2.3
+
+3.0
+
+1.0
+
+1.4
+
+2.1
+
+3.3
+
+3.0
+
+1.4
+
+2.1
+
+2.8
+
+3.3
+
+3.0
+
+1.62
+
+ReLU
+
+1.0
+
+1.0
+
+1.0
+
+1.2
+
+1.6
+
+1.0
+
+1.0
+
+1.2
+
+1.6
+
+2.2
+
+1.0
+
+1.0
+
+1.6
+
+2.3
+
+2.9
+
+1.0
+
+1.6
+
+2.2
+
+3.0
+
+3.1
+
+1.6
+
+2.1
+
+2.9
+
+3.1
+
+3.1
+
+1.70
+
+SiLU
+
+1.0
+
+1.1
+
+1.3
+
+1.2
+
+1.6
+
+1.1
+
+1.3
+
+1.2
+
+1.6
+
+2.4
+
+1.3
+
+1.2
+
+1.6
+
+2.4
+
+3.4
+
+1.2
+
+1.6
+
+2.4
+
+3.5
+
+3.6
+
+1.6
+
+2.4
+
+3.4
+
+3.6
+
+3.7
+
+1.90
+
+GLU
+
+1.0
+
+1.1
+
+1.3
+
+1.2
+
+1.4
+
+1.1
+
+1.2
+
+1.2
+
+1.4
+
+2.0
+
+1.3
+
+1.2
+
+1.6
+
+2.0
+
+3.4
+
+1.2
+
+1.6
+
+2.0
+
+3.1
+
+3.2
+
+1.3
+
+2.0
+
+3.1
+
+3.3
+
+3.3
+
+1.77
+
+SwiGLU
+
+1.0
+
+1.3
+
+1.1
+
+1.1
+
+1.5
+
+1.3
+
+1.0
+
+1.1
+
+1.5
+
+2.1
+
+1.1
+
+1.1
+
+1.6
+
+2.2
+
+2.9
+
+1.1
+
+1.5
+
+2.3
+
+3.0
+
+2.9
+
+1.5
+
+2.1
+
+3.1
+
+3.0
+
+3.0
+
+1.67
+
+Softmax
+
+1.0
+
+1.0
+
+1.0
+
+1.0
+
+1.3
+
+1.0
+
+1.0
+
+1.0
+
+1.2
+
+2.1
+
+1.0
+
+1.0
+
+1.3
+
+2.0
+
+2.9
+
+1.0
+
+1.3
+
+1.8
+
+2.7
+
+2.9
+
+1.2
+
+2.0
+
+2.3
+
+2.7
+
+3.0
+
+1.52
+
+MaxPool
+
+1.0
+
+1.0
+
+1.0
+
+1.1
+
+1.2
+
+1.0
+
+1.0
+
+1.0
+
+1.2
+
+1.3
+
+1.0
+
+1.0
+
+1.0
+
+1.5
+
+1.7
+
+1.0
+
+1.0
+
+1.5
+
+1.5
+
+2.2
+
+1.0
+
+1.5
+
+1.4
+
+2.2
+
+2.1
+
+1.23
+
+vs Hand-implemented NKI
+
+Cumsum
+
+–
+
+1.00
+
+1.35
+
+1.00
+
+1.08
+
+–
+
+1.35
+
+1.00
+
+1.03
+
+1.07
+
+–
+
+1.00
+
+1.02
+
+1.08
+
+1.08
+
+–
+
+1.01
+
+1.03
+
+1.08
+
+1.10
+
+–
+
+1.01
+
+1.04
+
+1.10
+
+1.08
+
+1.07
+
+RoPE
+
+–
+
+1.00
+
+1.20
+
+1.00
+
+1.07
+
+–
+
+1.10
+
+1.00
+
+1.03
+
+1.06
+
+–
+
+1.00
+
+1.02
+
+1.07
+
+1.08
+
+–
+
+1.01
+
+1.01
+
+1.08
+
+1.11
+
+–
+
+1.01
+
+1.06
+
+1.11
+
+1.08
+
+1.06
+
+6.2.
+RQ1: Individual Operators
+
+Table 5
+.
+Speedups of
+Axon
+over the Neuron Compiler and Mirage on multi-operator kernels. MM=MatMul, Proj=Projection, GQA=Group Query Attention; 2K/4K/8K=2048/4096/8192. Mirage results shown only for kernels it could synthesize. Shading:
+1.0–1.1x
+,
+
+1.1–1.2x
+,
+
+>
+1.2x
+.
+
+Benchmark
+
+2Kx2Kx2K
+
+2Kx2Kx4K
+
+2Kx2Kx8K
+
+2Kx4Kx2K
+
+2Kx4Kx4K
+
+2Kx4Kx8K
+
+2Kx8Kx2K
+
+2Kx8Kx4K
+
+2Kx8Kx8K
+
+4Kx2Kx2K
+
+4Kx2Kx4K
+
+4Kx2Kx8K
+
+4Kx4Kx2K
+
+4Kx4Kx4K
+
+4Kx4Kx8K
+
+4Kx8Kx2K
+
+4Kx8Kx4K
+
+4Kx8Kx8K
+
+8Kx2Kx2K
+
+8Kx2Kx4K
+
+8Kx2Kx8K
+
+8Kx4Kx2K
+
+8Kx4Kx4K
+
+8Kx4Kx8K
+
+8Kx8Kx2K
+
+8Kx8Kx4K
+
+8Kx8Kx8K
+
+Geomean
+
+vs Neuron Compiler
+
+Transpose+MM
+
+1.01
+
+1.01
+
+1.00
+
+1.04
+
+1.06
+
+1.01
+
+1.05
+
+1.05
+
+1.06
+
+1.06
+
+1.01
+
+1.06
+
+1.01
+
+1.06
+
+1.03
+
+1.09
+
+1.11
+
+1.15
+
+1.22
+
+1.00
+
+1.03
+
+1.00
+
+1.06
+
+1.02
+
+5.61
+
+1.14
+
+19.01
+
+1.32
+
+RMSNorm+MM
+
+1.40
+
+1.00
+
+1.22
+
+1.00
+
+1.28
+
+1.00
+
+1.03
+
+1.12
+
+1.06
+
+1.47
+
+1.00
+
+1.25
+
+1.00
+
+1.27
+
+1.00
+
+1.03
+
+1.12
+
+1.07
+
+1.42
+
+1.00
+
+1.28
+
+1.00
+
+1.23
+
+1.00
+
+1.03
+
+1.13
+
+1.07
+
+1.11
+
+MM+Add+RMSNorm
+
+1.51
+
+1.41
+
+1.45
+
+1.32
+
+1.34
+
+1.23
+
+1.13
+
+1.03
+
+1.02
+
+1.05
+
+1.00
+
+1.05
+
+1.00
+
+1.09
+
+1.00
+
+1.03
+
+1.02
+
+1.14
+
+1.08
+
+1.05
+
+1.00
+
+1.00
+
+2.25
+
+1.00
+
+1.02
+
+1.06
+
+1.03
+
+1.11
+
+Softmax+MM
+
+1.47
+
+1.00
+
+1.19
+
+1.13
+
+1.38
+
+1.04
+
+1.06
+
+1.14
+
+1.09
+
+1.47
+
+1.00
+
+1.17
+
+1.12
+
+1.36
+
+1.04
+
+1.06
+
+1.15
+
+1.07
+
+1.64
+
+1.00
+
+1.17
+
+1.13
+
+1.37
+
+1.04
+
+1.06
+
+1.17
+
+1.08
+
+1.14
+
+MM+MM+SiLU+Mul
+
+1.22
+
+1.12
+
+1.14
+
+1.11
+
+1.18
+
+1.18
+
+1.28
+
+1.17
+
+1.12
+
+1.30
+
+1.11
+
+1.12
+
+1.11
+
+1.16
+
+1.14
+
+1.29
+
+1.16
+
+1.15
+
+1.18
+
+1.13
+
+1.09
+
+1.05
+
+1.13
+
+1.06
+
+1.28
+
+1.14
+
+1.13
+
+1.15
+
+QKV Projection
+
+2.35
+
+1.00
+
+2.12
+
+1.00
+
+1.06
+
+1.02
+
+1.08
+
+1.02
+
+1.03
+
+2.37
+
+1.00
+
+2.12
+
+1.04
+
+1.09
+
+1.01
+
+1.04
+
+1.03
+
+1.16
+
+2.39
+
+1.95
+
+2.14
+
+1.04
+
+1.50
+
+1.00
+
+1.02
+
+1.07
+
+1.02
+
+1.24
+
+GQA
+
+1.47
+
+1.00
+
+1.19
+
+1.13
+
+1.38
+
+1.04
+
+1.06
+
+1.14
+
+1.09
+
+1.47
+
+1.00
+
+1.17
+
+1.12
+
+1.36
+
+1.04
+
+1.06
+
+1.15
+
+1.07
+
+1.64
+
+1.00
+
+1.17
+
+1.13
+
+1.37
+
+1.04
+
+1.06
+
+1.17
+
+1.08
+
+1.14
+
+SiLU MLP
+
+1.07
+
+1.00
+
+1.50
+
+1.02
+
+1.08
+
+1.04
+
+1.10
+
+1.09
+
+1.06
+
+1.17
+
+1.00
+
+1.52
+
+1.02
+
+1.08
+
+1.02
+
+1.07
+
+1.09
+
+1.07
+
+1.13
+
+1.00
+
+1.54
+
+1.04
+
+1.09
+
+1.00
+
+1.07
+
+1.09
+
+1.06
+
+1.08
+
+SwiGLU MLP
+
+1.07
+
+1.00
+
+1.30
+
+1.02
+
+1.08
+
+1.04
+
+1.10
+
+1.09
+
+1.06
+
+1.17
+
+1.00
+
+1.52
+
+1.02
+
+1.08
+
+1.02
+
+1.07
+
+1.09
+
+1.07
+
+1.13
+
+1.00
+
+1.54
+
+1.04
+
+1.09
+
+1.00
+
+1.07
+
+1.09
+
+1.06
+
+1.08
+
+vs Mirage
+
+RMSNorm+MM
+
+1.08
+
+1.11
+
+1.03
+
+1.15
+
+1.11
+
+1.05
+
+1.08
+
+1.06
+
+1.06
+
+1.11
+
+1.11
+
+1.11
+
+1.22
+
+1.11
+
+1.03
+
+1.07
+
+1.06
+
+1.06
+
+1.10
+
+1.15
+
+1.13
+
+1.22
+
+1.13
+
+1.08
+
+1.08
+
+1.07
+
+1.06
+
+1.10
+
+Softmax+MM
+
+1.00
+
+1.22
+
+1.07
+
+1.13
+
+1.00
+
+1.21
+
+1.13
+
+1.06
+
+1.09
+
+1.01
+
+1.16
+
+1.06
+
+1.11
+
+1.02
+
+1.18
+
+1.10
+
+1.05
+
+1.08
+
+1.00
+
+1.19
+
+1.05
+
+1.10
+
+1.01
+
+1.16
+
+1.14
+
+1.06
+
+1.09
+
+1.06
+
+MM+MM+SiLU+Mul
+
+1.11
+
+1.01
+
+1.04
+
+1.09
+
+1.09
+
+1.01
+
+1.16
+
+1.15
+
+1.11
+
+1.24
+
+1.17
+
+1.12
+
+1.21
+
+1.09
+
+1.18
+
+1.25
+
+1.15
+
+1.03
+
+1.12
+
+1.10
+
+1.12
+
+1.11
+
+1.02
+
+1.08
+
+1.27
+
+1.08
+
+1.11
+
+1.10
+
+Table
+4
+and Figure
+13
+show the performance of
+Axon
+on individual tensor operators across a range of tensor dimension sizes.
+
+Against the Neuron Compiler.
+
+Across all operators compared against the Neuron compiler—Tensor Multiplication, RMSNorm, Softmax, ReLU, SiLU, GLU, SwiGLU, and Max Pooling (Table
+4
+, top)—
+Axon
+matches or slightly outperforms the Neuron compiler at smaller dimension sizes and achieves speedups of up to 3.7x (SiLU at 16384
+\times
+16384) at larger sizes, with geomean speedups ranging from 1.23x (Multiply, MaxPool) to 1.90x (SiLU).
+The speedups at larger sizes are primarily because the code synthesized by
+Axon
+achieves better temporal locality for tiles of data in on-chip buffer and better DMA utilization.
+The Neuron compiler uses fixed heuristics for tiling that become suboptimal as tensor dimensions grow, whereas
+Axon
+systematically explores the space of valid tiling configurations and selects the best-performing one empirically.
+
+Against Mirage.
+
+Mirage provides a hand-tuned NKI template only for MatMul among the individual operators.
+On Matrix Multiplication (Figure
+13
+),
+Axon
+achieves performance comparable to Mirage across all dimension sizes, with a geomean speedup of 2% and a maximum speedup of 14%.
+This result is notable because Mirage’s MatMul template is manually crafted and parameterized for different tiling factors, while
+Axon
+discovers its tiling automatically.
+
+Against hand-optimized NKI kernels.
+
+For Cumsum and RoPE (Table
+4
+, bottom), hand-optimized NKI kernels are the only available baseline.
+
+Axon
+matches the expert code on most configurations and outperforms them by up to 1.35x on certain configurations (geomean speedups of 1.07x and 1.06x respectively), demonstrating that
+Axon
+’s automated exploration can match and even surpass manually tuned code without requiring the programmer to have hardware expertise.
+
+6.3.
+RQ2: Multi-Operator Kernels
+
+Table
+5
+shows the performance of
+Axon
+on multi-operator kernels.
+Unlike the individual operator benchmarks, these kernels benefit from the combination of
+Axon
+’s optimization strategies—algebraic transformations, operator and ISA fusion, and effective tiling—to achieve speedups.
+
+Against the Neuron Compiler.
+
+Axon
+achieves speedups over the Neuron compiler across all multi-operator benchmarks (Table
+5
+, top).
+On these benchmarks,
+Axon
+achieves better performance by discovering independent subgraphs using algebraic transformations and then deeply fusing the loop nests, thereby maximizing data reuse across tensor operators and enabling hardware to better exploit pipeline parallelism; whereas the Neuron compiler fails to fuse computations across tensor operators, which often leads to costly spillage of data into HBM.
+For RMSNorm+MatMul, the running example from Section
+2
+,
+Axon
+achieves up to 1.47x speedup with a geomean of 1.11x.
+The
+\nu
+Graph mutator discovers that the element-wise multiply can be reordered past the matrix multiplication (Figure
+3
+), enabling the RMS computation on the Vector/Scalar Engine to execute in parallel with the matrix multiplication on the Tensor Engine, while fusion keeps normalization intermediates in on-chip buffer.
+MatMul+Add+RMSNorm achieves up to 2.25x (geomean 1.11x), and Matmul+Matmul+SiLU+Mul—which performs part of the Gated MLP computation—achieves up to 1.30x (geomean 1.15x).
+The full Gated MLP layers (SiLU and SwiGLU activated) achieve geomean speedups of 1.08x.
+Transpose+MatMul achieves a geomean speedup of 1.32x, with improvements growing as dimensions increase: at smaller dimensions
+Axon
+achieves modest speedups of 1–15%, while at the largest dimensions the gains are 5.6x (8192
+\times
+8192
+\times
+2048) and 19x (8192
+\times
+8192
+\times
+8192).
+We attribute these large speedups to
+Axon
+’s better tiling strategy and efficient DMA bandwidth utilization: at high dimensions, the gap between a suboptimal tiling configuration and an optimal one widens because poorly chosen tile sizes cause more frequent spillage from on-chip buffer to HBM and poor DMA utilization.
+
+Axon
+’s systematic exploration of tiling configurations finds tile block dimensions that keep data on-chip and improve DMA utilization, while a heuristic-based approach is more likely to miss these configurations as the search space grows.
+QKV Projection achieves up to 2.39x (geomean 1.24x) and GQA achieves up to 1.64x (geomean 1.14x).
+
+Against Mirage.
+
+Mirage’s NKI extension supports three multi-operator benchmarks (Table
+5
+, bottom): RMSNorm+MatMul, Softmax+MatMul, and Matmul+Matmul+SiLU+Mul.
+The remaining multi-operator benchmarks are not supported because Mirage’s NKI code generation relies on hand-implemented templates that do not yet cover these operator compositions.
+On the benchmarks Mirage does support,
+Axon
+achieves geomean speedups of 10% on RMSNorm+MatMul, 6% on Softmax+MatMul, and 10% on Matmul+Matmul+SiLU+Mul.
+Notably, Mirage’s hand-crafted NKI templates sometimes produce code that is slower than the Neuron compiler baseline (e.g., on several dimension sizes for RMSNorm+MatMul in Table
+5
+), whereas
+Axon
+consistently matches or outperforms the Neuron compiler through systematic exploration of algebraic transformations and fusion opportunities not supported by Mirage.
+
+Figure 13
+.
+Speedups of
+Axon
+and Mirage on Matrix Multiplication relative to the Neuron Compiler across different input dimension sizes (M
+\times
+N
+\times
+K). MatMul has three dimensions, thus separate from Table
+4
+.
+
+6.4.
+RQ3: Ablation Study on Optimizations
+
+To understand the contribution of each optimization to performance, we selectively disable algebraic transformations and operator fusion, and measure the impact on four multi-operator benchmarks (Table
+6
+).
+We do not disable tiling because it is required for executing kernels with large tensors that do not fit in the on-chip buffers.
+As discussed in Section
+6.2
+, the individual operator benchmarks (Table
+4
+) primarily demonstrate the impact of tiling, since single-operator kernels have limited opportunities for algebraic transformations or inter-operator fusion.
+
+Operator fusion is the most impactful optimization.
+
+Across all four benchmarks, disabling fusion causes the largest performance degradation, with geomean slowdowns of 35–50%.
+Without fusion, intermediate results between operators must be written to and read back from HBM, significantly increasing memory traffic.
+
+Algebraic transformations provide consistent gains.
+
+Disabling algebraic transformations leads to geomean slowdowns of 15–35% across the benchmarks.
+The impact is present across all four benchmarks, confirming that the graph mutator’s operator reordering contributes to performance even when fusion is still enabled.
+
+The two optimizations are complementary.
+
+The combined effect of both optimizations (i.e., the full
+Axon
+pipeline) consistently outperforms either optimization alone, indicating that algebraic transformations and fusion target different sources of inefficiency: algebraic transformations expose parallelism and reduce unnecessary computation; fusion reduces memory traffic between operators.
+
+Table 6
+.
+Ablation study: performance relative to
+Axon
+with all optimizations enabled, measured across all 27 dimension sizes from Table
+5
+. Values below 1.0x indicate slowdown. Per-dimension results are in Appendix
+C
+.
+
+No Algebraic Transform
+
+No Loop Fusion
+
+Benchmark
+
+Min
+
+Max
+
+Geomean
+
+Min
+
+Max
+
+Geomean
+
+RMSNorm+MatMul
+
+0.50x
+
+0.90x
+
+0.65x
+
+0.33x
+
+0.80x
+
+0.53x
+
+QKV Projection
+
+0.39x
+
+0.98x
+
+0.85x
+
+0.24x
+
+0.90x
+
+0.65x
+
+Group Query Attention
+
+0.50x
+
+0.98x
+
+0.77x
+
+0.34x
+
+0.96x
+
+0.60x
+
+SiLU MLP
+
+0.51x
+
+0.94x
+
+0.80x
+
+0.21x
+
+0.92x
+
+0.64x
+
+6.5.
+RQ4: Compilation Overhead
+
+Table
+7
+reports the compilation overhead for all benchmarks.
+
+•
+
+Phase 1 (Lowering and Emission):
+The full
+Axon
+pipeline—graph mutation, tiling, ISA synthesis, ISA fusion mutation, and NKI code emission—transforms the input computation graph and emits multiple candidate NKI programs.
+
+•
+
+Phase 2 (Compilation and Execution):
+Each emitted NKI program is compiled by the Neuron compiler backend and, if compilation succeeds, executed on Trainium. The best-performing kernel is selected.
+
+Table
+7
+reports, for each benchmark, the number of graph-level operations (
+# Ops
+), the Phase 1 time, the number of emitted and compilable NKI programs, the Phase 2 time, and the total time.
+Note that
+# Ops
+counts operations after decomposition: a single high-level operator such as RMSNorm decomposes into multiple graph operations (square, mean, rsqrt, multiply), so # Ops can exceed 1 even for individual operator benchmarks.
+Not all emitted programs are compilable: as described in Section
+4.6
+,
+Axon
+does not directly control on-chip buffer allocation, so candidates that satisfy
+Axon
+’s symbolic tile constraints may still be rejected by the Neuron compiler when the cumulative size of live tiles in a block exceeds the physical SBUF capacity.
+
+Phase 1 is fast; Phase 2 dominates compilation time.
+
+Phase 1 completes in under 82 seconds even for the most complex kernels, as it operates symbolically on the computation graph.
+Phase 2, which involves parallelized compilation and serialized execution of NKI kernels on hardware, accounts for over 97% of total compilation time.
+Its cost is proportional to the number of compilable NKI kernels: element-wise and reduction operators produce 456–1,126 compilable kernels and complete Phase 2 in 289–348 seconds; kernels involving matrix multiplication produce 5,000–18,982 compilable kernels and take 3,156–4,107 seconds; and complex LLM layers produce 18,450–19,934 compilable kernels and take 4,992–5,983 seconds.
+
+The search space is driven by the number of operators, input dimensions, and hardware constraints.
+
+In general, more operators (
+# Ops
+) lead to more emitted candidates, since each operator introduces tiling configurations and instruction choices that compose multiplicatively (Section
+4.1
+).
+However, the number of input dimensions and hardware constraints also play a significant role.
+MatMul, despite being a single operator, emits 14,554 candidates—far more than other individual operators (625–1,475)—because its three input dimensions (M
+\times
+K
+\times
+N) create a larger combinatorial space for block size exploration compared to the two dimensions of element-wise operators.
+Conversely, Transpose+MatMul (2 operators) emits only 8,050 candidates, fewer than MatMul alone, because the ISA Fusion Mutator (Section
+4.5
+) eliminates redundant
+transpose
+instructions: lowering
+matmul
+introduces a
+transpose
+(required by
+nc_matmul
+’s semantics), which is fused with the pre-existing
+transpose
+operation in the input graph, reducing the number of emitted candidates.
+Among multi-operator kernels, the search space grows with complexity but is bounded by hardware constraints: GQA (6 operators) and Gated MLP (5–7 operators) approach an upper bound of approximately 29,500 emitted candidates.
+
+Not all emitted candidates are compilable.
+
+Across all benchmarks, 60–76% of emitted kernels are compilable (e.g., GQA: 19,627 of 28,219); the remainder are rejected by the Neuron compiler due to hardware resource constraints such as insufficient SBUF capacity (Section
+4.6
+).
+
+The compilation overhead is a one-time cost.
+
+The total time ranges from approximately 5 minutes for simple operators to 1.7 hours for the most complex kernels (SwiGLU Gated MLP); since performance depends only on tensor shapes, the optimized kernel is reused for all subsequent executions.
+This one-time search cost is comparable to that of other optimizing compilers that explore large search spaces:
+Mirage
+(
+52
+)
+reports search times of up to 4 hours on GPUs for similar LLM kernels, and schedule-based compilers such as Halide
+(
+40
+)
+, AutoTVM
+(
+13
+)
+, and Ansor
+(
+58
+)
+take several hours to explore tiling and fusion choices.
+In practice, kernels for commonly used tensor shapes can be compiled ahead of time and cached as artifacts for reuse across models—a standard practice at companies like Amazon to amortize compilation cost
+(
+33
+)
+.
+
+Appendix
+A
+discusses threats to validity, including end-to-end inference, generalizability beyond Trainium, and benchmark coverage.
+
+Table 7
+.
+Compilation overhead of
+Axon
+.
+Phase 1:
+lowering and emission of candidate programs (mutation, tiling, synthesis, fusion, emission);
+Phase 2:
+compilation and execution on Trainium.
+
+Kernel
+
+# Ops
+
+Phase 1 (s)
+
+# Emitted
+
+# Compilable
+
+Phase 2 (s)
+
+Total (s)
+
+Tensor Multiply
+
+1
+
+8.2
+
+625
+
+456
+
+288.5
+
+296.7
+
+Cumsum
+
+1
+
+11.4
+
+625
+
+456
+
+314.3
+
+325.7
+
+RMSNorm
+
+5
+
+15.6
+
+900
+
+540
+
+348.2
+
+363.8
+
+Softmax
+
+3
+
+16.3
+
+900
+
+540
+
+319.9
+
+336.2
+
+ReLU
+
+1
+
+9.6
+
+625
+
+456
+
+290.5
+
+300.1
+
+SiLU
+
+1
+
+10.8
+
+625
+
+456
+
+304.1
+
+314.9
+
+GLU
+
+3
+
+10.8
+
+1,258
+
+875
+
+305.7
+
+316.5
+
+SwiGLU
+
+3
+
+10.9
+
+1,258
+
+875
+
+308.9
+
+319.8
+
+MaxPool
+
+1
+
+22.7
+
+1,475
+
+1,126
+
+324.5
+
+347.2
+
+RoPE
+
+1
+
+15.9
+
+1,250
+
+912
+
+327.2
+
+343.1
+
+MatMul
+
+1
+
+24.8
+
+14,554
+
+9,532
+
+3,228.6
+
+3,253.4
+
+Transpose+MatMul
+
+2
+
+29.3
+
+8,050
+
+5,000
+
+3,155.7
+
+3,185.0
+
+RMSNorm+MatMul
+
+6
+
+37.1
+
+17,500
+
+12,750
+
+3,246.4
+
+3,283.5
+
+MatMul+Add+RMSNorm
+
+7
+
+39.4
+
+19,500
+
+14,758
+
+3,253.7
+
+3,293.1
+
+Softmax+MatMul
+
+4
+
+31.9
+
+16,263
+
+12,549
+
+3,242.4
+
+3,274.3
+
+MM+MM+SiLU+Mul
+
+4
+
+75.4
+
+27,740
+
+18,982
+
+4,106.8
+
+4,182.2
+
+QKV Projection
+
+3
+
+68.2
+
+26,750
+
+18,450
+
+5,878.9
+
+5,947.1
+
+Group Query Attention
+
+6
+
+79.4
+
+28,219
+
+19,627
+
+4,992.2
+
+5,071.6
+
+SiLU Gated MLP
+
+5
+
+81.6
+
+29,535
+
+19,934
+
+5,949.3
+
+6,030.9
+
+SwiGLU Gated MLP
+
+7
+
+79.8
+
+29,535
+
+19,934
+
+5,982.8
+
+6,062.6
+
+7.
+Related Work
+
+Algebraic transformation compilers.
+
+TASO
+(
+26
+)
+, PET
+(
+49
+)
+, Grappler
+(
+43
+)
+, and EinNet
+(
+59
+)
+optimize tensor programs by rewriting computation graphs using algebraic equivalences: TASO enumerates user-provided rewrite rules with random testing, and PET adds partially equivalent rewrites with correction kernels.
+Equality saturation-based compilers (e.g., Tensat
+(
+54
+)
+, Constable
+(
+48
+)
+) apply hand-written Egg
+(
+51
+)
+rewrite rules but provide no semantic correctness guarantees; overall, these methods rely on pattern-specific rules and do not automatically reason about operator semantics. The closest prior work to
+Axon
+is Mirage
+(
+52
+)
+, which uses probabilistic equivalence checking to jointly optimize algebraic and scheduling transformations on
+\mu
+Graphs and relies on hand-written NKI templates to constrain search for Trainium.
+In contrast,
+Axon
+discovers transformations using operator propagation, synthesizes ISA instructions from specifications, and proves correctness with SMT over unbounded tensors, without hand-written rewrite rules or templates.
+
+Schedule-based compilers.
+
+Halide
+(
+40
+)
+introduced the idea of separating the algorithm from its schedule; TVM
+(
+12
+)
+, Ansor
+(
+58
+)
+, and others
+(
+60
+;
+21
+;
+19
+)
+build on this idea to search for optimized schedules (tiling, fusion, parallelization) on CPUs and GPUs.
+However, these compilers target CPUs and GPUs—none currently generates code for tile-based AI accelerators.
+
+Axon
+jointly explores algebraic transformations and schedule transformations (tiling, fusion) for tile-based accelerator programs, whereas schedule-based compilers only explore schedules for a fixed algorithm.
+
+Synthesis-based compilers.
+
+Works such as Rake
+(
+1
+)
+, Pitchfork
+(
+41
+)
+, Hydride
+(
+27
+)
+and Misaal
+(
+34
+)
+use program synthesis to synthesize for x86
+(
+23
+)
+, ARM
+(
+4
+)
+, and Hexagon DSP
+(
+15
+)
+vector ISA; Diospyros
+(
+47
+)
+targets Tensilica DSP’s vector ISA.
+However, all of these works only target 1-D vector instructions. Hardboiled
+(
+57
+)
+uses equality saturation in Halide
+(
+40
+)
+to target 2-D Intel AMX
+(
+23
+)
+and Nvidia Tensor Core
+(
+36
+)
+ISA for signal and image processing; however, it only lowers to matrix multiply and accumulate operations.
+Whereas prior works on guided tensor program lifting
+(
+11
+;
+31
+)
+synthesize higher-level abstractions from legacy C/C++ code, without synthesizing complex tensor operations,
+Axon
+synthesizes 2-D tile instructions with hardware-constrained tile dimensions.
+
+Tile-based accelerator languages.
+
+Vendors provide tile-based kernel languages for their accelerators: NKI
+(
+7
+)
+for Amazon’s Trainium, Pallas
+(
+25
+)
+for Google’s TPUs, and Triton
+(
+44
+)
+for GPUs.
+Higher-level frameworks such as Hidet
+(
+18
+)
+, TileLang
+(
+50
+)
+, and Helion
+(
+39
+)
+compile from high-level tensor programs to GPU kernels.
+All of these require programmers to have knowledge of hardware-specific details.
+
+Axon
+takes a high-level NumPy-like program and automatically generates optimized code in NKI, without requiring programmers to have hardware expertise.
+
+Verified tensor transformations.
+
+Liu et al.
+(
+32
+)
+present a Coq framework that verifies
+scheduling
+rewrites (tiling, fusion, compute_at) for Halide programs via machine-checked proofs.
+TensorRight
+(
+5
+)
+provides an SMT-based framework for verifying XLA
+(
+37
+)
+rewrite rules over unbounded tensors.
+NiceToMeetYou
+(
+38
+)
+uses synthesis with SMT-based verification to generate sound abstract transformers for LLVM
+(
+28
+)
+static analyses from MLIR
+(
+29
+)
+semantics.
+Axon
+uses SMT-verified algebraic transformations and ISA instruction selection for AI accelerators.
+
+8.
+Conclusion
+
+We introduced
+Axon
+, a synthesizing superoptimizer that automatically generates optimized tile-based AI accelerator kernels from high-level tensor programs, combining provably correct algebraic transformations, ISA synthesis, tiling, and fusion in a unified
+\nu
+Graph representation.
+On Amazon’s Trainium across 20 benchmarks,
+Axon
+achieves speedups up to 3.7x on individual operators and up to 19x on multi-operator kernels over the Neuron compiler, up to 1.35x over hand-optimized NKI kernels, and geomean speedups of 2–10% over Mirage on all benchmarks it supports.
+
+Appendix A
+Threats to Validity
+
+End-to-end inference.
+
+Our evaluation measures kernel-level performance, consistent with Mirage
+(
+52
+)
+and other kernel optimization work.
+End-to-end inference latency depends on additional factors such as kernel launch overhead, collective communication, and framework-level scheduling, which are orthogonal to the kernel optimizations presented in this paper.
+
+Generalizability beyond Trainium.
+
+Axon
+’s core algorithms—algebraic transformations, tiling exploration, ISA synthesis, and fusion—could be adapted to other tile-based accelerators with similar architectural properties (Section
+3
+).
+Targeting a new platform requires providing new ISA semantics, hardware constraints, and a code emitter; the synthesis pipeline itself remains unchanged.
+Accelerators with fundamentally different execution models (e.g., many-core architectures, GPU thread-block models) are not directly targeted by
+Axon
+’s current design.
+
+Hardware generation.
+
+We evaluate on first-generation Trainium due to limited public availability of newer generations (Trainium2
+(
+9
+)
+and Trainium3
+(
+10
+)
+).
+Based on published architecture descriptions, all Trainium generations share the same multi-engine design, NKI programming model, and tile-based execution model, so we expect
+Axon
+’s optimizations to transfer, though specific tiling parameters and performance characteristics may differ.
+
+Benchmark coverage.
+
+Our benchmark suite covers core operators and multi-operator kernels, including LLM-specific layers such as GQA and Gated MLP, and overlaps significantly with Mirage’s evaluation.
+However, it does not cover all kernel types, such as convolutions, sparse operators, or training-specific kernels like backward passes.
+
+X
+Y
+exp
+sum
+divide
+matmul
+Z
+Softmax
+(a)
+Parallelizable ops
+X
+Y
+exp
+sum
+matmul
+divide
+Z
+(b)
+
+Figure 14
+.
+(a) Computation graph for Softmax+MatMul. (b) Semantically equivalent Softmax+MatMul graph with two parallelizable operations.
+
+Appendix B
+Additional Algebraic Transformation Examples
+
+B.1.
+Softmax+MatMul
+
+Figure
+14
+shows a Softmax+MatMul kernel where the
+divide
+and
+matmul
+operators can be reordered so that
+matmul
+executes on the Tensor Engine while the row-wise
+sum
+reduction executes on the Vector Engine in parallel, rather than sequentially.
+
+This transformation is analogous to the RMSNorm+MatMul rewrite discussed in Section
+2
+: an element-wise operation (here,
+divide
+by the softmax normalization factor) commutes with
+matmul
+because the normalization factor reduces along the same dimension contracted by the matrix multiplication.
+
+Axon
+automatically discovers this transformation through operator propagation and provably checks it using SMT over unbounded tensors (Section
+5
+).
+However, existing graph rewriting systems—including TASO
+(
+26
+)
+, Tensat
+(
+54
+)
+, Constable
+(
+48
+)
+, and Mirage
+(
+52
+)
+—do not support this rewrite because their hand-written rules do not cover this particular pattern of operator reordering.
+This illustrates the fundamental limitation of pattern-matching approaches: they can only perform transformations for patterns that have been manually anticipated and implemented.
+
+Appendix C
+Ablation Study: Per-Dimension Results
+
+Figure
+15
+shows the per-dimension results for the ablation study discussed in Section
+6.4
+. Each bar shows performance relative to
+Axon
+with all optimizations enabled (dashed line at 1.0x).
+
+(a)
+
+RMSNorm + MatMul
+
+(b)
+
+QKV Projection
+
+(c)
+
+Group Query Attention
+
+(d)
+
+Gated MLP
+
+Figure 15
+.
+Impact of disabling algebraic transformations and fusion on four multi-operator benchmarks across all dimension sizes from Table
+5
+.
+
+Appendix D
+Generated NKI Kernel for RMSNorm+MatMul
+
+Figure
+16
+shows the NKI kernel generated by
+Axon
+for the RMSNorm+MatMul input program from Figure
+2
+. The RMS branch (lines 18–21) executes on the Vector/Scalar Engine while the MatMul branch (lines 24–39) executes on the Tensor Engine in parallel within the same loop nest. The results are combined at the end (lines 46–49), reflecting the algebraic transformation from Figure
+3
+(b).
+
+⬇
+
+1
+
+@nki
+.
+jit
+
+2
+
+def
+
+rmsnorm_matmul
+(
+x
+,
+
+w
+,
+
+eps
+):
+
+3
+
+M
+,
+
+K
+
+=
+
+x
+.
+shape
+;
+
+K
+,
+
+N
+
+=
+
+w
+.
+shape
+
+4
+
+output
+
+=
+
+nl
+.
+ndarray
+((
+M
+,
+
+N
+),
+
+dtype
+=
+x
+.
+dtype
+,
+
+buffer
+=
+nl
+.
+shared_hbm
+)
+
+5
+
+6
+
+for
+
+m
+
+in
+
+nl
+.
+affine_range
+(
+NUM_BLOCK_M
+):
+
+7
+
+rms
+
+=
+
+nl
+.
+zeros
+((
+TILES_IN_BLOCK_M
+,
+
+TILE_M
+),
+
+dtype
+=
+x
+.
+dtype
+,
+
+buffer
+=
+nl
+.
+sbuf
+)
+
+8
+
+mm_tiles
+
+=
+
+nl
+.
+zeros
+((
+NUM_BLOCK_N
+,
+
+TILES_IN_BLOCK_M
+,
+
+TILE_M
+,
+
+BLOCK_N
+),
+
+9
+
+dtype
+=
+x
+.
+dtype
+,
+
+buffer
+=
+nl
+.
+sbuf
+)
+
+10
+
+11
+
+for
+
+k
+
+in
+
+nl
+.
+sequential_range
+(
+NUM_BLOCK_K
+):
+
+12
+
+#
+
+Load
+
+x
+
+tiles
+
+from
+
+HBM
+
+to
+
+SBUF
+
+13
+
+x_tiles
+
+=
+
+nl
+.
+ndarray
+((
+TILES_IN_BLOCK_M
+,
+
+TILE_M
+,
+
+BLOCK_K
+),
+
+14
+
+dtype
+=
+x
+.
+dtype
+,
+
+buffer
+=
+nl
+.
+sbuf
+)
+
+15
+
+for
+
+tile_m
+
+in
+
+nl
+.
+affine_range
+(
+TILES_IN_BLOCK_M
+):
+
+16
+
+x_tiles
+[
+tile_m
+,
+
+ix
+.
+p
+,
+
+ix
+.
+x
+]
+
+=
+
+nl
+.
+load
+(
+
+17
+
+x
+[(
+TILES_IN_BLOCK_M
+
+*
+
+m
+
++
+
+tile_m
+)
+
+*
+
+TILE_M
+
++
+
+ix
+.
+p
+,
+
+BLOCK_K
+
+*
+
+k
+
++
+
+ix
+.
+x
+])
+
+18
+
+19
+
+#
+
+---
+
+RMS
+
+branch
+
+(Vector/Scalar
+
+Engine)
+
+---
+
+20
+
+for
+
+tile_m
+
+in
+
+nl
+.
+affine_range
+(
+TILES_IN_BLOCK_M
+):
+
+21
+
+square
+
+=
+
+nisa
+.
+activation
+(
+op
+=
+nl
+.
+square
+,
+
+data
+=
+x_tiles
+[
+tile_m
+,
+
+ix
+.
+p
+,
+
+ix
+.
+x
+])
+
+22
+
+temp_rms
+
+=
+
+nisa
+.
+tensor_reduce
+(
+np
+.
+add
+,
+
+square
+,
+
+axis
+=[1],
+
+keepdims
+=
+True
+)
+
+23
+
+rms
+[
+tile_m
+,
+
+i_rms
+]
+
+=
+
+nisa
+.
+tensor_tensor
+(
+
+24
+
+rms
+[
+tile_m
+,
+
+i_rms
+,
+
+0],
+
+temp_rms
+,
+
+op
+=
+nl
+.
+add
+)
+
+25
+
+26
+
+#
+
+---
+
+MatMul
+
+branch
+
+(Tensor
+
+Engine)
+
+---
+
+27
+
+#
+
+Transpose
+
+x
+
+tiles
+
+for
+
+nc_matmul
+
+(requires
+
+transposed
+
+first
+
+operand)
+
+28
+
+xt_tiles
+
+=
+
+nl
+.
+ndarray
+((
+MAT_BLOCK_K
+,
+
+BLOCK_M
+),
+
+dtype
+=
+x
+.
+dtype
+,
+
+buffer
+=
+nl
+.
+sbuf
+)
+
+29
+
+for
+
+bm
+
+in
+
+nl
+.
+affine_range
+(
+TILES_IN_BLOCK_M
+):
+
+30
+
+for
+
+bk
+
+in
+
+nl
+.
+affine_range
+(
+TILES_IN_MAT_BLOCK_K
+):
+
+31
+
+xt_tiles
+[
+bk
+,
+
+ix
+.
+p
+,
+
+bm
+
+*
+
+TILE_M
+
++
+
+ix
+.
+x
+]
+
+=
+
+nisa
+.
+nc_transpose
+(
+
+32
+
+x_tiles
+[
+bm
+,
+
+xt
+.
+p
+,
+
+bk
+
+*
+
+MAT_TILE_K
+
++
+
+xt
+.
+x
+])
+
+33
+
+#
+
+Load
+
+w
+
+tiles
+
+and
+
+perform
+
+matmul
+
+34
+
+for
+
+n
+
+in
+
+nl
+.
+affine_range
+(
+NUM_BLOCK_N
+):
+
+35
+
+w_tiles
+
+=
+
+nl
+.
+ndarray
+((
+BLOCK_K
+,
+
+BLOCK_N
+),
+
+dtype
+=
+w
+.
+dtype
+,
+
+buffer
+=
+nl
+.
+sbuf
+)
+
+36
+
+for
+
+bk_r
+
+in
+
+nl
+.
+affine_range
+(
+TILES_IN_MAT_BLOCK_K
+):
+
+37
+
+w_tiles
+[
+bk_r
+,
+
+iw
+.
+p
+,
+
+iw
+.
+x
+]
+
+=
+
+nl
+.
+load
+(
+
+38
+
+w
+[
+BLOCK_K
+
+*
+
+k
+
++
+
+bk_r
+
+*
+
+MAT_TILE_K
+
++
+
+iw
+.
+p
+,
+
+BLOCK_N
+
+*
+
+n
+
++
+
+iw
+.
+x
+])
+
+39
+
+for
+
+bn
+
+in
+
+nl
+.
+affine_range
+(
+TILES_IN_BLOCK_N
+):
+
+40
+
+for
+
+bm
+
+in
+
+nl
+.
+affine_range
+(
+TILES_IN_BLOCK_M
+):
+
+41
+
+res
+
+=
+
+nl
+.
+zeros
+((
+TILE_M
+,
+
+TILE_N
+),
+
+dtype
+=
+nl
+.
+float32
+,
+
+buffer
+=
+nl
+.
+psum
+)
+
+42
+
+for
+
+bk
+
+in
+
+nl
+.
+affine_range
+(
+TILES_IN_MAT_BLOCK_K
+):
+
+43
+
+res
+[...]
+
++=
+
+nisa
+.
+nc_matmul
+(
+xt_tiles
+[
+bk
+,
+
+ix
+.
+p
+,
+
+bm
+*
+TILE_M
+
++
+
+ix
+.
+x
+],
+
+44
+
+w_tiles
+[
+bk
+,
+
+iw
+.
+p
+,
+
+bn
+*
+TILE_N
+
++
+
+iw
+.
+x
+])
+
+45
+
+mm_tiles
+[
+n
+,
+
+bm
+,
+
+ir
+.
+p
+,
+
+ir
+.
+x
+
++
+
+bn
+*
+TILE_N
+]
+
++=
+
+res
+[
+ir
+.
+p
+,
+
+ir
+.
+x
+]
+
+46
+
+47
+
+#
+
+Finish
+
+RMS:
+
+mean,
+
+add
+
+eps,
+
+rsqrt
+
+48
+
+for
+
+tile_m
+
+in
+
+nl
+.
+affine_range
+(
+TILES_IN_BLOCK_M
+):
+
+49
+
+temp
+
+=
+
+nisa
+.
+tensor_scalar
+(
+rms
+[
+tile_m
+,
+
+i_rms
+],
+
+50
+
+np
+.
+multiply
+,
+
+1/
+K
+,
+
+op1
+=
+np
+.
+add
+,
+
+operand1
+=
+eps
+)
+
+51
+
+rms
+[
+tile_m
+,
+
+i_rms
+]
+
+=
+
+nisa
+.
+activation
+(
+op
+=
+nl
+.
+rsqrt
+,
+
+data
+=
+temp
+)
+
+52
+
+53
+
+#
+
+Combine:
+
+multiply
+
+matmul
+
+result
+
+by
+
+rms,
+
+store
+
+to
+
+HBM
+
+54
+
+for
+
+n
+
+in
+
+nl
+.
+affine_range
+(
+NUM_BLOCK_N
+):
+
+55
+
+result
+
+=
+
+nisa
+.
+tensor_tensor
+(
+mm_tiles
+[
+n
+,
+
+tile_m
+,
+
+ix
+.
+p
+,
+
+ix
+.
+x
+],
+
+56
+
+rms
+[
+tile_m
+,
+
+i_rms
+],
+
+op
+=
+nl
+.
+multiply
+,
+
+dtype
+=
+x
+.
+dtype
+)
+
+57
+
+nl
+.
+store
+(
+output
+[(
+TILES_IN_BLOCK_M
+*
+m
+
++
+
+tile_m
+)*
+TILE_M
+
++
+
+io
+.
+p
+,
+
+58
+
+BLOCK_N
+*
+n
+
++
+
+io
+.
+x
+],
+
+value
+=
+result
+)
+
+59
+
+return
+
+output
+
+Figure 16
+.
+NKI kernel generated by
+Axon
+for RMSNorm+MatMul from the 5-line input in Figure
+2
+.
+

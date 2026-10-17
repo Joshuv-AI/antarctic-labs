@@ -1,0 +1,1628 @@
+CacheWise: Understanding Workloads and Optimizing KVCache Management for Efficiently Serving LLM Coding Agents
+Shubham Tiwari, Tapan Chugh, Nash Rickert, Simon Peter, Ratul Mahajan, Haiying Shen
+
+Abstract
+. Coding agents are a fast-growing LLM application, executing as long-running closed-loop sessions in which LLM generations alternate with external tool calls. Yet, unlike chat workloads, their serving behavior has not been studied extensively. We address this gap by collecting a dataset of real-world coding assistant traces. Our analysis shows that coding agent sessions repeatedly reuse large prefixes and create sustained KVCache pressure that conventional LLM serving policies handle poorly. Based on our analysis, we present CacheWise , a KVCache management layer that improves KVCache reuse for coding agent workloads. CacheWise combines prefix-aware scheduling with reuse-aware eviction guided by lightweight predictions from tool call metadata. Implemented in vLLM and evaluated on the collected traces, CacheWise reduces KVCache evictions by up to 2 2 – 2.6 × 2.6\times and improves total agent session completion time by up to ~ 3.5 × 3.5\times . CacheWise is open sourced at github.com/cachewise-project/cachewise-coding-traces
+
+
+
+1.
+Introduction
+
+(a)
+
+Coding agent workflow.
+
+(b)
+
+Chat session.
+
+(c)
+
+Coding assistant session.
+
+Figure 1
+.
+Chat and coding-assistant interactions.
+
+Coding assistance
+(
+4
+;
+24
+;
+15
+)
+, where a Large Language Model (LLM) generates code based on user instructions, is emerging as a crucial application with significant potential. Unlike chatbots (
+1(b)
+), where the user sends a query and the LLM generates a corresponding response, coding agents
+(
+39
+;
+44
+;
+18
+)
+formulate multi-step plans and execute them through a series of tool calls
+(
+26
+;
+41
+)
+to run code, inspect program outputs, or modify files (
+1(c)
+). As
+1(a)
+shows, the execution alternates between the LLM, which processes input and generates function calls, and the
+environment
+, which executes those calls and performs actions such as reading/writing code and running tests.
+
+While LLM serving in the context of chat systems has been studied extensively
+(
+20
+;
+45
+;
+28
+;
+46
+;
+42
+;
+25
+;
+2
+;
+35
+;
+13
+)
+, coding agent serving systems have not been examined previously, to the best of our knowledge. A key reason is the lack of publicly available real-world traces for this workload. To address this gap, we collect a dataset of real-world coding assistant traces from researchers actively using coding assistants for research.
+
+In this work, we use this collected dataset to study coding agent workloads and their implications for serving system design. Compared to chatbot workloads, coding-agent sessions are long-running, accumulate substantially larger contexts, and are dominated by tool-initiated turns rather than direct user input. A single user task therefore expands into a closed-loop sequence of LLM requests and tool calls, where each new turn reuses and extends a growing prefix. Consequently, coding assistance is fundamentally a
+session-oriented
+serving workload: the key objective is not the latency of an individual request, but the completion time of the full multi-turn session.
+
+Existing LLM serving systems are primarily designed and evaluated for prior workloads such as chatbot applications. Their default scheduling and KVCache management policies are not well-suited for coding agent workloads. In particular, systems such as vLLM
+(
+20
+)
+and Mooncake
+(
+28
+)
+employ First-Come-First-Served (FCFS) batching and Least-Recently-Used (LRU) KVCache eviction. These workload-agnostic policies ignore two defining properties of coding-agent sessions: requests from the same session frequently have high prefix overlap with already-resident state, and the time to next reuse depends strongly on the ongoing tool execution. FCFS interleaves many sessions and expands the active KVCache working set, increasing the likelihood of evicting prefixes that will soon be needed again. LRU, in turn, uses only past access recency and cannot distinguish between a session whose tool call is about to complete and one whose state will remain unused for much longer. Under memory pressure, these policies therefore trigger KVCache thrashing, reducing useful work and lowering token goodput (i.e., the rate of useful token processing after excluding recomputation and KVCache movement overheads). While some recent works
+(
+14
+;
+22
+)
+attempt to optimize serving for agentic workloads, they tightly couple the agent implementation framework with the LLM serving system, and thus are ill-suited for large-scale deployments, which must support diverse clients.
+
+To address these challenges, we introduce
+CacheWise
+, an agent-aware KVCache management layer that reduces the overhead from KVCache recomputation and offload for general-purpose LLM serving systems.
+CacheWise
+is built on two key ideas: prefix-aware request scheduling and reuse-aware KVCache eviction. Prefix-aware request scheduling prioritizes inference requests with a higher degree of prefix overlap with KVCache state already maintained in accelerator memory. By doing so, it reduces the number of blocks that must be reclaimed and later restored. Complementing this, reuse-aware KVCache eviction evicts prefixes based on anticipated reuse likelihood, rather than relying purely on access recency. Notably,
+CacheWise
+leverages session metadata, such as tool execution information, as signals to predict the reuse likelihood of KVCache prefixes using lightweight predictors trained on historical samples collected by the serving system, without any modifications to the coding agents themselves. This enables,
+CacheWise
+to sustain high accelerator utilization while reducing the frequency of KVCache evictions, thereby improving overall token goodput, i.e., the rate at which new LLM tokens are generated.
+
+This paper makes the following contributions:
+
+\bullet
+
+We collect and analyze real-world coding agent traces, and use them to characterize coding agents as a distinct class of LLM serving workloads. We contrast them with traditional chatbot and other multi-turn tool-use workloads, identify the systems implications of closed-loop execution, long-lived sessions, and large, growing prefixes. We have open sourced the dataset at
+github.com/cachewise-project/cachewise-coding-traces
+.
+
+\bullet
+
+We design and implement
+CacheWise
+, based on two key ideas: prefix-aware scheduling and predictive KVCache eviction. We implement our techniques on top of vLLM
+(
+20
+)
+.
+
+\bullet
+
+We evaluate our techniques using real-world coding agent traces. Our results show that
+CacheWise
+reduces KVCache evictions by
+2
+–
+2.6\times
+compared to state-of-the-art systems such as vLLM, significantly improving token goodput. In addition,
+CacheWise
+improves total request completion time by up to ~
+3.5\times
+and achieves performance comparable to a predictive eviction policy with ground-truth reuse information.
+
+2.
+Background: Efficient LLM Serving
+
+LLM serving typically requires expensive and scarce accelerators such as GPUs and TPUs (we will collectively call them XPUs). Efficiently using their massive internal resources requires massively parallel operations to optimize their internal compute and memory resources. Although serving requests consist of separate
+prefill
+and
+decode
+stages, which require fundamentally different optimization strategies, efficient XPU memory management is crucial for both.
+
+During prefill, serving requires a large number of parallel compute operations to process the input sequence and generate the intermediate key-value tensors (KVCache) corresponding to each input token. During decode, efficient serving systems typically employ
+continuous batching
+
+(
+42
+;
+20
+)
+to ensure parallelism
+across requests
+, since the LLM only generates output tokens sequentially, due to the autoregressive nature of the Transformer architecture
+(
+36
+)
+. While
+parallelism within a sequence (for prefill) or across multiple sequences, through batching
+(
+42
+)
+(for decode) improves XPU efficiency, the benefits are limited by the XPU memory available to store the KVCache states of all the requests in the batch.
+
+Similarly, the available KVCache memory is a bottleneck for optimizing the prefill phase of serving requests that share a common prefix. Although state-of-the art serving systems, e.g., vLLM
+(
+20
+)
+, SGLang
+(
+45
+)
+, persist KVCache from previous requests to minimize the number of operations required for executing requests that extend a previous request, during memory pressure, persisted KVCache prefixes must be evicted to allocate memory for requests whose prefixes are not already available. If a subsequent request arrives whose prefix corresponds to evicted KVCache state, the prefix must be rematerialized which either requires recomputing the KVCache or transferring it back from lower storage tiers, such as host DRAM, SSD, or remote memory, if available (e.g., LMCache
+(
+9
+)
+, Mooncake
+(
+28
+)
+). Notice that although some systems, e.g., Infercept
+(
+1
+)
+, make KVCache management decisions per-request, state-of-the-art serving systems typically implement a block-based abstraction, analogous to memory paging in operating systems, that partitions the KVCache memory pool in the XPU into fixed-size blocks, and eviction decisions can be made at per-block to reduce wastage.
+
+Trace
+
+CATraces
+
+SWE-
+
+T1
+
+Toucan
+
+ShareGPT
+
+Captures?
+
+(ours)
+
+Agent
+(
+40
+)
+
+(
+8
+)
+
+(
+38
+)
+
+(
+29
+)
+
+# Tokens
+
+10M
+
+474M
+
+2.3K
+
+0.94M
+
+0.26M
+
+Workload
+
+Coding
+
+Software
+
+Tool
+
+Tool
+
+Chat
+
+Domain
+
+Assistant
+
+Engg.
+
+Usage
+
+Usage
+
+Interactive
+
+✔
+
+✘
+
+✘
+
+✘
+
+✔
+
+Sessions?
+
+Real Tasks?
+
+✔
+
+✘
+
+✘
+
+✘
+
+✔
+
+Real Tools?
+
+✔
+
+✔
+
+✘
+
+✔
+
+✘
+
+Table 1
+.
+Comparison of coding agent and multi-turn datasets.
+
+3.
+Coding Agent Workloads
+
+To understand the system implications of coding agent workloads, we present a detailed characterization of traces collected from users of Claude Code
+(
+4
+)
+, a popular coding assistant application, performing real-world software development and engineering tasks on various open source projects.
+
+Our collected dataset
+1
+1
+
+1
+
+We collected anonymized traces from consenting participants within our lab. This data collection follows standard ethical guidelines for research.
+, denoted as CATraces, includes detailed conversations: user instructions, model outputs, tool calls, their results, etc., and annotated with key system metadata e.g,. number of tokens, timestamps for each message, human interventions, and so on.
+Table
+1
+highlights the unique aspects compared to previously available LLM workload traces. To the best of our knowledge, we are the first to present the real-world usage of coding assistant workloads; ShareGPT
+(
+29
+)
+presents real-world interactions for chat workloads, while others usually contain synthetic tasks
+(
+40
+;
+8
+;
+18
+)
+, sometimes against mock tools
+(
+38
+)
+.
+
+(a)
+
+Prefill length distributions for different datasets
+
+(b)
+
+Decode length distributions for different datasets
+
+Figure 2
+.
+Comparing LLM serving request characteristics across datasets.
+
+Figure 3
+.
+Distribution of number of turns for different workloads.
+
+CATraces Overview:
+We begin by characterizing structural differences between real-world coding agent workloads and prior datasets. First, observe in Figure
+3
+, that coding agent serving requests have orders of magnitude more
+turns
+than other workloads, where a turn refers to a new LLM request building upon a previous request and result. Notice that each turn presents an opportunity for KVCache reuse; if the entire accumulated prefix needed to be recomputed for each turn, the overall number of flops required to compute would be orders to magnitude higher. Second, observe in
+Figure 2
+that the distribution of the number of tokens to prefill and decode per request is significantly different for coding agent workloads compared to others: without KVCache sharing across turns, each request must prefill a substantially higher number of tokens, whereas each generates significantly fewer decode tokens, leading to ~
+21\times
+higher ratio of prefill to decode tokens compared to chatbot workloads. These differences have crucial implications for future systems
+(
+11
+;
+43
+)
+: the significantly larger shared KVCache prefixes implies that only fewer KVCache blocks can be stored in XPU memory concurrently, which reduces the number of requests that can be executing concurrently, and constrains the overall token generation throughput during the decode phase (§
+2
+). Overall, optimizing KVCache management is especially crucial for serving coding agent workloads efficiently.
+
+Figure 4
+.
+CDF of requests triggered by tool completion versus user input. Tool-initiated requests dominate, indicating a predominantly closed-loop request generation process.
+
+Closed-loop execution shifts performance objective:
+
+We analyze the distribution of requests initiated by tool completion versus those initiated by direct user input.
+Figure 4
+shows this distribution. We observe that requests triggered by tool completion (i.e., model-generated tool calls)
+(
+41
+;
+33
+)
+are
+20\times
+more frequent than user-initiated requests at the median, indicating that the request generation process is predominantly closed-loop.
+
+Figure 1
+illustrates this behavior: while chat workloads consist of simple user–LLM interactions, coding agent workloads form closed-loop chains where a single user request triggers a sequence of LLM requests and tool calls. To evaluate the performance of coding agent workloads, session-level metrics (such as session completion time) capture the system’s efficiency in advancing multi-step execution within a session, whereas widely used token-level metrics such as Time-To-First-Token (TTFT) and Time-Between-Tokens (TBT) capture only per-request latency.
+
+Figure 5
+.
+Session duration distribution observed in CATraces.
+
+Long-running sessions compete for limited accelerator memory:
+
+We analyze session durations by computing the time difference between the first and last LLM request in each session of CATraces.
+Figure 5
+shows the distribution of session durations. We observe substantial variation in duration, with long-running sessions being common (e.g.,
+36
+min at median, >
+2.6
+hours at tail). Such long-running sessions imply that KVCache state must persist in XPU memory over long periods to enable reuse across turns. Each turn of the session appends additional context to the prefix, causing the KVCache memory to grow over time (as shown in
+Figure 6
+), and remain resident for the duration of the session. As multiple long-running sessions coexist, their KVCache state collectively competes for limited XPU memory.
+Large KVCache prefixes directly translate to higher eviction overheads. Evicting large KVCache states requires recomputation of state or data transfer across memory tiers, both of which incur significant overhead and impact system’s efficiency.
+
+Figure 6
+.
+Context Length growth in number of tokens.
+
+Inter-request time varies, but carries meaningful structure across toolcalls:
+
+We analyze the types of tools invoked and their execution times in CATraces.
+Figure 8
+shows that tool execution times vary significantly across tool types and exhibit long-tailed behavior. For example,
+grep
+has short and tightly clustered durations, whereas
+bash
+exhibits longer and more variable execution times.
+This variability translates directly into large fluctuations in the time between successive serving requests from the same session.
+Figure 7
+shows that tool executions induce substantial variation in inter-arrival times, leading to irregular reuse intervals for KVCache state. Eviction policies that rely solely on past access patterns (e.g., LRU) may evict state that is about to be reused, resulting in unnecessary evictions.
+
+Figure 7
+.
+Time between consecutive LLM requests.
+
+Despite variations, tool call durations are not arbitrary.
+Figure 9
+shows that tool metadata, such as tool type and arguments, captures meaningful structure in execution behavior. For instance, simple file-system operations (e.g.,
+ls
+,
+grep
+) have short durations, whereas more complex operations (e.g.,
+pytest
+) exhibit significantly longer execution times. This observation exposes opportunities for KVCache optimization by leveraging tool metadata as signals for reuse prediction, which we discuss further in §
+5
+.
+
+Figure 8
+.
+Distribution of tool execution durations.
+
+⬇
+
+{
+
+"tool"
+:
+
+"bash"
+,
+
+"args"
+:
+
+"ls
+
+-la"
+,
+
+"duration_ms"
+:
+
+49
+
+}
+
+{
+
+"tool"
+:
+
+"bash"
+,
+
+"args"
+:
+
+"cd
+
+vllm
+
+&&
+
+git
+
+log
+
+--all
+
+-p
+
+--grep=’SchedulingPolicy’
+
+--
+
+’*.py’
+
+|
+
+head
+
+-300"
+,
+
+"duration_ms"
+:
+
+1143
+
+}
+
+{
+
+"tool"
+:
+
+"bash"
+,
+
+"args"
+:
+
+"uv
+
+run
+
+--frozen
+
+pytest
+
+tests/client
+
+/test_set_roots.py
+
+-xvs"
+,
+
+"duration_ms"
+:
+
+83333
+
+}
+
+⬇
+
+{
+
+"tool"
+:
+
+"Grep"
+,
+
+"args"
+:
+
+{
+"path"
+:
+
+"vllm/vllm"
+,
+
+"pattern"
+:
+
+"start_load_kv"
+,
+
+"duration_ms"
+:
+
+183
+
+}
+
+{
+
+"tool"
+:
+
+"Glob"
+,
+
+"args"
+:
+
+"**/scheduler*.py"
+,
+
+"duration_ms"
+:
+
+147
+
+}
+
+{
+
+"tool"
+:
+
+"WebFetch"
+,
+
+"args"
+:
+
+"https://gofastmcp.com
+
+/servers/context"
+,
+
+"duration_ms"
+:
+
+39988
+
+}
+
+Figure 9
+.
+Examples of tool invocations observed in CATraces.
+
+4.
+Implications for Efficient LLM Serving
+
+Coding agent workloads exhibit strong temporal locality, where successive requests within a session share and reuse substantial portions of previously computed KVCache state. Existing LLM serving systems manage KVCache allocation and eviction independently at the granularity of individual requests, without accounting for future reuse across successive requests within a session. This mismatch leads to significantly lower KVCache reuse and system efficiency.
+
+We introduce a lightweight formal model to precisely characterize the resource dynamics of KVCache management in LLM serving and highlight the implications for coding agents. Figure
+10
+illustrates the memory layout that motivates our notation.
+
+Let
+M
+denote the total KVCache block capacity of an inference node (i.e., XPU memory available for KVCache after accounting for model weights and runtime overhead).
+At any time
+t
+, let
+\mathcal{S}_{t}=\{S_{1},S_{2},\ldots\}
+be the set of
+active sessions
+co-located on the node.
+Each session
+S_{i}
+has a contiguous, monotonically growing prefix of KVCache blocks
+d_{i}
+, out of which
+k_{i}(t)
+are resident in XPU memory at time
+t
+. The
+active KVCache working set
+is
+W(t)=\sum_{i\,\in\,\mathcal{S}_{t}}d_{i}
+, and the system operates within memory budget (requires no eviction) as long as
+W(t)\leq M
+.
+
+When session
+S_{i}
+issues a new request
+r_{i}
+at time
+t
+, it requires
+d_{i}
+KVCache blocks in total to serve the full context.
+Of these,
+k_{i}(t))
+blocks already reside in memory (the
+reusable prefix overlap
+), so the number of
+additional
+blocks that must be allocated is
+a_{i}(t)=d_{i}-k_{i}(t)
+.
+If
+W(t)+a_{i}(t)\leq M
+, the request is admitted immediately. Otherwise, the system must
+evict
+
+a_{i}(t)
+blocks from one or more other sessions before admission.
+
+Implication #1: FCFS scheduling thrashes KVCache of long-running agent sessions:
+
+At any given time
+t
+, a session
+S_{j}
+can be active (i.e., executing a request on the XPU), queued (i.e., request is waiting to be executed due to insufficient XPU memory), or inactive (i.e., waiting upon user or the environment to submit the next request). Existing systems which admit requests in FCFS order interleave requests from multiple queued sessions, which attempts to increases
+k_{i}
+for many different sessions. As the working set grows, it competes for limited XPU memory and can exceed the available HBM capacity. When this occurs, KVCache state from one session is evicted to accommodate requests from other sessions.
+Since this evicted state is often reused by subsequent requests within the same session, FCFS scheduling leads to repeated eviction and recomputation (or movement) of state, resulting in KVCache thrashing.
+
+Implication #2: LRU eviction does not account for future KVCache reuse when toolcalls return:
+When
+W(t)+a_{i}>M
+, the system faces a trade-off: admitting
+r_{i}
+requires evicting blocks whose
+\tau_{j}
+may be small, incurring recomputation overhead and reducing system
+goodput. However, not all evictions are equally costly. Let
+\tau_{i}
+denote the
+time to next reuse
+of session
+S_{i}
+’s resident blocks, i.e., the time until
+S_{i}
+issues its next request and those blocks are accessed again. Evicting blocks from a session with small
+\tau_{i}
+forces an imminent recomputation (or data movement) penalty; evicting from a session with large
+\tau_{i}
+is comparatively cheap. An ideal eviction policy therefore selects
+j^{*}=\operatorname*{arg\,max}_{j\,\in\,\mathcal{S}_{t},\;j\neq i}\tau_{j}
+, retaining sessions whose KVCache will be needed soonest.
+
+In-practice, when serving coding agents with multiple long-running, KVCache working set is likely to exceed the available XPU memory. Since
+\tau_{i}
+is unknown, a workload-agnostic policy (e.g., LRU) resolves this tension using only past access recency, which can lead to priority inversions and blocks have high reuse value are evicted and subsequent requests from the same session require these blocks to be recomputed or moved back into memory. Repeated eviction and restoration of state leads to high overhead in recomputation and data movement.
+
+Model
+Weights
+k_{1}(t)
+S_{1}
+k_{2}(t)
+S_{2}
+k_{3}(t)
+S_{3}
+k_{4}(t)
+S_{4}
+free
+KVCache capacity
+M
+W(t)=\sum_{i}k_{i}(t)
+W(t){+}a_{5}>M
+
+Figure 10
+.
+
+XPU memory layout during LLM serving.
+After reserving memory for model weights, the remaining
+capacity
+M
+holds KVCache blocks for active sessions
+
+\mathcal{S}_{t}=\{S_{1},\ldots,S_{4}\}
+.
+The working set
+W(t)=\sum_{i}k_{i}(t)
+grows as sessions
+accumulate context.
+When a new request
+r_{5}
+requires
+a_{5}
+additional blocks
+that exceed
+M
+, the system must evict blocks from an existing session.
+
+5.
+CacheWise
+Design
+
+Figure 11
+.
+(A) End-to-end workflow of a session through a typical LLM serving system. (B) Prefix-aware request scheduling prioritizes requests by degree of overlap with KVCache resident on the XPU memory, leading to higher KVCache reuse. (C) Demonstration of predictive KVCache eviction choosing the block with the highest predicted reuse probability, rather than purely recency-based heuristics like LRU.
+
+Property
+
+Workload Characteristic
+
+Baseline Limitation
+
+CacheWise
+Design Choice
+
+Closed-loop sessions
+
+User tasks trigger multi-turn sessions of LLM calls and tool executions.
+
+Per-request metrics (TTFT, TBT) do not capture session-level efficiency.
+
+Optimize for end-to-end session completion for closed-loop workloads.
+
+Expanding KVCache prefixes
+
+Sessions accumulate large KVCache prefixes that compete for limited XPU memory.
+
+FCFS request scheduling disregards KVCache residency which leads to thrashing across sessions.
+
+Prefix-aware scheduling forms batches in priority order to maximize KVCache reuse.
+
+Variable inter-request times
+
+Tool execution durations vary by orders of magnitude due to different tool types and arguments.
+
+LRU eviction uses only access recency that which leads to priority inversions w.r.t. future re-use.
+
+Predictive eviction estimates the order of future reuse from tool metadata to guide eviction decisions.
+
+Table 2
+.
+Summary of key findings. Each row identifies a characteristic of coding agent workloads, the limitation it exposes in existing systems, and the corresponding
+CacheWise
+design choice.
+
+Drawing from our measurements and analysis, we present
+CacheWise
+(Table
+2
+). Unlike existing systems that optimize KVCache management for individual request processing commonly found in chatbots,
+CacheWise
+maximizes KVCache reuse across requests in long-running, closed-loop agent sessions (e.g., coding agent workloads). Higher KVCache reuse reduces the eviction overhead (recomputation and data movement overhead of KVCache across storage tiers) and allows executing more sessions concurrently which improves the end-to-end session performance and the system’s token goodput.
+
+Workflow:
+Figure
+11
+(A) illustrates the end-to-end workflow of a session in an LLM serving system with
+CacheWise
+integrated at the inference node. Incoming requests from active sessions are routed by the load balancer to an inference node. Since existing load balancers typically use prefix-match based routing
+(
+27
+;
+7
+;
+10
+)
+, i.e., a request is routed to the inference node with largest reusable KVCache prefix resident in the XPU memory, requests from the same session, which share the growing KVCache prefix, are likely to be routed to the same inference node.
+CacheWise
+optimizes KVCache management at each inference node using two key techniques: (a) prefix-aware request scheduling, and (b) predictive KVCache eviction.
+
+5.1.
+Prefix-aware Request Scheduling
+
+CacheWise
+leverages a prefix-aware request scheduler that prioritizes requests that can reuse KVCache already resident in XPU memory. Specifically, at time
+t
+,
+CacheWise
+selects request
+r_{i}
+which requires fewest additional blocks
+a_{i}(t)
+to be allocated as the next request to dispatch.
+
+Although greedy prefix-aware scheduling has been explored in prior systems such as SGLang, we observe that it is particularly effective for coding agent workloads because it directly minimizes the
+thrashing
+effect on other sessions which will eventually re-use their evicted blocks as well. Furthermore, dispatching requests in order of
+a_{i}(t)
+approximates
+shortest-job-first
+
+(
+16
+)
+scheduling which additionally minimizes overall system queueing at the expense of per-request responsiveness, since for closed-loop agent workloads, optimizing end-to-end session completions is more important than minimizing per-request TTFT or TBT, as no user is waiting on any individual request.
+
+5.2.
+Predictive KVCache Eviction
+
+While prefix-aware scheduling reduces the overhead of evictions, they remain inevitable because sessions keep accumulating context across turns and overall memory required increases. Ideally, the optimal eviction strategy follows Belady’s rule
+(
+6
+)
+, i.e., at time
+t
+, evict blocks whose next access time
+\tau_{i}(t)
+is furthest into the future, so that the evicted memory can be used for other sessions for the entire duration
+\tau_{i}(t)
+. Conversely, if the evicted blocks will be required almost immediately, and because
+W(t)>M
+, to allocate them again, blocks from some other session must be evicted at
+\tau_{i}(t)
+, which increases the overall eviction overhead incurred.
+
+CacheWise
+proposes a predictive KVCache eviction policy that attempts to approximate the optimal eviction strategy by evicting blocks in decreasing order of
+\tau_{i}(t)
+. Our key insight is that although precisely predicting future KVCache reuse time for each session is challenging due to the variability in tool execution times,
+CacheWise
+only needs to predict the relative order of
+\tau(t)
+across sessions to identify which blocks to evict. Furthermore, in-practice, we find that accurately identifying the session with the highest
+\tau_{i}(t)
+is sufficient when using
+CacheWise
+, and lightweight estimators based on function names and arguments for each tool call can provide sufficient accuracy.
+
+Predictor:
+For a session
+S_{i}
+that generated a tool call with metadata
+m=(\text{tool\_name},\text{tool\_args})
+at time
+T_{i}
+, our predictor estimates it’s next expected use time
+\mathbb{E}[\tau_{i}(t)]
+using historical information, and uses these estimates to calculate the relative ordering to make its eviction decisions. Specifically, at time
+t
+,
+CacheWise
+estimates the expected remaining time for the tool call to complete, i.e.,
+\mathbb{E}[\tau_{i}(t)\mid\tau_{i}(t)-T_{i}>t-T_{i}]
+by analyzing distributions of tool execution durations with similar metadata
+m
+from historical sessions with similar characteristics e.g., same user, same project.
+
+Predictor Training:
+Figure
+12
+shows that relying solely on execution duration distributions of tools with the same names is insufficient to make these estimates accurately because execution times may vary significantly based on the tool arguments and the environment; for instance,
+Bash
+calls can have highly variable execution durations depending upon the arguments (e.g., Table
+3
+) or the coding repository context (e.g., running
+pytest
+to run tests depends upon the specific test suite). To capture the effect of tool call arguments,
+CacheWise
+semantically clusters
+2
+2
+
+2
+
+We use
+KMeans
+
+(
+19
+)
+to generate clusters. We upper bound
+the number of clusters to a large value to achieve maximum granularity,
+allowing the model to distinguish fine-grained argument patterns within
+each tool type.
+historical samples based on the TF-IDF embeddings
+(
+30
+;
+31
+)
+of their arguments, and uses these per-cluster distributions instead of per-tool distributions in such cases. TF-IDF encodes tool arguments into vectors by assigning higher weight to terms that are frequent within an argument but rare across other arguments
+3
+3
+
+3
+
+Each tool argument is mapped to a TF-IDF vector of a maximum size of 5000 lexicons. We use scikit-learn’s implementation of
+\ell_{2}
+norm
+(
+31
+)
+to assign weights.
+.
+
+Figure 12
+.
+Distribution of tool execution times with respect to time elapsed since last access as observed in CATraces.
+
+Command Pattern
+
+P50
+
+P90
+
+P99
+
+n
+
+Python one-liners (
+python -c
+)
+
+0.1s
+
+0.2s
+
+0.4s
+
+9
+
+Type checking (
+mypy
+)
+
+10s
+
+56s
+
+182s
+
+46
+
+Docker builds (
+docker compose
+)
+
+22s
+
+89s
+
+152s
+
+30
+
+Git operations (
+git add / status
+)
+
+0.1s
+
+34s
+
+97s
+
+34
+
+Table 3.
+Bash tool call execution time distributions clustered by argument types. Columns P50, P90, and P99 show percentiles of tool execution times.
+n
+is the number of datapoints in the cluster.
+
+5.3.
+Implementation
+
+We have implemented
+CacheWise
+using vLLM
+(
+20
+)
+in ~2,500 lines of Python code and extend the batch scheduler and KVCache manager to support
+CacheWise
+’s predictive block eviction mechanisms. Specifically, to implement
+CacheWise
+’s policies atop the vLLMs existing batch scheduling and KVCache management layer, we extend their KVCache block manager to associate additional session-level metadata with each KVCache block, i.e.,
+tool_name
+,
+tool_args
+and
+T_{i}
+(time when the tool call was generated), which can be parsed by the vLLM engine itself.
+
+When a request completes and its blocks become unreferenced (i.e., the reference count drops to zero), those blocks retain their metadata and are inserted into an eviction heap for ordered eviction.
+CacheWise
+replaces the default LRU eviction policy: when unreferenced blocks are added, our lightweight predictor quickly estimates the
+\mathbb{E}[\tau_{i}(t)]
+based on the block’s attached
+S_{i}
+, and adds the block to the eviction heap with the prediction as its priority value. Note that
+CacheWise
+maintains predictions across blocks that share the same session metadata and multiple KVCache blocks belonging to the same session do not require invoking the predictor independently for each one.
+
+However, as tool call executions progress, the predicted
+\mathbb{E}[\tau_{i}(t)]
+value for a KVCache block becomes stale; as time elapses since the last access, the expected time-to-next-reuse shifts, and the stored prediction no longer reflects the current reuse likelihood of the block. To account for this,
+CacheWise
+periodically re-evaluates all unreferenced blocks through the predictor and rebuilds the eviction heap with updated
+\mathbb{E}[\tau_{i}(t)]
+estimates. The rebuild frequency is controlled by a tunable parameter
+N_{\text{rebuild}}
+(in engine iterations): smaller values yield fresher estimates at higher CPU scheduling overhead, while larger values reduce overhead at the cost of stale predictions. In our evaluation, we set
+N_{\text{rebuild}}=3
+based on empirical observation that this balances prediction freshness and overhead.
+
+6.
+Evaluation
+
+We evaluate
+CacheWise
+using real multi-turn coding-agent traces sampled from the CATraces dataset. Our evaluation seeks to answer the following questions:
+
+\bullet
+
+How much
+CacheWise
+improve end-to-end performance compared to baselines?
+
+\bullet
+
+How much prefix-aware scheduling and predictive KVCache eviction contribute to end-to-end performance?
+
+\bullet
+
+Does
+CacheWise
+reduce KVCache data movement?
+
+\bullet
+
+Does
+CacheWise
+introduce non-negligible scheduling overheads?
+
+6.1.
+Experimental Setup
+
+Testbed:
+We ran experiments on a server with 2
+\times
+H200 GPUs and AMD EPYC 9534 64-core CPU with Tensor Parallelism
+(
+34
+)
+(TP=2) enabled, with a combined GPU memory of 282GB. All experiments run with chunked-prefill enabled and we use the default value of max. 512 tokens per chunk
+(
+37
+)
+.
+
+Model:
+Similar to prior works
+(
+2
+;
+46
+)
+, we use a
+32B
+parameter model, Qwen2.5-Coder-32B-Instruct
+(
+5
+)
+, for our evaluation. Our prototype can execute any model, including models with grouped-query attention
+(
+3
+)
+or multi-query attention
+(
+32
+)
+, without any modifications to model weights.
+
+Workloads:
+We replay the traces collected in our dataset for our experiments deterministically. We randomly sample
+80\%
+of the sessions for
+offline
+training of the predictor, and use the remaining traces for our experiments. We assume that the system deploying
+CacheWise
+routinely logs request traces which can be used as the training data.
+In practice, trace distributions may drift over time as coding repositories and tool usage patterns evolve; in such cases,
+CacheWise
+’s estimators can be periodically retrained on recent traces to adapt to distribution shift, though we leave a thorough study of drift robustness to future work.
+
+In our traces, users interactively respond to agent output to send a new request with the same KVCache prefix. Users can have long idle periods. During replay, we consider human idle periods as session boundaries. Our evaluation includes resumed sessions after human pause and these sessions have a significantly larger KVCache to prefill due to previous history. This is acceptable because it mimics our scheduler’s decisions: we always evict KVCache from idle sessions before evicting from sessions with toolcall induced delays.
+
+Methodology:
+Our experiments launch
+N
+independent coding agent sessions concurrently on a single serving instance and runs until all sessions complete. We evaluate performance under increasing load. We repeat each experiment several times to ensure stability across runs.
+
+Figure 13
+.
+Session completion time (in seconds) for different KVCache management systems under the coding agent workload (sampled from CATraces).
+
+Baselines:
+
+We compare
+CacheWise
+against: (a)
+vLLM
+
+(
+20
+)
+with block-level LRU KVCache eviction and FCFS admission, (b)
+InferCept
+
+(
+1
+)
+with FCFS scheduling and moving-average-based eviction that predicts tool call durations from recent history.
+Although, we did not directly evaluate against SGLang, which already implements prefix-aware scheduling, our ablations (described below) cover this scenario as well.
+
+Figure 14
+.
+Serving efficiency of different KVCache management systems under the coding agent workload. (a) Goodput in-terms of the number of useful tokens generated per-unit time. (b)-(e) LLM request latency distribution (in seconds). (f) LLM request throughput (in number of requests completed per second).
+
+Ablations:
+We also present (a)
+CacheWise
+*, a version of
+CacheWise
+that has access to ground truth tool latencies to make evictions (b)
+vLLM(Prefix-aware)
+and (c)
+InferCept(Prefix-aware)
+which add prefix-aware scheduling to these baselines.
+
+Metrics:
+We compare (1) token goodput (rate of new tokens computed per unit time), request throughput (LLM requests/second) (2) request completion time, (3) session completion time (the sum of LLM request latencies across a single session without the tool execution durations. We exclude tool execution durations as they are determined by the external environment and independent of the serving system), and (4) KVCache transfer volume (the amount of data moved due to evictions).
+
+6.2.
+End-to-End Performance Improvements
+
+Session-level performance:
+Figure
+13
+shows session-level performance across varying load levels. Observe that at lower load levels (
+N\leq 10
+), all systems exhibit similar performance, which is expected as there is negligible memory (KVCache) contention at low load levels, leaving sufficient GPU memory capacity for all sessions to execute concurrently. At higher load levels (
+N>10
+),
+CacheWise
+consistently outperforms the baselines, achieving 2.7
+\times
+–3.5
+\times
+lower completion time as compared to vLLM and InferCept. Further,
+CacheWise
+achieves performance comparable to the
+CacheWise
+* with ground-truth tool latencies, indicating that our lightweight estimators offer sufficient accuracy to identify which sessions blocks should be evicted. In some configurations,
+CacheWise
+marginally outperforms
+
+CacheWise
+*, which we attribute to scheduling dynamics induced
+by differences in eviction decisions; evicting different blocks
+changes which requests can be scheduled with prefix-aware scheduling,
+which in turn affects the order and timing of requests being processed.
+
+Figure
+14
+shows our evaluation of token goodput, KVCache block evictions, request-level latency, and throughput with respect to system load.
+
+Token goodput:
+Observe that for
+N>10
+,
+CacheWise
+consistently outperforms vLLM and InferCept with respect to token goodput (1.64x-2x improvement).
+CacheWise
+maximizes KVCache reuse, and consistently reduces the number of evicted KVCache blocks by 2-2.6x compared to vLLM and InferCept, which enables it to increase the useful tokens generated per-unit time. Also observe that the token goodput decreases with increasing load for all systems. This is expected, because at higher load more sessions compete for GPU memory, causing more KVCache evictions and recomputations for all systems. However,
+CacheWise
+minimizes the number of unnecessary evictions and recomputations, even at higher loads.
+
+Request throughput:
+At higher load levels (
+N>10
+),
+CacheWise
+consistently out-performs vLLM and InferCept.
+CacheWise
+achieves 1.5
+\times
+–2
+\times
+higher throughput with respect to baselines. This is expected since higher token goodput is directly correlated with higher rate of request completion.
+
+Request latency:
+
+CacheWise
+outperforms both vLLM and InferCept in terms of median (P50), and P90 request completion times across all load levels. At P50,
+CacheWise
+achieves a 13–14
+\times
+lower latencies as compared to the baselines, underscoring the benefit of
+CacheWise
+’s better resource management. We observe that
+CacheWise
+exhibits higher P99 request latencies, especially at higher load levels. This is due to
+CacheWise
+’s prefix-aware scheduling policy that defers new requests that lack history and is acceptable—session completion time is the appropriate user-facing metric, rather than request tail latency.
+
+6.3.
+Performance Ablations
+
+(a)
+
+Token goodput.
+
+(b)
+
+Mean session completion time.
+
+Figure 15
+.
+Impact of
+CacheWise
+’s predictive KVCache eviction. vLLM(Prefix-aware), InferCept(Prefix-aware),
+CacheWise
+, and
+CacheWise
+* with prefix-aware scheduling enabled to isolate impact of KVCache eviction while keeping the scheduling policy fixed.
+
+To better understand the impact of different optimizations in
+CacheWise
+, we compare it against vLLM(Prefix-aware) and InferCept(Prefix-aware) which use the same prefix-aware scheduling as in
+CacheWise
+but do not have access to the predictive KVCache eviction policy.
+
+Impact of predictive KVCache management:
+Figure
+15
+shows the gains from predictive KVCache eviction, where
+CacheWise
+outperforms both respect to token goodput and session completion time, achieving 1.2
+\times
+-1.6
+\times
+higher token goodput than baselines. Consequently,
+CacheWise
+also achieves ~1.7
+\times
+-2
+\times
+lower session completion time than vLLM(Prefix-aware) and InferCept(Prefix-aware).
+
+InferCept(Prefix-aware) computes tool execution durations by taking moving average of the prior tool executions in the session, disregarding the tool name, arguments, and the last accessed time of the KVCache blocks, leading to inaccurate time-to-next-reuse decisions, and hence suboptimal eviction decisions.
+
+(a)
+
+Token goodput.
+
+(b)
+
+Mean session completion time.
+
+Figure 16
+.
+Impact of prefix-aware scheduling policy. For each system, we compare the FCFS variant with the corresponding Prefix-aware variant.
+
+Impact of prefix-aware scheduling:
+
+Figure
+16
+shows the effect of prefix-aware scheduling applied independently to all baselines. Prefix-aware scheduling alone improves token goodput by ~1.38
+\times
+–1.64
+\times
+at
+N=30
+and ~1.6
+\times
+–1.7
+\times
+at
+N=40
+(Figure
+16
+(a)), and reduces session completion time by ~1.8
+\times
+–2.35
+\times
+at
+N=30
+and ~1.85
+\times
+–2.66
+\times
+at
+N=40
+(Figure
+16
+(b)). These gains hold even in the absence of accurate KVCache reuse predictions, reinforcing that the two optimizations are independent.
+
+6.4.
+KVCache Movement
+
+Modern LLM serving systems commonly offload evicted KVCache blocks to CPU memory or disk
+(
+28
+;
+9
+)
+to avoid recomputation. For such systems,
+CacheWise
+reduces the frequency of evictions by retaining reusable blocks rather than repeatedly evicting and recomputing them. These transfers consume significant interconnect bandwidths and can stall GPU execution while data is moved, reducing GPU utilization and token goodput.
+
+Figure 17
+.
+KVCache movement incurred (in TB of data) during the duration of each experiment, by translating eviction count to data size using KVCache block size.
+
+Figure 18
+.
+Overhead of KVCache offloading incurred due to transfer of KVCache from GPU–CPU and CPU–GPU over PCIe. The experiment was run with
+N
+=30 coding agent sessions sampled from CATraces. The KVCache offload latency (top-left) is the sum of swap-in and swap-out latencies observed by all the requests in the experiment.
+
+To quantify this effect, we translate KVCache evictions into the corresponding volume of KVCache data transferred and report the cumulative transfer volume over the course of each experiment. Figure
+17
+shows the KVCache data transfer volume from our evaluation.
+CacheWise
+reduces KVCache transfer volume by ~2
+\times
+-2.6
+\times
+compared to baselines.
+
+We further evaluate
+CacheWise
+on a system that physically moves
+KVCache blocks rather than recomputing them. In this configuration, evicted blocks are transferred from GPU memory to CPU DRAM and swapped back on demand when the corresponding session resumes, replacing recomputation overhead with idle times due to PCIe transfer latency.
+Figure
+18
+shows the KVCache offloading latencies and session completion time for
+N{=}30
+concurrent sessions.
+CacheWise
+achieves ~1.19x lower session completion times than vLLM. The absolute gains under offloading are smaller than under recomputation. This is expected: PCIe transfers are substantially faster than prefill recomputation for large KVCache prefixes, so the penalty
+per eviction is lower, and the headroom for improvement is correspondingly reduced.
+
+6.5.
+Predictor Accuracy
+
+(a)
+
+Block Evictions.
+
+(b)
+
+Mean session completion time.
+
+Figure 19
+.
+Eviction count and session completion time in seconds. Lower values are better for both.
+CX
+=Tool argument based clustering with X clusters.
+Hint
+=Trace replay with ground truth tool durations.
+
+We evaluate how prediction granularity affects eviction count and
+session completion time by progressively refining the estimator and
+measuring the resulting system efficiency.
+We consider the following predictors:
+
+Point Estimates
+uses a single point estimate of
+\hat{\tau}
+derived from the global mean tool duration across all tool types and sessions.
+
+Tool Name Only
+conditions the estimate on tool name alone, using the per-tool empirical duration distribution (§
+5
+).
+
+C20
+,
+C50
+, and
+C100
+further refine the
+estimate by clustering tool calls based on tool arguments,
+using 20, 50, and 100 clusters respectively. Increasing the cluster count beyond 100 yielded no additional clusters, as the data did not
+support finer granularity. Using cluster
+Hint
+uses
+ground-truth tool duration from the trace.
+Figure
+19
+reports eviction counts and session completion times across four predictor variants and three load levels (
+N=\{30,40,50\}
+). We observe that as the prediction granularity increases from
+Point Estimate
+to
+C100
+,
+both eviction count and session completion time decrease across values of N.
+C100
+achieves the highest performance, with upto
+19\%
+improvement in session completion time.
+
+6.6.
+Scheduling Overheads
+
+Figure 20
+.
+CPU scheduling overheads (Sched.) vs. GPU execution overhead (Model Exec.) for different systems.
+
+Figure
+20
+compares the CPU-side scheduling overhead incurred by the
+CacheWise
+’s KVCache management policies against the GPU model execution time. The scheduling overhead corresponds to the time spent making scheduling and eviction decisions prior to each model iteration that executes on the GPU.
+CacheWise
+incurs ~2.4
+\times
+–3
+\times
+higher CPU scheduling overhead as those incurred by vLLM. However, the absolute CPU scheduling overheads are negligible when compared to the corresponding gains in lower model execution times.
+At
+N=40
+,
+CacheWise
+incurs higher CPU scheduling overhead, increasing from 0.33 s (vLLM) to 0.99 s (3.0
+\times
+increase). However, this overhead increase is more than offset by a significant reduction in GPU model execution time, which decreases from 16.6 s to 11.2 s (1.48
+\times
+improvement). Overall,
+CacheWise
+yields a net reduction of ~4.7 s per request, demonstrating that savings from reduced model execution far outweigh the additional CPU scheduling cost. In relative terms, scheduling overhead accounts for roughly ~6% of total request time under vLLM and increases to about ~9% under
+CacheWise
+. However the absolute reduction in model execution time (~4.7 s for
+N=40
+) is responsible for the significant gains in end-to-end performance.
+
+7.
+Related Work
+
+Serving systems for emerging LLM applications:
+Our work differs from recent works, e.g., Pie
+(
+14
+)
+, Autellix
+(
+22
+)
+, which create novel programming abstractions for agentic workloads.
+These systems tightly couple the agent implementation with the serving system and cannot work with existing widely deployed coding agents, while
+CacheWise
+can because it only modifies the serving system for these workload-specific characteristics.
+
+Session-aware vs. request-aware scheduling:
+
+Existing serving systems including vLLM
+(
+20
+)
+and
+InferCept
+(
+1
+)
+, typically schedule each request independently rather than optimizing for session completion times. Although SGLang
+(
+45
+)
+introduces prefix-aware scheduling to reuse KVCache across requests that share a common system prompt, their work primarily targets sharing across independent requests, while our work demonstrates this is especially valuable for long-running, closed-loop coding agent sessions.
+
+Predictive vs. recency-based eviction:
+
+vLLM, SGLang, and Mooncake
+(
+28
+)
+all rely on LRU eviction, which uses only past access
+recency and is oblivious to future reuse.
+InferCept
+(
+1
+)
+takes a step toward
+prediction by estimating tool call durations from a
+session-local moving average; however, this estimate is agnostic to tool type and arguments, limiting its accuracy for coding agent workloads where tool durations vary by orders of magnitude across tool types §
+5
+). InfiniGen
+(
+21
+)
+dynamically manages KVCache with speculative offloading but does not predict reuse from session metadata. Although predictive caching has been studied theoretically previously
+(
+23
+)
+,
+CacheWise
+applies this practically for KVCache management.
+
+KVCache tiered storage and memory management:
+
+LMCache
+(
+9
+)
+and Mooncake
+(
+28
+)
+
+address memory pressure by offloading evicted KVCache blocks to lower storage tiers (DRAM, SSD, or remote memory). NEO
+(
+17
+)
+offloads part of the attention computation and KVCache state to the CPU to increase effective batch size.
+Jenga
+(
+43
+)
+introduces a two-level memory allocator for heterogeneous KVCache embeddings, addressing memory fragmentation through LCM-based allocation.
+EvicPress
+(
+12
+)
+jointly applies lossy compression and adaptive eviction across storage tiers. Tiered storage is complementary to
+CacheWise
+’s approach. By reducing the frequency of evictions,
+CacheWise
+directly reduces the volume of data that must be moved across tiers, lowering the bandwidth and latency overhead that tiered systems must absorb.
+
+8.
+Conclusion
+
+Coding agents are emerging as an important class of LLM workloads, but they differ fundamentally from traditional chat workloads. Through a study of CATraces, our collected dataset of real-world coding-assistant sessions, we show that coding agents execute as long-running closed loops, generate predominantly tool-initiated turns, and repeatedly reuse large, growing prefixes. These properties make serving efficiency depend not only on per-request execution, but on how well the system preserves and reuses KVCache across turns within a session.
+
+We present
+CacheWise
+, a KVCache management layer for coding-agent workloads.
+CacheWise
+combines prefix-aware scheduling, which prioritizes requests that can reuse resident KVCache, with predictive eviction, which retains prefixes expected to be reused soon based on tool execution metadata. Implemented in vLLM and evaluated on real coding-agent traces,
+CacheWise
+reduces KVCache evictions by up to
+2
+–
+2.6\times
+and improves end-to-end session completion time by up to ~
+3.5\times
+.
+

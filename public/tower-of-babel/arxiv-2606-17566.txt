@@ -1,0 +1,1356 @@
+AoiZora: Topology-Aware Auto-Parallel Optimization for Inference of Diffusion Transformers
+Kaijian Wang Yuanyuan Xu Fanjiang Ye Ye Cao Jingwei Zuo, T.S. Eugene Ng Yarong Mu Yuke Wang, [3pt] Rice University
+
+Abstract
+Video diffusion has quickly grown into a key generative serving workload, yet producing each clip demands many denoising iterations over large spatio-temporal latents, which puts low-latency inference out of reach on a single device. A denoising step is therefore typically distributed across multiple accelerators, and TPU sub-slices have become an attractive and practical fabric for doing so. Current auto-parallel systems, however, search almost exclusively over logical device meshes and disregard how a chosen sharding is actually laid out on the physical TPU interconnect—an oversight that leaves large, topology-dependent performance on the table. We address this gap with AoiZora , a compiler-mediated topology planner built for low-latency video diffusion inference on TPU sub-slices. Its guiding principle is to reconnect logical sharding with physical placement by drawing on different points in the compilation flow: AoiZora first eliminates weak sharding candidates from inexpensive pre-compilation IRs, then compiles only the ones that survive and orders their physical placements using compiled HLO together with a topology-aware communication model. The winning plan is realized along the ordinary compiler path, leaving model code, compiler lowering, collective kernels, and network routing entirely intact. On TPU v5e sub-slices, AoiZora reduces Wan 2.1 one-step denoising latency by as much as 1.42 × 1.42\times relative to existing solutions.
+
+
+
+1
+Introduction
+
+Over the recent years, video generation has rapidly become a central workload in modern generative AI, enabling applications across content creation, simulation, embodied AI, and interactive media
+Yang et al. 2024
+,
+Qin et al. 2024
+,
+Bruce et al. 2024
+. Recent open video-generation systems, such as CogVideoX
+Yang et al. 2025
+, HunyuanVideo
+Kong et al. 2025
+, and Wan
+Wan et al. 2025
+, demonstrate that diffusion-transformer-based architectures can synthesize high-resolution and temporally coherent videos. However, the inference performance of video diffusion models is often unsatisfactory. Compared with earlier generative workloads such as autoregressive language modeling or image diffusion, video diffusion introduces a large temporal dimension into the latent representation. A single request may contain tens to hundreds of thousands of spatio-temporal tokens, and the denoising network is repeatedly invoked for many diffusion steps. As a result, inference cost is determined not only by model parameter count, but also by large activation tensors, repeated transformer execution, and high-volume collective communication
+Kong et al. 2025
+,
+Wan et al. 2025
+,
+Yang et al. 2025
+,
+Chen et al. 2023
+,
+Ma et al. 2025
+.
+
+These characteristics make distributed inference necessary for practical video diffusion serving. In LLM serving, parallelism is often motivated by model size and KV-cache capacity
+Shoeybi et al. 2020
+,
+Aminabadi et al. 2022
+,
+Kwon et al. 2023
+. In video diffusion, parallelism must also distribute the per-request activation footprint and the repeated DiT computation over long spatio-temporal token sequences
+Yang et al. 2026
+,
+Fang et al. 2024
+. Tensor parallelism, context/sequence parallelism, FSDP-style weight sharding, and their hybrids partition different workload axes and introduce different collective communication patterns. Therefore, the key systems challenge is not only how to shard video diffusion computation, but also how to map the resulting logical communication groups onto the physical accelerator topology.
+
+This work focuses on TPU sub-slices, a practical deployment target for multi-accelerator video diffusion serving. Google TPUs provide high-bandwidth inter-chip interconnects and cost-efficient large-scale serving
+Jouppi et al. 2023
+,
+Google Team 2026
+. In practice, however, serving jobs are commonly allocated a slice or sub-slice rather than an entire TPU pod. Such an allocation gives the workload a connected physical device subgraph whose links are not uniformly interchangeable. Cloud allocations often expose regular rectangular sub-slices, which we evaluate in this paper, but the underlying issue is more general: a logical parallel plan must eventually be placed onto a physical topology, and its latency depends on the concrete links used by the compiler-generated collectives.
+
+We observe that this topology effect is substantial for video diffusion inference. Existing auto-parallel systems usually optimize over a logical device mesh with a placement-oblivious communication model. This abstraction can be acceptable on systems with dense intra-node fabrics, where the logical mesh closely approximates the physical fabric. It is less suitable for TPU sub-slices, where the inter-chip interconnect is a nearest-neighbor mesh. On such topologies, collective traffic traverses local links, and independent collectives may contend for the same physical link. Moreover, current JAX/XLA workflows
+Bradbury et al. 2018
+,
+OpenXLA Project 2024a
+bind logical mesh ranks to physical devices when the mesh is initialized, before backend compilation exposes the workload’s concrete collective graph. Thus, two executions can use the same model, the same logical sharding, and the same logical collective volume, yet achieve different latency because one physical placement concentrates traffic on shared links while another distributes it more evenly. Our measurements on Wan 2.1 show that this placement effect alone causes up to 16.6% end-to-end latency of one DiT denoising step variation on a single v5e-8 slice, mainly due to shared-link contention rather than hop count alone.
+
+A natural solution is to make topology awareness part of the parallelization process. However, doing so is non-trivial. Prior topology-aware systems typically operate at the network, routing, runtime scheduling, or job-placement layer.
+Cho et al. 2019
+,
+Won et al. 2024
+,
+Shah et al. 2023
+,
+Wang et al. 2023
+These approaches can model physical topology, but they often require low-level system support or lack the model-specific collective graph produced by ML compilers. Conversely, auto-parallel compilers understand tensor semantics, sharding constraints, and program structure, but their early cost models are usually too abstract to reason about concrete backend collectives and device groups. This creates a gap between logical sharding search and physical placement optimization, raising where topology awareness should live in the stack.
+
+Our key insight is that
+topology-aware planning should be placed at the compiler-planning boundary, the layer that sees both tensor semantics and the backend collective graph.
+Video diffusion inference is especially suitable for this design because a denoising step has static tensor shapes and a largely fixed computation graph across diffusion steps. Therefore, sharding and placement decisions can be planned once and reused across many steps and same-shape requests. At the same time, the compiler workflow provides multiple views of the workload with different cost and fidelity. Pre-compilation representations such as StableHLO
+OpenXLA Project 2024b
+and Shardy
+OpenXLA Project 2024c
+are cheap enough to evaluate expose tensor shapes, propagated shardings, and resharding hazards. Fully compiled HLO is more expensive to obtain, but it exposes concrete collectives, payloads, dependencies, and device groups that are necessary for accurate physical placement ranking.
+
+Inspired by these observations, we present
+AoiZora
+, a compiler-mediated topology planner for video diffusion inference on TPU sub-slices. AoiZora is built around three design principles.
+First
+, topology-aware planning should be guided by the actual communication behavior of video diffusion workloads, since the same logical sharding can lead to different latency once mapped onto different physical TPU placements.
+
+Second
+, the planner should exploit the compiler-stage cost/fidelity asymmetry: early compiler IRs are inexpensive and useful for pruning inefficient logical shardings, while compiled HLO provides the concrete collective graph needed to reason about physical placement and shared-link contention.
+
+Third
+, the selected plan should remain compatible with existing serving stacks. AoiZora therefore separates logical sharding pruning from compiled-HLO-based placement ranking, then applies the selected sharding and placement through the standard JAX/XLA execution path without modifying model code, compiler lowering, collective implementations, or network routing. This design bridges logical parallelism and physical TPU topology while keeping topology awareness transparent to model developers and the lower-level communication substrate.
+
+In short, this paper makes the following contributions:
+
+•
+
+We characterize video diffusion inference on TPU sub-slices and show that physical placement of the same logical sharding can change end-to-end latency by up to 16.6%, with the gap driven primarily by shared-link contention.
+
+•
+
+We identify a compiler-stage cost/fidelity asymmetry that makes topology-aware planning practical: early compiler representations are cheap and useful for logical-sharding pruning, while compiled HLO exposes the concrete collective graph required for physical placement ranking.
+
+•
+
+We design AoiZora, a compiler-mediated topology planner that separates logical sharding pruning from compiled-HLO placement ranking and applies the selected plan through the standard JAX/XLA execution path without changing model code, compiler lowering, collective implementations, or network routing.
+
+•
+
+We evaluate AoiZora on Wan 2.1 as a representative dense video DiT across diverse TPU v5e sub-slices and video shapes, showing lower denoising latency than existing solutions.
+
+2
+Background and Preliminaries
+
+2.1
+Inference in Video Diffusion Models
+
+Modern video diffusion inference follows a three-stage pipeline consisting of a text encoder
+Raffel et al. 2020
+, an iterative denoiser, and a variational autoencoder (VAE) decoder
+Kingma and Welling 2014
+,
+Rombach et al. 2022
+. The text encoder maps the prompt into conditioning features, the denoiser repeatedly refines a spatio-temporal latent for
+T
+diffusion steps
+Ho et al. 2020
+,
+Song et al. 2021
+, and the VAE decoder reconstructs the final latent into pixel space. Figure
+1
+illustrates this structure: the denoising loop repeatedly invokes a diffusion transformer (DiT) over latent video tokens, while the text encoder and VAE decoder sit outside the repeated loop. These stages have different performance roles. The text encoder and VAE decoder run once per request, whereas the DiT denoiser runs at every diffusion step and therefore dominates latency; the bottom panel shows that, in our representative Wan 2.1 720p generation, denoising accounts for
+97.7\%
+of end-to-end latency while VAE decoding accounts for only
+0.70\%
+. Although VAE decoding can be memory-sensitive because it processes the full spatio-temporal latent, tiled decoding bounds its peak memory in common serving pipelines, so the denoiser is the main optimization target in this paper. DiT denoisers use repeated homogeneous transformer blocks with static tensor shapes
+Peebles and Xie 2023
+, exposing a regular computation graph suitable for compile-time parallelization.
+
+Video diffusion transformer serving commonly combines several forms of parallelism over the denoiser. Tensor parallelism partitions the large matrix multiplications and attention projections inside each DiT block, then uses collectives to combine partial results. Fully sharded data parallelism (FSDP) shards model weights across devices and materializes them around layer execution; although this is often counterintuitive for inference because it adds weight communication, DiT denoisers perform large GEMMs over long spatio-temporal token sequences, making the communication easier to amortize. Context parallelism partitions the spatio-temporal token axis to reduce per-device activation and attention cost. Classifier-free guidance (CFG) parallelism evaluates conditional and unconditional guidance branches on different devices. We treat these choices as workload-level parallel axes that must be mapped onto a logical device mesh.
+
+(a) Video diffusion inference
+
+(b) Latency breakdown
+
+Figure 1:
+Video diffusion inference structure and latency concentration. (a) The denoising loop repeatedly invokes a DiT denoiser over latent video tokens. (b) End-to-end latency breakdown of a representative Wan 2.1 720p generation.
+
+2.2
+Device Placement on TPU Sub-Slices
+
+A Tensor Processing Unit (TPU) pod consists of hundreds to thousands of TPU chips connected by a dedicated inter-chip interconnect (ICI) arranged as a multi-dimensional torus
+Jouppi et al. 2023
+. Each chip communicates directly with its immediate neighbors, and boundary links wrap around to form closed loops along each dimension. In practice, large-scale workloads such as video diffusion are rarely allocated an entire pod; instead, they are assigned to a
+sub-slice
+, a contiguous rectangular subset of chips sized to the workload. While a sub-slice preserves local nearest-neighbor connectivity, it loses wrap-around links along dimensions that are not fully allocated, effectively transforming the topology into a 2D or 3D mesh
+Jouppi et al. 2023
+,
+Google Team 2026
+. On such sub-slices, collective latency depends on the physical paths used by communication groups and on the load placed on shared ICI links. Distributed tensor programs, by contrast, are usually expressed over a logical device mesh. A sharding specification maps tensor dimensions, or higher-level workload axes such as batch, sequence, or attention heads, onto dimensions of this logical mesh. The logical mesh describes which ranks form data-parallel, tensor-parallel, or sequence-parallel groups, but abstracts away the physical TPU chip coordinates. A physical placement maps logical ranks to chip coordinates in the TPU sub-slice. In current JAX/XLA workflows, this logical-to-physical assignment is typically fixed when the device mesh is initialized, before backend lowering exposes the model’s collective graph and communication costs. Consequently, the placement is usually determined by default device order, row-major convention, or manual assignment, rather than by compiler heuristics derived from model communication. This separation is convenient for programming, but it hides an important performance variable on TPU meshes: the same logical sharding can induce different physical paths, per-link traffic, and hotspot contention under different placements. This contrast between the logical device mesh and the physical TPU mesh is the source of the placement-sensitive behavior studied in the next section.
+
+2.3
+The JAX/XLA Compilation Flow
+
+JAX programs are compiled through a multi-level pipeline before execution on TPUs. A Python function is first traced into Jaxpr and lowered into StableHLO
+OpenXLA Project 2024b
+, a hardware-independent tensor IR that represents high-level tensor operators and sharding constraints. The sharded program is then processed by an SPMD partitioning layer; modern JAX/XLA
+Bradbury et al. 2018
+,
+OpenXLA Project 2024a
+routes this role through Shardy/SDY, the MLIR-based successor path to earlier GSPMD-style propagation
+Xu et al. 2021
+. This layer infers tensor shardings across the StableHLO graph and can materialize explicit resharding boundaries as SDY collective operations. The resulting pre-compilation IR is cheap to obtain and provides a sharding-annotated view of the program, but it does not reliably predict the final backend computation graph. Full XLA compilation performs SPMD lowering and many HLO/backend optimizations, including key compiler optimizations and backend-specific code generation decisions. These passes can substantially transform computation, layout, kernel selection, and communication. Thus, pre-compilation IRs are useful for low-cost sharding analysis, while the fully compiled representation is needed for accurate communication, placement, and runtime cost modeling.
+In sum, these components define the execution setting studied in this paper: a static video diffusion computation graph, a topology-sensitive TPU sub-slice, a logical sharding abstraction separated from physical placement, and a compiler pipeline that exposes different levels of execution information at different costs.
+
+3
+Motivating Observations
+
+Serving video diffusion inference on TPU mesh topologies exposes a two-level planning challenge. Finding an effective logical sharding strategy is already difficult because video diffusion models combine several workload-level parallel axes with nontrivial computation, memory, and communication tradeoffs. Existing auto-parallel workflows can express these logical shardings, but they typically bind the logical mesh to physical devices before the final collective traffic is known. This section motivates AoiZora through three observations that align with the planner design in §
+4
+: placement changes the cost of an otherwise identical logical sharding, exhaustive compiled-level placement search is too expensive, and pre-compilation compiler signals are cheap enough to prune logical shardings before paying for full compilation.
+
+Figure 2:
+Per-step denoising latency of Wan 2.1 14B under a fixed
+logical sharding strategy across all distinct placements of the
+2
+\times
+2
+\times
+2 logical mesh on the 2
+\times
+4 physical mesh.
+
+Observation 1: Communication Cost Depends on Placement.
+
+A logical sharding determines which ranks participate in each parallel group, but it does not determine how those ranks occupy physical TPU links. End-to-end latency therefore depends not only on
+how
+tensors are partitioned, but also on
+where
+the corresponding logical devices are placed. In current JAX/XLA-style workflows, users create a logical device mesh before execution, fixing the correspondence between logical ranks and physical TPU devices. Because backend lowering materializes the concrete collective graph only later, this placement is usually chosen by default device order, row-major convention, or manual assignment without model-specific communication guidance.
+
+To quantify this effect, we fix a representative sharding strategy for Wan 2.1 480p 81-frame video inference on v5e-8: 2-rank sequence parallelism, 2-rank tensor parallelism, and 2-rank data parallelism. We then enumerate all distinct placements of the 2
+\times
+2
+\times
+2 logical mesh onto the 2
+\times
+4 physical mesh up to symmetry, yielding 6 candidates. As shown in Figure
+2
+, the best and worst placements differ by 16.6% in per- denoise step latency while executing the identical logical computation with the identical tensor shapes and logical communication volume.
+
+The gap comes from how the same collective traffic is embedded onto physical ICI links. A favorable placement keeps high-volume collective groups compact or routes them over mostly disjoint links, while an unfavorable placement maps independent groups onto overlapping paths. We validate this mechanism with a controlled ppermute microbenchmark on the same 2
+\times
+4 v5e-8 slice, summarized in Figure
+3
+. Isolated routes across different axes and hop counts achieve similar bandwidth, around 23 GB/s, but concurrent transfers degrade only when their routes share physical links, dropping to 15.2 GB/s in our measurement. Thus, the dominant issue is shared-link contention rather than hop count alone.
+
+Figure 3:
+Bandwidth under isolated and concurrent permute routes on a 2
+\times
+4 v5e-8 slice.
+
+Insight.
+Placement is not merely a mesh-ordering convention; it is part of the parallel execution plan. This observation motivates making physical placement a first-class output of AoiZora and later ranking placements with topology-aware collective information in §
+4.4
+.
+
+Observation 2: Placement Search at the Compiled Level Does Not Scale.
+
+Observation 1 shows that placement must be scored with enough fidelity to see real collective traffic. For a fixed logical sharding, placement quality depends on concrete collective types, payload sizes, device groups, and dependencies: these details determine which physical links are loaded and where contention appears. They are not reliably available from early sharding-annotated IRs because full backend compilation can rewrite computation, choose layouts, and materialize final collectives and replica groups. Faithful placement evaluation therefore requires either compiling the candidate to expose the backend collective graph or measuring the candidate directly on hardware.
+
+The problem is that this high-fidelity path cannot be applied to every sharding-placement pair. Logical sharding search already grows with the number of compatible workload-axis assignments: if
+\mathcal{M}
+is the set of logical mesh axes and
+\mathcal{A}_{m}
+is the set of workload axes that can legally use mesh axis
+m
+, then
+|\mathcal{S}|\leq\prod_{m\in\mathcal{M}}(|\mathcal{A}_{m}|+1)
+. Placement adds another dimension. If the logical mesh uses
+n
+ranks and the allocated TPU sub-slice contains
+N
+chips, the labeled placement space is at most
+|\mathcal{P}|\leq N!/(N-n)!
+, or
+n!
+when the mesh uses the full sub-slice. Even after symmetry and legality pruning, a direct strategy must reason about
+|\mathcal{S}|\cdot|\mathcal{P}|
+pairs and pay roughly
+|\mathcal{S}|\cdot T_{\mathrm{compile}}+|\mathcal{S}|\cdot|\mathcal{P}|\cdot T_{\mathrm{place}}
+. In our profiling, full XLA compilation takes
+O(1)
+seconds per sharding candidate, and real measurements are more expensive because every pair must execute on TPU hardware.
+
+Insight.
+Compiled-level topology information is necessary for final placement decisions, but too expensive for broad search. This observation motivates the split in §
+4.1
+: search many logical shardings cheaply, then spend compiled-HLO placement ranking only on a small survivor set.
+
+Observation 3: Pre-Compilation Signals Make Pruning Cheap.
+
+The JAX/XLA compiler pipeline exposes different representations at different costs. Early stages such as JAX lowering, StableHLO generation, and Shardy propagation/partitioning are much cheaper than full backend compilation because they avoid hardware-specific optimization, layout assignment, code generation, and collective scheduling. These stages do not expose the final backend collective graph or placement-dependent device groups, but they do expose tensor shapes, data types, producer-consumer layout mismatches, operator semantics, and sharding annotations.
+
+Figure 4:
+Compilation-time comparison between pre-compilation analysis and full XLA compilation.
+
+These signals are useful because many bad shardings fail for reasons that are visible before topology is considered. Explicit layout conversions indicate resharding communication, sharded contraction or reduction dimensions imply collective-like communication even before the compiler materializes final all-reduce, all-gather, reduce-scatter, or all-to-all operations, and memory-infeasible shardings can be removed from local tensor sizes. Such signals are not enough to predict final latency exactly, but they are enough to reject shardings with clearly poor logical communication or memory behavior before paying for full compilation. Figure
+4
+shows this cost asymmetry: JAX lowering followed by Shardy propagation takes only
+O(0.1)
+seconds or less, substantially cheaper than full XLA compilation.
+
+Insight.
+The compiler pipeline provides a natural fidelity boundary: pre-compilation IRs are sufficient for high-recall logical-sharding pruning, while compiled HLO should be reserved for topology-aware ranking of the survivors. This observation corresponds directly to AoiZora’s Pre-Compilation Pruning stage in §
+4.3
+and Post-Compilation Topology Ranking stage in §
+4.4
+.
+
+4
+AoiZora
+
+4.1
+Planning Aware of Compiler Fidelity
+
+Motivated by the observations in §
+3
+, we present AoiZora, a compiler-mediated planner for topology-aware video diffusion inference on TPU sub-slices. Given a model family, a fixed request shape, and an allocated TPU mesh, AoiZora chooses two execution decisions: a logical sharding strategy, expressed as workload-axis rules, and a physical axis order, which determines how the logical mesh axes are embedded onto TPU devices. The normal JAX/XLA serving path then compiles and runs the model under this selected configuration. AoiZora does not introduce a new collective implementation, modify XLA lowering, or change the model code; it supplies better sharding and placement decisions to the existing compiler stack.
+
+The key idea is
+compiler-fidelity-aware search
+. The compiler exposes different information at different costs. StableHLO/Shardy representations are cheap to obtain for many sharding candidates and already expose tensor shapes, propagated shardings, explicit resharding boundaries, and many large communication hazards. They do not, however, expose the final collective graph needed for topology modeling: concrete collective instructions, payloads, replica groups, source-target pairs, async collective metadata, backend layout, and dependency structure are finalized only after XLA compilation. Fully compiled HLO therefore has the right fidelity for physical placement ranking, but compiling the entire sharding search space is infeasible.
+
+AoiZora separates the two decisions at this fidelity boundary. The first stage searches broadly over logical sharding strategies and prunes them using a cheap pre-compilation prediction graph. The second stage compiles only the survivor set, enumerates distinct physical axis orders, and ranks each sharding-placement pair with a topology-aware model built from compiled HLO. This split is not merely an engineering shortcut: logical sharding quality is largely determined by memory footprint, tensor partitioning, and dominant resharding traffic that are visible before full compilation, while physical placement quality depends on the backend collective groups that are not available until after compilation.
+
+The offline design matches video diffusion serving. A denoising request has static tensor shapes, and the same DiT transformer structure is executed repeatedly across denoising steps and same-shape requests. Thus, AoiZora can spend planning time before serving begins, cache the selected plan for the model shape, compiler configuration, and TPU allocation, and amortize that planning cost over many executions. Online inference consumes only the selected axis rules and physical axis order.
+
+Figure 5:
+AoiZora planning pipeline.
+
+Figure
+5
+summarizes the AoiZora planning pipeline. AoiZora first uses cheap StableHLO/Shardy analysis to prune logical shardings. For each sharding candidate, it lowers a reduced full-path DiT proxy through StableHLO and Shardy, augments the compiler graph with implicit communication, and scores it with a placement-oblivious throughput bound. This stage keeps only a small top-
+K
+survivor set. AoiZora then compiles the surviving candidates, enumerates their physical placements, parses the optimized HLO, reconstructs the physical collective geometry, and selects the lowest-ranked sharding-placement pair using compiled-HLO topology analysis.
+
+4.2
+Generating Workload-Axis Candidates
+
+AoiZora searches over workload-level axes rather than choosing an independent sharding for every tensor dimension or every operator. This restriction is important for both tractability and compiler compatibility. DiT’s performance is dominated by a small set of axes: batch/data, video-token sequence, attention heads, hidden embedding dimension, and MLP expansion dimension. Once AoiZora chooses rules for these axes, Shardy propagates the induced tensor-level shardings through the StableHLO graph and inserts required resharding boundaries. The search therefore controls the parallelism choices that matter most, while leaving non-dominant tensor layouts to compiler propagation.
+
+A candidate
+s
+consists of a logical mesh configuration and a set of workload-axis rules. The logical mesh covers the parallel roles that dominate DiT inference, including data, context/sequence, and tensor-style partitioning. For every mesh configuration, AoiZora assigns the dominant DiT weight axes
+embed
+,
+mlp
+, and
+heads
+to feasible subsets of the present mesh axes. Activation rules are tied to the weight rules: sequence-like activations follow the context axis, and attention-head activations follow the head sharding.
+
+The candidate generator applies legality filters before invoking any compiler analysis. First, divisibility constraints require the product of selected mesh axes to divide the corresponding model dimension. For example, the head-sharding factor must divide the number of attention heads, and the embedding-sharding factor must divide the hidden size. Second, tensor-compatibility constraints prevent one physical tensor from using the same mesh axis on two dimensions. Third, a memory guard requires the dominant attention and MLP weight families to be sharded by at least a configurable factor if the device has special memory constraints. This filter removes candidates that are unlikely to fit or that leave the largest matrices replicated on each device.
+
+We canonicalize candidates by their induced tensor sharding signature. Different syntactic axis-rule assignments can represent the same tensor partitioning or differ only by inactive mesh axes. Deduplicating them before scoring prevents the planner from spending compilation budget on equivalent shardings. Conceptually, the search can be written as binary variables
+x_{a,m}
+indicating whether workload axis
+a
+is partitioned over mesh axis
+m
+, but the implementation enumerates only feasible axis subsets and canonical signatures.
+
+The memory filter used for pruning can be viewed as a conservative per-device footprint estimate,
+
+\widehat{M}(s)=\widehat{M}_{w}(s)+\widehat{M}_{act}(s)+\widehat{M}_{attn}(s)+\widehat{M}_{tmp}(s).
+
+The implementation does not rely on this estimate as a fine-grained latency predictor. Its role is to keep only structurally plausible candidates before the more informative compiler-derived pruning stage. The subsequent StableHLO/Shardy analysis still determines how much communication each candidate induces in the actual program graph.
+
+Table 1:
+Implicit communication added by the Pre-Compilation Stage pruning proxy. Collectives are abbreviated: AG (all-gather), RS (reduce-scatter), AR (all-reduce), A2A (all-to-all).
+
+Category
+
+Added primitive
+
+Cost
+
+Compiler-visible collective
+
+Parsed coll. or
+reshard
+
+B_{g}\cdot\phi_{\tau}(n)
+
+Producer-consumer reshard
+
+AG, RS, or A2A
+
+|T|\cdot\phi_{\tau}(n)
+
+Sharded contraction
+
+AR or RS
+
+|Y|\cdot\phi_{\tau}(n)
+
+Weight contraction gather
+
+AG
+
+|W|\cdot\phi_{\mathrm{ag}}(n)
+
+Sharded reduction
+
+AR or RS
+
+|Y|\cdot\phi_{\tau}(n)
+
+Opaque-kernel boundary
+
+Boundary reshard
+
+|T_{\mathrm{bdry}}|\cdot\phi_{\tau}(n)
+
+4.3
+High-Recall Pruning Before Compilation
+
+The pre-compilation stage answers a deliberately limited question: which logical shardings are worth compiling? For each feasible candidate
+s
+, AoiZora lowers a reduced full-path DiT proxy through JAX, StableHLO, and Shardy, then extracts a sharding-annotated graph
+G_{s}^{pre}
+. The proxy preserves the deployed model’s entry path, conditioning tensors, loop structure, activation shapes, and output path while capping denoiser depth, giving the compiler realistic boundary conditions without paying full compilation cost.
+
+The extracted graph contains compute nodes, tensor metadata, sharding annotations, explicit communications, and producer-consumer dependencies. Because early IR is not a complete communication graph, AoiZora adds synthetic
+implicit_comm
+nodes for sharding-induced movement such as incompatible producer-consumer shardings, partial-sum aggregation, sharded reductions, and opaque-kernel boundaries. Table
+1
+summarizes these augmentation rules, which let the pre-compilation score account for communication that backend compilation would later materialize.
+
+In Table
+1
+,
+T
+is the tensor being reshaped,
+W
+is the weight operand,
+Y
+is the operator output,
+n
+is the logical group size, and
+\phi_{\tau}
+is the collective-family volume factor. These estimates know tensor volume and logical group size, but not final replica groups or physical routes, so the cost model is placement-oblivious by construction. A compute node
+v
+is charged by per-device work,
+
+C^{pre}_{comp}(v)=\frac{\mathrm{FLOPs}(v,s)}{\rho_{\mathrm{dev}}},
+
+where
+\rho_{\mathrm{dev}}
+is the per-device compute throughput. A communication node of collective family
+\tau
+is charged by logical payload size and logical group size,
+
+C^{pre}_{comm}(v)=\alpha_{\tau}+\beta_{\tau}\,\phi_{\tau}(n_{v})\,B_{v}.
+
+Here
+B_{v}
+is the payload and
+\phi_{\tau}
+captures family-specific logical traffic, e.g., all-reduce as reduce-scatter plus all-gather, all-gather and reduce-scatter as
+(n_{v}-1)/n_{v}
+data movement, and permute or broadcast-like movement as point-to-point payload. Physical link embedding and shared-link contention are intentionally deferred until placement is known.
+
+AoiZora scores each candidate with a steady-state throughput bound rather than a critical path. The deployed denoiser is a deep scan of identical DiT blocks, so blocks pipeline and steady-state per-step latency is throughput-bound: it is set by the busiest resource e.g. compute or communication, rather than their serial sum along the dependency chain. Compute and overlappable communication run on separate engines and hide under one another. The one collective pipelining cannot hide is the tensor-parallel all-reduce: each block’s residual add consumes the full reduced output, a hard barrier on the loop-carried recurrence. The score is therefore
+
+Q_{1}(s)=\max\big(C_{\mathrm{comp}}(s),\,C_{\mathrm{comm}}(s)-C_{\mathrm{ar}}(s)\big)+C_{\mathrm{ar}}(s),
+
+where
+C_{\mathrm{comp}}
+,
+C_{\mathrm{comm}}
+sum the per-node compute and communication costs above and
+C_{\mathrm{ar}}\subseteq C_{\mathrm{comm}}
+is the all-reduce subset. The collective type is read directly from the inferred DAG; the split introduces no hand-tuned coefficient, prefetch fraction, or per-workload term.
+
+4.4
+Topology Ranking from Compiled HLO
+
+Figure 6:
+Case study for the post-compilation stage. The same logical sharding compiled under two physical placements produces the same surrounding HLO and collective payload, but different
+replica_groups
+.
+
+The post-compilation stage evaluates the placement-sensitive decision after the compiler has materialized concrete communication. Figure
+6
+illustrates why this stage is needed: the same logical sharding compiles to an identical 64.7 MB all-reduce on the tensor axis under two physical placements, yet the resulting cost differs by roughly
+2\times
+, about 9.66 ms for the compact placement A versus 19.32 ms for placement B, because B spans twice as many serial ICI links and contends on shared links. This gap is invisible before compilation, since both placements share the same payload and surrounding HLO. For each surviving logical sharding
+s
+, AoiZora enumerates physical axis orders that map active logical axes onto the TPU sub-slice. An axis order induces a JAX mesh construction and therefore determines which logical ranks become neighboring physical devices. Placements that are symmetric or have the same contention signature for the active context and tensor groups are deduplicated before compilation.
+
+AoiZora compiles a reduced full-path DiT proxy for this stage. A single transformer block misses inter-block communication and overlap opportunities, while the full denoiser is too expensive to compile for every survivor-placement pair. The proxy therefore keeps the entry path, loop structure, and minimum two-block body needed to expose one inter-block boundary; AoiZora then scales the repeated-block body cost to the full denoising step.
+
+For each remaining placement
+p
+, AoiZora compiles the proxy with XLA and parses the optimized HLO into a graph
+G_{s,p}^{comp}
+. The parser keeps only attributes needed for physical ranking: dependencies, instruction classes, tensor sizes, and collective type, payload, group, and async metadata. These are the placement-relevant details unavailable in early IR. The score is a rank objective rather than an exact latency prediction:
+
+Q_{2}(s,p)=\mathrm{RS}_{phys}\!\left(G_{s,p}^{comp},C^{phys}_{s,p}\right)+R_{cont}\!\left(G_{s,p}^{comp},p\right).
+
+The compute part of
+C^{phys}
+estimates HLO compute, fusion, and layout work from FLOPs, bytes, or compiler cycle estimates. The communication part uses the compiled collective geometry.
+
+Given a collective
+g
+, compiled HLO provides a replica group
+R_{g}
+or source-target pairs. AoiZora maps the participating device ids to TPU coordinates, reconstructs the physical dimensions and coordinate spans used by the group, and maps collective-permute pairs onto modeled physical routes. The communication cost is then
+
+C^{phys}_{comm}(g,p)=\alpha_{\tau(g)}+\frac{1}{b_{\mathrm{ICI}}}\Psi_{\tau(g)}(B_{g},R_{g},p,P),
+
+where
+B_{g}
+is the compiled payload,
+b_{\mathrm{ICI}}
+is the per-link ICI bandwidth, and
+\Psi
+expands the collective into a topology-aware byte volume.
+
+The ranker instantiates
+\Psi
+from the topology descriptor rather than workload-specific constants. For TPU sub-slices, all-gather and reduce-scatter are modeled as per-dimension ring or line exchanges over the compiled replica-group embedding. Contiguous groups pay the natural coordinate span, strided placements pay larger spans, multi-dimensional groups can use multiple ICI ports, all-reduce is charged as reduce-scatter plus all-gather, and permute or broadcast-like collectives are charged over their modeled routes.
+
+The physical resource schedule assigns one engine per physical ICI dimension: collectives sharing a physical dimension serialize, independent dimensions can overlap, and communication can overlap compute when dependencies allow. AoiZora also accounts for compiler-exposed overlap by ignoring non-executable helper-computation bodies while still costing real async collectives and prefetchable weight-like communication.
+
+The residual term
+R_{cont}
+captures placement effects that the dimension-level schedule cannot represent, such as sibling activation all-gathers contending on the same physical link. AoiZora adds a penalty for the modeled extra link load, distinguishing placements that keep collective groups compact from those that route them through shared links.
+
+4.5
+The Complete Two-Stage Planner
+
+Algorithm
+1
+summarizes the full planner. The first loop enumerates legal DiT shardings and scores each through the inexpensive compiler path, using
+Q_{1}
+only as a filter to keep the top-
+K
+logical survivors. The second loop spends full XLA compilation on those survivors under distinct physical axis orders, reconstructs the compiled collective graph, ranks sharding-placement pairs with
+Q_{2}
+, and caches the lowest-scoring plan for the static serving configuration.
+
+Input:
+
+Model family
+M
+; workload shape
+\theta
+; TPU mesh
+P
+; HBM budget
+B_{\mathrm{HBM}}
+; survivor budget
+K
+
+Output:
+
+Logical sharding rules
+s^{\star}
+and physical placement
+p^{\star}
+
+1
+
+\mathcal{S}\leftarrow\textsc{EnumerateDiTShardings}(M,\theta,P)
+;
+
+2
+
+R\leftarrow\emptyset
+;
+
+3
+
+foreach
+
+s\in\mathcal{S}
+
+do
+
+4
+
+if
+
+Illegal
+(s,\theta)
+
+or
+
+\widehat{M}(s)>B_{\mathrm{HBM}}
+
+then
+
+continue
+;
+
+5
+
+H_{s}\leftarrow\textsc{LowerDiTProxy}(M,\theta,s)
+;
+
+//
+JAX/StableHLO
+
+\widetilde{H}_{s}\leftarrow\textsc{PropagateShardings}(H_{s})
+;
+
+//
+Shardy
+
+G_{s}^{pre}\leftarrow\textsc{BuildPredictionDAG}(\widetilde{H}_{s})
+;
+
+6
+
+G_{s}^{pre}\leftarrow\textsc{InsertImplicitComms}(G_{s}^{pre})
+;
+
+7
+
+q_{s}\leftarrow Q_{1}(s)
+;
+
+8
+
+R\leftarrow R\cup\{(s,q_{s})\}
+;
+
+9
+
+\mathcal{S}_{K}\leftarrow\textsc{TopK}(R,K)
+;
+
+10
+
+11
+
+best\leftarrow\infty
+;
+
+12
+
+foreach
+
+s\in\mathcal{S}_{K}
+
+do
+
+13
+
+\mathcal{P}_{s}\leftarrow\textsc{DistinctAxisOrders}(s,P)
+;
+
+14
+
+foreach
+
+p\in\mathcal{P}_{s}
+
+do
+
+15
+
+H_{s,p}^{comp}\leftarrow\textsc{CompileDiTProxy}(M,\theta,s,p)
+;
+
+16
+
+G_{s,p}^{comp}\leftarrow\textsc{ParseCompiledHLO}(H_{s,p}^{comp})
+;
+
+17
+
+q_{s,p}\leftarrow Q_{2}(s,p)
+;
+
+18
+
+if
+
+q_{s,p}<best
+
+then
+
+19
+
+best\leftarrow q_{s,p}
+;
+
+20
+
+(s^{\star},p^{\star})\leftarrow(s,p)
+;
+
+21
+
+return
+
+s^{\star},p^{\star}
+;
+
+22
+
+Algorithm 1
+
+AoiZora Planning
+
+This decomposition makes compiler-level topology awareness practical without changing model code, XLA lowering, routing policy, or collective libraries. AoiZora performs topology-aware selection offline, then hands the chosen sharding and placement back to the standard serving path.
+
+5
+System Implementation
+
+We implement AoiZora as a Python package that wraps the normal video generation path rather than replacing it. The package exposes a small runtime surface: users build a video generation configuration with
+aoizora.build_config
+, decorate the serving function with
+@aoizora.auto_shard
+, and optionally call
+aoizora.apply_strategy_to_config
+when constructing a MaxDiffusion-compatible configuration. On the first invocation for a static request shape, the decorator resolves a sharding-placement strategy, enters the selected JAX mesh and sharding strategy, and then calls the original model code. Subsequent invocations with the same model, shape, mesh, and planner settings reuse the selected strategy. The implementation therefore keeps AoiZora outside the model definition, XLA lowering rules, and collective implementation.
+
+Listing
+1
+shows the intended integration pattern. The user keeps the model-specific generation routine unchanged and lets AoiZora attach the selected strategy through the serving configuration. The planner realizes the two-stage search of §
+4
+from a static workload descriptor and a TPU topology descriptor. The pre-compilation stage (§
+4.2
+, §
+4.3
+) applies all legality and canonicalization filters before any compiler invocation and runs entirely on JAX/StableHLO/Shardy IRs and abstract shapes: it lowers each candidate, builds the implicit-communication-augmented prediction graph, and scores it without ever executing the model or invoking backend compilation. The post-compilation stage (§
+4.4
+) compiles only the survivors, realizes physical placements as JAX mesh axis orders, and feeds the selected sharding-placement plan into the first-invocation cache described above, so serving reuses it while the stock JAX/XLA compiler and runtime perform final compilation and execution.
+
+Listing 1:
+User-facing AoiZora integration for a video generation entry point.
+
+⬇
+
+1
+
+import
+
+aoizora
+
+2
+
+from
+
+maxdiffusion
+.
+generate_wan
+
+import
+
+run
+
+3
+
+4
+
+#
+
+Keep
+
+model-specific
+
+generation
+
+unchanged.
+
+5
+
+@aoizora
+.
+auto_shard
+()
+
+6
+
+def
+
+generate_video
+(
+config
+):
+
+7
+
+#
+
+Attach
+
+selected
+
+sharding
+
+and
+
+placement.
+
+8
+
+aoizora
+.
+apply_strategy_to_config
+(
+config
+)
+
+9
+
+return
+
+run
+(
+config
+)
+
+10
+
+11
+
+#
+
+Shape
+
+and
+
+TPU
+
+allocation
+
+identify
+
+the
+
+reusable
+
+plan.
+
+12
+
+config
+
+=
+
+aoizora
+.
+build_config
+(
+
+13
+
+model_name
+=
+"wan2.1"
+,
+
+14
+
+shape
+=(480,
+
+832,
+
+21),
+
+15
+
+chips
+=16,
+
+16
+
+cfg
+=
+True
+,
+
+17
+
+)
+
+18
+
+generate_video
+(
+config
+)
+
+6
+Experimental Evaluation
+
+This section introduces our evaluation settings and presents the experimental findings for AoiZora on Wan 2.1
+Wan et al. 2025
+video diffusion inference across TPU v5e sub-slices and video shapes. Our evaluation is structured into four parts: (1) end-to-end DiT denoising latency against an expert-tuned deployment and an Alpa-inspired logical-search baseline (§
+6.3
+), (2) the fidelity of the two-stage staged search, covering pre-compilation pruning recall and compiled-HLO placement ranking (§
+6.4
+), (3) ablations that isolate individual design decisions (§
+6.5
+), and (4) offline planning cost for static serving configurations (§
+6.6
+). This organization highlights the performance, fidelity, and practicality of AoiZora.
+
+6.1
+Experimental Methodology
+
+We evaluate the Wan 2.1 video diffusion inference on TPU v5e sub-slices. The experiments cover v5e-4, v5e-8, and v5e-16 allocations. For each slice size, we evaluate six serving workloads: 480p and 720p generation with 21, 41, and 81 frames. Unless otherwise stated, all systems use the same model checkpoint, precision, compiler version, attention implementation, and denoising-step input shapes.
+
+Scope.
+
+The DiT denoiser architecture is general across modern open video diffusion systems: CogVideoX
+Yang et al. 2025
+, HunyuanVideo
+Kong et al. 2025
+, and Wan
+Wan et al. 2025
+all build their denoisers from repeated transformer blocks over static spatio-temporal latents with attention- and MLP-dominated execution
+Peebles and Xie 2023
+,
+Ma et al. 2025
+. We therefore focus our evaluation on Wan 2.1 as a representative dense video DiT. Because AoiZora targets this shared dense DiT denoiser structure rather than any Wan-specific detail, we expect the same dominant sharding and placement decisions to carry over in principle to other dense DiT video frameworks such as CogVideoX and HunyuanVideo, though we leave an empirical confirmation to future work; MoE-style video DiTs with expert routing and load imbalance are likewise out of scope here. On the hardware side, AoiZora only needs a topology description and a per-link communication model: we evaluate on the broadly deployed, topology-sensitive v5e 2-D sub-slices, and in principle v6e-style 2-D and v7x-style 3-D topologies should fit the same framework by swapping in the corresponding routing and link-capacity model, which we have not yet validated empirically.
+
+Our primary metric is one-step denoising latency, a direct proxy for the serving objective: DiT denoising accounts for
+97.7\%
+of end-to-end latency (Figure
+1
+), we target single-video request latency where long spatio-temporal token sequences and large activations leave little benefit from throughput batching
+Ye et al. 2026
+, and total denoising latency is approximately per-step latency times the number of diffusion steps. For each workload, we compile the selected configuration, warm up execution, and report steady-state latency. When a full pipeline path is unavailable for a searched configuration, we use a full-step denoiser probe with the same tensor shapes, shardings, and physical placements as the real DiT denoiser; such probes validate execution latency for the selected plan, but not final video quality.
+
+AoiZora uses the two-stage planner described in §
+4
+. The Pre-Compile Stage enumerates legal DiT sharding configurations, runs lower and propagation without backend compilation, builds the prediction DAG, and keeps the top-
+K
+logical shardings. The Post-Compile Stage compiles each survivor, extracts the compiled-HLO communication DAG, expands physical placements on the allocated TPU mesh, and selects the lowest-cost sharding-placement pair. Planning time is measured as wall-clock time and reported separately from execution latency.
+
+6.2
+Comparison Baselines
+
+AoiZora produces complete, executable video-DiT serving plans, and its planning problem separates into two decisions: a
+pre-compile
+choice of logical sharding strategy and a
+post-compile
+choice of physical placement, made once the compiler has materialized the concrete collective graph. Our two baselines sit at strong, complementary points of the pre-compile logical decision, a hand-tuned expert deployment and an automated logical search, and both stop short of the post-compile placement decision; together they bracket the strong logical frontier while isolating what AoiZora’s compiled-HLO placement stage adds.
+
+Existing deployment.
+
+This baseline represents a strong hand-tuned Wan deployment derived from standard open-source Wan/xDiT/SGLang-style parallelism
+Wan et al. 2025
+,
+Fang et al. 2024
+,
+SGLang Project 2024
+. Starting from the common serving recipe, a practitioner uses FSDP to fit model weights, sequence/context parallelism for long video token sequences, and tensor parallelism when useful for DiT hidden and MLP dimensions. We then manually choose the best-performing logical configuration suggested by these deployment insights for each slice and workload. Thus it captures an expert-tuned deployment path: the logical parallelism is workload-aware and valid, but the physical placement is not optimized using the compiled collective graph.
+
+Logical-search baseline (Alpa-style).
+
+This is not the original Alpa system used as a drop-in video serving baseline. It is a strengthened logical-search baseline inspired by Alpa’s pre-compile auto-sharding objective: it searches legal logical shardings under memory constraints and selects a single logical plan by optimizing an ILP-style objective over compute, abstract collective communication, and resharding costs
+Zheng et al. 2022
+. To make this baseline appropriate for TPU, we strengthen its cost model with an abstract v5e mesh-axis collective cost rather than using a GPU-uniform communication model. When feasible, it is evaluated through the same MaxDiffusion execution path as AoiZora, but it never touches the post-compile HLO communication DAG or the physical placements on the TPU mesh.
+
+6.3
+End-to-End Latency of Denoising
+
+Figure 7:
+One-step denoising latency across Wan workloads. Labels above AoiZora report speedup over the slower baseline.
+
+Table 2:
+Measured speedups of AoiZora, computed as baseline latency divided by AoiZora latency; – indicates no feasible baseline plan.
+
+Workload
+
+v5e-4
+
+v5e-8
+
+v5e-16
+
+Exist.
+
+Alpa
+
+Exist.
+
+Alpa
+
+Exist.
+
+Alpa
+
+480p21f
+
+1.03
+\times
+
+1.00
+\times
+
+1.12
+\times
+
+1.06
+\times
+
+1.42
+\times
+
+1.37
+\times
+
+480p41f
+
+1.00
+\times
+
+1.05
+\times
+
+1.12
+\times
+
+1.15
+\times
+
+1.18
+\times
+
+1.16
+\times
+
+480p81f
+
+1.00
+\times
+
+1.07
+\times
+
+1.15
+\times
+
+1.18
+\times
+
+1.13
+\times
+
+1.11
+\times
+
+720p21f
+
+1.00
+\times
+
+1.05
+\times
+
+1.12
+\times
+
+1.17
+\times
+
+1.05
+\times
+
+1.04
+\times
+
+720p41f
+
+1.01
+\times
+
+1.00
+\times
+
+1.09
+\times
+
+1.17
+\times
+
+1.17
+\times
+
+1.16
+\times
+
+720p81f
+
+1.00
+\times
+
+–
+
+1.09
+\times
+
+1.06
+\times
+
+1.07
+\times
+
+1.07
+\times
+
+Figure
+7
+reports the primary end-to-end execution result. We measure one-step denoising latency for AoiZora, the existing solution, and the Alpa-inspired logical-search baseline across all TPU slices and workloads. For each baseline, speedup is defined as
+
+S_{\mathrm{exist}}=\frac{T_{\mathrm{exist}}}{T_{\mathrm{ours}}},\qquad S_{\mathrm{alpa}}=\frac{T_{\mathrm{alpa}}}{T_{\mathrm{ours}}}.
+
+To keep the figure compact, annotations report AoiZora’s speedup over the slower baseline,
+\max(T_{\mathrm{exist}},T_{\mathrm{alpa}})/T_{\mathrm{ours}}
+.
+
+The results show two trends. First, increasing the TPU allocation consistently reduces one-step latency for the same workload, demonstrating that the searched parallelization strategies expose useful scaling from v5e-4 to v5e-8 and v5e-16. The reduction is not expected to be perfectly linear, because larger slices also introduce additional collective communication and placement sensitivity, but the measured latencies decrease substantially as more chips are made available. Second, across all tested settings, AoiZora is not slower than any feasible baseline within measurement precision, and it improves over both baselines whenever the selected strategies are not tied. Table
+2
+summarizes the corresponding speedups: geometric-mean speedups are
+1.09\times
+over the existing solution and
+1.11\times
+over feasible Alpa-inspired logical-search runs, with maximum speedups of
+1.42\times
+and
+1.37\times
+respectively.
+
+Both baselines are nontrivial, so the gains isolate what each misses. The existing solution already makes expert-level logical-parallelism choices but uses a fixed mesh-axis and device order; AoiZora’s benefit over it comes from automating the hard-to-tune final sharding-placement decision with compiler-derived communication information, since a fixed order can still embed otherwise-equivalent collectives on congested ICI links once XLA materializes the groups(§
+3
+). The Alpa-inspired baseline instead selects good logical shardings with a TPU-aware cost model and runs through the same MaxDiffusion path when feasible, but never observes the compiled-HLO communication DAG or enumerates physical placements; this explains the remaining gap on TPU sub-slices and for the infeasible v5e-4 case, where its logical plan violates the HBM constraint.
+
+The slice-level pattern further explains where the speedups come from. On v5e-4, the topology exposes few placement degrees of freedom, and memory and divisibility constraints leave only a small set of legal CP/TP/FSDP decompositions. The best strategy is therefore relatively easy to find, and expert or logical auto-sharding baselines often converge to the same or nearly identical plan, leaving little room for AoiZora to improve. On v5e-8 and v5e-16, the larger meshes expand both the logical decomposition space and the physical-placement space; compiler-derived topology ranking has more opportunities to avoid congested collective embeddings. The main end-to-end benefit therefore comes from these larger slices.
+
+6.4
+Fidelity of the Staged Search
+
+Figure 8:
+Pre-Compile Stage pruning fidelity across TPU v5e sub-slices.
+
+The two-stage planner is useful only if the cheap stage preserves good logical shardings and the expensive stage provides reliable placement-aware rankings. We evaluate both stages with rank correlation and top-1 retention. For the Pre-Compile Stage, Spearman’s
+\rho_{s}
+compares the pre-compilation score with measured latency at the logical-sharding level. If a sharding has multiple measured placements, we use its best observed placement latency. For the Post-Compile Stage,
+\rho_{s}
+compares the compiled-HLO topology score with measured latency at the sharding-placement level. Top-1 retention asks whether the measured best candidate survives pruning.
+
+Figure
+8
+shows the Pre-Compile Stage behavior. Each panel pools the six workloads for one TPU slice. The x-axis is the predicted rank percentile within that workload’s candidate pool, where lower is better; the y-axis is measured latency normalized to the workload’s best measured latency. The green region marks the top-
+15\%
+pruning cut. The plot shows that the pre-compilation proxy is not intended to be a precise latency predictor for the entire tail of bad candidates. Its role is to keep the good frontier while removing clearly poor shardings. Across all shown slices, the measured best logical shardings fall inside the kept region, so the later topology-aware stage still sees the candidates it needs.
+
+Table 3:
+Two-stage ranker fidelity across TPU v5e sub-slices.
+
+Slice
+
+Res.
+
+Pre-
+\rho_{s}
+
+Post-
+\rho_{s}
+
+Pre- top-1 recall
+
+v5e-4
+
+480p
+
+0.840
+
+0.928
+
+3/3
+
+720p
+
+0.794
+
+0.962
+
+3/3
+
+v5e-8
+
+480p
+
+0.724
+
+0.985
+
+3/3
+
+720p
+
+0.655
+
+0.936
+
+3/3
+
+v5e-16
+
+480p
+
+0.667
+
+0.859
+
+3/3
+
+720p
+
+0.694
+
+0.817
+
+3/3
+
+Table
+3
+summarizes the same trend across slices and resolutions. The Pre-Compile Stage has moderate-to-strong correlation, but more importantly retains the measured top-1 logical sharding in every setting shown. The Post-Compile Stage has consistently higher correlation, with
+\rho_{s}
+between 0.817 and 0.985 across the evaluated settings, because it scores the concrete collectives, payloads, replica groups, and device placements produced by XLA. Together, these results validate the intended division of labor: use the cheap compiler representation for high-recall pruning, then use compiled HLO only where topology-sensitive ranking matters.
+
+6.5
+Ablation Studies
+
+We further isolate two design choices on v5e-16. First, we disable the Post-Compile Stage and run the Pre-Compile Stage top-1 logical strategy under two physical placements. Second, we replace the two-block post-compilation proxy with a standalone one-block proxy and compare its placement ranking against real measurements. Table
+4
+summarizes both ablations; latency values are regularized to average one-block latency by dividing each two-block measurement by two.
+
+Table 4:
+v5e-16 ablations of staged search decisions.
+
+Workload
+
+Pre- only
+
+Full
+
+Gap
+
+1-block
+\rho_{s}
+
+avg. block (ms)
+
+avg. block (ms)
+
+480p21
+
+21.412–26.823
+
+14.750
+
+45.2–81.9%
+
+0.000
+
+480p41
+
+35.794–38.269
+
+29.403
+
+21.7–30.2%
+
+0.371
+
+480p81
+
+65.598–68.474
+
+58.373
+
+12.4–17.3%
+
+0.048
+
+720p21
+
+45.435–46.012
+
+34.754
+
+30.7–32.4%
+
+0.143
+
+720p41
+
+85.146–88.833
+
+77.788
+
+9.5–14.2%
+
+0.000
+
+720p81
+
+207.861–224.203
+
+202.389
+
+2.7–10.8%
+
+0.000
+
+The Pre-Compile-Stage-only ablation shows why the cheap stage should prune rather than make the final decision. Even after trying multiple placements for the Pre-Compile Stage top-1 logical strategy, the measured latency remains higher than the full pipeline on every workload, with gaps from 2.7% to 81.9%. This means that pre-compilation signals are useful for preserving promising candidates, but they do not reliably identify the final sharding-placement pair.
+
+The one-block ablation explains why the Post-Compile Stage compiles a two-block proxy. A standalone block produces weak placement rank correlation, with
+\rho_{s}
+at most 0.371 and near zero on most workloads. This is consistent with the methodology: a single isolated block misses cross-block communication and overlap opportunities that appear only when the compiler sees an inter-block boundary.
+
+6.6
+Cost of Planning
+
+Figure 9:
+Offline planning time across TPU v5e sub-slices.
+
+Figure
+9
+reports the offline cost of running AoiZora. Search time is not included in one-step latency because AoiZora plans before serving and caches the selected strategy for repeated same-shape runs. The relevant question is whether planning is cheap enough to rerun when the model shape, compiler version, or TPU allocation changes.
+
+The Pre-Compile Stage remains small because it avoids backend compilation: it takes roughly 19–23 seconds on v5e-4, 55–77 seconds on v5e-8, and 75–112 seconds on v5e-16 across the evaluated workloads. The Post-Compile Stage is more expensive because it compiles survivor-placement pairs and parses compiled HLO, but it is paid only after pruning. Total planning time ranges from 47–108 seconds on v5e-4, 112–145 seconds on v5e-8, and 250–376 seconds on v5e-16. These costs are practical for an offline serving configuration step and are far smaller than compiling the full sharding-placement space exhaustively.
+
+7
+Related Work
+
+Parallelizing Diffusion-Model Inference.
+
+Distributed diffusion inference has been studied mainly on GPU clusters. DistriFusion
+Li et al. 2024
+introduces patch parallelism that hides communication by reusing stale activations from the previous denoising step, and PipeFusion
+Fang et al. 2026
+extends this idea to patch-level pipeline parallelism for DiTs; xDiT
+Fang et al. 2024
+unifies tensor, sequence, and these hybrid schemes in a serving engine, while SwiftFusion
+Yang et al. 2026
+scales sequence parallelism for DiT inference and GenServe
+Ye et al. 2026
+co-serves heterogeneous diffusion workloads. These systems design new parallelism schemes or scheduling policies, often relying on approximation (stale activations) or assuming dense, near-uniform GPU fabrics; they do not select
+where
+logical communication groups land on a physical mesh. AoiZora is complementary: it keeps exact computation and standard collectives, and instead automates the sharding-placement decision on topology-sensitive TPU sub-slices.
+
+Automated Parallelization Systems.
+
+Compiler and search-based systems automate sharding over a logical
+device mesh. GSPMD
+Xu et al. 2021
+and PartIR
+Alabed et al. 2025
+propagate or compose user-specified partitioning rules but do not search strategies. FlexFlow
+Jia et al. 2018
+and Unity
+Unger et al. 2022
+search hybrid strategies with an execution simulator, and Alpa
+Zheng et al. 2022
+formulates intra-operator sharding as an ILP over compute and abstract communication costs. These planners score candidates before backend compilation, so they cannot observe the final collectives, replica groups, or link contention that determine placement quality on a TPU mesh (§3). AoiZora retains a cheap logical search in this tradition, but adds a second stage that ranks physical placements from compiled HLO.
+
+Topology-Aware Placement and Communication.
+
+Topology awareness has been pursued at other layers of the stack. TACCL
+Shah et al. 2023
+and TACOS
+Won et al. 2024
+synthesize topology-aware collective
+algorithms
+, and TopoOpt
+Wang et al. 2023
+co-optimizes the network topology itself for training jobs; classic HPC work maps process graphs onto torus networks at job-allocation time
+Hoefler and Snir 2011
+. These approaches modify the communication substrate or operate without the model’s compiled collective graph. AoiZora instead places topology awareness at the compiler-planning boundary: it
+consumes the collectives XLA materializes and selects a placement, leaving collective implementations, routing, and the allocation itself unchanged.
+
+8
+Conclusion
+
+Video diffusion serving requires distributed inference because long spatio-temporal token sequences and repeated denoising create large activation and collective-communication costs. On TPU sub-slices, the resulting systems problem is not only which tensors to shard, but how to map logical communication groups onto physical links. AoiZora places that topology decision at the compiler-planning boundary: cheap StableHLO/Shardy analysis prunes logical shardings, while compiled HLO exposes the concrete collectives needed for placement ranking. Across Wan 2.1 workloads on TPU v5e sub-slices, this staged planner improves denoising latency over heuristic and logical auto-sharding baselines while remaining practical for same-shape serving. The result is a compiler-visible alternative to treating the logical mesh as a complete abstraction.
+

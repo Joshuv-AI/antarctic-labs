@@ -1,0 +1,3793 @@
+Video-Rate Streaming Stylization on a Vision-Aware MLLM-Conditioned Edit Diffusion: Asymmetric Batched Inference on a Distilled UNet + MLLM Text Encoder
+Yoshiyuki Ootani
+
+Abstract
+Aggressive distillation of the diffusion U-Net inverts the per-frame bottleneck of real-time text-to-image pipelines: once the denoiser is a 4-step or 1-step distilled student, the text encoder becomes the critical path. This inversion is most acute in vision-aware edit diffusion, where the encoder is a multimodal large language model (MLLM). We study the case of a 0.39 0.39 B distilled edit U-Net paired with a 2.13 2.13 B MLLM text encoder (Qwen3-VL) and present a streaming pipeline targeted at this regime built around three engineering mechanisms: asymmetric side-stream / main-stream CUDA pipelining with batched text-encoder amortisation (and optional static-prompt caching), a compile-friendly ControlNet-LLLite reformulation that folds the entire U-Net + adapter stack into a single fused graph, and a periodic conditioning-refresh schedule with a hook subset that amortises the per-frame conditioning cost. On a single consumer RTX 3090 Ti at × 512 512\!\times\!512 the pipeline sustains 27.4 27.4 fps over a 480-frame run at batch size B = 8 B{=}8 and 29.6 29.6 fps at B = 16 B{=}16 , with end-to-end p50 latency of ≈ \approx 0.5 0.5 and ≈ \approx 1.0 1.0 s respectively; the same operating point measures 54.9 54.9 fps on RTX 4090 and 74.1 74.1 fps on RTX 5090. We report video-rate streaming throughput rather than interactive low latency, and locate our numbers against same-stack StreamDiffusion re-runs as systems context, not as a benchmark superiority claim. For the trained oil-painting style, the released temporal adapter generalises within in-clip noise to 19 unused DAVIS-2017 sequences and 15 non-DAVIS clips from seven sources; prompt-level generalisation to unseen style families is bounded and reported separately.
+
+
+
+I
+Introduction
+
+Real-time streaming video translation with diffusion
+models has been driven by text-conditioned image diffusion stacks in
+which the U-Net denoiser dominates the per-frame critical path and the
+text encoder is a CLIP-class network of
+\sim
+125 M parameters. Once
+the denoiser is aggressively distilled (a 4-step or 1-step student
+running under
+torch.compile
+or TensorRT), this familiar
+bottleneck inverts: the text encoder becomes the per-frame critical
+path, and the systems techniques developed for the denoiser-dominated
+regime stop being the right design centre.
+
+We refer to this pattern as the
+
+small-distilled-denoiser plus heavy-MLLM-encoder
+(SDD-MTE)
+regime: a
+\leq
+1
+B distilled diffusion denoiser running
+under
+torch.compile
+or TensorRT, paired with a
+
+\geq
+2
+B vision-aware multimodal language model that jointly
+attends to a source image and an instruction string. The three
+engineering mechanisms reported in this paper are designed for
+this regime; we instantiate them on the smallest currently
+documented configuration of the class and would expect them to
+transfer to other SDD-MTE pairings, though we evaluate only
+DreamLite-mobile+Qwen3-VL empirically.
+
+The most acute case of this inversion arises in vision-aware edit-mode
+diffusion: models that consume both a source image and a textual
+instruction in order to produce an instruction-conditioned re-render.
+This class has converged on multimodal large language model (MLLM)
+text encoders that jointly process image and text tokens.
+DreamLite-mobile
+[
+10
+]
+is representative — a
+0.39
+B
+parameter U-Net, distilled to 4 steps, conditioned on Qwen3-VL-2B
+
+[
+30
+]
+(2.13 B parameters) which jointly attends to a
+
+256\!\times\!256
+source patch and an instruction string. The text
+encoder is roughly
+5\!\times
+larger than the denoiser by parameter
+count, and it carries an intrinsic CPU–GPU synchronisation point
+inside its rotary position-embedding code that prevents simple
+single-stream dispatch from overlapping it with U-Net compute.
+
+The temporal-consistency adapters that emerged for SD-class
+denoisers, in particular ControlNet-LLLite
+[
+17
+]
+,
+make this regime harder rather than easier. Their forward path uses
+Python branches and tensor-identity tests that break
+
+torch.compile
+’s graph capture, so a naive LLLite-augmented
+U-Net runs
+\sim
+3.5
+\times
+slower than the base U-Net even at the
+same arithmetic intensity. Wide-range MLLM TE outputs (std
+=37
+,
+max
+=1160
+in our profiling) also overflow FP16 attention, so the
+TensorRT path that StreamDiffusion-class systems
+
+[
+16
+]
+rely on for headline throughput is
+unavailable here.
+
+This paper is a systems study of how to drive a small distilled
+edit-U-Net + MLLM-TE pipeline at video-rate streaming throughput on a
+single consumer GPU. We make three engineering contributions, each
+with a directly measured per-frame impact:
+
+1.
+
+Asymmetric side-stream / main-stream pipelining
+
+(§
+III-B
+) places the MLLM TE on a dedicated
+CUDA stream and runs it concurrently with the compiled U-Net on the
+main stream, hiding the TE’s intrinsic
+.item()
+sync inside
+the U-Net step. Two opt-in static-prompt approximations are
+exposed for streams where the user instruction is fixed and the
+source visual content changes slowly — a single-frame TE
+prompt (
+te_batch_one
+) and an
+N
+-batch TE refresh
+schedule (
+te_refresh_every
+) — which amortise the
+TE cost further but are not used for any reported number unless
+explicitly stated.
+
+2.
+
+A
+compile-friendly LLLite reformulation
+
+(§
+III-C
+) removes Python branches and
+tensor-identity changes from the 108-hook adapter forward, allowing
+
+torch.compile
+to fold the entire U-Net + adapter stack
+into a single fused graph.
+
+3.
+
+A
+periodic conditioning-refresh and hook-subset schedule
+
+(§
+III-D
+) amortises the LLLite cond-image encoder
+cost across
+N
+batches, exposes a smoothing artifact in which
+warping-error is mechanically lowered by output blur, and threads
+the per-frame Farneback flow asynchronously during prefetch.
+
+On a single consumer RTX 3090 Ti at
+512\!\times\!512
+the resulting
+pipeline sustains
+27.4
+
+fps
+over a
+480
+-frame run at batch
+
+B{=}8
+with end-to-end p50 latency
+\approx
+0.5
+s, and
+
+29.6
+
+fps
+at
+B{=}16
+. The same operating point measures
+
+54.9
+
+fps
+on RTX 4090 and
+74.1
+
+fps
+on RTX 5090. We do not
+claim superiority over StreamDiffusion-class systems and instead
+locate our numbers against a same-stack rerun of their reference
+configuration as systems context (§
+IV-B
+). The
+released temporal adapter is evaluated in-domain on DAVIS-2017 and
+out-of-domain on 19 unused DAVIS sequences plus a 15-clip
+cross-dataset sanity check spanning seven non-DAVIS sources
+(§
+IV-D
+).
+
+Paper organisation.
+Section
+II
+surveys
+streaming-V2V, MLLM-conditioned generation, and temporal-consistency
+work. Section
+III
+details the three engineering
+mechanisms. Section
+IV
+reports sustained throughput,
+temporal quality, transfer evaluation, and hardware scaling.
+Section
+V
+documents five negative results and a
+distillation case study. Section
+VI
+closes with
+deployment implications.
+
+II
+Related Work
+
+II-A
+
+Streaming and Real-Time Diffusion Video Pipelines
+
+StreamDiffusion
+[
+16
+]
+establishes the
+modern reference point for real-time text-conditioned image
+diffusion: batched-timestep dispatch, residual classifier-free
+guidance, stochastic similarity filtering, and TensorRT compilation
+together reach 91
+fps
+on SD-Turbo and 38
+fps
+on Kohaku v2.1
+
++
+LCM-LoRA at
+512\!\times\!512
+on an RTX 4090. StreamV2V
+
+[
+22
+]
+extends the framework to video-to-video by
+maintaining a cross-frame feature bank; StreamDiffusionV2
+
+[
+11
+]
+adds SLO-aware batching and a
+sink-token–guided rolling KV cache for multi-GPU video-diffusion
+backbones; StreamDiT
+[
+15
+]
+and MotionStream
+
+[
+34
+]
+target streaming text-to-video
+
+generation
+on dedicated DiT backbones; RTR-DiT
+
+[
+26
+]
+and Live2Diff
+[
+41
+]
+pursue
+causal real-time video translation with autoregressive DiT or
+uni-directional 3D-attention bases respectively. Streaming Video
+Diffusion
+[
+4
+]
+formalises the
+online-editing setting with a video-token cache; Denoising Reuse
+
+[
+37
+]
+amortises noise-prediction cost across
+frames by reusing inter-frame motion structure. ParaDiGMS
+
+[
+33
+]
+, DistriFusion
+[
+20
+]
+, and
+PipeFusion
+[
+8
+]
+parallelise the denoising
+trajectory across timesteps or GPUs for offline throughput. A
+recent line of caching / reuse work on the encoder side is directly
+relevant: VLCache
+[
+29
+]
+reuses VLM encoder state
+across repeated multimodal inputs, Skip-Vision
+[
+44
+]
+
+accelerates VLM inference via adaptive visual-token skipping, and
+InfiniPot-V
+[
+14
+]
+compresses KV cache for
+streaming video understanding under memory bounds. Adaptive
+caching has also emerged on the denoiser side: AdaCache
+
+[
+13
+]
+adapts cache cadence to motion in
+diffusion transformers, and Elastic-Cache
+
+[
+27
+]
+formalises when/where to refresh
+in diffusion LLMs. We adopt a deliberately simple periodic-refresh
+policy and discuss adaptive alternatives in
+§
+IV-C
+and §
+VI
+. Our setting
+differs from all of the above in two ways: a vision-aware MLLM
+text encoder makes the per-frame critical path the encoder rather
+than the denoiser, and a single consumer GPU forbids the multi-GPU
+patch parallelism that the offline systems assume.
+Table
+I
+positions our work along base
+model, conditioning modality, and per-frame critical path.
+
+TABLE I:
+Streaming video-to-video systems by base model and
+conditioning modality. Ours occupies the distilled-edit-UNet +
+MLLM-TE cell with the per-frame critical path on the encoder rather
+than the denoiser.
+
+Work
+
+Base model
+
+Conditioning
+
+Temporal mechanism
+
+Per-frame critical path
+
+StreamDiffusion
+[
+16
+]
+
+SD / SD-Turbo image diff.
+
+text
+
+per-frame i2i (none)
+
+U-Net
+
+StreamV2V
+[
+22
+]
+
+SD image diff.
+
+text
+
+cross-frame feature bank
+
+U-Net
+
+Live2Diff
+[
+41
+]
+
+video-diffusion (3D)
+
+text
+
+uni-directional temporal attn.
+
+video-diff. denoiser
+
+StreamDiffusionV2
+[
+11
+]
+
+video-diff. 1.3–14B
+
+text
+
+rolling KV cache + SLO sched.
+
+video-diff. denoiser
+
+StreamDiT
+[
+15
+]
+
+streaming DiT 4B (gen.)
+
+text
+
+moving frame buffer + window attn.
+
+DiT denoiser
+
+MotionStream
+[
+34
+]
+
+causal video DiT (gen.)
+
+text + motion traj.
+
+sliding window + attn. sinks
+
+video DiT denoiser
+
+RTR-DiT
+[
+26
+]
+
+autoregressive DiT (video)
+
+text / reference
+
+AR KV-cache rerender
+
+video DiT denoiser
+
+Ours
+
+distilled edit U-Net + MLLM TE
+
+image + instruction
+
+LLLite temporal adapter
+
+MLLM TE
+
+II-B
+
+Vision-Aware and MLLM-Conditioned Generation
+
+A separate strand pairs diffusion bases with multimodal language
+models for instruction-conditioned editing or generation. GPT4Video
+
+[
+39
+]
+couples a unified MLLM with diffusion
+decoders for instruction-followed multimodal generation; MoTrans
+
+[
+21
+]
+customises motion via text-driven video
+diffusion guidance; unified MLLM-edit systems such as BAGEL
+
+[
+6
+]
+(7 B active) and OmniGen2
+[
+40
+]
+
+(4 B diff. + 3 B VLM) place a full MLLM in the conditioning path.
+DreamLite-mobile
+[
+10
+]
+compresses this class with a
+
+0.39
+B distilled U-Net and a
+2.13
+B Qwen3-VL
+
+[
+30
+]
+encoder. Among documented vision-aware distilled
+edit models, this pairing is the smallest combination that retains
+instruction-following at video-stylization quality; the asymmetry it
+creates between a fast denoiser and a heavy encoder is exactly the
+regime this paper targets.
+
+II-C
+
+Temporal Consistency and Adapter-Based Conditioning
+
+Cross-frame attention and 3D convolution define the heavyweight
+route to temporal consistency (AnimateDiff
+[
+12
+]
+,
+Stable Video Diffusion
+[
+2
+]
+). Zero-shot routes
+rely on optical flow or keyframe re-rendering (Rerender-A-Video
+
+[
+43
+]
+, FlowVid
+[
+23
+]
+); both are
+offline. Within TCSVT-adjacent venues, TCVE
+[
+38
+]
+
+imposes temporal-consistent video editing via image-diffusion bases
+with a dedicated motion module; spatio-temporal energy-guided
+diffusion
+[
+42
+]
+unifies zero-shot synthesis and
+editing with an explicit energy prior; UniVST
+[
+35
+]
+
+targets training-free localised video style transfer; TVG
+
+[
+47
+]
+formalises a training-free transition-video
+generator; FluencyVE
+[
+3
+]
+replaces full
+temporal attention with a Mamba state-space mixer plus bypass
+attention for editing efficiency. ControlNet
+[
+45
+]
+and ControlNet-LLLite
+
+[
+17
+]
+provide the adapter mechanism we build on:
+LLLite uses per-attention zero-initialised residuals
+(
+\sim
+13 M parameters at the default rank) gated by a per-block
+CNN encoder of a conditioning image. We re-purpose this adapter from
+
+spatial
+conditioning (canny, depth, pose) to a
+temporal
+
+signal, the warped previous decoded frame, with the teacher being
+the post-hoc-blended base output at
+\alpha{=}0.85
+.
+
+II-D
+
+Distillation and Step Reduction
+
+Latent Consistency Models
+[
+25
+]
+, adversarial
+distillation
+[
+32
+]
+, and progressive
+adversarial distillation
+[
+24
+]
+reduce inference
+step count by retraining. We
+do not
+retrain in this paper.
+Instead we show empirically (§
+IV-B
+) that the
+4-step distilled DreamLite-mobile base degrades gracefully to
+K{=}1
+
+inference on the trained style prompts at a measurable
+teacher-fidelity cost, providing a useful operating point for
+deployment without an additional distillation pass.
+
+III
+Method
+
+III-A
+
+Notation and Setup
+
+DreamLite-mobile
+[
+10
+]
+pairs a
+0.39
+B U-Net (TAESDXL
+VAE; FlowMatchEuler scheduler
+[
+7
+]
+) with Qwen3-VL
+
+[
+30
+]
+as the text encoder; text-to-image
+(
+generate
+) and image-edit (
+edit
+) modes share
+weights.
+edit
+concatenates the noisy latent with an encoded
+reference-image latent along the spatial-width axis, and the
+TE prompt template injects a
+\langle\texttt{image\_pad}\rangle
+
+visual token processed by Qwen3-VL’s vision tower. The released
+checkpoint is 4-step distilled. ControlNet-LLLite
+
+[
+17
+]
+attaches
+108
+adapter modules to the
+
+LLLite
+-eligible Linear layers in U-Net attention blocks
+(
+\textsc{attn1}.\{q,k,v\}
+and
+\textsc{attn2}.q
+); each module
+contains a per-block CNN that encodes a conditioning image, a
+zero-initialised residual, and a
+\delta
+added to its host Linear’s
+output. We train this adapter with the Farnebäck-warped
+
+[
+9
+]
+previous decoded frame as the
+conditioning input and the post-hoc-blended (
+\alpha{=}0.85
+) base
+output as the teacher target. All experiments use Python 3.10.0,
+PyTorch 2.6.0
++
+cu124, Triton 3.2 (Windows port), on a single RTX
+3090 Ti unless noted otherwise.
+
+III-B
+
+Asymmetric Side-Stream / Main-Stream Pipelining
+
+The reference implementation runs a
+generate
+-mode encode
+followed by a 4-step denoise on a single Python thread. We
+restructure it into four cumulative steps.
+
+torch.compile
+of the U-Net
+
+We compile only the
+U-Net (
+reduce-overhead
+,
+fullgraph=False
+,
+
+dynamic=False
+). At fixed
+512\!\times\!512
+shapes the
+compiled U-Net is
+3.1\times
+faster than eager.
+
+CUDA-stream pipelining of TE and VAE-encode
+
+The
+
+edit
+-mode TE output depends on both the source image and
+the prompt and in the base operating mode must be recomputed every
+batch. Its
+\sim
+200 ms latency at
+B{=}1
+can however be hidden
+behind the next frame’s denoise. We launch TE and VAE-encode for
+batch
+n{+}1
+on a side CUDA stream while the default stream runs
+batch
+n
+’s denoise and VAE-decode; synchronisation uses a single
+CUDA event, so the two streams contend only at memory bandwidth.
+The TE additionally carries an intrinsic
+.item()
+
+synchronisation point inside its rotary position-embedding code;
+placing the encoder on its own stream lets this stall overlap
+U-Net compute on the main stream rather than serialising into the
+per-frame critical path.
+
+Zero-retraining
+K{=}1
+inference
+
+Running the released
+4-step distilled weights at
+K{=}1
+(a single
+\sigma{=}1\!\to\!0
+
+flow-matching update) preserves recognisable stylisation at the same
+prompt with
+\varepsilon_{w}
+within 5% of the
+K{=}2
+trajectory’s;
+LPIPS to the
+K{=}4
+teacher rises to
+\approx
+0.40
+
+(Table
+II
+). We trade this controlled fidelity loss for a
+
+2\times
+throughput gain; this is an inference-time operating point,
+not a new distillation.
+
+Asymmetric batched dispatch with TE caching
+
+At fixed
+
+K{=}1
+, Table
+V
+(§
+IV-B
+) shows
+that the Qwen3-VL TE amortises substantially better with batch than
+the compiled U-Net: TE wall grows from
+125
+ms at
+B{=}1
+to
+
+153
+ms at
+B{=}4
+and
+233
+ms at
+B{=}8
+(sub-linearity
+
+s{=}0.319
+and
+0.226
+), while the compiled U-Net grows from
+
+23
+ms to
+74
+ms and
+142
+ms (
+s{=}0.806
+and
+0.770
+).
+We exploit this asymmetry by buffering
+
+B{=}8
+frames before each pipeline call; per-frame TE drops from
+
+125
+to
+\sim
+30
+ms while per-frame U-Net cost rises only
+marginally. Latency cost is
+B{-}1{=}7
+frames of buffering
+(
+\sim
+230
+ms at
+30
+
+fps
+source).
+
+Optional TE caching modes for static-prompt streams
+
+When the user instruction is fixed across the stream and the
+source visual content changes slowly, we additionally expose two
+opt-in switches that further amortise the TE: (i)
+
+te_batch_one
+encodes only one representative
+
+(\text{image},\text{prompt})
+pair in the batch and broadcasts
+its key/value tensors to the remaining
+B{-}1
+frames, shrinking
+the multimodal sequence by
+B\times
+; (ii)
+
+te_refresh_every
+
+=N_{\text{TE}}
+caches the broadcast
+TE output across
+N_{\text{TE}}
+consecutive batches so it is
+recomputed once per
+B\cdot N_{\text{TE}}
+source frames. Both
+modes are explicit approximations:
+(i)
+accepts that the visual
+content represented in the TE drifts from the actual per-frame
+input across the batch,
+(ii)
+extends that drift across the
+cache window. They are independent of the per-batch LLLite
+
+cond
+-refresh schedule (§
+III-D
+), which
+amortises the LLLite conditioning encoder rather than the
+Qwen3-VL TE. Algorithm
+1
+writes out the resulting
+per-batch loop, and Fig.
+1
+sketches the
+two-stream schedule.
+
+Algorithm 1
+
+Per-batch streaming inference loop. Side stream and
+main stream are dispatched concurrently and synchronised via a
+single CUDA event.
+TE.cached
+,
+cond_emb
+are
+buffers preserved across batches; refresh schedules are
+controlled by
+te_refresh_every
+(
+N_{\text{TE}}
+) and
+
+cond_refresh_every
+(
+N_{\text{cond}}
+).
+
+Input:
+batch index
+n
+, frames
+x_{n,1..B}
+, prompt
+p
+, prev. output
+y_{n-1}
+
+Side stream
+(concurrent with main):
+
+z_{n}\leftarrow\mathrm{VAE.enc}(x_{n,1..B})
+
+if
+
+n\bmod N_{\text{TE}}=0
+
+or
+
+te_batch_one
+disabled
+then
+
+\text{TE.cached}\leftarrow\mathrm{TE}(x_{n,\text{rep}},p)
+
+//
+batch_one
+: 1 rep. frame, else
+B
+
+end if
+
+h_{n}\leftarrow\text{TE.cached}
+
+Main stream
+:
+
+if
+
+n\bmod N_{\text{cond}}=0
+
+then
+
+c_{n}\leftarrow\mathrm{LLLite.cond}(\mathrm{warp}(y_{n-1},\mathrm{flow}_{n-1\to n}))
+
+else
+
+c_{n}\leftarrow c_{n-1}
+
+end if
+
+\hat{z}_{n}\leftarrow\mathrm{U\text{-}Net}_{K{=}1}(z_{n};\,h_{n},\,c_{n})
+
+y_{n}\leftarrow\mathrm{VAE.dec}(\hat{z}_{n})
+
+Synchronise
+: event between side and main streams;
+
+\mathrm{wall}_{n}=\max(t_{\text{side}},t_{\text{main}})
+
+Fig. 1:
+Asymmetric batched dispatch on the DreamLite-mobile+Qwen3-VL
+stack (
+unoptimised cond-refresh path
+, matching
+Table
+IV
+). The Qwen3-VL TE and VAE-encode for batch
+
+n{+}1
+run on a CUDA
+side stream
+while the compiled U-Net
+(
+K{=}1
+,
+down_blocks
+LLLite hook subset) and VAE-decode
+for batch
+n
+run on the
+main stream
+. Because the TE
+dominates the side total (
+\approx
+467
+ms vs.
+\approx
+303
+ms
+U-Net at
+B{=}16
+, Table
+IV
+), the per-batch wall is
+bounded by the side stream and the main stream is fully hidden
+behind the TE except for the first batch’s prefetch warm-up.
+Hatched columns mark the periodic LLLite cond-refresh
+(§
+III-D
+), fired every
+N{=}8
+batches. The
+
+628
+ms per-batch wall annotated here corresponds to the
+
+26.4
+fps baseline row of Table
+III
+
+(
+16/0.628\!\approx\!25.5
+fps in isolation; the additional gap
+to
+26.4
+fps reflects the seven non-refresh batches in each
+window of eight); threading the per-frame Farnebäck flow and
+async-kicking it inside
+prefetch_batch
+so it overlaps
+the next side-stream slot is what reaches the
+29.6
+fps
+sustained champion throughput reported in Table
+III
+
+and the body text.
+
+Cumulatively, the base four speed mechanisms (
+a
+–
+d
+;
+mode
+e
+is off by default and not used for any reported number
+unless explicitly stated) take a no-LLLite baseline from
+
+1.45
+
+fps
+(
+\approx
+690
+ms/frame) to
+32.4
+
+fps
+
+(Table
+II
+).
+
+III-C
+
+Compile-Friendly LLLite Reformulation
+
+Attaching the temporal LLLite adapter on top of the compiled U-Net
+breaks
+torch.compile
+
+[
+1
+]
+: the released
+LLLite forward contains five Python branches (a
+
+multiplier=0
+short-circuit, a
+cond_emb is None
+
+guard, dtype/device mismatch checks, a sequence-length fallthrough,
+and a dropout-only-in-training path), and the cached
+
+cond_emb
+tensor is reassigned (not in-place updated)
+inside
+set_cond_image
+, changing tensor identity and
+forcing Dynamo to recompile on every frame.
+
+We refactor the adapter for inference as follows:
+(i) register
+cond_emb
+as a fixed-size buffer of shape
+
+(B_{\max},N,d_{\text{cond}})
+with
+persistent=False
+(old
+checkpoints load unchanged);
+set_cond_image
+writes
+in-place, preserving tensor identity;
+(ii) register the multiplier as a buffer too, written via
+
+set_multiplier_tensor
+; updates do not invalidate the
+graph;
+(iii) expose a separate
+forward_inference
+method with no
+Python branches — dropout, dtype, and shape-fallback paths are
+pruned and the host Linear’s
+\delta
+is unconditionally added;
+(iv) apply the adapter in-place via
+
+apply_lllite(…,inference_mode=True)
+, which patches
+
+forward_inference
+into the host Linear’s
+forward
+
+attribute.
+After this refactor an LLLite-augmented U-Net at
+B{=}8
+,
+K{=}1
+
+averages
+10.12\pm 0.11
+
+fps
+across 10 DAVIS sequences versus
+
+2.13\pm 0.03
+
+fps
+for the eager LLLite reference — a
+4.75\times
+
+speed-up with no change to the trained weights.
+
+III-D
+
+Periodic Conditioning Refresh and Hook Subset
+
+Even compile-friendly, the 108 LLLite hooks each invoke a small
+
+conditioning1
+CNN every time
+set_cond_image
+is
+called. At
+B{=}8
+this CNN forward is
+4\times
+a single image’s
+cost and dominates the LLLite path’s wall time.
+
+Cond-refresh interval
+
+Because consecutive frames share
+most scene content, the warped previous output — the LLLite cond
+input — changes slowly. We rebuild
+cond_emb
+every
+N
+-th
+batch and reuse the previous embedding in between. With
+B{=}8
+and
+
+N{=}8
+a refresh fires once per 64 frames (
+\sim
+2
+s at
+
+30
+
+fps
+); the cached embedding remains a good approximation for
+intermediate batches and empirically does
+not
+degrade
+reference fidelity or warping error versus per-batch refresh
+(§
+IV-C
+). The Farnebäck flow itself is
+threaded and async-kicked during
+prefetch_batch
+so it
+overlaps the next side-stream slot rather than stalling the wall.
+
+Hook subset
+
+Reducing the active hook count is the second
+axis. The 108-hook attachment splits into 38 on
+
+down_blocks
+, 16 on
+mid_block
+, and 54 on
+
+up_blocks
+on the DreamLite-mobile U-Net. Restricting to
+
+down_blocks
+-only (38 hooks,
+\approx
+35\%
+of the full
+set) cuts conditioning-encoder work by the same factor; trained
+weights for dropped hooks are silently ignored at load time. The
+restriction recovers stylisation sharpness from
+Sobel
+1.88
+(all-108) to
+4.74
+(close to the no-LLLite
+baseline
+5.10
+) and LPIPS-to-teacher from
+0.54
+to
+0.38
+
+(Table
+II
+). We adopt it as the default operating point.
+
+Caveat on
+\varepsilon_{w}
+in the smoothing regime
+
+A LLLite configuration with
+too much
+attribute authority — e.g.,
+108 hooks at multiplier
+1.0
+— pushes outputs toward a desaturated
+“smooth purple” attractor. The Sobel / HF-FFT / LPIPS triplet in
+Table
+II
+catches this immediately (108-hook rows:
+Sobel
+1.88
+–
+1.97
+, HF-FFT
+987
+–
+1046
+, LPIPS-to-teacher
+
+0.52
+–
+0.54
+), while
+\varepsilon_{w}
+
+rewards
+the smoothing
+(
+12.96
+–
+13.00
+vs. champion’s
+18.34
+) because the output is
+nearly static. We therefore recommend always pairing warping error
+with at least one spatial high-frequency probe in this regime; the
+LCM-LoRA distillation case study reported in §
+V
+is the
+direct application of this rule.
+
+IV
+Experiments
+
+IV-A
+
+Setup and Metrics
+
+Unless noted, all measurements use a single RTX 3090 Ti at
+
+512\!\times\!512
+,
+B{=}8
+,
+K{=}1
+, with the temporal LLLite v3
+adapter (trained on 10 DAVIS-2017
+[
+28
+]
+sequences
+
+\times
+50 frames at
+the oil-painting prompt for 12 epochs, AdamW8bit, post-hoc
+
+\alpha{=}0.85
+blended teacher,
+\sim
+25 min). We exclude the
+first batch of every run (it incurs the
+torch.compile
+cost)
+and drop partial tail batches (the compiled U-Net and LLLite
+
+cond_emb
+buffer are shape-locked to
+B
+). Throughput
+
+fps
+is per-frame steady-state wall-clock; warping error
+
+\varepsilon_{w}
+
+[
+18
+]
+is computed with Farnebäck
+flow on the inputs (we cross-check with RAFT-Large
+
+[
+36
+]
+below). We additionally report Sobel mean-abs,
+HF-FFT energy outside the centre
+H/4
+disc, LPIPS to the eager
+4-step teacher
+[
+46
+]
+, and CLIP-sim
+
+[
+31
+]
+.
+
+IV-B
+
+Sustained Throughput and Latency
+
+Table
+II
+reports speed and quality across the same 10
+DAVIS-2017 sequences the v3 LLLite was trained on;
+all
+quality numbers in this table are therefore in-domain
+and should
+be read as such, with quality generalisation outside the training
+set evaluated separately in §
+IV-D
+(held-out
+DAVIS-19, held-out prompts, cross-dataset). The eager 4-step
+reference runs at
+1.45
+
+fps
+; the full pipeline with all four
+speed mechanisms, the trained LLLite, the
+down_blocks
+
+hook subset, and cond-refresh runs at
+
+32.66\!\pm\!1.00
+
+fps
+(
+N{=}9
+,
+scooter-black
+
+excluded because its 43-frame length is shorter than the
+B{=}16
+
+warm-up
++
+measure window) — a
+22.5\times
+speed-up. Two
+complementary comparisons isolate the adapter contribution: at
+identical
+K{=}1
+,
+B{=}16
+the LLLite champion matches the
+no-LLLite pipelined baseline in throughput (
+-1.2\%
+) while cutting
+flicker by
+20\%
+(
+\varepsilon_{w}
+:
+22.97\!\to\!18.34
+); against a
+no-LLLite
+K{=}2
+post-hoc flow-warp smoother (the configuration
+whose targets we distill for LCM-LoRA training in
+§
+V
+), the champion is simultaneously
+2.2\times
+
+faster and
+5\%
+lower in
+\varepsilon_{w}
+.
+
+TABLE II:
+Main results on DAVIS-2017 (mean
+\pm
+std).
+
+fps values are short-window per-batch peaks
+on a
+3090 Ti (steady-state on 30 measured batches after 3 warm-up
+batches); see Table
+III
+for the
+480-frame sustained throughput, and Table
+XI
+
+for the per-GPU hardware-scaling re-measurement.
+
+†
+includes the trained Temporal LLLite adapter. The
+all-108-hook rows appear to lower
+\varepsilon_{w}
+but also
+collapse Sobel (
+-60\%
+) and HF-FFT (
+-38\%
+) and inflate
+LPIPS-to-teacher (
++30\%
+) — the smoothing artifact discussed at
+end of §
+III-D
+.
+down_blocks
+restores
+spatial detail while keeping the temporal-consistency benefit
+(
+\varepsilon_{w}
+:
+18.34
+vs. no-LLLite
+22.97
+).
+
+Configuration
+
+N_{\text{seq}}
+
+fps
+
+\varepsilon_{w}
+
+Sobel
+
+HF-FFT
+
+LPIPS
+
+Speed pipeline (no LLLite)
+
+Eager baseline (4-step)
+
+10
+
+1.45
+
+\pm
+0.01
+
+25.83
+
+\pm
+3.67
+
+4.96
+
+1084
+
+0.000
+
++ compile + 2-step + pipelined + blend
+
+10
+
+15.08
+
+\pm
+0.19
+
+19.32
+
+\pm
+3.15
+
+4.33
+
+1109
+
+0.170
+
++ batched
+B{=}8
++ 1-step + pipelined
+
+10
+
+32.35
+
+\pm
+0.82
+
+24.03
+
+\pm
+4.44
+
+5.10
+
+1596
+
+0.398
+
++ batched
+B{=}16
++ 1-step + pipelined
+
+9
+
+33.04
+
+\pm
+0.70
+
+22.97
+
+\pm
+3.77
+
+5.16
+
+1663
+
+0.401
+
+LLLite-augmented (all-108 hooks; smoothing artifact)
+
+LLLite v3 eager (108 hooks)
+†
+
+10
+
+2.13
+
+\pm
+0.03
+
+12.96
+
+\pm
+2.46
+
+1.97
+
+987
+
+0.520
+
++ compile-friendly LLLite +
+B{=}8
+(108)
+†
+
+10
+
+10.12
+
+\pm
+0.11
+
+13.00
+
+\pm
+2.61
+
+1.88
+
+1046
+
+0.541
+
+LLLite +
+down_blocks
+hook subset (champion)
+
++ cond-refresh +
+down_blocks
+†
+
+10
+
+30.92
+
+\pm
+0.74
+
+19.01
+
+\pm
+3.34
+
+4.90
+
+1784
+
+0.377
+
++ batched
+B{=}16
+(champion)
+†
+
+9
+
+32.66
+
+\boldsymbol{\pm}
+
+1.00
+
+18.34
+
+\pm
+2.66
+
+4.74
+
+1760
+
+0.380
+
+Transfer of the champion configuration to held-out video (see Table
+IX
+for full breakdown)
+
+unused DAVIS-19 (v3 never trained on)
+†
+
+19
+
+29.97
+
+\pm
+0.45
+
+19.14
+
+\pm
+4.53
+
+–
+
+–
+
+–
+
+cross-dataset (7 sources, 15 clips)
+†
+
+15
+
+30.50
+
+\pm
+0.34
+
+19.31
+
+\pm
+4.54
+
+–
+
+–
+
+–
+
+Reading the table.
+The in-domain rows establish the speed
+budget; the two transfer rows at the bottom — released v3 adapter
+on 19 unused DAVIS sequences and 15 non-DAVIS clips from 7
+sources — show that fps and
+\varepsilon_{w}
+on unseen video lie
+within the in-clip noise of the in-domain champion. We treat
+this, not the in-domain DAVIS-10 row, as the headline operational
+result.
+
+Sustained throughput and end-to-end latency.
+Short eval
+windows over-state steady-state throughput: over a 480-frame
+
+parkour
+-loop run with
+
+torch._dynamo.cache_size_limit=256
+(Dynamo recompile
+ruled out), an unoptimised cond-refresh path settles to
+
+26.4
+
+fps
+with bimodal walls (p50
+501
+ms, p95
+1439
+ms).
+The bimodality is the periodic LLLite refresh path; profiling
+attributes 96% of the spike to CPU Farnebäck flow on the
+refresh batch (848 / 882 ms; the 38-hook
+
+conditioning1
+CNN itself takes only
+34
+ms). Threading
+the per-frame flow across 8 worker threads (
+cv2
+
+Farnebäck releases the GIL) and async-kicking it inside
+
+prefetch_batch
+raises sustained throughput to
+
+29.6
+
+fps
+(p50
+513
+ms, p95
+756
+ms,
+\sigma{=}81
+ms).
+End-to-end latency at
+30
+
+fps
+input is
+
+(B{-}1)/30+\text{batch wall}
+:
+B{=}16
+p50
+1.01
+s
+(throughput-champion),
+B{=}8
+p50
+0.51
+s (low-latency
+operating point at
+27.4
+
+fps
+sustained, Table
+III
+).
+
+TABLE III:
+Sustained
+throughput and end-to-end latency on
+RTX 3090 Ti,
+parkour
+looped to 480 frames; e2e
+=(B{-}1)/30+\text{batch wall}
+. The threaded-flow optimisation
+closes most of the gap between the unoptimised path and the
+refresh-disabled upper bound.
+
+Config
+
+fps
+
+p50
+
+p95
+
+e2e p50
+
+e2e p95
+
+(ms)
+
+(ms)
+
+(ms)
+
+(ms)
+
+B{=}16
+refresh
+=
+8 baseline
+
+26.4
+
+501
+
+1439
+
+1001
+
+1939
+
+B{=}16
+refresh
+=
+8 threaded
++
+async
+
+29.6
+
+513
+
+756
+
+1013
+
+1256
+
+B{=}16
+refresh
+=\infty
+(upper bound)
+
+32.2
+
+497
+
+506
+
+997
+
+1006
+
+B{=}8
+6
+refresh
+=
+8 threaded
++
+async
+
+27.4
+
+272
+
+436
+
+506
+
+669
+
+In-pipeline component profile.
+Table
+IV
+
+profiles the
+unoptimised
+cond-refresh path to isolate the
+side/main per-component costs; the sustained champion throughput
+
+after
+the threaded
++
+async flow optimisation is reported
+separately in Table
+III
+. Per-component CUDA-event
+profiling on the side stream and
+
+cuda.synchronize
+-bracketed walls on the main stream at
+
+B{=}16
+yield per-batch wall equal to
+
+\max(\text{side},\text{main})
+within
+0.4\%
+— confirming that
+prefetch overlap is operating as designed and that the
+configuration is TE-bound. The TE prompt encode at
+
+29.2
+ms/frame is the single largest contributor; the
+LLLite-augmented U-Net adds only
+\sim
+1.7
+ms/frame over the
+no-LLLite U-Net once the graph is hot.
+
+TABLE IV:
+In-pipeline component profile of the champion configuration
+on RTX 3090 Ti,
+B{=}16
+,
+K{=}1
+,
+down_blocks
+LLLite,
+refresh
+=
+8. Side and main columns are simultaneous (one overlaps
+the other); the wall row matches
+\max(\text{side},\text{main})
+
+within noise.
+This profile uses the unoptimised
+cond-refresh path
+: the large
+\sigma\!\approx\!306
+ms on the
+wall row is bimodality from the periodic CPU Farnebäck flow on
+the LLLite refresh batch (one in every eight batches; the mean
+
+628
+ms therefore matches the
+26.4
+fps baseline row of
+Table
+III
+, not the
+29.6
+fps threaded-flow row).
+Threading the per-frame flow across
+8
+worker threads and
+async-kicking it during
+prefetch_batch
+reduces the
+p95 wall from
+1439
+to
+756
+ms (Table
+III
+); we
+keep the unoptimised profile here because it cleanly isolates
+the side / main per-component contributions.
+
+Component
+
+ms/batch
+
+ms/frame
+
+Side stream (async w.r.t. main)
+
+TE encode (Qwen3-VL,
+B{=}16
+)
+
+466.9\pm 11.8
+
+29.2
+
+VAE encode
+
+161.5\pm 11.1
+
+10.1
+
+side total
+
+628.4
+
+39.3
+
+Main stream (sequential within batch)
+
+U-Net (
+down_blocks
+LLLite, 38)
+
+302.7\pm 9.1
+
+18.9
+
+VAE decode
+
+190.3\pm 6.8
+
+11.9
+
+main total
+
+493.0
+
+30.8
+
+\max(\text{side},\text{main})
+
+628.4
+
+39.3
+
+measured wall
+
+\boldsymbol{628.3\pm 306.0}
+
+39.3
+
+Isolated batch scaling (TE vs. U-Net).
+
+Table
+V
+reports per-component wall in isolation at
+
+B\in\{1,2,4,8\}
+. The TE shows strong sub-linear scaling
+(
+s{=}t_{B}/(B\!\cdot\!t_{1})
+drops from
+1.000
+at
+B{=}1
+to
+
+0.226
+at
+B{=}8
+, i.e.
+4.4\times
+throughput), while the
+compiled U-Net saturates near
+s{=}0.77
+at the same batch.
+The asymmetry is the direct empirical warrant for buffering
+
+B
+frames before each pipeline call: the TE benefits
+super-linearly while the U-Net cost is near-flat per unit time.
+
+TABLE V:
+Per-component batch scaling in isolation on RTX 3090 Ti.
+Sub-linearity
+s{=}t_{B}/(B\!\cdot\!t_{1})
+; smaller is better
+(
+0.5
+would be a perfect
+2\times
+throughput per unit time).
+The TE benefits substantially from batching; the compiled U-Net
+is already close to peak.
+
+B{=}1
+
+B{=}2
+
+B{=}4
+
+B{=}8
+
+TE
+(eager, fp16) ms
+
+125
+
+136
+
+153
+
+233
+
+sub-linearity
+s
+
+1.000
+
+0.545
+
+0.319
+
+0.226
+
+U-Net
+(compiled, fp16) ms
+
+23
+
+41
+
+74
+
+142
+
+sub-linearity
+s
+
+1.000
+
+0.896
+
+0.806
+
+0.770
+
+Locating our number against StreamDiffusion (same stack).
+
+The published StreamDiffusion
+[
+16
+]
+
+numbers (91
+fps
+SD-Turbo
+K{=}1
+text-to-image; 38
+fps
+
+Kohaku v2.1
++
+LCM-LoRA
+K{=}4
+image-to-image, both at
+
+512^{2}
+on RTX 4090 with TensorRT) come from a different model
+class (CLIP-class text-only encoder vs. a
+2.13
+B vision-aware
+MLLM). For a same-stack reference we re-ran their
+
+examples/benchmark/single.py
+on a vast.ai RTX 4090 instance
+(Ryzen 9 5900X, PyTorch 2.6.0
++
+cu124, TensorRT 10.6, polygraphy
+0.49) with three SD-side compatibility patches needed to make their
+TRT path build under TRT 10.x (new
+diffusers
+import paths
+in
+tensorrt/engine.py
+; TRT 10 rewrite of
+
+allocate_buffers
+in
+tensorrt/utilities.py
+using
+
+num_io_tensors
+and
+get_tensor_*
+; matching
+
+tensorrt-cu12
+variant against the host driver). With the
+TRT engines built (U-Net 1.7 GB FP16 in
+166
+s; tiny VAE
+encoder
++
+decoder,
+\sim
+25
+s each) the benchmark engages TRT
+end-to-end and Kohaku v2.1
++
+LCM-LoRA reaches a steady-state mean of
+
+43.6\!\pm\!0.6
+
+fps
+at
+K{=}2
+and
+29.9\!\pm\!0.3
+
+fps
+at
+
+K{=}4
+(100 iter, 10 warm-up). On the
+same
+4090 host our
+champion measures
+54.9\!\pm\!0.6
+
+fps
+; on RTX 3090 Ti without
+TRT we measure
+32.7
+
+fps
+against StreamDiffusion’s
+
+9.3
+
+fps
+(Kohaku
+K{=}2
+, xformers only). We report these as
+same-stack systems context, not as a benchmark superiority claim,
+because the model classes and conditioning modalities differ.
+
+IV-C
+
+Temporal Quality, Flow Estimator, and Scene Cuts
+
+Cond-refresh sweep.
+Table
+VI
+sweeps
+
+N\in\{1,4,8,16\}
+on the champion
+down_blocks
+
+configuration (
+B{=}8
+,
+K{=}1
+, 38 hooks). Throughput climbs from
+
+25.4
+to
+28.9
+
+fps
+while
+\varepsilon_{w}
+, Sobel and HF-FFT
+are flat to three significant figures and LPIPS-to-
+N{=}1
+rises
+only from
+0
+to
+0.030
+at
+N{=}16
+— small compared with the
+LPIPS-to-4-step-teacher of
+\sim
+0.40
+at the same operating
+point. The same monotone-then-saturated trend holds for the
+108-hook configuration (gap from
+N{=}1
+to
+N{=}8
+is larger
+because the per-hook
+conditioning1
+CNN dominates the
+refresh batch; see supplementary). We adopt
+N{=}8
+.
+
+TABLE VI:
+Cond-refresh sweep on the champion
+down_blocks
+
+configuration (
+B{=}8
+,
+K{=}1
+, 38 hooks).
+\varepsilon_{w}
+, Sobel
+and HF-FFT are flat across
+N
+; LPIPS-to-
+N{=}1
+at
+N{=}16
+is
+
+\sim
+0.03
+, vs. LPIPS-to-4-step-teacher of
+\sim
+0.40
+at the
+same operating point.
+
+N
+
+fps
+
+\boldsymbol{\varepsilon_{w}}
+
+Sobel
+
+HF-FFT
+
+LPIPS
+N=1
+
+1
+
+25.36\pm 0.25
+
+19.26\pm 3.61
+
+4.86
+
+1725
+
+0.000
+
+4
+
+27.67\pm 1.14
+
+19.25\pm 3.61
+
+4.87
+
+1727
+
+0.025\pm 0.004
+
+8
+
+\boldsymbol{28.21\pm 1.59}
+
+19.26\pm 3.60
+
+4.86
+
+1727
+
+0.027\pm 0.006
+
+16
+
+28.90\pm 1.50
+
+19.26\pm 3.64
+
+4.87
+
+1731
+
+0.030\pm 0.008
+
+Long-sequence drift.
+DAVIS clips are short (43–100
+frames); to verify stability over a longer streaming window
+than any single DAVIS clip permits, we loop
+parkour
+to
+480 frames (
+20
+s at
+24
+
+fps
+) and chunk the measured 448
+frames into seven 64-frame windows. A truly multi-minute
+sustained test remains future work. Table
+VII
+reports
+
+\varepsilon_{w}
+, Sobel, HF-FFT, and LPIPS-against-chunk-0; the
+seven-chunk std on each metric stays within the inter-clip noise
+of Table
+II
+(no monotonic drift). LPIPS shows a
+one-time jump at chunk 1 (different per-frame noise produces
+different per-frame stylisation even for repeating inputs) but is
+stable across chunks 1–6.
+
+TABLE VII:
+Long-sequence drift on
+parkour
+looped to 480
+frames (champion configuration, 2-batch warm-up dropped, then
+chunked by 64 frames). Per-chunk std on each metric is within the
+inter-clip noise of Table
+II
+.
+
+chunk
+
+frames
+
+\boldsymbol{\varepsilon_{w}}
+
+Sobel
+
+HF-FFT
+
+LPIPS
+\to
+ch0
+
+0
+
+0–64
+
+17.62
+
+5.30
+
+1755
+
+0.000
+
+1
+
+64–128
+
+17.45
+
+5.00
+
+1736
+
+0.724
+
+2
+
+128–192
+
+17.21
+
+4.87
+
+1669
+
+0.725
+
+3
+
+192–256
+
+17.65
+
+5.37
+
+1782
+
+0.640
+
+4
+
+256–320
+
+17.93
+
+4.82
+
+1690
+
+0.728
+
+5
+
+320–384
+
+18.02
+
+5.06
+
+1715
+
+0.713
+
+6
+
+384–448
+
+17.38
+
+5.34
+
+1791
+
+0.694
+
+7-chunk std
+
+0.27
+
+0.21
+
+45
+
+0.030
+†
+
+†
+std over chunks 1–6 only (chunk 0 is the
+reference).
+
+Robustness to the flow estimator.
+
+We recompute
+\varepsilon_{w}
+on champion outputs using RAFT-Large
+
+[
+36
+]
+
+(
+torchvision
+
+raft_large
+with
+
+C_T_SKHT_V2
+weights). On the 9-clip champion subset the two
+estimators’ per-clip means agree to within
+
+-0.7\pm 5.6\%
+(RAFT
+18.07\pm 2.02
+vs. Farnebäck
+
+18.29\pm 2.71
+). On the three rows of Table
+II
+that
+span the no-LLLite / champion / 108-hook smoothing-artifact
+spectrum, both estimators rank the configurations identically and
+the per-aggregate relative difference is
+\leq 2\%
+, so the ordering
+claims are not Farnebäck-specific.
+
+Scene-cut robustness.
+Periodic cond-refresh with
+N{=}8
+
+can leave the LLLite embedding up to
+N{-}1
+batches stale at a
+hard scene change. We constructed three synthetic hard-cut clips
+(
+blackswan_goat
+,
+kite_dance
+,
+
+libby_camel
+; first 32 frames of one DAVIS sequence
+concatenated with first 32 of another) timed so the four post-cut
+batches all reuse the pre-cut
+cond_emb
+(the worst
+possible alignment). On these clips
+\varepsilon_{w}
+cannot
+distinguish
+N{=}8
+from
+N{=}1
+(per-clip absolute
+
+\leq 0.11
+,
+<\!0.7\%
+relative in every window) because a
+stale-but-fixed cond still produces a temporally consistent output.
+LPIPS-against-
+N{=}1
+does surface the divergence: pre-cut
+
+0.020\pm 0.002
+vs. post-cut 8-frame window
+0.030\pm 0.004
+
+(
+\sim
+50\%
+relative increase, reproduced on all three clips;
+Fig.
+2
+shows the visual pattern on
+
+blackswan_goat
+). The takeaway is a metric one:
+
+\varepsilon_{w}
+alone is insufficient to certify cut-robustness;
+a production deployment for cut-heavy streams should trigger an
+explicit refresh on cut detection.
+
+Fig. 2:
+Scene-cut at frame 32 on the synthetic
+
+blackswan_goat
+clip.
+Top:
+
+N{=}8
+default
+cond-refresh (the stale embedding from batch 0 was computed on
+pre-cut swan content).
+Bottom:
+
+N{=}1
+always-refresh
+oracle (refreshes every batch, including batch 4 on post-cut goat
+content). The visual divergence between the two rows is small in
+the pre-cut window (frames 28–31, both styling the same swan
+content) and remains small in the post-cut window
+(frames 32–35) — small enough that
+\varepsilon_{w}
+does not
+resolve it (
+\leq 0.11
+absolute,
+<\!0.7\%
+relative) but large
+enough that LPIPS against
+N{=}1
+does (
+0.020\!\to\!0.030
+,
+
+\sim
+50\%
+relative jump). The cut is marked with a dashed
+vertical line.
+
+TABLE VIII:
+Scene-cut robustness:
+\varepsilon_{w}
+and
+LPIPS-against-oracle on three synthetic hard-cut clips at
+worst-case timing (cut at frame 32, mid-stale window).
+
+N{=}8
+is the default cond-refresh interval;
+N{=}1
+is the
+always-refresh oracle equivalent to a perfect cut detector.
+
+\varepsilon_{w}
+does not distinguish the two (
+\leq 0.11
+absolute),
+but LPIPS against
+N{=}1
+surfaces a
+\sim
+50\%
+post-cut
+relative jump, reproduced on each clip.
+
+Clip
+
+\boldsymbol{\varepsilon_{w}^{N=8}}
+
+\boldsymbol{\varepsilon_{w}^{N=1}}
+
+LPIPS pre
+
+LPIPS post-8
+
+blackswan_goat
+
+17.89
+
+17.78
+
+0.0216
+
+0.0319
+
+kite_dance
+
+20.71
+
+20.80
+
+0.0177
+
+0.0335
+
+libby_camel
+
+17.33
+
+17.30
+
+0.0220
+
+0.0259
+
+mean
+\pm
+std
+
+18.64\pm 1.81
+
+18.63\pm 1.89
+
+0.020\pm 0.002
+
+\boldsymbol{0.030\pm 0.004}
+
+IV-D
+
+Held-Out and Cross-Dataset Transfer
+
+Table
+IX
+consolidates four transfer experiments
+along three axes: held-out videos within DAVIS, unused DAVIS
+sequences for the released v3 adapter, held-out prompts, and
+non-DAVIS sources. (i) A separate
+v5-heldout
+adapter trained
+on 7 of 10 DAVIS sequences and evaluated on the held-out 3 reaches
+
+\varepsilon_{w}
+
+19.14\pm 0.68
+versus v3’s in-domain
+21.05\pm 2.04
+
+on the same 3 sequences — within in-clip noise. (ii) Evaluating the
+released v3 adapter on 19 additional DAVIS sequences it never saw
+during training yields fps
+29.97\pm 0.45
+,
+\varepsilon_{w}
+
+19.14\pm 4.53
+, within inter-clip noise of the in-domain
+DAVIS-10 champion (
+30.07\pm 0.37
+,
+18.96\pm 3.34
+). (iii) On 15
+clips from 7 non-DAVIS sources (Big Buck Bunny CC-BY
+\times
+3,
+Sintel CC-BY
+\times
+1, Jellyfish
+\times
+3, MDN CC0
+\times
+2,
+learning-container
+\times
+1, Intel IoT sample-videos
+\times
+5)
+fps reaches
+30.50\pm 0.34
+and
+\varepsilon_{w}
+
+19.31\pm 4.54
+,
+again indistinguishable from in-domain DAVIS. (iv) On three
+held-out style prompts the gradient tracks semantic distance to the
+training prompts —
+van Gogh
+matches the in-domain champion
+on every metric,
+ukiyo-e
+degrades roughly
+2\times
+, and
+
+comic halftone
+fails (high-frequency texture outside the
+adapter’s training manifold). CLIP-sim
+
+[
+31
+]
+provides an
+independent prompt-adherence signal that ranks the four prompts in
+the same order (Table
+IX
+, last column).
+Figure
+3
+shows the visual pattern on three
+DAVIS clips.
+
+TABLE IX:
+Transfer evaluation. (a) v5-heldout: separate adapter
+trained on 7 DAVIS, evaluated on 3 held-out. (b) v3 on 19
+additional unused DAVIS sequences. (c) v3 on 15 non-DAVIS clips
+(7 sources). (d) the v4 multi-prompt adapter on 3 held-out
+style prompts. All use the champion configuration.
+
+Axis
+
+Set
+
+N_{\text{seq}}
+
+fps
+
+\boldsymbol{\varepsilon_{w}}
+
+CLIP
+
+in-domain
+
+DAVIS-10 champ.
+
+10
+
+30.07
+
+18.96
+
+0.218
+
+held-out video
+
+v5h, 3 clips
+
+3
+
+33.06
+
+19.14
+
+–
+
+unused DAVIS
+
+v3, 19 clips
+
+19
+
+29.97
+
+19.14
+
+–
+
+cross-dataset
+
+7 sources, 15 clips
+
+15
+
+30.50
+
+19.31
+
+–
+
+held-out prompt
+
+van Gogh
+
+9
+
+32.48
+
+18.41
+
+0.231
+
+held-out prompt
+
+ukiyo-e
+
+9
+
+32.15
+
+39.10
+
+0.157
+
+held-out prompt
+
+comic halftone
+
+9
+
+31.76
+
+50.29
+
+0.172
+
+Fig. 3:
+Qualitative held-out-prompt results on three DAVIS
+clips (
+blackswan
+,
+dance-twirl
+,
+
+parkour
+). Top: input; second row: in-domain oil-painting
+(training prompt); bottom three rows: held-out prompts on the same
+v3 adapter, never seen during training. The visual pattern tracks
+Table
+IX
+:
+van Gogh
+generalises cleanly,
+
+ukiyo-e
+captures flat-colour line-art partially, and
+
+comic halftone
+
+is the principal failure mode of
+the v3 adapter
+— the halftone-dot texture is unlike any
+training-prompt style, the LLLite cond-encoder was not exposed to
+it, and the output collapses to a noisy high-frequency rendering
+(HF-FFT
+9189
+vs. in-domain
+1760
+). Single mid-clip frame
+(
+t{=}16
+) per cell.
+
+Multi-prompt v4 LLLite per-prompt breakdown
+
+The held-out-prompt column above is evaluated on a v3-class
+adapter that has been trained on five style prompts simultaneously
+(oil painting, watercolor, pencil sketch, anime cel-shaded,
+3D-render ray-traced) — 110 distillation pairs per prompt,
+
+550
+pairs total, otherwise identical to the v3 recipe. We refer
+to this adapter as
+v4
+. Table
+X
+reports
+the v4 per-prompt breakdown on the same DAVIS-9 split as the
+champion. v4 maintains v3’s in-domain quality on oil painting
+(
+\varepsilon_{w}
+
+18.21
+vs. v3’s
+18.34
+) and reaches
+
+30+
+
+fps
+on every prompt, with
+\varepsilon_{w}
+tracking the
+natural high-frequency content of each style. The 3D-render
+prompt is slightly slower because the encoding for an MLLM
+instruction containing two highlighted concepts (3D + ray tracing)
+sits at the high end of the TE compute distribution; the U-Net
+path is unchanged.
+
+TABLE X:
+Multi-prompt v4 LLLite per-prompt breakdown on DAVIS-9
+(
+N_{\text{seq}}{=}9
+). v4 holds in-domain quality on oil painting
+(
+\varepsilon_{w}
+
+18.21
+vs. v3’s
+18.34
+) and runs at
+
+30+
+
+fps
+on every prompt; per-prompt
+\varepsilon_{w}
+tracks
+each style’s natural high-frequency content (sharp pencil lines
+flicker more than soft watercolor edges).
+
+Prompt
+
+fps
+
+\boldsymbol{\varepsilon_{w}}
+
+v3 single (oil)
+†
+
+32.66\pm 1.00
+
+18.34\pm 2.66
+
+oil painting
+†
+
+32.25\pm 0.41
+
+18.21\pm 1.92
+
+watercolor
+†
+
+32.44\pm 0.30
+
+15.46\pm 3.90
+
+pencil sketch
+†
+
+32.41\pm 0.41
+
+28.08\pm 3.64
+
+anime cel-shaded
+†
+
+32.16\pm 0.35
+
+24.77\pm 5.18
+
+3D-render ray-traced
+†
+
+29.72\pm 0.25
+
+23.43\pm 4.29
+
+v4 overall
+(5 prompts
+\times
+9 seq.)
+†
+
+\boldsymbol{31.80\pm 1.11}
+
+21.99\pm 5.94
+
+†
+champion configuration (
+B{=}16
+,
+K{=}1
+,
+
+down_blocks
+, refresh
+N{=}8
+).
+
+IV-E
+
+Hardware Scaling
+
+Table
+XI
+reports the champion configuration on
+three consumer NVIDIA GPUs at the same operating point, same v3
+LLLite checkpoint, same 10 DAVIS sequences. RTX 4090 (Ada
+Lovelace,
++0\%
+memory bandwidth over 3090 Ti) reaches
+
+54.9\pm 0.6
+
+fps
+(
++83\%
+); RTX 5090 (Blackwell,
++78\%
+
+memory bandwidth,
++34\%
+TFLOPs, torch nightly
+2.12
+-cu128 for
+SM_120 support) reaches
+\textbf{74.1}\!\pm\!4.5
+
+fps
+
+(
++147\%
+over 3090 Ti,
++35\%
+over 4090). The 5090 scaling is
+closer to the compute ratio than the memory-bandwidth ratio,
+indicating the champion is no longer purely bandwidth-bound on the
+TE side at this generation.
+
+TABLE XI:
+Hardware scaling
+of the champion configuration
+(
+B{=}8
+,
+K{=}1
+,
+down_blocks
++
+refresh, BF16). fps
+values are short-window steady-state across the same 10 DAVIS-10
+sequences as Table
+II
+; not a 480-frame sustained
+measurement. Same v3 LLLite checkpoint; the RTX 5090
+row additionally uses the PyTorch-nightly stack disclosed in
+§
+IV-F
+.
+
+GPU
+
+Gen.
+
+Mem. BW
+
+fps
+
+\varepsilon_{w}
+
+RTX 3090 Ti
+
+Ampere
+
+1008 GB/s
+
+30.07\pm 0.37
+
+18.96\pm 3.34
+
+RTX 4090
+
+Ada
+
+1008 GB/s
+
+54.9\pm 0.6
+
+18.96\pm 3.34
+
+RTX 5090
+
+Blackwell
+
+1792 GB/s
+
+\boldsymbol{74.1\pm 4.5}
+
+19.73\pm 3.47
+
+IV-F
+
+Reproducibility
+
+All measurements were produced from a single commit of the public
+inference repository (
+otanl/dreamlite-stream
+, commit hash
+
+efe2caa
+); the code state is archived as Zenodo release
+
+v0.1.0-tcsvt-submission
+at
+
+DOI 10.5281/zenodo.20389428
+,
+and the released v3 LLLite adapter weights are attached to the
+GitHub release with the same tag.
+The 3090 Ti and 4090 runs use Windows 11 Pro,
+PyTorch 2.6.0+cu124, Triton 3.2 (Windows port), and CUDA driver
+
+\geq
+565
+. The RTX 5090 row additionally requires PyTorch
+nightly
+\geq
+2.12
+-cu128 for SM_120 compute-capability support;
+the exact wheel pinning is recorded in
+
+environment_5090.yml
+alongside the repository, and we
+disclose this explicitly because the nightly stack is unstable
+across snapshots. The v3 LLLite adapter checkpoint
+(
+lllite_v3.safetensors
+) and its SHA-256 are recorded in
+the supplementary
+config.json
+together with the prompt
+list and DAVIS sequence split. Each table number is backed by a
+per-sequence JSONL file in the supplementary; the included
+
+scripts/champion_eval.py
+,
+
+scripts/sustained_throughput_test.py
+, and
+
+scripts/cross_dataset_eval.py
+regenerate
+Tables
+II
+,
+III
+,
+IV
+,
+
+V
+,
+VI
+,
+VII
+,
+
+VIII
+,
+IX
+,
+X
+,
+
+XI
+, and
+XII
+from raw DAVIS and
+non-DAVIS inputs. Warm-up rules (first batch excluded; partial
+tail batches dropped) are identical across all reported numbers.
+
+Base-model availability.
+The pipeline depends on the
+upstream DreamLite-mobile base-model checkpoint
+
+[
+10
+]
+. At submission time the inference code
+is released under an open licence, while the base-model weights
+are listed on a release plan with the weights themselves gated
+by a safety-review / request process; we used the bf16/fp16
+weights available to us at the time of these experiments and
+record the specific checkpoint hash in our supplementary
+
+config.json
+. We do not claim public reproducibility of
+the upstream base-model weights themselves; we release the
+inference code, evaluation harness, our v3 Temporal-LLLite
+adapter weights, the LLLite-baked TRT export tooling, and the
+benchmark / ablation scripts. Readers should consult the
+DreamLite-mobile and Qwen3-VL release notes for current access
+modality and licence constraints, as these may change after
+submission.
+
+V
+Negative Results and Case Studies
+
+We summarise five engineering dead ends and one distillation case
+study; each ruled out a tempting direction and shaped the final
+recipe.
+
+Naive previous-latent init mixing
+
+Mixing the previous output latent into the noisy init at frame
+t
+
+(a standard SD streaming trick
+[
+16
+]
+)
+degenerates within
+\sim
+10 frames into a self-reinforcing single-colour
+attractor on the 4-step distilled flow-matching scheduler. The
+4-step schedule lacks the integration steps to pull the trajectory
+back on-manifold once the init is off-distribution.
+\varepsilon_{w}
+
+falsely drops (the output is near-static); reference fidelity
+
+L_{1}^{\text{ref}}
+catches the failure.
+
+Cond-image manipulation in distilled edit models
+
+Replacing the right half of the spatial-concat
+edit
+input
+with a flow-warped previous output, a learned T2I keyframe, or a
+blend all break: the distilled U-Net trained with the cond-image
+matching the input distribution drifts to an abstract red/orange
+blur when fed a stylised intermediate or a hallucinated keyframe.
+Cond-side conditioning is not a free temporal channel.
+
+Pure flow-warped speculation
+
+Speculatively predicting frame
+t{+}1
+by warping frame
+t
+’s latent
+and skipping the U-Net unless flow magnitude crosses a threshold,
+in the spirit of speculative decoding
+[
+19
+]
+,
+reaches the noise floor of the base flicker without a
+temporally-consistent base (
+\sim
+30 vs. input flicker
+\sim
+28).
+
+\varepsilon_{w}
+is constructively low (
+\sim
+11) because the output
+is by construction a flow-warp of the previous frame; the metric is
+invariant under exactly that warp. We use this as motivation for
+cond-refresh: amortising the LLLite cost via
+N{>}1
+is much cheaper
+than a learned skip mechanism.
+
+TensorRT FP16 with wide-range MLLM TE outputs
+
+The pure-FP16 TRT 10.16 U-Net engine produces visibly broken
+outputs in pipeline: Qwen3-VL TE outputs have unusual range
+(std
+37
+, min
+-854
+, max
+1160
+), and the
+
+encoder_hid_proj
+into the U-Net attention dimension
+overflows FP16 attention/softmax kernels selected by TRT. Standard
+remedies — per-layer FP32 hints on
+normalization
+,
+
+softmax
+, and
+matrix_multiply
+;
+
+OBEY_PRECISION_CONSTRAINTS
+; FP32 ONNX
+\to
+FP16 engine —
+do not recover accuracy. A pure-FP32 engine is numerically
+equivalent to PyTorch (cos-sim
+0.999996
+) but at
+23.7
+
+fps
+,
+slower than the PyTorch
++
+compile path. An LLLite-baked TRT export
+(38 hooks’
+cond_emb
+exposed as separate engine bindings)
+is
+structurally
+correct (FP32 cos-sim
+0.999999
+, FP16 at
+
+2.14\times
+PyTorch U-Net wall) but blocked by the same FP16
+attention overflow (cos-sim drops to
+0.77
+on real Q3-VL
+embeddings). FP8-capable hardware (H100, Blackwell) with explicit
+per-tensor attention scaling is a plausible direction we have not
+verified.
+
+TE template-token pruning absorbed by side-stream slack
+
+Removing the 80-token Qwen3-VL system prompt from the chat template
+cuts TE wall by
+13\%
+(
+262\to 229
+ms at
+B{=}8
+) in isolation,
+but does not move end-to-end fps (
+30.09\to 30.10
+): the saving is
+fully absorbed by side-stream slack because the main stream sets
+the wall. Quality regresses slightly (
+\varepsilon_{w}
+
+18.4\to 19.9
+), consistent with the system prompt being
+load-bearing for instruction-tuned behaviour.
+Lesson:
+once
+side-stream pipelining is in place, the per-frame bottleneck migrates
+to the slower stream and improvements to the faster stream are
+invisible without also accelerating the slower one.
+
+LCM-LoRA distillation case study: warping error rewards
+smoothing
+
+A rank-16 LoRA distilled against post-hoc-blended
+(
+\alpha{=}0.85
+) teacher targets reached
+\varepsilon_{w}
+
+10.10
+on DAVIS-9, ostensibly halving the LLLite champion’s
+
+18.34
+. Inspecting outputs revealed a
+46\%
+drop in HF-FFT
+(
+942
+vs.
+1760
+) and Sobel
+2.29
+vs.
+4.74
+: the LoRA had
+learned a smoothing prior, not a temporal mechanism, and
+
+\varepsilon_{w}
+rewarded the smoothness mechanically. Retraining
+against unblended (
+\alpha{=}1.0
+) targets and doubling rank to 32
+partially recovered sharpness (Sobel
+2.54
+, HF-FFT
+1193
+) but did
+not close the gap. The remaining gap is a combination of (i)
+
+K{=}1
+inference under-sampling the diffusion trajectory of a
+4-step distilled base, (ii)
+v
+-prediction MSE being dominated by
+low-frequency error, and (iii) the choice of per-frame teacher not
+transferring temporal structure that the LLLite path obtains
+explicitly via the warped previous output.
+Methodological
+takeaway:
+on this pipeline,
+\varepsilon_{w}
+alone is not a
+sufficient temporal-consistency metric; pair it with a
+spatial-fidelity probe (Sobel, HF-FFT, or LPIPS) before declaring
+a smoothness gain. Table
+XII
+reports the full
+v1 / v2 / v3 progression with the champion baseline included for
+reference; Figure
+4
+visualises the artifact.
+
+TABLE XII:
+LCM-LoRA distillation case study on DAVIS-9
+(oil-painting prompt). v1 (blended teacher targets) appears to
+halve
+\varepsilon_{w}
+but does so by softening the output by
+
+\sim
+2\times
+on Sobel and HF-FFT. v2 (unblended targets)
+recovers part of the sharpness gap; the residual is
+LoRA-rank / step-count-bound, not data-bound. v3 (rank 32) does
+not move the sharpness needle further. The combined v1+LLLite row
+appears redundant at the metric level but inspecting the output
+reveals the LLLite hooks have nothing to add to an already-flat
+signal.
+
+Configuration
+
+fps
+
+\boldsymbol{\varepsilon_{w}}
+
+Sobel
+
+HF-FFT
+
+LLLite v3 champion (no LoRA)
+
+32.66
+
+\pm
+1.00
+
+18.34
+
+\pm
+2.66
+
+4.74
+
+1760
+
+v1 LoRA (blended target)
+
+33.05
+
+\pm
+0.53
+
+10.10
+
+\pm
+1.33
+
+2.29
+
+942
+
+v1 LoRA + LLLite v3
+
+31.39
+
+\pm
+0.25
+
+10.10
+
+\pm
+1.12
+
+–
+
+–
+
+v2 LoRA (rank 16, unblended)
+
+32.15
+
+\pm
+0.82
+
+10.67
+
+\pm
+1.46
+
+2.54
+
+1193
+
+v3 LoRA (rank 32, unblended)
+
+33.02
+
+\pm
+0.60
+
+10.52
+
+\pm
+1.43
+
+2.53
+
+1187
+
+Fig. 4:
+The smoothing artifact (DAVIS
+blackswan
+, mid-clip
+frame, oil-painting prompt).
+Top:
+champion
+(
+down_blocks
+subset) preserves brushstrokes and water
+reflections; all 108 LLLite hooks (middle) or a rank-16 LCM-LoRA
+on blended targets (right) both collapse to a noticeably softer
+character.
+Bottom:
+re-distilling on
+unblended
+
+teacher targets (v2, middle) recovers some sharpness; rank 32 (v3,
+right) does not move the needle further.
+
+VI
+Conclusion and Future Work
+
+We presented a systems study of video-rate streaming-throughput
+stylisation on a vision-aware MLLM-conditioned distilled
+edit-diffusion stack — an operating point of
+
+27
+–
+30
+
+fps
+sustained with
+0.5
+–
+1.0
+s end-to-end p50
+latency, not an interactive low-latency one. The
+inversion of the per-frame bottleneck once the U-Net is distilled —
+the MLLM text encoder becomes the critical path — makes the standard
+streaming-V2V design centre (denoiser acceleration) the wrong
+starting point. We instead show that three engineering mechanisms —
+asymmetric side-stream / main-stream pipelining with batched TE amortisation and optional static-prompt caching, a
+compile-friendly LLLite reformulation, and a periodic cond-refresh
+schedule with a hook subset — together sustain
+27
+–
+30
+
+fps
+
+(
+B\in\{8,16\}
+;
+32.7
+
+fps
+short-window peak) at
+
+512\!\times\!512
+on a single RTX 3090 Ti,
+54.9
+
+fps
+on
+RTX 4090, and
+74.1
+
+fps
+on RTX 5090, with the released temporal
+adapter transferring within in-clip noise to 19 unused DAVIS
+sequences and 15 non-DAVIS clips from 7 sources. Negative results
+on previous-latent mixing, cond-image manipulation, flow-warped
+speculation, TensorRT FP16, and TE template pruning, together with
+the LCM-LoRA smoothing case study, are intended as guardrails for
+practitioners working in this regime.
+Limitations.
+The
+in-domain quality numbers use a v3 adapter trained on the same 10
+DAVIS sequences they are evaluated on; the held-out splits address
+this on the video axis but the held-out-prompt experiments show
+adapter quality degrades gracefully outside the training-prompt
+manifold. The 1-step inference recipe is empirical on DreamLite-mobile
+only.
+Future work.
+Four directions are natural: an
+LLLite-aware TRT FP8 path on H100/Blackwell hardware (the
+LLLite-baked export reported here is already structurally correct);
+a learned 1-step distillation specialised for this pipeline with a
+perceptual
++
+adversarial loss (our LCM-LoRA case study suggests
+
+v
+-prediction MSE is the wrong objective); a lower-resolution
+(
+256^{2}
+-native) LLLite retrain to probe whether the
+asymmetric-batched-dispatch recipe still applies once the
+TE / U-Net cost ratio shifts further toward the denoiser, as it
+typically does on resource-constrained hardware; and a
+motion-adaptive cond-refresh schedule that replaces the fixed
+
+N
+-batch policy with a flow-magnitude or salience-driven trigger,
+following the adaptive-cache lineage of
+
+[
+13
+,
+27
+,
+5
+]
+.
+Open-source code, trained adapter weights, and the full
+per-sequence ablation JSONLs accompany the submission.
+
+Acknowledgments
+
+The author thanks the DreamLite-mobile team for releasing the base
+model that this work builds on, and the kohya-ss / sd-scripts
+maintainers for the LLLite reference implementation.
+
+In accordance with the IEEE policy on the use of generative AI
+(IEEE Author Center, April 2024), the author discloses that
+Anthropic Claude (
+Sonnet 4.5
+and
+Opus 4.7
+) and
+OpenAI GPT-5.5 were used during the preparation of this work.
+The AI systems were used at the following levels:
+(i)
+writing assistance
+— copy-editing, phrasing, and
+structural suggestions across all sections of the manuscript
+(Abstract, Introduction, Related Work, Method, Experiments,
+Negative Results, Conclusion, and this Acknowledgments section),
+with all wording reviewed and edited by the author;
+(ii)
+implementation assistance
+— code drafting,
+debugging, and iterative design discussion for the training,
+inference, and evaluation scripts referenced in
+§
+III
+and §
+IV
+; and
+(iii)
+no autonomous content generation
+— the AI systems
+did not generate figures, tables, numerical results, or claims.
+All research direction, experimental decisions, measurements, and
+interpretive claims are the author’s own, and the author takes
+full responsibility for the content of the paper.
+

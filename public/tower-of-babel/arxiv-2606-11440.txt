@@ -1,0 +1,1661 @@
+InfraMind : Infrastructure-Aware Multi-Agent Orchestration
+Ahasan Kabir, Jiaqi Xue, Mengxin Zheng, Qian Lou
+
+Abstract
+Existing multi-agent LLM orchestration methods, ranging from brute-force ensembles to learned routers, select models and topologies based on task and model features. However, these methods do not consider the runtime state of the serving infrastructure. On shared GPU clusters under concurrent load, this infrastructure blindness causes systematic resource underutilization: preferred models accumulate deep request queues while equally capable alternatives sit idle. In multi-agent pipelines, where each query triggers multiple sequential model calls, these delays then compound across every downstream step. Closing this gap is challenging because the relevant infrastructure signals (queue depths, KV-cache pressure, latencies) are dynamic and noisy, and they must drive three different decisions: planning, per-step routing, and scheduling. We introduce InfraMind , a framework that makes the entire multi-agent stack infrastructure-aware. An infra-aware planner conditions topology and role selection on real-time system load and remaining budget, biasing toward simpler graphs under congestion and richer ones at low load. An infra-aware executor then observes per-model queue depths, cache utilization, and response latencies at each agent step to decide which model to call and how deeply to reason; a budget-aware scheduler further reorders each model’s queue so that urgent requests are served first. Cast as a hierarchical constrained MDP and solved end-to-end via reinforcement learning, the system learns to balance quality against latency automatically. Across five benchmarks, InfraMind delivers up to + 7.6 +7.6 pp accuracy over the prior baseline at low load with up to 7 × \times lower latency, and sustains up to 99.9 % 99.9\% SLO compliance under high load where every baseline drops below 50 % 50\% .
+
+
+
+1
+Introduction
+
+Multi-agent LLM systems, where multiple models collaborate through debate, review, or sequential chains
+(
+26
+;
+10
+;
+15
+)
+, are the dominant paradigm for complex tasks, and recent work has focused on learning the orchestration itself: which models to call, in what topology, and with what roles
+(
+21
+;
+31
+;
+28
+)
+. Yet every existing method selects models from static task features alone, ignoring the
+runtime state
+of the serving infrastructure. As multi-agent workloads move onto shared GPU clusters serving pools of open-weight models
+(
+7
+;
+8
+)
+via vLLM
+(
+14
+)
+and SGLang
+(
+30
+)
+, this becomes a critical blind spot. A model that is “fast” in isolation may have hundreds of requests queued while an idle alternative could respond instantly, and in multi-agent pipelines a bottleneck at any step delays every downstream agent. We call this failure mode
+infrastructure blindness
+.
+
+Figure
+1
+exposes the symptoms of infrastructure blindness. We profile MasRouter
+(
+28
+)
+, the state-of-the-art task-adaptive router, on a shared pool of five models under Poisson load, and observe three failure patterns that recur across regimes. First, static routing produces extreme load imbalance: preferred small models accumulate queues exceeding 130 requests while equally capable large models sit nearly idle (Figure
+1
+a). Second, this imbalance translates directly into avoidable latency: congested models incur
+>
+30 s end-to-end delays on queries that an idle alternative could answer in under 10 s (Figure
+1
+b). Third, the failure inverts at low load: 67% of large-model GPU capacity goes unused, leaving quality on the table that deeper reasoning could otherwise harvest (Figure
+1
+c). In both regimes, the orchestrator commits to routing decisions in a training-time information regime that is fundamentally disconnected from runtime conditions.
+
+Figure 1
+:
+Load-agnostic routing in practice (MasRouter on MATH, Poisson arrivals).
+(a)
+Per-model queue depth.
+(b)
+Per-model end-to-end latency.
+(c)
+Large-model GPU utilization at low load.
+
+Solving these problems is hard for three reasons. First,
+planning the reasoning structure
+(topology, agent count, and roles) from the current runtime state is challenging because the infrastructure state is dynamic and changes during execution. Prior work sidesteps this and decides the structure from task features alone. Second,
+picking which model to call and how deeply it should reason at each step
+is a fine-grained decision over noisy, fast-changing runtime signals (queue depths, KV pressure, latencies). Prior routers ignore these signals: they choose the model from the query alone, overloading preferred ones (Figure
+1
+a,b), and never adapt reasoning depth to resource availability, leaving idle capacity untapped (Figure
+1
+c). Third,
+prioritizing among the many multi-agent steps that arrive together
+is hard because each step carries its own remaining budget and urgency. Prior work defaults to FCFS and ignores both, so tight-budget requests wait behind relaxed ones and miss their SLOs. The three decisions are also coupled: a choice at any layer reshapes the runtime state the others must respond to. Heuristics tuned one layer at a time therefore leave the cross-layer interactions on the table.
+
+Figure 2
+:
+InfraMind
+reads live system metrics and routes around congestion while adapting reasoning depth (Flash/Concise/DeepThink) to current capacity.
+
+We propose
+InfraMind
+, which places an infrastructure-aware component at each of these decision points. At
+query arrival
+, an infrastructure-aware
+planner
+conditions topology, agent-count, and role choices on a summary of current load and remaining budget, biasing toward simpler graphs when the system is congested and richer ones when capacity is available. At
+each agent step
+, an infrastructure-aware
+executor
+reads per-model queue depths, KV cache utilization, and end-to-end latencies, then jointly selects the target model and reasoning depth (Flash / Concise / DeepThink). Figure
+2
+contrasts this with a load-agnostic router: the baseline (left) picks by quality alone and stacks requests onto the same preferred large model, while our executor (right) sees that the large model’s queue is saturated, redirects the call to an idle smaller model, and invests in DeepThink, using the time saved by skipping the queue to compensate for the smaller model’s lower headline quality, so the answer arrives at comparable accuracy and a fraction of the latency. At
+each model’s queue
+, a budget-aware
+Earliest-Deadline-First scheduler
+reorders pending requests so tight-budget queries are not blocked behind relaxed ones. The three components are cast as a hierarchical constrained MDP and trained end-to-end via reinforcement learning, automatically discovering the quality–latency trade-off across load levels.
+
+Contributions.
+(1) We identify
+infrastructure blindness
+as a systematic failure of multi-agent LLM systems and quantify it empirically (§
+1
+). (2) We propose
+InfraMind
+, the first end-to-end infrastructure-aware multi-agent orchestrator, comprising an infra-aware planner, executor, and EDF scheduler trained jointly as a single hierarchical RL policy under a shared budget constraint (§
+3
+, §
+4
+). (3) Across five benchmarks,
+InfraMind
+delivers up to
++7.6
+pp accuracy over the strongest baseline at low load with up to 7
+\times
+lower latency, and sustains up to
+99.9\%
+SLO compliance under high load where every baseline drops below
+50\%
+(§
+5
+).
+
+2
+Related Work
+
+Multi-agent LLM orchestration.
+
+Multi-agent systems improve task performance by orchestrating multiple LLM instances in structured collaboration topologies. Research in this area has progressively introduced more intelligence into the orchestration layer, but a critical dimension, runtime infrastructure state, remains entirely unaddressed.
+
+Three representative systems illustrate increasing task-level sophistication.
+Mixture-of-Agents (MoA)
+
+(
+21
+)
+runs every model in the pool in parallel and synthesises via a fixed aggregator, providing zero routing intelligence: the slowest model bottlenecks every response and queue congestion on any single model degrades the entire system.
+GPTSwarm
+
+(
+31
+)
+models multi-agent collaboration as a directed graph with REINFORCE-learned edge weights, but the graph is frozen at test time: edge weights are fixed after training, so the system cannot reroute when a preferred model becomes congested during deployment.
+MasRouter
+
+(
+28
+)
+introduces the most sophisticated task-adaptive orchestration to date: a VAE-based cascaded controller that jointly determines topology, agent count, role assignments, and per-role model from the query embedding, enabling task-specific routing. Yet its decisions are based entirely on static task features, with no mechanism to distinguish an idle model from a saturated one and a fixed prompting strategy regardless of whether the budget is tight or generous.
+
+LLM routing and cost-aware serving.
+
+Outside the multi-agent setting, a growing body of work addresses the cost and quality of single-model routing. RouteLLM
+(
+18
+)
+learns a quality-based router that directs queries to either a strong or weak model based on predicted difficulty, achieving cost savings without significant quality loss. TREACLE
+(
+29
+)
+extends this to budget-constrained LLM cascades with joint model and prompt selection. R2-Router
+(
+27
+)
+further refines query-conditioned routing by incorporating reasoning-aware difficulty signals to choose between models. However, these systems operate over single-turn, single-model calls; they do not handle the multi-step, multi-agent workflows where routing decisions at each step affect the quality and latency of downstream agents.
+
+On the serving infrastructure side, vLLM
+(
+14
+)
+introduced PagedAttention for efficient KV cache management and supports continuous batching, priority-based scheduling, and detailed telemetry via Prometheus endpoints. Sarathi-Serve
+(
+1
+)
+further optimizes prefill–decode scheduling with chunked prefills. These systems expose precisely the signals (queue depth, cache utilization, per-request latency) that an infrastructure-aware orchestrator needs, but they optimize inference
+within
+a single model and make no cross-model routing decisions.
+InfraMind
+sits at the intersection: it consumes the telemetry that serving systems expose to make the cross-model routing decisions that those systems do not.
+
+Table 1
+:
+How each orchestration system behaves at decision time and under stress.
+
+System
+
+Model Selection
+
+Reasoning Depth
+
+When Load Increases
+
+Queue Scheduling
+
+MoA
+
+All models, every query
+
+Fixed
+
+Slowest model bottlenecks all
+
+FCFS
+
+GPTSwarm
+
+Learned DAG, frozen at test
+
+Fixed
+
+Cannot reroute around congestion
+
+FCFS
+
+MasRouter
+
+Task-adaptive (VAE)
+
+Fixed
+
+Blind to queues; latency explodes
+
+FCFS
+
+InfraMind
+(ours)
+
+Task + infra-adaptive, per step
+
+Budget-adaptive
+
+Redirects to idle models
+
+Budget-first (EDF)
+
+3
+Problem Formulation
+
+Multi-agent orchestration involves decisions at two timescales:
+what reasoning structure to use
+(topology, roles, agent count), chosen once per query primarily from query semantics, and
+how to execute each step
+(which model, how much reasoning), chosen repeatedly under fast-changing per-model queues, latencies, and remaining budget. We formalize this as a hierarchical Constrained Markov Decision Process (CMDP)
+(
+2
+)
+in which both levels see infrastructure state, but at appropriate granularities.
+
+State.
+
+Consider
+N
+LLM services
+\mathcal{M}=\{m_{1},\ldots,m_{N}\}
+on shared GPUs and prompting strategies
+\mathcal{S}=\{\text{Flash},\text{Concise},\text{DeepThink}\}
+. A query
+q
+arrives with a time budget
+\beta
+. At each agent step
+k
+, the executor observes:
+
+s_{k}=\big[\underbrace{\mathbf{e}_{q},\;\mathbf{e}_{r_{k}}}_{\text{what to solve}},\;\;\underbrace{b_{k}}_{\text{time left}},\;\;\underbrace{\mathbf{d}^{\text{queue}},\;\mathbf{d}^{\text{e2e}},\;\mathbf{d}^{\text{kv}}}_{\text{system load}}\big]
+
+(1)
+
+where
+\mathbf{e}_{q},\mathbf{e}_{r_{k}}\in\mathbb{R}^{384}
+are Sentence-BERT
+(
+19
+)
+query and role embeddings,
+b_{k}
+is the normalized remaining budget, and
+\mathbf{d}^{\text{queue}},\mathbf{d}^{\text{e2e}},\mathbf{d}^{\text{kv}}\in\mathbb{R}^{N}
+are per-model queue depth, end-to-end latency, and KV cache utilization polled from vLLM’s
+/metrics
+endpoint.
+
+Action.
+
+The executor selects a joint action
+a_{k}\in\{0,\ldots,N|\mathcal{S}|-1\}
+, decoded as model
+m_{k}=\lfloor a_{k}/|\mathcal{S}|\rfloor
+and strategy
+\sigma_{k}=a_{k}\bmod|\mathcal{S}|
+.
+
+Objective.
+
+We maximize quality subject to a latency budget. With quality reward
+R_{k}\in\{0,1\}
+and cost
+C_{k}=\ell_{k}/\beta
+(step latency as a fraction of the budget):
+
+\pi^{*}=\arg\max_{\pi}\;\mathbb{E}_{\pi}\!\Big[\textstyle\sum_{k}R_{k}\Big]\quad\text{s.t.}\quad\mathbb{E}_{\pi}\!\Big[\textstyle\sum_{k}C_{k}\Big]\leq 1
+
+(2)
+
+A single Lagrange multiplier
+\lambda
+converts this constraint into a learnable quality–latency trade-off:
+
+\mathcal{L}(\pi,\lambda)=\mathbb{E}_{\pi}\!\Big[\textstyle\sum_{k}R_{k}-\lambda\cdot C_{k}\Big]+\lambda
+
+(3)
+
+The dual update (Eq.
+7
+, §
+4.4
+) drives
+\lambda
+up when the policy overspends and down when it has slack, automatically discovering the trade-off across budget tiers and load levels.
+
+Hierarchical decomposition.
+
+We split the policy into a
+planner
+
+\pi_{\text{plan}}(\tau,K,\mathbf{r}\mid\mathbf{e}_{q},\mathbf{z}_{0})
+that selects topology
+\tau
+, agent count
+K
+, and roles
+\mathbf{r}
+at
+t{=}0
+from query semantics plus a low-dimensional summary
+\mathbf{z}_{0}=[b_{0},\mathbf{d}^{\text{queue}},\mathbf{d}^{\text{e2e}},\mathbf{d}^{\text{kv}}]
+, and an
+executor
+
+\pi_{\text{exec}}(a_{k}\mid s_{k})
+that selects the (model, strategy) pair at each step from the full state. The planner commits once to a feasible reasoning structure; the executor adapts execution as queues build and drain.
+
+4
+Method
+
+InfraMind
+threads infrastructure awareness through every layer of orchestration (Figure
+3
+): an
+infra-aware planner
+chooses a topology, agent count, and roles conditioned on a coarse summary of system load and budget (§
+4.1
+); an
+infra-aware executor
+then makes per-step model and strategy decisions from the full real-time state (§
+4.2
+); and a
+budget-aware scheduler
+manages request priority within each model’s queue (§
+4.3
+). All three components are trained jointly as a single hierarchical RL policy under a shared budget constraint (§
+4.4
+).
+
+Figure 3
+:
+InfraMind
+architecture.
+(1) Planner:
+given the query, budget, and a System Monitor snapshot (queue depth, KV cache, E2E latency), it selects topology and roles, with FiLM modulation biasing toward simpler graphs under congestion and richer ones under slack.
+(2) Executor:
+at each step, a dual-pathway RL policy reads the role, query, remaining budget, and live metrics to jointly select a target model and reasoning strategy (Flash/Concise/DeepThink).
+(3) EDF scheduler:
+reorders each model’s queue by deadline, preventing tight-budget requests from being blocked behind loose ones.
+
+A
+System Monitor
+continuously polls per-model queue depth, KV cache utilization, and end-to-end latency, exposing the state vector consumed by the planner (once at
+t{=}0
+) and the executor (every step).
+
+4.1
+Infrastructure-Aware Planner
+
+When planning the multi-agent topology and role allocation for an incoming query, the planner considers the current state of the system (load and budget) so the topology it chooses is one downstream stages can actually carry out smoothly. We adopt a cascaded controller (task classifier
+\rightarrow
+collaboration
+\rightarrow
+agent count
+\rightarrow
+roles) following MasRouter
+(
+28
+)
+, and inject infrastructure awareness by conditioning every head on a system summary
+\mathbf{z}_{0}
+(budget plus per-model queue, E2E latency, and KV cache vectors; cf. Eq.
+1
+) via Feature-wise Linear Modulation:
+
+\tilde{\mathbf{e}}_{q}=\boldsymbol{\gamma}(\mathbf{z}_{0})\odot\mathbf{e}_{q}+\boldsymbol{\beta}(\mathbf{z}_{0})
+
+(4)
+
+A small MLP maps
+\mathbf{z}_{0}
+to the scale and shift
+(\boldsymbol{\gamma},\boldsymbol{\beta})
+, which modulate the query embedding before it flows through the cascade, so all four heads inherit a single, coherent view of system state and learn to bias toward simpler chains under tight budgets or congestion and richer debate topologies under slack.
+
+4.2
+Infrastructure-Aware Executor
+
+At every agentic step, the executor selects a model and reasoning strategy for the next call, adapting both to current conditions for better resource utilization. It reads two complementary signals: a
+semantic signal
+(query plus current role; what the task needs) and a
+resource signal
+(remaining budget plus live system metrics; what the system can currently deliver). Each is routed through its own pathway before merging, so the joint action head conditions on both.
+
+Semantic pathway.
+
+\mathbf{h}_{\text{sem}}=\text{LN}(\text{ReLU}(\mathbf{W}_{\text{sem}}[\mathbf{e}_{q}\|\mathbf{e}_{r_{k}}]))\in\mathbb{R}^{128}
+.
+
+Resource pathway.
+
+A budget head
+\mathbf{h}_{\text{bud}}=\text{ReLU}(\mathbf{W}_{\text{bud}}b_{k})
+and a system head
+\mathbf{h}_{\text{sys}}=\text{ReLU}(\mathbf{W}_{\text{sys}}[\mathbf{d}^{\text{queue}}\|\mathbf{d}^{\text{e2e}}\|\mathbf{d}^{\text{kv}}])
+(
+\in\mathbb{R}^{16}
+each) combine into
+\mathbf{h}_{\text{res}}=\text{LN}(\text{ReLU}(\mathbf{W}_{\text{res}}[\mathbf{h}_{\text{bud}}\|\mathbf{h}_{\text{sys}}]))\in\mathbb{R}^{64}
+.
+
+Decision.
+
+Pathways merge into
+\mathbf{h}=\text{ReLU}(\mathbf{W}_{\text{merge}}[\mathbf{h}_{\text{sem}}\|\mathbf{h}_{\text{res}}])\in\mathbb{R}^{128}
+, yielding policy
+\pi(a_{k}|s_{k})=\text{softmax}(\mathbf{W}_{\text{act}}\mathbf{h})
+and value
+V(s_{k})=\mathbf{w}_{\text{val}}^{\top}\mathbf{h}
+over
+N\times|\mathcal{S}|
+joint actions (5 models
+\times
+3 strategies). Strategies modulate reasoning depth on top of CoT prompting
+(
+23
+)
+:
+Flash
+(direct answer),
+Concise
+(2–3 steps), and
+DeepThink
+(thorough reasoning with verification). The executor learns when each is worth the latency cost.
+
+4.3
+Budget-Aware Priority Scheduling
+
+Even with optimal cross-model routing, a tight-budget request can stall behind a relaxed one inside a single model’s queue, so urgency must propagate from the user’s contract into the serving layer itself. We attach a deadline
+t_{\text{arrive}}+\beta
+to each query, every LLM call its agents generate inherits that deadline, and each model’s queue serves them Earliest-Deadline-First (EDF)
+(
+17
+)
+. Routing then handles
+cross-model
+load balancing while EDF handles
+within-model
+deadline ordering; the two layers cover orthogonal axes of waiting.
+
+4.4
+Joint Hierarchical RL Training
+
+The planner and executor make decisions at different timescales (one per query vs. one per step) and so receive different learning signals, but they share an outcome. We train them jointly with a hierarchical policy gradient: the executor uses the PPO clipped surrogate
+(
+20
+)
+on its per-step trajectories, the planner uses baseline-normalized REINFORCE
+(
+25
+)
+on the episode return, and a single Lagrange multiplier
+\lambda
+enforces the budget constraint across both:
+
+\mathcal{L}_{\text{exec}}=-\mathbb{E}\!\left[\min\!\left(\rho_{k}\hat{A}_{k},\;\text{clip}(\rho_{k},1{-}\epsilon,1{+}\epsilon)\hat{A}_{k}\right)\right]+0.5\,\mathcal{L}_{\text{value}}-\alpha_{H}\mathcal{H}[\pi],
+
+(5)
+
+\mathcal{L}_{\text{plan}}=-\log\pi_{\text{plan}}\cdot\frac{U_{i}-\bar{U}}{\sigma_{U}}+\mathcal{L}_{\text{task}}+\alpha_{\text{VAE}}\mathcal{L}_{\text{VAE}},
+
+(6)
+
+where the executor reward
+r_{k}=\mathbb{1}[\text{solved}]-\lambda\ell_{k}/\beta
+and planner utility
+U_{i}=\mathbb{1}[\text{solved}]-\lambda L_{\text{total}}/\beta
+share the same penalty term. The planner additionally inherits a task-classification loss
+\mathcal{L}_{\text{task}}
+and a VAE regularizer
+\mathcal{L}_{\text{VAE}}
+from its cascaded controller, providing a stable initialization signal that the policy gradient then refines under the budget constraint.
+
+After each batch,
+\lambda
+adapts to the average constraint violation
+\bar{C}
+(where
+\bar{C}=\sum_{k}\ell_{k}/\beta
+over the batch):
+
+\lambda\leftarrow\text{clip}\!\left(\lambda+\eta_{\lambda}(\bar{C}-1),\;0,\;\lambda_{\max}\right).
+
+(7)
+
+The dual update closes the loop: persistent overspend pushes both policies toward faster choices, slack lets them invest in quality. Episodes sweep across budget tiers and Poisson arrival rates with inter-sweep queue draining, so the executor sees the full distribution of congestion regimes it must adapt to at deployment. Hyperparameters are in Appendix
+A
+.
+
+5
+Experiments
+
+5.1
+Setup
+
+Benchmarks.
+
+To probe routing behavior across distinct reasoning regimes, we evaluate on five established benchmarks spanning code generation, mathematical reasoning, and knowledge-intensive QA:
+
+MBPP
+
+(
+3
+)
+,
+
+HumanEval
+
+(
+4
+)
+,
+
+GSM-Hard
+
+(
+5
+)
+,
+
+MATH
+
+(
+9
+)
+, and
+
+MMLU-Pro
+
+(
+22
+)
+.
+Dataset sizes and splits are in Appendix
+B
+.
+
+Model pool.
+
+We assemble a deliberately heterogeneous pool (a reasoning specialist, a code specialist, a general-purpose mid-size model, and two small generalists) spanning a
+10\times
+parameter range so the executor faces a non-trivial capability/cost trade-off: DeepSeek-R1-Distill-Qwen-32B
+(
+8
+)
+, Mistral-Small-24B
+(
+12
+)
+, Qwen2.5-Coder-14B
+(
+11
+)
+, Llama-3.1-8B and Llama-3.2-3B
+(
+7
+)
+, all served via vLLM on two NVIDIA B200 GPUs.
+
+Baselines.
+
+We compare against representative multi-agent orchestrators that span the design spectrum from no routing to learned task-adaptive routing:
+
+MoA
+
+(
+21
+)
+(brute-force ensemble, no routing),
+
+GPTSwarm
+
+(
+31
+)
+(learned topology, fixed at test time), and
+
+MasRouter
+
+(
+28
+)
+(task-adaptive routing, no infrastructure awareness).
+
+Evaluation protocol.
+
+To stress-test behavior across load regimes rather than a single operating point, all methods are evaluated under Poisson arrivals at low, moderate, and high rates (
+\{10,50,100\}
+req/min) on the same shared model pool. We report accuracy (solve rate), mean latency (seconds), and SLO compliance (% of queries completing within 300 s).
+
+5.2
+Main Results
+
+Table
+2
+and Figure
+4
+present the central comparison. The figure visualizes the quality–latency trade-off: each subplot shows one dataset at one arrival rate, with background shading indicating SLO compliance zones.
+
+Table 2
+:
+Accuracy (%), mean latency (s), and SLO compliance (%, budget
+\leq
+300 s) across three load levels.
+Bold
+= best per column.
+
+MATH
+
+MBPP
+
+GSM-Hard
+
+HumanEval
+
+MMLU-Pro
+
+Method
+
+Acc
+
+Lat
+
+SLO
+
+Acc
+
+Lat
+
+SLO
+
+Acc
+
+Lat
+
+SLO
+
+Acc
+
+Lat
+
+SLO
+
+Acc
+
+Lat
+
+SLO
+
+Low Load (
+\mu=10
+req/min)
+
+InfraMind
+(Ours)
+
+82.0
+
+44
+
+100.0
+
+83.6
+
+40
+
+99.7
+
+62.0
+
+37
+
+100.0
+
+100.0
+
+5
+
+100.0
+
+61.0
+
+44
+
+99.8
+
+MASRouter
+
+67.4
+
+50
+
+100.0
+
+82.4
+
+253
+
+60.2
+
+54.6
+
+38
+
+100.0
+
+93.1
+
+70
+
+99.2
+
+58.5
+
+83
+
+98.8
+
+GPTSwarm
+
+69.6
+
+84
+
+100.0
+
+76.4
+
+73
+
+100.0
+
+54.0
+
+52
+
+100.0
+
+100.0
+
+42
+
+100.0
+
+57.8
+
+36
+
+100.0
+
+MoA
+
+74.4
+
+122
+
+100.0
+
+77.2
+
+68
+
+100.0
+
+49.3
+
+38
+
+100.0
+
+99.2
+
+49
+
+100.0
+
+41.6
+
+124
+
+84.2
+
+Mid Load (
+\mu=50
+req/min)
+
+InfraMind
+(Ours)
+
+75.6
+
+255
+
+87.3
+
+80.3
+
+95
+
+99.0
+
+60.0
+
+76
+
+98.8
+
+100.0
+
+8
+
+100.0
+
+60.0
+
+319
+
+59.8
+
+MASRouter
+
+72.8
+
+321
+
+53.0
+
+81.7
+
+926
+
+24.6
+
+55.0
+
+521
+
+27.4
+
+93.1
+
+195
+
+77.1
+
+58.9
+
+821
+
+14.7
+
+GPTSwarm
+
+71.0
+
+1209
+
+7.4
+
+76.6
+
+1307
+
+5.6
+
+57.0
+
+707
+
+14.8
+
+100.0
+
+134
+
+100.0
+
+55.4
+
+563
+
+18.4
+
+MoA
+
+73.8
+
+1145
+
+3.2
+
+75.2
+
+969
+
+4.8
+
+49.1
+
+474
+
+16.8
+
+100.0
+
+155
+
+100.0
+
+46.2
+
+1240
+
+2.0
+
+High Load (
+\mu=100
+req/min)
+
+InfraMind
+(Ours)
+
+75.2
+
+290
+
+61.8
+
+80.4
+
+167
+
+91.0
+
+57.2
+
+81
+
+98.4
+
+100.0
+
+33
+
+99.9
+
+59.8
+
+372
+
+56.0
+
+MASRouter
+
+70.6
+
+399
+
+48.2
+
+80.8
+
+985
+
+25.5
+
+56.4
+
+652
+
+20.6
+
+89.3
+
+205
+
+71.0
+
+57.0
+
+908
+
+13.4
+
+GPTSwarm
+
+68.4
+
+1325
+
+2.2
+
+78.6
+
+1369
+
+2.6
+
+54.0
+
+806
+
+9.0
+
+100.0
+
+153
+
+100.0
+
+57.4
+
+753
+
+11.0
+
+MoA
+
+74.8
+
+1160
+
+0.4
+
+75.8
+
+993
+
+1.6
+
+50.0
+
+525
+
+11.2
+
+100.0
+
+177
+
+95.4
+
+47.8
+
+1171
+
+0.8
+
+Latency under load: the central result.
+
+Figure
+4
+reveals the core pattern. As arrival rate increases (top to bottom rows), baseline points migrate rightward into the “over budget” and “severely congested” zones (MoA and GPTSwarm exceed 1 000 s on several benchmarks at 100 req/min), while
+InfraMind
+stays under 300 s and remains in or near the SLO-compliant zone across all five benchmarks. This is the queue imbalance from §
+1
+manifesting at scale: baselines keep routing to the same models regardless of congestion, and the queuing delay compounds with load.
+
+The practical impact is stark: at 100 req/min with a 300 s SLO budget,
+InfraMind
+achieves up to 99.9% SLO compliance (HumanEval), while baselines collapse: MoA and GPTSwarm fall below 12% on most benchmarks. MASRouter fares slightly better but still drops below 50% SLO on four of five benchmarks.
+
+Quality holds at every load.
+
+At low load,
+InfraMind
+achieves the highest accuracy on all five benchmarks, with margins of
++7.6
+pp on MATH (
+82.0
+vs.
+74.4
+for MoA) and
++7.4
+pp on GSM-Hard (
+62.0
+vs.
+54.6
+for MASRouter), while running up to
+14\times
+faster than MASRouter on HumanEval (
+5
+s vs.
+70
+s) and
+6.3\times
+faster on MBPP (
+40
+s vs.
+253
+s). This turns available slack into both quality (DeepThink on capable models) and headroom. As load rises, accuracy degrades gracefully rather than collapsing alongside latency: at 100 req/min,
+InfraMind
+remains the most accurate method on MATH, GSM-Hard, HumanEval, and MMLU-Pro, narrowly trailing MASRouter by
+0.4
+pp on MBPP; that
+0.4
+pp comes at
+985
+s mean latency and
+26
+% SLO compliance, a trade no production system would accept.
+
+Figure 4
+:
+Quality–latency trade-off across datasets (
+columns
+) and arrival rates (
+rows
+). Each point is one method; the
+x
+-axis is mean latency (log scale). Background shading indicates latency zones:
+blue
+= SLO compliant (
+<
+100 s),
+peach
+= over budget (100–500 s),
+salmon
+= severely congested (
+>
+500 s).
+InfraMind
+(vermillion diamonds) consistently occupies the SLO-compliant zone with competitive accuracy, while baselines migrate into the congested zone as load increases.
+
+5.3
+Analysis and Ablations
+
+Table 3:
+Ablation of
+InfraMind
+’s three mechanisms. Each row disables one mechanism in isolation; we report the change vs.
+InfraMind
+on the indicated workload.
+
+Mechanism
+
+Disabled variant
+
+Effect vs.
+InfraMind
+
+Infra-aware routing
+
+Quality-only routing
+
++2.3
+–
+3.6\times
+step latency; mean queue
+25.1\to 40.6
+
+Deadline-aware scheduling
+
+FCFS
+
++2.0\times
+mean lat (
+68{\to}134
+s);
++1.8\times
+P90 (
+207{\to}366
+s)
+
+Adaptive reasoning depth
+
+Flash only (
+\forall
+steps)
+
+MMLU-Pro acc.
+-9.5
+pp (
+59.5\%\to 50.0\%
+)
+
+Figure
+5
+shows the executor is budget-aware: under low load on MATH, accuracy rises monotonically with the time budget as the executor progressively shifts to larger models and DeepThink reasoning. This emerges from end-to-end constrained RL; no budget-specific rules are hand-coded.
+
+Table
+3
+disables each of
+InfraMind
+’s three mechanisms in turn while holding the rest fixed, and each contributes a distinct, non-overlapping gain. Without infra-aware routing, traffic concentrates on preferred models: queues build on the favorites while alternatives sit idle, inflating step latency in a way no quality-only router can avoid on shared infrastructure. Replacing EDF with FCFS lets tight-budget requests stall behind relaxed ones under mixed-budget workloads, sharply increasing tail latency where routing alone cannot help. Forcing a single reasoning depth (Flash on every step) collapses accuracy on knowledge tasks like MMLU-Pro, confirming that adaptive depth is a genuine quality lever rather than just a latency knob. Removing any one mechanism degrades the corresponding axis (mean latency, tail latency, or accuracy) while leaving the others intact, evidence that the three components fix different failure modes rather than redundantly fixing the same one.
+
+Figure 5
+:
+Accuracy vs. time budget on MATH (
+\mu{=}10
+r/m). Accuracy rises from
+62.6\%
+to
+82.0\%
+(
++19.4
+pp) as the executor shifts to larger models and DeepThink, emergent from end-to-end RL with no hand-coded rules.
+
+5.4
+Extension to Blackbox and Hybrid Pools
+
+The same infrastructure-awareness principle extends to API-only and mixed deployments where serving internals are not observable. We construct two client-side proxies that require no server-side access: an exponential moving average of observed end-to-end latency, and an artificial congestion signal
+d^{\text{queue}}_{i}=\text{recent\_requests}_{i}/\text{RPM\_limit}_{i}
+derived from each provider’s rate limit. A model at
+90\%
+of its RPM behaves as “congested” as a whitebox model with a deep queue. The executor architecture is unchanged.
+
+Table
+4
+reports both settings on GSM-Hard. In a
+hybrid
+pool (three whitebox + two API models),
+InfraMind
+prefers the whitebox models at low load and overflows to APIs only as whitebox queues build up; in a
+pure-API
+pool with heterogeneous RPM limits, it redistributes across providers to keep latency near budget. In both settings, baselines collapse under load while
+InfraMind
+sustains accuracy and SLO, confirming that the gains from infrastructure awareness do not require privileged server access; they require only a signal that correlates with current responsiveness.
+
+Table 4:
+Hybrid (3 whitebox + 2 OpenRouter API, budget
+100
+s) and pure-API (5 OpenRouter, budget
+500
+s) pools on GSM-Hard. Acc (%), Lat (s), SLO (%).
+Bold
+= best per metric per load per pool.
+
+\mu=10
+r/m
+
+\mu=50
+r/m
+
+\mu=100
+r/m
+
+Pool
+
+Method
+
+Acc
+
+Lat
+
+SLO
+
+Acc
+
+Lat
+
+SLO
+
+Acc
+
+Lat
+
+SLO
+
+Hybrid
+
+InfraMind
+
+62.4
+
+14
+
+100.0
+
+61.6
+
+43
+
+94.4
+
+61.4
+
+107
+
+54.4
+
+MASRouter
+
+62.8
+
+28
+
+99.8
+
+61.4
+
+352
+
+17.4
+
+60.4
+
+441
+
+11.6
+
+GPTSwarm
+
+59.4
+
+42
+
+100.0
+
+59.8
+
+209
+
+19.6
+
+58.8
+
+412
+
+9.4
+
+Pure-API
+
+InfraMind
+
+63.0
+
+3
+
+100.0
+
+63.7
+
+370
+
+68.1
+
+64.6
+
+492
+
+50.4
+
+MASRouter
+
+62.8
+
+114
+
+96.2
+
+63.6
+
+714
+
+40.6
+
+61.2
+
+813
+
+30.6
+
+GPTSwarm
+
+63.6
+
+70
+
+99.8
+
+64.6
+
+686
+
+23.6
+
+64.0
+
+902
+
+11.6
+
+6
+Conclusion
+
+Existing multi-agent orchestration makes routing decisions without observing the queues, cache pressure, or latencies of the models it routes to, a blindness that no amount of task-level intelligence can close on shared GPU infrastructure.
+InfraMind
+addresses this by making infrastructure awareness first-class at every layer: an infra-aware planner adapts topology and roles to current load, an infra-aware executor redistributes traffic and reasoning depth per step, and a deadline-aware scheduler resolves head-of-line blocking within each model’s queue, all jointly trained as a single hierarchical RL policy under a shared budget constraint. Across five benchmarks,
+InfraMind
+delivers up to
++7.6
+pp accuracy over the strongest baseline at low load with up to 7
+\times
+lower latency, and sustains up to
+99.9\%
+SLO compliance under high load where every baseline drops below
+50\%
+. The same principle extends to blackbox API pools via client-side proxies.
+
+Limitations and future work.
+
+InfraMind
+commits to a topology at planning time and assumes a fixed model pool. Two natural extensions follow from the same formulation:
+runtime topology revision
+, where the planner re-decides collaboration structure mid-workflow as load or partial outputs evolve, and
+dynamic hardware configurations
+, where the system adapts to elastic pools (autoscaling, hot model swaps) rather than a static set of replicas. Both relax assumptions of the present work without changing the underlying state and action spaces.
+
+Broader impacts.
+
+Multi-agent LLM systems are reaching production scale across enterprise. JPMorgan Chase’s internal LLM Suite serves
+{\sim}200
+K employees
+24
+, Bloomberg’s AskB routes queries across internal and open-weight models within Bloomberg’s own infrastructure
+13
+, and web-scale companies such as Uber standardize on open-source serving stacks like vLLM in production
+16
+. Gartner projects this trajectory will reach
+40\%
+of enterprise applications by 2026, up from under
+5\%
+in 2025
+6
+. These deployments increasingly run on operator-managed GPU pools, where queue contention and cache pressure surface as tail latency that existing multi-agent routers ignore.
+InfraMind
+drops into any such deployment to make routing infra-aware, and because the blackbox/hybrid extension also covers API-only and mixed pools, the approach is orthogonal to the choice of serving backend, an immediate path to lower tail latency and higher SLO compliance for production multi-agent workflows.
+
+Appendix A
+Training Hyperparameters
+
+Table 5:
+Training hyperparameters for
+InfraMind
+.
+
+Parameter
+
+Value
+
+Optimizer
+
+Adam, lr
+3\times 10^{-4}
+
+Batch size
+
+64
+
+Max epochs
+
+40 (early stopping, patience 12)
+
+LR scheduler
+
+ReduceLROnPlateau (patience 3, factor 0.5)
+
+PPO clip
+\epsilon
+
+0.2
+
+PPO mini-epochs
+K
+
+3
+
+Entropy coefficient
+\alpha_{H}
+
+0.10
+
+Initial
+\lambda_{0}
+
+0.2
+
+\lambda
+learning rate
+\eta_{\lambda}
+
+0.001
+
+\lambda_{\max}
+
+1.0
+
+Budget tiers (s)
+
+{10, 30, 50, 100, 200, 300}
+
+Arrival rates (req/min)
+
+{10, 30, 50, 100, 200}
+
+vLLM
+max_num_seqs
+
+16 (all models)
+
+Total parameters
+
+\sim
+471K
+
+Appendix B
+Dataset Details
+
+Table 6:
+Dataset splits used in experiments.
+
+Dataset
+
+Train
+
+Val
+
+Test
+
+MATH
+[
+9
+]
+
+519
+
+131
+
+500
+
+MBPP
+[
+3
+]
+
+374
+
+94
+
+500
+
+GSM-Hard
+[
+5
+]
+
+500
+
+125
+
+500
+
+HumanEval
+[
+4
+]
+
+33
+
+10
+
+131
+
+MMLU-Pro
+[
+22
+]
+
+500
+
+70
+
+500
+
+Appendix C
+Blackbox Extension Details
+
+The blackbox extension is described in §
+5.4
+. Here we provide additional implementation details.
+
+Sliding-window RPM tracking.
+
+We use a 60-second sliding window per model. Each outgoing request is timestamped; the congestion signal is the count of timestamps within the window divided by the model’s RPM limit. When this ratio exceeds 1.0, excess requests are held in a local queue and dispatched as capacity frees up, creating backpressure visible to the executor.
+
+Dual Lagrange multipliers.
+
+For hybrid pools, we maintain
+\lambda_{\text{time}}
+and
+\lambda_{\text{money}}
+with independent dual updates:
+
+\displaystyle\lambda_{\text{time}}
+
+\displaystyle\leftarrow\text{clip}(\lambda_{\text{time}}+\eta_{\lambda}\cdot(\bar{C}_{\text{time}}-1),\;0,\;\lambda_{\max})
+
+(8)
+
+\displaystyle\lambda_{\text{money}}
+
+\displaystyle\leftarrow\text{clip}(\lambda_{\text{money}}+\eta_{\lambda}\cdot(\bar{C}_{\text{money}}-1),\;0,\;\lambda_{\max})
+
+(9)
+
+where
+\bar{C}_{\text{time}}=\sum\ell_{k}/\beta_{\text{time}}
+and
+\bar{C}_{\text{money}}=\sum c_{k}/\beta_{\text{money}}
+. With
+\beta_{\text{money}}=\infty
+(no monetary budget) and no blackbox models,
+\lambda_{\text{money}}
+stays at zero and the formulation reduces exactly to the whitebox-only system in the main text.
+

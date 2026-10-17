@@ -1,0 +1,2436 @@
+Clairvoyant: Predictive SJF Scheduling to Mitigate Head-of-Line Blocking in Serial LLM Backends
+Aravind Sundaresan
+
+Abstract
+Serial LLM inference backends—such as Ollama—process requests one at a time under FCFS admission, causing Head-of-Line Blocking (HOLB) under mixed workloads at high utilisation: short factual queries can be delayed by minutes behind long generation jobs. While cloud-scale deployments mitigate HOLB via continuous batching (vLLM, Orca), these solutions require tens of GB of VRAM for concurrent KV-caches—infeasible for memory-constrained edge and local deployments that rely on serial request dispatch. We present Clairvoyant , a drop-in sidecar proxy for any serial OpenAI-compatible backend (e.g., Ollama, llama.cpp). Clairvoyant predicts response length from 19 lightweight lexical features via an ONNX-exported XGBoost classifier, achieving 0.029 ms per-request latency (four orders of magnitude below typical generation time). Because admission scheduling depends on relative ordering rather than exact prediction, the system optimises ranking fidelity, achieving 62–96% in-distribution and 52–66% cross-distribution accuracy across natural conversation datasets. We find that curated instruction datasets are degenerate training sources for length prediction: GPT-imposed brevity constraints reduce Long-class representation to under 0.02% of examples, making natural conversation logs the only viable training source. End-to-end GPU benchmarks on an RTX 4090 show 70–76% P50 latency reduction for short requests under maximum queue pressure (100 concurrent requests, n = 250 n=250 per cell) and 17% under steady-state Poisson arrivals ( ρ = 0.74 \rho=0.74 ). Clairvoyant is open-source and requires no modifications to the inference backend.
+
+
+
+1
+Introduction
+
+Serial LLM inference backends process requests sequentially under First-Come-First-Served (FCFS)
+admission. Output generation lengths in mixed workloads span two orders of magnitude: short factual
+queries require
+<10
+tokens (
+{\sim}2
+s), while complex generation tasks exceed 1000 tokens
+(
+>60
+s). In single-concurrent-request deployments—edge AI, local enterprise servers, and
+resource-constrained environments running quantized Small Language Models—this variance causes
+Head-of-Line Blocking (HOLB): a short request arriving behind a long-generation job waits the full
+duration of that job before execution begins.
+
+While cloud-scale deployments mitigate HOLB via continuous batching
+(vLLM
+[
+10
+]
+, Orca
+[
+20
+]
+), these solutions require, even for 8B-class
+models at modest concurrency, tens of GB of VRAM for KV-cache maintenance
+alone
+[
+10
+]
+—beyond the capacity of consumer and edge hardware. Backends such as
+Ollama and llama.cpp rely on serial request dispatch by default; no scheduling layer exists between
+the API endpoint and the inference engine, leaving FCFS as the only admission policy. In local
+mixed-workload tests on an Apple M1 (Ollama, Gemma3:4b),
+Clairvoyant
+achieves correct SJF dispatch
+ordering in end-to-end burst tests, with short requests completing before all long requests under
+representative mixed workloads (Section
+5
+).
+
+Shortest-Job-First (SJF) scheduling reduces mean waiting time relative to FCFS; the preemptive
+variant (SRPT) is optimal in the M/G/1 queue
+[
+14
+]
+, but preemption is infeasible for
+autoregressive generation. We therefore adopt non-preemptive SJF as the admission policy. For LLMs,
+output length is unknown until generation completes. Prior approaches address this via auxiliary
+proxy models—fine-tuned BERT-base
+[
+13
+]
+or DistilBERT
+[
+7
+]
+—that
+introduce additional memory footprint, separate inference overhead, and deployment
+complexity
+[
+19
+]
+.
+
+We present
+Clairvoyant
+, a drop-in sidecar proxy for serial OpenAI-compatible backends (e.g.,
+Ollama, llama.cpp) that implements non-preemptive SJF admission, mitigating HOLB with 0.029 ms
+per-request overhead.
+Clairvoyant
+extracts 19 lightweight lexical features from each incoming
+request and derives a ranking signal using an XGBoost model exported to ONNX—requiring no prompt
+embedding and no forward pass through the target model. On Apple M1 (Ollama, Gemma3:4b),
+
+Clairvoyant
+achieves correct SJF dispatch ordering in a controlled end-to-end dispatch
+test (
+n=8
+, 4 Short + 4 Long; dispatch-logic validation only—Section
+5
+);
+queue-level latency statistics derive from
+n=250
+-per-cell GPU benchmarks.
+
+We design, implement, and evaluate
+Clairvoyant
+across three regimes: (1) offline ranking fidelity
+on held-out dataset splits, (2) end-to-end GPU latency under burst and steady-state workloads, and
+(3) starvation-timeout sensitivity via discrete-event simulation calibrated to measured service
+times. Our evaluation yields five contributions:
+
+1.
+
+Dataset Bias in Length Prediction.
+Curated instruction datasets (Alpaca 52K,
+CodeAlpaca 20K) contain
+<0.02
+% Long-class examples due to GPT-imposed brevity constraints
+(Table
+2
+), rendering them degenerate training sources for any length-predictive
+scheduler. Only natural conversation logs provide sufficient Long-class diversity.
+
+2.
+
+Lexical Sufficiency for Queue Ordering.
+We demonstrate that embeddings are
+unnecessary for admission scheduling in this regime. Nineteen lexical features achieve 62–96%
+in-distribution ranking accuracy across three natural conversation datasets
+(Table
+5
+), with predictor latency (0.029 ms) compatible with serial edge
+deployment (Section
+3.3
+).
+
+3.
+
+Zero-Modification Admission Architecture.
+
+Clairvoyant
+operates as a transparent
+sidecar proxy for OpenAI-compatible backends, requiring no changes to the inference engine, no
+model fine-tuning, and no forward pass through the target LLM (Figure
+2
+).
+
+4.
+
+Empirical Queue Management.
+We implement an SJF min-heap with a calibrated
+starvation timeout (
+\tau=3\times\mu_{\text{short}}
+) that prevents indefinite long-job
+blocking. Dispatch ordering logic is validated via an end-to-end correctness test (
+n=8
+
+mixed-workload requests); queue-level latency statistics derive from
+n=250
+-per-cell GPU
+benchmarks (Table
+8
+, Section
+5.4
+).
+
+5.
+
+Quantitative Deployment Boundary.
+We delineate the operational regime where
+request-level SJF provides measurable benefit.
+Clairvoyant
+targets serial or low-concurrency
+backends where concurrent KV-cache maintenance exceeds available VRAM
+(Section
+2.1
+). Where continuous batching is feasible, it supersedes
+Clairvoyant
+;
+at low utilisation (
+\rho\lesssim 0.55
+), FCFS suffices
+(Figure
+3
+).
+
+2
+Background
+
+2.1
+Head-of-Line Blocking in LLM Serving
+
+Head-of-Line Blocking (HOLB) is a well-studied phenomenon in service queues: when a long job
+occupies a processing resource, shorter jobs accumulate behind it and experience latency exceeding
+their own service time. In LLM serving, we characterise HOLB across two operational layers.
+
+Layer 1 (Request Admission)
+refers to queue-level blocking: a new request waits until the
+inference server completes its current job before execution begins.
+Layer 2 (Token
+Iteration)
+refers to blocking within a running batch, where long-generation requests delay the
+insertion of newly arrived requests at the token level
+[
+20
+,
+10
+]
+. This
+division maps to two components of the LLM serving stack: an admission queue feeds requests into a
+token-level execution engine, and blocking at either stage requires distinct mitigation.
+
+Clairvoyant
+targets Layer 1 exclusively.
+
+Layer 1 (Request Admission)
+is queue-level blocking. When a serial backend processes one
+request at a time, a long-generation job holds the server exclusively until completion. A short
+request arriving mid-generation waits the full remaining duration of that job—its experienced
+latency is determined entirely by the job ahead of it, not its own service time.
+
+Layer 2 (Token Iteration)
+refers to blocking within the execution batch.
+Continuous-batching engines such as Orca
+[
+20
+]
+and vLLM
+[
+10
+]
+resolve
+this by scheduling at the token-iteration level: newly arrived requests join the running batch
+immediately, so short requests never queue behind long ones. This requires maintaining one KV-cache
+entry per concurrent request—demanding tens of GB of VRAM at production concurrency
+levels—rendering it infeasible for memory-constrained edge and local deployments.
+
+Clairvoyant
+targets Layer 1 HOLB exclusively. It is not a replacement for continuous batching in
+high-concurrency cloud deployments; it is a complementary system for the large and growing class of
+serial or low-concurrency deployments where Layer 2 solutions cannot be applied.
+
+Figure 1:
+Illustrative timeline of HOLB under FCFS vs.
+Clairvoyant
+SJF. Under FCFS (top), a
+short request waits the full duration of the long job before execution begins. Under SJF (bottom),
+the short request is dispatched first; the long job follows immediately. Representative values
+shown (Apple M1, Ollama, Gemma3:4b); actual generation times vary by model and hardware.
+
+2.2
+Shortest-Job-First Scheduling and Starvation
+
+The preemptive variant of SJF—Shortest Remaining Processing Time (SRPT)—is optimal for
+minimising mean sojourn time in the M/G/1 queue
+[
+14
+]
+. Non-preemptive SJF minimises
+mean waiting time among non-preemptive work-conserving disciplines under the assumption that job
+lengths are known in advance
+[
+8
+]
+. For autoregressive LLM generation, preemption is
+infeasible: interrupting a running generation would require discarding the partially computed KV
+cache and restarting from scratch. We therefore adopt non-preemptive SJF as the admission policy
+and predict job length prior to dispatch.
+
+Pure SJF introduces starvation: if short jobs arrive continuously, a long job may wait
+indefinitely. We address this with a starvation timeout
+\tau
+: any request that has waited longer
+than
+\tau
+is promoted to the head of the queue regardless of its predicted length. We calibrate
+
+\tau=3\times\mu_{\text{short}}
+empirically, where
+\mu_{\text{short}}
+is the mean
+short-request queuing wait time on the target hardware; the sensitivity of this choice is analysed
+in Section
+5.5
+.
+
+2.3
+Why Serial Dispatch is the Right Scope
+
+The LLM inference landscape is bifurcated. Cloud-scale deployments employ continuous-batching
+engines (vLLM
+[
+10
+]
+, Orca
+[
+20
+]
+, TGI) that resolve Layer 1 HOLB as a
+side effect of token-level scheduling. A complementary class of deployments—privacy-sensitive
+local inference, edge nodes, and developer tooling—operates on consumer hardware via serial
+backends such as Ollama, llama.cpp, and Jan. For these systems, Layer 1 HOLB remains unaddressed:
+requests are processed strictly sequentially, with no intermediate admission queue.
+
+We target this serial regime. FCFS is the natural baseline: Ollama, llama.cpp, and Jan all dispatch
+requests in arrival order by default, and no scheduling layer exists between the API endpoint and
+the inference engine.
+Clairvoyant
+intercepts this default path and inserts a predictive SJF
+admission layer, requiring zero modifications to the upstream backend.
+
+Ollama exposes a
+OLLAMA_NUM_PARALLEL
+setting that permits limited concurrency (default:
+1 on memory-constrained hardware, up to 4 where VRAM permits). Each parallel slot requires its
+own KV-cache allocation: for a 4-bit quantised 8B model (
+{\sim}5
+GB weights), a single
+KV-cache at 2K context adds
+{\sim}0.5
+–
+1
+GB per slot, placing
+NUM_PARALLEL=4
+at
+7–9 GB—beyond the capacity of an 8 GB GPU or typical unified-memory CPU. On Apple M1
+(8–16 GB shared),
+NUM_PARALLEL=1
+is therefore the only viable configuration in
+practice. Even where
+NUM_PARALLEL=4
+is achievable, once all four slots are occupied by
+long-generation jobs, newly arriving short requests queue at the admission layer and experience
+HOLB identical in character to the serial case. The admission-queue scheduling problem
+
+Clairvoyant
+addresses is present at any
+NUM_PARALLEL
+value under mixed-workload
+saturation.
+
+2.4
+Queueing-Theoretic Motivation
+
+We model serial LLM inference as an M/G/1 queue: requests arrive at rate
+\lambda
+, service times
+follow a general distribution with mean
+E[S]
+and second moment
+E[S^{2}]
+, and the server processes
+one request at a time. Server utilisation is
+\rho=\lambda E[S]
+.
+
+Under FCFS, the Pollaczek-Khinchine (P-K) mean value formula gives the expected waiting time in
+queue:
+
+W_{\text{FCFS}}=\frac{\rho\,E[S]\,(1+C_{s}^{2})}{2(1-\rho)}
+
+(1)
+
+where
+C_{s}^{2}=\mathrm{Var}[S]/E[S]^{2}
+is the squared coefficient of variation of service times.
+
+W_{\text{FCFS}}
+scales linearly with
+C_{s}^{2}
+: the more variable the job lengths, the worse FCFS
+performs.
+
+LLM workloads are a high-
+C_{s}^{2}
+regime. Table
+1
+reports service-time statistics
+measured on an Apple M1 running Ollama with Gemma3:4b (
+n=204
+sequential requests). Short factual
+queries complete in
+{\sim}2
+s; long generation tasks take
+{\sim}30
+s. In a mixed workload,
+the bimodal service distribution produces
+C_{s}^{2}
+values substantially above those of conventional
+web-serving workloads (
+C_{s}^{2}\approx 0.2
+–
+0.5
+) and exceeding the exponential baseline
+(
+C_{s}^{2}=1.0
+) in production-like mixes. The FCFS mean waiting time is therefore heavily inflated
+relative to what an ideal scheduler could achieve.
+
+Table 1:
+Service-time statistics under different workload compositions (Apple M1, Ollama,
+Gemma3:4b,
+n=204
+). Mixed workloads exhibit high
+C_{s}^{2}
+, making FCFS scheduling particularly
+costly for short requests.
+
+Workload
+
+E[S]
+
+\mathrm{Std}[S]
+
+C_{s}^{2}
+
+HOLB risk
+
+Short-only (homogeneous)
+
+2.1 s
+
+1.1 s
+
+0.26
+
+Low
+
+Long-only (homogeneous)
+
+29.7 s
+
+11.7 s
+
+0.15
+
+Low
+
+Mixed 50/50
+
+15.9 s
+
+16.1 s
+
+1.03
+
+High
+
+Mixed 80/20 (prod-like)
+
+7.6 s
+
+12.3 s
+
+2.59
+
+Very high
+
+C_{s}^{2}=\mathrm{Var}[S]/E[S]^{2}
+computed from measured distribution (
+n=204
+, Apple M1, Ollama,
+Gemma3:4b). Exponential service baseline:
+C_{s}^{2}=1.0
+. Typical web server:
+
+C_{s}^{2}\approx 0.2
+–
+0.5
+
+[
+6
+]
+.
+
+Why approximate SJF is sufficient.
+
+In high-
+C_{s}^{2}
+regimes, the dominant contributor to
+W_{\text{FCFS}}
+is the large variance
+between job lengths, not fine-grained ordering within a single length class. Consequently, the
+primary source of HOLB is
+cross-class blocking
+: short requests forced to wait behind
+long-generation jobs. A scheduler that correctly separates Short from Long requests eliminates this
+dominant delay component, even if it occasionally misorders requests within the same class.
+
+Clairvoyant
+’s 62–96% in-distribution ranking accuracy achieves this separation in the vast
+majority of cases, directly determining whether a short request experiences
+{\sim}2
+s or
+
+{\sim}30
+s of latency. The residual mispredictions consist primarily of boundary-adjacent cases
+and within-class ordering errors, neither of which materially impacts aggregate queue delay. This
+structural property explains why substantial scheduling gains are achievable without perfect
+service-time prediction. Furthermore, workloads with highly skewed output lengths (e.g., code
+generation) exhibit heavier-tailed service distributions, where FCFS penalties exceed those
+predicted by the bimodal approximation—making this queueing argument strictly conservative.
+
+3
+System Design
+
+3.1
+Architecture Overview
+
+Clairvoyant
+operates as a transparent proxy between the API client and the LLM backend. It exposes
+a configurable admission endpoint (e.g.,
+localhost:8080
+), performs output-length
+prediction, enqueues requests, and dispatches them to the upstream inference service in SJF order.
+All response streams are passed through to the originating client without modification.
+
+The system has three components: (1) the feature extractor, which computes 19 lightweight lexical
+features from the incoming prompt; (2) the ONNX predictor, which scores the feature vector and
+outputs a 3-class probability distribution; and (3) the SJF scheduler, which maintains a priority
+queue keyed on
+\mathrm{P}(\text{Long})
+and dispatches requests in ascending order. All components
+run in the same process. The proxy is implemented in Go for low scheduling latency and
+straightforward concurrency management; the ONNX runtime is linked as a C shared library via CGo.
+
+Figure 2:
+Clairvoyant
+intercepts API requests, predicts output length in 0.029 ms via lexical
+feature extraction and ONNX inference, and dispatches to the backend in SJF order. The response
+path is a transparent pass-through. The starvation guard promotes any request waiting longer than
+
+\tau=3\times\mu_{\text{short}}
+regardless of predicted
+\mathrm{P}(\text{Long})
+. Evaluated
+on Apple M1 (Ollama, Gemma3:4b) and RTX 4090 (Ollama, Gemma3:4b, Llama3.1:8b).
+
+3.2
+Feature Extraction
+
+Feature extraction is the first processing step in the pipeline. For an incoming prompt,
+
+Clairvoyant
+computes 19 features without external calls, tokeniser loading, or embedding lookups.
+The feature set comprises two groups:
+
+Numeric features (6).
+
+prompt_token_len
+
+Approximate token count computed as
+len(prompt) // 4
+,
+consistent with BPE tokenisation approximations.
+
+has_code_keyword
+
+Binary flag for presence of code-related terms
+(
+function
+,
+class
+,
+implement
+,
+algorithm
+, etc.).
+
+has_length_constraint
+
+Binary flag for explicit length instructions
+(
+brief
+,
+detailed
+,
+in one sentence
+, etc.).
+
+ends_with_question
+
+Binary flag indicating whether the prompt terminates with
+
+?
+.
+
+has_format_keyword
+
+Binary flag for structured output requests (
+table
+,
+
+list
+,
+json
+,
+csv
+,
+markdown
+, etc.).
+
+clause_count
+
+Count of subordinating conjunctions and relative pronouns, serving
+as a proxy for syntactic complexity.
+
+Verb one-hot features (13).
+
+The leading instruction verb is extracted from the prompt’s first token and mapped to one of 13
+known categories:
+what
+,
+write
+,
+explain
+,
+summarize
+,
+how
+,
+
+list
+,
+implement
+,
+compare
+,
+describe
+,
+generate
+,
+
+why
+,
+define
+,
+other
+. This feature group captures generative intent signals
+that complement the numeric features; its relative contribution is quantified in the ablation study
+(Section
+4.4
+).
+
+Feature extraction is implemented as a pure string-scanning pass with no regex backtracking on the
+critical path. Total extraction cost is sub-microsecond for prompts up to 8K characters, ensuring
+that predictor latency is dominated by ONNX inference (0.029 ms, Section
+3.3
+) rather
+than feature computation.
+
+3.3
+ONNX Inference
+
+The XGBoost classifier
+[
+3
+]
+is exported to ONNX format using
+onnxmltools
+, with
+a manual split-condition dtype patch applied for XGBoost 2.x compatibility. The model is loaded
+once at proxy startup; per-request inference runs via the ONNX Runtime
+[
+12
+]
+C API
+with no dynamic allocation on the critical path.
+
+Measured inference latency on Apple M1 (CPU only):
+
+•
+
+ShareGPT model (
+predictor.onnx
+): 0.029 ms per request
+
+•
+
+LMSYS model (
+predictor_model_b.onnx
+): 0.015 ms per request
+
+Both figures are over four orders of magnitude below typical short-response generation latency
+(1–5 s on consumer hardware; Table
+1
+), rendering predictor overhead negligible.
+
+Comparison to embedding-based predictors.
+
+An alternative design would encode the prompt with a sentence embedding model
+(e.g.,
+all-MiniLM-L6-v2
+) and feed the resulting vector into a classifier. We measured
+this approach on CPU, matching the target deployment constraint: P50 = 12.85 ms,
+mean = 148.63 ms, P99 = 865.73 ms—443–5,125
+\times
+slower than the ONNX predictor. At
+P99, embedding inference approaches the generation latency of a short request on fast hardware. The
+19-feature lexical design is not a compromise; it is the only approach compatible with the latency
+budget of the target deployment regime.
+
+The model outputs a 3-class probability vector
+[\mathrm{P}(\text{Short}),\,\mathrm{P}(\text{Medium}),\,\mathrm{P}(\text{Long})]
+.
+Clairvoyant
+uses
+\mathrm{P}(\text{Long})
+
+as the priority key: requests are dispatched in ascending order of
+\mathrm{P}(\text{Long})
+,
+placing predicted-short requests first.
+
+3.4
+SJF Scheduler and Starvation Timeout
+
+Incoming requests are inserted into a Go min-heap keyed on ascending
+\mathrm{P}(\text{Long})
+. A
+dispatcher goroutine continuously extracts the minimum-priority request and forwards it to the
+backend; because the backend is serial, at most one request is in flight at any time. The dispatcher
+handles client disconnections gracefully: if a client disconnects while queued, the request is
+removed from the heap; if disconnection occurs mid-generation, the backend response is drained to
+release the serial dispatch slot for the next request.
+
+Requests predicted as Medium are scheduled using their continuous
+\mathrm{P}(\text{Long})
+score
+as the priority key, with no discrete class treatment. This avoids hard boundary errors: a Medium
+request with
+\mathrm{P}(\text{Long})=0.3
+is dispatched after most Short requests but before
+high-confidence Long requests, producing a smooth ordering gradient rather than a binary partition.
+
+The starvation timeout
+\tau
+is enforced as follows. Each queued request carries its arrival
+timestamp. Before each dispatch decision, the scheduler checks whether any request has waited longer
+than
+\tau
+; if so, the longest-waiting request is promoted to the head of the queue regardless of
+its predicted
+\mathrm{P}(\text{Long})
+. We calibrate
+\tau=3\times\mu_{\text{short}}
+
+empirically, where
+\mu_{\text{short}}
+is the
+mean short-request sojourn time under
+representative mixed-workload queueing conditions
+on the target hardware (distinct from the
+sequential service time reported in Table
+1
+). For the Apple M1 deployment (Ollama,
+Gemma3:4b), we observe
+\mu_{\text{short}}\approx 40
+s in burst tests and set
+\tau=120
+s;
+for the RTX 4090 deployment,
+\mu_{\text{short}}\approx 3.5
+s yields
+\tau=15
+s. The
+sensitivity of this choice is analysed in Section
+5.5
+.
+
+Rationale for
+\tau=3\times\mu_{\text{short}}
+.
+
+We select
+\tau=3\times\mu_{\text{short}}
+based on Pareto analysis of the short/long latency
+tradeoff (Section
+5.5
+). At this threshold, short-request P50 latency improves by 17%
+over FCFS while bounding long-request P95 inflation to 17%—the elbow of the Pareto frontier.
+Smaller
+\tau
+values yield diminishing short-request gains; larger values disproportionately
+penalize long requests. This heuristic is hardware-agnostic:
+\mu_{\text{short}}
+is measured
+empirically on the target deployment, making
+\tau
+adaptive to model/hardware changes.
+
+Measuring
+\mu_{\text{short}}
+in production.
+
+To calibrate
+\tau
+on new hardware, measure
+\mu_{\text{short}}
+as the mean sojourn time (queue
+wait + service) for Short requests under representative mixed-workload queueing conditions. A
+minimal script (
+profiler/measure_mu_short.py
+) dispatches 100 Short requests concurrently
+to the backend, records end-to-end latency, and computes the mean. Example:
+
+python profiler/measure_mu_short.py --backend http://localhost:11434 --class short --n 100
+.
+
+At
+\tau=120
+s on M1,
+Clairvoyant
+achieves correct SJF ordering in an end-to-end dispatch
+test using real Dolly 15K prompts (
+n=8
+: 4
+closed_qa
+Short, 4
+
+creative_writing
+Long): all Short requests complete before any Long request, confirming
+the scheduler respects the priority ordering. This
+n=8
+test validates dispatch logic only;
+queue-level latency statistics derive from the
+n=250
+-per-cell GPU benchmarks reported in
+Section
+5.4
+.
+
+4
+ML Predictor
+
+4.1
+Problem Formulation
+
+We formulate output-length prediction as a 3-class classification problem. Given a prompt
+p
+, we
+predict one of:
+
+•
+
+Short
+: response
+<200
+tokens
+
+•
+
+Medium
+: response
+\in[200,800)
+tokens
+
+•
+
+Long
+: response
+\geq 800
+tokens
+
+For scheduling, absolute class labels are less important than correct pairwise ordering: it is
+sufficient to rank a Long job above a Short job in the priority queue. We therefore adopt
+
+ranking accuracy
+as our primary metric: the fraction of
+(\text{Short},\text{Long})
+
+pairs in which the model assigns a higher
+\mathrm{P}(\text{Long})
+score to the Long example than
+to the Short example, using the continuous probability score rather than the discrete predicted
+class. Formally:
+
+\text{Ranking Accuracy}=\frac{\left|\{(i,j):\hat{p}_{\text{long}}(j)>\hat{p}_{\text{long}}(i)\}\right|}{\left|\mathcal{S}\right|\times\left|\mathcal{L}\right|}
+
+(2)
+
+where
+\mathcal{S}=\{i:y_{i}<200\}
+,
+\mathcal{L}=\{j:y_{j}\geq 800\}
+, and
+
+\hat{p}_{\text{long}}
+is the classifier’s predicted
+\mathrm{P}(\text{Long})
+score. Medium
+examples are excluded from both sets to avoid boundary noise.
+
+Algorithm 1
+
+Ranking Accuracy Computation
+
+0:
+
+Test set
+\mathcal{D}=\{(p_{i},y_{i})\}
+, model
+f
+outputting
+\hat{p}_{\text{long}}
+
+0:
+
+Ranking accuracy
+\in[0,1]
+
+1:
+
+S\leftarrow\{i:y_{i}<200\}
+{Short examples}
+
+2:
+
+L\leftarrow\{j:y_{j}\geq 800\}
+{Long examples}
+
+3:
+
+\text{correct}\leftarrow 0
+
+4:
+
+for
+
+(i,j)\in S\times L
+
+do
+
+5:
+
+if
+
+\hat{p}_{\text{long}}(j)>\hat{p}_{\text{long}}(i)
+
+then
+
+6:
+
+\text{correct}\leftarrow\text{correct}+1
+
+7:
+
+end
+
+if
+
+8:
+
+end
+
+for
+
+9:
+
+10:
+
+return
+
+\frac{\text{correct}}{|S|\times|L|}
+
+This metric is more directly aligned with scheduling objectives than discrete 3-class
+classification accuracy: a scheduler requires correct relative ordering of short and long jobs, not
+exact class labels. Ranking accuracy consistently exceeds classification accuracy by 21–29
+percentage points across all three training datasets (Table
+5
+).
+
+4.2
+Dataset Selection and the Long-Class Starvation Finding
+
+We evaluated seven publicly available LLM prompt-response datasets. Dataset statistics are
+summarised in Table
+2
+. The finding is stark: curated instruction datasets are
+
+systematically unsuitable
+as SJF training sources.
+
+Alpaca 52K
+[
+17
+]
+(Stanford) contains only 4 Long examples across 52,002 training samples
+(0.008%). CodeAlpaca 20K
+[
+2
+]
+contains 3 Long examples (0.015%).
+Dolly 15K
+[
+4
+]
+contains 88 Long examples (0.6%)—sufficient for held-out evaluation but
+offering limited utility for training due to extreme class imbalance. CNN/DailyMail, used as a RAG
+surrogate via the prompt template “Summarise the following article:
+[article]”
+[
+15
+]
+, contains only 1 Long example in its test split.
+
+The root cause is structural: curated instruction datasets are generated by prompting GPT-3/4 with
+templates instructing the model to produce concise, well-scoped responses. This brevity constraint
+propagates throughout the dataset, eliminating the long-response examples that the scheduler must
+learn to distinguish. Only
+natural conversation logs
+—datasets collected from real
+human-assistant interactions—provide sufficient Long-class representation:
+
+•
+
+ShareGPT
+[
+16
+]
+(52,002 conversations; exact count after filtering: 48,312): 6,000 balanced (2,000 per class) after resampling
+
+•
+
+LMSYS-Chat-1M
+[
+11
+]
+(1,004,248 conversations; exact count after filtering: 876,412): 6,000 balanced, filtered to small open-source models (Vicuna, Koala, WizardLM)
+
+•
+
+OASST1
+[
+9
+]
+(Open Assistant): 828 balanced (276 per class)—limited by the 551 total Long examples available in the English subset
+
+Data filtering recipe.
+
+All datasets were filtered using the pipeline in
+data/pipeline/
+. For conversation datasets
+(ShareGPT, LMSYS, OASST1), we: (1) extracted first-turn prompt-response pairs; (2) retained only
+English-language prompts (detected via
+langdetect
+with threshold
+p>0.95
+); (3) computed
+response token length using the Llama-2 tokenizer (
+len(tokenizer.encode(response))
+); (4)
+applied class boundaries (Short:
+<200
+, Medium:
+[200,800)
+, Long:
+\geq 800
+); and (5) stratified
+sampled to balance classes for training. The exact filtering logic is implemented in
+
+data/pipeline/featurize.py
+(commit
+39ad9a6
+).
+
+We train three models, one per dataset (Models A, B, C), and evaluate each against all available
+test sets. WildChat-1M was collected but excluded from the evaluation matrix to ensure fully
+reproducible access without authentication barriers.
+
+Table 2:
+Dataset statistics: Long-class representation across seven evaluated LLM datasets.
+
+Dataset
+
+Total
+
+Short (
+<
+200)
+
+Medium (200–799)
+
+Long (
+\geq
+800)
+
+% Long
+
+Usable?
+
+ShareGPT
+
+52,002 (48,312 filtered)
+
+27,000
+
+17,000
+
+7,800
+
+14.8%
+
+Yes (balanced)
+
+LMSYS-Chat-1M
+
+1,004,248 (876,412 filtered)
+
+520,000
+
+360,000
+
+120,000
+
+12.1%
+
+Yes (filtered)
+
+OASST1
+
+8,792
+†
+
+7,300
+
+940
+
+551
+
+6.3%
+
+Yes (limited)
+
+Alpaca 52K
+
+52,002
+
+49,284
+
+2,056
+
+4
+
+0.008%
+
+No (starvation)
+
+CodeAlpaca 20K
+
+20,022
+
+19,457
+
+379
+
+3
+
+0.015%
+
+No (starvation)
+
+Dolly 15K
+
+15,011
+
+13,000
+
+1,900
+
+88
+
+0.6%
+
+Test-only
+
+CNN/DailyMail
+
+11,490 test
+
+11,441
+
+48
+
+1
+
+0.009%
+
+Test-only
+
+†
+Derived from filtering the 84K-message OASST1 conversation tree to English
+parent-child prompt-response pairs; OASST1 Short/Medium counts estimated from the 6.3% Long rate
+and the 8,792-pair total. ShareGPT and LMSYS-Chat-1M class counts are derived from published
+dataset statistics; exact counts for
+Clairvoyant
+’s filtered training subsets are available via
+
+python model/train.py
+(commit
+39ad9a6
+).
+
+Table 3:
+Exact training and test splits used for each model. Counts reflect post-filtering,
+balanced subsets. Validation split is 10% of training set, stratified by class.
+
+Model
+
+Dataset
+
+Split
+
+Short
+
+Medium
+
+Long
+
+Total
+
+A
+
+ShareGPT
+
+Train
+
+1,600
+
+1,600
+
+1,600
+
+4,800
+
+Val
+
+200
+
+200
+
+200
+
+600
+
+Test
+
+200
+
+200
+
+200
+
+600
+
+B
+
+LMSYS-Chat-1M
+
+Train
+
+1,600
+
+1,600
+
+1,600
+
+4,800
+
+Val
+
+200
+
+200
+
+200
+
+600
+
+Test
+
+200
+
+200
+
+200
+
+600
+
+C
+
+OASST1
+
+Train
+
+220
+
+220
+
+220
+
+660
+
+Val
+
+28
+
+28
+
+27
+
+83
+
+Test
+
+28
+
+28
+
+28
+
+84
+
+Note: OASST1 test split has one fewer Long example due to odd total count (551 Long in source).
+Exact filtering logic:
+data/pipeline/featurize.py
+(commit
+39ad9a6
+).
+
+4.3
+Model Training
+
+We train an XGBoost classifier
+[
+3
+]
+with a 3-class softmax objective. Hyperparameters
+are fixed across all three training runs: 300 estimators, max depth 6, learning rate 0.1, random
+seed 42. Each dataset is split 80/20 train/test using stratified sampling to preserve class balance
+in the held-out set. In-distribution accuracy numbers cited in Section
+5
+refer to
+this held-out 20% split.
+
+4.4
+Ablation Study
+
+We conduct a drop-one ablation study to quantify the contribution of each feature group. Across all
+three datasets,
+prompt_token_len
+is the only universally important feature, with an
+average ranking-accuracy delta of
+-3.09
+percentage points (pp) when removed. In contrast,
+
+instruction_verb
+is highly distribution-specific: dropping it decreases accuracy by
+
+-5.04
+pp on LMSYS but increases it by
++3.21
+pp on OASST1, indicating that the verb encoding
+learned on conversational data does not transfer uniformly across domains.
+
+Two numeric features,
+has_format_keyword
+and
+clause_count
+, are net-harmful on
+average (yielding
++0.78
+pp and
++1.07
+pp improvement when dropped). However, a combined
+minimal model that removes all three net-harmful features yields no aggregate improvement (average
+delta:
+-0.3
+pp), placing the change within measurement noise. We therefore retain the full
+19-feature model to ensure consistent behaviour across all deployment targets; a systematically
+pruned feature set is left for future work.
+
+Table 4:
+Ablation study: ranking accuracy delta (pp) when each feature group is removed.
+Averaged across Models A, B, C.
+
+Feature Removed
+
+ShareGPT
+
+LMSYS
+
+OASST1
+
+Average
+
+Effect
+
+prompt_token_len
+
+-3.57
+
+-2.49
+
+-3.21
+
+-3.09
+
+Harmful
+
+instruction_verb
+
+-3.52
+
+-5.04
+
++3.21
+
+-1.78
+
+Mixed
+
+has_code_keyword
+
+-4.47
+
+-0.54
+
++0.49
+
+-1.51
+
+Harmful
+
+ends_with_question
+
+-2.25
+
+-0.30
+
+-0.84
+
+-1.13
+
+Harmful
+
+has_length_constraint
+
+-0.55
+
+-0.21
+
++0.42
+
+-0.12
+
+Neutral
+
+has_format_keyword
+
+-0.01
+
++0.11
+
++2.24
+
++0.78
+
+Net-harmful
+
+clause_count
+
++0.51
+
+-0.47
+
++3.18
+
++1.07
+
+Net-harmful
+
+5
+Evaluation
+
+This section presents five complementary evaluations that collectively validate
+Clairvoyant
+’s
+design choices and quantify its latency benefits:
+(1) a dataset viability study establishing the Long-class starvation threshold for training
+(§
+4.2
+, Table
+2
+);
+(2) offline ranking-fidelity evaluation on held-out dataset splits (§
+5.2
+);
+(3) baseline comparison against simpler scheduling signals (§
+5.3
+);
+(4) end-to-end GPU latency benchmarks on an RTX 4090 under burst and steady-state workloads
+(§
+5.4
+); and
+(5) starvation-timeout sensitivity analysis via discrete-event simulation (§
+5.5
+).
+The ablation study quantifying per-feature contribution appears in §
+4.4
+
+(Table
+4
+).
+
+5.1
+Dataset Study: Long-Class Distribution
+
+Table
+2
+summarises Long-class (
+\geq 800
+tokens) representation across seven
+evaluated datasets. A minimum of
+{\sim}200
+Long examples is required for stratified 80/20
+splitting to yield a stable XGBoost training set (160 Long examples in the training split).
+Alpaca 52K and CodeAlpaca 20K fall short of this threshold by more than an order of
+magnitude—containing only 4 and 3 Long examples, respectively—and produce degenerate
+classifiers that predict the majority class for all inputs, as confirmed empirically.
+
+5.2
+Scheduling-Oriented Ranking Evaluation
+
+In-distribution performance.
+
+Table
+5
+reports in-distribution ranking accuracy for each of the three trained
+models, measured on the held-out 20% test split. The ranking-over-classification gap
+(+21–29 pp) confirms the core motivation for adopting ranking accuracy: the classifier may
+frequently misassign Medium-class examples, but it consistently orders Short below Long in the
+priority queue—which is all the scheduler requires.
+
+Cross-distribution generalisation.
+
+Off-diagonal entries in Table
+6
+represent true cross-distribution performance;
+diagonal entries include training data and are therefore optimistic. Cross-distribution accuracy
+in the range 52–66% represents modest but non-trivial generalisation above the random baseline
+(50%). This motivates deployment-specific fine-tuning using production request logs.
+
+Table 5:
+In-distribution ranking accuracy vs. classification accuracy for all three models
+(held-out 20% test split,
+n=600
+per model).
+
+Model
+
+Training Dataset
+
+Ranking Acc
+
+Class Acc
+
+Delta
+
+Model A
+
+ShareGPT
+
+76.29%
+
+47.6%
+
++28.7
+pp
+
+Model B
+
+LMSYS
+
+95.62%
+
+66.8%
+
++28.8
+pp
+
+Model C
+
+OASST1
+
+62.21%
+
+41.0%
+
++21.2
+pp
+
+Table 6:
+Cross-distribution ranking accuracy matrix. Diagonal entries include training data.
+Off-diagonal entries are true cross-distribution results (
+n=600
+per cell).
+
+Train
+\downarrow
+/ Test
+\rightarrow
+
+ShareGPT
+
+LMSYS
+
+OASST1
+
+Dolly
+
+ShareGPT (Model A)
+
+86.4%
+\dagger
+
+53.6%
+
+56.3%
+
+52.7%
+
+LMSYS (Model B)
+
+62.7%
+
+98.3%
+\dagger
+
+65.3%
+
+58.4%
+
+OASST1 (Model C)
+
+58.0%
+
+65.3%
+
+90.4%
+\dagger
+
+57.7%
+
+\dagger
+Diagonal entries include training data. Off-diagonal entries are true
+cross-distribution results. CNN/DailyMail excluded: 1 Long example in test split renders
+the ranking metric unreliable.
+
+Deployment recommendation.
+
+For practitioners: retraining on
+{\sim}500
+production samples (balanced across classes)
+typically converges in
+<
+10 s on a consumer CPU and yields immediate ranking-accuracy gains.
+We caution against heuristic baselines: the prompt-length rule achieves only marginal improvement
+over random (52–56% vs. 50%), while the keyword heuristic performs substantially worse than
+random on two of three datasets (4.6–36.3%; Table
+7
+).
+Clairvoyant
+’s
+lexical+XGBoost approach delivers consistent, substantial gains (67–95%) without manual
+threshold tuning.
+
+5.3
+Baseline Comparison
+
+To assess the necessity of the ML predictor, we compare
+Clairvoyant
+against three simpler
+scheduling signals on the same 20% held-out test split used for in-distribution evaluation.
+Table
+7
+reports pairwise ranking accuracy (Short vs. Long pairs) across the
+three evaluation datasets. The random baseline is 50%; the prompt-length rule threshold is
+optimised on the training split per dataset.
+
+Table 7:
+Pairwise ranking accuracy (Short vs. Long pairs) for four scheduling approaches
+across three datasets (
+n=600
+per cell). Random baseline is 50%. Prompt-length rule threshold
+is optimised on the training split per dataset.
+
+Method
+
+ShareGPT
+
+LMSYS
+
+OASST1
+
+FCFS (random)
+
+50.0%
+
+50.0%
+
+50.0%
+
+Prompt-length rule
+
+52.4%
+
+52.3%
+
+55.8%
+
+Keyword heuristic
+
+36.3%
+
+4.6%
+
+18.5%
+
+Clairvoyant (XGBoost)
+
+74.9%
+
+95.1%
+
+67.1%
+
+The prompt-length rule is only marginally better than random (52–56% vs. 50%), while the
+keyword heuristic is actively harmful on LMSYS (4.6%), where code-related vocabulary does not
+reliably predict long outputs.
+Clairvoyant
+outperforms the next-best method by 11–43 percentage
+points across datasets, delivering consistent gains without manual threshold tuning. The keyword
+heuristic’s poor performance (4.6–36.3%) underscores the risk of rule-based approaches that
+lack learned signal.
+
+5.4
+GPU Benchmark: End-to-End Latency
+
+We evaluate
+Clairvoyant
+end-to-end on an RTX 4090 (24 GB VRAM) using Ollama as the serial
+backend. The workload consists of 100 concurrent requests (50 Short, 50 Long) drawn from the
+Dolly 15K test split, dispatched via a Python script (
+profiler/benchmark.py
+) using
+
+asyncio.gather
+to ensure all requests enter the queue within
+\leq
+50 ms. This is an
+adversarial stress-test scenario: SJF ordering must work through the complete queued backlog with
+no idle periods. OS-level TCP buffering is below 1 ms and does not materially affect measurements
+at the 2–10 s generation timescale.
+
+Table
+8
+reports P50, P95, and P99 latency for Short and Long requests under FCFS and
+
+Clairvoyant
+(SJF) dispatch, for two model configurations: Gemma3:4b and Llama3.1:8b. Values show
+mean
+\pm
+1 std dev across 5 independent runs (
+n=250
+per cell).
+
+Table 8:
+End-to-end latency (seconds) for 100 concurrent requests on RTX 4090 (
+n=250
+per cell,
+5 runs). Short requests (
+<
+200 tokens) see substantial P50/P95/P99 reductions under SJF; Long
+requests (
+\geq
+800 tokens) incur modest increases due to deferred dispatch. Values show mean
+
+\pm
+1 std dev.
+
+Model
+
+Class
+
+Condition
+
+P50 (s)
+
+P95 (s)
+
+P99 (s)
+
+Gemma3:4b
+
+Short
+
+FCFS
+
+229.5
+\pm
+12.3
+
+504.7
+\pm
+18.9
+
+552.2
+\pm
+21.1
+
+SJF
+
+69.1
+\pm
+4.2
+
+163.0
+\pm
+8.7
+
+177.8
+\pm
+9.4
+
+Long
+
+FCFS
+
+309.7
+\pm
+15.6
+
+547.0
+\pm
+22.3
+
+578.8
+\pm
+24.8
+
+SJF
+
+376.0
+\pm
+19.1
+
+554.9
+\pm
+23.1
+
+573.6
+\pm
+25.3
+
+Llama3.1:8b
+
+Short
+
+FCFS
+
+158.8
+\pm
+9.8
+
+352.0
+\pm
+14.2
+
+367.7
+\pm
+15.9
+
+SJF
+
+38.0
+\pm
+2.1
+
+94.8
+\pm
+4.9
+
+104.8
+\pm
+5.6
+
+Long
+
+FCFS
+
+188.7
+\pm
+11.3
+
+342.2
+\pm
+16.8
+
+360.7
+\pm
+18.2
+
+SJF
+
+239.6
+\pm
+14.7
+
+355.3
+\pm
+17.9
+
+367.6
+\pm
+19.1
+
+SJF reduces short-request P50 latency by 70% (Gemma3:4b) and 76% (Llama3.1:8b), with
+consistent P95 and P99 reductions of 68–73%. Long-request latency increases by 21–27%,
+reflecting the intentional deferral of Long jobs to prioritise Short requests. The large absolute
+latency values under FCFS (P50
+\approx
+159–230 s for Short requests) underscore the severity
+of HOLB in serial deployments;
+Clairvoyant
+mitigates this without requiring continuous batching
+or additional VRAM.
+
+Workload regime.
+
+Under steady-state Poisson arrivals at
+\rho=0.74
+,
+Clairvoyant
+reduces short-request P50
+latency by 17%. The benefit peaks near
+\rho=0.74
+and declines at
+\rho=0.85
+(to
+
+{\sim}10\%
+) as the starvation timeout
+\tau
+fires more frequently to protect Long requests.
+Below
+\rho\lesssim 0.50
+, queueing delay is minimal and SJF gains are
+<
+3%; in this regime,
+FCFS suffices and the added scheduling layer may not be justified.
+Clairvoyant
+provides
+measurable benefit in moderate-to-high utilisation serial backends
+(
+0.55\lesssim\rho\lesssim 0.80
+).
+
+Figure 3:
+SJF latency reduction for short requests vs. queue utilisation
+\rho
+. Poisson
+points from discrete-event simulation calibrated to measured RTX 4090 Gemma3:4b service
+times (
+\mu_{\text{short}}=3.5
+s,
+\mu_{\text{long}}=8.9
+s),
+\tau=3\times\mu_{\text{short}}=10.5
+s,
+n=2{,}000
+requests; error bars show
+\pm
+1 std dev across
+5 seeds. Burst point from RTX 4090 GPU benchmark (100 concurrent requests,
+n=250
+; no
+per-seed CI available from pooled results). Benefit peaks at
+\rho\approx 0.74
+(17%) and
+declines at
+\rho=0.85
+as the starvation timeout fires more frequently under heavy load.
+Below
+\rho=0.50
+, gains are negligible. Practical deployment range:
+
+0.55\lesssim\rho\lesssim 0.80
+. Evaluated on RTX 4090 (24 GB VRAM), Ollama backend,
+Gemma3:4b and Llama3.1:8b models.
+
+5.5
+Starvation Timeout Sensitivity
+
+We analyse the effect of
+\tau
+on the short/long latency tradeoff via discrete-event simulation
+under Poisson arrivals (
+\lambda=0.12
+/s,
+\rho\approx 0.74
+). Service times are drawn from
+
+\mathcal{N}(3.5\,\text{s},0.8\,\text{s})
+for Short requests and
+
+\mathcal{N}(8.9\,\text{s},2.0\,\text{s})
+for Long requests in a 50/50 mix (
+n=2{,}000
+
+requests across 5 random seeds).
+
+Pure SJF (
+\tau=\infty
+) yields the optimal short-request P50 latency (5.97 s, a 38%
+reduction relative to FCFS) at the expense of the worst long-request P95 latency (79.3 s, a
+53% inflation over FCFS). The recommended threshold,
+\tau=3\times\mu_{\text{short}}
+,
+sits at the elbow of this Pareto frontier, delivering a 17% short P50 improvement over FCFS
+while bounding the long P95 penalty to just 17%. Conversely, in the concurrent burst
+benchmark,
+\tau
+exhibits a negligible effect, causing less than 1% variation across a
+
+0.5\times
+to
+10\times
+range. This behaviour is expected: in a closed-loop burst, all 50
+short requests are cleared within
+{\sim}175
+s regardless of
+\tau
+, as verified empirically
+in Section
+5.4
+.
+
+Table 9:
+Short and long sojourn time vs. starvation timeout
+\tau
+(Poisson arrivals,
+
+\rho=0.74
+,
+n=2{,}000
+requests across 5 seeds). FCFS baseline shown for reference.
+
+\tau
+
+SHORT P50 (s)
+
+SHORT P95 (s)
+
+LONG P50 (s)
+
+LONG P95 (s)
+
+FCFS (baseline)
+
+9.70
+
+43.71
+
+15.60
+
+51.79
+
+1.0\times\mu_{\text{short}}
+
+8.38
+
+18.15
+
+15.18
+
+69.35
+
+3.0\times
+(default)
+
+8.03
+
+23.46
+
+16.83
+
+60.45
+
+5.0\times
+
+7.02
+
+28.56
+
+16.07
+
+55.17
+
+\infty
+(pure SJF)
+
+5.97
+
+14.72
+
+14.14
+
+79.32
+
+Deployment Guidance.
+
+For practitioners calibrating
+\tau
+on production hardware, we propose a three-step heuristic:
+(1) measure
+\mu_{\text{short}}
+under representative mixed-workload queueing conditions rather
+than isolated sequential service times; (2) initialise
+\tau=3\times\mu_{\text{short}}
+;
+and (3) tune within a
+\pm
+20% window based on the observed long-request P95 degradation. This
+heuristic closely approximates the Pareto-optimal tradeoff observed in simulation without
+requiring exhaustive discrete-event modelling.
+
+5.6
+Reproducibility
+
+All experiments are reproducible using the open-source repository
+(
+https://github.com/Aravind0403/clairvoyant-scheduler
+). Key details:
+
+•
+
+Code commit
+: Experiments in this paper use commit
+39ad9a64
+.
+
+•
+
+Dependencies
+: Python 3.10+, Go 1.21+,
+requirements.txt
+(XGBoost 2.0.3,
+ONNX Runtime 1.16.3, pandas 2.0.3).
+
+•
+
+ONNX model
+: Pre-trained
+predictor.onnx
+included in
+model/
+;
+export script:
+model/export.py
+.
+
+•
+
+Hardware
+: RTX 4090 (24 GB VRAM), CUDA 12.2, driver 535.104.05; Apple M1 (16 GB),
+macOS 14.4.1.
+
+•
+
+Backend
+: Ollama 0.1.38, Gemma3:4b and Llama3.1:8b quantized (Q4_K_M).
+
+A minimal inference script (
+predictor_infer.py
+) demonstrates feature extraction
+
+\rightarrow
+ONNX inference in
+<
+10 lines of code.
+
+Planned extensions.
+
+Two experiments are in progress for a v2 preprint: (P1) Time-to-First-Token (TTFT)
+instrumentation to quantify Clairvoyant’s admission overhead on interactive latency; expected
+completion Q3 2026. (P2) Cross-backend validation on llama.cpp and Jan to confirm generality
+beyond Ollama; expected completion Q4 2026. Both will be integrated into the open-source
+repository upon completion.
+
+6
+Related Work
+
+S3 (Jin et al., NeurIPS 2023).
+
+S3
+[
+7
+]
+proposes length-predictive scheduling for LLMs but with the opposite
+scheduling objective: longest-job-first, optimised for throughput by filling continuous-batching
+pipelines efficiently.
+Clairvoyant
+’s objective is orthogonal—shortest-job-first for latency
+of short requests in serial deployments. The two systems target different layers and different
+metrics; they are complementary rather than competing.
+
+Orca (Yu et al., OSDI 2022).
+
+Orca
+[
+20
+]
+introduces iteration-level scheduling (continuous batching), which
+eliminates Layer 1 HOLB as a side effect of Layer 2 scheduling. Orca targets high-concurrency
+GPU clusters with sufficient VRAM for concurrent KV-caches.
+Clairvoyant
+targets the
+complementary regime where Orca’s memory requirements are infeasible.
+
+vLLM / PagedAttention (Kwon et al., SOSP 2023).
+
+vLLM
+[
+10
+]
+optimises KV-cache memory management to increase the practical
+concurrency level achievable under continuous batching. Like Orca, vLLM operates at Layer 2
+and implicitly mitigates Layer 1 HOLB through batching.
+Clairvoyant
+’s scope explicitly
+excludes vLLM-backed deployments.
+
+Learning-to-Rank Scheduling (LTR).
+
+The closest prior work is LTR
+[
+5
+]
+, which also approximates SJF via relative
+output-length prediction.
+Clairvoyant
+differs on three axes: (1)
+deployment target
+:
+LTR is built into vLLM for high-concurrency cloud deployments, whereas
+Clairvoyant
+targets
+serial/low-concurrency backends (Ollama, llama.cpp); (2)
+prediction mechanism
+: LTR
+uses prompt embeddings with a ranking loss, whereas
+Clairvoyant
+uses 19 lexical features and
+XGBoost (0.029 ms latency, no embedding overhead); (3)
+preemption
+: LTR supports
+token-level preemption via vLLM’s paged attention, whereas
+Clairvoyant
+is non-preemptive
+(KV-cache discard makes preemption prohibitively expensive on consumer hardware). The two
+systems are complementary: LTR for cloud-scale continuous batching,
+Clairvoyant
+for
+edge/local serial dispatch.
+
+FastServe (Wu et al., arXiv 2023).
+
+FastServe
+[
+18
+]
+implements preemptive SRPT scheduling for LLM inference via
+a skip-join Multi-Level Feedback Queue (MLFQ) with proactive KV-cache offloading across GPU
+and host memory. FastServe achieves what
+Clairvoyant
+approximates—job-length-aware
+preemption—but requires a multi-GPU distributed environment and incurs KV-cache migration
+overhead.
+Clairvoyant
+targets serial single-GPU or CPU-only deployments where preemption is
+infeasible due to memory constraints; the two systems are complementary across deployment tiers.
+
+Sarathi-Serve (Agrawal et al., OSDI 2024).
+
+Sarathi-Serve
+[
+1
+]
+eliminates prefill-induced pipeline stalls in
+continuous batching via chunked prefills—splitting large prefill requests into equal-sized
+chunks so that decode requests are not blocked during long prompt processing. This addresses a
+Layer 2 sub-problem (starvation within a running batch) distinct from
+Clairvoyant
+’s Layer 1
+admission-queue target. The two optimisations are orthogonal and composable: Sarathi-Serve
+improves decode continuity inside a batch;
+Clairvoyant
+improves admission order before a
+request enters the backend.
+
+Classical SJF/SRPT theory.
+
+The scheduling discipline used by
+Clairvoyant
+is a direct application of classical M/G/1
+queue theory
+[
+8
+,
+14
+]
+. The novelty is not the scheduling policy itself
+but the practical realisation of approximately-known job lengths in the LLM domain via
+lightweight lexical prediction.
+
+7
+Limitations and Threats to Validity
+
+Scope.
+
+Clairvoyant
+is designed for serial OpenAI-compatible backends (Ollama, llama.cpp) where
+Layer 1 HOLB is unaddressed. Deployments already running continuous-batching engines (vLLM,
+Orca, TGI) gain nothing from
+Clairvoyant
+; adding a proxy layer would only introduce overhead.
+The system makes no claims about distributed or multi-GPU serving.
+
+Predictor limits.
+
+Cross-distribution ranking accuracy (52–66%) reflects the dominant role of training
+distribution in determining scheduler quality. A ShareGPT-trained model deployed on a
+code-heavy production workload will produce near-random ordering for that workload; a sustained
+rise in short-request P99 latency is the observable indicator. The token-length proxy
+(
+len(response) // 4
+) diverges from true BPE counts for code-heavy, multilingual, or
+symbol-dense inputs. Feature extraction and instruction-verb mappings are English-only; prompts
+in other languages collapse to the
+other
+verb category, reducing ranking fidelity.
+
+Fairness and multi-tenant mitigation.
+
+Clairvoyant
+reduces mean waiting time for short requests at the expense of long ones. The
+starvation timeout
+\tau
+bounds worst-case delay for any single request, but within that
+bound, short requests are systematically favoured. Multi-user deployments with heterogeneous
+request-length distributions may require per-tenant priority controls. Concrete mitigation
+strategies include: (1)
+per-tenant quotas
+: limit the fraction of short requests that
+can jump ahead of long requests from the same tenant; (2)
+per-tenant
+\tau
+: calibrate
+starvation timeout individually per tenant based on their workload mix; (3)
+weighted
+priority keys
+: combine
+\mathrm{P}(\text{Long})
+with tenant-level fairness weights; (4)
+instrumentation
+: monitor per-tenant P95 latency and alert when disparity exceeds a
+threshold. These extensions are left for future work; the current implementation prioritizes
+simplicity and low overhead for single-tenant or homogeneous-workload deployments.
+
+Calibration.
+
+\tau=3\times\mu_{\text{short}}
+is an empirically derived starting point, not a
+guarantee. It requires measuring
+\mu_{\text{short}}
+under queueing conditions—not
+sequential service time—and should be revisited when hardware or model changes alter
+short-request latency.
+
+Evaluation scope.
+
+Benchmarks were run on one RTX 4090; behaviour under different GPU memory hierarchies or
+alternative backends (llama.cpp, Jan) is not characterised. The DES steady-state analysis uses
+normally distributed service times, which is a simplifying assumption—real LLM generation
+variance includes prompt-dependent effects not captured by a Gaussian. End-to-end latency is
+measured from client dispatch to response completion; Time-to-First-Token is not separately
+instrumented.
+Clairvoyant
+’s 0.029 ms admission overhead should not materially affect TTFT,
+but this is not experimentally verified.
+
+8
+Ethics and Privacy
+
+Clairvoyant
+operates as a transparent proxy and does not require access to user data beyond
+the incoming prompt text. No personally identifiable information (PII) is logged by default.
+For production deployments, we recommend: (1) disabling prompt logging or implementing data
+retention policies; (2) providing an opt-out mechanism for users who prefer not to have prompts
+processed for scheduling; and (3) auditing feature extraction to ensure no sensitive substrings
+are retained. The system is released under the MIT License; dataset usage follows the terms of
+each source (ShareGPT, LMSYS-Chat-1M, OASST1).
+
+9
+Conclusion
+
+Serial LLM backends are high-variance service queues. Under FCFS, mixed workloads produce
+severe Head-of-Line Blocking: a short factual query waits the full duration of whatever job
+arrived first.
+Clairvoyant
+addresses this at the admission layer with a lightweight sidecar
+proxy: 19 lexical features, an ONNX-exported XGBoost classifier at 0.029 ms per request, and
+a min-heap SJF dispatcher with a calibrated starvation timeout. No changes to the inference
+backend are required.
+
+The core results are: 70–76% P50 latency reduction for short requests under burst conditions
+on an RTX 4090 (
+n=250
+per cell), 17% under steady-state Poisson arrivals at
+\rho=0.74
+,
+and 62–96% in-distribution ranking accuracy across three natural conversation datasets. The
+dataset finding stands independently: curated instruction corpora (Alpaca, CodeAlpaca) are
+degenerate training sources for length-predictive scheduling, containing fewer than 5 Long
+examples each. Only natural conversation logs exhibit sufficient class diversity.
+
+The system is open-source. Code, trained ONNX models, and evaluation scripts are at
+
+https://github.com/Aravind0403/clairvoyant-scheduler
+. Training requires only public
+datasets and standard tools (XGBoost, ONNX Runtime, Go 1.21+), with no proprietary
+dependencies.
+

@@ -1,0 +1,2637 @@
+Parallel Prefix Verification for Speculative Generation
+Yuncheng Yao, Yuxuan Xia, Shengjie Wang, Danyang Zhuo
+
+Abstract
+We introduce Parse ( PA rallel p R efix S peculative E ngine), a speculative generation framework that accelerates large language model (LLM) inference by parallelizing prefix verification on a semantic level. Existing speculative decoding methods are fundamentally limited by token-level equivalence: the target model must verify each token, leading to short acceptance lengths and modest speedups. Moving to semantic or segment-level verification can substantially increase acceptance granularity, but prior approaches rely on sequential verification, introducing significant overhead and limiting practical gains. Parse introduces parallel prefix verification, enabling semantic-level verification without sequential checks. Given a full draft from a draft model, the target model evaluates correctness across multiple prefixes in a single forward pass using a custom attention mask, directly identifying the maximal valid prefix. This eliminates sequential segment verification, and makes verification compute-efficient. Parse is orthogonal to token-level speculative decoding and can be composed with it for additional gains. Across models and benchmarks, Parse delivers 1.25 × \times –4.3 × \times throughput gain over the target model, and 1.6 × \times –4.5 × \times when composed with EAGLE-3 — all with negligible accuracy degradation. This demonstrates parallel prefix verification as an effective, general approach to accelerating LLM inference.
+
+
+
+1
+Introduction
+
+As large language models (LLMs) scale, their inference cost increasingly dominates deployment budgets. Reducing latency and server load without compromising quality has therefore become a central research goal
+(
+11
+;
+23
+;
+26
+)
+. Among existing techniques,
+speculative generation
+
+(
+12
+;
+5
+)
+is especially attractive: a lightweight draft model proposes tokens that the target model then verifies. Classical speculative
+decoding
+is
+lossless
+: through rejection sampling, the final output distribution exactly matches that of the target model, so any accepted tokens are guaranteed to be distributionally consistent.
+
+While token-level speculation provides rigorous correctness, it constrains acceleration to per-token agreement. Many user-facing tasks admit a coarser but still reliable unit of verification:
+semantic spans
+. In practice, correctness is often determined by whether a prefix remains on a correct solution trajectory (e.g., problem setup, derivation scaffolding, or factual context), not by matching the target model’s probability at each token position. This observation opens a complementary axis of speedup: amortize verification over longer semantic units, reuse any prefix that is semantically sound, and only regenerate from the first incorrect point onward.
+
+Prior works have also recognized the potential of semantic-level speculation. In particular, SpecReason
+(
+16
+)
+and Speculative Thinking
+(
+22
+)
+apply semantic verification to reasoning-oriented tasks by checking intermediate chain-of-thought segments (e.g., a step in reasoning). However, these approaches operate at the segment level and rely on sequential verification along the generation trajectory. Each segment must be checked before proceeding to the next, introducing significant overhead and unable to fully unlock the benefits of larger acceptance units.
+
+These observations expose a fundamental tension in speculative generation:
+fine-grained (token-level) verification enables parallelism but limits acceptance length, whereas coarse-grained (semantic-level) verification increases acceptance length but introduces sequential dependency.
+
+In this paper, we show that this tradeoff is not inherent. We introduce parallel prefix verification, a new inference paradigm that enables semantic-level parallel prefix verification. Our key idea is to treat every partial output as a prefix of a complete draft and to verify multiple prefixes simultaneously in a single forward pass. Given a complete candidate output from a draft model, the target model evaluates correctness across different prefix boundaries using a custom attention mask, and identifies the maximal valid prefix. This eliminates iterative, segment-by-segment generation and verification.
+
+Building on this idea, we present
+Parse
+, a speculative generation framework that combines a fast draft model with parallel prefix verification in the target model.
+Parse
+requires no model retraining and
+integrates cleanly with existing token-level speculative decoding techniques
+. Empirically, using Qwen3-235B
+(
+21
+)
+as the target model,
+Parse
+achieves
+\sim
+1.3
+\times
+–4.3
+\times
+speedup while maintaining accuracy close to the target model, demonstrating that semantic-level parallel verification is a practical and effective approach for high-throughput LLM serving.
+
+Figure 1
+:
+Auto-regressive decoding is sequential and token-level; SpecDecode parallelizes verification at the token level (short acceptance spans); SpecReason verifies semantic steps but sequentially (serial bottleneck).
+Parse
+fills the remaining quadrant by verifying all semantic prefixes of a draft in a single prefill and resuming from the last correct one, capturing both long acceptance units and parallel verification.
+
+2
+Related Works
+
+2.1
+Speculative Decoding
+
+Speculative decoding has recently seen several enhancements to draft tree structures, feature‐level modeling, and single‐model drafting. The EAGLE series (EAGLE-1, EAGLE-2)
+(
+14
+;
+13
+)
+introduces draft trees, enabling context-aware token drafting with lossless speedups of 3–4.3
+\times
+. Dynamic Depth Decoding
+(
+3
+)
+further improves on EAGLE-2 by adapting draft depth per context, gaining additional speed without accuracy loss. EAGLE-3
+(
+15
+)
+relaxes the feature-prediction constraint by fusing multiple semantic feature levels during training and inference, achieving better speedups. Alternatives like Medusa
+(
+4
+)
+avoid separate small models by attaching lightweight “draft heads” directly to the target model.
+
+These variants of speculative decoding still rely on
+token-level
+distributional alignment, where the target model sequentially verifies agreement on each token. In contrast,
+Parse
+shifts the focus to
+semantic-level
+verification: instead of matching token probabilities, the target model evaluates whether draft prefixes remain semantically correct. This is done in a single prefill pass, after which the target model continues from the last verified prefix. Figure
+1
+illustrates this contrast between token-level speculative decoding and our approach.
+
+2.2
+Semantic Speculative Decoding
+
+Prior works such as JudgeDecoding
+(
+2
+)
+enables a larger acceptance length (about 19 tokens on average) by training a small network to recognize semantic-level alignment based on the last layer of network features. SpecReason
+(
+16
+)
+, Lookahead Reasoning
+(
+8
+)
+and Speculative Thinking
+(
+22
+)
+apply semantic verification to reasoning steps in a chain-of-thought (CoT), enabling speed-up in the reasoning process. In these approaches, a small draft model proposes an intermediate reasoning step, which the larger model then accepts or rejects before the next step is produced. This step-by-step accept/reject loop requires sequential generation and verification for each reasoning steps. To the best of our knowledge, we are the first work that enables parallel verification for semantic speculative generation.
+
+3
+Parse
+Design
+
+Speculative decoding wants two properties that have so far been at odds:
+parallel verification
+, so the target model is not a sequential bottleneck, and
+long acceptance units
+, so that each speculation round amortizes its drafting and verification overhead. Token-level methods
+(
+15
+)
+verify many drafted tokens in a single target-model pass (parallel), but a single mismatch invalidates the rest of the speculation window, leaving the average accepted span short. Semantic-level methods
+(
+16
+)
+accept much longer spans by checking whole segments, but they must check one segment, wait for the verdict, then proceed to the next segment (sequential), reintroducing exactly the serial bottleneck speculation was meant to remove. Either way, end-to-end speedups remain bounded.
+
+Parse
+(PArallel pRefix Speculative Engine) closes this gap. Its core primitive,
+parallel prefix verification
+, lets a single prefill of the target model emit a Correct/Incorrect decision for
+every
+prefix of a drafted answer simultaneously. Verification cost is one forward pass regardless of how many prefixes we inspect, so we can recover the long acceptance lengths of semantic-level methods without their sequential verification overhead. At a high level,
+Parse
+runs three stages: a small
+draft
+model writes a complete candidate answer, the target model
+holistically verifies
+it, and whatever is not accepted is
+rewritten
+by the target model starting from the longest correct prefix.
+
+3.1
+The
+Parse
+Inference Framework
+
+Parse
+is built on three empirical observations about how a target model evaluates correctness. To probe this, we hand the target model a draft answer and ask it to emit
+Correct
+or
+Incorrect
+, then measure how reliably its judgment tracks the actual correctness of the draft. Three findings emerge.
+
+(a)
+
+MMLU-Pro
+
+(b)
+
+MMLU
+
+(c)
+
+SuperGPQA
+
+Figure 2
+:
+Error-detection metrics on three benchmarks (MMLU-Pro, MMLU, SuperGPQA), with Qwen3-235B prompted to classify a draft answer as
+Correct
+or
+Incorrect
+. The x-axis is the two-way confidence threshold
+\tau
+on
+\mathrm{conf}=P(\texttt{Correct})/(P(\texttt{Correct})+P(\texttt{Incorrect}))
+; any draft with
+\mathrm{conf}<\tau
+is flagged
+Incorrect
+. Treating
+Incorrect
+as the positive class, the
+blue bars
+report
+coverage
+— the fraction of all drafts the judge flags at threshold
+\tau
+(i.e., the rejection rate, including both true and false positives) — and the line markers report
+recall
+(of all wrong drafts, the fraction flagged),
+precision
+(of flagged drafts, the fraction actually wrong), and overall classification
+accuracy
+(of all drafts, the fraction classified correctly). The
+orange bar
+separately reports the target model’s own accuracy when restricted to the draft’s failure cases: among the questions the draft got wrong, how often the target model could itself produce the correct answer.
+
+Judging is easier than answering.
+Even on questions the target model would itself get wrong (orange bars in Fig.
+2
+), it correctly flags the draft as
+Incorrect
+at substantially higher coverage than its own answering accuracy: the model recognizes that something is wrong without knowing the right fix.
+Parse
+exploits this asymmetry — a judge that detects errors well, even when it cannot produce the right answer itself, is enough to supervise a fast, error-prone draft model.
+
+Confidence beats argmax.
+The first principle only pays off if we can extract the judge’s verdict reliably, and the naive readout — taking whichever of
+Correct
+or
+Incorrect
+the model assigns higher probability — does not: this argmax decision catches just
+60
+–
+70\%
+of the draft’s errors (Fig.
+2
+,
+\tau=0.5
+). The probabilities themselves carry the model’s uncertainty, but collapsing them to a single token discards it. Defining the
+two-way confidence
+
+\mathrm{conf}(y)\;=\;\frac{P(\texttt{Correct})}{P(\texttt{Correct})+P(\texttt{Incorrect})},
+
+and treating any draft with
+\mathrm{conf}<\tau
+as suspect, we catch nearly all errors — the recall (fraction of wrong drafts flagged) jumps from
+\sim
+65\%
+at the argmax to nearly
+100\%
+at
+\tau=0.997
+.
+
+Aggressive error-catching does not waste good drafts.
+A higher
+\tau
+catches more errors, but in principle it could also flag many
+correct
+drafts as wrong — and every such false alarm forces an unnecessary target-model regeneration. Fig.
+2
+shows this does not happen: as
+recall
+(of all wrong drafts, the fraction we flag) climbs with
+\tau
+, both
+precision
+(of the drafts we flag, the fraction that are actually wrong) and overall classification
+accuracy
+(of
+all
+drafts, the fraction we classify correctly) stay flat. Concretely, the confidence margin separates correct from incorrect drafts cleanly enough that almost every correct draft scores well above
+\tau=0.997
+, so raising the threshold captures additional errors without misclassifying correct drafts.
+Parse
+can therefore afford to set
+\tau
+aggressively.
+
+These observations leads to the design of
+Parse
+, which consists of 3 stages: a small draft model proposes a complete answer, the confidence-thresholded judge (the target model) decides what to keep, and the target model fills in whatever the judge rejects (Fig.
+3
+).
+
+Parameters:
+confidence threshold
+\tau
+; chunk size
+\Delta
+.
+
+1
+
+foreach
+
+question
+q
+
+do
+
+2
+
+//
+\triangleright
+Stage 1: draft generation
+
+y_{s}\leftarrow\textsc{SmallDraft}(q)
+
+3
+
+//
+\triangleright
+Stage 2(i): full-answer judgment
+
+(v,\,\mathrm{conf})\leftarrow\textsc{JudgeFull}(q,y_{s})
+
+4
+
+if
+
+v=\texttt{Correct}
+
+and
+
+\mathrm{conf}\geq\tau
+
+then
+
+5
+
+//
+\triangleright
+Stage 3: accept
+
+return
+
+y_{s}
+
+6
+
+else
+
+7
+
+//
+\triangleright
+Stage 2(ii): parallel prefix verification (§
+3.2
+)
+
+t^{\star}\leftarrow\textsc{VerifyPartial}(q,\,y_{s};\,\Delta)
+
+8
+
+if
+
+t^{\star}\neq\varnothing
+
+then
+
+9
+
+//
+\triangleright
+Stage 3: continue
+
+y_{\text{cont}}\leftarrow\textsc{BigContinue}(q,\ y_{1:t^{\star}})
+
+10
+
+return
+
+y_{1:t^{\star}}\,\|\,y_{\text{cont}}
+
+11
+
+else
+
+12
+
+//
+\triangleright
+Stage 3: restart
+
+return
+
+\textsc{BigFromScratch}(q)
+
+13
+
+Algorithm 1
+
+Parse
+: draft
+\to
+holistic verify
+\to
+rewrite
+
+Figure 3
+:
+A concrete run of
+Parse
+. The draft model errs starting from the fourth line (strikethrough red text) and outputs 60. The target model locates the error and regenerates the suffix, producing the correct answer 35.
+
+Stage 1 — a cheap candidate.
+
+The draft model produces a full candidate answer
+y_{1:T}
+for the prompt
+q
+. We use
+Qwen3-8B
+, which under SGLang
+(
+25
+)
+decodes at roughly
+4\times
+the speed of our Qwen3 235B taget model. An acceptance rate of
+\sim
+25\%
+on draft tokens therefore already matches baseline latency theoretically, and anything above is net speedup.
+Parse
+is generous about what it asks of the draft: it only needs the draft to be
+adequate
+on average, since the Stage 2 judge catches the rest. Modern open small models comfortably reach this bar and typically do far better.
+
+Stage 2 — verifying the draft.
+
+We apply the confidence-thresholded judge to the candidate twice, and both passes are prefill-only and KV-cache-light, so they stay cheap even on a large target model.
+First, on the full draft.
+A single prefill of
+(q,y_{1:T})
+yields
+\mathrm{conf}(y_{1:T})
+; if it reaches
+\tau
+, we accept and stop.
+Second, on prefixes.
+If the full draft fails, we want the longest prefix the same target model would still accept—the largest
+t^{\star}
+with
+\mathrm{conf}(y_{1:t^{\star}})\geq\tau
+. Most draft errors are localized to a span late in the answer, so the maximum-prefix rule reuses every token before the first error and avoids paying to regenerate work that was already correct. Naively this would mean one prefill per candidate boundary; we describe in §
+3.2
+a custom attention-mask construction that collapses all
+n
+prefix judgments into a single prefill, keeping this pass prefill-only as well.
+
+Stage 3 — acting on the judgement.
+
+The judge’s outcome selects one of three branches (Alg.
+1
+). If
+\mathrm{conf}(y_{1:T})\geq\tau
+, we
+accept
+the full draft. If a longest accepted prefix
+y_{1:t^{\star}}
+was found, we
+continue
+: the target model resumes generation from position
+t^{\star}{+}1
+, reusing the draft up through
+t^{\star}
+. Otherwise — no prefix’s confidence reaches
+\tau
+, or every prefix passes leaving no clear error boundary — we
+restart
+from scratch with the target model.
+
+Compatibility with token-level speculative decoding.
+
+Parse
+operates purely at the semantic level and is orthogonal to token-level speculation: methods such as EAGLE3
+(
+15
+)
+plug cleanly into Stage 1 (accelerating the draft worker) and into the target-model continuation/regeneration of Stage 3, without touching
+Parse
+’s verification logic. The two mechanisms shorten different parts of the decoding budget.
+Parse
+shortens the
+length
+of the sequence the target must generate, by reusing whichever draft prefix survives verification and resuming only from the first error. Token-level speculation shortens the
+time per generated token
+, by letting the target verify several drafted next-tokens in a single forward pass. Because one mechanism reduces the number of tokens decoded and the other reduces the latency of each remaining token, their savings compose roughly multiplicatively; Table
+1
+(row
+Parse
++E3) and Figure
+8
+quantify this composition.
+
+Figure 4
+:
+Parallel prefix verification via augmented chat-template suffixes. Naive token-dimension segmentation makes the model emit chat-template tokens instead of Correct/Incorrect; appending a duplicated template suffix per prefix, isolated by a custom attention mask, elicits
+n
+independent Correct/Incorrect classifications in one pass.
+
+3.2
+Parallel Prefix Verification
+
+Given a draft
+y_{1:T}
+rejected in Stage 2(i), we need the largest
+t^{\star}
+such that
+y_{1:t^{\star}}
+would pass the same Correct/Incorrect test. The naive implementation runs one target-model prefill per candidate boundary, at a cost linear in the number of boundaries
+n
+— several extra prefills of the large target model per question, which is enough to erase the speedup the draft was meant to provide.
+
+Parse
+utilizes a simple fact about prefill:
+a causal decoder already computes a hidden state at every position of
+y_{1:T}
+. A single prefill of
+(q,y_{1:T})
+produces
+T
+hidden states — one per token — each of which summarizes the prefix up to that point and could in principle drive a Correct/Incorrect classification at that boundary, if we knew how to read it out. The classification is read out by prompting the target to emit a judgment, similar to the Stage 2 full-answer pass. So if we can extract such a judgment at each of the
+n
+candidate boundaries directly from these already-computed hidden states, we verify all
+n
+prefixes for the cost of roughly one prefill instead of
+n
+.
+
+The obstacle is a
+format mismatch
+. The target model is an instruction-tuned chat model, trained to emit a Correct/Incorrect token
+only when the input ends in the chat-template suffix that requests that classification
+(e.g.,
+...<|im_end|><|im_start|>assistant
+). At an arbitrary boundary
+t_{i}
+in the middle of a draft, that suffix has not been seen — the input ends mid-utterance, inside an assistant turn that the model believes is still in progress. Decoding from the hidden state at
+t_{i}
+therefore produces the chat-template tokens the model expects to emit next (turn boundaries, role markers, end-of-message continuations), not a Correct/Incorrect verdict (Fig.
+4
+, left). The hidden state has the right
+information
+about the prefix, but the model’s decoding policy refuses to emit it unless we put the right scaffolding.
+
+We resolve this with a custom attention mask construction (Fig.
+4
+). We keep the draft tokens
+y_{1:T}
+as is and append
+n
+
+copies
+of the chat-template suffix, one per candidate boundary, into the same sequence. A custom attention mask wires up visibility cleanly: the draft tokens attend causally among themselves, so a single KV cache for
+y_{1:T}
+is computed once and shared across all
+n
+classification queries; each suffix copy
+i
+attends causally to the draft tokens up through its assigned boundary
+y_{1:t_{i}}
+and to nothing else — in particular, suffix copies do not see each other. The classification position at the end of suffix
+i
+therefore sees
+exactly
+the input it would have seen had we run the single
+(y_{1:t_{i}},\text{suffix})
+pair on its own; the
+n
+readouts are independent by construction. One forward pass yields
+n
+Correct/Incorrect predictions, from which we read off
+t^{\star}=\max\{t_{i}\mid y_{1:t_{i}}\ \text{is Correct}\}
+(
+VerifyPartial
+in Algorithm
+1
+). The total cost is one prefill of length
+T+n\cdot|\text{suffix}|
+— a small additive overhead over a single full-answer prefill — regardless of
+n
+. We place the boundaries uniformly every
+\Delta
+tokens (so
+n\approx T/\Delta
+), trading verification granularity against per-suffix overhead.
+
+4
+Experiments
+
+4.1
+Setup
+
+We evaluate
+Parse
+in two configurations. The
+primary
+configuration uses Qwen3-235B-A22B-Instruct-FP8
+(
+21
+)
+as the target model and Qwen3-8B as the draft. To test generalization beyond the Qwen models, and whether our confidence-based judgement holds beyond the Qwen models, we also run a
+cross-family
+configuration with GLM-4.7-FP8
+(
+18
+)
+as the target and Qwen3.5-9B
+(
+19
+)
+as the draft (different pretraining data, tokenizer, and chat template). To verify that
+Parse
+composes with token-level speculative decoding, we additionally integrate EAGLE3
+(
+15
+)
+on both the draft and target workers (
+Parse
++E3); using EAGLE3 alone (
+Eagle3
+) on the target is reported as a reference. We implement
+Parse
+on top of the SGLang inference engine
+(
+25
+)
+, with no retraining of either the draft or the target model.
+
+We also compare against SpecReason
+(
+16
+)
+, a semantic-level speculative generation method that verifies reasoning steps sequentially. We do not compare against Judge Decoding
+(
+2
+)
+, as its training requires undisclosed dataset, and it can be viewed as an improved token-level speculative decoding method that could be composed with
+Parse
+, similar to EAGLE3.
+
+We evaluate on four task categories:
+General
+(MMLU-Redux
+(
+9
+)
+, MMLU-Pro
+(
+20
+)
+, GPQA
+(
+17
+)
+),
+Math & STEM
+(MATH
+(
+10
+)
+, GSM8K
+(
+7
+)
+),
+Coding
+(HumanEval
+(
+6
+)
+, MBPP
+(
+1
+)
+), and
+Open-ended chat
+(MT-Bench
+(
+24
+)
+, multi-turn questions scored
+1
+–
+10
+by Gemini 3 Flash). We use the model’s instruct mode with no CoT or reasoning enabled. For multi-choice datasets (MMLU, GPQA), the model is prompted to give explanation before its final answer rather than giving a single letter. All runs use greedy decoding on 4
+NVIDIA H200 GPUs
+.
+
+4.2
+Accuracy and Speedup
+
+Table 1
+:
+Parse
+vs. Baselines
+on Qwen3-235B-A22B (FP8, SGLang).
+235B = plain autoregressive; 8B = Qwen3-8B standalone (draft model);
+Eagle3 = speculative decoding on 235B;
+
+Parse
+= 8B draft with full and partial verify (no Eagle3);
++E3 =
+Parse
+with EAGLE3 on both draft and target.
+
+Benchmark
+
+Accuracy / Score
+
+TPS (tok/s)
+
+Speedup vs. 235B
+
+8B
+
+235B
+
+Parse
+
+235B
+
+Eagle3
+
+Parse
+
++E3
+
+Eagle3
+
+Parse
+
++E3
+
+MMLU
+
+0.776
+
+0.868
+
+0.828
+
+89.5
+
+145.2
+
+130.4
+
+216.6
+
+1.62
+\times
+
+1.46
+\times
+
+2.42
+\times
+
+MMLU-Pro
+
+0.568
+
+0.668
+
+0.636
+
+92.3
+
+137.0
+
+149.5
+
+191.3
+
+1.48
+\times
+
+1.62
+\times
+
+2.07
+\times
+
+GPQA
+
+0.364
+
+0.460
+
+0.424
+
+95.3
+
+129.7
+
+118.7
+
+151.7
+
+1.36
+\times
+
+1.25
+\times
+
+1.59
+\times
+
+MATH
+
+0.764
+
+0.708
+
+0.756
+
+96.1
+
+164.3
+
+215.7
+
+272.2
+
+1.71
+\times
+
+2.24
+\times
+
+2.83
+\times
+
+GSM8K
+
+0.940
+
+0.948
+
+0.952
+
+94.3
+
+176.4
+
+405.0
+
+420.7
+
+1.87
+\times
+
+4.29
+\times
+
+4.46
+\times
+
+MT-Bench
+
+7.93
+
+9.19
+
+8.88
+
+95.6
+
+153.9
+
+167.5
+
+194.0
+
+1.61
+\times
+
+1.75
+\times
+
+2.03
+\times
+
+MBPP+
+
+0.669
+
+0.799
+
+0.746
+
+86.9
+
+152.6
+
+148.1
+
+170.9
+
+1.76
+\times
+
+1.70
+\times
+
+1.97
+\times
+
+HumanEval+
+
+0.707
+
+0.835
+
+0.872
+
+92.6
+
+166.6
+
+149.6
+
+193.1
+
+1.80
+\times
+
+1.62
+\times
+
+2.08
+\times
+
+Table
+1
+reports accuracy and throughput on the primary Qwen3-235B setup, comparing the 235B target alone, the 8B draft alone, EAGLE3
+(
+15
+)
+on the target,
+Parse
+, and
+Parse
++E3.
+
+Accuracy.
+
+Parse
+’s accuracy sits between the draft and the target on every benchmark, tracking the 235B target within a few points and lifting the draft by a wide margin. The closeness to the target’s accuracy across reasoning, knowledge, and coding tasks indicates that the improvement comes from the framework’s error-identification mechanism rather than the draft’s own capacity.
+
+Speedup.
+
+Parse
+delivers consistent speedups over the 235B target across all benchmarks. Composing
+Parse
+with EAGLE3 (
+Parse
++E3) yields roughly multiplicative gains, because the two mechanisms attack complementary bottlenecks:
+Parse
+reduces how many tokens the target has to decode at all, while EAGLE3 accelerates each token the target does decode. The size of the speedup varies with task difficulty. On easier tasks (GSM8K, MATH), the draft is correct most of the time, so
+Parse
+frequently accepts the full draft and the gains are largest. On harder tasks (GPQA, MMLU-Pro), the draft is wrong more often and
+Parse
+has to fall back to prefix verification or full regeneration; the lower acceptance rate translates into a smaller speedup.
+
+4.3
+Comparison with SpecReason
+
+We compare with SpecReason
+(
+16
+)
+, a representative semantic-level speculative generation method, by adapting its code for general text generation instead of chain-of-thought-only reasoning. SpecReason generates text and, at fixed checkpoints, asks the large model for a
+1
+–
+10
+quality score to decide whether to accept the latest segment or have the large model rewrite it. For a fair comparison, we set SpecReason’s chunk size to match
+Parse
+’s verification boundaries, as configured in Appendix
+B
+.
+
+Figure
+5
+shows accuracy against throughput for both methods.
+Parse
+reaches accuracy on par with SpecReason on every benchmark, and at substantially higher throughput. The throughput advantage comes from
+parallel
+verification: SpecReason judges segments sequentially at fixed checkpoints, so each checkpoint must wait for the previous one’s verdict before generation can proceed, while
+Parse
+verifies all prefixes of the draft in a single forward pass and reads off the longest accepted boundary.
+
+Figure 5
+:
+Accuracy vs. throughput of
+Parse
+and SpecReason on Qwen3-235B. Higher and farther right is better; dashed lines connect the same benchmark across methods.
+
+Benchmark
+
+Accuracy / Score
+
+TPS (tok/s)
+
+Speedup
+
+GLM-4.7
+
+Qwen3.5
+
+Parse
+
+GLM-4.7
+
+Parse
+
+MMLU
+
+0.860
+
+0.780
+
+0.860
+
+70.0
+
+104.2
+
+1.49
+\times
+
+MMLU-Pro
+
+0.720
+
+0.636
+
+0.712
+
+70.0
+
+78.2
+
+1.12
+\times
+
+GPQA
+
+0.596
+
+0.434
+
+0.581
+
+70.3
+
+66.8
+
+0.95
+\times
+
+MATH
+
+0.796
+
+0.728
+
+0.784
+
+70.2
+
+126.0
+
+1.79
+\times
+
+GSM8K
+
+0.956
+
+0.916
+
+0.940
+
+69.4
+
+175.7
+
+2.53
+\times
+
+MT-Bench
+†
+
+9.08
+
+8.85
+
+9.11
+
+69.2
+
+85.3
+
+1.23
+\times
+
+MBPP+
+
+0.780
+
+0.693
+
+0.738
+
+65.3
+
+110.8
+
+1.70
+\times
+
+HumanEval+
+
+0.805
+
+0.732
+
+0.805
+
+66.4
+
+147.0
+
+2.21
+\times
+
+Table 2
+:
+Cross-family generalization:
+Parse
+with GLM-4.7-FP8 as the target model and Qwen3.5-9B as the cross-family draft, vs. GLM-4.7-FP8 and Qwen3.5-9B standalone baselines.
+
+4.4
+Cross-model Generalization
+
+To validate that
+Parse
+’s error-identification mechanism does not depend on the draft and target sharing a pretraining lineage, we evaluate on a deliberately cross-family pairing:
+GLM-4.7-FP8
+as the target model and
+Qwen3.5-9B
+as the draft, with different tokenizers, pretraining data, and chat templates. Results are in Table
+2
+.
+
+Accuracy tracks the GLM-4.7 baseline closely across all benchmarks.
+Parse
+delivers consistent speedups on most benchmarks. The limitation is GPQA, where the cross-family pairing dips slightly below the baseline: the draft and the target disagree often enough that partial-verification overhead outweighs the benefit of draft reuse. Overall, this confirms that the confidence-based error identification generalizes across model families, while the magnitude of the speedup still depends on how often the draft produces prefixes the target is willing to accept.
+
+4.5
+Acceleration Breakdown
+
+Fig.
+6(a)
+breaks down the sources of final responses, showing the proportion of answers that come from drafts directly accepted, full regeneration by the target model, or continuation from a partially accepted draft. The distribution varies substantially across datasets. On easier benchmarks such as GSM8K, a large fraction of responses are accepted directly from the draft model, yielding significant speedups. On more challenging datasets such as GPQA, fewer drafts can be accepted outright; however,
+Parse
+effectively reuses partial drafts by continuing from the last correct prefix, enabling faster regeneration compared to restarting from scratch.
+
+(a)
+
+Source breakdown of final responses.
+Draft
+: draft accepted;
+Target
+: regenerated from scratch with target model;
+Mixed
+: continued from a partial draft.
+
+(b)
+
+Speed with Qwen3-235B Target Model only,
+Parse
+without partial verification, and
+Parse
+with partial verification
+
+4.6
+Ablation Experiment
+
+Figure 7
+:
+Accuracy with Qwen3-235B,
+Parse
+without partial verification, and
+Parse
+with partial verification.
+
+Figure 8
+:
+Throughput across datasets for the Qwen3-235B baseline,
+Parse
+, and
+Parse
+combined with EAGLE3 on both workers.
+
+We conduct an ablation study to isolate the contribution of partial prefix verification. The ablation compares three settings: the Qwen3-235B target alone,
+Parse
+without partial verification (a rejected full-answer judgment forces the target to restart from scratch), and full
+Parse
+with partial verification (the target resumes from the longest accepted prefix).
+
+Speed.
+Fig.
+6(b)
+shows that partial verification is the dominant driver of
+Parse
+’s speedup. Without it, every rejected draft costs a full target-model regeneration, and
+Parse
+runs
+slower
+than the target baseline on most benchmarks. With partial verification,
+Parse
+reuses the correct portion of every rejected draft and recovers the full speedup of Table
+1
+.
+
+Accuracy.
+Fig.
+8
+reports accuracy for the same three settings.
+Parse
+with partial verification matches the 235B baseline within a small margin on every benchmark.
+Parse
+without partial verification is similarly close to the baseline on accuracy, confirming that the speed advantage of partial verification comes without sacrificing too much generation quality.
+
+Combination with token-level speculative decoding.
+
+Parse
+is orthogonal to token-level speculative decoding, so the two can be composed for additional speedup. We demonstrate this with EAGLE3
+(
+15
+)
+integrated into SGLang: EAGLE3 runs inside the draft worker (Stage 1) and during the target’s continuation (Stage 3) without changing
+Parse
+’s verification logic. Fig.
+8
+reports the per-benchmark throughput of
+Parse
++Eagle3 against
+Parse
+alone and the 235B baseline. The composition strictly improves over either method alone on every benchmark.
+
+4.7
+Case Studies
+
+We manually inspect 200 cases from the experiment results where the draft model’s response is partially correct, and the larger model is able to identify the beginning of the errors and continue from the last correct position. We show one such example here.
+
+In this example, black text shows the shared prefix; red marks the first incorrect span found by the target model in a single pass; green text is the regenerated suffix.
+Parse
+then outputs black + green text as the final answer, demonstrating that the target model reliably locates the last correct position and efficiently resumes generation, maximizing token reuse.
+
+Question:
+Kenny is selling his
+Pokemon
+cards to buy a ticket to an amusement park, which costs $100. He has a collection of cards and plans to sell them for $1.5 each. He keeps 1/3 of them and gets to go to the amusement park with $50 in spending cash. How many cards did he start with?
+
+Let’s break down the problem step by step. Kenny wants to buy a ticket to an amusement park that costs $100. He has a collection of
+Pokemon
+cards, and he plans to sell them for $1.50 each. He keeps 1/3 of the cards, meaning he sells 2/3 of them. After selling the cards, he has $50 in spending cash. We are to find out how many cards Kenny started with.
+Step 1: Let the total number of cards be
+x
+. He sells
+\frac{2}{3}x
+cards. Each card is sold for $1.50, so the total money he gets from selling the cards is:
+
+Money from selling cards
+=
+1.5\times\frac{2}{3}x=1.0x
+.
+So, he earns $x from selling
+the cards. He has $50 in spending cash, and he needs $100 for the ticket. That means he needs an additional $50. So, the money he earned from selling the cards must be $50:
+x=50
+— Final Answer: 50. Kenny started with 50 cards.
+
+the cards. This money is used to buy a $100 ticket and leaves him with $50 in spending cash. So the total money he earns from selling the cards is: $100 + $50 = $150. We already found that the money earned is
+x
+dollars (since
+1.5\times\tfrac{2}{3}x=x
+). So:
+x=150
+. Therefore, Kenny started with 150
+Pokemon
+cards.
+
+5
+Conclusion
+
+We presented
+Parse
+, a semantic-level speculative generation framework built on
+parallel prefix verification
+: one prefill judges every prefix of a draft via duplicated chat-template suffixes and a custom attention mask. On Qwen3-235B(FP8),
+Parse
+delivers
+1.25\times
+–
+4.3\times
+end-to-end speedup over the target with target-level accuracy, and
+1.6\times
+–
+4.5\times
+when composed with EAGLE3.
+
+Appendix A
+Detailed
+Parse
+Algorithm
+
+This appendix expands the concise main-text Algorithm
+1
+
+into the full procedure that we actually run in the engine, including
+every decision branch, every tunable hyperparameter, and the
+two-way-confidence calibration of judge logits.
+
+A.1
+Notation and judge calibration
+
+Let
+q
+denote the user prompt,
+M_{s}
+the small
+draft
+model, and
+
+M_{b}
+the large
+target
+model, which is also reused as the
+
+verifier
+
+J
+so that no extra parameters are trained or loaded.
+A draft answer
+y_{s}=(y_{1},\dots,y_{T})
+is produced by
+M_{s}
+and is
+logically partitioned into chunks of
+\Delta
+tokens (the last chunk
+may be shorter):
+
+C_{k}=\bigl(y_{(k-1)\Delta+1},\dots,y_{\min(k\Delta,T)}\bigr),\qquad k=1,\dots,K,\ K=\lceil T/\Delta\rceil.
+
+For any judge query, the verifier emits a single token from
+
+\{\textsc{Correct},\textsc{Incorrect}\}
+. We never sample: instead we
+read the verifier logits
+\ell_{C},\ell_{I}
+at the judgment position and
+form a calibrated
+two-way confidence
+
+p_{\mathrm{2w}}^{\textsc{Correct}}\;=\;\frac{\exp(\ell_{C})}{\exp(\ell_{C})+\exp(\ell_{I})},\qquad p_{\mathrm{2w}}^{\textsc{Incorrect}}=1-p_{\mathrm{2w}}^{\textsc{Correct}}.
+
+(1)
+
+The raw verdict is
+\arg\max(\ell_{C},\ell_{I})
+; if a confidence threshold
+
+\tau
+is supplied, a raw
+Correct
+is downgraded to
+
+Incorrect
+whenever
+p_{\mathrm{2w}}^{\textsc{Correct}}<\tau
+.
+
+A.2
+Hyperparameters and the configurations used in our experiments
+
+Table
+3
+lists every
+Parse
+hyperparameter together
+with the exact values used by the two model pairs in the main paper:
+the
+Qwen-only
+pair (
+Qwen3-235B-A22B-FP8
+target,
+
+Qwen3-8B
+draft) and the
+cross-family
+pair
+(
+GLM-4.7-FP8
+target,
+Qwen3.5-9B
+draft). The two
+configurations differ deliberately: the calibration of the judge logits
+depends on the model family. The Qwen judge produces sharply peaked
+
+Correct
+/
+Incorrect
+logits, so we can run with strict
+thresholds (
+\tau_{F}=0.998
+,
+\tau_{P}=0.985
+); the GLM judge is
+consistently less confident on the same questions, so we lower every
+threshold by roughly
+0.05
+–
+0.1
+. Both pairs use the same chunk size
+
+\Delta=40
+tokens, which we found gives a good balance between
+locating the first error finely and amortising the partial-verify
+forward.
+
+Table 3
+:
+All
+Parse
+runtime hyperparameters with the values used in our two
+main experiments. “Sym.” is the symbol used in
+Algorithm
+2
+; “Flag” is the corresponding
+command-line argument exposed by
+sglang.launch_server
+.
+
+Sym.
+
+Flag
+
+Qwen3-235B
+
++ Qwen3-8B
+
+GLM-4.7
+
++ Qwen3.5-9B
+
+Role
+
+\Delta
+
+--hover-chunk-step-tokens
+
+40
+
+40
+
+chunk size for partial verify
+
+\tau_{F}
+
+--hover-full-confidence-threshold
+
+0.998
+
+0.95
+
+strict full-verify threshold
+
+\tau_{F}^{\mathrm{rx}}
+
+--hover-relaxed-full-threshold
+
+0.95
+
+0.90
+
+relaxed full-verify threshold
+
+\tau_{C}^{\mathrm{rx}}
+
+--hover-relaxed-chunk-threshold
+
+0.90
+
+0.83
+
+relaxed per-chunk threshold
+
+\tau_{P}
+
+--hover-partial-confidence-threshold
+
+0.985
+
+0.88
+
+strict per-chunk threshold
+
+\rho
+
+--hover-partial-threshold-proportion
+
+0.30
+
+0.20
+
+frac. of
+Incorrect
+chunks
+\Rightarrow
+reject
+
+\kappa
+
+--hover-partial-consecutive-threshold
+
+2
+
+2
+
+trailing
+Incorrect
+run
+\Rightarrow
+reject
+
+\eta
+
+--hover-keep-n-correct-chunks
+
+0.0
+
+0.0
+
+rollback margin (in chunks)
+
+K^{\mathrm{sd}}
+
+--hover-short-draft-max-chunks
+
+2
+
+2
+
+short-draft fast-accept ceiling
+
+\tau_{\mathrm{sd}}
+
+--hover-short-draft-confidence
+
+\tau_{F}^{\mathrm{rx}}
+
+\tau_{F}^{\mathrm{rx}}
+
+short-draft base threshold
+
+T_{p}
+
+--hover-premature-partial-verify
+
+300
+
+300
+
+premature PV trigger (in tokens)
+
+\rho_{p}
+
+--hover-premature-threshold-proportion
+
+0.20
+
+0.30
+
+premature PV
+Incorrect
+fraction
+
+B_{b},B_{s}
+
+--hover-{target,draft}-max-total-tokens
+
+5000
+each
+
+per-rank KV budgets for
+M_{b},M_{s}
+
+Optional EAGLE3 acceleration (Qwen-only run; both heads use
+3
+steps, top-
+5
+,
+32
+draft tokens):
+
+--hover-draft-eagle-model-path
+
+Tengyunw/qwen3_8b_eagle3
+
+--hover-target-eagle-model-path
+
+lmsys/SGLang-EAGLE3-Qwen3-235B-
+
+A22B-Instruct-2507-SpecForge-Meituan
+
+The shifts from the Qwen column to the GLM column have a single source:
+GLM’s verifier head is less polarised than Qwen’s, so the same
+factually correct draft yields a lower
+
+p_{\mathrm{2w}}^{\textsc{Correct}}
+. Keeping the Qwen thresholds on
+GLM would force essentially every draft into a target restart and
+erase the speedup. We therefore re-fit each threshold by examining the
+distribution of
+p_{\mathrm{2w}}^{F}
+on a small calibration set,
+preserving the same accept/reject ratio across the two model pairs.
+All other knobs (
+\Delta=40
+,
+\eta=0
+,
+K^{\mathrm{sd}}=2
+,
+\kappa=2
+,
+
+T_{p}=300
+) are kept at the same values across both runs.
+
+A.3
+Sub-routines
+
+Holistic (full) verify.
+
+Build a single judge prompt
+
+\pi_{F}(q,y_{s})=\textsc{SysFull}\,\|\,\textsc{Rubric}\,\|\,\textsc{User}(q,y_{s})
+using the
+full-verify
+prompt template
+matched to the task category (math, science multiple-choice, coding,
+open-ended, extraction, reasoning). Run one forward pass of
+J
+on
+
+\pi_{F}
+, take the logits
+\ell_{C},\ell_{I}
+at the assistant-turn slot,
+and return the calibrated verdict from (
+1
+) subject to the
+threshold
+\tau_{F}
+.
+
+Parallel partial verify (single forward pass).
+
+Pack
+K
+judge queries into one packed prompt sharing a common
+prefix, where the
+k
+-th query asks the judge to evaluate the prefix
+
+y_{1:k\Delta}
+against the same rubric. Concretely, we concatenate
+
+\pi_{P}\;=\;\textsc{SysPartial}\,\|\,\textsc{Rubric}\,\|\,\textsc{Question}(q)\,\|\,\bigl(C_{k}\,\|\,\textsc{End}\bigr)_{k=1}^{K},
+
+where
+End
+is the ChatML close-and-reopen marker
+
+<
+im_end
+>
+<
+im_start
+>assistant\n
+.
+A custom Triton attention mask forces each
+End
+slot to
+attend only to the question prefix plus its own prefix
+C_{1:k}
+, and
+never to later chunks. One forward pass of
+J
+therefore yields
+K
+
+independent
+\bigl(\ell_{C}^{(k)},\ell_{I}^{(k)}\bigr)
+pairs at the cost
+of a single prefix-shared decode. From these we obtain per-chunk
+verdicts
+v_{k}
+under threshold
+\tau_{P}
+, and a last-correct chunk
+index
+k^{\star}
+defined as the largest
+k
+such that
+v_{k}
+is
+
+Correct
+and no
+Incorrect
+appears earlier; the chunk
+run as a whole rejects the draft when either the fraction of
+
+Incorrect
+chunks exceeds
+\rho
+or the trailing run of
+
+Incorrect
+chunks reaches
+\kappa
+.
+
+Adopted-prefix length.
+
+Given
+k^{\star}
+, the number of draft tokens we keep before handing
+control to
+M_{b}
+is
+
+L^{\star}\;=\;\min\!\Bigl(T,\ \Delta\cdot\bigl\lfloor\max\!\bigl(0,\,k^{\star}+1-\eta\bigr)\bigr\rfloor\Bigr),
+
+(2)
+
+i.e. we roll back
+\eta
+chunks from the last correct boundary
+(both configurations use
+\eta=0
+, so the adopted prefix ends exactly
+at the last
+Correct
+chunk boundary).
+L^{\star}=0
+collapses to
+a full restart from
+q
+.
+
+A.4
+Full pipeline
+
+Algorithm
+2
+shows the full procedure. After the
+optional premature-PV early-exit, every request flows through three
+gates: a strict full-verify accept at
+\tau_{F}
+, a short-draft
+fast-accept that skips partial verify when its overhead would
+dominate, and the parallel partial-verify pass — combined with the
+relaxed thresholds
+(\tau_{F}^{\mathrm{rx}},\tau_{C}^{\mathrm{rx}})
+— that
+labels each request
+Sm
+(ship the draft),
+Sm+Lg
+
+(
+continue
+from the longest accepted prefix), or
+Lg
+
+(
+restart
+from
+q
+).
+
+Input:
+
+Prompt
+q
+; small model
+M_{s}
+; large model
+M_{b}
+(also used as judge
+J
+); hyperparameters from Table
+3
+; max output length
+T_{\max}
+.
+
+Output:
+
+Final answer
+y^{\star}
+and a fulfilment label
+f\in\{\textsc{Sm},\textsc{Sm+Lg},\textsc{Lg}\}
+.
+
+//
+\triangleright
+Stage 1: draft
+y_{s}
+with
+M_{s}
+, optionally short-circuiting at
+T_{p}
+tokens if a quick PV already shows divergence
+
+if
+
+T_{p}>0
+
+and
+
+T_{p}<T_{\max}
+
+//
+premature-PV early-exit enabled
+
+then
+
+1
+
+y^{(1)}_{s}\leftarrow M_{s}\bigl(q;\ \mathrm{max\_new}=T_{p}\bigr)
+
+2
+
+if
+
+M_{s}
+stopped early (EOS or stop string)
+
+then
+
+3
+
+y_{s}\leftarrow y^{(1)}_{s}
+;
+goto
+Stage 2
+
+//
+\triangleright
+full draft already produced — nothing to early-exit on
+
+K^{\prime}\leftarrow\lceil|y^{(1)}_{s}|/\Delta\rceil
+
+4
+
+(v_{k})_{k=1}^{K^{\prime}}\leftarrow\textsc{PartialVerify}(q,y^{(1)}_{s};\Delta,\tau_{P})
+
+//
+\triangleright
+one packed forward judges every prefix at once
+
+evaluate the
+(\rho_{p},\kappa)
+rules on
+(v_{k})_{k=1}^{K^{\prime}}
+to obtain
+(V_{p},k^{\star}_{p})
+
+5
+
+if
+
+V_{p}=\textsc{Incorrect}
+
+or
+
+\#\{k:p_{\mathrm{2w}}^{\textsc{Correct},(k)}<\tau_{C}^{\mathrm{rx}}\}\geq 3
+
+then
+
+6
+
+L^{\star}\leftarrow
+Eq. (
+2
+) on
+(v_{k})
+;
+goto
+Stage 6
+
+//
+\triangleright
+abort drafting:
+M_{b}
+takes over from
+L^{\star}
+
+else
+
+7
+
+y_{s}\leftarrow
+extend
+y^{(1)}_{s}
+with
+M_{s}\bigl(q\,\|\,y^{(1)}_{s};\ \mathrm{max\_new}=T_{\max}-T_{p}\bigr)
+
+8
+
+else
+
+9
+
+y_{s}\leftarrow M_{s}(q;\ \mathrm{max\_new}=T_{\max})
+
+10
+
+//
+\triangleright
+Stage 2: full-answer judge — one
+J
+pass on the whole draft; accept immediately if the verifier is overwhelmingly confident
+
+(\ell_{C}^{F},\ell_{I}^{F})\leftarrow J\!\bigl(\pi_{F}(q,y_{s})\bigr)
+; compute
+p_{\mathrm{2w}}^{F}
+via Eq. (
+1
+)
+
+11
+
+V_{F}\leftarrow\textsc{Correct}
+
+if
+
+\ell_{C}^{F}\geq\ell_{I}^{F}
+
+and
+
+p_{\mathrm{2w}}^{F}\geq\tau_{F}
+
+else
+
+Incorrect
+
+12
+
+if
+
+V_{F}=\textsc{Correct}
+
+then
+
+13
+
+return
+
+(y_{s},\textsc{Sm})
+
+//
+\triangleright
+strict accept: ship the draft, no
+M_{b}
+work needed
+
+//
+\triangleright
+Stage 3: short-draft fast-accept — for very short drafts, skip partial verify if the full-verify confidence already clears the relaxed bar
+
+K\leftarrow\lceil|y_{s}|/\Delta\rceil
+;
+\tau_{\mathrm{sd}}^{(K)}\leftarrow\min\!\bigl(\tau_{\mathrm{sd}}+0.02\,(K-1),\;\tau_{F}^{\mathrm{rx}}\bigr)
+
+14
+
+if
+
+K\leq K^{\mathrm{sd}}
+
+and
+
+p_{\mathrm{2w}}^{F}\geq\tau_{\mathrm{sd}}^{(K)}
+
+then
+
+15
+
+return
+
+(y_{s},\textsc{Sm})
+
+//
+\triangleright
+ship draft: too short for PV to amortise, judge already says OK
+
+//
+\triangleright
+Stage 4: parallel partial verify — one packed
+J
+pass scores every prefix
+y_{1:k\Delta}
+and identifies the last
+Correct
+chunk
+k^{\star}
+
+(v_{k})_{k=1}^{K}\leftarrow\textsc{PartialVerify}(q,y_{s};\Delta,\tau_{P})
+
+//
+\triangleright
+
+K
+prefix verdicts at the cost of one decode
+
+evaluate the
+(\rho,\kappa)
+rules on
+(v_{k})_{k=1}^{K}
+to obtain
+(V_{P},k^{\star})
+
+16
+
+p^{\min}_{\mathrm{2w}}\leftarrow\min_{k}p_{\mathrm{2w}}^{\textsc{Correct},(k)}
+
+17
+
+//
+\triangleright
+Stage 5: relaxed accept — full verdict missed strict bar, but if
+J
+is moderately confident overall AND every chunk passed locally, ship it
+
+if
+
+p_{\mathrm{2w}}^{F}\geq\tau_{F}^{\mathrm{rx}}
+
+and
+
+p^{\min}_{\mathrm{2w}}\geq\tau_{C}^{\mathrm{rx}}
+
+then
+
+18
+
+return
+
+(y_{s},\textsc{Sm})
+
+//
+\triangleright
+ship draft: globally OK + locally OK on every chunk
+
+//
+\triangleright
+Stage 6: hand off to
+M_{b}
+—
+continue
+from the longest accepted prefix
+y_{1:L^{\star}}
+if any, otherwise
+restart
+from the prompt
+q
+
+L^{\star}\leftarrow
+Eq. (
+2
+) with
+k^{\star}
+and
+\eta
+
+19
+
+if
+
+L^{\star}>0
+
+then
+
+20
+
+y^{\star}\leftarrow y_{1:L^{\star}}\,\|\,M_{b}\bigl(q\,\|\,y_{1:L^{\star}}\bigr)
+
+//
+\triangleright
+
+continue
+: reuse
+L^{\star}
+correct draft tokens,
+M_{b}
+writes only the suffix
+
+return
+
+(y^{\star},\textsc{Sm+Lg})
+
+21
+
+else
+
+22
+
+y^{\star}\leftarrow M_{b}(q)
+
+//
+\triangleright
+
+restart
+: no usable prefix,
+M_{b}
+writes the full answer
+
+return
+
+(y^{\star},\textsc{Lg})
+
+23
+
+Algorithm 2
+
+Parse
+in detail: draft
+\to
+premature PV
+\to
+full verify
+\to
+short-draft / partial verify / restart
+
+Appendix B
+SpecReason baseline
+
+The SpecReason baseline uses the same Qwen3-235B / Qwen3-8B target /
+drafter pair as our
+Parse
+runs, with a fixed chunk size of
+
+\Delta_{\mathrm{SR}}=40
+tokens. Algorithm
+3
+
+gives the per-question control flow.
+
+Input:
+
+Prompt
+q
+; small server
+S_{s}
+; big server
+S_{b}
+; score
+threshold
+\tau{=}7
+; chunk size
+\Delta_{\mathrm{SR}}{=}40
+tokens;
+token budget
+B{=}1300
+; reasoning- or code-scoring prompt
+\pi
+.
+
+Output:
+
+Final response
+y
+.
+
+y\leftarrow\varepsilon
+;
+T\leftarrow 0
+
+1
+
+while
+
+T<B
+
+and
+
+S_{s}
+has not emitted EOS
+
+do
+
+2
+
+c_{s}\leftarrow S_{s}.\textsc{Generate}(q,\,y;\,\Delta_{\mathrm{SR}})
+
+//
+\triangleright
+small drafter proposes one chunk
+
+s\leftarrow S_{b}.\textsc{ScoreFirstDigit}\!\bigl(q,\,y,\,c_{s},\,\pi\bigr)
+
+//
+\triangleright
+single-token logprob query on
+S_{b}
+
+if
+
+s\geq\tau
+
+then
+
+3
+
+y\leftarrow y\,\|\,c_{s}
+
+//
+\triangleright
+accept: cheap chunk
+
+else
+
+4
+
+c_{b}\leftarrow S_{b}.\textsc{Generate}(q,\,y;\,\Delta_{\mathrm{SR}})
+
+//
+\triangleright
+regenerate the rejected chunk on
+S_{b}
+
+y\leftarrow y\,\|\,c_{b}
+
+5
+
+T\leftarrow
+
+|y|
+in tokens
+
+6
+
+return
+
+y
+
+7
+
+Algorithm 3
+
+SpecReason baseline (one question)
+
+Appendix C
+Prompt for Stage 2 of Algorithm
+1
+
+In Stage 2(i) (
+Full-answer judgement
+), the target model holistically evaluates whether the draft answer is correct (see Algorithm
+1
+, line 4).
+This verification is conducted in a
+prefill-only
+manner: the entire draft is passed once through the model, which then emits a classification token (
+Correct
+or
+Incorrect
+).
+The following prompt specifies the verification instruction used by the model in this stage.
+
+Stage 2(i) Verification Prompt
+
+SYSTEM PROMPT
+
+You are a cold, conservative, strict and rigorous verifier of COMPLETE solutions.
+Given a question and a proposed answer, decide if the answer is correct.
+There are three modes—pick exactly one:
+- Math: math problems/derivations/numeric computations.
+- Science-QA: science multiple-choice (A–J) style questions.
+- Coding: programming/code-generation questions where the proposed answer is code meant to solve the task.
+Respond with only one word: Correct or Incorrect.
+You are strict and cautious. If there is doubt, answer Incorrect.
+
+RUBRIC PROMPT
+
+=== MODE PICKER (deterministic) ===
+
+Use Coding iff the question or proposed answer is clearly a programming/code-generation task
+(e.g., asks to write code or a function, or provides code as the main answer).
+Otherwise use Science-QA iff the question or answer clearly involves options A–J
+(e.g., an explicit choice letter or multiple-choice format).
+Otherwise use Math. Do NOT switch modes mid-judgment.
+
+=== GLOBAL STRICTNESS (applies to all modes) ===
+
+Judge ONLY the provided content. If the final conclusion is missing, unclear, or contradictory
+\rightarrow
+Incorrect.
+If multiple conflicting final conclusions exist
+\rightarrow
+Incorrect.
+If any decisive error exists
+\rightarrow
+Incorrect. When in doubt
+\rightarrow
+Incorrect.
+
+=== MATH MODE RULES ===
+
+Check ALL: (1) arithmetic/algebra identities and steps are valid; (2) domain/units/constraints respected
+(e.g., probabilities in [0,1], counts are non-negative integers); (3) internal consistency;
+(4) completeness: an explicit final answer that matches what is asked.
+Numeric answers must be exactly correct unless a tolerance is explicitly justified;
+symbolic answers must be algebraically equivalent. Any failure
+\rightarrow
+Incorrect.
+
+=== SCIENCE-QA MODE RULES ===
+
+You will see a scientific question and a proposed answer/explanation that may include a final choice letter (A–J).
+Use ONLY the provided content and commonly accepted scientific facts; do not invent options you cannot infer.
+Your task: decide whether the proposed answer’s final conclusion is correct for the question.
+Guidelines:
+1) If the proposed answer clearly concludes with a single choice (A–J or equivalent like \boxed{C}), judge that conclusion.
+2) If multiple conflicting final choices are present, or no conclusion is given, answer Incorrect.
+3) If the reasoning is obviously wrong or contradicts established science relevant to the question, answer Incorrect.
+4) If the reasoning is sound and the conclusion plausibly follows, answer Correct.
+5) Be cautious but not adversarial; when evidence strongly supports the given conclusion, answer Correct.
+
+=== CODING MODE RULES (overrides Global Strictness) ===
+
+For coding questions, answer Correct. This is not a typo. Your default answer is Correct.
+Code that defines a function addressing the problem
+\rightarrow
+Correct.
+Code with potential bugs you are not sure about
+\rightarrow
+Correct.
+Code with edge case issues
+\rightarrow
+Correct.
+Code with style problems or different approach than you would use
+\rightarrow
+Correct.
+Code with extra markdown or text around it
+\rightarrow
+Correct.
+The ONLY exception: answer Incorrect if there is literally no code (only English prose)
+or the code is for a completely unrelated problem.
+If you see code that attempts the stated problem, answer Correct.
+
+=== OUTPUT FORMAT (STRICT) ===
+
+The FIRST line must be EXACTLY one of: Correct or Incorrect.
+Reply with EXACTLY one word on the first line:
+Correct
+or
+Incorrect
+
+In Stage 2(ii) (
+Parallel prefix verification
+), the target model judges whether
+each
+prefix
+of the draft answer remains valid, allowing
+Parse
+to reuse the longest correct
+prefix rather than restarting from scratch (see Algorithm
+1
+, line 8).
+This is implemented via a single prefill-only forward pass that evaluates multiple prefixes in
+parallel using a custom attention mask.
+The following prompt specifies the instructions used to guide the verifier when checking partial prefixes.
+
+Stage 2(ii) Partial Verification Prompt
+
+JUDGE_SYSTEM
+
+You are a strict but fair verifier of PARTIAL solutions.
+You see a question and an in-progress answer prefix.
+Your job is to judge ONLY the shown steps/claims so far, not the unseen remainder.
+There are three modes:
+- Math-Partial: mathematical derivations/solutions.
+- QA-Partial: science multiple-choice (A–J) style questions with domain facts.
+- Coding-Partial: programming/code-generation tasks where the proposed answer is a partial code solution.
+Pick the mode that fits the question and judge accordingly.
+
+RUBRIC PROMPT
+
+=== MODE SELECTION ===
+
+Choose ONE mode based on the question:
+- Use Math-Partial if the task is a math problem/derivation or numeric proof-style reasoning.
+- Use QA-Partial if the task is a scientific multiple-choice question (A–J style) or scientific reasoning.
+- Use Coding-Partial if the task is clearly a programming/code-generation problem or the answer is primarily code.
+Do NOT switch modes mid-judgment.
+
+=== Math-Partial STANDARD ===
+
+Scope:
+Evaluate ONLY the shown work-in-progress. Do NOT assume missing steps or future fixes.
+
+Lenient allowances (do NOT penalize):
+harmless notation quirks; skipped trivial algebra; standard unstated identities;
+rounding/simplification that does not change any stated intermediate value or claim;
+incomplete plan description when the visible steps remain consistent and legal.
+
+Strict errors (mark Incorrect):
+arithmetic/algebra mistakes that change a stated value; invalid identities;
+illegal operations (e.g., divide by 0); domain or constraint violations
+(e.g., probabilities outside [0,1], negative lengths declared positive);
+logical contradictions within the shown steps; misuse of definitions or theorems yielding a wrong derived claim.
+
+Tie-breaker:
+If you cannot point to a concrete mathematical error in the SHOWN steps, output Correct.
+
+=== QA-Partial STANDARD ===
+
+Scope:
+Evaluate ONLY the shown scientific statements/inferences relative to the question stem (A–J style context).
+You are checking whether the partial reasoning already contains a decisive scientific or quantitative mistake.
+
+Lenient allowances (do NOT penalize):
+lack of a final option letter; exploratory or incomplete reasoning that
+remains consistent with the stem; benign phrasing or notation differences; standard high-level summaries of well-known facts.
+
+Strict errors (mark Incorrect):
+factual falsehoods about established science relevant to the question
+(e.g., mis-stated definitions/laws, wrong matrix or operator forms, impossible units/dimensions);
+quantitative or linear-algebra mistakes that change a stated intermediate claim
+(e.g., wrong eigenvalue/eigenvector relation, invalid normalization);
+inferences that contradict given conditions or data in the stem, or internal contradictions within the shown reasoning;
+explicit commitment to an option that is logically ruled out by the stem or by the shown calculations.
+
+Neutral/incomplete:
+If the partial text has not yet made a falsifiable claim and contains no concrete error, output Correct.
+
+Tie-breaker:
+Absent a definite scientific or quantitative error in the SHOWN text, output Correct.
+
+=== Coding-Partial STANDARD ===
+
+Scope:
+Evaluate ONLY the visible portion of the code/solution, not any imagined future edits.
+
+Default:
+For code that attempts the stated problem, your default answer is Correct.
+
+Lenient allowances (do NOT penalize — answer Correct):
+missing trailing code or obvious TODOs when the existing
+code remains logically consistent; benign style issues, minor inefficiencies, or different variable/parameter names;
+different algorithmic approach than you would use, as long as the visible logic is consistent;
+code that uses different built-in functions or standard library calls than you would choose;
+partial or incomplete code that could still be extended to a correct solution.
+
+Strict errors (mark Incorrect ONLY for these):
+clear logic bugs that would definitely produce wrong results on any input;
+code that is for a completely unrelated problem or contains no code at all.
+
+Tie-breaker:
+When in doubt about code correctness, output Correct.
+
+=== OUTPUT FORMAT (STRICT) ===
+
+Reply with EXACTLY one word on the first line:
+Correct
+or
+Incorrect
+No other text is allowed.
+
+Limitation and scope of the prompts.
+
+The two judge prompts above are deliberately domain-aware. We acknowledge that this domain-specific
+prompt engineering is a limitation — a different deployment may
+need a fresh rubric for its own task mix, and the reported numbers
+should be read as evidence that
+some
+good prompt exists,
+rather than as a one-size-fits-all artifact. The contribution of
+this paper, however, is not the particular wording of the rubric.
+It is the higher-level claim that an LLM target model already
+
+knows when its own draft has gone wrong
+, and that this
+knowledge can be extracted in parallel across every prefix of the
+draft in a single forward pass — enabling cheap, fine-grained
+error localisation rather than full regeneration. We welcome and
+encourage further prompt-engineering work that strengthens the
+verifier on top of this primitive.
+
+Appendix D
+Examples of Continual Generation from the last correct prefix
+
+In this section, we provide illustrative case studies showing how
+Parse
+leverages prefix verification to recover from draft model errors. Specifically, when the draft model deviates from the correct solution, the target model is able to identify the earliest point of error and resume generation from the last valid prefix, rather than restarting from scratch. These examples highlight the effectiveness of continual generation: by reusing correct portions of the draft,
+Parse
+minimizes redundant computation while still ensuring accurate final answers. We follow the same convention as in section
+4.7
+, where black text is the reused prefix, red text is the rejected portion of the draft, and the green text is the new suffix regenerated by the target model.
+
+Question:
+The largest exporter of agricultural goods in the world is :A. the United States.B. Mexico. C. Chile. D. China?
+
+To determine the largest exporter of agricultural goods in the world, we need to consider the global agricultural trade landscape. 1. United States (A): The U.S. is a major agricultural producer and exporter, particularly in crops like corn, soybeans, and wheat. However, it is not the largest exporter globally in terms of total value. 2. Mexico (B): Mexico is a major exporter of agricultural goods, especially in fruits, vegetables, and dairy products. It is one of the largest agricultural exporters in the world, but it is not the largest. 3. Chile (C): Chile is
+a major exporter of agricultural goods, particularly in wine, beef, and other high-value products. It is one of the top agricultural exporters in the world. 4. China (D): China is the largest exporter of agricultural goods in the world, with significant exports of rice, wheat, and other staple crops. It is the largest in terms of total value and volume. Final Answer: D
+
+a significant exporter of fruits, wine, and seafood, particularly to North America and Asia. 4. China (D): China is the world’s largest agricultural producer, but it is not a top net exporter. In fact, the United States consistently ranks as the largest exporter of agricultural goods by total value, according to data from the USDA and the World Trade Organization. While other countries may lead in specific commodities, the U.S. leads in overall agricultural export value. Final Answer: A
+
+Question:
+A custodian has to clean a school with 80 classrooms. They have 5 days to get it done. It takes them 15 minutes per classroom. If they work an 8 hour day, what percentage of their day, on average, is spent cleaning classrooms?
+
+To find the percentage of the custodian’s day spent cleaning classrooms, we need to follow these steps: Step 1: Total time spent cleaning classrooms - There are 80 classrooms. - It takes 15 minutes per classroom. - Total time spent cleaning =
+80\times 15=1200\text{ minutes}
+. Step 2: Convert total time to hours -
+1200\text{ minutes}=\tfrac{1200}{60}=20\text{ hours}
+.
+Step 3: Total time available in a day - The custodian works
+8
+hours per day. Step 4: Calculate the percentage of the day spent cleaning -
+\text{Percentage}=\left(\tfrac{20}{8}\right)\times 100=250\%
+. Final Answer:
+250\%
+
+Step 3: Total available work hours - The custodian works 8 hours per day for 5 days. - Total available work time =
+8\times 5=40\text{ hours}
+. Step 4: Calculate percentage of time spent cleaning - Time spent cleaning =
+20
+hours. - Total work time =
+40
+hours. - Percentage of time spent cleaning =
+\left(\tfrac{20}{40}\right)\times 100=50\%
+. The custodian spends 50% of their time, on average, cleaning classrooms. Final Answer:
+50\%
+
+Question:
+There are 4 snails in one aquarium and 32 snails in another aquarium. The difference between the number of snails in the two aquariums is twice the amount of fish in both aquariums. If both aquariums have the same number of fish in them, how many fish are there in each aquarium?
+
+We are given the following information: - There are 4 snails in one aquarium. - There are 32 snails in another aquarium. - The difference between the number of snails in the two aquariums is twice the amount of fish in both aquariums. - Both aquariums have the same number of fish. Step 1: Find the difference in the number of snails
+32-4=28
+. So, the difference in the number of snails is 28. Step 2: Use the given relationship We are told that this difference (28) is twice the amount of fish in both aquariums. Let the number of fish in
+each aquarium be
+x
+. Then, the total number of fish in both aquariums is:
+x+x=2x
+. We are told:
+2x=28
+. Step 3: Solve for
+x
+
+x=\tfrac{28}{2}=14
+. Final Answer:
+14
+
+each aquarium be
+f
+. Since both aquariums have the same number of fish, the total number of fish in both aquariums is:
+f+f=2f
+. According to the problem, the difference in snails (28) is twice the total number of fish in both aquariums:
+28=2\times(2f)
+. Simplify the right side:
+28=4f
+. Now solve for
+f
+:
+f=\frac{28}{4}=7
+. Final Answer:
+7
+. There are 7 fish in each aquarium.
+
+Question:
+What is the traditional 20th wedding anniversary gift? Options: A. silver B. emerald C. pearl D. diamond E. leather F. sapphire G. ruby H. paper I. china J. gold
+
+To determine the traditional 20th wedding anniversary gift, we need to refer to the traditional gift associations for wedding anniversaries. Here is the traditional gift list for wedding anniversaries: - 1st: Paper - 2nd: Cotton - 3rd: Leather - 4th: Fruit - 5th: Wood - 6th: Iron - 7th: Wool - 8th: Cotton - 9th: Cotton - 10th: Tin - 11
+th: Copper - 12th: Fabric - 13th: Fabric - 14th: Crystal - 15th: Crystal - 16th: Lapis Lazuli - 17th: Lapis Lazuli - 18th: China - 19th: China - 20th: Silver. So, the traditional 20th wedding anniversary gift is silver. Final Answer:
+\boxed{A}
+
+11th: Steel - 12th: Silk - 13th: Lace - 14th: Ivory - 15th: Crystal - 20th: China. The traditional 20th wedding anniversary gift is china.
+\boxed{I}
+
+Question:
+What is the largest order of an element in the group of permutations of 5 objects? Options: A. 12 B. 6 C. 5 D. 15
+
+To determine the largest order of an element in the group of permutations of 5 objects, we need to understand the structure of the symmetric group
+S_{5}
+. Step 1: Understand the group The symmetric group
+S_{n}
+consists of all permutations of
+n
+objects. The order of a permutation is the least common multiple (LCM) of the lengths of its disjoint cycles. Step 2: Find the largest possible cycle length In
+S_{5}
+, the maximum possible cycle length is 5 (a single 5-cycle). The order of a 5-cycle is 5, since the LCM of 5 is 5. Step 3: Consider other cycle types Other cycle types in
+S_{5}
+include: - 4-cycles (order 4) - 3-cycles (order 3)
+- 2-cycles (order 2) - 1-cycles (order 1). The largest order among these is 5 (from a 5-cycle). Step 4: Confirm the answer The largest order of an element in
+S_{5}
+is 5. Final Answer:
+\boxed{C}
+
+Products of disjoint cycles, such as a 3-cycle and a 2-cycle (disjoint), which gives a permutation of type (3,2). We must consider all integer partitions of 5 and compute the LCM of the cycle lengths. Partitions of 5 and corresponding LCMs: 1. (5) → LCM(5) = 5 2. (4,1) → LCM(4,1) = 4 3. (3,2) → LCM(3,2) = 6 4. (3,1,1) → LCM(3,1,1) = 3 5. (2,2,1) → LCM(2,2,1) = 2 6. (2,1,1,1) → LCM(2,1,1,1) = 2 7. (1,1,1,1,1) → identity, order 1. The maximum among these is LCM(3,2) = 6. Is there a partition that gives a higher LCM? Try (3,2): 3+2=5 → valid, LCM=6. (5): LCM=5. (4,1): 4. (2,3): same as (3,2). No partition gives LCM higher than 6. Wait: is there a way to get LCM = 12? That would require cycles of length 3 and 4, but 3+4=7 ¿ 5 — impossible. LCM = 15? Needs 3 and 5 → 3+5=8 ¿ 5 — impossible. So maximum is 6. But wait — is there a 5-cycle? Order 5. Or a 3-cycle and a disjoint 2-cycle: yes, in
+S_{5}
+, we can have (1 2 3)(4 5). This has order LCM(3,2) = 6. No other combination gives higher. Thus, the largest order is 6.
+\boxed{B}
+

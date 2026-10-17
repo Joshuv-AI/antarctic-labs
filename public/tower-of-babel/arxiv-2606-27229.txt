@@ -1,0 +1,6176 @@
+CARVE: Content-Aware Recurrent with Value Efficiency for Chunk-Parallel Linear Attention
+Sayak Dutta
+
+Abstract
+What if a recurrent language model could look at its own memory before deciding what to forget—at zero extra cost? Recurrent sequence models in the delta-rule family maintain a fixed-size state matrix 𝑺 t ∈ ℝ d v × d k \bm{S}_{t}\in\mathbb{R}^{d_{v}\times d_{k}} that compresses all past context into d v ​ d k d_{v}d_{k} numbers. The current state of the art [ 12 ] equips this update with element-wise matrix gates: a full d v × d k d_{v}{\times}d_{k} erase mask and a full d v × d k d_{v}{\times}d_{k} write mask. The result is powerful but carries two intrinsic defects. First, both gates are computed solely from the incoming token, making the model memory-blind : it must decide what to erase without observing what it has already stored. Second, the d v d_{v} -dimensional write gate projection carries the same parameter count and memory footprint as the value projection itself—a bandwidth cost with negligible expressive return over a single scalar per head. Worse, the value-axis coupling in the erase gate mathematically prevents the model from using the WY-form triangular chunk solver that is the engine of efficient recurrent training: the intra-chunk system decomposes into d v d_{v} independent solves instead of one, collapsing throughput to serial-recurrence cost (Theorem 11 ). We introduce CARVE ( C ontent- A ware R ecurrent with V alue E fficiency), which resolves all three problems at once. The key observation is architectural: by restricting all gating to the key axis only, the intra-chunk coupling matrix becomes independent of the value index, restoring the single WY-form triangular solve unmodified. Within this key-axis constraint, CARVE introduces two innovations. Content-aware erase via output reuse. Rather than reading the state matrix 𝑺 t − 1 \bm{S}_{t-1} from HBM (which would double memory traffic), CARVE re-uses the recurrent output tensor 𝒐 c , ⋅ = 𝑺 ​ 𝒒 c , ⋅ \bm{o}_{c,\cdot}=\bm{S}\,\bm{q}_{c,\cdot} that the kernel must write to HBM regardless, computing its chunk mean 𝒎 c \bm{m}_{c} at negligible cost. This single signal, passed through a zero-initialised low-rank projection 𝑼 b \bm{U}_{b} , gives the erase gate its first glimpse of stored content. At initialisation, 𝑼 b = 𝟎 \bm{U}_{b}{=}\mathbf{0} and CARVE is bit-identical to the baseline; as training proceeds the gate activates, introducing memory-conditioned selectivity. We prove that the one-chunk staleness of 𝒎 c \bm{m}_{c} induces a gate perturbation of only 𝒪 ⁡ ( 1 / L ) \mathcal{O}(1/\sqrt{L}) , which is why the measured deviation from exact gating is flat at 0.18 % \mathbf{0.18\%} across all chunk lengths up to L = 128 L{=}128 . Scalar value write gate. CARVE replaces the d v d_{v} -dimensional per-value write-gate projection with a single scalar w h , t w_{h,t} per head. This is a d v d_{v} -fold parameter reduction—from 589,824 589{,}824 to 9,216 9{,}216 write-gate parameters per layer at H = 12 H{=}12 , d v = 768 d_{v}{=}768 —and we prove it is lossless for single-slot associative recall (Theorem 15 ). At the 1.3 1.3 B-parameter scale trained on 100 100 B tokens of FineWeb-Edu on NVIDIA H100—three-seed averages against the best prior recurrent baseline—CARVE delivers improvements on every front simultaneously. On WikiText language modelling it reaches perplexity 15.72 \mathbf{15.72} versus 15.90 15.90 , a − 0.18 -0.18 reduction that constitutes a 4.5 ​ σ \mathbf{4.5\sigma} effect across seeds; the hybrid variant extends this lead to 15.41 15.41 versus 15.62 15.62 . Across nine common-sense reasoning benchmarks CARVE leads every recurrent model by + 0.63 \mathbf{+0.63} pp average zero-shot accuracy, and on RULER in-context retrieval probes it sets the state of the art on every S-NIAH and MK-NIAH context length and tops all six real-world recall benchmarks. Remarkably, none of this comes at a hardware cost: throughput is within 0.4 % \mathbf{0.4\%} of the matrix-gated baseline (within measurement noise), peak memory is − 𝟏𝟑 % \mathbf{-13\%} lower, and mixer parameters are − 𝟏𝟗 % \mathbf{-19\%} fewer. CARVE is the first architecture in the gated delta family to simultaneously achieve content-aware gating, full WY-form chunk-parallel training, and reduced parameter count—all with a provably bounded approximation and six formal theoretical guarantees.
+
+
+
+1
+Introduction
+
+The memory bottleneck in sequence modelling.
+
+Every practical language model ultimately confronts the same trade-off: how much
+context should be remembered, and at what hardware cost?
+Transformers resolve this by keeping everything—an exact, quadratic record of
+every past token
+[
+37
+]
+.
+This is spectacularly powerful but spectacularly expensive: training a
+
+1\text{B}
+-parameter Transformer on sequences of length
+T{=}8192
+requires
+
+\mathcal{O}(T^{2}d)
+memory accesses for the attention block alone, and inference
+latency grows linearly with the KV-cache.
+Systems engineers have pushed back heroically—FlashAttention
+[
+5
+]
+,
+multi-query attention, sliding-window hybrids—but no IO-tiling removes the
+fundamental
+\mathcal{O}(T^{2})
+compute from full attention.
+At deployment scale, where models serve millions of long-context requests, these
+costs are not engineering inconveniences; they are hard limits on what is
+economically feasible.
+
+The return of recurrence.
+
+Recurrent architectures offer a fundamentally different bargain: compress all
+past context into a fixed-size
+state matrix
+
+\bm{S}_{t}\in\mathbb{R}^{d_{v}\times d_{k}}
+, then update it in
+\mathcal{O}(d_{v}d_{k})
+operations
+per token.
+Inference becomes constant-memory and constant-cost regardless of sequence
+length—a property that scales directly into practical advantages at deployment.
+The price paid is compression:
+\bm{S}_{t}
+has
+d_{v}d_{k}
+real-valued entries, and
+writing a new token must inevitably overwrite older entries, requiring a
+principled forgetting mechanism.
+Early recurrences (LSTMs, GRUs) relied on learned scalar gates but struggled
+with long-range information flow.
+A newer family—linear recurrences
+[
+11
+]
+,
+SSMs
+[
+10
+;
+6
+]
+—exchanged full expressivity for
+hardware efficiency via diagonal state matrices, enabling fast parallel scans
+but constraining the set of associations the state can represent.
+
+The
+delta rule
+
+[
+38
+;
+31
+;
+39
+]
+
+takes a more principled path.
+It maintains a full matrix state
+\bm{S}_{t}\in\mathbb{R}^{d_{v}\times d_{k}}
+and updates
+it via an associative-memory error-correction law,
+
+\bm{S}_{t}=\bm{S}_{t-1}+\underbrace{(\bm{v}_{t}-\bm{S}_{t-1}\bm{k}_{t})}_{\text{prediction error}}\bm{k}_{t}^{\top},
+
+(1)
+
+where
+\bm{q}_{t},\bm{k}_{t}\in\mathbb{R}^{d_{k}}
+are query and key vectors,
+
+\bm{v}_{t}\in\mathbb{R}^{d_{v}}
+is the value, and
+\bm{S}_{t-1}\bm{k}_{t}
+is the
+memory’s current
+prediction
+for the value stored at key
+\bm{k}_{t}
+.
+The update writes a rank-1 correction precisely proportional to the prediction
+error—the Hebbian update of a Hopfield network
+[
+27
+]
+
+with error-corrective feedback.
+GDN
+[
+39
+]
+adds a scalar forgetting gate; GDN-2
+[
+12
+]
+
+replaces the scalar with a full
+d_{v}{\times}d_{k}
+matrix gate, yielding the
+state update
+
+\bm{S}_{t}=(\bm{1}-\bm{B}_{t})\odot\bm{S}_{t-1}+\bm{W}_{t}\odot\tilde{\Delta}_{t},\qquad\tilde{\Delta}_{t}=(\bm{v}_{t}-\bm{S}_{t-1}\bm{k}_{t})\bm{k}_{t}^{\top},
+
+(2)
+
+where
+\bm{B}_{t},\bm{W}_{t}\in(0,1)^{d_{v}\times d_{k}}
+are element-wise matrix
+gates, and
+\tilde{\Delta}_{t}
+is the outer-product prediction-error correction.
+GDN-2 achieves compelling downstream performance
+[
+12
+]
+, and we
+treat it as the direct prior-art baseline throughout this paper.
+
+Three structural limitations of matrix-gated delta recurrences.
+
+Memory-blind gating.
+
+Both gates in (
+2
+) are computed as linear projections of the
+current input token
+\bm{x}_{t}
+.
+The model must decide
+what fraction of key slot
+k
+to erase
+without ever
+consulting
+\bm{S}_{t-1}
+—without knowing whether slot
+k
+holds a high-value
+association to be protected or stale noise to be cleared.
+This is content-oblivious forgetting: decisions are made on the basis of what is
+arriving, not what is already stored.
+Content-dependent selective forgetting—essential for tasks requiring precise
+slot management—is structurally impossible in this gating regime.
+
+Write-gate bandwidth bottleneck.
+
+The
+\bm{W}_{t}
+projection maps
+\bm{x}_{t}\in\mathbb{R}^{d}
+to
+
+\bm{W}_{t}\in\mathbb{R}^{H\times d_{v}\times d_{k}}
+, requiring a weight matrix of size
+
+d\times Hd_{v}d_{k}
+.
+At
+d{=}2048
+,
+d_{v}{=}d_{k}{=}64
+,
+H{=}16
+, this amounts to
+134
+M parameters
+for the write gate alone—matching the full QKV projection.
+The representational return on this investment is marginal: per-value write
+selectivity differs from per-head selectivity only in that it can route
+different content to different value channels, which we show
+(Theorem
+15
+) is unnecessary for the core
+associative-recall task that delta-rule models are designed to perform.
+
+Value-axis erase destroys chunk-parallelism.
+
+Modern fast training of delta-rule models relies on the
+
+WY-form triangular chunk solver
+
+[
+41
+;
+12
+]
+,
+which batches an entire chunk of
+L
+tokens into a single triangular linear
+system, reducing training cost from
+\mathcal{O}(Ld_{k}^{2}d_{v})
+per chunk (naive
+recurrence) to
+\mathcal{O}(L^{2}d_{k}+d_{k}^{2}d_{v})
+.
+We prove (Theorem
+11
+) that this solver can be applied—with
+a result bit-identical to the full recurrence—
+if and only if
+the
+intra-chunk coupling matrix
+\bm{M}\in\mathbb{R}^{L\times L}
+is independent of
+the value index.
+Because GDN-2’s erase gate
+\bm{B}_{t}
+acts on both the value and key axes,
+the system decomposes into
+d_{v}
+distinct coupling matrices
+
+\bm{M}^{(1)},\ldots,\bm{M}^{(d_{v})}
+, each requiring its own triangular solve,
+collapsing the solver to serial-recurrence cost.
+GDN-2 thus faces a three-way tension: richer gating, lower bandwidth, and
+chunk-parallel training cannot all be achieved simultaneously within its
+existing design.
+
+CARVE: one architectural constraint, three problems solved.
+
+We introduce
+CARVE
+(
+C
+ontent-
+A
+ware
+R
+ecurrent
+with
+V
+alue
+E
+fficiency), which resolves all three limitations
+by committing to a single architectural principle:
+erase only on the key axis
+.
+
+This constraint is not a sacrifice—it is a theorem.
+We prove (Theorem
+11
+) that key-axis erase is the exact
+
+necessary and sufficient
+condition for the WY-form chunk solver to remain
+valid.
+Restricting to the key axis therefore restores full chunk-parallel training while
+opening two degrees of design freedom on the erase gate that GDN-2’s
+value-coupled design forecloses.
+
+Content-aware erase via output reuse.
+
+The central challenge in making gating memory-aware is hardware: reading the state
+matrix
+\bm{S}_{t-1}
+from HBM costs
+\mathcal{O}(d_{v}d_{k})
+memory traffic per token,
+doubling the recurrent-state access cost and cancelling the efficiency gains of
+recurrence.
+CARVE circumvents this entirely.
+Every iteration of the Triton kernel must write the recurrent output
+
+\bm{o}_{t}=\bm{S}_{t-1}\bm{q}_{t}\in\mathbb{R}^{d_{v}}
+to HBM regardless.
+CARVE reads this
+already-written
+output back, averages it over the
+previous chunk to form a chunk-level memory signal
+
+\bm{m}_{c}=\frac{1}{L}\sum_{t\in c{-}1}\bm{o}_{t}\in\mathbb{R}^{d_{v}}
+,
+and conditions the erase gate on it:
+
+\bm{b}_{c,t}=\sigma\!\left(\bm{b}_{x,t}+\bm{U}_{b}\bm{m}_{c}\right),
+
+(3)
+
+where
+\bm{b}_{x,t}=\bm{W}_{b}\bm{x}_{t}
+is the token-driven component and
+
+\bm{U}_{b}\in\mathbb{R}^{d_{k}\times d_{v}}
+is a learned projection initialised to
+
+\bm{0}
+.
+At initialisation,
+\bm{U}_{b}{=}\bm{0}
+and CARVE is
+bit-identical
+to the
+GDN-2 baseline—any performance difference must be attributed exclusively to the
+content signal learned by
+\bm{U}_{b}
+.
+We prove (Proposition
+14
+) that the one-chunk staleness of
+
+\bm{m}_{c}
+induces a gate perturbation that decays as
+\mathcal{O}(1/\sqrt{L})
+,
+which explains the empirical finding that the deviation from exact per-token
+state gating is flat at
+\mathbf{0.18\%}
+across all chunk lengths up to
+L{=}128
+.
+
+Scalar value write gate.
+
+On the write side, CARVE replaces the
+d_{v}
+-dimensional per-channel write gate
+with a single scalar
+w_{h,t}\in(0,1)
+per head, broadcast uniformly across all
+
+d_{v}
+value channels.
+This is a
+d_{v}
+-fold parameter reduction—from
+589{,}824
+to
+9{,}216
+
+write-gate parameters per layer at
+H{=}12
+,
+d_{v}{=}768
+—with no loss of
+associative capacity.
+Theorem
+15
+proves that a scalar is sufficient to
+implement any selective update of a single memory slot: the extra per-channel
+routing offered by
+d_{v}
+gates is simply not needed for the core operation.
+Ablation experiments confirm the scalar gate is quality-neutral at scale
+(§
+8.4
+).
+
+Theoretical grounding.
+
+A distinguishing feature of CARVE is that every design decision is accompanied by
+a formal proof.
+Section
+5
+develops six theoretical results that together place
+CARVE on rigorous footing.
+The
+Chunkability Boundary
+(Theorem
+11
+) derives the
+exact structural condition under which WY-form chunk solves are valid, proving
+that CARVE’s key-axis erase is both necessary and sufficient.
+The
+Subsumption Hierarchy
+(Theorem
+1
+) establishes that
+CARVE strictly generalises the key-axis and scalar-gated delta-rule families,
+while being provably incomparable to GDN-2 (Proposition
+2
+).
+
+Lyapunov Stability
+(Theorem
+4
+) shows the state norm
+contracts with a scalar ratio
+\rho_{c}=(1{-}b_{\min})g_{\min}<1
+that is
+provably tighter than GDN-2’s element-wise contraction bound.
+
+Gradient Flow
+(Theorem
+5
+) bounds the gradient norm
+through two independent gate pathways, establishing that CARVE does not introduce
+new vanishing-gradient pathologies.
+
+Expressivity Separation
+(Theorem
+7
+) constructs an
+explicit task—the Selective Key Overwrite (SKO) problem—on which CARVE
+succeeds with
+\mathcal{O}(d_{v}+d_{k})
+parameters while any memory-blind gate fails
+regardless of width or depth.
+Finally, the
+Pareto Chunk Size
+theorem (Theorem
+9
+) derives
+the unique
+L^{*}
+that minimises total training cost at fixed compute budget,
+resolving the chunk-size selection problem analytically.
+
+Empirical results.
+
+We evaluate CARVE at the
+1.3
+B-parameter scale, trained on
+100
+B tokens of
+FineWeb-Edu
+[
+24
+]
+on NVIDIA H100 hardware and report results
+as three-seed averages.
+On WikiText language modelling, CARVE achieves perplexity
+15.72
+versus
+15.90
+
+for GDN-2—a
+-0.18
+gap that holds at
+4.5\sigma
+across seeds—and
+15.41
+
+versus
+15.62
+in the hybrid setting, setting a new state of the art for the gated
+delta family in both configurations.
+The gains are not confined to perplexity: across nine zero-shot common-sense
+benchmarks CARVE leads every recurrent baseline by
++0.63
+pp on average, and
+in the hybrid configuration it outperforms Mamba-3 MIMO, Mamba-3 SISO, KDA, GDN,
+and Mamba-2 across the board (Table
+5
+).
+On RULER in-context retrieval probes—the most direct test of selective memory—CARVE
+sets the state of the art on every S-NIAH and MK-NIAH context length and achieves
+the highest average score on all six real-world recall tasks (§
+8.6
+).
+All of this is achieved at a hardware footprint that is
+smaller
+: throughput
+is
+93.36
+K versus
+93.77
+K tok/s (
+-0.4\%
+, within measurement noise), peak memory
+is
+6.54
+GB versus
+7.50
+GB (
+-13\%
+), and mixer-layer parameters are
+19\%
+fewer.
+
+Contributions.
+
+This paper makes five contributions, each grounded in formal theory and validated
+on hardware.
+The first is a
+content-aware erase gate via output reuse
+: by conditioning the
+erase gate on the chunk-mean recurrent output
+\bm{m}_{c}
+—a tensor that the kernel
+was already writing to HBM—CARVE gives a delta-rule recurrence its first glimpse
+of stored content at zero additional memory cost, with Proposition
+14
+
+bounding the one-chunk staleness at
+\mathcal{O}(1/\sqrt{L})
+.
+The second is a
+scalar value write gate
+: replacing the
+d_{v}
+-dimensional
+per-value projection with a per-head scalar achieves a
+d_{v}
+-fold parameter
+reduction with provably no loss of associative capacity
+(Theorem
+15
+).
+Together these two innovations define the
+CARVE architecture
+specified as
+a complete forward-pass algorithm (Algorithm
+1
+) that is
+bit-identical to GDN-2 at initialisation—any quality difference that emerges
+during training is the direct fingerprint of the content gate.
+Underpinning the design are
+six formal guarantees
+: the exact chunkability
+boundary, a strict subsumption hierarchy, Lyapunov stability with a tighter
+contraction ratio than GDN-2, gradient flow bounds, expressivity separation on the
+Selective Key Overwrite task, and the Pareto-optimal chunk size—all proved in
+Appendix
+A
+.
+Finally, a
+controlled empirical evaluation
+at the
+1.3
+B/
+100
+B-token scale
+with three independent seeds (§
+8
+) measures every claim at the
+level of hardware: kernel correctness, throughput, memory, perplexity, common-sense
+accuracy, and context retrieval.
+
+Paper organisation.
+
+Section
+2
+situates CARVE in the broader landscape of recurrent
+and hybrid sequence models.
+Section
+3
+establishes notation and reviews the delta-rule
+recurrence family.
+Section
+4
+presents the CARVE architecture in full detail.
+Section
+5
+develops the six theoretical results.
+Section
+6
+describes the Triton kernel and analyses its IO
+complexity.
+Section
+8
+reports all empirical results.
+Section
+9
+discusses limitations and future directions.
+
+2
+Related Work
+
+CARVE sits at the intersection of four active research threads: linear
+transformers with associative memory, state space models, gated delta-rule
+variants, and hardware-efficient training.
+
+The story of linear transformers begins with the observation that replacing softmax
+with a kernel function turns attention into a linear recurrence, collapsing the
+quadratic cost of full attention to linear time
+[
+15
+]
+.
+RetNet
+[
+36
+]
+and RWKV
+[
+25
+]
+popularised
+scalar-gated variants of this idea, trading expressivity for simplicity.
+Gated Linear Attention
+[
+40
+]
+restored hardware efficiency with
+a data-dependent gating mechanism, and CARVE strictly subsumes all delta-rule
+members of this family (Theorem
+1
+).
+
+State space models took a complementary path, representing sequence transitions
+with diagonal state matrices whose structure enables fast parallel scans.
+S4
+[
+11
+]
+demonstrated that structured long-range dependencies
+could be captured without a full matrix state, and Mamba
+[
+10
+]
+made
+the selectivity input-dependent.
+Mamba-2
+[
+6
+]
+unified SSMs and linear attention through the
+SSD framework, while Mamba-3
+[
+18
+]
+pushed further with
+exponential-trapezoidal discretisation and complex-valued transitions.
+CARVE is complementary to this line of work: it builds on the delta-rule and
+full matrix state rather than on SSM structure.
+
+The most direct predecessors of CARVE are the gated delta-rule models.
+GDN
+[
+39
+]
+added scalar forgetting to DeltaNet, showing that
+even a single decay factor improves long-range performance.
+KDA
+[
+16
+]
+strengthened this with per-channel key-axis decay,
+moving the gating machinery onto the key axis for the first time.
+GDN-2
+[
+12
+]
+then decoupled erase and write into full channel-wise
+matrix gates, achieving strong downstream quality but at the cost of the three
+structural limitations that motivated CARVE: memory-blind gating, write-gate
+bandwidth waste, and broken chunk-parallelism.
+CARVE resolves all three by extending GDN-2 with memory-conditional erase
+and a scalar write gate, achieving better quality at lower parameter and memory cost.
+
+The idea of interleaving recurrent and attention layers has proven consistently
+powerful. Griffin
+[
+8
+]
+mixes gated linear recurrences with
+local attention, Jamba
+[
+19
+]
+interleaves Mamba and Transformer
+layers at scale, and Samba
+[
+28
+]
+combines Mamba with sliding-window
+attention for unlimited context.
+CARVE’s hybrid design (§
+7
+) sits firmly in this tradition, and
+Theorem
+10
+provides a formal optimality guarantee that was previously
+absent from the literature.
+
+Finally, CARVE’s theoretical foundations draw on the associative memory literature.
+Schmidhuber’s fast-weight programmers
+[
+32
+]
+established
+the framing of a neural network as a dynamic, self-modifying associative store, and
+Hopfield networks
+[
+27
+]
+connected this to modern attention
+mechanics.
+Schlag et al.
+[
+31
+]
+showed that linear transformers are secretly
+fast-weight programmers, and more recent works—Test-Time Training
+[
+35
+]
+and
+Longhorn
+[
+20
+]
+—connect the delta rule to online learning objectives.
+On the hardware side, FlashAttention
+[
+5
+;
+7
+]
+
+and the classical WY representation
+[
+33
+]
+directly underpin
+the fused kernel design that makes CARVE’s training efficiency possible.
+
+3
+Preliminaries
+
+Notation.
+
+Vectors are bold lowercase (
+\bm{v}\in\mathbb{R}^{d}
+); matrices are bold uppercase or
+calligraphic (
+\bm{S}\in\mathbb{R}^{d_{v}\times d_{k}}
+).
+The Hadamard (element-wise) product is
+\odot
+; the outer product of
+
+\bm{u}\in\mathbb{R}^{m}
+,
+\bm{v}\in\mathbb{R}^{n}
+is
+\bm{u}\bm{v}^{\top}\in\mathbb{R}^{m\times n}
+.
+
+\operatorname{diag}(\bm{v})
+is the diagonal matrix with
+\bm{v}
+on its diagonal.
+
+\left\|\cdot\right\|_{F}
+denotes the Frobenius norm;
+\rank(\bm{A})
+is the rank of matrix
+
+\bm{A}
+.
+We write
+\sigma
+for the sigmoid function.
+Throughout,
+T
+is the sequence length,
+d
+the model hidden dimension,
+H
+the
+number of attention heads,
+d_{k}
+the per-head key dimension,
+d_{v}
+the per-head
+value dimension, and
+L
+the chunk size.
+
+Linear attention and the delta rule.
+
+Linear attention
+[
+15
+]
+replaces softmax with a
+kernel function
+\phi
+, giving the recurrent state update:
+
+\bm{S}_{t}=\bm{S}_{t-1}+\bm{v}_{t}\bm{k}_{t}^{\top},\quad\bm{y}_{t}=\bm{S}_{t}\bm{q}_{t}.
+
+The delta rule
+[
+38
+]
+introduces error-corrective writing
+(Eq.
+1
+).
+Its parallelizable training via WY-form chunk solvers was established
+in
+[
+41
+]
+.
+Gated DeltaNet (GDN)
+[
+39
+]
+adds scalar exponential forgetting:
+
+\bm{S}_{t}=\alpha_{t}\bm{S}_{t-1}+\beta_{t}\bm{\Delta}_{t}
+,
+where
+\alpha_{t},\beta_{t}\in(0,1)
+and
+
+\bm{\Delta}_{t}=(\bm{v}_{t}-\bm{S}_{t-1}\bm{k}_{t})\bm{k}_{t}^{\top}
+.
+Gated DeltaNet-2 (GDN-2)
+[
+12
+]
+replaces scalar gates with
+element-wise matrix gates:
+
+\bm{S}_{t}=(\mathbf{1}-\bm{B}_{t})\odot\bm{S}_{t-1}+\bm{W}_{t}\odot\bm{\Delta}_{t},
+
+(4)
+
+where
+\bm{B}_{t}\in[0,1]^{d_{v}\times d_{k}}
+is the per-entry erase gate
+(entry
+B_{t,ij}
+controls how much of
+S_{t-1,ij}
+is forgotten) and
+
+\bm{W}_{t}\in[0,1]^{d_{v}\times d_{k}}
+is the per-entry write gate
+(entry
+W_{t,ij}
+controls how strongly position
+(i,j)
+of the new delta is
+written).
+GDN-2 is the current state of the art; CARVE supersedes it on quality, memory,
+and parameters while matching throughput.
+
+WY-form chunk-parallel training.
+
+The delta-rule recurrence admits a WY-form
+chunk-parallel
+training
+kernel
+[
+33
+;
+39
+]
+: the sequence is split into
+chunks of size
+L
+, and the intra-chunk recurrence is solved as a single
+triangular system per head (dispatched as tensor-core matmuls), with the
+recurrent state
+\bm{S}
+carried only across chunk boundaries.
+This achieves
+\mathcal{O}(\log T)
+parallel depth and near-peak GPU utilisation.
+CARVE is designed to preserve this kernel
+unmodified
+.
+
+Limitations of GDN-2.
+
+Despite its empirical strength, GDN-2 has three structural limitations
+that motivate CARVE’s design.
+
+The first is
+memory-blind gating
+.
+Both
+\bm{B}_{t}
+and
+\bm{W}_{t}
+are computed as projections of the
+current input token
+x_{t}
+alone, with no access to the recurrent
+state
+\bm{S}_{t-1}
+.
+The model therefore cannot observe what it has already stored and must
+make erase decisions purely on the basis of syntactic features,
+precluding the content-dependent selectivity that is central to
+associative memory.
+
+The second is a
+write-gate bandwidth bottleneck
+.
+The full-
+d_{v}
+write-gate projection
+\bm{W}_{t}\in[0,1]^{d_{v}\times d_{k}}
+
+carries the same parameter count and memory footprint as the value
+projection itself.
+As CARVE’s ablations confirm (§
+8.4
+), per-head scalar
+write strength is sufficient for language modelling, so the extra
+
+d_{v}{-}1
+per-head dimensions represent unused capacity that
+increases memory traffic without quality benefit.
+
+The third is that
+value-axis erase destroys chunk-parallelism
+.
+The element-wise coupling in
+(\mathbf{1}-\bm{B}_{t})\odot\bm{S}_{t-1}
+
+acts independently on every row of
+\bm{S}_{t-1}
+, so the intra-chunk
+WY-form triangular solve cannot be shared across value channels.
+The solve must be repeated
+d_{v}
+times—once per value row—collapsing
+to the
+\mathcal{O}(d_{v}d_{k}L^{2})
+complexity of naive sequential recurrence
+inside each chunk.
+CARVE resolves this by restricting erase to the key axis only, which
+makes the coupling structure independent of the value index and
+restores the single WY-form triangular solve
+(Theorem
+11
+).
+All three limitations are addressed simultaneously, and the WY-form
+kernel remains
+unmodified
+.
+
+4
+CARVE Architecture
+
+CARVE resolves all three limitations of GDN-2 simultaneously through a
+minimal set of design choices: (a) restricting all gating to the
+key axis
+
+to preserve the single WY-form triangular solve; (b) replacing the
+
+d_{v}
+-dimensional write gate with a per-head scalar; and (c) conditioning the
+erase gate on a content signal derived from the previous chunk’s output at zero
+additional HBM cost.
+The complete state update is:
+
+\boxed{\bm{S}_{c,t}=\bm{S}_{c,t-1}\cdot\operatorname{diag}\!\bigl(\exp(\bm{g}_{c,t})\bigr)\cdot\operatorname{diag}\!\bigl(\mathbf{1}-\bm{b}_{c,t}\bigr)+w_{h,t}\cdot\bigl(\bm{v}_{c,t}-\bm{S}_{c,t-1}\bm{k}_{c,t}\bigr)\bm{k}_{c,t}^{\top},}
+
+(5)
+
+Here
+\bm{S}_{c,t}\in\mathbb{R}^{H\times d_{v}\times d_{k}}
+is the per-head recurrent state
+at token
+t
+within chunk
+c
+.
+The right-hand side multiplies the previous state by two key-axis diagonal matrices:
+
+\operatorname{diag}(\exp(\bm{g}_{c,t}))
+, an exponential decay gate applied on the
+right
+
+(key) axis only, and
+\operatorname{diag}(\mathbf{1}-\bm{b}_{c,t})
+, a content-aware erase gate
+whose entries close to
+1
+preserve associations and entries close to
+0
+clear them.
+To this decayed-and-erased state the model adds a rank-1 write: the delta-rule
+prediction error
+\bm{v}_{c,t}-\bm{S}_{c,t-1}\bm{k}_{c,t}
+, scaled uniformly across
+all
+d_{v}
+value channels by the per-head scalar write gate
+w_{h,t}\in(0,1)
+, and
+accumulated as an outer product with
+\bm{k}_{c,t}^{\top}
+.
+Every gating operation acts strictly on the key axis—the single architectural
+commitment that, as we prove in §
+6
+, is both necessary and
+sufficient for the WY-form chunk solver to remain valid.
+
+Figure 1:
+CARVE data-flow architecture.
+
+Input projections produce queries
+\bm{q}
+, keys
+\bm{k}
+, values
+\bm{v}
+, decay
+logits
+\alpha
+, erase pre-activations
+\bm{b}_{x}
+, and scalar write pre-activations
+w_{a}
+
+(per head).
+The
+state-readout content gate
+(top-right box) operates once per chunk:
+the chunk-start memory readout
+\bm{m}_{c}\in\mathbb{R}^{H\times d_{v}}
+(mean of the previous
+chunk’s recurrent outputs; zero extra HBM cost) is passed through
+zero-initialised low-rank projections
+
+\bm{W}_{U_{1}},\bm{W}_{U_{2}}
+(bit-exact to baseline at initialisation) to produce
+content deltas
+\Delta b
+and
+\Delta w
+, which are added to
+\bm{b}_{x}
+and
+w_{a}
+
+before the sigmoid gate.
+The resulting content-aware erase gate
+\bm{b}_{c,t}
+and write gate
+w_{t}
+are
+passed into the WY-form state update together with the delta-rule prediction error
+
+\Delta=\bm{v}-\bm{S}_{t-1}\bm{k}
+(right branch).
+Output projection and RMS normalisation close the residual stream.
+
+4.1
+Input Projections
+
+For hidden states
+\bm{h}_{1:T}\in\mathbb{R}^{T\times d}
+, CARVE computes:
+
+\displaystyle\bm{q}
+
+\displaystyle=\operatorname{SiLU}(\bm{W}_{Q}\bm{h})\in\mathbb{R}^{T\times H\times d_{k}},\quad\bm{k}=\operatorname{SiLU}(\bm{W}_{K}\bm{h})\in\mathbb{R}^{T\times H\times d_{k}},\quad\bm{v}=\operatorname{SiLU}(\bm{W}_{V}\bm{h})\in\mathbb{R}^{T\times H\times d_{v}},
+
+(6)
+
+along with gate pre-activations:
+
+\bm{f}=f_{\mathrm{proj}}(\bm{h})\in\mathbb{R}^{T\times H\times d_{k}}
+(decay
+logits, kept in FP32 for numerical precision),
+
+\bm{b}_{x}=b_{\mathrm{proj}}(\bm{h})\in\mathbb{R}^{T\times H\times d_{k}}
+
+(erase bias), and
+
+\hat{\bm{w}}=w_{\mathrm{proj}}(\bm{h})\in\mathbb{R}^{T\times H}
+
+(scalar write pre-activations:
+H
+values, one per head, versus
+
+H\times d_{v}
+in the GDN-2 baseline).
+
+4.2
+Content-Aware Erase Gate
+
+Memory readout via output reuse.
+
+CARVE’s key insight is that the chunk kernel already produces the per-token output
+
+\bm{o}_{t}=\bm{S}_{t}\bm{q}_{t}
+as a mandatory side-product, and this tensor must be
+read back from HBM regardless.
+Computing the chunk mean over these outputs adds only an inexpensive reduction
+(while the tensor is still hot in L2 cache), adding zero additional HBM round-trips:
+
+\bm{m}_{c}=\frac{1}{L}\sum_{t=c_{0}}^{c_{1}-1}\bm{o}_{t}\in\mathbb{R}^{H\times d_{v}},\qquad\bm{m}_{0}=\mathbf{0}.
+
+(7)
+
+Here
+\bm{m}_{c}
+is the mean recurrent output of chunk
+c{-}1
+, used as the
+content signal for chunk
+c
+.
+The signal is one chunk (
+L
+tokens) stale; Proposition
+14
+
+shows this staleness is
+\mathcal{O}(1/\sqrt{L})
+, so it does not accumulate with chunk size.
+
+Content-aware erase.
+
+The content signal
+\bm{m}_{c}\in\mathbb{R}^{H\times d_{v}}
+is mapped to a per-chunk gate
+bias via a low-rank bottleneck projection
+
+\bm{U}_{b}=\bm{W}_{U_{2}}\tanh(\bm{W}_{U_{1}}\cdot):\mathbb{R}^{d_{v}}\to\mathbb{R}^{d_{k}}
+,
+with
+\bm{W}_{U_{1}}\in\mathbb{R}^{r\times d_{v}}
+and
+\bm{W}_{U_{2}}\in\mathbb{R}^{d_{k}\times r}
+
+zero-initialised
+.
+The content-aware erase gate is:
+
+\boxed{\bm{b}_{c,t}=\sigma\!\bigl(\bm{b}_{x,t}+\bm{U}_{b}(\bm{m}_{c})\bigr)\in[0,1]^{H\times d_{k}}.}
+
+(8)
+
+At initialisation,
+\bm{U}_{b}\equiv\mathbf{0}
+, so
+
+\bm{b}_{c,t}=\sigma(\bm{b}_{x,t})
+: CARVE is
+bit-identical
+to the
+matrix-gated baseline at step 0.
+As training proceeds,
+\bm{W}_{U_{2}}
+departs from zero, and the content gate
+activates, introducing memory-awareness into the erase decision.
+
+4.3
+Scalar Value Write Gate
+
+\boxed{w_{h,t}=\sigma(\hat{w}_{h,t})\in(0,1),\qquad\bm{w}_{c,t}=w_{h,t}\cdot\mathbf{1}_{d_{v}}\in\mathbb{R}^{H\times d_{v}}.}
+
+(9)
+
+The same scalar
+w_{h,t}
+is broadcast across all
+d_{v}
+value channels within
+head
+h
+.
+This replaces the
+H\cdot d_{v}
+-parameter projection of GDN-2 with
+H
+parameters—a
+
+d_{v}
+-fold reduction.
+Theorem
+15
+shows this is lossless for single-slot
+associative recall; in practice the quality is maintained at scale
+(Table
+7
+).
+
+4.4
+Key-Axis Decay Gate (Fused in Kernel)
+
+The exponential decay is:
+
+\bm{g}_{c,t}=-\exp(\bm{A})\odot\operatorname{softplus}(\bm{f}_{c,t}+\bm{\tau})\in\mathbb{R}^{H\times d_{k}}_{\leq 0},
+
+(10)
+
+where
+\bm{A}\in\mathbb{R}^{H\times d_{k}}
+are learned log-decay amplitudes and
+
+\bm{\tau}\in\mathbb{R}^{H\times d_{k}}
+are bias terms.
+The activation is computed
+inside
+the Triton kernel (“gate-in-kernel”
+fusion), saving one full-sequence BF16 activation tensor (
+\approx 100
+MB at
+
+B{=}8
+,
+T{=}1024
+,
+H{=}12
+,
+d_{k}{=}64
+) and contributing
++1.2
+K tok/s.
+
+4.5
+CARVE Forward Pass Algorithm
+
+Algorithm 1
+
+CARVE Forward Pass (single layer, one head)
+
+1:
+
+Input:
+Hidden states
+\bm{h}_{1:T}
+; state
+\bm{S}_{0}\leftarrow\mathbf{0}
+; chunk size
+L
+
+2:
+
+Compute
+\bm{q},\bm{k},\bm{v}
+and gate pre-activations
+\bm{f},\bm{b}_{x},\hat{\bm{w}}
+
+3:
+
+\bm{m}_{0}\leftarrow\mathbf{0}
+
+\triangleright
+content signal initialised to zero for the first chunk
+
+4:
+
+for
+
+c=0,1,\ldots,T/L-1
+
+do
+
+5:
+
+c_{0}\leftarrow cL,\;c_{1}\leftarrow(c{+}1)L
+
+6:
+
+\bm{u}_{b}\leftarrow\bm{W}_{U_{2}}\tanh(\bm{W}_{U_{1}}\bm{m}_{c})
+
+\triangleright
+low-rank content projection, shape
+[H,d_{k}]
+
+7:
+
+\bm{b}_{c,\cdot}\leftarrow\sigma(\bm{b}_{x,c_{0}:c_{1}}+\bm{u}_{b})
+
+\triangleright
+content-aware erase gate, shape
+[L,H,d_{k}]
+
+8:
+
+w_{c,\cdot}\leftarrow\sigma(\hat{\bm{w}}_{c_{0}:c_{1}})
+
+\triangleright
+scalar write gate, shape
+[L,H]
+
+9:
+
+\bm{o}_{c,\cdot},\,\bm{S}_{c}\leftarrow\textsc{WYChunkDelta}(\bm{q},\bm{k},\bm{v},\bm{b}_{c,\cdot},w_{c,\cdot},\bm{f}_{c_{0}:c_{1}},\bm{S}_{c-1})
+
+\triangleright
+unmodified WY-form kernel, Eq.
+5
+
+10:
+
+\bm{m}_{c+1}\leftarrow\operatorname{mean}_{L}(\bm{o}_{c,\cdot})
+
+\triangleright
+content signal for next chunk, shape
+[H,d_{v}]
+; zero extra HBM reads
+
+11:
+
+end
+
+for
+
+12:
+
+\bm{y}_{1:T}\leftarrow\bm{W}_{O}\,\mathrm{RMSNorm}(\mathrm{reshape}(\bm{o}_{0:T}))
+
+13:
+
+Output:
+Output
+\bm{y}_{1:T}\in\mathbb{R}^{T\times d}
+; updated state
+\bm{S}_{T/L}
+
+Design note.
+
+The write gate
+w_{c,\cdot}
+carries no content modulation.
+This asymmetry is intentional: selective
+forgetting
+benefits from knowing
+what is currently stored; write
+strength
+at the correct magnitude is
+sufficient for retrieval (Theorem
+15
+).
+
+4.6
+CARVE Subsumption Hierarchy
+
+Restricting erase to the key axis places CARVE in a well-defined subset of
+all gated delta recurrences: it is strictly more expressive than memory-blind
+key-axis architectures (because its gate reads
+\bm{m}_{c}
+), strictly more
+expressive than scalar-gated variants (because it is per-dimension), and
+strictly more expressive than the original delta rule and linear attention
+as special cases.
+The following theorem makes this hierarchy precise.
+
+Theorem 1
+
+(CARVE Subsumption Hierarchy, Key-Axis Family)
+.
+
+Within the family of key-axis–only gated delta recurrences (i.e.,
+architectures whose erase acts on the right/key axis):
+
+\text{CARVE}\supsetneq\text{key-axis--gated (memory-blind)}\supsetneq\text{scalar-gated delta net}\supsetneq\text{delta rule}\supsetneq\text{linear attention},
+
+(11)
+
+where a “key-axis–gated (memory-blind) delta recurrence” is any architecture of the form
+
+\bm{S}_{t}=\bm{S}_{t-1}\operatorname{diag}(\bm{e}_{t})+w_{t}(\bm{v}_{t}-\bm{S}_{t-1}\bm{k}_{t})\bm{k}_{t}^{\top}
+
+with
+\bm{e}_{t}\in[0,1]^{d_{k}}
+a function of
+x_{t}
+alone.
+Each inclusion is strict: CARVE strictly subsumes all others, and no two
+adjacent classes are equal.
+
+Proof sketch.
+
+Each inclusion reduces to a containment on gate parameter spaces.
+CARVE contains the memory-blind key-axis class because setting
+
+\bm{W}_{U_{1}}{=}0
+recovers it exactly.
+The scalar-gated and delta-rule inclusions follow by restricting
+
+\bm{e}_{t}
+to a scalar and then to
+\mathbf{1}
+.
+Each is strict by the Selective Key Overwrite task
+(Definition
+6
+): CARVE solves it with
+\mathcal{O}(d_{v}{+}d_{k})
+
+parameters; each smaller class requires strictly more (or fails entirely).
+Full proof: Appendix
+A
+.
+∎
+
+The theorem has an important
+corollary
+: since GDN-2 uses
+
+value-axis
+erase, it lies outside this hierarchy.
+The two architectures operate in structurally different subspaces of
+gated recurrence, which motivates the following incomparability result.
+
+Proposition 2
+
+(CARVE and GDN-2 are Incomparable)
+.
+
+Let
+\mathcal{C}
+be the function class of CARVE (key-axis rank-1 erase,
+memory-aware) and
+\mathcal{G}
+that of GDN-2 (full element-wise erase,
+memory-blind).
+Then
+\mathcal{C}\not\subseteq\mathcal{G}
+and
+
+\mathcal{G}\not\subseteq\mathcal{C}
+: neither class contains the other.
+
+This incomparability characterises the architectural trade precisely.
+CARVE replaces GDN-2’s full-rank value-axis erase—which is expressive
+but destroys chunk-parallelism—with memory-aware key-axis erase that
+is strictly more expressive on memory-conditioned tasks (such as selective
+key overwrite and long-context retrieval) while leaving the WY-form kernel
+intact.
+
+5
+Theoretical Analysis
+
+The architectural choices in CARVE—key-axis-only erase, scalar write gate,
+content-aware conditioning, and output-reuse readout—are each motivated by
+formal guarantees.
+This section presents six such guarantees covering state capacity, Lyapunov
+stability, gradient flow, expressivity separation, the speed–accuracy
+Pareto frontier, and hybrid architecture optimality.
+All proofs are deferred to Appendix
+A
+, where they are preceded
+by a brief discussion of their proof techniques.
+We highlight the key intuitions here.
+
+5.1
+Memory Capacity
+
+The state matrix
+\bm{S}\in\mathbb{R}^{d_{v}\times d_{k}}
+is a finite-rank
+structure.
+Understanding its storage capacity determines how many associations can be
+held simultaneously and, crucially, when selective forgetting becomes
+necessary.
+
+Theorem 3
+
+(Memory Capacity)
+.
+
+The maximum number of orthogonal key–value associations
+({\bm{k}}_{i},{\bm{v}}_{i})
+
+that can be stored
+exactly
+in
+\bm{S}\in\mathbb{R}^{d_{v}\times d_{k}}
+is
+
+n^{*}=\min(d_{v},d_{k})
+.
+With rank-1 delta-rule updates and orthonormal keys
+\{\bm{k}_{i}\}
+, this
+capacity is filled in exactly
+n^{*}
+sequential writes from
+\bm{S}_{0}=\mathbf{0}
+.
+
+The theorem sets a fundamental ceiling: once
+n^{*}
+orthogonal associations
+have been written, every subsequent write necessarily corrupts at least one
+existing association.
+This motivates the content-aware erase gate—it is precisely when the state
+is near saturation that the model needs to know
+what is already stored
+
+to decide what to overwrite.
+Theorem
+8
+below formalises this observation.
+
+5.2
+Lyapunov Stability
+
+Beyond capacity bounds, one needs to know that the state does not diverge
+during long sequences.
+CARVE’s bi-axial gating provides a provably tighter contraction bound than
+the matrix-gated GDN-2 baseline.
+
+Theorem 4
+
+(Lyapunov Stability)
+.
+
+Under CARVE with minimum erase gate value
+b_{\min}=\min_{t,h,j}b_{c,t,h,j}>0
+,
+maximum (post-activation) decay factor
+g_{\min}=\max_{t,h,j}\exp(g_{c,t,h,j})<1
+,
+bounded delta updates
+\left\|\bm{\Delta}_{t}\right\|_{F}\leq M
+, and per-head scalar write gate
+
+w_{h,t}\leq 1
+, the recurrent state satisfies:
+
+\left\|\bm{S}_{t}\right\|_{F}\leq\rho_{c}^{t}\left\|\bm{S}_{0}\right\|_{F}+\frac{M}{1-\rho_{c}},\qquad\rho_{c}=(1-b_{\min})\,g_{\min}.
+
+(12)
+
+Here
+\rho_{c}\in(0,1)
+is the joint contraction ratio.
+Since both
+b_{\min}>0
+and
+g_{\min}<1
+, we have
+
+\rho_{c}<\min(1-b_{\min},\,g_{\min})<1
+: CARVE’s bi-axial gating
+contracts the state strictly faster than either mechanism in isolation.
+The bounded stationary value
+M/(1-\rho_{c})
+guarantees that
+\left\|\bm{S}_{t}\right\|_{F}
+
+remains bounded for all
+t
+, regardless of sequence length.
+
+For the matrix-gated GDN-2, the effective contraction ratio is
+
+\rho_{\mathrm{GDN2}}=\max_{ij}(1-B_{t,ij})
+, which approaches
+1
+if
+any entry of
+\bm{B}_{t}
+is small.
+At
+b_{\min}=g_{\min}=0.05
+:
+
+\rho_{\mathrm{CARVE}}=0.9025
+versus
+\rho_{\mathrm{GDN2}}=0.95
+—a
+faster effective forgetting rate that reduces interference over long contexts.
+
+The bi-axial gating also has consequences for training: because
+\rho_{c}
+is
+jointly controlled by two independent mechanisms, the model can learn to trade
+off forgetting speed (via the decay gate
+\bm{g}
+) against content-selectivity
+(via the erase gate
+\bm{b}
+) in a task-dependent manner.
+
+5.3
+Gradient Flow
+
+Stable gradients are prerequisite for learning long-range dependencies.
+The following theorem characterises how CARVE’s gating controls gradient
+magnitude along the recurrent path.
+
+Theorem 5
+
+(Gradient Flow)
+.
+
+Under CARVE, the gradient of a scalar loss
+\mathcal{L}
+with respect to the
+initial state
+\bm{S}_{0}
+satisfies:
+
+\left\|\frac{\partial\mathcal{L}}{\partial\bm{S}_{0}}\right\|_{F}\leq\left\|\frac{\partial\mathcal{L}}{\partial\bm{S}_{T}}\right\|_{F}\cdot\prod_{t=1}^{T}\rho_{t},\quad\rho_{t}=(1-b_{\min,t})\,\exp(g_{\max,t}).
+
+(13)
+
+The two factors
+(1-b_{\min,t})
+and
+\exp(g_{\max,t})
+correspond to
+the erase gate and the decay gate respectively.
+Together they provide
+two independent gradient modulation mechanisms
+
+that the model can tune jointly.
+In particular, by setting
+g_{\max,t}\approx 1
+(slow decay) and
+
+b_{\min,t}\approx 0
+(weak erase) near a critical dependency, the model
+can pass gradients over long lags without resorting to gradient clipping.
+This separation of concerns—decay controls forgetting speed, erase controls
+content-selectivity—is a design property unique to CARVE within the gated
+delta family.
+
+5.4
+Expressivity Separation
+
+The previous theorems establish stability and gradient properties that hold
+regardless of what the content gate learns.
+We now show a
+separation
+result: there exists a concrete task on which
+CARVE provably outperforms any memory-blind gated delta recurrence with
+insufficient gate width.
+
+Definition 6
+
+(Selective Key Overwrite (SKO) Task)
+.
+
+A stream of
+T
+tokens arrives; each is either a
+write
+token
+
+(\bm{k},\bm{v})
+or an
+overwrite
+token
+(\bm{k},\bm{v}^{\prime},f{=}1)
+.
+Upon receiving an overwrite token, the model must erase the current value
+associated with key
+\bm{k}
+and write
+\bm{v}^{\prime}
+in its place, leaving all
+other stored associations intact.
+Performance is measured as the mean squared retrieval error at a subsequent
+query for each stored key.
+
+The SKO task is a minimal formalisation of an operation that appears
+throughout language—updating a fact (“Alice now lives in …”),
+revising a count, or correcting a prior claim.
+
+Theorem 7
+
+(Expressivity Separation)
+.
+
+CARVE with
+\mathcal{O}(d_{v}+d_{k})
+gate parameters achieves zero error on the SKO
+task.
+Any memory-blind gated delta recurrence (whose gate depends only on the
+current token
+x_{t}
+, not on
+\bm{S}_{t-1}
+) with
+o(d_{k}/2)
+gate parameters
+has strictly positive error on SKO for some key distribution.
+
+The intuition is as follows.
+Upon receiving an overwrite token, CARVE queries the current state via
+
+\bm{m}_{c}\approx\bm{S}_{c-1}\bm{q}_{t}
+to locate which key direction is
+currently occupied, then uses the content projection
+\bm{U}_{b}
+to
+target the erase at precisely that direction.
+A memory-blind gate, by contrast, must enumerate all
+d_{k}
+possible key
+directions from
+x_{t}
+alone—requiring gate width
+\Omega(d_{k})
+—since
+it has no information about which direction is currently stored.
+
+Theorem 8
+
+(Saturation and Content-Aware Retention)
+.
+
+Let
+N>n^{*}
+orthogonal key–value associations be written sequentially.
+
+(a)
+
+At most
+n^{*}
+associations can be stored exactly;
+at least
+N-n^{*}
+are necessarily corrupted.
+
+(b)
+
+Among all rank-
+n^{*}
+state matrices, expected retrieval error is
+minimised by retaining the
+n^{*}
+associations with the largest
+empirical query mass.
+
+(c)
+
+CARVE’s content gate can realise this optimal retention policy.
+No memory-blind gate can rank stored associations by their
+content-relevance; for some query distributions, any memory-blind
+gate incurs strictly higher expected error.
+
+Part (c) links the capacity and expressivity results: at saturation, optimal
+forgetting requires knowing
+what is stored
+, which is exactly what the
+content gate—operating on
+\bm{m}_{c}\propto\bm{S}_{c-1}\bm{q}
+—provides.
+
+5.5
+Speed-Accuracy Pareto Frontier
+
+Chunk size
+L
+is the primary hardware knob: larger
+L
+improves arithmetic
+intensity and throughput but increases the staleness of the content signal
+
+\bm{m}_{c}
+.
+The following theorem characterises the optimal operating point.
+
+Theorem 9
+
+(Speed-Accuracy Pareto Frontier)
+.
+
+Let
+\varepsilon(L)=\mathcal{O}(LMQ/(1-\rho))
+denote the approximation error from
+one-chunk staleness (where
+M
+,
+Q
+,
+\rho
+are from Theorem
+4
+)
+and let
+g(L)=\mathcal{O}(L)
+denote the throughput gain from larger chunks.
+For trade-off weight
+\lambda\in(0,1)
+and objective
+
+J(L)=\lambda\cdot\varepsilon(L)+(1-\lambda)/g(L)
+, the
+Pareto-optimal chunk size is:
+
+L^{*}=\sqrt{\frac{(1-\lambda)(1-\rho)}{\lambda MQ}}.
+
+(14)
+
+The Pareto-frontier error at
+L^{*}
+is
+
+\varepsilon(L^{*})=\mathcal{O}\!\left(\sqrt{(1-\lambda)MQ/(\lambda(1-\rho))}\right)
+.
+
+Importantly,
+L^{*}
+grows with
+1-\rho
+(slower forgetting
+\to
+larger
+chunks safe) and shrinks with
+MQ
+(larger updates
+\to
+content changes
+rapidly, so smaller chunks keep the signal fresh).
+In our experiments,
+L{=}64
+lies near the empirical Pareto frontier across
+all tested model sizes, consistent with the analytically predicted range
+(§
+8.3
+).
+
+5.6
+Hybrid Architecture Optimality
+
+Interleaving CARVE with sliding-window attention (SWA) addresses the
+complementary weaknesses of each: CARVE provides linear-complexity long-range
+memory but limited local precision; SWA provides exact local attention but
+no long-range state.
+The next theorem formalises when a hybrid achieves both simultaneously.
+
+Theorem 10
+
+(Hybrid Architecture Optimality)
+.
+
+For a CARVE/SWA hybrid with
+H
+CARVE layers and
+A=D-H
+sliding-window
+attention layers (window size
+W
+), there exists a ratio
+H/A
+such that the
+hybrid simultaneously achieves:
+(i) training cost
+\mathcal{O}(Td_{v}d_{k}+TWd)
+, which is linear in
+T
+;
+(ii) near-exact retrieval for tokens within
+W
+of the current position via SWA;
+and (iii) content-aware retrieval of long-range associations via the CARVE state.
+No single-component architecture (all-CARVE or all-SWA) achieves all three
+simultaneously.
+
+6
+Hardware-Efficient Implementation
+
+6.1
+The Chunkability Boundary
+
+The critical theoretical result that explains CARVE’s design is:
+
+Theorem 11
+
+(Chunkability Boundary)
+.
+
+For the gated delta recurrence, the intra-chunk corrected values
+
+\{\bm{u}_{t}\}
+satisfy a linear system whose coupling matrix is independent of
+the value index
+v
+—and therefore admits a
+single
+WY-form triangular
+solve per head—
+if and only if
+the value-axis erase is trivial
+(
+\bm{b}_{t}\equiv\mathbf{0}
+).
+When
+\bm{b}_{t}\neq\mathbf{0}
+, the system decomposes into
+d_{v}
+independent
+triangular solves, one per value channel, whose prefactors
+
+\beta_{t-1}[v]/\beta_{s}[v]
+(where
+\beta_{t}=\prod_{s\leq t}(1-\bm{b}_{s})
+)
+cannot be cancelled without division by quantities that decay geometrically to
+zero (causing underflow and numerical instability).
+
+Corollary 12
+
+(CARVE is Chunk-Parallel)
+.
+
+CARVE’s state update (Eq.
+5
+) applies erase only on the
+
+key axis
+via
+\bm{b}_{c,t}
+.
+By Theorem
+11
+, the intra-chunk corrected values satisfy a
+single triangular system shared across all
+d_{v}
+value channels, admitting the
+WY-form chunk solve in
+\mathcal{O}(\log T/L)
+kernel launches.
+
+This is the architectural constraint CARVE satisfies by construction:
+by restricting erase to the key axis, the coupling matrix
+\bm{M}
+in the
+intra-chunk system is shared across all
+d_{v}
+value channels, enabling a single
+triangular GEMM on tensor cores rather than
+d_{v}
+separate solves.
+The value-axis erase in GDN-2 breaks this sharing and collapses throughput to
+
+\mathcal{O}(d_{v}d_{k}L^{2})
+per chunk—exactly the naive sequential recurrence cost.
+
+6.2
+WY-Form Intra-Chunk Solve
+
+The subroutine
+WYChunkDelta
+called in Algorithm
+1
+
+is the inner kernel that implements the WY-form triangular solve within each
+chunk.
+We specify it below, highlighting why key-axis-only retention enables a
+single shared solve.
+
+For a chunk of
+L
+tokens, define the
+cumulative key-axis retention
+vector
+up to position
+t
+(relative to chunk start) as:
+
+\bm{\gamma}_{t}=\prod_{s=0}^{t}\!\bigl(\exp(\bm{g}_{s})\odot(\mathbf{1}-\bm{b}_{s})\bigr)\;\in\;(0,1]^{d_{k}},\qquad\bm{\gamma}_{-1}=\mathbf{1}.
+
+(15)
+
+Because
+\bm{\gamma}_{t}
+lives on the key axis only, it is the
+same
+
+for every row (value channel) of
+\bm{S}
+.
+The inter-position retention from position
+s
+to
+t
+is therefore
+
+\bm{\gamma}_{s\to t}=\bm{\gamma}_{t-1}/\bm{\gamma}_{s-1}
+(element-wise),
+independent of the value index.
+This is the property that enables the single WY-form solve.
+
+Algorithm 2
+
+WY-Form Chunk Delta Solve (
+WYChunkDelta
+)
+
+1:
+
+Input:
+Per-chunk slices
+\bm{q},\bm{k}\in\mathbb{R}^{L\times H\times d_{k}}
+,
+
+\bm{v}\in\mathbb{R}^{L\times H\times d_{v}}
+;
+key-axis erase gate
+\bm{b}\in[0,1]^{L\times H\times d_{k}}
+;
+scalar write gate
+\bm{w}\in(0,1)^{L\times H}
+;
+decay logits
+\bm{f}\in\mathbb{R}^{L\times H\times d_{k}}
+;
+incoming state
+\bm{S}_{\mathrm{prev}}\in\mathbb{R}^{H\times d_{v}\times d_{k}}
+.
+
+2:
+
+Output:
+Token outputs
+\bm{o}\in\mathbb{R}^{L\times H\times d_{v}}
+;
+updated state
+\bm{S}_{\mathrm{next}}\in\mathbb{R}^{H\times d_{v}\times d_{k}}
+.
+
+3:
+
+All operations below are per-head; head index suppressed.
+
+4:
+
+Decay gate
+(fused inside kernel; no HBM write):
+
+5:
+
+\bm{g}_{t}\leftarrow-\exp(\bm{A})\odot\operatorname{softplus}(\bm{f}_{t}+\bm{\tau})
+
+for
+t=0,\ldots,L{-}1
+
+6:
+
+Cumulative key-axis retention
+(parallel prefix product):
+
+7:
+
+\bm{\gamma}_{t}\leftarrow\prod_{s=0}^{t}(\exp(\bm{g}_{s})\odot(\mathbf{1}-\bm{b}_{s}))
+
+for
+t=0,\ldots,L{-}1
+
+8:
+
+Right-hand sides
+(inter-position-shifted prediction errors):
+
+9:
+
+\bm{r}_{t}\leftarrow\bm{v}_{t}-\bm{S}_{\mathrm{prev}}(\bm{\gamma}_{t-1}\odot\bm{k}_{t})
+
+\triangleright
+using
+\bm{\gamma}_{-1}=\mathbf{1}
+
+10:
+
+Lower-triangular coupling matrix
+
+\bm{M}\in\mathbb{R}^{L\times L}
+:
+
+M_{ts}=\begin{cases}w_{s}\cdot\bm{k}_{s}^{\top}\!\left(\dfrac{\bm{\gamma}_{t-1}}{\bm{\gamma}_{s-1}}\odot\bm{k}_{t}\right)&s<t,\\[4.0pt]
+1&s=t,\\[2.0pt]
+0&s>t.\end{cases}
+
+(16)
+
+11:
+
+Key insight
+:
+\bm{M}
+is
+independent of the value index
+,
+since
+\bm{\gamma}
+lives on the key axis.
+
+12:
+
+Triangular solve
+(single GEMM on tensor cores, shared across
+d_{v}
+):
+
+13:
+
+\bm{U}\leftarrow\bm{M}^{-1}\bm{R}\;\in\mathbb{R}^{L\times d_{v}}
+
+14:
+
+(Forward substitution;
+\bm{M}
+has unit diagonal.)
+
+15:
+
+Token outputs
+:
+
+16:
+
+\bm{o}_{t}\leftarrow\Bigl(\bm{S}_{\mathrm{prev}}\,\operatorname{diag}(\bm{\gamma}_{t-1})+\textstyle\sum_{s\leq t}w_{s}\,\bm{u}_{s}\,\bm{k}_{s}^{\top}\Bigr)\bm{q}_{t}
+
+17:
+
+(Computed via two GEMMs and masked accumulation; no loop over
+t
+.)
+
+18:
+
+End-of-chunk state update
+:
+
+19:
+
+\bm{S}_{\mathrm{next}}\leftarrow\bm{S}_{\mathrm{prev}}\,\operatorname{diag}(\bm{\gamma}_{L-1})+\textstyle\sum_{t=0}^{L-1}w_{t}\,\bm{u}_{t}\,\bm{k}_{t}^{\top}
+
+20:
+
+return
+
+\bm{o},\;\bm{S}_{\mathrm{next}}
+
+Complexity.
+
+The dominant cost is the triangular solve (Step 5) plus two GEMMs (Step 6):
+
+\mathcal{O}(d_{v}d_{k}L+L^{2}d_{k})
+per head per chunk.
+With
+L\ll T
+(e.g.,
+L{=}64
+,
+T{=}2048
+), this achieves
+
+\mathcal{O}(\log T/L)
+kernel launches and near-peak H100 tensor-core utilisation.
+Crucially, Step 5 is dispatched
+once
+regardless of
+d_{v}
+; this is
+the direct hardware benefit of restricting erase to the key axis.
+
+6.3
+Output-Reuse Content Readout
+
+The content signal
+\bm{m}_{c}
+requires some view into the current memory
+state.
+The naïve approach—reading a subset of
+\bm{S}_{c-1}
+from HBM—would add
+a full extra memory read per chunk, doubling HBM traffic for the gating path.
+CARVE avoids this entirely by observing that the output tensor
+
+\bm{o}_{c,\cdot}=\bm{S}_{t}\bm{q}_{c,\cdot}
+is already produced by the
+kernel and must be written to HBM regardless; taking its mean while the
+tensor is still in L2 cache adds negligible cost.
+The following two propositions formalise this claim and bound the
+approximation error introduced by the resulting one-chunk staleness.
+
+Proposition 13
+
+(Content Readout is Asymptotically Free)
+.
+
+In the chunk-parallel setting, the output-reuse content readout
+
+\bm{m}_{c+1}=\operatorname{mean}_{L}(\bm{o}_{c,\cdot})
+adds zero HBM reads
+and
+\mathcal{O}(Hd_{v})
+amortised FLOPs per token, both dominated by the kernel’s
+existing output write.
+
+The readout is therefore “free” in the sense that it does not appear in
+the asymptotic complexity of Table
+1
+.
+The remaining concern is whether using a signal that is one chunk stale
+introduces a significant error in the gate.
+
+Proposition 14
+
+(One-Chunk Staleness Bound)
+.
+
+The gate perturbation due to one-chunk staleness satisfies:
+
+\left\|\bm{b}_{c,t}-\bm{b}_{c,t}^{\mathrm{exact}}\right\|_{2}\leq\left\|\bm{U}_{b}\right\|_{2}\cdot\left\|\Delta\bm{o}\right\|_{F}/\sqrt{L},
+
+(17)
+
+where
+\Delta\bm{o}
+is the per-token output increment between consecutive
+chunks.
+Since
+\bm{W}_{U_{2}}
+is zero-initialised,
+\left\|\bm{U}_{b}\right\|_{2}
+starts at
+zero and grows only as the content gate learns its task, keeping the
+perturbation negligible in the early phases of training.
+Furthermore, for weakly correlated per-token output increments with variance
+
+\sigma_{o}^{2}
+:
+
+\mathbb{E}\left\|\bm{m}_{c}-\bm{m}_{c}^{\mathrm{exact}}\right\|_{2}=\mathcal{O}(\sigma_{o}/\sqrt{L})
+,
+so the staleness error
+decreases
+with larger chunk size rather than
+accumulating.
+
+This
+\mathcal{O}(1/\sqrt{L})
+averaging behaviour is why the measured gate
+deviation in Table
+4
+is
+flat
+at
+0.18\%
+across
+
+L\in\{16,32,64,128\}
+, not the
+\mathcal{O}(L)
+worst-case envelope that
+the triangle inequality would suggest.
+In practice, for all chunk sizes used in training (
+L\leq 128
+), the content
+signal is accurate enough that the model learns to rely on it from the first
+gradient steps.
+
+6.4
+Gate-in-Kernel Fusion
+
+The decay activation
+\bm{g}_{c,t}=-\exp(\bm{A})\odot\operatorname{softplus}(\bm{f}_{c,t}+\bm{\tau})
+
+is computed inside the Triton kernel from the raw logit
+\bm{f}_{c,t}
+.
+This eliminates one full-sequence BF16 activation tensor from Python
+(
+\approx 100
+MB at
+B{=}8
+,
+T{=}1024
+,
+H{=}12
+,
+d_{k}{=}64
+) and
+contributes
++1.2
+K tok/s over the unfused baseline.
+
+6.5
+Complexity Comparison
+
+Table 1:
+Complexity comparison.
+T
+: sequence length;
+d_{v},d_{k}
+: state dimensions;
+
+L
+: chunk size. Throughput measured on single H100,
+125
+M scale,
+T{=}1024
+, mb
+=8
+.
+
+Architecture
+
+Train FLOPs
+
+Train Mem
+
+Infer/tok
+
+Par. Depth
+
+H100 tok/s
+
+Linear Attention
+
+\mathcal{O}(Td^{2})
+
+\mathcal{O}(d^{2})
+
+\mathcal{O}(d^{2})
+
+\mathcal{O}(\log T)
+
+—
+
+Delta Rule
+
+\mathcal{O}(Td^{2})
+
+\mathcal{O}(d^{2})
+
+\mathcal{O}(d^{2})
+
+\mathcal{O}(\log T)
+
+—
+
+GDN-2 (matrix-gated)
+
+\mathcal{O}(Td_{v}d_{k})
+
+\mathcal{O}(Ld_{v}d_{k})
+
+\mathcal{O}(d_{v}d_{k})
+
+\mathcal{O}(\log T)
+
+93.8
+K
+
+Content-aware exact recurrent
+
+\mathcal{O}(Td_{v}d_{k})
+
+\mathcal{O}(Td_{v}d_{k})
+
+\mathcal{O}(d_{v}d_{k})
+
+\mathcal{O}(T)
+
+24.8
+K
+
+CARVE (ours)
+
+\mathcal{O}(Td_{v}d_{k})
+
+\mathcal{O}(Ld_{v}d_{k})
+
+\mathcal{O}(d_{v}d_{k})
+
+\mathcal{O}(\log T)
+
+\mathbf{93.4}
+K
+
+7
+The CARVE Hybrid Architecture
+
+Pure recurrent models compress all context into a fixed-size state, trading
+exactness for linear complexity.
+Pure attention models retain all tokens but pay quadratic cost.
+CARVE’s hybrid design exploits a natural information partition: tokens within
+the most-recent
+W
+positions are handled by exact sliding-window attention
+(SWA), while long-range associations are handled by the CARVE recurrence.
+The two mechanisms cover complementary context ranges and communicate only
+through the shared residual stream.
+
+Formally, CARVE can be interleaved with SWA in a repeating block:
+
+[\underbrace{\text{CARVE}}^{\times H}\to\underbrace{\text{SWA}}^{\times A}]^{D/(H+A)}
+,
+where
+H
+CARVE layers provide global long-range memory and
+A
+SWA layers
+provide local exact attention over window
+W
+.
+The CARVE state
+\bm{S}
+is strictly internal to the CARVE layers and is never
+read or modified by SWA.
+
+Figure 2:
+Left: Hybrid CARVE layer stack.
+
+The model alternates
+H
+CARVE layers with
+A
+sliding-window attention (SWA) layers
+in a repeating
+[(\text{CARVE})^{H}\to(\text{SWA})^{A}]
+block, with
+H{:}A{=}3{:}1
+
+as the empirically optimal ratio (§
+7
+).
+The GAGA (
+H{=}A{=}1
+) configuration is a special case.
+
+Right: CARVE block internals.
+
+The
+WY Chunk Solve
+kernel (top) fuses the key-axis decay gate
+
+\bm{g}_{c,t}=-\exp(\bm{A})\odot\operatorname{softplus}(\bm{f}_{c,t}+\bm{\tau})
+
+internally (gate-in-kernel fusion), eliminating one BF16 activation tensor per forward
+pass.
+The
+Content Gates
+box (centre) receives linear projections of the hidden state
+(
+\bm{b}_{x}
+, decay
+\alpha
+, write pre-activation
+w_{a}
+) together with the
+chunk-mean offset
+\bm{U}_{b}(\bm{m}_{c})
+from the content readout, producing the
+content-aware erase gate
+
+\bm{b}_{c,t}=\sigma(\bm{b}_{x}+\bm{U}_{b}(\bm{m}_{c}))\in[0,1]^{H\times d_{k}}
+
+and the scalar write gate
+w_{t}=\sigma(w_{a})\in(0,1)
+per head.
+The chunk-mean
+\bm{m}_{c}=\frac{1}{L}\sum_{t}\bm{o}_{t}
+is accumulated in the
+same kernel pass at zero additional HBM cost.
+
+Information partition.
+
+Information
+>W
+tokens ago lives predominantly in the CARVE state
+\bm{S}
+
+(compressed to
+d_{v}d_{k}
+parameters);
+information
+\leq W
+tokens ago is resolved by SWA with exact softmax attention.
+This partition is orthogonal and clean; no explicit state injection is needed.
+
+Hybrid throughput.
+
+For the GAGA (
+H=A
+) case, measured throughput is
+
+\approx\frac{H\cdot 93.4\text{K}+A\cdot 159.8\text{K}}{H+A}
+;
+formula prediction
+126.6
+K, observed
+120.0
+K tok/s (consistent with
+framework overhead).
+The CARVE hybrid is within
+28\%
+of a pure Transformer and
+29\%
+faster than
+pure CARVE at the same parameter budget.
+
+CARVE:SWA ratio.
+
+Ablation over
+H{:}A\in\{1{:}1,2{:}1,3{:}1,4{:}1\}
+at
+1.3
+B/
+10
+B tokens yields
+WikiPPL
+15.94
+,
+15.82
+,
+\mathbf{15.71}
+,
+15.78
+respectively.
+The
+3{:}1
+ratio achieves the best perplexity: it allocates most capacity to the
+content-aware recurrence while retaining periodic exact-attention refresh; beyond
+
+3{:}1
+the SWA layers become too sparse to correct local positional errors.
+
+8
+Experiments
+
+Every number reported in this section is
+measured
+on NVIDIA H100 hardware
+rather than estimated from complexity tables.
+We structure the evaluation as a sequence of six increasingly broad questions, each
+building on the last: first, is the kernel numerically correct? second, is it fast?
+third, is the chunkability property empirically tight?
+And only after those three hardware questions are settled do we ask the language-model
+questions: does content-awareness improve perplexity, reasoning, and long-range recall?
+
+Kernel exactness, throughput, and chunkability microbenchmarks use the matched
+
+125
+M configuration (
+d{=}768
+,
+H{=}12
+,
+d_{k}{=}d_{v}{=}64
+,
+T{=}1024
+,
+vocabulary
+32
+K).
+Full language-modelling and downstream evaluations use the
+1.3
+B/
+100
+B-token
+FineWeb-Edu
+[
+24
+]
+scale, with all
+1.3
+B models sharing an
+identical training harness: AdamW (
+\beta{=}(0.9,0.95)
+, weight decay
+0.1
+,
+gradient clip
+1.0
+), cosine schedule, peak LR
+1.5\times 10^{-4}
+, batch size
+
+4
+M tokens, sequence length
+4096
+, DeepSeek-V3 tokeniser, and a single fixed
+data seed.
+Every result is the average of three independent model seeds.
+
+8.1
+Experiment 1: Numerical Exactness
+
+Before asking whether CARVE is better, we ask whether it is correct.
+This is not a formality: fused Triton kernels with reverse-scan backward passes
+have known failure modes where the gradient of one quantity is silently substituted
+for another, leaving the model training on wrong gradients without any runtime
+error.
+Table
+2
+reports the worst-case relative error across all
+supported configurations (
+d_{k}{=}d_{v}{=}64
+; delta rank
+R\in\{1,2,4\}
+;
+content rank
+\leq 32
+; chunk lengths
+\{16,32,64\}
+): every one of the thirteen
+gradient tensors agrees with the fp32 autograd reference to relative error below
+
+7\times 10^{-7}
+, which is fp32 round-off.
+
+Table 2:
+Numerical exactness of CARVE kernels (worst case over all tensors and shapes).
+
+Check
+
+Quantity
+
+Max rel. error
+
+Forward scan (
+d{=}64
+)
+
+output vs. fp32 reference
+
+5{\times}10^{-7}
+
+Backward scan,
+R{=}1
+
+gradient vs. autograd
+
+6{\times}10^{-7}
+
+Backward scan,
+R{=}4
+, content rank
+32
+
+gradient vs. autograd
+
+7{\times}10^{-7}
+
+Chunk mode vs. sequential
+
+output, chunk size
+1
+
+9{\times}10^{-8}
+
+CARVE vs. GDN-2 baseline at init
+
+output (zero-init content proj.)
+
+0
+(bit-exact)
+
+Chunk-by-chunk vs. full call
+
+output and carried state
+
+0
+(bit-exact)
+
+The bit-exact identity with GDN-2 at initialisation confirms that any
+observed quality difference is attributable solely to the learned content gate.
+
+8.2
+Experiment 2: Training Throughput and Memory
+
+Having established correctness, the next question is whether CARVE pays a speed
+penalty for its content-awareness.
+The short answer is no—but understanding
+why
+requires appreciating the
+architectural constraint that CARVE is built around.
+By restricting all erase to the key axis, CARVE ensures the intra-chunk coupling
+matrix is shared across all
+d_{v}
+value channels, allowing the WY-form solver to
+run
+unmodified
+as a single triangular GEMM.
+Table
+3
+places this against two comparators: the GDN-2
+matrix-gated baseline (the reference WY-form implementation) and a content-aware
+variant that bypasses the WY-form solver entirely to perform exact per-token
+content gating.
+
+Table 3:
+Measured training throughput and memory at
+125
+M,
+T{=}1024
+, single H100
+(5-round interleaved, mb
+=8
+). Chunk size
+L{=}64
+.
+
+Architecture
+
+Tok/s
+
+Peak mem
+
+\Delta
+vs. baseline
+
+Content-aware exact recurrent (fused Triton backward)
+
+24.8
+K
+
+8.4
+GB
+
+-73.6\%
+
+GDN-2 matrix-gated baseline (WY-form, 12L)
+
+93.77
+K
+
+7.50
+GB
+
+—
+
+Content-aware, drop write gate
+
+94.93
+K
+
+6.54
+GB
+
++1.2\%
+
+CARVE (scalar write gate, output-reuse, 12L)
+
+93.36
+K
+
+\mathbf{6.54}
+GB
+
+\mathbf{-0.4\%}
+
+CARVE runs the WY-form solver
+unmodified
+, achieving throughput within
+0.4\%
+
+of the matrix-gated baseline (
+<1\sigma
+across 5 interleaved rounds)—a gap
+within statistical noise.
+Simultaneously, CARVE uses
+-13\%
+GPU memory and
+-19\%
+mixer parameters.
+The content-aware exact recurrent variant, even with the fused Triton backward
+(
+68.9\times
+speedup), still runs
+3.8\times
+below the WY-form chunk solver:
+the gap is
+intrinsic
+to the per-token value-axis dependency
+(Theorem
+11
+).
+
+This parity is visualised in Figure
+3
+.
+The left panel reports training throughput for the hybrid
+1.3
+B models as
+sequence length grows at a fixed token budget.
+CARVE traces the same near-flat scaling profile as GDN-2—the two curves are
+visually indistinguishable, confirming that content-aware gating and the scalar
+write gate are throughput-neutral—while the full-attention Transformer degrades
+sharply once the context exceeds its compute-bound regime.
+The right panel reframes the comparison as a quality–efficiency trade-off:
+plotting WikiText perplexity against throughput, CARVE occupies the
+
+best-quality corner
+of the Pareto frontier, sitting at the same throughput
+as GDN-2 but at strictly lower perplexity, with no competitor achieving both
+higher throughput and lower perplexity simultaneously.
+
+2
+K
+\times 8
+4
+K
+\times 4
+8
+K
+\times 2
+16
+K
+\times 1
+25
+30
+35
+40
+45
+Seq. length
+\times
+batch
+Throughput (Kt/s)
+(a) Throughput vs. sequence length
+Transformer
+Mamba-3 SISO
+Mamba-2
+Gated DeltaNet
+KDA
+Mamba-3 MIMO
+GDN-2
+CARVE
+30
+35
+40
+45
+15
+16
+17
+18
+19
+20
+better
+Transf.
+Mamba-2
+GDN
+KDA
+M3-SISO
+M3-MIMO
+GDN-2
+CARVE
+Throughput (Kt/s) at
+8
+K
+\times 2
+WikiText PPL (
+\downarrow
+)
+(b) Quality–efficiency Pareto frontier
+
+Figure 3:
+CARVE is throughput-neutral and Pareto-optimal on quality.
+
+(a)
+Training throughput for hybrid
+1.3
+B models versus sequence length
+at a fixed token budget (single H100).
+CARVE (thick violet,
+\otimes
+) tracks just below GDN-2 (olive), the two
+curves separated only by the
+0.4\%
+throughput overhead of content-aware
+gating and the scalar write gate; both preserve the flat recurrent scaling
+profile, while the Transformer degrades sharply at long context.
+
+(b)
+WikiText perplexity versus throughput; down-and-right is better.
+The dashed line marks the Pareto frontier; CARVE sits at its best-quality corner,
+matching GDN-2’s throughput at strictly lower perplexity (
+15.41
+vs.
+15.62
+).
+
+8.3
+Experiment 3: Chunkability Boundary
+
+Theorem
+11
+is not a warning—it is a design specification.
+But a theorem can be proved for the wrong model of hardware.
+This experiment asks: in practice, how close does the output-reuse content readout
+actually get to exact per-token gating, and does this approximation error accumulate
+as chunk size grows?
+
+Table 4:
+Chunkability boundary measured on
+125
+M activations across chunk lengths
+L
+.
+Only content-gate chunk-alignment is cheap; every approach that tries to remove
+the value-axis dependency either diverges or produces a qualitatively different model.
+
+Transformation
+
+Chunkable?
+
+Rel. deviation vs. exact
+
+Chunk-align content read-out only
+
+yes
+
+\mathbf{1.8{\times}10^{-3}}
+, flat
+L{=}16{-}128
+
++
+decouple value decay from solve
+
+yes
+
+4.5{\times}10^{-2}
+(
+L{\geq}16
+)
+
++
+remove value decay by
+\beta
+-division
+
+yes
+
+diverges (
+NaN
+)
+
+Move value gates out of delta loop
+
+yes
+
+9.8{\times}10^{-1}
+(a different model)
+
+The measured
+0.18\%
+deviation from chunk-aligning the content readout is flat
+across
+L\in\{16,32,64,128\}
+, confirming the
+\mathcal{O}(1/\sqrt{L})
+averaging bound
+of Proposition
+14
+.
+All other routes to chunk-parallelism either diverge numerically or yield a
+qualitatively different model.
+
+8.4
+Experiment 4: Language Modelling and Common-Sense Reasoning
+
+With hardware correctness and efficiency established, the central question is
+whether content-aware gating translates into better language understanding.
+We compare at the
+1.3
+B/
+100
+B-token scale against the full field of modern
+recurrent models and their hybrid counterparts, all trained under identical recipes.
+
+Table 5:
+Performance at
+1.3
+B/
+100
+B-token scale on WikiText
+[
+21
+]
+,
+LAMBADA
+[
+23
+]
+, PIQA
+[
+2
+]
+,
+HellaSwag
+[
+42
+]
+, Winogrande
+[
+29
+]
+,
+ARC-e/c
+[
+4
+]
+, OpenBookQA
+[
+22
+]
+,
+SIQA
+[
+30
+]
+, and BoolQ
+[
+3
+]
+.
+Best bolded; second-best underlined.
+
+Avg.
+averages LAMBADA accuracy and the eight reasoning tasks.
+
+Model
+
+Wiki.
+
+LMB.
+
+LMB.
+
+PIQA
+
+Hella.
+
+Wino.
+
+ARC-e
+
+ARC-c
+
+OBQA
+
+SIQA
+
+BoolQ
+
+Avg.
+
+ppl
+\downarrow
+
+ppl
+\downarrow
+
+acc
+\uparrow
+
+acc
+\uparrow
+
+acc_n
+\uparrow
+
+acc
+\uparrow
+
+acc
+\uparrow
+
+acc
+\uparrow
+
+acc
+\uparrow
+
+acc
+\uparrow
+
+acc
+\uparrow
+
+acc
+\uparrow
+
+Recurrent models
+
+Mamba-2
+[
+6
+]
+
+16.79
+
+12.38
+
+45.24
+
+72.58
+
+55.51
+
+55.33
+
+70.68
+
+35.26
+
+31.00
+
+40.63
+
+60.19
+
+51.82
+
+Gated DeltaNet
+[
+39
+]
+
+16.40
+
+11.89
+
+49.62
+
+72.31
+
+56.50
+
+56.75
+
+68.81
+
+35.15
+
+30.20
+
+40.53
+
+58.78
+
+52.07
+
+KDA
+[
+16
+]
+
+16.81
+
+11.68
+
+48.13
+
+72.09
+
+55.75
+
+55.72
+
+70.83
+
+35.92
+
+30.40
+
+40.99
+
+60.67
+
+52.28
+
+Mamba-3 SISO
+[
+18
+]
+
+16.30
+
+12.99
+
+45.06
+
+72.31
+
+55.58
+
+56.20
+
+70.45
+
+34.56
+
+31.00
+
+41.76
+
+55.90
+
+51.42
+
+Mamba-3 MIMO
+
+16.45
+
+11.66
+
+47.82
+
+72.36
+
+56.49
+
+55.78
+
+72.38
+
+38.07
+
+30.00
+
+40.89
+
+57.74
+
+52.39
+
+GDN-2
+[
+12
+]
+
+15.90
+
+11.41
+
+48.09
+
+72.80
+
+56.84
+
+57.85
+
+72.43
+
+38.23
+
+31.60
+
+40.58
+
+59.54
+
+53.11
+
+CARVE (ours)
+
+15.72
+
+11.27
+
+48.87
+
+73.15
+
+57.31
+
+58.12
+
+73.06
+
+38.74
+
+32.20
+
+40.91
+
+60.43
+
+53.74
+
+Hybrid models (recurrent base + Sliding-Window Attention at 3:1 ratio, matched recipe)
+
+Transformer (full attention)
+[
+37
+]
+
+19.22
+
+13.72
+
+48.32
+
+70.21
+
+56.12
+
+55.85
+
+69.23
+
+33.84
+
+25.00
+
+39.74
+
+59.42
+
+50.86
+
+Mamba-2 + SWA
+[
+6
+]
+
+17.46
+
+11.29
+
+48.05
+
+71.47
+
+57.52
+
+56.17
+
+70.50
+
+34.73
+
+29.80
+
+40.35
+
+59.31
+
+51.99
+
+Gated DeltaNet + SWA
+[
+39
+]
+
+16.00
+
+10.82
+
+48.71
+
+70.06
+
+57.50
+
+56.83
+
+70.41
+
+35.15
+
+30.60
+
+40.97
+
+60.00
+
+52.25
+
+KDA + SWA
+[
+16
+]
+
+16.01
+
+10.66
+
+49.21
+
+71.06
+
+56.89
+
+57.77
+
+71.59
+
+35.07
+
+30.00
+
+40.53
+
+62.03
+
+52.68
+
+Mamba-3 SISO + SWA
+[
+18
+]
+
+15.54
+
+10.65
+
+49.19
+
+71.01
+
+58.75
+
+57.30
+
+70.54
+
+36.35
+
+32.00
+
+41.20
+
+57.86
+
+52.69
+
+Mamba-3 MIMO + SWA
+
+15.81
+
+10.92
+
+49.82
+
+71.98
+
+58.19
+
+57.06
+
+70.54
+
+38.48
+
+29.40
+
+40.99
+
+57.98
+
+52.72
+
+GDN-2 + SWA
+[
+12
+]
+
+15.62
+
+10.43
+
+50.90
+
+72.20
+
+58.46
+
+58.56
+
+71.89
+
+36.69
+
+33.00
+
+41.50
+
+62.57
+
+53.97
+
+CARVE + SWA (ours)
+
+15.41
+
+10.29
+
+52.37
+
+74.31
+
+59.83
+
+60.71
+
+72.54
+
+38.84
+
+34.20
+
+43.67
+
+64.04
+
+55.61
+
+CARVE leads every recurrent baseline on WikiText perplexity.
+The
+-0.18
+improvement over GDN-2 (recurrent) corresponds to a
+4.5\sigma
+effect
+across three seeds (Table
+6
+).
+The advantage stems from the content-aware gate: at
+100
+B tokens, the gate
+contribution
+\operatorname{Var}(\bm{U}_{b}\bm{m}_{c})/\operatorname{Var}(b_{x})
+reaches
+
+11.4\%
+, growing monotonically from zero as
+\bm{W}_{U_{2}}
+departs from its
+zero initialisation.
+
+Table 6:
+Three-seed statistics for CARVE vs. the best prior recurrent baseline
+at
+1.3
+B/
+100
+B-token scale.
+
+Model
+
+WikiPPL
+\downarrow
+
+LMB. PPL
+\downarrow
+
+LMB. acc
+\uparrow
+
+Avg. acc
+\uparrow
+
+GDN-2 (recurrent)
+
+15.90\pm 0.04
+
+11.41\pm 0.09
+
+48.09\pm 0.38
+
+53.11\pm 0.29
+
+CARVE (recurrent)
+
+\mathbf{15.72\pm 0.04}
+
+\mathbf{11.27\pm 0.10}
+
+\mathbf{48.87\pm 0.41}
+
+\mathbf{53.74\pm 0.31}
+
+GDN-2 (hybrid)
+
+15.62\pm 0.03
+
+10.43\pm 0.08
+
+50.90\pm 0.36
+
+53.97\pm 0.27
+
+CARVE (hybrid)
+
+\mathbf{15.41\pm 0.03}
+
+\mathbf{10.29\pm 0.09}
+
+\mathbf{52.37\pm 0.39}
+
+\mathbf{55.61\pm 0.28}
+
+Mechanism attribution.
+
+Table
+7
+decomposes the gain.
+Row (a) freezes
+\bm{U}_{b}\equiv\mathbf{0}
+(content gate disabled, scalar write
+only); row (b) enables content-aware erase but removes the scalar write gate.
+
+Table 7:
+Mechanism attribution at
+1.3
+B/
+100
+B-token scale.
+
+Configuration
+
+WikiPPL
+\downarrow
+
+\Delta
+vs. GDN-2
+
+GDN-2 baseline
+
+15.90
+
+—
+
+(a) Scalar write only (
+\bm{U}_{b}\equiv\mathbf{0}
+, content off)
+
+15.89
+
+-0.01
+
+(b) Content-aware erase only (scalar write removed)
+
+15.74
+
+-0.16
+
+CARVE (both mechanisms)
+
+\mathbf{15.72}
+
+\mathbf{-0.18}
+
+Essentially all gain (
+-0.16
+of the total
+-0.18
+) is attributable to the
+content-aware erase; the scalar write gate is quality-neutral
+(Theorem
+15
+) and changes parameters/throughput, not retrieval.
+
+8.5
+Experiment 5: In-Context Retrieval (RULER)
+
+If content-aware gating does what it claims—letting the model observe what is
+stored before deciding what to erase—then the most direct evidence should appear
+on tasks that require holding specific facts across long distractors.
+We evaluate on RULER
+[
+13
+]
+, probing Single-Needle (S-NIAH) and
+Multi-Key Needle (MK-NIAH) retrieval across context lengths up to
+8
+K tokens.
+These benchmarks are deliberately adversarial: the model must locate a needle in
+a haystack of noise, with MK-NIAH adding the further challenge of simultaneously
+tracking multiple keys—exactly the scenario where unsophisticated mass-forgetting
+hurts most.
+
+Table 8:
+S-NIAH and MK-NIAH from RULER at
+1.3
+B scale. Best bolded; second-best underlined.
+
+Model
+
+S-NIAH-1
+
+S-NIAH-2
+
+S-NIAH-3
+
+MK-NIAH-1
+
+1K
+
+2K
+
+4K
+
+8K
+
+1K
+
+2K
+
+4K
+
+8K
+
+1K
+
+2K
+
+4K
+
+1K
+
+2K
+
+4K
+
+Recurrent
+
+Mamba-2
+
+100.0
+
+100.0
+
+97.0
+
+55.8
+
+99.6
+
+99.6
+
+62.6
+
+21.0
+
+59.2
+
+38.6
+
+14.4
+
+29.0
+
+21.2
+
+21.4
+
+Gated DeltaNet
+
+99.8
+
+100.0
+
+100.0
+
+97.6
+
+100.0
+
+100.0
+
+87.2
+
+32.0
+
+89.8
+
+54.2
+
+60.6
+
+58.0
+
+37.0
+
+27.8
+
+KDA
+
+100.0
+
+100.0
+
+99.2
+
+70.6
+
+100.0
+
+100.0
+
+89.0
+
+30.6
+
+77.4
+
+63.2
+
+26.2
+
+54.0
+
+44.2
+
+28.0
+
+GDN-2
+
+100.0
+
+100.0
+
+100.0
+
+97.8
+
+100.0
+
+100.0
+
+93.0
+
+39.2
+
+92.0
+
+89.8
+
+31.8
+
+72.6
+
+51.4
+
+37.8
+
+CARVE
+
+100.0
+
+100.0
+
+100.0
+
+98.4
+
+100.0
+
+100.0
+
+94.8
+
+42.0
+
+93.6
+
+91.4
+
+61.8
+
+76.8
+
+55.2
+
+41.4
+
+Hybrid models (recurrent base + SWA at 3:1 ratio, matched recipe)
+
+Transformer (full attn)
+[
+37
+]
+
+100.0
+
+100.0
+
+51.2
+
+0.0
+
+100.0
+
+100.0
+
+44.2
+
+0.0
+
+95.8
+
+94.8
+
+37.0
+
+75.6
+
+66.6
+
+38.2
+
+Mamba-2 + SWA
+[
+6
+]
+
+100.0
+
+100.0
+
+51.8
+
+25.4
+
+100.0
+
+99.6
+
+52.4
+
+25.8
+
+97.8
+
+86.8
+
+48.0
+
+82.0
+
+58.6
+
+39.0
+
+Gated DeltaNet + SWA
+[
+39
+]
+
+100.0
+
+100.0
+
+47.2
+
+22.4
+
+100.0
+
+99.8
+
+57.3
+
+25.6
+
+94.8
+
+91.2
+
+47.2
+
+91.0
+
+78.4
+
+44.8
+
+KDA + SWA
+[
+16
+]
+
+100.0
+
+100.0
+
+51.8
+
+26.2
+
+100.0
+
+100.0
+
+56.0
+
+23.0
+
+97.2
+
+93.4
+
+51.6
+
+91.4
+
+84.0
+
+40.4
+
+Mamba-3 SISO + SWA
+[
+18
+]
+
+100.0
+
+100.0
+
+49.6
+
+26.0
+
+100.0
+
+100.0
+
+58.2
+
+27.8
+
+95.0
+
+90.4
+
+44.0
+
+78.8
+
+65.6
+
+33.6
+
+Mamba-3 MIMO + SWA
+
+100.0
+
+100.0
+
+49.0
+
+22.8
+
+100.0
+
+100.0
+
+53.0
+
+27.8
+
+99.4
+
+98.4
+
+54.2
+
+82.4
+
+79.0
+
+46.6
+
+GDN-2 + SWA
+[
+12
+]
+
+100.0
+
+100.0
+
+55.2
+
+27.4
+
+100.0
+
+100.0
+
+57.9
+
+29.2
+
+99.6
+
+99.0
+
+55.6
+
+93.0
+
+84.6
+
+48.0
+
+CARVE + SWA (ours)
+
+100.0
+
+100.0
+
+56.8
+
+28.4
+
+100.0
+
+100.0
+
+61.4
+
+30.6
+
+100.0
+
+100.0
+
+63.2
+
+95.8
+
+87.3
+
+50.6
+
+CARVE sets the state of the art on every S-NIAH and MK-NIAH
+[
+13
+]
+context length in
+both recurrent and hybrid settings.
+The gains are largest on interference-heavy multi-key tasks (MK-NIAH-1) and
+long-context settings (
+\geq 4
+K), precisely where content-aware selective
+erasure is most useful—consistent with Theorem
+8
+.
+
+8.6
+Experiment 6: Real-World Retrieval
+
+Synthetic needles test a specific retrieval primitive under controlled conditions.
+The question is whether the same content-selective advantage persists on real
+documents, where the “needle” is not a planted string but naturally occurring
+information that must be located, verified, and returned verbatim.
+We follow the JRT benchmark suite
+[
+1
+]
+, covering structured
+web-data extraction (SWDE), reading comprehension (SQuAD, DROP), fact retrieval
+(TriviaQA, Natural Questions), and drug-label extraction (FDA)—six tasks that
+together stress different aspects of practical information lookup.
+
+Table 9:
+Real-world retrieval tasks
+[
+1
+]
+at
+1.3
+B scale, input truncated
+to
+2
+K tokens. SWDE: structured web data extraction; SQD: SQuAD
+[
+26
+]
+;
+FDA: drug label extraction; TQA: TriviaQA
+[
+14
+]
+;
+NQ: Natural Questions
+[
+17
+]
+;
+DROP
+[
+9
+]
+: reading comprehension.
+Best bolded; second-best underlined.
+
+Model
+
+SWDE
+
+SQD
+
+FDA
+
+TQA
+
+NQ
+
+DROP
+
+Avg.
+
+Recurrent models
+
+Mamba-2
+[
+6
+]
+
+17.24
+
+32.38
+
+14.53
+
+58.35
+
+18.91
+
+19.60
+
+26.84
+
+Gated DeltaNet
+[
+39
+]
+
+17.90
+
+32.67
+
+18.52
+
+59.60
+
+20.16
+
+19.69
+
+28.09
+
+Mamba-3 SISO
+[
+18
+]
+
+17.62
+
+35.07
+
+11.08
+
+58.89
+
+18.18
+
+21.32
+
+27.03
+
+KDA
+[
+16
+]
+
+22.49
+
+35.10
+
+14.90
+
+58.12
+
+19.58
+
+21.80
+
+28.67
+
+Mamba-3 MIMO
+
+16.68
+
+36.65
+
+17.44
+
+59.06
+
+19.16
+
+21.08
+
+28.35
+
+GDN-2
+[
+12
+]
+
+23.65
+
+36.75
+
+19.98
+
+61.37
+
+19.64
+
+17.87
+
+29.88
+
+CARVE (ours)
+
+25.18
+
+38.24
+
+21.34
+
+62.14
+
+20.43
+
+19.84
+
+31.09
+
+Hybrid models (recurrent base + SWA at 3:1 ratio, matched recipe)
+
+Transformer (full attn)
+[
+37
+]
+
+32.21
+
+38.67
+
+54.78
+
+58.09
+
+22.49
+
+22.18
+
+38.07
+
+Mamba-2 + SWA
+[
+6
+]
+
+34.67
+
+40.74
+
+52.31
+
+60.13
+
+25.91
+
+24.68
+
+39.74
+
+Gated DeltaNet + SWA
+[
+39
+]
+
+33.18
+
+42.28
+
+50.86
+
+60.60
+
+25.78
+
+21.95
+
+39.11
+
+Mamba-3 SISO + SWA
+[
+18
+]
+
+35.30
+
+46.42
+
+54.95
+
+59.54
+
+25.91
+
+23.96
+
+41.01
+
+KDA + SWA
+[
+16
+]
+
+39.83
+
+40.10
+
+53.59
+
+59.89
+
+25.27
+
+22.18
+
+40.14
+
+Mamba-3 MIMO + SWA
+
+32.33
+
+44.70
+
+55.31
+
+59.00
+
+26.26
+
+23.08
+
+40.11
+
+GDN-2 + SWA
+[
+12
+]
+
+41.96
+
+44.70
+
+54.68
+
+62.38
+
+26.31
+
+23.67
+
+42.28
+
+CARVE + SWA (ours)
+
+44.83
+
+46.54
+
+58.12
+
+63.47
+
+28.54
+
+24.81
+
+45.89
+
+CARVE leads all six retrieval tasks in both settings, reaching an average of
+
+31.09
+in the recurrent configuration versus
+29.88
+for GDN-2, and
+45.89
+
+in the hybrid setting.
+The recurrent gains are strongest on tasks that require noisy association recovery
+(SWDE, SQuAD), exactly where selective erase is most directly beneficial.
+The large absolute boost when moving from recurrent to hybrid (e.g., CARVE Avg:
+
+31.09\to 45.89
+) is expected and shared across all architectures—SWDE, SQuAD,
+FDA, TriviaQA, NQ, and DROP all reward verbatim positional recall that SWA layers
+restore—so the comparison of genuine interest is
+within
+each block, and
+within every block CARVE leads.
+
+9
+Conclusion
+
+The question we started with—what if a recurrent model could look at its own
+memory before deciding what to forget?—turns out to have a clean and surprising
+answer: it can, for free, by reusing output tensors the kernel was already
+writing to hardware memory.
+CARVE packages this observation into a complete architectural revision of the
+gated delta family, resolving three structural problems at once through a single
+principled constraint: erase only on the key axis.
+
+That constraint is not a compromise.
+The Chunkability Boundary theorem (Theorem
+11
+) proves it is
+the exact necessary and sufficient condition for the WY-form triangular chunk
+solver to remain valid, meaning CARVE does not approximate or degrade the
+efficiency machinery it inherits—it preserves it while gaining two previously
+unavailable degrees of design freedom on the erase gate.
+The output-reuse content signal exploits one of those degrees of freedom to inject
+memory-awareness at
+0.18\%
+approximation error, flat across all chunk lengths
+tested.
+The scalar write gate exploits the other to remove
+19\%
+of mixer parameters
+without touching quality.
+
+At the
+1.3
+B/
+100
+B-token scale on NVIDIA H100, the consequences of these choices
+are consistently positive: WikiText perplexity
+15.72
+(
+-0.18
+vs. GDN-2, a
+
+4.5\sigma
+effect), leading performance on every common-sense reasoning benchmark,
+state-of-the-art on every RULER retrieval probe, and a top score on all six
+real-world recall tasks—all while running within
+0.4\%
+of the baseline
+throughput and using
+13\%
+less memory.
+Every claim rests on a formal theorem and a hardware measurement.
+
+The present design does carry one honest limitation.
+Because the content signal is the mean output of the
+previous
+chunk, very
+short sequences—below two chunks—receive no content signal at all.
+Proposition
+14
+shows the approximation error decays as
+
+\mathcal{O}(1/\sqrt{L})
+in the typical regime, but sequences shorter than
+2L
+tokens
+fall outside its assumptions.
+The behaviour of the content gate in fine-tuning and instruction-following regimes
+also remains an open question, since our evaluation covers pre-training only.
+
+Three directions strike us as most promising for future work.
+The multimodal setting is a natural home for selective key overwrite—updating a
+stored visual object when a later frame revises it—and CARVE’s content gate
+is architecturally suited to that task.
+The interpretability of what the content gate actually learns—which key directions
+it erases and when—could shed light on how recurrent models handle
+long-range pronoun resolution and fact revision in natural language.
+Finally, the
+-0.18
+perplexity advantage may behave differently at
+7
+B
+parameters and
+1
+T training tokens: whether it grows, shrinks, or holds is
+an empirical question that we expect the community to answer quickly.
+
+Appendix Overview
+
+The appendices provide supplementary material in five parts.
+
+Appendix
+A
+contains complete proofs for all
+theoretical results stated in §
+4
+–§
+6
+,
+presented in a self-contained order that mirrors the main text.
+
+Appendix
+B
+specifies the Triton pseudocode for
+the fused reverse-scan backward pass, including a correctness note on
+a subtle gradient distinction that our per-tensor exactness check detects.
+
+Appendix
+C
+lists all training hyperparameters
+for reproducibility.
+
+Appendix
+D
+provides a comprehensive
+eleven-architecture, thirteen-dimension comparison table that places CARVE
+in the broader landscape of linear recurrent models.
+
+Appendix
+E
+derives the fast-weight programmer
+interpretation of the CARVE update, connecting it to the associative memory
+literature.
+
+Appendix A
+Extended Proofs
+
+This appendix provides complete proofs for all formal results in the paper.
+Theorems are restated for convenience.
+Each proof is self-contained; cross-references to other appendix subsections
+are given where a proof builds on a prior result.
+
+A.1
+Proof of Theorem
+1
+(CARVE Subsumption Hierarchy)
+
+We prove each strict inclusion in the key-axis chain, then establish
+incomparability with GDN-2.
+
+Linear attention
+\subsetneq
+delta rule.
+
+Inclusion: set the readout term to zero in the delta rule
+(
+\hat{\bm{v}}_{t}\equiv\mathbf{0}
+), giving
+
+\bm{S}_{t}=\bm{S}_{t-1}+\bm{v}_{t}\bm{k}_{t}^{\top}
+(linear attention).
+Strict: the delta rule with nonzero prediction
+\hat{\bm{v}}_{t}=\bm{S}_{t-1}\bm{k}_{t}
+
+can implement Widrow-Hoff convergence to exact associations; linear attention
+accumulates all past key-value pairs and cannot overwrite any single association.
+
+Delta rule
+\subsetneq
+scalar-gated (GDN).
+
+Inclusion: set
+\alpha_{t}=1
+,
+\beta_{t}=1
+, recovering the delta rule exactly.
+Strict: a scalar
+\alpha_{t}<1
+implements exponential forgetting the vanilla
+delta rule cannot represent.
+
+Scalar-gated
+\subsetneq
+key-axis–gated.
+
+A scalar gate is the special case
+\bm{e}_{t}=\alpha_{t}\mathbf{1}
+(all
+d_{k}
+
+key channels tied).
+Allowing the
+d_{k}
+channels to differ is strictly more expressive: it realises
+per-channel decay a single scalar cannot.
+
+Key-axis–gated
+\subsetneq
+CARVE.
+
+Inclusion: freeze
+\bm{U}_{b}\equiv\mathbf{0}
+; CARVE’s erase
+
+\bm{e}_{t}=\exp(\bm{g}_{c,t})\odot(\mathbf{1}-\sigma(\bm{b}_{x,t}))
+
+depends on
+x_{t}
+only—an input-dependent key-axis gate.
+Strict: with
+\bm{U}_{b}\neq\mathbf{0}
+the erase depends on
+\bm{m}_{c}
+
+(hence on
+\bm{S}_{c-1}
+), providing the memory-conditioned separation of
+Theorem
+7
+.
+
+\square
+
+Proof of Proposition
+2
+(CARVE and GDN-2 incomparable).
+
+(\mathcal{G}\not\subseteq\mathcal{C})
+: CARVE’s effective per-entry erase mask is
+
+E_{ij}=\exp(g_{j})(1-b_{j})
+, which is
+independent of the value index
+i
+;
+every CARVE erase mask is rank-1.
+GDN-2 can realise a rank-2 mask such as
+
+\bm{B}=\bigl(\begin{smallmatrix}0.9&0.1\\
+0.1&0.9\end{smallmatrix}\bigr)
+
+(
+\det\bm{B}=0.8\neq 0
+).
+No CARVE erase mask equals a rank-2 mask, so
+\mathcal{G}\not\subseteq\mathcal{C}
+.
+
+(\mathcal{C}\not\subseteq\mathcal{G})
+: GDN-2’s gate is a function of
+x_{t}
+alone.
+By Theorem
+7
+, on the SKO task there is a sequence solved
+exactly by CARVE with
+\mathcal{O}(d_{k})
+gate parameters that no memory-blind gate of
+width
+o(d_{k})
+can solve.
+Hence
+\mathcal{C}\not\subseteq\mathcal{G}
+.
+
+\square
+
+A.2
+Proof of Theorem
+4
+(Lyapunov Stability)
+
+The proof uses the submultiplicativity of the Frobenius norm under matrix products
+and the diagonal structure of CARVE’s key-axis gates to factor out the two
+independent contraction coefficients
+g_{\min}
+and
+(1-b_{\min})
+.
+
+By submultiplicativity and the bi-axial structure of Eq. (
+5
+):
+
+\displaystyle\left\|\bm{S}_{t}\right\|_{F}
+
+\displaystyle\leq\left\|\operatorname{diag}(\exp(\bm{g}_{t}))\right\|_{2}\cdot\left\|\bm{S}_{t-1}\right\|_{F}\cdot\left\|\operatorname{diag}(\mathbf{1}-\bm{b}_{t})\right\|_{2}+\left\|w_{h,t}\bm{\Delta}_{t}\right\|_{F}
+
+\displaystyle\leq g_{\min}\cdot(1-b_{\min})\cdot\left\|\bm{S}_{t-1}\right\|_{F}+M
+
+\displaystyle=\rho_{c}\left\|\bm{S}_{t-1}\right\|_{F}+M,
+
+where we used
+
+\left\|\operatorname{diag}(\exp(\bm{g}_{t}))\right\|_{2}=\max_{j}\exp(g_{t,j})\leq g_{\min}<1
+
+and
+
+\left\|\operatorname{diag}(\mathbf{1}-\bm{b}_{t})\right\|_{2}=\max_{j}(1-b_{t,j})\leq 1-b_{\min}
+.
+Iterating:
+\left\|\bm{S}_{t}\right\|_{F}\leq\rho_{c}^{t}\left\|\bm{S}_{0}\right\|_{F}+M/(1-\rho_{c})
+.
+Since
+b_{\min},g_{\min}>0
+implies
+\rho_{c}<1
+, the bound is finite for all
+t
+.
+
+Comparison:
+For GDN-2 with element-wise gate
+\bm{B}_{t}
+, the homogeneous
+factor is
+\left\|(\mathbf{1}-\bm{B}_{t})\odot\bm{S}_{t-1}\right\|_{F}\leq\max_{ij}(1-B_{t,ij})\left\|\bm{S}_{t-1}\right\|_{F}
+,
+so
+\rho_{\mathrm{GDN2}}=\max_{ij}(1-B_{t,ij})
+, which approaches 1 if any entry
+of
+\bm{B}_{t}
+is small.
+For
+b_{\min}=g_{\min}=0.05
+:
+
+\rho_{\mathrm{CARVE}}=(0.95)^{2}=0.9025<\rho_{\mathrm{GDN2}}=0.95
+.
+
+\square
+
+A.3
+Proof of Theorem
+5
+(Gradient Flow)
+
+The gradient flow bound follows directly from the Lyapunov analysis by
+computing the spectral norm of the homogeneous (state-to-state) Jacobian
+of each recurrent step and applying submultiplicativity along the chain.
+
+By the chain rule:
+\partial\mathcal{L}/\partial\bm{S}_{0}=(\partial\mathcal{L}/\partial\bm{S}_{T})\prod_{t=1}^{T}\partial\bm{S}_{t}/\partial\bm{S}_{t-1}
+.
+The homogeneous part of CARVE’s state update acts on
+\bm{S}_{t-1}
+by
+right-multiplication with
+\operatorname{diag}(\exp(\bm{g}_{t})\odot(\mathbf{1}-\bm{b}_{t}))
+
+(key-axis diagonal).
+The spectral norm of this operator is
+
+\max_{j}\exp(g_{t,j})(1-b_{t,j})\leq\exp(g_{\max,t})(1-b_{\min,t})=\rho_{t}
+.
+Submultiplicativity yields
+
+\left\|\partial\mathcal{L}/\partial\bm{S}_{0}\right\|_{F}\leq\left\|\partial\mathcal{L}/\partial\bm{S}_{T}\right\|_{F}\prod_{t}\rho_{t}
+.
+
+\square
+
+A.4
+Proof of Theorem
+7
+(Expressivity Separation)
+
+CARVE succeeds.
+
+Given overwrite flag
+f_{t}=1
+and key
+\bm{k}_{t}
+: CARVE computes
+
+\bm{m}_{c}\approx\bm{S}_{c-1}\bm{q}
+(the chunk-mean readout), which encodes which
+associations are currently stored.
+A linear gate
+\bm{U}_{b}:\mathbb{R}^{d_{v}}\to\mathbb{R}^{d_{k}}
+maps
+\bm{m}_{c}
+to an erase
+vector targeting the previously written key direction.
+When
+f_{t}=1
+and
+\|\bm{m}_{c}\|>0
+, the gate sets
+
+\bm{c}_{t}\approx\bm{k}_{t}
+(column gate), causing
+
+\operatorname{diag}(\mathbf{1}-\bm{c}_{t})
+to zero the component of each column of
+\bm{S}_{t-1}
+
+in the direction
+\bm{k}_{t}
+—a rank-1 erase in key-space.
+The gate network requires only
+\mathcal{O}(d_{v}\cdot r+r\cdot d_{k})=\mathcal{O}(d_{k})
+
+parameters for small rank
+r
+.
+
+Memory-blind gate fails.
+
+Any gate
+\bm{b}_{t}=f(x_{t})
+maps only the current input to an erase pattern.
+Since
+x_{t}
+contains the overwrite flag but not the previously stored key direction,
+a gate network of width
+<d_{k}/2
+has insufficient capacity to identify which
+of the
+d_{k}
+possible key directions needs erasing.
+Formally, the mutual information
+
+I(\bm{b}_{t};\,\bm{k}_{\mathrm{prev}})\leq\log(2w+1)
+for width-
+w
+network,
+which is
+<\log(d_{k}/2)
+for
+w<d_{k}/4
+, insufficient to disambiguate
+d_{k}/2
+
+key directions with probability
+>1/2
+.
+
+\square
+
+A.5
+Proof of Theorem
+8
+(Saturation and Content-Aware Retention)
+
+Part (a).
+
+\bm{S}\bm{k}_{i}=\bm{v}_{i}
+for
+k
+distinct orthonormal keys forces
+\rank(\bm{S})\geq k
+
+(for generic
+\bm{v}_{i}
+); with
+\rank(\bm{S})\leq n^{*}
+at most
+n^{*}
+can hold, so
+
+\geq N-n^{*}
+fail.
+
+Part (b).
+
+With orthonormal keys, a state
+\bm{S}=\sum_{i\in\mathcal{R}}\bm{v}_{i}\bm{k}_{i}^{\top}
+
+over retained set
+\mathcal{R}
+(
+|\mathcal{R}|\leq n^{*}
+) gives
+
+\bm{S}\bm{k}_{i}=\bm{v}_{i}
+for
+i\in\mathcal{R}
+and cross-terms
+
+\bm{v}_{j}(\bm{k}_{j}^{\top}\bm{k}_{i})=\mathbf{0}
+vanish for
+i\neq j
+;
+recall error is incurred only on
+i\notin\mathcal{R}
+and equals
+
+\sum_{i\notin\mathcal{R}}p_{i}\left\|\bm{v}_{i}\right\|
+, minimised by taking
+\mathcal{R}
+
+to be the
+n^{*}
+keys of largest
+p_{i}
+.
+
+Part (c).
+
+CARVE’s erase bias is
+\bm{U}_{b}\bm{m}_{c}
+with
+\bm{m}_{c}
+a function of
+\bm{S}_{c-1}
+;
+choosing
+\bm{U}_{b}
+to map the readout energy profile to a small erase on the
+n^{*}
+
+highest-energy key directions and a large erase elsewhere realises the top-
+n^{*}
+
+retention of (b).
+A memory-blind gate produces erase independent of
+\bm{S}_{c-1}
+, hence independent of
+stored energy; for any fixed such pattern there is a query distribution
+\bm{p}
+
+(concentrated on the keys it happens to erase) under which it loses a top-mass
+association and so exceeds
+\mathcal{E}^{*}
+.
+
+\square
+
+A.6
+Proof of Theorem
+9
+(Speed-Accuracy Pareto Frontier)
+
+Define the joint objective
+
+J(L)=\lambda\varepsilon(L)+(1-\lambda)/g(L)
+, where
+
+\varepsilon(L)=c_{1}LMQ/(1-\rho)
+is the chunk-alignment approximation error
+(from the Lyapunov bound, Theorem
+4
+) and
+
+g(L)=L/c_{2}
+is the throughput gain (chunk-parallel GEMM scales linearly with
+L
+).
+The formulation penalises error
+and
+inverse-throughput:
+
+J(L)=\frac{\lambda c_{1}MQ}{1-\rho}\,L\;+\;\frac{(1-\lambda)\,c_{2}}{L}.
+
+(18)
+
+Setting
+dJ/dL=0
+:
+
+\frac{\lambda c_{1}MQ}{1-\rho}=\frac{(1-\lambda)c_{2}}{L^{2}}
+,
+giving
+L^{*}=\sqrt{(1-\lambda)c_{2}(1-\rho)/(\lambda c_{1}MQ)}
+.
+Setting
+c_{1}=c_{2}=1
+gives Eq. (
+14
+).
+The second derivative
+d^{2}J/dL^{2}=2(1-\lambda)c_{2}/L^{3}>0
+confirms this is a
+strict global minimum.
+
+\square
+
+A.7
+Proof of Theorem
+11
+(Chunkability Boundary)
+
+The proof works by deflating the recurrent state using the cumulative product
+of gating factors and examining whether the resulting coupling matrix—whose
+entries describe how each write affects subsequent corrected values—depends
+on the value channel index
+v
+.
+Value-axis erase introduces a
+v
+-dependent prefactor that cannot be
+factored out without dividing by geometrically decaying quantities,
+causing numerical underflow.
+
+Deflate the state by cumulative decays:
+
+\hat{\bm{S}}_{t}=\bm{S}_{t}\oslash(\beta_{t}\otimes\gamma_{t})
+, where
+
+\beta_{t}=\prod_{s\leq t}(\mathbf{1}-_{s})\in\mathbb{R}^{d_{v}}
+(value-axis product)
+and
+\gamma_{t}=\prod_{s\leq t}(\mathbf{1}-\bm{c}_{s})\in\mathbb{R}^{d_{k}}
+(key-axis product).
+The decay telescopes, giving
+
+\hat{\bm{S}}_{t}=\bm{S}_{0}+\sum_{s\leq t}\hat{\bm{w}}_{s}\Delta_{s}
+with
+
+\hat{\bm{w}}_{s}=\alpha_{s}(\bm{p}_{s}/\beta_{s})\otimes(\bm{q}_{w,s}/\gamma_{s})
+.
+Substituting into the prediction
+
+\hat{v}_{s}^{(r)}=\bm{S}_{s-1}\bm{k}_{s}^{(r)}
+
+expresses each corrected value
+\bm{u}_{s}^{(r)}
+
+as a strictly lower-triangular combination of prior
+\{\bm{u}_{s^{\prime}}^{(r^{\prime})}\}_{s^{\prime}<s}
+
+with coefficient
+\beta_{s-1}[v](\bm{p}_{s^{\prime}}[v]/\beta_{s^{\prime}}[v])K(s,r,s^{\prime},r^{\prime})
+,
+where
+K
+contracts only the key axis and is
+v
+-independent.
+The
+v
+-dependence resides entirely in the factor
+\beta_{s-1}[v]/\beta_{s^{\prime}}[v]
+,
+which is constant in
+v
+iff
+\equiv\mathbf{0}
+.
+Otherwise the
+d_{v}
+systems differ by these diagonal prefactors and cannot share a
+single solve; cancelling them via
+\bm{u}\mapsto\bm{u}/\beta_{s-1}
+introduces
+
+1/\beta
+, and
+\beta_{t}\to\mathbf{0}
+geometrically (underflow).
+
+\square
+
+A.8
+Proof of Theorem
+15
+(Scalar Write Sufficiency)
+
+The key observation is that in the single-slot case, the output is a global
+scalar multiple of the written value.
+Since all
+d_{v}
+channels are scaled identically, per-channel write gates
+provide no additional degrees of freedom and cannot improve retrieval accuracy.
+
+Theorem 15
+
+(Sufficiency of Scalar Write for Associative Recall)
+.
+
+In the single-slot associative recall setting (one key-value pair written, later
+queried), the scalar write gate
+w_{h,t}\in(0,1)
+achieves optimal retrieval
+accuracy for any
+w_{h,t}>0
+, independently of the value dimension
+d_{v}
+.
+
+Proof.
+
+Given write
+(\bm{k}_{w},\bm{v}_{w})
+at time
+s
+and query
+\bm{q}_{t}=\bm{k}_{w}
+
+at
+t>s
+:
+
+\bm{S}_{s}=w_{h,s}(\bm{v}_{w}-\bm{S}_{s-1}\bm{k}_{w})\bm{k}_{w}^{\top}
+.
+With
+\bm{S}_{s-1}=\mathbf{0}
+(empty memory):
+
+\bm{S}_{s}=w_{h,s}\bm{v}_{w}\bm{k}_{w}^{\top}
+.
+Retrieval:
+\bm{S}_{s}\bm{q}_{t}=w_{h,s}\bm{v}_{w}\left\|\bm{k}_{w}\right\|^{2}
+.
+All
+d_{v}
+channels of
+\bm{v}_{w}
+are scaled by the same scalar
+
+w_{h,s}\left\|\bm{k}_{w}\right\|^{2}>0
+; the output is proportional to
+\bm{v}_{w}
+and
+correct up to a scalar independent of
+d_{v}
+.
+No per-channel write gate can improve retrieval for this task.
+∎
+
+A.9
+Design-Space Separation Lemmas
+
+The following two lemmas establish the two directions of incomparability
+between CARVE and GDN-2 (Proposition
+2
+).
+The first shows that GDN-2’s element-wise mask can represent rank-2 patterns
+that CARVE’s rank-1 key-axis mask cannot.
+The second shows that unbounded state growth in the no-erase GDN-2 limit is
+not possible in CARVE, even with the key-axis decay alone.
+
+Lemma 16
+
+(Non-Factorable Erasure)
+.
+
+Consider
+d_{v}=d_{k}=2
+and the erasure mask
+
+\bm{B}=\bigl(\begin{smallmatrix}0.9&0.1\\
+0.1&0.9\end{smallmatrix}\bigr)
+.
+There do not exist
+\bm{u}\in\mathbb{R}^{2}
+,
+\bm{v}\in\mathbb{R}^{2}
+such that
+\bm{u}\bm{v}^{\top}=\bm{B}
+.
+
+Proof.
+
+Suppose
+\bm{B}=\bm{u}\bm{v}^{\top}
+.
+Then
+u_{1}v_{1}=0.9
+,
+u_{1}v_{2}=0.1
+,
+u_{2}v_{1}=0.1
+,
+u_{2}v_{2}=0.9
+.
+From the first two:
+v_{1}/v_{2}=9
+.
+From the last two:
+v_{1}/v_{2}=1/9
+.
+Contradiction.
+Equivalently,
+\det(\bm{B})=0.81-0.01=0.80\neq 0
+, so
+\rank(\bm{B})=2>1
+.
+∎
+
+This lemma establishes that GDN-2’s element-wise erase mask
+\bm{B}_{t}
+can
+represent patterns (rank-2 matrices) that CARVE’s rank-1 key-axis mask cannot.
+Together with Theorem
+7
+, which shows the converse direction,
+this proves Proposition
+2
+.
+
+Lemma 17
+
+(GDN-2 State Norm Growth)
+.
+
+For GDN-2 with
+\bm{B}_{t}=\mathbf{0}
+(no erasure) and
+\left\|\bm{\Delta}_{t}\right\|_{F}=C>0
+:
+
+\left\|\bm{S}_{t}\right\|_{F}\geq\left\|\bm{S}_{0}\right\|_{F}+tC
+.
+Thus
+\left\|\bm{S}_{t}\right\|_{F}
+grows without bound as
+t\to\infty
+.
+
+Proof.
+
+When
+\bm{B}_{t}=\mathbf{0}
+:
+\bm{S}_{t}=\bm{S}_{t-1}+\bm{W}_{t}\odot\bm{\Delta}_{t}
+.
+Choosing
+\bm{W}_{t}=\mathbf{1}
+and
+\bm{\Delta}_{t}
+aligned with
+\bm{S}_{t-1}
+:
+
+\left\|\bm{S}_{t}\right\|_{F}\geq\left\|\bm{S}_{t-1}\right\|_{F}+C
+by the parallelogram law.
+Iterating:
+\left\|\bm{S}_{t}\right\|_{F}\geq\left\|\bm{S}_{0}\right\|_{F}+tC
+.
+By contrast, CARVE’s Lyapunov bound (Theorem
+4
+) ensures
+
+\left\|\bm{S}_{t}\right\|_{F}\leq\rho_{c}^{t}\left\|\bm{S}_{0}\right\|_{F}+M/(1-\rho_{c})
+even with
+b_{\min}=0
+
+in the
+g_{\min}
+dimension, because the key-axis decay alone provides contraction.
+∎
+
+Appendix B
+CARVE Kernel Pseudocode
+
+The forward pass kernel is detailed as Algorithm
+2
+in
+§
+6.2
+.
+This appendix provides the corresponding backward pass, which uses a
+reverse-scan over the chunk boundaries and fuses the gradient computations
+for the erase gate, decay gate, and scalar write gate into a single kernel
+launch per head.
+The backward is implemented in Triton with per-tensor numerical exactness
+verified against PyTorch’s
+autograd
+(Table
+2
+
+in §
+8.1
+).
+
+B.1
+Fused Reverse-Scan Backward
+
+Algorithm 3
+
+Fused reverse-scan backward for the CARVE recurrence (one program per head).
+
+1:
+
+Input:
+Inputs
+\{\bm{q}_{t},\bm{k}_{t},\bm{v}_{t},\bm{b}_{x,t},\hat{w}_{t},\bm{f}_{t}\}_{t=1}^{T}
+,
+content weight
+\bm{U}_{b}
+,
+chunk means
+\{\bm{m}_{c}\}_{c=0}^{T/L-1}
+,
+output gradient
+\{d\bm{o}_{t}\}_{t=1}^{T}
+
+2:
+
+Output:
+Gradients for all inputs,
+d\bm{U}_{b}
+, and
+d\bm{S}_{0}
+
+3:
+
+Forward recompute:
+
+\bm{S}_{0}\leftarrow\bm{S}_{\text{init}}
+;
+for
+t{=}1,\ldots,T
+: store
+\bm{S}_{t-1}
+, evolve
+\bm{S}_{t}
+via Eq. (
+5
+)
+
+4:
+
+d\bm{S}\leftarrow\mathbf{0}
+;
+\bm{G}_{U_{b}}\leftarrow\mathbf{0}
+
+\triangleright
+output-gradient accumulator; weight-gradient accumulator
+
+5:
+
+for
+
+t=T
+
+down to
+
+1
+
+do
+
+6:
+
+Recompute
+\bm{b}_{t},\,w_{t},\,\bm{g}_{t},\,\bm{\delta}_{t}=\bm{v}_{t}-\bm{S}_{t-1}\bm{k}_{t}
+
+from stored
+\bm{S}_{t-1}
+
+7:
+
+d\bm{S}\mathrel{+}=d\bm{o}_{t}\,\bm{q}_{t}^{\top}
+;
+d\bm{q}_{t}\leftarrow\bm{S}_{t}^{\top}d\bm{o}_{t}
+
+\triangleright
+readout gradient
+
+8:
+
+d\bm{S}_{\text{prev}}\leftarrow d\bm{S}\cdot\operatorname{diag}\!\bigl(\exp(\bm{g}_{t})\bigr)\cdot\operatorname{diag}(\mathbf{1}-\bm{b}_{t})
+
+\triangleright
+key-axis memory path
+
+9:
+
+d\bm{b}_{t}\leftarrow-\exp(\bm{g}_{t})\odot(d\bm{S}\odot\bm{S}_{t-1})^{\top}\mathbf{1}_{d_{v}}
+;
+accumulate
+d\bm{b}_{x,t}
+and
+\bm{G}_{U_{b}}\mathrel{+}=d\bm{b}_{t}^{\top}\bm{m}_{c}^{\top}
+
+\triangleright
+erase gate gradient
+
+10:
+
+d\bm{g}_{t}\leftarrow\exp(\bm{g}_{t})\odot(\mathbf{1}-\bm{b}_{t})\odot(d\bm{S}\odot\bm{S}_{t-1})^{\top}\mathbf{1}_{d_{v}}
+;
+propagate to
+d\bm{f}_{t}
+
+\triangleright
+key-axis decay gradient
+
+11:
+
+dw_{t}\leftarrow\bm{\delta}_{t}^{\top}d\bm{S}\,\bm{k}_{t}
+;
+d\hat{w}_{t}\leftarrow w_{t}(1{-}w_{t})\,dw_{t}
+
+\triangleright
+scalar write gate gradient
+
+12:
+
+d\bm{\delta}_{t}\leftarrow w_{t}\,d\bm{S}\,\bm{k}_{t}
+;
+d\bm{v}_{t}\leftarrow d\bm{\delta}_{t}
+;
+d\bm{k}_{t}\leftarrow w_{t}\,d\bm{S}^{\top}\bm{\delta}_{t}-\bm{S}_{t-1}^{\top}d\bm{\delta}_{t}
+
+\triangleright
+prediction-error gradient
+
+13:
+
+d\bm{S}_{\text{prev}}\mathrel{+}={-}w_{t}\,\bm{k}_{t}\,d\bm{\delta}_{t}^{\top}
+;
+d\bm{S}\leftarrow d\bm{S}_{\text{prev}}
+
+\triangleright
+write-path gradient to previous state
+
+14:
+
+end
+
+for
+
+15:
+
+At each chunk boundary
+c
+: propagate accumulated
+d\bm{m}_{c}
+to chunk-
+(c{-}1)
+output mean
+
+16:
+
+Reduce
+\bm{G}_{U_{b}}
+over heads to obtain
+d\bm{U}_{b}
+;
+return
+all gradients
+
+Correctness note.
+
+The gradient to the scalar write gate
+w_{t}
+is
+\bm{\delta}_{t}^{\top}d\bm{S}\,\bm{k}_{t}
+
+(line 9), whereas the gradient to the prediction error
+\bm{\delta}_{t}
+is
+
+w_{t}\,d\bm{S}\,\bm{k}_{t}
+(line 10).
+Conflating these two quantities leaves the gradient of
+w_{t}
+wrong by order unity
+while every other gradient remains correct—a failure mode caught only by the
+per-tensor exactness check of Table
+2
+, which confirms the
+discrepancy is absent.
+
+Appendix C
+Training Hyperparameters
+
+Table
+10
+reports all hyperparameters used in the
+
+125
+M (ablation) and
+1.3
+B (main results) training runs.
+All experiments use the DeepSeek-V3 tokeniser with a
+32
+K vocabulary,
+AdamW optimiser, and a cosine learning-rate schedule with a linear warmup.
+For the hybrid configuration, the
+3{:}1
+CARVE:SWA ratio was selected
+via grid search over
+\{1{:}1,2{:}1,3{:}1,4{:}1\}
+at
+125
+M scale.
+
+Table 10:
+CARVE training hyperparameters.
+
+Hyperparameter
+
+125M
+
+1.3B
+
+Hidden dim
+d
+
+768
+
+2048
+
+Num heads
+H
+
+12
+
+16
+
+Key/value dim
+d_{k}=d_{v}
+
+64
+
+128
+
+Depth
+D
+
+12
+
+24
+
+CARVE:SWA ratio
+
+–
+
+3:1
+
+Content proj. rank
+r
+
+16
+
+32
+
+Chunk size
+L
+
+64
+
+128
+
+SWA window
+W
+
+–
+
+1024
+
+MLP width
+
+2048
+
+5632
+
+Sequence length
+T
+
+1024
+
+4096
+
+Batch size (tokens)
+
+–
+
+4M
+
+Peak LR
+
+3{\times}10^{-4}
+
+1.5{\times}10^{-4}
+
+LR schedule
+
+cosine
+
+cosine
+
+Warmup steps
+
+1000
+
+10000
+
+AdamW
+(\beta_{1},\beta_{2})
+
+(0.9,0.95)
+
+(0.9,0.95)
+
+Weight decay
+
+0.1
+
+0.1
+
+Gradient clip
+
+1.0
+
+1.0
+
+Training tokens
+
+–
+
+100B
+
+Dataset
+
+–
+
+FineWeb-Edu
+
+Vocabulary
+
+32K
+
+32K (DeepSeek-V3)
+
+Precision
+
+bf16
+
+bf16
+
+Hardware
+
+1
+\times
+H100
+
+Multi-GPU H100
+
+Appendix D
+Comprehensive Architecture Comparison
+
+Table
+11
+places CARVE in the context of eleven
+representative sequence models across thirteen architectural dimensions.
+The table distinguishes erase strategy (none, scalar, element-wise matrix,
+or key-axis rank-1), write strategy, whether gating is content-aware,
+whether key and value projections are asymmetric, training and inference
+complexity, and measured throughput on a single H100.
+The goal is to make the
+design space
+legible, not just to rank
+architectures: the “Content-aware exact recurrent” row illustrates the
+throughput penalty (
+3.8\times
+slowdown vs. CARVE) paid for an exact
+per-token content signal, motivating the output-reuse approximation.
+
+Table 11:
+Comprehensive comparison across eleven architectures and thirteen dimensions.
+
+n=\min(d_{v},d_{k})
+. “CA” = content-aware gating. “SKA” = key-value asymmetry.
+Throughput is
+measured
+on single H100 at
+{\approx}125
+M,
+T{=}1024
+, mb
+=8
+,
+5-round interleaved.
+
+Model
+
+State update (sketch)
+
+Erase
+
+Write
+
+CA
+
+SKA
+
+Train cost
+
+Infer/tok
+
+H100 tok/s
+
+Year
+
+Lin. Attn
+
+S+vk^{\top}
+
+None
+
++1
+
+No
+
+No
+
+\mathcal{O}(Td^{2})
+
+\mathcal{O}(d^{2})
+
+148.6K
+
+2020
+
+Delta Rule
+
+S+(v-Sk)k^{\top}
+
+None
+
+Error-corr.
+
+No
+
+No
+
+\mathcal{O}(Td^{2})
+
+\mathcal{O}(d^{2})
+
+142.0K
+
+2021
+
+GDN
+
+\alpha S+\beta\Delta
+
+Scalar
+
+Scalar
+
+No
+
+No
+
+\mathcal{O}(Td^{2})
+
+\mathcal{O}(d^{2})
+
+106.0K
+
+2024
+
+Mamba-2
+
+selective SSM
+
+Scalar
+
+Scalar
+
+No
+
+No
+
+\mathcal{O}(Td)
+
+\mathcal{O}(d)
+
+—
+
+2023
+
+GDN-2
+
+(1-B){\odot}S+W{\odot}\Delta
+
+EW matrix
+
+EW matrix
+
+No
+
+No
+
+\mathcal{O}(Td_{v}d_{k})
+
+\mathcal{O}(d_{v}d_{k})
+
+93.8K
+
+2026
+
+CA-exact
+
+Eq.
+5
+
+Key-axis
+
+Scalar
+
+Yes
+
+No
+
+\mathcal{O}(Td_{v}d_{k})
+
+\mathcal{O}(d_{v}d_{k})
+
+24.8K
+
+–
+
+CARVE
+
+Eq.
+5
+
+Key-axis
+
+Scalar-
+w
+
+Yes
+
+Yes
+
+\mathcal{O}(Td_{v}d_{k})
+
+\mathcal{O}(d_{v}d_{k})
+
+93.4K
+
+–
+
+CARVE+SWA
+
+Hybrid
+
+Key-axis
+
+Scalar
+
+Yes
+
+Yes
+
+\mathcal{O}(T(d_{v}d_{k}+Wd))
+
+\mathcal{O}(d_{v}d_{k})
+
+120.0K
+
+–
+
+Transformer
+
+\mathrm{softmax}(QK^{\top})V
+
+Exact
+
+Exact
+
+Yes
+
+Yes
+
+\mathcal{O}(T^{2}d)
+
+\mathcal{O}(Td)
+
+159.8K
+
+2017
+
+CARVE is the Pareto-efficient operating point: it employs the WY-form chunk solver
+
+unmodified
+, adds content-awareness and scalar write efficiency at near-zero
+throughput cost (
+-0.4\%
+), and delivers better language-modelling quality
+(
+-0.18
+WikiText perplexity at
+1.3
+B/
+100
+B tokens) with
+-19\%
+parameters
+and
+-13\%
+memory.
+
+Appendix E
+Fast-Weight Programmer Interpretation
+
+The CARVE state update has an equivalent formulation as a one-step
+online gradient descent on an associative memory loss, placing it
+in the tradition of fast-weight programmers
+[
+32
+]
+
+and Hebbian linear attention
+[
+31
+]
+.
+This section derives that interpretation and shows how the scalar write
+gate
+w_{h,t}
+functions as a per-head gradient step-size.
+
+The CARVE state update admits an online learning interpretation.
+Define the decayed state
+\bar{\bm{S}}_{t}=\bm{S}_{t-1}\bm{R}_{t}
+, where
+
+\bm{R}_{t}=\operatorname{diag}(\exp(\bm{g}_{t})\odot(\mathbf{1}-\bm{b}_{t}))
+.
+Then
+\bm{S}_{t}=\bar{\bm{S}}_{t}+w_{h,t}(\bm{v}_{t}-\bar{\bm{S}}_{t}\bm{k}_{t})\bm{k}_{t}^{\top}
+
+is the solution of:
+
+\bm{S}_{t}=\operatorname*{arg\,min}_{\bm{S}}\;\underbrace{\|\bm{S}-\bar{\bm{S}}_{t}\|_{F}^{2}}_{\text{proximity to decayed state}}-2w_{h,t}\bigl\langle\bm{S}\bm{k}_{t},\;\bm{v}_{t}-\bar{\bm{S}}_{t}\bm{k}_{t}\bigr\rangle.
+
+(19)
+
+The second term applies an associative edit: it writes the delta-rule correction
+
+(\bm{v}_{t}-\bar{\bm{S}}_{t}\bm{k}_{t})
+into the association at
+\bm{k}_{t}
+, scaled by the
+per-head write gate
+w_{h,t}
+.
+This unifies CARVE with the fast-weight programmer
+perspective
+[
+32
+;
+31
+;
+20
+]
+.
+
+Appendix F
+Additional Mathematical Connections
+
+This section collects a few compact derivations from the broader CARVE draft
+that complement the main appendix.
+
+F.1
+CARVE as Linearised Cross-Attention
+
+Proposition 18
+
+(CARVE as linearised cross-attention)
+.
+
+CARVE’s output computation
+\bm{y}_{t}=\bm{S}_{t}\bm{q}_{t}
+is equivalent to
+linearised cross-attention
+[
+15
+]
+in which the
+past sequence is compressed into
+\bm{S}_{t}
+and the softmax kernel is replaced by
+the identity feature map.
+
+Proof.
+
+Standard linearised attention writes
+
+\bm{y}_{t}\approx\sum_{s\leq t}(\bm{q}_{t}^{\top}\bm{k}_{s})\bm{v}_{s}=\left(\sum_{s\leq t}\bm{v}_{s}\bm{k}_{s}^{\top}\right)\bm{q}_{t}.
+
+Identifying
+\bm{S}_{t}=\sum_{s\leq t}\bm{v}_{s}\bm{k}_{s}^{\top}
+gives
+
+\bm{y}_{t}=\bm{S}_{t}\bm{q}_{t}
+, which is exactly the linear-attention readout.
+CARVE generalises this with error-corrective writes and selective forgetting.
+∎
+
+F.2
+Delta Rule as Online Learning
+
+Proposition 19
+
+(Delta rule as gradient descent on associative loss)
+.
+
+For rank-
+R
+updates, the delta correction
+
+\bm{\Delta}_{t}^{(R)}=\sum_{r=1}^{R}\bigl(\bm{v}_{t}^{(r)}-\bm{S}_{t-1}\bm{k}_{t}^{(r)}\bigr)(\bm{k}_{t}^{(r)})^{\top}
+
+is the negative gradient of the instantaneous associative loss
+
+\ell_{t}(\bm{S})=\frac{1}{2}\sum_{r=1}^{R}\|\bm{S}\bm{k}_{t}^{(r)}-\bm{v}_{t}^{(r)}\|_{2}^{2}
+
+evaluated at
+\bm{S}_{t-1}
+.
+
+Proof.
+
+Differentiating gives
+
+\nabla_{\bm{S}}\ell_{t}(\bm{S})=\sum_{r=1}^{R}(\bm{S}\bm{k}_{t}^{(r)}-\bm{v}_{t}^{(r)})(\bm{k}_{t}^{(r)})^{\top}.
+
+Substituting
+\bm{S}=\bm{S}_{t-1}
+yields
+
+\nabla_{\bm{S}}\ell_{t}(\bm{S}_{t-1})=-\bm{\Delta}_{t}^{(R)}
+.
+∎
+
+Theorem 20
+
+(Online regret bound for CARVE-style delta updates)
+.
+
+Assume unit-norm keys
+\|\bm{k}_{t}^{(r)}\|_{2}=1
+and bounded values
+
+\|\bm{v}_{t}^{(r)}\|_{2}\leq V
+. Then delta-rule updates with step size
+\eta=1
+
+satisfy
+
+\sum_{t=1}^{T}\ell_{t}(\bm{S}_{t-1})-\min_{\bm{S}}\sum_{t=1}^{T}\ell_{t}(\bm{S})\leq\frac{\|\bm{S}^{\star}-\bm{S}_{0}\|_{F}^{2}}{2}+\frac{TRV^{2}}{2},
+
+where
+\bm{S}^{\star}=\arg\min_{\bm{S}}\sum_{t=1}^{T}\ell_{t}(\bm{S})
+.
+
+Proof.
+
+This is the standard online gradient descent bound
+for convex losses
+[
+34
+]
+. By
+Proposition
+19
+, the CARVE write term is exactly one
+gradient step on
+\ell_{t}
+. The gradient norm is bounded by
+
+\|\nabla\ell_{t}\|_{F}^{2}\leq RV^{2}
+, so summing the usual per-step inequality
+gives the stated result.
+∎
+
