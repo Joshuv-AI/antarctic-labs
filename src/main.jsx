@@ -13,48 +13,75 @@ import { ScrollTrigger } from "gsap/ScrollTrigger";
 import "./styles.css";
 import "./shaders/threeui.css";
 import NewBackgroundVideo from "./components/NewBackgroundVideo.jsx";
-// Silent one-shot reload on chunk-load failure (2026-10-14). Deploys ship
-// new hashed chunk filenames; a cached index.html (or an interrupted fetch)
-// can reference a chunk that no longer exists, which otherwise renders a
-// blank page. On import() failure we reload exactly once: the fresh
-// index.html carries the current chunk graph, so the retry succeeds. The
-// flag makes the reload one-shot per failure chain — it is cleared on every
-// successful chunk load, so a later, unrelated failure still gets its own
-// single reload, and a reload can never loop. An in-memory fallback covers
-// environments where sessionStorage throws (private mode); the flag still
-// survives a real reload via sessionStorage, which is what breaks the loop.
+// Silent recovery on chunk-load failure (2026-10-14, hardened 2026-10-17).
+// Deploys ship new hashed chunk filenames; a cached index.html (or an
+// interrupted fetch) can reference a chunk that no longer exists, which
+// otherwise renders a blank page or the error panel.
+//
+// Two layers of defense:
+//  1. Transient failures (the common case after the device slept or a tab
+//     was restored — the radio is still reconnecting) are retried twice
+//     with a short backoff. A reload for a blip the retry would have
+//     absorbed is what used to surface the error panel.
+//  2. On persistent failure we reload exactly once: the fresh index.html
+//     carries the current chunk graph, so the retry succeeds.
+//
+// The reload marker is time-bounded (10 min): a marker left behind by a
+// killed tab that never completed its reload must not suppress a fresh
+// silent reload days later — that stale-marker case is what made the
+// error panel appear "sometimes" on tab restore. An in-memory fallback
+// covers environments where sessionStorage throws (private mode). The
+// marker is never cleared on success: with several lazy chunks in flight,
+// a succeeding chunk would wipe the marker of a concurrently failing one
+// and re-arm its reload, looping forever.
 const CHUNK_RELOAD_KEY = "al-chunk-reload-v1";
-let chunkReloadedMemory = false;
-function readChunkReloadFlag() {
+const CHUNK_RELOAD_TTL_MS = 10 * 60 * 1000;
+let chunkReloadedAtMemory = 0;
+function chunkReloadedAt() {
+  let fromStorage = 0;
   try {
-    return sessionStorage.getItem(CHUNK_RELOAD_KEY) === "1";
-  } catch (e) {
-    return chunkReloadedMemory;
-  }
+    const raw = sessionStorage.getItem(CHUNK_RELOAD_KEY);
+    const t = raw ? parseInt(raw, 10) : 0;
+    fromStorage = Number.isFinite(t) ? t : 0;
+  } catch (e) {}
+  return Math.max(fromStorage, chunkReloadedAtMemory);
 }
-function writeChunkReloadFlag() {
-  chunkReloadedMemory = true;
+function markChunkReloaded() {
+  const now = Date.now();
+  chunkReloadedAtMemory = now;
   try {
-    sessionStorage.setItem(CHUNK_RELOAD_KEY, "1");
+    sessionStorage.setItem(CHUNK_RELOAD_KEY, String(now));
   } catch (e) {}
 }
 function clearChunkReloadFlag() {
-  chunkReloadedMemory = false;
+  chunkReloadedAtMemory = 0;
   try {
     sessionStorage.removeItem(CHUNK_RELOAD_KEY);
   } catch (e) {}
 }
-// Wrap a dynamic import(): on success clear the reload flag; on failure do
+function chunkReloadFresh() {
+  const t = chunkReloadedAt();
+  return t > 0 && Date.now() - t < CHUNK_RELOAD_TTL_MS;
+}
+// Wrap a dynamic import(): on failure retry twice with backoff, then do
 // the single silent reload, otherwise rethrow for the error boundary.
-function importWithChunkRetry(importer) {
+// NOTE: success deliberately does NOT clear the reload marker. Clearing it
+// on every successful chunk load re-armed the reload for a concurrently
+// failing chunk (its decision ran after the clear) and produced a reload
+// loop. The marker is time-bounded (10 min), which is the only expiry it
+// needs; a later failure inside the window surfaces the error panel, whose
+// TRY AGAIN still offers a full reload.
+function importWithChunkRetry(importer, attempt = 0) {
   return importer().then(
-    (mod) => {
-      clearChunkReloadFlag();
-      return mod;
-    },
+    (mod) => mod,
     (err) => {
-      if (!readChunkReloadFlag()) {
-        writeChunkReloadFlag();
+      if (attempt < 2) {
+        return new Promise((resolve) =>
+          setTimeout(resolve, 350 * (attempt + 1))
+        ).then(() => importWithChunkRetry(importer, attempt + 1));
+      }
+      if (!chunkReloadFresh()) {
+        markChunkReloaded();
         window.location.reload();
         // The reload is in flight: return a never-settling promise so this
         // render never commits a broken state and the user never sees an
@@ -82,10 +109,14 @@ class RouteErrorBoundary extends Component {
     // Deliberately quiet: the fallback panel is the user-facing signal.
   }
   handleRetry = () => {
-    // Clear the chunk-reload flag so a retry after a chunk failure still
-    // gets its single silent reload if the fetch fails again.
+    // A render crash can leave poisoned module state behind (a half-
+    // evaluated chunk, a rejected cached promise) that an in-place retry
+    // would just hit again — and a stale cached index.html can keep
+    // pointing at purged chunks. A full reload is the reliable recovery.
+    // Clear the reload marker first so the fresh boot keeps its silent
+    // reload if a chunk fetch fails again.
     clearChunkReloadFlag();
-    this.setState({ error: null });
+    window.location.reload();
   };
   render() {
     if (this.state.error) {
@@ -168,11 +199,26 @@ import { loadCatalog, loadBootstrap, isCatalogPending } from "./lib/catalog.js";
 // on the homepage) and is cached for the rest of the session. The in-app
 // PageCurtain beat covers the fetch; the RouteErrorBoundary covers a failed
 // fetch with a retry instead of a blank screen.
-const importPagesChunk = () =>
-  importWithChunkRetry(() => import("./pages.jsx"));
+const importPagesChunk = () => importWithChunkRetry(() => import("./pages.jsx"));
+// One shared promise for the pages chunk: every lazy route slice awaits the
+// same import, so a failure produces exactly one recovery decision (one
+// silent reload) instead of one per mounted route. Rejections are never
+// cached — a failed chain must not poison later callers; the next caller
+// starts a fresh attempt (which, with a fresh reload marker, throws to the
+// error boundary instead of reloading in a loop).
+let pagesChunkPromise = null;
+const sharedPagesChunk = () => {
+  if (!pagesChunkPromise) {
+    pagesChunkPromise = importPagesChunk();
+    pagesChunkPromise.catch(() => {
+      pagesChunkPromise = null;
+    });
+  }
+  return pagesChunkPromise;
+};
 const lazyPage = (name) =>
   lazy(() =>
-    importPagesChunk().then((m) => ({ default: m[name] }))
+    sharedPagesChunk().then((m) => ({ default: m[name] }))
   );
 const TowerOfBabel = lazyPage("TowerOfBabel");
 const LibraryArtifact = lazyPage("LibraryArtifact");
