@@ -193,7 +193,14 @@ try {
   if (process.env.SEARCH_INDEX_OUT || process.env.SEARCH_INDEX_FORCE_BUILD) {
     main();
   } else if (!stageCommitted()) {
-    main();
+    // REMOTE INDEX (2026-10-17): the full-text index now lives in the
+    // Joshuv-AI/antarctic-labs-texts repo and is served by Pages Functions
+    // (functions/search-index/*). With no search-index-data/ in this repo,
+    // NEVER attempt a full local regeneration during deploy builds: at
+    // 115k+ texts it exceeds Cloudflare's build time limit. Write a minimal
+    // placeholder manifest and exit 0; the functions serve the real index.
+    // (Pipeline regeneration still works via SEARCH_INDEX_OUT.)
+    failSafe("index served from antarctic-labs-texts repo; local regeneration skipped");
   }
 } catch (err) {
   failSafe(String((err && err.message) || err));
