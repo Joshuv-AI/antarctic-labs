@@ -1,14 +1,14 @@
 // Serves /tower-of-babel/<file>.txt — the Tower of Babel hosted texts.
 //
 // The TXT files live in the Joshuv-AI/antarctic-labs-texts repo under
-// tower-of-babel/ (moved out of the main repo on 2026-10-16: 115k+ files
+// public/tower-of-babel/ (moved out of the main repo on 2026-10-16: 115k+ files
 // made the main repo 8 GiB and pushed Cloudflare Pages builds past the
 // 20-minute limit). This function proxies them from that repo's raw
 // content, with edge caching so GitHub is only hit on the first request
 // for each text.
 
 const ORIGIN =
-  "https://raw.githubusercontent.com/Joshuv-AI/antarctic-labs-texts/main/tower-of-babel/";
+  "https://raw.githubusercontent.com/Joshuv-AI/antarctic-labs-texts/main/public/tower-of-babel/";
 
 export async function onRequest(context) {
   let file = context.params.file || "";
