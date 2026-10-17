@@ -25,6 +25,15 @@ import {
   onIndexReady,
   isIndexLoading,
 } from "./lib/catalog.js";
+// Two-level browse taxonomy for the library filter (revamp 2026-10-17):
+// top-level lanes + subcategories derived from the artifact_id prefix.
+// Pure module, no dependencies — see ./lib/tower-taxonomy.js.
+import {
+  TOWER_TOP_LABELS,
+  TOWER_SUBS,
+  towerBucketKey,
+  towerSubLabel,
+} from "./lib/tower-taxonomy.js";
 // The build-time manifest of hosted tower texts (2.4MB at current scale)
 // is NOT statically imported: it would ride inside the lazy pages chunk and
 // make every page pay for it. It loads as its own chunk, on demand, only on
@@ -385,6 +394,8 @@ export function TowerOfBabel({ go, onReady }) {
 // ----- Tower of Babel / Library -------------------------------------------------
 const TOWER_SORTS = [
   { id: "title-asc", label: "Title A–Z" },
+  { id: "title-desc", label: "Title Z–A" },
+  { id: "creator-asc", label: "Creator A–Z" },
   { id: "year-desc", label: "Newest first" },
   { id: "year-asc", label: "Oldest first" },
 ];
@@ -486,14 +497,17 @@ function TowerCatalogError({ onRetry }) {
 }
 
 // Case-insensitive haystack for catalog search: title, creator, year,
-// description, collection, and tags.
-function towerHaystack(a) {
+// description, collection, subcategory label, and tags. The subcategory
+// label (e.g. "CIA", "PLOS Journals") makes the revamp's buckets findable
+// by search too.
+function towerHaystack(a, subLabel) {
   return [
     a.title || "",
     a.creator || "",
     a.year ? String(a.year) : "",
     a.description || "",
     a.collection || "",
+    subLabel || "",
     Array.isArray(a.tags) ? a.tags.join(" ") : "",
   ]
     .join("\n")
@@ -562,12 +576,20 @@ async function buildTitleOrder(artifacts, isCancelled) {
 // Chunked haystack build: 20k records per macrotask, so filtering data
 // never blocks the thread either. Output is identical to the old
 // artifacts.map(towerHaystack).
-async function buildHaystacks(artifacts, isCancelled) {
+async function buildHaystacks(artifacts, bucketKeys, isCancelled) {
   const out = new Array(artifacts.length);
   for (let from = 0; from < artifacts.length; from += 20000) {
     if (isCancelled()) return null;
     const end = Math.min(from + 20000, artifacts.length);
-    for (let i = from; i < end; i++) out[i] = towerHaystack(artifacts[i]);
+    for (let i = from; i < end; i++) {
+      const a = artifacts[i];
+      const bk = bucketKeys[i];
+      const colon = bk.indexOf(":");
+      out[i] = towerHaystack(
+        a,
+        colon < 0 ? "" : towerSubLabel(a.collection, bk.slice(colon + 1))
+      );
+    }
     await new Promise((r) => setTimeout(r, 0));
   }
   return out;
@@ -582,16 +604,38 @@ async function deriveTowerData(artifacts, isCancelled) {
     const key = artifacts[i].collection || "OTHER";
     counts[key] = (counts[key] || 0) + 1;
   }
+  // Two-level browse taxonomy (filter revamp 2026-10-17): one bucket key per
+  // record ("COLLECTION" or "COLLECTION:sub"), aligned with artifacts like
+  // haystacks. Subcategory partitions are exact — the union of a lane's
+  // sub-buckets is the lane itself — so the top-level filter result set is
+  // identical to the old collection filter (see parity-test.mjs).
+  const bucketKeys = new Array(artifacts.length);
+  const subCounts = {};
+  for (let i = 0; i < artifacts.length; i++) {
+    const bk = towerBucketKey(artifacts[i]) || artifacts[i].collection || "OTHER";
+    bucketKeys[i] = bk;
+    subCounts[bk] = (subCounts[bk] || 0) + 1;
+  }
   const titleOrder = await buildTitleOrder(artifacts, isCancelled);
   if (!titleOrder || isCancelled()) return null;
-  const haystacks = await buildHaystacks(artifacts, isCancelled);
+  const haystacks = await buildHaystacks(artifacts, bucketKeys, isCancelled);
   if (!haystacks || isCancelled()) return null;
   const data = {
     haystacks,
     counts,
-    collections: Object.keys(counts).sort(),
+    subCounts,
+    bucketKeys,
+    collections: Object.keys(counts).sort(
+      (a, b) => counts[b] - counts[a] || (a < b ? -1 : a > b ? 1 : 0)
+    ),
     order: {
       "title-asc": titleOrder,
+      "title-desc": titleOrder.slice().reverse(),
+      "creator-asc": artifacts
+        .map((_, i) => i)
+        .sort((p, q) =>
+          (artifacts[p].creator || "").localeCompare(artifacts[q].creator || "")
+        ),
       "year-desc": artifacts
         .map((_, i) => i)
         .sort((p, q) => (artifacts[q].year || 0) - (artifacts[p].year || 0)),
@@ -655,9 +699,13 @@ function TowerLibrarySection({ go, onReady }) {
     setDeriveSeq((n) => n + 1);
   };
   const failed = catalogError || deriveError;
-  // Live search + collection filter + sort. Empty query/filter = show all.
+  // Live search + two-level browse filter + sort. Empty query/filter = show all.
+  // bucketFilter is "" (all), a lane ("PAPERS"), or a subcategory
+  // ("PAPERS:bio"). Click mechanics are unchanged from the old collection
+  // filter: click a chip to filter, click the active chip to clear,
+  // pagination resets on change, 50 rows per page with "Load more".
   const [query, setQuery] = useState("");
-  const [collectionFilter, setCollectionFilter] = useState("");
+  const [bucketFilter, setBucketFilter] = useState("");
   const [sortId, setSortId] = useState("title-asc");
   // Pagination: 50 rows per page, user clicks "Load more". The full catalog
   // is never mounted at once — the DOM stays small so style recalc and
@@ -685,7 +733,7 @@ function TowerLibrarySection({ go, onReady }) {
     setMatchesExpanded(false);
     // Reset pagination to first 50 when filters change.
     setRowBudget(TOWER_ROWS_PER_PAGE);
-  }, [listQuery, collectionFilter, sortId]);
+  }, [listQuery, bucketFilter, sortId]);
   // Deep full-text search: same query, second mode. Debounced; searches the
   // full contents of every staged text via the build-time index. Title
   // results above are untouched by this.
@@ -717,19 +765,28 @@ function TowerLibrarySection({ go, onReady }) {
   // catalog — the hidden-flag approach this replaced kept input fast but
   // made every update walk everything. The memoized TowerRow re-renders
   // only when its own rank actually changes.
+  // Active lane for the subcategory row: the lane part of bucketFilter.
+  const activeLane = bucketFilter ? bucketFilter.split(":")[0] : "";
+  const activeSubs = TOWER_SUBS[activeLane] || [];
   const { rankMap, matchCount } = useMemo(() => {
     const map = new Map();
     if (!artifacts || !towerData) return { rankMap: map, matchCount: 0 };
+    // Two-level filter: a lane bucket ("PAPERS") matches every record whose
+    // bucket key starts with "PAPERS:" (the subcategory partition is exact,
+    // so this is identical to the old collection equality check); a
+    // subcategory bucket ("PAPERS:bio") matches its key exactly.
+    const bf = bucketFilter;
+    const bfLane = bf && bf.indexOf(":") < 0 ? bf + ":" : null;
     for (let k = 0; k < towerOrder.length; k++) {
       const i = towerOrder[k];
+      const bk = towerData.bucketKeys[i];
+      if (bf && bk !== bf && !(bfLane && bk.indexOf(bfLane) === 0)) continue;
       const a = artifacts[i];
-      if (collectionFilter && (a.collection || "OTHER") !== collectionFilter)
-        continue;
       if (q && !towerData.haystacks[i].includes(q)) continue;
       map.set(a.artifact_id, map.size + 1);
     }
     return { rankMap: map, matchCount: map.size };
-  }, [q, collectionFilter, sortId, towerOrder, artifacts, towerData]);
+  }, [q, bucketFilter, sortId, towerOrder, artifacts, towerData]);
   // Report ready exactly once when the section settles: the first 50 rows
   // have painted, or the error UI is up. The double rAF waits for paint;
   // the timeout fallback covers background tabs (and any dropped frame
@@ -826,23 +883,54 @@ function TowerLibrarySection({ go, onReady }) {
             <div className="tower-chips" role="group" aria-label="Filter by collection">
               <button
                 type="button"
-                className={`tower-chip${collectionFilter === "" ? " is-active" : ""}`}
-                onClick={() => setCollectionFilter("")}
+                className={`tower-chip${bucketFilter === "" ? " is-active" : ""}`}
+                onClick={() => setBucketFilter("")}
               >
                 All <span>{artifacts.length}</span>
               </button>
-              {towerData.collections.map((c) => (
-                <button
-                  type="button"
-                  key={c}
-                  className={`tower-chip${collectionFilter === c ? " is-active" : ""}`}
-                  onClick={() => setCollectionFilter(collectionFilter === c ? "" : c)}
-                  aria-pressed={collectionFilter === c}
-                >
-                  {c} <span>{towerData.counts[c]}</span>
-                </button>
-              ))}
+              {towerData.collections.map((c) => {
+                const laneActive =
+                  bucketFilter === c || bucketFilter.indexOf(c + ":") === 0;
+                return (
+                  <button
+                    type="button"
+                    key={c}
+                    className={`tower-chip${laneActive ? " is-active" : ""}`}
+                    onClick={() =>
+                      setBucketFilter(bucketFilter === c ? "" : c)
+                    }
+                    aria-pressed={laneActive}
+                  >
+                    {TOWER_TOP_LABELS[c] || c} <span>{towerData.counts[c]}</span>
+                  </button>
+                );
+              })}
             </div>
+            {activeSubs.length > 0 && (
+              <div
+                className="tower-chips tower-subchips"
+                role="group"
+                aria-label={`Filter ${TOWER_TOP_LABELS[activeLane] || activeLane} by subcategory`}
+              >
+                {activeSubs.map((s) => {
+                  const key = `${activeLane}:${s.id}`;
+                  const subActive = bucketFilter === key;
+                  return (
+                    <button
+                      type="button"
+                      key={s.id}
+                      className={`tower-chip${subActive ? " is-active" : ""}`}
+                      onClick={() =>
+                        setBucketFilter(subActive ? activeLane : key)
+                      }
+                      aria-pressed={subActive}
+                    >
+                      {s.label} <span>{towerData.subCounts[key] || 0}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
             <LibraryResults
               artifacts={artifacts}
               towerOrder={towerOrder}
