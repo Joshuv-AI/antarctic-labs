@@ -12,9 +12,7 @@
 // a mode with its own overlay).
 //
 // The menu fans out D-pad style around the orb: up / inward-side / down /
-// outward-diagonal, swinging to an inward diagonal when the orb is parked too
-// close to the top or bottom edge for a straight slot. Slot order follows
-// FEATURES order.
+// inward-down diagonal. Slot order follows FEATURES order.
 //
 // Share links: bare entry URL = from the top; ?at=<char offset> jumps the
 // receiver to the sharer's scroll position; &hl=<start>-<end> additionally
@@ -1767,7 +1765,6 @@ export default function ReaderAssist({
     const R = 26; // fan item radius (52px circle)
     const d = ORB / 2 + 16 + R; // center distance from the orb center
     const inward = cx > viewport.w / 2 ? -1 : 1; // away from the snapped edge
-    const outward = -inward; // toward the snapped edge
     const minC = R + 10;
     const maxX = Math.max(minC, viewport.w - R - 10);
     const maxY = Math.max(minC, viewport.h - R - 10);
@@ -1775,9 +1772,10 @@ export default function ReaderAssist({
       { dx: 0, dy: -1 }, // up
       { dx: inward, dy: 0 }, // inward side
       { dx: 0, dy: 1 }, // down
-      // 4th: outward-down diagonal. The old outward-up slot clamped onto the
-      // orb when snapped to an edge; down-diagonal clears it (2026-10-18).
-      { dx: outward * 0.65, dy: 0.75 },
+      // 4th: inward-down diagonal (2026-10-18). D-pad style — sits 45° between
+      // the inward and down slots, clear of both. Inward (away from the snapped
+      // edge) always has room, so it never clamps onto the orb.
+      { dx: inward * 0.72, dy: 0.72 },
     ];
     return visibleFeatures.map((f, i) => {
       const s = slots[i % slots.length];
