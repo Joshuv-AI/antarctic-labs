@@ -125,14 +125,70 @@ export function isCatalogPending() {
   return bootstrapPending !== null;
 }
 
+// Find a full record by artifact_id, loading the full catalog on demand.
+// Uses the sharded catalog (2026-10-18): manifest maps ID -> shard number,
+// then we fetch just that shard (~9MB) instead of the whole catalog.
+let shardManifest = null;
+let shardManifestPending = null;
+const shardCache = {};
+function loadShardManifest() {
+  if (shardManifest) return Promise.resolve(shardManifest);
+  if (!shardManifestPending) {
+    shardManifestPending = fetchJsonOnce("/catalog-shard-manifest.json").then(
+      (data) => {
+        shardManifest = data || {};
+        shardManifestPending = null;
+        return shardManifest;
+      },
+      () => {
+        shardManifest = {};
+        shardManifestPending = null;
+        return shardManifest;
+      }
+    );
+  }
+  return shardManifestPending;
+}
+function loadCatalogShard(n) {
+  const key = `shard-${n}`;
+  if (shardCache[key]) return Promise.resolve(shardCache[key]);
+  return fetchJsonOnce(`/catalog-shards/catalog-${String(n).padStart(2, "0")}.json`).then(
+    (data) => {
+      const items = Array.isArray(data) ? data : data?.artifacts || data?.items || [];
+      shardCache[key] = items;
+      return items;
+    }
+  );
+}
+export function getFullArtifact(artifactId) {
+  if (fullCache) {
+    return Promise.resolve(fullCache.find((a) => a.artifact_id === artifactId) || null);
+  }
+  // Try the sharded catalog first (has all 133k+ entries).
+  return loadShardManifest().then((manifest) => {
+    const shardNum = manifest[artifactId];
+    if (shardNum === undefined) {
+      // Not in manifest — fall back to legacy catalog.json.
+      return loadFullCatalog().then(
+        (full) => full.find((a) => a.artifact_id === artifactId) || null
+      );
+    }
+    return loadCatalogShard(shardNum).then(
+      (items) => items.find((a) => a.artifact_id === artifactId) || null
+    );
+  });
+}
+
 // Rewritten entry descriptions (2026-10-18 description revamp).
-// Sidecar sharded by artifact_id suffix: /tower-descriptions/<xx>.json,
+// Sidecar sharded by artifact_id prefix: /tower-descriptions/<xx>.json,
 // each a {artifact_id: description} map. Loaded lazily per entry view and
 // cached per shard; a failed shard fetch resolves null (callers fall back
 // to the catalog record's own description).
 const descShardCache = {};
 const descShardPending = {};
 function descShardKey(artifactId) {
+  // LAST 2 chars: id prefixes concentrate (pmc-, arxiv-, tob-) but suffixes
+  // distribute evenly. Must match build_sidecar.py.
   const s = String(artifactId || "").toLowerCase().slice(-2).replace(/[^a-z0-9]/g, "_");
   return (s + "__").slice(0, 2);
 }
@@ -144,19 +200,17 @@ export function getDescription(artifactId) {
   if (!descShardPending[key]) {
     descShardPending[key] = fetchJsonOnce(`/tower-descriptions/${key}.json`)
       .then(
-        (data) => { descShardCache[key] = data || {}; descShardPending[key] = null; return descShardCache[key]; },
-        () => { descShardCache[key] = {}; descShardPending[key] = null; return descShardCache[key]; }
+        (data) => {
+          descShardCache[key] = data || {};
+          descShardPending[key] = null;
+          return descShardCache[key];
+        },
+        () => {
+          descShardCache[key] = {};
+          descShardPending[key] = null;
+          return descShardCache[key];
+        }
       );
   }
   return descShardPending[key].then((shard) => shard[artifactId] || null);
-}
-
-// Find a full record by artifact_id, loading the full catalog on demand.
-export function getFullArtifact(artifactId) {
-  if (fullCache) {
-    return Promise.resolve(fullCache.find((a) => a.artifact_id === artifactId) || null);
-  }
-  return loadFullCatalog().then(
-    (full) => full.find((a) => a.artifact_id === artifactId) || null
-  );
 }
