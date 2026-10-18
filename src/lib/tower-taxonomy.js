@@ -60,7 +60,12 @@ export const TOWER_SUBS = {
     { id: "patents", label: "Patents & Inventions" },
     { id: "other", label: "Other Documents" },
   ],
-  PODCASTS: [],
+  PODCASTS: [
+    { id: "joerogan", label: "Joe Rogan" },
+    { id: "dannyjones", label: "Danny Jones" },
+    { id: "tuckercarlson", label: "Tucker Carlson" },
+    { id: "other", label: "Other Podcasts" },
+  ],
 };
 
 // --- prefix helpers -------------------------------------------------------
@@ -138,6 +143,13 @@ export function towerSubId(a) {
       if (DOCS_FOUNDING.has(p)) return "founding";
       if (DOCS_TRIALS.has(p)) return "trials";
       if (/^meyer-us/.test(p)) return "patents";
+      return "other";
+    case "PODCASTS":
+      // Host-derived from the artifact_id (podcast-<host>-...). PowerfulJRE
+      // is the official Joe Rogan Experience channel — folds into joerogan.
+      if (/^podcast-(joerogan|powerfuljre)/.test(p)) return "joerogan";
+      if (/^podcast-dannyjones/.test(p)) return "dannyjones";
+      if (/^podcast-tuckercarlson/.test(p)) return "tuckercarlson";
       return "other";
     default:
       return "";

@@ -7,7 +7,7 @@
 // Visual language is intentionally not redesigned here — these shells
 // use the same classes the existing Home page already uses, so the
 // destinations already share the home-page visual grammar.
-import { useState, useEffect, useMemo, useDeferredValue, useRef, memo } from "react";
+import { useState, useEffect, useMemo, useDeferredValue, useRef, memo, Fragment } from "react";
 import { searchDeep, getSnippets } from "./lib/deep-search.js";
 import { site } from "./content/site.js";
 import { expeditions, expeditionsArchive } from "./content/expeditions.js";
@@ -892,46 +892,51 @@ function TowerLibrarySection({ go, onReady }) {
               {towerData.collections.map((c) => {
                 const laneActive =
                   bucketFilter === c || bucketFilter.indexOf(c + ":") === 0;
+                const isOpenLane = laneActive && c === activeLane && activeSubs.length > 0;
                 return (
-                  <button
-                    type="button"
-                    key={c}
-                    className={`tower-chip${laneActive ? " is-active" : ""}`}
-                    onClick={() =>
-                      setBucketFilter(bucketFilter === c ? "" : c)
-                    }
-                    aria-pressed={laneActive}
-                  >
-                    {TOWER_TOP_LABELS[c] || c} <span>{towerData.counts[c]}</span>
-                  </button>
+                  <Fragment key={c}>
+                    <button
+                      type="button"
+                      className={`tower-chip${laneActive ? " is-active" : ""}`}
+                      onClick={() =>
+                        setBucketFilter(bucketFilter === c ? "" : c)
+                      }
+                      aria-pressed={laneActive}
+                      aria-expanded={isOpenLane}
+                    >
+                      {TOWER_TOP_LABELS[c] || c} <span>{towerData.counts[c]}</span>
+                    </button>
+                    {isOpenLane && (
+                      <div
+                        className="tower-subchips"
+                        role="group"
+                        aria-label={`Filter ${TOWER_TOP_LABELS[activeLane] || activeLane} by subcategory`}
+                      >
+                        {activeSubs.map((s) => {
+                          const key = `${activeLane}:${s.id}`;
+                          const count = towerData.subCounts[key] || 0;
+                          if (count === 0) return null;
+                          const subActive = bucketFilter === key;
+                          return (
+                            <button
+                              type="button"
+                              key={s.id}
+                              className={`tower-subchip${subActive ? " is-active" : ""}`}
+                              onClick={() =>
+                                setBucketFilter(subActive ? activeLane : key)
+                              }
+                              aria-pressed={subActive}
+                            >
+                              {s.label} <span>{count}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </Fragment>
                 );
               })}
             </div>
-            {activeSubs.length > 0 && (
-              <div
-                className="tower-chips tower-subchips"
-                role="group"
-                aria-label={`Filter ${TOWER_TOP_LABELS[activeLane] || activeLane} by subcategory`}
-              >
-                {activeSubs.map((s) => {
-                  const key = `${activeLane}:${s.id}`;
-                  const subActive = bucketFilter === key;
-                  return (
-                    <button
-                      type="button"
-                      key={s.id}
-                      className={`tower-chip${subActive ? " is-active" : ""}`}
-                      onClick={() =>
-                        setBucketFilter(subActive ? activeLane : key)
-                      }
-                      aria-pressed={subActive}
-                    >
-                      {s.label} <span>{towerData.subCounts[key] || 0}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
             <LibraryResults
               artifacts={artifacts}
               towerOrder={towerOrder}
