@@ -1,0 +1,987 @@
+Spark Policy Toolkit: Semantic Contracts and Scalable Execution for Policy Learning in Spark
+Zeyu Bai
+
+Abstract
+Custom policy-learning pipelines in Spark fail for two coupled systems reasons: rowwise Python execution makes inference impractical, and driver-side candidate materialization makes split search fragile at feature scale. We present Spark Policy Toolkit, a semantics-governed systems toolkit for scalable policy learning in Spark. The toolkit provides two Spark-native primitives: partition-initialized vectorized inference through mapInPandas and mapInArrow , and collect-less split search that scores candidates on executors. Both primitives are governed by one fixed-input semantic contract: the same rows, feature order, treatment vocabulary, preprocessing manifest, and split boundaries must preserve per-row score vectors, best-split decisions, and end-to-end learned policy outputs. The evaluation combines practical baseline ladders, backend parity checks, measured split-search scale results, synthetic and Hillstrom end-to-end policy preservation, missingness stress, partition and order perturbation tests, quantile-boundary sensitivity, and a concrete adversarial failure catalog. On a 40-worker Databricks cluster, mapInArrow reaches 4.72M rows/s at 10M matched rows and 7.23M rows/s at 50M rows, while collect-less split search remains valid from F = 10 F=10 through F = 1000 F=1000 with 124000 candidate rows, where the driver-collect baseline is intentionally skipped. Across 24 backend-ablation settings, mapInArrow wins 18 while mapInPandas wins 6, so the paper treats backend choice as workload-dependent rather than universal. Once the fixed-input lock is enforced, all six tested repartition/coalesce/shuffle perturbations preserve identical signatures; before lock, all six drift. The central result is not speed alone: throughput and collect-less execution are the mechanisms that let policy semantics survive at Spark scale.
+
+
+
+1
+Introduction
+
+Policy and uplift workflows often sit between several adjacent literatures.
+Distributed tree systems such as PLANET, XGBoost, LightGBM, and Spark MLlib
+optimize standard supervised objectives
+
+[
+14
+,
+6
+,
+10
+,
+13
+]
+, while
+uplift and heterogeneous-effect libraries often target local or model-centric
+workflows
+
+[
+4
+,
+19
+,
+15
+,
+5
+,
+17
+]
+.
+Distributed causal infrastructure has also become more practical, including
+distributed double machine learning, Spark-oriented causal APIs such as
+SynapseML’s
+DoubleMLEstimator
+, and production uplift systems such as
+H2O’s distributed uplift random forest
+
+[
+11
+,
+8
+,
+18
+,
+7
+]
+.
+At the same time, a separate correctness lineage asks how to make machine
+learning execution deterministic or semantically faithful, from deterministic
+workflow frameworks such as
+mlf-core
+to graph-equivalence verification
+systems such as AERIFY
+[
+9
+,
+21
+]
+. Production
+Spark teams still build custom policy pipelines around application-specific
+treatment vocabularies, missing-value rules, split objectives, and business
+utility witnesses. These pipelines are easy to express in Python and easy to
+break when distributed execution is introduced.
+
+The systems failure is coupled. Inference commonly falls back to per-row Python
+model deserialization or rowwise scoring. Split search commonly collects
+candidate statistics to the driver, where candidate count grows with features,
+bins, treatments, and missing-routing variants. Replacing these paths with
+distributed operators is not a mechanical optimization: small changes in
+missing routing, control assignment, tie resolution, candidate validity, or
+bucket boundaries can silently change the learned policy.
+
+This work therefore targets a gap not fully addressed by standard distributed
+tree systems, distributed causal estimators, or local uplift packages. It does
+not introduce a new causal or uplift objective. It is also narrower than a
+general model-equivalence verifier such as AERIFY: the target here is not
+arbitrary tensor-program equivalence, but exact preservation of row-level policy
+vectors, split semantics, and shallow policy-tree witnesses for an existing
+Spark policy pipeline. Instead, the paper addresses the systems pathologies that
+appear when custom policy-learning code is embedded inside Spark jobs with
+Python-side execution and ad hoc distributed rewrites
+
+[
+20
+,
+3
+,
+16
+]
+. The
+central question is how to make an existing custom policy pipeline scalable
+without changing what that pipeline means.
+
+This paper therefore frames Spark Policy Toolkit as a semantics-governed
+execution layer, not as a pure speed paper and not as a general determinism
+paper. Throughput and collect-less execution are not a separate speed story;
+they are the enabling mechanisms that let the semantic contract survive at
+production scale.
+
+The contributions are:
+
+•
+
+a Spark-native vectorized inference primitive with
+mapInPandas
+
+and
+mapInArrow
+execution paths;
+
+•
+
+a collect-less split-search primitive that scores candidates without
+driver-side candidate-table materialization;
+
+•
+
+a fixed-input semantic contract covering data, inference, split search,
+and end-to-end trainer witnesses;
+
+•
+
+an experiment program that tests performance, parity, policy
+preservation, missingness stress, partition/order robustness, boundary
+sensitivity, and concrete adversarial failures.
+
+2
+Problem and Threat Model
+
+The target workload is a custom multi-treatment policy-learning pipeline in
+Spark. A trained policy forest or tree assigns each row a treatment-score
+vector, and split search chooses candidate thresholds from per-treatment outcome
+statistics. The threat is not malicious input. The threat is a distributed
+rewrite that appears equivalent but changes one of the semantics that determines
+the final policy.
+
+We consider five concrete drift mechanisms. First, implicit null handling can
+route missing feature values differently from the learned node rule. Second,
+first-seen control selection can make treatment identity depend on partition or
+row order. Third, unstable argmax or sort behavior can change ties between equal
+candidate scores. Fourth, sparse-group omission can treat absent
+bin-by-treatment combinations as if they did not constrain validity. Fifth,
+independent approximate quantile recomputation can change bucket boundaries,
+which changes candidate membership before the split score is evaluated.
+
+The claims in this paper are fixed-input claims. They do not assert general
+determinism under arbitrary Spark conditions, arbitrary preprocessing, or
+independently recomputed approximate boundaries.
+
+3
+Toolkit Overview
+
+Spark Policy Toolkit exposes two primitives that share one semantic surface.
+The first primitive scores array-native policy trees over Spark partitions. A
+forest is broadcast once, vectorized tree objects are initialized once per
+partition, and batches are scored through
+mapInPandas
+or
+
+mapInArrow
+. A broadcast-rowwise path remains as a practical comparator,
+and an intentionally slow JSON-per-row path remains as a legacy anti-pattern
+baseline.
+
+The second primitive performs collect-less split search. Spark bucketization
+assigns feature values, including an explicit missing bin. Executor-side
+aggregation builds per-bin, per-treatment prefix sums. Candidate scoring then
+evaluates both NaN-left and NaN-right routes and applies a deterministic
+score-and-tie order. The driver receives only the selected best-split tuple,
+not the full candidate table.
+
+3.1
+Primitive-Level Data Flow
+
+At the API level, the toolkit accepts ordinary Spark DataFrames together with a
+small set of explicit policy-learning inputs. Primitive A takes feature columns,
+an ordered feature list, and a forest represented as array-native trees, then
+returns one Spark array column containing the per-row treatment-score vector.
+Primitive B takes a feature column, treatment labels, outcomes, and fixed split
+boundaries, then returns a deterministic best-split object with feature,
+candidate bin, threshold boundary, missing-value direction, score, and optional
+diagnostics. A driver-collect implementation remains available only as a
+reference path for parity and small-scale comparisons.
+
+Primitive A.
+
+Inputs are a Spark DataFrame, an ordered
+feature_cols
+list aligned to
+the tree schema, and a forest represented as array-native trees. The output is a
+new DataFrame with one appended Spark array column containing the length-
+T
+treatment-score vector for each row. The production backends are
+
+mapInPandas
+and
+mapInArrow
+;
+broadcast_rowwise
+and
+
+anti_pattern
+exist only as comparators.
+
+Primitive B.
+
+Split search follows a two-stage contract. Stage S1,
+
+build_prefix_sums(...)
+, converts a DataFrame containing
+
+feature_col
+,
+treatment_col
+, and
+outcome_col
+into a
+fixed prefix-sum table using explicit boundaries. Stage S2,
+
+score_candidates_collectless(...)
+, takes that prefix table plus
+constraints such as
+min_leaf_size
+and returns a deterministic
+
+BestSplit
+record. The production execution path is collect-less; the
+driver-collect version is retained only as a reference implementation.
+
+3.2
+Execution Contract
+
+The two primitives are coupled by design. Inference is not only a deployment
+path; it is also the mechanism that turns a serialized policy model into a
+stable row-level policy-vector witness. Split search is not only a training
+optimization; it is the mechanism that ensures the same bucketized statistics
+lead to the same candidate-validity set and the same winning split under
+distributed execution. That is why the paper treats them as one toolkit rather
+than two unrelated accelerators.
+
+4
+Fixed-Input Semantic Contracts
+
+The toolkit is governed by four contracts.
+
+C1: Data contract.
+
+The compared execution paths must use a fixed row set, fixed row identifiers,
+fixed feature order, fixed treatment vocabulary, fixed deterministic
+preprocessing manifest, and fixed bucket boundaries when split search is
+compared.
+
+C2: Inference contract.
+
+The same forest arrays and the same input rows must produce the same per-row
+treatment-score vectors across broadcast-rowwise,
+mapInPandas
+, and
+
+mapInArrow
+paths, up to the declared floating-point tolerance.
+
+C3: Split-search contract.
+
+The same input table and the same bucket boundaries must produce the same
+control identifier, candidate-validity set, best-split tuple, NaN direction, and
+score across driver-reference, SQL, and executor-local
+mapInPandas
+
+scoring.
+
+C4: End-to-end trainer witness contract.
+
+The same preprocessing manifest, shared boundaries, deterministic node
+expansion order, and training configuration must produce the same serialized
+tree signature and the same held-out policy outputs.
+
+The scope limits are explicit. Independently recomputed approximate boundaries
+can break semantics. Row-order, feature-order, or vocabulary drift outside the
+manifest is not covered. Claims are for explicit fixed-input contracts, not for
+arbitrary distributed conditions.
+
+Operationally, C2 fixes traversal semantics as part of the contract. Continuous
+nodes route left on
+<=
+; categorical nodes route left on equality;
+missing values follow the per-node
+nan_goes_left
+flag; and forest
+output is the arithmetic mean of the per-tree score vectors. C3 similarly fixes
+the semantics of control selection and candidate ordering. Control selection
+prefers a treatment label equal to
+control
+(case-insensitive), then an
+exact label
+"0"
+, then the lexicographically smallest label. Candidate
+ordering is total: higher score, then lower threshold boundary, then lower
+candidate bin, then preferred NaN direction, then feature name.
+
+The C4 witness uses an explicit serialized tree signature rather than only
+aggregate metrics. Internal-node records include the node path, split feature,
+threshold, candidate bin, and missing-value direction; leaf records include the
+node path, deterministic treatment order, and full policy vector. The end-to-end
+claim is therefore about the learned tree itself, not only about one utility
+number.
+
+5
+Primitive A: Vectorized Inference
+
+The vectorized inference primitive removes repeated row-level model setup. Each
+partition receives the same serialized forest arrays. The
+mapInPandas
+
+backend converts feature columns into NumPy arrays from Pandas batches; the
+
+mapInArrow
+backend converts Arrow record batches directly. Both call
+the same vectorized tree traversal code and emit one array-valued score column.
+
+The semantic obligation is simple: vectorization must not change score vectors.
+The C1 parity block fixes rows, feature order, and forest arrays, then compares
+broadcast-rowwise,
+mapInPandas
+, and
+mapInArrow
+by checksum,
+per-row mismatch count, and maximum absolute difference.
+
+5.1
+Why Per-row Execution Fails
+
+A common legacy deployment pattern in PySpark is to treat the model as row-level
+metadata: each row carries a JSON blob describing the forest, scoring parses
+that JSON in Python, reconstructs model objects, and then walks the tree one
+row at a time. The intentionally slow
+anti_pattern
+baseline captures
+that workflow directly. It is slow for structural reasons: JSON decoding and
+object construction scale with
+N
+even though the model is constant, rowwise
+Python loops defeat NumPy-level vectorization, and transient object churn raises
+executor overhead and variability.
+
+To separate worst-case legacy behavior from a more credible practical baseline,
+we also evaluate a broadcast-once rowwise scorer
+(
+broadcast_rowwise
+). That path broadcasts the forest once,
+initializes in-memory model state once per partition, and still scores one row
+at a time in Python. The anti-pattern remains the worst-case reference;
+practical inference claims in the paper are tied to this stronger rowwise
+comparator.
+
+5.2
+Array-native Tree Schema
+
+The forest is represented as a dictionary of parallel arrays plus a leaf payload
+matrix. Each tree stores node type, feature index, threshold or categorical
+value, left/right child indices, missing-routing flags, and a leaf response-rate
+matrix indexed by node. This representation keeps the broadcast compact and
+removes per-row model metadata. It also lets traversal operate on arrays of
+current node indices, so each iteration updates the still-active rows in a
+vectorized way until all rows reach leaves.
+
+Schema validation is part of correctness rather than hygiene. The implementation
+checks required fields, array lengths, child indices, feature indices, and a
+traversal step budget that detects malformed trees such as cycles. Those checks
+are necessary because a distributed execution path can otherwise fail silently in
+ways that resemble benign floating-point noise.
+
+5.3
+Backends and Partition Initialization
+
+Both supported inference backends are iterator UDFs, but they differ in the
+batch representation that Spark hands to Python.
+mapInPandas
+receives
+Pandas batches, converts the ordered feature columns into NumPy arrays, and
+returns one array-valued score column.
+mapInArrow
+receives Arrow
+
+RecordBatch
+objects, extracts features by position, and returns an
+Arrow list array. In both cases, the critical design point is lazy
+per-partition initialization: the broadcast forest is converted into in-memory
+
+VectorizedArrayTree
+objects once on the first batch seen by the
+partition iterator.
+
+The backend choice is therefore a systems tradeoff, not a semantic one. Arrow
+and Pandas can differ in throughput because of interchange and output-materialization
+costs, but they are required to execute the same routing semantics under the
+fixed-input contract.
+
+6
+Primitive B: Collect-less Split Search
+
+The split-search primitive separates candidate-stat construction from candidate
+scoring. Prefix sums are constructed with explicit treatment levels and explicit
+missing-bin counts. Candidate scoring expands each candidate into two missing
+routes, validates per-treatment support, computes the multi-treatment DDP
+max-envelope score, and selects the winner with a total order:
+higher score, lower boundary, lower candidate bin, preferred NaN direction, and
+feature name.
+
+The C2 parity block fixes bucket boundaries and compares driver-collect, SQL,
+and
+mapInPandas
+candidate scoring. Driver-collect is retained only as a
+reference and small-scale comparator; the production path is collect-less.
+
+6.1
+Why Driver Collect Fails
+
+The driver-collect bottleneck has two coupled forms. First, the candidate table
+scales as
+O(F\cdot(B-1)\cdot T)
+, so even when executors compute the
+underlying statistics efficiently, materializing those rows on the driver
+creates a single-node memory and Python-loop bottleneck. Second, once the
+candidate table is local, the driver becomes the throughput limiter even when it
+does not run out of memory. In the validated harness, oversized cases are
+safety-skipped before OOM rather than being allowed to fail catastrophically.
+
+6.2
+Bucketization and Prefix Sums
+
+Stage S1 of the split-search path builds a fixed intermediate representation
+with Spark-native operators only. A continuous feature is discretized with
+
+Bucketizer(handleInvalid="keep")
+
+[
+1
+]
+, which turns
+NULLs and NaNs into an explicit missing bin. The bucketed data is then grouped
+by candidate bin and treatment to compute opportunities and accepts, and missing
+bin tallies are carried separately. Window prefix sums
+
+[
+12
+,
+2
+]
+convert
+those tallies into left-branch statistics; right-branch statistics are derived
+from totals minus prefixes. The result is a narrow per-candidate sufficient
+statistic table that can be reused by multiple scoring backends.
+
+6.3
+Candidate Scoring and DDP Max-envelope
+
+Stage S2 expands each candidate into both missing-value routes, computes
+branch-level response rates, and evaluates the multi-treatment DDP max-envelope
+score
+[
+15
+]
+. For branch
+b\in\{L,R\}
+and
+non-control treatment
+t
+,
+
+r_{t}^{(b)}=\frac{\mathrm{accepts}_{t}^{(b)}}{\mathrm{opps}_{t}^{(b)}},\qquad u_{t}^{(b)}=r_{t}^{(b)}-r_{\mathrm{control}}^{(b)}.
+
+The candidate score is the maximum separation between the best treatment uplift
+on one side and the worst treatment uplift on the other:
+
+\mathrm{DDP}_{\max}=\max\left(u_{\max}^{(R)}-u_{\min}^{(L)},u_{\max}^{(L)}-u_{\min}^{(R)}\right).
+
+The same calculation is implemented in a pure SQL backend and an executor-local
+
+mapInPandas
+backend. The paper therefore separates two questions:
+whether the backends agree semantically, and how their runtimes differ at a
+given workload size.
+
+6.4
+Deterministic Validity and Selection
+
+Candidate validity is part of the contract, not a post-processing detail. A
+candidate is valid only if every treatment has positive support on both sides,
+total left/right counts satisfy
+min_leaf_size
+, a control group and at
+least one non-control group exist, and the score is defined. The missing-value
+direction is optimized explicitly by evaluating both left and right routes for
+every candidate. The winner is then selected with the total order described in
+Section 4. This is what makes the split-search contract meaningful: the SQL,
+
+mapInPandas
+, and driver-reference paths are not only trying to return a
+similar score; they are required to agree on which candidates are even legal.
+
+7
+Adversarial Failure Modes
+
+The F1 validation suite includes a concrete failure catalog. The primary
+synthetic grid spans row counts 500000 and 2000000, treatment counts 4 and 8,
+32 bins, four feature patterns, missing rates 0.0 and 0.3, and both balanced
+and severe treatment skew. For 4 treatments, the severe skew vector is 0.90,
+0.08, 0.015, 0.005. For 8 treatments, it is 0.88, 0.06, 0.025, 0.015, 0.008,
+0.006, 0.004, 0.002.
+
+The feature families are designed to trigger exact or near ties
+(
+x_tie
+), sparse bin-by-treatment support (
+x_sparse
+),
+minority-arm missingness (
+x_miss
+), ambiguous control labels
+(
+x_control
+), and near-boundary values (
+x_boundary
+). The
+contract-preserving path is compared against intentionally stripped-down
+variants: no total order, first-seen control, sparse-group omission, implicit
+missing routing, and independently recomputed quantiles. A failure mode remains
+in the paper only if the experiment records an actual drift.
+
+8
+Experimental Methodology
+
+All mandatory experiments are run by
+
+databricks_semantic_contract_experiments.py
+on Databricks Runtime
+15.4 LTS / Spark 3.5.x using 40 fixed workers with autoscaling, Photon, and
+spot workers disabled. The mandatory blocks are:
+
+•
+
+P1: practical inference baseline ladder, including matched rows and
+production maxima;
+
+•
+
+P2: measured split-search feature scale with no projected main-paper
+points;
+
+•
+
+C1: inference backend parity;
+
+•
+
+C2: split-search backend parity;
+
+•
+
+E1: synthetic end-to-end trainer preservation across depths;
+
+•
+
+E2: Hillstrom end-to-end policy parity and utility preservation;
+
+•
+
+F1: adversarial failure catalog;
+
+•
+
+F2: fixed-boundary versus recomputed-boundary sensitivity;
+
+•
+
+F3: missingness stress grid for D1, D2, and a representative end-to-end witness;
+
+•
+
+S1: partition/order perturbation robustness before and after manifest lock;
+
+•
+
+S2: Arrow-vs-Pandas backend crossover and batch-size ablation.
+
+The Hillstrom block requires a deterministic preprocessing manifest, fixed row
+IDs, fixed feature order, fixed treatment mapping, fixed bucket boundaries, and
+a fixed seed/configuration. It reports serialized tree signatures, policy-vector
+equality, top-treatment assignment agreement, held-out policy value, AUUC, and
+Qini for the same learner family across reference and distributed paths. The
+validated manifest contains 64000 source rows, 21 canonical features, and a
+deterministic 51200/12800 train/holdout split.
+
+All synthetic blocks use seed 7 and fixed data-generation logic. To keep the
+paper synchronized with the final validated evidence, the manuscript cites a
+frozen base semantic bundle plus one additive final-round bundle. The frozen
+bundle supplies P1/C1/C2/E2 together with the original E1/F2 rows and the
+focused P2/F1 rerun; the additive bundle supplies the strengthened E1/F2 rows
+plus F3/S1/S2. Tables and figures report only those final validated outputs
+rather than intermediate or superseded runs.
+Appendix-only legacy-support artifacts are generated separately from the older
+
+databricks_paper_experiments.py
+result family and from the refreshed
+8-worker/40-worker E1/E2 reruns. Those appendix artifacts are used only for
+secondary systems context and do not replace the semantic-contract evidence.
+
+9
+Results
+
+9.1
+Performance
+
+P1 reports two inference views. The matched-row view compares feasible methods
+at the same row counts, with the anti-pattern retained only where it is
+practical to run. The production-max view reports method-specific upper-scale
+runs separately. The practical comparator is broadcast-rowwise; the
+anti-pattern remains a worst-case legacy baseline and is not the headline
+identity of the paper.
+
+At 1M matched rows, broadcast-rowwise reaches 10522 rows/s, while
+
+mapInPandas
+and
+mapInArrow
+reach 1.12M and 1.07M rows/s,
+respectively. At 10M matched rows, broadcast-rowwise remains near 10646 rows/s,
+while
+mapInPandas
+reaches 3.10M rows/s and
+mapInArrow
+
+reaches 4.72M rows/s, corresponding to roughly
+291\times
+and
+
+443\times
+speedups over the practical rowwise baseline. The production-max
+view reaches 6.86M rows/s for
+mapInPandas
+and 7.23M rows/s for
+
+mapInArrow
+at 50M rows. Arrow is therefore not a universal winner: at
+1M matched rows,
+mapInPandas
+is slightly faster, while Arrow overtakes
+it by 10M rows and stays ahead at the 50M production maximum. That is exactly
+the kind of backend-choice story the paper should tell.
+
+Figure 1:
+Matched-row inference runtime and throughput for anti-pattern, broadcast-rowwise,
+mapInPandas
+, and
+mapInArrow
+.
+
+Figure 2:
+Production-maximum inference runtime and throughput by method.
+
+P2 reports measured feature-scale split-search behavior. The main paper uses no
+projected points: any skipped driver baseline must record the candidate-row
+count and skip reason.
+
+The P2 result is a scale result, not a small-scale latency win. The
+driver-collect reference is faster at
+F\in\{10,50,250\}
+, but the
+collect-less SQL path completes for every measured point from 1240 to 124000
+candidate rows with zero invalid features, while the driver reference is
+skipped at
+F=1000
+because the estimated candidate table exceeds the
+100000-row safety threshold. Across those collect-less runs, the measured
+driver RSS deltas stay below 1.6 MB. This is the right systems message for the
+paper: driver-collect remains a reasonable small-scale reference, but the
+contract-preserving collect-less path is the one that continues to operate once
+candidate-table materialization stops being a sensible design.
+
+Figure 3:
+Measured collect-less split-search scale with driver candidate rows, runtime, and driver RSS delta.
+
+S2 turns the Arrow-vs-Pandas choice into a measured systems result instead of
+an anecdotal observation. Across 24 workload settings varying Arrow batch size,
+tree depth, number of trees, and treatment cardinality,
+mapInArrow
+
+wins 18 settings and
+mapInPandas
+wins 6. Arrow dominates all eight
+settings at batch size 1000 and seven of eight at 10000, but Pandas wins five
+of eight at 50000, mainly on
+T=4
+workloads and heavier model
+configurations. The best observed throughputs are 8.14M rows/s for
+
+mapInArrow
+and 7.16M rows/s for
+mapInPandas
+. This is the
+precise claim the paper should make: Arrow is often faster, but backend choice
+depends on the batch-size/model-shape regime.
+
+Figure 4:
+S2 backend crossover and batch-size ablation. Left: throughput bands and medians by backend and Arrow batch size. Right: number of workload settings won by each backend at each batch size.
+
+9.2
+Correctness / Parity
+
+C1 and C2 test the primitive-level contracts. C1 compares inference score
+vectors across rowwise-broadcast,
+mapInPandas
+, and
+
+mapInArrow
+. C2 compares split-search outputs across three backends:
+driver-collect, SQL, and
+mapInPandas
+. Success requires zero mismatches
+above
+10^{-9}
+for inference vectors and exact best-split tuple agreement
+with score equality within tolerance for split search.
+
+All C1 backends report zero mismatches above
+10^{-9}
+and max absolute delta
+0.0. All C2 backends return the same best split tuple
+
+("x_boundary", 15, 0.5, "right", 0.01700393701327202)
+.
+
+9.3
+End-to-end Policy Preservation
+
+E1 tests a synthetic multi-depth policy-tree witness under the fixed-input
+contract. E2 upgrades Hillstrom from a semantic witness to an end-to-end
+policy-preservation result. Both blocks compare serialized signatures, held-out
+policy vectors, treatment assignments, leaf assignments where applicable,
+policy value, AUUC, and Qini.
+
+E1 preserves the serialized signature and policy vector exactly for every
+backend at depths 1 through 4, with policy agreement 1.0 throughout. E2 does
+the same on Hillstrom: all backends report identical signatures, assignment
+agreement 1.0, policy value 0.182109, AUUC 0.036672, Qini 0.000461, and
+policy-vector max delta 0.0. E1 is a witness-style preservation result rather
+than a scale result: its purpose is to show that once boundaries, feature order,
+treatment order, and node expansion order are fixed, the distributed execution
+paths preserve the learned tree itself. The strengthened E1 grid extends that
+claim across
+T\in\{4,8\}
+and
+p_{\mathrm{miss}}\in\{0.0,0.3\}
+at depth 2. All
+12 grid rows preserve identical signatures, zero exact policy-vector
+mismatches, and zero leaf mismatches across driver-collect, SQL, and
+
+mapInPandas
+.
+
+Figure 5:
+Hillstrom AUUC and Qini curves for the single-node reference and distributed toolkit paths.
+
+9.4
+Robustness Under Perturbation
+
+S1 asks whether the contract stays exact under realistic Spark perturbations.
+It varies repartition counts, shuffles rows before lock, uses
+
+coalesce
+, and toggles intra-partition sorting. F3 asks the same
+question for missingness semantics. It sweeps missingness rates 0.0 through
+0.5, both NULL and NaN encodings, and missingness concentrated in the control
+arm, treated arms, or the positive-outcome subgroup.
+
+S1 gives the right semantics story. Once the fixed-input lock is enforced, all
+six perturbation variants preserve the serialized signature exactly, with zero
+exact policy-vector mismatches and zero leaf mismatches. Before lock, all six
+variants drift, with signature mismatches in every case, exact policy-vector
+drift in every case, and leaf drift in three of six variants. That is strong
+evidence that the contract is doing real work rather than merely documenting an
+already-stable pipeline.
+
+F3 is equally clean. Across 72 D1 parity checks, 72 D2 parity checks, and 54
+representative end-to-end witness checks, every contract-preserving row is
+exact: no inference mismatches, no split-tuple mismatches, no signature drift,
+no exact policy-vector drift, and no leaf drift. The paper can therefore say
+that the toolkit is robust to this missingness stress grid under the fixed-input
+contract, not merely on one nominal data distribution.
+
+9.5
+Failure / Stress Results
+
+F1 records which intentionally naive variants drift and which contract rule
+fixes the drift. F2 isolates boundary sensitivity by comparing frozen
+boundaries with independently recomputed approximate boundaries on the same
+data and seed. The expected outcome is equality under frozen boundaries and
+visible drift under recomputation; if the frozen-boundary path diverges, the
+semantics must be fixed before polishing the paper.
+
+All four naive F1 variants fail at least once.
+naive_first_seen_control
+
+drifts in 34 cases,
+naive_no_total_order
+in 29,
+
+naive_sparse_omit
+in 30, and
+naive_implicit_missing
+in
+3. The strongest evidence comes from
+x_tie
+,
+x_boundary
+,
+
+x_miss
+, and
+x_sparse
+;
+x_control
+mainly acts as a
+scope-boundary witness where the contract rejects the candidate set outright.
+For
+unstable argmax
+, the drift rows are equal-score ties: the winning
+candidate identity changes even though the score itself does not, so the largest
+score delta remains 0.0 while the selected split still drifts.
+The most operationally dangerous naive variant is
+naive_sparse_omit
+,
+because 30 of its failures come from accepting a split after the contract path
+has already rejected the candidate set as invalid. That behavior is exactly why
+candidate validity belongs in the semantic contract rather than in ad hoc
+backend-specific logic.
+In F2, the fixed-boundary path returns a valid split, while the independently
+recomputed approximate-quantile path produces no valid D2.2 candidate on the
+same data and seed. The stronger witness result shows why that matters:
+changing the boundary from
+0.5
+to
+0.4999999999
+changes the
+serialized tree signature and 99996 held-out policy vectors and leaf
+assignments, even though the top-treatment assignment agreement remains 1.0.
+The AUUC and Qini values also shift by about 0.0078. So the paper should not
+frame boundary recomputation as a harmless numerical detail. It changes the
+learned policy witness materially, even when the top treatment label stays the
+same on most rows.
+
+Figure 6:
+Fixed-boundary versus independently recomputed-boundary valid-split availability on the same data and seed.
+
+9.6
+Cross-Experiment Summary
+
+Table
+collects the results that anchor the paper’s claims.
+The speed evidence comes from P1 and S2, the scale evidence from P2, the
+primitive contracts from C1/C2 and F3, the end-to-end preservation evidence
+from E1/E2 and S1, and the failure semantics from F1/F2. Grouping the evidence
+this way makes the paper’s identity explicit: one toolkit, two primitives, one
+semantic contract, and one coherent validation program.
+
+10
+Discussion and Limitations
+
+Spark Policy Toolkit is not a replacement for optimized supervised tree
+systems, and it does not claim arbitrary determinism for arbitrary Spark jobs.
+Its role is narrower and more operational: preserve the meaning of a custom
+policy-learning pipeline while moving the expensive parts of inference and
+split search into Spark-native execution. In that sense it belongs closer to
+the correctness and semantic-faithfulness lineage represented by
+
+mlf-core
+and AERIFY than to estimator-centric uplift packages or
+distributed causal estimators
+[
+9
+,
+21
+]
+.
+
+The fixed-input contract is also a limitation. The toolkit assumes the
+preprocessing manifest, treatment vocabulary, feature order, and split
+boundaries are locked before comparing backends. Approximate quantile
+boundaries may be useful for exploration, but independently recomputing them in
+different paths is outside the semantic guarantee.
+
+The split-search scale result should also be read precisely. P2 does not claim
+that collect-less SQL is the fastest path at small feature counts; it shows
+that the contract-preserving path remains operational when driver-side
+candidate-table materialization stops being a reasonable execution strategy.
+
+Selected legacy measurements remain useful as appendix-only systems context.
+The older E4 split-search sweeps show a clean bin-count-dependent crossover
+between SQL and
+mapInPandas
+, and the refreshed 8-worker versus
+40-worker E1/E2 reruns show the expected throughput/runtime penalty at smaller
+cluster size. Those measurements strengthen interpretation of backend choice
+and cluster sensitivity, but they are intentionally kept out of the core claim
+path because they were not run as part of the frozen semantic-contract bundle
+used for P1/P2/C1/C2/E1/E2/F1/F2.
+
+The older Spark UI measurements are also useful for interpretation. Across the
+refreshed 40-worker and 8-worker inference-cost runs, GC ratios remain low
+(below 1.21%; see Appendix A), while executor CPU time grows sharply for the
+rowwise paths. That pattern supports the paper’s central reading of the
+serialization tax: the bottleneck is dominated by Python-side and executor CPU
+work, not by a GC-driven pathology.
+
+The current evidence is also intentionally scoped. The paper now shows exact
+fixed-input preservation on the synthetic witness and on Hillstrom, exactness
+under a missingness stress grid, and stability under six realistic
+repartition/coalesce/shuffle perturbations once the manifest lock is enforced.
+It therefore includes one public real-data end-to-end preservation case, not a
+broad multi-dataset real-data survey. It still does not claim arbitrary
+determinism outside that lock, arbitrary stability under independently
+recomputed boundaries, or broad public-dataset coverage. Extending the same
+end-to-end witness discipline to additional public datasets remains the most
+obvious next breadth step.
+
+11
+Conclusion
+
+Spark Policy Toolkit is a semantics-governed execution layer for policy
+learning in Spark. Vectorized inference and collect-less split search improve
+scalability, but their purpose is larger than raw speed: they preserve
+inference outputs, split decisions, and learned policy behavior under an
+explicit fixed-input contract. The validated run supports two clean claims:
+vectorized inference delivers the large runtime gains, and collect-less split
+search carries the semantic contract to larger candidate tables without
+driver-side materialization. The strengthened final-round evidence adds three
+important refinements: backend choice is workload-dependent, missingness stress
+does not break the contract-preserving paths, and realistic Spark perturbations
+remain exact once the fixed-input lock is enforced. The paper’s core message is
+semantics and scalability together.
+
+Appendix A
+Legacy Supplemental Systems Context
+
+This appendix reuses a narrow subset of older measurements that answer systems
+questions not directly covered by the frozen semantic-contract bundle. These
+artifacts are supplemental only: they do not support the core semantic
+preservation claims in the main text.
+
+A.1
+Legacy Split-Search Backend Crossover
+
+The older E4 sweep remains useful because it isolates a backend-choice question
+that the current semantic bundle does not measure directly. On both the
+40-worker and 8-worker clusters,
+mapInPandas
+is slightly faster at 16
+bins, the two backends are close around 32 bins, and SQL is faster by 64 and
+128 bins. That is consistent with the main paper’s broader message that
+backend choice is workload-dependent rather than universal.
+
+Figure 7:
+Appendix-only legacy E4 backend crossover from the older paper notebook family. The panels use the 40-worker and 8-worker legacy runs and show a bin-count-dependent crossover between SQL and
+mapInPandas
+.
+
+A.2
+Cluster-Size Sensitivity and CPU/GC Context
+
+The refreshed legacy E1/E2 reruns provide clean 40-worker versus 8-worker
+context for inference behavior. They are not part of the core semantic bundle,
+but they are useful for interpreting how the same inference workload scales
+with cluster size. The same reruns also include Spark UI CPU and GC summaries,
+which help explain the rowwise bottleneck without turning manual profiling into
+a main-text claim.
+

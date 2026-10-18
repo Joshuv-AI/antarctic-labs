@@ -1,0 +1,4850 @@
+Streaming Structured Inference with Flash-SemiCRF
+Benjamin K. Johnson, Thomas Goralski, Ayush Semwal, Hui Shen, H. Josh Jang
+
+Abstract
+Semi-Markov Conditional Random Fields (semi-CRFs) assign labels to segments of a sequence rather than to individual positions, enabling exact inference over segment-level features and principled uncertainty estimates at their boundaries. However, existing implementations must materialize a large edge potential tensor whose size grows with sequence length, maximum segment length, and label count, becoming prohibitive for speech-scale state spaces and intractable at genomic scales where sequences can exceed 100,000 positions. This memory bottleneck has limited the adoption of exact segment-level inference for long sequences and large label sets. We identify that the core inefficiency is materializing edge potentials that can instead be evaluated on-the-fly from a compact prefix-sum array, and make several improvements. First, replacing the stored edge tensor with prefix-sum lookup reduces the memory footprint by a factor proportional to the product of segment length and label count. Second, a streaming forward-backward pass with checkpoint-boundary normalization keeps working memory sublinear in sequence length while preserving exact gradients. Third, zero-centered cumulative scores control numerical drift and induce an adaptive duration prior under label imbalance. We integrate these ideas into Flash-SemiCRF, a fused Triton kernel that enables exact semi-CRF inference on previously intractable problem sizes. Available at https://github.com/biobenkj/flash-semicrf .
+
+
+
+keywords
+Semi-CRF · Structured prediction · Genomic segmentation · GPU inference · Triton
+
+†
+†
+equal-contributors:
+These authors contributed equally to this work.
+†
+†
+equal-contributors:
+These authors contributed equally to this work.
+
+1
+Introduction
+
+Many sequence types are naturally segmented and prediction tasks need to go beyond per-position labels. Modern neural encoders learn rich cross-position dependencies, but their output layers remain per-position: the loss decomposes over individual positions, no constraint enforces that adjacent predictions form a valid segmentation, segment duration is never explicitly modeled, and there is no direct mechanism to obtain posterior marginals over segment boundaries or segment identities.
+
+Semi-Markov conditional random fields (semi-CRFs)
+Sarawagi and Cohen 2004
+formalizes discriminative segment-level prediction by scoring variable-length segments via content, duration, and transition potentials. This factorization provides three structural properties that per-position classifiers lack, such as: every position belongs to exactly one labeled segment, explicit duration modeling that captures label-dependent length distributions, and segment-level posterior marginals that quantify uncertainty over boundaries rather than individual positions. The integration of CRFs as neural network output layers
+Lample et al. 2016
+;
+Ma and Hovy 2016
+;
+Kong et al. 2016
+;
+Ye and Ling 2018
+demonstrated that structured inference and representation learning are complementary, with the CRF layer enforcing global coherence over the encoder’s learned representations. Rush
+Rush 2020
+provided a general-purpose semi-CRF
+implementation (
+pytorch-struct
+), making the algorithm widely
+accessible as a training and inference layer but remaining bound by the edge tensor at scale.
+
+Semi-CRF inference requires materializing a dense edge tensor of size
+
+O(TKC^{2})
+(
+T
+positions,
+K
+maximum segment duration,
+C
+labels),
+dominating both time and memory. For NLP tasks with
+T
+in the tens to
+hundreds and small
+K
+, this cost is manageable.
+At genomic scales, modern CRF-based tools have primarily adopted
+the per-position linear (
+K{=}1
+) case that avoids this edge tensor and the associated time and memory costs of a standard semi-CRF: Bonito
+Oxford Nanopore Technologies 2020
+and
+Dorado
+Oxford Nanopore Technologies 2024
+decode raw nanopore signal, and
+Tranquillyzer
+Semwal et al. 2025
+annotates long-read RNA-seq, all at
+sequence lengths routinely exceeding
+10^{5}
+. Earlier semi-CRF
+applications to gene prediction – CONRAD
+DeCaprio et al. 2007
+and
+CRAIG
+Bernal et al. 2007
+– relied on hand-crafted features and
+CPU-bound Viterbi decode rather than serving as differentiable layers
+under neural encoder training. Extending to the semi-Markov setting
+multiplies the per-position cost by
+K
+; at genomic scales (
+K\geq 10^{3}
+), materializing the full edge tensor becomes infeasible on GPU
+long before the sequential sweep over
+T
+becomes the bottleneck.
+
+Recent work from Zaratiana et al.
+Zaratiana et al. 2023
+addresses this problem through pruning. Their Filtered Semi-CRF uses a local span classifier to discard irrelevant segments before running structured inference on the reduced graph. This exploits the sparsity of named entities in text, where most spans are non-entities. In contrast, for dense segmentation problems where every position belongs to a labeled segment such as those in genomics, the sparsity assumption does not typically hold and the full semi-CRF graph must be traversed.
+
+FlashAttention
+Dao et al. 2022
+demonstrated that for attention, the dominant cost is not arithmetic but memory access: by never materializing the
+n\times n
+attention matrix and instead recomputing blocks on-chip, it achieves large wall-clock speedups despite higher FLOP counts. We apply the same IO-aware principle to semi-CRF inference. The standard implementation pre-computes and stores the full
+O(TKC^{2})
+edge tensor in HBM, then runs forward-backward over the stored result. At scale, this tensor dominates memory. We observe that when segment content scores decompose as sums over positions
+Sarawagi and Cohen 2004
+, prefix sums reduce per-edge evaluation to
+O(1)
+, and the edge tensor need never be materialized. Each potential can instead be computed on-the-fly within a streaming dynamic programming (DP) kernel from an
+O(TC)
+cumulative score array.
+
+We present
+Flash-SemiCRF
+, a Triton-accelerated semi-CRF library built on this observation. The key ideas are:
+
+1.
+
+On-the-fly edge computation.
+A prefix-sum decomposition of segment content scores enables
+O(1)
+-in-duration edge potential evaluation, reducing inference from memory-bound to compute-bound and dispensing with the
+O(TKC^{2})
+edge tensor entirely.
+
+2.
+
+Ring-buffer streaming.
+The forward-backward algorithm operates through
+K
+-slot and
+2K
+-slot ring buffers for the forward and backward passes respectively, achieving
+O(KC)
+working memory independent of sequence length
+T
+.
+
+3.
+
+Sublinear checkpointing.
+Gradient checkpointing at
+\sqrt{TK}
+intervals, following the recomputation paradigm of FlashAttention
+Dao et al. 2022
+and the chunked scan of Mamba
+Gu and Dao 2024
+, yields
+O(\sqrt{T/K}\cdot KC)
+checkpoint memory that grows sublinearly in
+T
+.
+
+4.
+
+Globally-centered emissions.
+A sequence-level baseline subtraction simultaneously stabilizes prefix sums at large
+T
+and induces an adaptive, data-dependent duration prior that regularizes segmentation under label imbalance.
+
+We validate correctness through training convergence criteria, finite-difference gradient checks, and self-consistency between independent forward-backward implementations. We benchmark against
+pytorch-struct
+
+Rush 2020
+and demonstrate that sparse or banded matrix representations are incompatible with semi-CRF inference due to the triangular, rather than diagonal, sparsity structure of the intermediate operators. We characterize the transition from memory-bound to compute-bound scaling as a function of
+T
+,
+K
+, and
+C
+. Flash-SemiCRF provides a structured decoding approach that can be applied to learned representations to produce segmentations that respect duration constraints and maintain segment-level coherence, properties that per-position classifiers typically discard.
+
+2
+Terminological clarification
+
+A linear CRF (or linear-chain CRF) is a model in which every segment has duration one (K=1), so inference reduces to the standard per-position Viterbi/forward–backward recurrence. A linear scan is an algorithm that implements the semi-CRF dynamic program by sweeping left-to-right over positions, as opposed to tree-structured (parallel-scan) alternatives. The two are orthogonal: a linear scan can execute semi-CRF inference at both K=1 and
+K\geq 1
+, and a linear CRF can in principle be computed by any backend. Throughout this paper, “linear CRF” refers to the K=1 model, while “linear scan” refers to the sequential sweep algorithm.
+
+3
+Implementation
+
+3.1
+Edge Potential Decomposition
+
+The prefix-sum decomposition of segment content scores
+Sarawagi and Cohen 2004
+enables
+O(1)
+-per-edge evaluation from an
+O(TC)
+cumulative score array, reducing the memory footprint by a factor of
+KC
+relative to the pre-materialized
+O(TKC^{2})
+edge tensor. Existing implementations use this decomposition to efficiently pre-compute the full edge tensor. We instead evaluate each potential on-the-fly within the streaming DP kernel, so the tensor is never materialized. The following subsections define the cumulative score array, the edge potential it supports, and boundary projections that extends the standard three-term decomposition.
+
+3.2
+Cumulative Centered Scores
+
+Let
+f_{\theta}(t,c)
+denote the raw projected encoder emissions at token
+t
+for label
+c
+. Before constructing prefix sums, we subtract a
+sequence-level emission baseline
+:
+
+\nu_{b,c}=\frac{1}{L_{b}}\sum_{u=0}^{L_{b}-1}f_{\theta}(u,c),\qquad\bar{f}_{\theta}(t,c)=f_{\theta}(t,c)-\nu_{b,c}
+
+(1)
+
+where
+L_{b}
+is the true (unpadded) sequence length for batch element
+b
+.
+
+The cumulative scores are then defined over the centered emissions:
+
+\mathcal{S}_{0,c}=0,\qquad\mathcal{S}_{t,c}=\sum_{u=0}^{t-1}\bar{f}_{\theta}(u,c)
+
+(2)
+
+The content score for a segment
+[s,s+k)
+labeled
+c
+decomposes as a constant-time lookup:
+
+\mathcal{S}_{s+k,c}-\mathcal{S}_{s,c}=\sum_{u=s}^{s+k-1}f_{\theta}(u,c)\;-\;\nu_{b,c}\cdot k
+
+(3)
+
+The data-dependent term
+-\nu_{b,c}\cdot k
+introduced by centering couples label identity to segment duration, inducing an adaptive duration prior described in Section
+4
+.
+
+Numerical motivation.
+Without centering, cumulative scores grow as
+\mathcal{S}_{T,c}=O(T)
+when encoder emissions have nonzero per-label means. At genomic scale (
+T>10^{5}
+), segment scores
+\mathcal{S}_{t+k,c}-\mathcal{S}_{t,c}
+risk catastrophic cancellation, when both operands reach magnitude
+O(T)
+while their difference is
+O(1)
+. Subtracting the per-label mean before accumulation produces a zero-mean random walk whose cumulative sums have standard deviation
+O(\sqrt{T})
+, reducing the dynamic range by a factor of
+\sqrt{T}
+.
+
+3.3
+Edge Potentials
+
+The edge potential for a segment ending at position
+t
+with duration
+k
+, transitioning from source label
+c^{\prime}
+to destination label
+c
+, is:
+
+\tilde{\psi}(t,k,c,c^{\prime})=\underbrace{\bigl(\mathcal{S}_{t,c}-\mathcal{S}_{t-k,c}\bigr)}_{\text{centered content}}+\underbrace{\mathcal{B}_{k,c}}_{\text{duration bias}}+\underbrace{\mathcal{T}_{c^{\prime},c}}_{\text{transition}}+\underbrace{\mathcal{P}^{\text{start}}_{t-k,c}+\mathcal{P}^{\text{end}}_{t-1,c}}_{\text{boundary}}
+
+(4)
+
+where
+k\in\{1,\ldots,K\}
+is the segment duration,
+c
+is the destination label, and
+c^{\prime}
+is the source label. All terms in Equation (
+4
+) are either precomputed arrays (
+\mathcal{S}
+,
+\mathcal{B}
+,
+\mathcal{T}
+,
+\mathcal{P}
+) or scalar indices, so each edge potential is evaluated in
+O(1)
+time regardless of duration
+k
+. The
+O(TC)
+cumulative score array replaces the
+O(TKC^{2})
+pre-materialized edge tensor, reducing the memory footprint by a factor of
+KC
+.
+
+3.4
+Boundary Projections
+
+The content score
+\mathcal{S}_{t,c}-\mathcal{S}_{t-k,c}
+aggregates encoder emissions uniformly over all positions in a segment, but carries no information about the
+positions
+at which segments begin or end. The transition matrix
+\mathcal{T}_{c^{\prime},c}
+captures label-to-label preferences but is position-independent. For applications where segment boundaries have distinctive local signatures, such as exon-intron transitions in genomic annotation, beat onsets in physiological signals, etc., explicit boundary features can improve segmentation accuracy.
+
+The optional boundary projections score segment start and end positions directly from the encoder’s hidden representation via independent linear heads,
+\mathcal{P}^{\text{start}}_{t,c}=W^{\text{start}}_{c}\cdot\mathbf{h}_{t}
+and analogously for
+\mathcal{P}^{\text{end}}
+, with
+\mathbf{h}_{t}\in\mathbb{R}^{d}
+the encoder hidden state at position
+t
+and
+W^{\text{start}},W^{\text{end}}\in\mathbb{R}^{C\times d}
+learned projection matrices. A segment
+[s,s+k)
+with label
+c
+receives additive boundary contributions
+\mathcal{P}^{\text{start}}_{s,c}+\mathcal{P}^{\text{end}}_{s+k-1,c}
+.
+
+Separate start and end projections reflect a structural property of many segmentation problems: segment entry and exit involve categorically different signals (e.g., the start of a ”person” identity in language has different best indicators, the first name, than the end indicators, the last name). The separable form also has a computational advantage: each endpoint requires only a single lookup into a precomputed
+(B,T,C)
+array, whereas a joint parameterization
+\phi(c,\mathbf{h}_{s},\mathbf{h}_{s+k-1})
+would require
+O(TKC)
+precomputation over all valid endpoint pairs. The projections operate on the full encoder hidden states
+\mathbf{h}_{t}
+rather than the label-space scores
+f_{\theta}(t,c)
+, allowing boundary features to capture context that may not be linearly decodable in label space. When disabled (
+\mathcal{P}^{\text{start}}=\mathcal{P}^{\text{end}}=0
+), Equation (
+4
+) reduces to the standard three-term decomposition.
+
+Relationship to classical semi-CRF features.
+
+In the classical formulation
+Sarawagi and Cohen 2004
+, segment features have the general form
+g^{\prime}_{k}(y_{j},y_{j-1},\mathbf{x},t_{j},u_{j})
+, where each feature may depend jointly on the segment label, the preceding label, the input, and both endpoint positions, at the cost of materializing the full
+O(TKC^{2})
+edge tensor. Our boundary projections are the streaming-compatible factorization of this capability: boundary scores depend on position
+t
+and destination label
+c
+, but
+not
+on segment duration
+k
+or source label
+c^{\prime}
+, restricting boundary features to the separable form
+\phi(y_{j},\mathbf{x},t_{j})+\phi^{\prime}(y_{j},\mathbf{x},u_{j})
+. This is the price of the
+O(KC)
+memory guarantee,
+\mathcal{P}^{\text{start}}
+and
+\mathcal{P}^{\text{end}}
+are precomputed before the DP loop and cannot condition on quantities only known at recurrence time.
+
+4
+Emission Baseline Centering
+
+The emission baseline subtraction (Equation
+1
+) serves a dual purpose. Numerically, it controls cumulative sum magnitude as described in Section
+3.2
+. But per-label centering is not path-invariant, and it simultaneously induces an adaptive duration prior with useful regularization properties. We analyze this modeling effect here so that the reader enters the algorithm with a complete understanding of what the edge potentials encode.
+
+4.1
+The Adaptive Duration Prior
+
+A path-invariant centering, such as subtracting a per-position scalar
+b_{t}=\max_{c}f_{\theta}(t,c)
+shared across labels, would cancel in the partition function because every valid segmentation covers each position exactly once. Per-label centering with
+\nu_{b,c}
+does not cancel, because different segmentations assign different labels to different positions and
+\nu_{b,c}
+varies across labels.
+
+The effective segment score under centering (Equation
+3
+) is:
+
+S_{\text{eff}}(c,s,k)=\sum_{u=s}^{s+k-1}f_{\theta}(u,c)+\mathcal{B}_{k,c}-\nu_{b,c}\cdot k
+
+(5)
+
+The term
+-\nu_{b,c}\cdot k
+acts as a
+data-dependent duration prior
+: labels with high average emission
+\nu_{b,c}
+incur a larger penalty for long segments, while labels with low average emission receive a relative boost. This is equivalent to a canonical semi-CRF with an effective duration model
+\mathcal{B}^{\text{eff}}_{k,c}=\mathcal{B}_{k,c}-\nu_{b,c}\cdot k
+that adapts per-sequence based on the global emission statistics.
+
+This decomposition has an empirical Bayes-like feature
+Efron 2010
+:
+\mathcal{B}_{k,c}
+captures population-level duration priors across training sequences, while
+\nu_{b,c}
+provides per-sequence adjustment. Since
+\mathcal{B}_{k,c}
+can absorb the average centering effect across training, the adaptive prior primarily regularizes per-sequence variation under label imbalance.
+
+4.2
+Worked Example and Ablation
+
+Table
+1
+illustrates the asymmetric regularization under label imbalance using a synthetic sequence with three genomic labels. The duration penalty
+-\nu_{b,c}\cdot k
+grows linearly in
+k
+, so it primarily affects long segments of the dominant label, and are often the degenerate segmentations one wishes to suppress. Rare labels with low or negative baselines incur minimal penalty or a slight boost, and their centered emissions at active positions have higher contrast (
++8.12
+for
+Promoter
+) than for dominant labels (
++0.75
+for
+Intron
+), because centering subtracts a baseline close to the active-position emission for prevalent labels.
+
+Label
+c
+
+f_{\theta}
+(active)
+
+f_{\theta}
+(inactive)
+
+Prevalence
+
+\nu_{b,c}
+
+-\nu_{b,c}\cdot 100
+
+Intron
+
++4.0
+
+-1.0
+
+85%
+
++3.25
+
+-325
+
+Exon
+
++5.0
+
+-0.5
+
+14%
+
++0.27
+
+-27
+
+Promoter
+
++8.0
+
+-0.2
+
+1%
+
+-0.12
+
++12
+
+Table 1:
+Asymmetric regularization under label imbalance (
+T=10{,}000
+,
+C=3
+).
+The baseline
+\nu_{b,c}
+is the weighted average of active and inactive emissions.
+The dominant label (
+Intron
+) receives a strong duration penalty (
+-325
+at
+k{=}100
+), while the rare label (
+Promoter
+) receives a slight duration
+bonus
+(
++12
+) because its baseline is negative. Centered emissions at active positions (
+f_{\theta}^{(\text{active})}-\nu_{b,c}
+) are
++0.75
+(
+Intron
+),
++4.73
+(
+Exon
+),
++8.12
+(
+Promoter
+)–centering amplifies signal-to-background contrast for rare labels.
+
+In ablation experiments (Table
+2
+) on synthetic label-imbalanced sequences (
+C=3
+,
+T=2{,}000
+, proportions 75/15/10%), Viterbi decoding under mean centering recovered 59 segments of the rarest label versus 19 under path-invariant centering, and 64 versus 35 for the second-rarest, while the dominant label’s segment count decreased from 142 to 90. Under balanced proportions (0.33 each), segment counts converge across centering modes.
+
+Duration penalty
+-\nu\cdot k
+
+Imbalanced
+
+Balanced
+
+Label
+
+\nu_{b,c}
+
+k{=}10
+
+k{=}25
+
+k{=}50
+
+mean
+
+none
+
+mean
+
+none
+
+INTRON
+
+2.021
+
+-20.21
+
+-50.53
+
+-101.05
+
+90
+
+142
+
+80
+
+84
+
+EXON
+
+-0.413
+
+4.13
+
+10.32
+
+20.64
+
+64
+
+35
+
+80
+
+80
+
+UTR
+
+-0.603
+
+6.03
+
+15.07
+
+30.14
+
+59
+
+19
+
+76
+
+77
+
+Table 2:
+Implicit duration prior from
+mean
+centering under label imbalance.
+The per-label temporal mean
+\nu_{b,c}
+creates a duration penalty
+-\nu_{b,c}\cdot k
+
+that penalizes long segments of prevalent labels.
+Right columns show decoded segment counts: under imbalance (75/15/10%),
+mean centering redistributes segments from the dominant to rare labels;
+under balanced proportions (0.33 each), the effect vanishes.
+Separately, cumulative score magnitudes at
+T{=}50{,}000
+confirm that
+mean centering grows as
+O(\sqrt{T})
+(peak
+/\sqrt{T}\approx 1.28
+)
+versus
+O(T)
+without centering (peak
+/\sqrt{T}\approx 484
+).
+
+Architectural context.
+When the semi-CRF serves as an output decoder, the encoder can learn representations calibrated to the centering, and the adaptive prior provides robustness to emission scale miscalibration during early training. When semi-CRF marginals serve as input features for a downstream model, a path-invariant centering (
+b_{t}=\max_{c}f_{\theta}(t,c)
+) is preferable to preserve the canonical semi-CRF distribution.
+
+5
+Streaming Forward-Backward Algorithm
+
+We now present the streaming forward-backward algorithm that maintains only
+O(KC)
+working memory through ring buffers, with gradient checkpointing at
+\Delta\approx\sqrt{TK}
+intervals. The design follows the tiling and recomputation pattern of FlashAttention
+Dao et al. 2022
+and the chunked parallel scan of Mamba
+Gu and Dao 2024
+, adapted to the semi-Markov recurrence structure.
+
+5.1
+Forward Scan with Ring Buffer
+
+Algorithm
+1
+maintains a ring buffer
+\boldsymbol{\alpha}\in\mathbb{R}^{K\times C}
+storing the
+K
+most recent log-forward messages (Figure
+1
+). At each position
+t
+, the recurrence looks back at most
+K
+positions, so a ring buffer indexed by
+t\bmod K
+suffices–the oldest entry is always the one about to be overwritten.
+
+At checkpoint boundaries (every
+\Delta
+positions), the algorithm normalizes the ring buffer by subtracting the current maximum, accumulating the shift into
+\mathcal{N}_{\text{accum}}
+. This prevents the log-forward messages from drifting to extreme magnitudes over long sequences
+Dao et al. 2022
+. The full ring buffer state
+\Omega_{i}
+and cumulative normalizer
+\mathcal{N}_{i}
+are saved at each checkpoint for use in the backward pass. For variable-length batches, the normalization shift is masked to zero for positions beyond the true sequence length
+L_{b}
+, preventing phantom normalization of padding positions.
+
+Input:
+
+\mathcal{S}
+,
+\mathcal{T}
+,
+\mathcal{B}
+,
+\mathcal{P}^{\text{start}}
+,
+\mathcal{P}^{\text{end}}
+(optional), checkpoint interval
+\Delta
+
+Output:
+
+\log Z
+, checkpoints
+(\Omega,\mathcal{N})
+
+\boldsymbol{\alpha}\leftarrow-\infty
+;
+\boldsymbol{\alpha}[0,:]\leftarrow 0
+;
+\mathcal{N}_{\text{accum}}\leftarrow 0
+;
+
+1
+
+\Omega[0]\leftarrow\boldsymbol{\alpha}
+;
+\mathcal{N}[0]\leftarrow 0
+;
+
+2
+
+for
+
+t\leftarrow 1
+
+to
+
+T
+
+do
+
+3
+
+\mathbf{v}_{t}\leftarrow-\infty\in\mathbb{R}^{C}
+;
+
+4
+
+for
+
+k\leftarrow 1
+
+to
+
+\min(K,t)
+
+do
+
+5
+
+\tilde{\boldsymbol{\alpha}}_{\text{prev}}\leftarrow\boldsymbol{\alpha}[(t-k)\bmod K,:]
+;
+
+6
+
+\mathbf{h}\leftarrow\bigl(\mathcal{S}_{t,:}-\mathcal{S}_{t-k,:}\bigr)+\mathcal{B}_{k,:}+\mathcal{P}^{\text{start}}_{t-k,:}+\mathcal{P}^{\text{end}}_{t-1,:}
+;
+
+7
+
+\mathbf{E}\leftarrow\mathbf{h}[:,\text{None}]+\mathcal{T}^{\top}
+;
+
+8
+
+\mathbf{s}_{k}\leftarrow\text{LSE}(\tilde{\boldsymbol{\alpha}}_{\text{prev}}[\text{None},:]+\mathbf{E},\text{axis}=1)
+;
+
+9
+
+\mathbf{v}_{t}\leftarrow\text{LSE}(\mathbf{v}_{t},\mathbf{s}_{k})
+;
+
+10
+
+\boldsymbol{\alpha}[t\bmod K,:]\leftarrow\mathbf{v}_{t}
+;
+
+11
+
+if
+
+t\bmod\Delta=0
+
+then
+
+//
+Normalize at checkpoint
+Dao et al. 2022
+
+12
+
+n\leftarrow t/\Delta
+;
+
+13
+
+s_{b}\leftarrow\begin{cases}\max_{c}\mathbf{v}_{t,b}(c)&\text{if }t\leq L_{b}\\
+0&\text{otherwise}\end{cases}
+;
+
+14
+
+\mathcal{N}_{\text{accum}}\leftarrow\mathcal{N}_{\text{accum}}+s_{b}
+;
+\boldsymbol{\alpha}\leftarrow\boldsymbol{\alpha}-s_{b}
+;
+
+15
+
+\Omega[n]\leftarrow\boldsymbol{\alpha}
+;
+\mathcal{N}[n]\leftarrow\mathcal{N}_{\text{accum}}
+;
+
+16
+
+\log Z\leftarrow\text{LSE}(\boldsymbol{\alpha}[T\bmod K,:])+\mathcal{N}_{\text{accum}}
+;
+
+17
+
+return
+
+\log Z
+,
+(\Omega,\mathcal{N})
+;
+
+18
+
+Algorithm 1
+
+Streaming Semi-CRF Forward Scan
+
+5.2
+Backward Scan and the
+2K
+Ring Buffer
+
+The backward pass processes checkpoint segments in reverse order. For each segment
+[i\Delta,(i{+}1)\Delta)
+, the algorithm restores
+\boldsymbol{\alpha}
+from the saved checkpoint
+\Omega_{i}
+, recomputes the local forward messages within the segment, then scans
+\boldsymbol{\beta}
+right-to-left, computing marginals and accumulating gradients at each position (Figure
+1
+b). The saved normalizer
+\mathcal{N}_{i}
+restores the true scale of
+\boldsymbol{\alpha}
+when computing marginals via
+\log\mu=\tilde{\alpha}+\tilde{\psi}+\tilde{\beta}+\mathcal{N}_{i}-\log Z
+. The full backward algorithm is given in Appendix
+8
+.
+
+While the forward pass uses a ring buffer of size
+K
+(sufficient since we only look back
+K
+positions), the backward pass requires a ring buffer of size
+2K
+. This asymmetry arises from a write-before-read hazard in the backward access pattern: at position
+t
+we
+read
+
+\beta
+values from positions
+\{t{+}1,\ldots,t{+}K\}
+and
+write
+
+\beta[t]
+, so with
+K
+slots the write at
+t
+collides with the read at
+t{+}K
+(both map to
+t\bmod K
+), overwriting
+\beta[t{+}K]
+before it is read. Doubling the buffer to
+2K
+slots separates write and read indices for the entire lookback window, eliminating the conflict. The additional
+KC
+float memory overhead is negligible compared to the
+O(\sqrt{T/K}\cdot KC)
+checkpoint storage.
+
+Forward scan
+\boldsymbol{\alpha}_{t}\leftarrow\boldsymbol{\alpha}_{t-k}
+k=1\ldots K
+
+Checkpoints
+\Omega_{i}=(\boldsymbol{\alpha},\mathcal{N}_{i})
+every
+\Delta
+steps
+
+Backward scan
+\boldsymbol{\beta}_{t}\leftarrow\boldsymbol{\beta}_{t+k}
+k=1\ldots K
+
+save
+\Omega_{i}
+restore
+\Omega_{i}
+recompute
+\boldsymbol{\alpha}
+K
+-slot ring
+\alpha_{t\text{-}3}
+\alpha_{t\text{-}2}
+\alpha_{t\text{-}1}
+\alpha_{t}
+write
+t\!\bmod K
+\Omega_{0},\;\mathcal{N}_{0}
+\Omega_{1},\;\mathcal{N}_{1}
+\Omega_{2},\;\mathcal{N}_{2}
+\lceil T/\Delta\rceil
+total
+2K
+-slot ring (no R/W hazard)
+\beta_{t\text{+}1}
+\beta_{t\text{+}2}
+\beta_{t\text{+}3}
+\beta_{t\text{+}4}
+read:
+k=1\ldots K
+write
+t\!\bmod 2K
+Per-segment cycle:
+
+restore
+\Omega_{i}\;\to\;
+recompute
+\boldsymbol{\alpha}_{[i\Delta..(i{+}1)\Delta]}
+
+\;\to\;
+emit gradients
+\;\to\;
+free
+Memory:
+\underbrace{O(KC)}_{\text{ring buffers}}+\underbrace{O\!\left(\sqrt{T/K}\cdot KC\right)}_{\text{checkpoints}}
+
+Figure 1:
+Memory layout for streaming semi-CRF inference.
+The forward scan maintains a
+K
+-slot ring buffer indexed by
+t\bmod K
+,
+checkpointing the full buffer state
+\Omega_{i}
+and cumulative log-normalizer
+
+\mathcal{N}_{i}
+every
+\Delta
+positions.
+During the backward pass, each segment is processed independently:
+
+\boldsymbol{\alpha}
+is restored from
+\Omega_{i}
+and recomputed locally,
+while
+\boldsymbol{\beta}
+is scanned right-to-left through a
+2K
+-slot
+ring buffer that prevents the write-before-read hazard
+(Section
+5.2
+).
+Total memory is
+O(KC)
+for ring buffers plus
+
+O(\sqrt{T/K}\cdot KC)
+for checkpoints, sublinear in
+T
+.
+
+5.3
+Complexity
+
+Table
+3
+summarizes the time and memory complexity of the streaming algorithm. The dominant working memory is the
+O(KC)
+ring buffer, which is independent of sequence length
+T
+. Checkpoints contribute
+O(\sqrt{T/K}\cdot KC)
+, which grows sublinearly in
+T
+. The total time is
+O(TKC^{2})
+, the same as a standard semi-CRF
+forward-backward pass. The dominant memory reduction is replacing
+the
+O(TKC^{2})
+edge tensor with the
+O(TC)
+prefix-sum array (a
+factor of
+KC
+). The ring buffer further reduces forward-message
+storage from
+O(TC)
+to
+O(KC)
+, independent of sequence length.
+At
+T=10^{6}
+,
+K=200
+,
+C=6
+, the edge tensor would require
+
+{\sim}29
+GB in float32; the prefix-sum array requires
+
+{\sim}24
+MB, and the ring buffer
+{\sim}10
+KB.
+
+Component
+
+Time
+
+Memory
+
+Prefix-sum array
+
+O(TC)
+
+O(TC)
+
+Forward scan
+
+O(TKC^{2})
+
+O(KC)
+ring buffer
+
+Checkpoints
+
+–
+
+O(\sqrt{T/K}\cdot KC)
+
+Backward scan
+
+O(TKC^{2})
+
+O(KC)
+ring buffer (
+2K
+slots)
+
+Alpha recompute
+
+O(TKC^{2})
+
+O(\Delta\cdot C)
+per segment
+
+Gradient workspace
+
+–
+
+O(B\cdot N_{\text{ckpt}}\cdot KC^{2})
+
+Total
+
+O(TKC^{2})
+
+O(KC+\sqrt{T/K}\cdot KC)
+\dagger
+
+Table 3:
+Complexity analysis. The DP working memory (ring buffers) is
+
+O(KC)
+, independent of
+T
+; checkpoint memory grows as
+O(\sqrt{T})
+.
+The
+O(TC)
+prefix-sum array is the dominant memory term but replaces
+the
+O(TKC^{2})
+edge tensor, a reduction by factor
+KC
+.
+
+N_{\text{ckpt}}=\lceil T/\Delta\rceil
+,
+B
+is batch size.
+
+\dagger
+Working memory only; excludes the
+O(TC)
+prefix-sum array
+(precomputed, not part of the streaming DP) and the
+O(B\cdot N\cdot KC^{2})
+
+gradient workspace.
+
+5.4
+Adaptive Loop Tiling
+
+The marginal computation requires a
+(C_{\text{PAD}}\times C_{\text{PAD}})
+matrix per
+(t,k)
+pair, which at
+C_{\text{PAD}}=64
+demands approximately 384 registers per thread. On our L40S GPUs
+(65,536 registers per SM), this exceeds the available register file at
+
+>
+4 warps and causes spilling to slow local memory. We tile the destination label dimension in blocks of size
+\tau
+, reducing peak register demand to
+{\sim}120
+per thread and enabling 4–8 warps without spilling. The
+\beta
+reduction across tiles uses the online logsumexp pattern from FlashAttention
+Dao et al. 2022
+. The tile size
+\tau
+is selected adaptively based on
+C
+to balance compile time, register pressure, and iteration count (Table
+4
+).
+
+C_{\text{PAD}}
+
+\tau
+
+Iterations
+
+Rationale
+
+\leq 8
+
+4
+
+2
+
+Minimal iteration count
+
+\leq 16
+
+8
+
+2
+
+Minimal iteration count
+
+32
+
+16
+
+2
+
+Balanced
+
+64
+
+16
+
+4
+
+Moderate register pressure
+
+\geq 128
+
+32
+
+\leq 8
+
+Bounded compile time
+
+Table 4:
+Adaptive tile size selection. The algorithm bounds iteration count to
+\leq 8
+even at
+C=256
+while keeping register pressure manageable.
+
+5.5
+Correctness validation.
+
+Because the Triton kernel uses a different floating-point reduction order than the PyTorch reference, bitwise agreement is not expected. Instead, we validate through three strategies (Table
+5
+).
+Self-consistency:
+boundary and emission marginals from the backward pass must satisfy the following probabilistic invariants, 1) marginals bounded as
+P(c\mid t)\in[0,1]
+, 2) class marginals normalized as
+\sum_{c}P(c\mid t)=1
+at each position, 3) total mass conserved as
+\sum_{t,c}P(c\mid t)=T
+, and 4) zero mass at padded positions. All invariants hold at genome scale (
+B{=}142
+,
+T{=}100{,}000
+,
+C{=}24
+,
+K{=}100
+) with per-position deviation of
+1.6\times 10^{-4}
+.
+Finite-difference gradient checking:
+for each element of
+\mathcal{S}
+(cumulative scores),
+\mathcal{T}
+(transition matrix), and
+\mathcal{B}
+(duration bias), we perturb by
+\pm\varepsilon
+
+(
+\varepsilon=10^{-3}
+) and compute the central-difference approximation
+
+(f(x{+}\varepsilon)-f(x{-}\varepsilon))/2\varepsilon
+using only
+forward-pass evaluations. This numerical gradient, independent of the backward
+kernel, serves as ground truth against which the Triton autograd output is
+compared. All parameters achieve cosine similarity
+\geq 0.9999
+and
+normalized maximum error
+<5\times 10^{-5}
+, confirming that the custom
+backward kernels produce correct gradients.
+Training convergence comparison:
+models initialized with the same random seeds were trained with the streaming PyTorch, streaming Triton, and
+pytorch-struct
+linear scan backends reaching the same final negative log-likelihood (relative difference
+<10^{-9}
+) with loss-curve cosine similarity of
+1.0
+after 100 epochs, while the Triton backend runs approximately
+5.7\times
+faster.
+
+(a) Self-consistency – large scale (
+B{=}4
+,
+T{=}2,000
+,
+C{=}32
+,
+K{=}50
+)
+
+Invariant
+
+Observed
+
+Boundary marginals
+\in[0,1]
+
+[0.9699,\;1.0000]
+
+Expected segments
+\sum_{t}p(\mathrm{bdy}\mid t)\in[1,T]
+
+\bar{x}=1940.6
+, range
+[1940.6,\;1940.6]
+
+\sum_{c}P(c\mid t)=1
+
+max dev.
+=1.5\times 10^{-6}
+
+\sum_{t,c}P(c\mid t)\approx T
+
+2{,}000\pm 1.5\times 10^{-3}
+(0.0001%)
+
+Emission marginals
+\geq 0
+
+observed
+\min=0.0179
+
+Padding-mask consistency
+
+all padded positions
+=0
+
+(b) Self-consistency – genome scale (
+B{=}142
+,
+T{=}100,000
+,
+C{=}24
+,
+K{=}100
+)
+
+Invariant
+
+Observed
+
+Boundary marginals
+\in[0,1]
+
+[0.9597,\;1.0000]
+
+Expected segments
+\sum_{t}p(\mathrm{bdy}\mid t)\in[1,T]
+
+\bar{x}=96085.4
+, range
+[96085.3,\;96085.5]
+
+\sum_{c}P(c\mid t)=1
+
+max dev.
+=1.6\times 10^{-4}
+
+\sum_{t,c}P(c\mid t)\approx T
+
+100{,}000\pm 8.10
+(0.0081%)
+
+Emission marginals
+\geq 0
+
+observed
+\min=0.0208
+
+Padding-mask consistency
+
+all padded positions
+=0
+
+(c) Finite-difference gradient validation
+
+Parameter
+
+Elements
+
+Cosine sim.
+
+Norm. max err
+
+Max
+|\Delta|
+
+cum_scores
+
+1,600
+
+1.000000
+
+2.1\times 10^{-5}
+
+1.5\times 10^{-6}
+
+transition
+
+256
+
+1.000000
+
+4.6\times 10^{-6}
+
+2.3\times 10^{-6}
+
+duration_bias
+
+400
+
+1.000000
+
+2.6\times 10^{-6}
+
+1.7\times 10^{-5}
+
+(d) Training convergence
+
+Backend
+
+Final NLL
+
+Rel. diff
+
+Curve cos.
+
+Time (s)
+
+pytorch
+
+1606.71
+
+–
+
+–
+
+810
+
+triton
+
+1606.71
+
+6.4\times 10^{-10}
+
+1.000000
+
+141
+
+linear scan
+
+1606.71
+
+1.2\times 10^{-9}
+
+1.000000
+
+697
+
+Table 5:
+Full correctness validation of the Triton Semi-CRF implementation.
+
+(a)
+Self-consistency invariants at large scale.
+
+(b)
+Self-consistency invariants at genome scale.
+
+(c)
+Finite-difference gradient validation: central differences (
+\varepsilon{=}1.0\times 10^{-3}
+) vs. autograd (
+B{=}1
+,
+T{=}100
+,
+C{=}16
+,
+K{=}25
+).
+
+(d)
+Training convergence across backends (100 epochs,
+B{=}4
+,
+T{=}500
+,
+C{=}32
+,
+K{=}50
+). Performed on an NVIDIA L40S GPU.
+
+6
+Experiments
+
+We evaluate the ability of Flash-SemiCRF to perform exact semi-Markov inference across a range of values of
+T
+,
+K
+, and
+C
+, scaling from NER-sized problems to genome-scale sequences, measuring time, memory, and throughput. We further show that the natural candidates for exploiting bounded K – banded or block-sparse matrix formats – cannot prevent the near-dense intermediates that arise under composition in a parallel-scan formulation. Next, we benchmark linear CRF (K=1) and semi-CRF (K=30) on the DARPA TIMIT speech corpus
+Garofolo et al. 1993
+. Before presenting scaling benchmarks, we address whether tree-structured alternatives could exploit the bounded K via banded kernels.
+
+6.1
+Infeasibility of Banded Backends for Tree-Structured Inference
+
+Bounded segment length
+K
+suggests that tree-structured backends could exploit sparsity via banded or block-sparse kernels. Two structural results show they cannot (full proofs in Appendix
+10
+). First, at a tree node of span
+S
+, the feasible duration constraint
+d_{1}+d_{2}\leq S
+is
+anti-diagonal triangular
+, not diagonal-banded; the clique formed by all states with
+d\leq\lfloor S/2\rfloor
+forces a permutation-independent bandwidth lower bound of
+C\lfloor S/2\rfloor-1
+, so the compatibility matrix is near-dense once
+S\gtrsim K
+. Second, even genuinely banded one-step operators fill in under composition:
+\mathrm{bw}(B^{m})=\min(T,mK)
+, saturating at dense width after
+O(\log(T/K))
+tree levels. Empirically, bandwidth-reducing permutations yield ratios
+\mathrm{bw}_{\mathrm{best}}/(n{-}1)\geq 0.97
+for
+S\geq K
+, and block-triangular formats that match the triangular geometry did not yield speedups due to indirect indexing overhead. Consequently, banded storage cannot prevent the near-dense intermediates that drive the high memory requirements in tree-structured formulations, motivating the streaming approach of Section
+5
+. Similarly,
+pytorch-struct
+implements a heuristic of
+KC>200
+state space switch to use the linear scan backend instead of the default tree search approach.
+
+6.2
+Benchmarking
+
+Time and Memory
+
+We benchmark semi-CRF backends across
+T
+,
+K
+, and
+C
+(Fig.
+2
+). Tree-based methods (binary tree, memory sharded tree) achieve the lowest per-position latency at small state sizes but degrade rapidly as
+(K{+}1)C
+increases (Fig.
+2
+A, B), reflecting the cost of materializing
+O(T(KC)^{2})
+intermediates. Linear and streaming scans exhibit stable, state-size-independent compute scaling; the fused Triton kernel matches this stability while improving throughput over unfused linear scans through on-the-fly edge evaluation (Fig.
+2
+E).
+
+The dominant constraint at scale is memory, not compute. Linear and streaming scans maintain a small, constant memory footprint regardless of
+T
+, while tree-based and block-structured methods require orders of magnitude more memory (Fig.
+2
+C). This separation is most visible in the out-of-memory (OOM) frontier (Fig.
+2
+D, F): tree-based methods support progressively smaller state sizes as
+T
+grows, whereas the fused kernel maintains a nearly constant maximum state size. Eliminating edge tensor materialization fundamentally alters the scaling behavior of semi-CRF inference.
+
+To assess performance in regimes relevant to genomics-scale segmentation (large
+T
+and
+K
+), we further evaluate the fused Triton implementation at extended sequence lengths and segment sizes (
+2
+G).In this setup, the tradeoff between memory and per-position runtime for K=2000–8000 is driven by hardware-specific constraints, likely due to L1 cache saturation, and will vary across systems. Further, in this setup where the competing methods are no longer tractable due to memory constraints, the fused kernel maintains near-linear runtime scaling in
+K
+and a stable memory footprint, demonstrating practical applicability to kilobase-scale segmentation tasks.
+
+Figure 2:
+Theoretical Benchmarks
+.
+A.
+Compute time per positions relationship to model state size between backends across different sizes T.
+B.
+Compute time for forward and backwards pass between each backend.
+C.
+Peak Memory utilization between backends at T=128, K=4, C=3.
+D.
+Mapping the out of memory (OOM) frontier for each backend across different sizes of T.
+E.
+Comparing fused Triton kernel optimization to original linear scan and binary tree backends (pytorch-struct) for compute time per position across different sizes T
+F.
+Demonstrating Triton implementation maintains linear memory requirements across sizes T while Binary tree is able to be used as a viable compute backend.
+G.
+Demonstration of triton streaming backend performance at scales T=50,000, C=6, batch size=32 and variable size K.
+
+DARPA TIMIT Speech Corpus
+
+To evaluate Flash-SemiCRF as a training and inference layer on a real segmentation task, we benchmark
+on the DARPA TIMIT acoustic-phonetic corpus
+Garofolo et al. 1993
+, a standard testbed for
+structured sequence models in speech recognition. TIMIT is a natural fit for semi-CRFs because
+phonemes have characteristic, label-dependent durations (vowels persist longer than stops, silence
+segments are highly variable) that a duration-aware model can exploit. TIMIT provides
+630 speakers (462 train, 168 test) with time-aligned phoneme annotations at 61 phone classes,
+collapsed to the standard 39-phone set (
+C=39
+,
+C_{\mathrm{PAD}}=64
+)
+following the Lee and Hon convention
+Lee and Hon 1989
+. Input features are 13 MFCCs with delta and delta-delta
+coefficients (39 dimensions total) extracted at 10 ms frame shift, z-score normalized using
+training-set statistics.
+
+Experimental setup.
+
+Both models share an identical 3-layer bidirectional LSTM encoder (hidden dimension 256, dropout 0.3)
+followed by the Flash-SemiCRF structured decoder, trained with AdamW (
+\eta=10^{-3}
+, weight
+decay
+10^{-5}
+) and cosine annealing over 50 epochs (batch size 32). CRF parameters receive L2
+regularization (
+\lambda=0.01
+) and gradient clipping at norm 5.0. The partition function is
+computed in float64 for numerical stability. Learnable scalar sequence boundary parameters
+
+\pi^{\mathrm{start}},\pi^{\mathrm{end}}\in\mathbb{R}^{C}
+are folded into the cumulative scores
+via the prefix-sum trick described in Appendix
+11.4
+. The only difference between models is the
+maximum segment duration:
+K=1
+(linear CRF) versus
+K=30
+(semi-CRF). This adds
+K\times C=1{,}170
+duration bias parameters to the semi-CRF, negligible relative to the encoder’s
+{\sim}1.6
+M
+parameters. At
+C_{\mathrm{PAD}}=64
+, the per-checkpoint gradient workspace
+(Section
+8
+.4.4) requires
+{\sim}120
+MB for a batch of 32, well within the regime where workspace
+memory is eclipsed by the edge tensor savings.
+
+Convergence.
+
+Figure
+3
+shows training convergence across three metrics. Both models
+converge to similar final Phone Error Rates (PER
+=0.218
+for
+K{=}30
+vs.
+0.219
+for
+K{=}1
+;
+best PER
+0.2178
+vs.
+0.2187
+at epoch 43), consistent with the expectation that a strong
+neural encoder absorbs much of the segmentation structure into its learned representations,
+compressing the marginal contribution of explicit duration modeling to corpus-level PER. The
+semi-CRF maintains a small but consistent advantage in boundary
+F1 (
+0.476
+vs.
+0.468
+) and segment F1 (
+0.215
+vs.
+0.207
+), reflecting improved
+segmentation coherence from explicit duration modeling.
+
+The semi-CRF starts behind (
+\mathrm{PER}=0.95
+at epoch 0 vs.
+0.89
+for
+K{=}1
+), requiring
+additional warmup to explore the larger state space, but overtakes the linear CRF by epoch 5 on PER
+and by epoch 1 on boundary and segment F1. The PER gap peaks near epoch 20
+(
+\Delta\approx 0.005
+) and compresses to
+{\sim}0.001
+as both models converge, suggesting that
+harder tasks with larger
+T
+or
+C
+may exhibit a more pronounced semi-CRF advantage.
+
+Validation loss is consistently higher for the semi-CRF (
+206.8
+vs.
+183.7
+at epoch 50) despite
+its lower PER. This is expected: the semi-CRF partition function sums over a combinatorially larger
+space of valid
+(K,C)
+segmentations, distributing probability mass more broadly than the per-frame
+linear CRF. The discrepancy underscores that the negative log-likelihood and the MAP segmentation
+accuracy measure distinct quantities.
+
+Metric
+
+K{=}1
+(Linear CRF)
+
+K{=}30
+(Semi-CRF)
+
+Phone Error Rate (PER)
+\downarrow
+
+0.219
+
+0.218
+
+Boundary F1
+\uparrow
+
+0.468
+
+0.476
+
+Boundary F1
+\pm
+2 frames
+\uparrow
+
+0.914
+
+0.919
+
+Segment F1
+\uparrow
+
+0.207
+
+0.215
+
+Boundary entropy
+H_{\mathrm{bdy}}
+
+5.687 (invariant)
+
+5.529
+
+Position entropy
+H_{\mathrm{pos}}
+
+3.651
+
+3.651
+
+Validation NLL
+
+183.7
+
+206.8
+
+Table 6:
+TIMIT benchmark results (
+C=39
+, 50 epochs, best checkpoint by PER at epoch 43).
+Both models share the same BiLSTM encoder (
+{\sim}1.6
+M parameters); the semi-CRF adds
+
+K\times C=1{,}170
+duration bias parameters. Boundary entropy for the linear CRF is
+structurally fixed:
+p(\mathrm{boundary}\mid t)=1
+when
+K{=}1
+.
+
+Backend
+
+Model
+
+K
+
+Train (s/ep)
+
+Infer (s)
+
+utt/s
+
+kfr/s
+
+pytorch-struct linear scan
+
+Semi-CRF
+
+30
+
+4,430
+
+1,243
+
+0.8
+
+0.3
+
+Flash-SemiCRF (Triton)
+
+Semi-CRF
+
+30
+
+175
+
+7
+
+21.1
+
+6.5
+
+Flash-SemiCRF (PyTorch)
+
+Linear CRF
+
+1
+
+27
+
+32
+
+140
+
+42.8
+
+Speedup (Flash
+K{=}30
+vs. pytorch-struct)
+
+25
+\times
+
+178
+\times
+
+26
+\times
+
+22
+\times
+
+Table 7:
+Wall-clock training and inference time on TIMIT (single NVIDIA L40S GPU,
+
+B=32
+,
+C=39
+). Flash-SemiCRF achieves a 25
+\times
+training speedup and
+178
+\times
+inference speedup over pytorch-struct’s linear scan, the only existing
+backend that can run
+K{=}30
+at this scale without OOM (tree backends exceed
+memory at
+(K{+}1)C=1{,}209
+; see Fig.
+2
+D). All three backends compute the same
+partition function (Table
+5
+d).
+
+Throughput.
+
+Table
+7
+compares wall-clock training and inference time on a single L40S GPU.
+The
+pytorch-struct
+linear scan
+Rush 2020
+requires 4,430 s per training epoch and
+1,243 s per inference pass at
+K{=}30
+, making a 50-epoch experiment a multi-day commitment.
+Flash-SemiCRF reduces this to 175 s per epoch (25
+\times
+speedup) and 7 s per inference pass
+(178
+\times
+), processing 6.5k frames/s versus 0.3k.
+Despite the
+30\times
+increase in theoretical
+O(TKC^{2})
+complexity from
+K{=}1
+to
+K{=}30
+, training the semi-CRF takes only
+6.5\times
+longer per epoch: 175 s versus 27 s.
+
+Inference time for
+K{=}1
+(32 s) is paradoxically slower than for
+K{=}30
+(7 s).
+The
+K{=}1
+CRF forward pass is fast (as reflected in the 27 s training time, which is dominated
+by forward-backward); the bottleneck is the unfused PyTorch Viterbi decode, which runs outside the
+Triton kernel pipeline. The
+K{\geq}3
+path dispatches to the fused Triton kernel for both
+forward-backward and Viterbi (Appendix
+11.9
+), avoiding this overhead. A fused
+K{=}1
+Triton
+Viterbi was not prioritized since the training loop, where kernel fusion provides the dominant
+speedup, already dispatches efficiently at
+K{=}1
+.
+
+Boundary entropy and structural differences in uncertainty.
+
+The clearest separation between models appears in boundary entropy (Figure
+3
+). Complementing the per-position label entropy
+H_{\mathrm{pos}}
+(the sequence-averaged form of the frame-level class entropy used by Salvi
+Salvi 2006
+for phonetic boundary detection), we define a sequence-level diagnostic as the Shannon entropy
+Shannon 1948
+of the normalized boundary distribution:
+
+H_{\mathrm{bdy}}=-\sum_{t=1}^{T}\hat{p}_{t}\ln\hat{p}_{t},\qquad\hat{p}_{t}=\frac{p(\mathrm{boundary}\mid t)}{\sum_{t^{\prime}}p(\mathrm{boundary}\mid t^{\prime})},
+
+(6)
+
+where
+p(\mathrm{boundary}\mid t)
+is the posterior segment-start probability from the forward-backward algorithm, and
+\exp(H_{\mathrm{bdy}})
+gives the effective number of boundary positions. For
+K{=}1
+, every frame is its own segment, so
+\hat{p}_{t}=1/T
+and
+H_{\mathrm{bdy}}=\ln T
+per utterance regardless of learned parameters; the linear CRF does not represent boundary uncertainty.
+
+Averaged over the test corpus, the
+K{=}1
+invariant is
+\mathbb{E}[\ln T]=5.687
+(geometric mean length
+\approx 295
+frames). The semi-CRF reduces
+H_{\mathrm{bdy}}
+from
+5.671
+at initialization to
+5.529
+by epoch 50, concentrating probability mass at true phoneme transitions; the effective boundary count
+\exp(H_{\mathrm{bdy}})
+drops from
+{\sim}295
+to
+{\sim}252
+. Per-position label entropy converges to the same value for both models (
+H_{\mathrm{pos}}=3.651
+), indicating that the encoder representations are comparably expressive and the difference lies in the structural decoder.
+
+Per-utterance uncertainty analysis.
+
+The corpus-level PER gap (
+\Delta=0.001
+) averages over utterances where the models perform comparably and utterances where they diverge. Figure
+4
+shows posterior marginals
+p(c\mid t)
+and boundary posteriors for DR4_MPCS0_SI729 (
+T=480
+, 39 ground-truth segments), where the semi-CRF achieves PER
+=0.232
+versus the linear CRF’s
+0.411
+, a 44% relative reduction concentrated in regions of phonetic ambiguity. Both models activate similar label hypotheses, but the semi-CRF concentrates posterior mass more tightly along the correct label rows. The boundary posterior panel makes the structural difference explicit: the linear CRF assigns
+p(\mathrm{boundary}\mid t)=1.0
+uniformly (expected at
+K{=}1
+), while the semi-CRF’s boundary posterior rises at true phoneme boundaries (red dashed lines) and falls to
+p<0.2
+in segment interiors. The semi-CRF thus provides a posterior over segmentation structure that a per-position model cannot represent, useful for downstream tasks requiring boundary uncertainty.
+
+Figure 3:
+Training convergence on TIMIT:
+K{=}1
+linear CRF vs.
+K{=}30
+semi-CRF.
+Both models share an identical BiLSTM encoder; the only difference is the maximum
+segment duration. The semi-CRF maintains a similar Phone Error Rate (PER) as the linear CRF, but consistent improvement at
+boundary and segment F1 despite starting from a higher initial PER (larger state
+space requires additional warmup).
+
+Figure 4:
+Per-utterance posterior analysis on TIMIT utterance DR4_MPCS0_SI729
+(
+T=480
+frames).
+Top:
+Ground-truth (GT) phoneme segmentation.
+
+Middle panels:
+Position-marginal heatmaps
+p(c\mid t)
+for the
+semi-CRF (
+K{=}30
+, PER
+=0.232
+) and linear CRF (
+K{=}1
+, PER
+=0.411
+).
+Both models activate similar label hypotheses, but the semi-CRF concentrates
+posterior mass more tightly on correct labels.
+
+Bottom:
+Boundary posterior
+p(\mathrm{boundary}\mid t)
+.
+The semi-CRF (blue) varies across the utterance, peaking at true phoneme boundaries
+(red dashed lines) and suppressing in segment interiors. The linear CRF (orange)
+assigns
+p(\mathrm{boundary}\mid t)=1.0
+uniformly, the expected behavior when
+every frame is its own segment (
+K{=}1
+).
+
+7
+Discussion
+
+The central barrier to scaling semi-Markov Conditional Random Fields has not been their asymptotic complexity, but the memory constraints of the standard implementations. Existing approaches materialize an
+O(TKC^{2})
+edge tensor, making inference memory bound and infeasible on long sequences. By eliminating this tensor through prefix-sum decomposition and streaming dynamic programming, Flash-SemiCRF reframes semi-CRF inference as a compute-bound problem. This shift mirrors recent advances such as FlashAttention and scan-based sequence models, where avoiding intermediate materialization, not just changing asymptotics, enables orders of magnitude improvements in scale.
+
+This change in computational approach has direct modeling consequences. Semi-CRFs, long limited to short sequences in domains such as natural language processing, now become viable as structured decoders for long-range sequence modeling. This addresses a persistent limitation of modern neural sequence models: while they learn rich contextual representations, they typically operate under a per-position prediction paradigm that does not enforce globally consistent segmentations. In contrast, semi-CRFs ensure coherent partitions of the input and model the label-dependent duration explicitly. With Flash-SemiCRF, these properties can now be applied at scale, enabling segmentation tasks to combine learned representations with explicit structural constraints (such as event detection, temporal action segmentation, or domain parsing). Both linear and semi-CRF models have complementary strengths that make them useful in different parts of a genomics workflow. Linear CRFs are computationally efficient and well-suited for annotating known sequence structures (e.g., Tranquillyzer, Bonito/Dorado). In contrast, semi-CRFs provide modeling of segment structure and boundary uncertainty, which can be advantageous for more complex annotation tasks, albeit at the cost of increased computational overhead due to the larger context space and exact marginals.
+
+The edge potential decomposition (
+3.4
+) also has consequences for gradient flow and encoder design. Because the boundary projections
+\mathcal{P}^{\text{start}}
+,
+\mathcal{P}^{\text{end}}
+and the content emissions
+f_{\theta}
+enter as separate additive terms, their gradients are structurally decoupled: the Jacobian is block-diagonal in (
+W^{\text{start}}
+,
+W^{\text{end}}
+) vs.
+f_{\theta}
+, so parameter updates can adjust boundary and content scoring independently. In a joint edge tensor parameterization these error signals are entangled, which can slow convergence when boundary and interior features have different characteristic scales or noise profiles. The additive decomposition also provides a natural interface for multi-modal encoders. Modalities that produce punctate, position-specific signals (e.g., Tn5 insertion densities from ATAC-seq) can be routed to the boundary projections via modality-specific heads on
+\mathbf{h}_{t}
+, while broad-domain signals (e.g., aggregate expression counts, histone mark coverage) feed the content term through
+f_{\theta}
+and accumulate evidence via the prefix sum. This routing is possible precisely because the terms are precomputed independently; it would not be available in a parameterization where boundary and content features are jointly materialized.
+
+Beyond computational efficiency, the formulation introduces a subtle but important statistical effect. The sequence-level centering of emissions induces an adaptive, data-dependent duration prior
+\mathcal{B}^{\text{eff}}_{k,c}=\mathcal{B}_{k,c}-\nu_{b,c}\cdot k
+. This acts as an implicit regularizer: labels with high average emissions incur stronger penalties for long segments, while low-prevalence labels receive a relative boost. In imbalanced settings, this mechanism suppresses degenerate segmentations dominated by frequent states and improves recovery of rare classes. At the same time, because this transformation is not path-invariant, it alters the underlying distribution and may be undesirable in settings requiring strict probabilistic interpretation. The choice between centered and uncentered formulations therefore reflects a trade-off between numerical stability, regularization, and model fidelity.
+
+We note a limitation regarding the state space size
+C
+. To
+ensure deterministic gradients and eliminate inter-segment atomic
+contention on the GPU, Flash-SemiCRF allocates a gradient workspace of
+size
+O(B\cdot N_{\text{ckpt}}\cdot K\cdot C^{2})
+. While this
+introduces a quadratic dependence on the number of labels, genomic
+segmentation tasks, parsing promoters, UTRs, exons, introns, and
+intergenic regions, rarely require
+C>64
+. Within this regime, the
+workspace memory remains low and is entirely eclipsed by the savings
+from avoiding the
+O(TKC^{2})
+edge tensor materialization. The
+implementation trades asymptotic scaling in
+C
+for transformative
+scaling in the dimensions that define genomic workloads (
+T
+and
+K
+).
+
+A more consequential constraint in practice is the maximum segment
+duration
+K
+. Segments longer than
+K
+cannot receive a unified duration
+or content score and are instead captured through
+K
+-position lookback
+and boundary projections alone, sacrificing the full segment-level
+modeling that motivates the semi-CRF. In human genomics, median
+protein-coding exons (
+{\sim}130
+bp) and most introns
+(
+{\sim}1{,}539
+bp median) fall well within practical
+K
+values, but
+the 95th percentile intron length (
+{\sim}22{,}908
+bp) approaches the
+regime where runtime and register pressure costs become significant
+(Section
+5.4
+). Selecting
+K
+to cover the segments of
+greatest modeling interest is therefore the primary tuning decision, and
+characterizing how segmentation quality degrades as features extend past
+
+K
+is an important direction for future work.
+
+From a systems perspective, the results highlight a broader principle: structured models are often dismissed as unscalable due to nominal complexity, when in practice the limiting factor is memory traffic and tensor materialization. By converting semi-CRF inference into a fused, streaming kernel, we demonstrate that exact structured inference can achieve high throughput and full hardware utilization at sequence lengths exceeding
+10^{6}
+. This suggests that other structured models based on dynamic programming over variable-length segments, such as segmental
+RNNs
+Kong et al. 2016
+, may admit similar reformulations.
+
+Acknowledgements
+
+We gratefully acknowledge the feedback on this work from Brad Dickson. Computation for the work described in this paper was supported by the High Performance Cluster and Cloud Computing (HPC3) Resource at the Van Andel Research Institute.
+
+Declarations
+
+•
+
+Funding:
+Support for this work was provided by VAI.
+
+•
+
+Conflict of interest:
+The authors declare no competing interests.
+
+•
+
+Code availability:
+[https://github.com/biobenkj/flash-semicrf]
+
+•
+
+Author contribution:
+B.K.J., T.G., A.S., H.S., and H.J.J. conceived the project. B.K.J. and T.G. implemented and bench marked the code base. B.K.J. and T.G. wrote the manuscript with contributions from A.S., H.S., and H.J.J.. H.S. and H.J.J. provided co-supervision and funding for this project.
+
+8
+Streaming Backend Supplement
+
+8.1
+Notation
+
+Table
+8.1
+collects all symbols used in the main text and supplement.
+
+Symbol
+
+Description
+
+Shape
+
+T
+
+Padded sequence length (batch dimension)
+
+scalar
+
+L_{b}
+
+True (unpadded) length for batch element
+b
+
+scalar
+
+K
+
+Maximum segment duration
+
+scalar
+
+C
+
+Number of labels (states)
+
+scalar
+
+C_{\text{PAD}}
+
+Padded label count (next power of 2)
+
+scalar
+
+B
+
+Batch size
+
+scalar
+
+\mathcal{S}_{t,c}
+
+Cumulative centered scores
+
+(B,T+1,C)
+
+f_{\theta}(t,c)
+
+Raw projected encoder emissions
+
+(B,T,C)
+
+\nu_{b,c}
+
+Sequence-level emission baseline
+
+(B,C)
+
+\bar{f}_{\theta}(t,c)
+
+Centered emissions:
+f_{\theta}(t,c)-\nu_{b,c}
+
+(B,T,C)
+
+\mathcal{T}_{c^{\prime},c}
+
+Transition scores (source
+c^{\prime}
+to dest
+c
+)
+
+(C,C)
+
+\mathcal{B}_{k,c}
+
+Duration bias for duration
+k
+, label
+c
+
+(K,C)
+
+\mathcal{P}^{\text{start}}_{t,c}
+
+Start boundary projection (optional)
+
+(B,T,C)
+
+\mathcal{P}^{\text{end}}_{t,c}
+
+End boundary projection (optional)
+
+(B,T,C)
+
+\tilde{\alpha}_{t}(c)
+
+Log-forward message at position
+t
+, label
+c
+
+(B,C)
+
+\tilde{\beta}_{t}(c)
+
+Log-backward message
+
+(B,C)
+
+\boldsymbol{\alpha}
+
+Forward ring buffer
+
+(B,K,C)
+
+\boldsymbol{\beta}
+
+Backward ring buffer
+
+(B,2K,C)
+
+\Omega
+
+Checkpointed ring buffer states
+
+(B,N_{\text{ckpt}},K,C)
+
+\mathcal{N}
+
+Cumulative log-normalization factors
+
+(B,N_{\text{ckpt}})
+
+\Delta
+
+Checkpoint interval (
+\approx\sqrt{TK}
+)
+
+scalar
+
+\tau
+
+Tile size for label dimension
+
+scalar
+
+\log Z
+
+Log partition function
+
+(B,)
+
+Table 8.1:
+Notation. Tilde (
+\tilde{\cdot}
+) denotes log-domain quantities.
+N_{\text{ckpt}}=\lceil T/\Delta\rceil
+is the number of checkpoints.
+
+Indexing conventions.
+
+Positions
+t\in\{0,\ldots,T\}
+index
+boundaries
+between tokens; cumulative scores
+\mathcal{S}_{t,c}
+are defined at boundaries, with
+\mathcal{S}_{0,c}=0
+.
+Emissions
+f_{\theta}(t,c)
+are defined at tokens
+t\in\{0,\ldots,T{-}1\}
+(0-indexed).
+Segments are half-open intervals
+[s,s{+}k)
+covering tokens
+s,s{+}1,\ldots,s{+}k{-}1
+, so that the content score is
+\mathcal{S}_{s+k,c}-\mathcal{S}_{s,c}
+.
+Durations are 1-indexed:
+k\in\{1,\ldots,K\}
+, stored at 0-indexed positions
+k{-}1
+in code.
+
+8.2
+Backward Pass with Checkpointing
+
+The backward pass processes checkpoint segments in reverse order, recomputing
+\boldsymbol{\alpha}
+from saved checkpoints following the gradient checkpointing strategy described in the main text. Algorithm
+2
+gives the full pseudocode. The saved normalizer
+\mathcal{N}_{i}
+restores the true scale of
+\boldsymbol{\alpha}
+when computing marginals.
+
+Input:
+
+\mathcal{S}
+,
+\mathcal{T}
+,
+\mathcal{B}
+,
+\mathcal{P}^{\text{start}}
+,
+\mathcal{P}^{\text{end}}
+(optional), checkpoints
+(\Omega,\mathcal{N})
+,
+\log Z
+, upstream
+\partial\mathcal{L}/\partial Z
+
+Output:
+
+\nabla\mathcal{S}
+,
+\nabla\mathcal{T}
+,
+\nabla\mathcal{B}
+
+\boldsymbol{\beta}\leftarrow-\infty\in\mathbb{R}^{2K\times C}
+;
+\boldsymbol{\beta}[T\bmod 2K,:]\leftarrow 0
+;
+
+1
+
+Initialize gradient accumulators;
+
+2
+
+for
+
+i\leftarrow N_{\text{ckpts}}-1
+
+to
+
+0
+
+do
+
+3
+
+t_{\text{start}}\leftarrow i\cdot\Delta
+;
+t_{\text{end}}\leftarrow\min((i+1)\cdot\Delta,T)
+;
+
+4
+
+\mathcal{N}_{i}\leftarrow\mathcal{N}[i]
+;
+
+5
+
+\boldsymbol{\alpha}_{\text{local}}\leftarrow
+
+RecomputeAlpha
+(
+\Omega[i]
+,
+t_{\text{start}}
+,
+t_{\text{end}}
+);
+
+6
+
+for
+
+t\leftarrow t_{\text{end}}-1
+
+to
+
+t_{\text{start}}
+
+do
+
+7
+
+\tilde{\boldsymbol{\alpha}}_{t}\leftarrow\boldsymbol{\alpha}_{\text{local}}[t-t_{\text{start}},:]
+;
+
+8
+
+\tilde{\boldsymbol{\beta}}_{t}\leftarrow-\infty
+;
+
+9
+
+for
+
+k\leftarrow 1
+
+to
+
+\min(K,T-t)
+
+do
+
+10
+
+\tilde{\boldsymbol{\beta}}_{\text{next}}\leftarrow\boldsymbol{\beta}[(t+k)\bmod 2K,:]
+;
+
+//
+2K
+ring buffer
+
+\tilde{\psi}\leftarrow
+edge potential (main text, Eq. (
+4
+));
+
+11
+
+//
+Log-norm correction restores true
+\alpha
+scale
+
+\log\mu\leftarrow\tilde{\boldsymbol{\alpha}}_{t}[\text{None},:]+\tilde{\psi}+\tilde{\boldsymbol{\beta}}_{\text{next}}[:,\text{None}]+\mathcal{N}_{i}-\log Z
+;
+
+12
+
+\mu\leftarrow\exp(\log\mu)
+;
+
+13
+
+Accumulate
+\nabla\mathcal{S}
+,
+\nabla\mathcal{T}
+,
+\nabla\mathcal{B}
+from
+\mu
+;
+
+14
+
+\tilde{\boldsymbol{\beta}}_{t}\leftarrow\text{LSE}(\tilde{\boldsymbol{\beta}}_{t},\text{LSE}(\tilde{\psi}+\tilde{\boldsymbol{\beta}}_{\text{next}}[:,\text{None}],\text{axis}=0))
+;
+
+15
+
+\boldsymbol{\beta}[t\bmod 2K,:]\leftarrow\tilde{\boldsymbol{\beta}}_{t}
+;
+
+//
+2K
+ring buffer
+
+return
+
+\nabla\mathcal{S}
+,
+\nabla\mathcal{T}
+,
+\nabla\mathcal{B}
+;
+
+16
+
+Algorithm 2
+
+Streaming Semi-CRF Backward Pass
+
+8.3
+Gradient Computation
+
+Gradients follow by the standard exponential-family identity:
+\nabla_{\theta}\log Z
+equals the expected sufficient statistics under
+p_{\theta}
+, computed from the joint segment marginals
+\mu(t,k,c,c^{\prime})=\exp(\tilde{\alpha}_{t-k}(c^{\prime})+\tilde{\psi}+\tilde{\beta}_{t}(c)+\mathcal{N}_{i}-\log Z)
+produced by the forward-backward pass. The implementation challenges lie not in these standard expressions but in accumulating them efficiently on GPU, which we address next.
+
+8.4
+Reduced Atomics: Full Algorithms
+
+8.4.1
+Reduced Atomics Strategy
+
+GPU atomic operations are expensive and introduce non-determinism from floating-point non-associativity. For per-position gradients
+\nabla\mathcal{S}_{t,c}
+, we accumulate all
+k
+and tile contributions into thread-local registers before a single atomic write, reducing atomics from
+K\times\text{tiles}
+to 1 per position (e.g.,
+4{,}000\to 1
+at
+K{=}1000
+,
+C{=}64
+). For shared parameters
+\nabla\mathcal{T}
+and
+\nabla\mathcal{B}
+, we allocate per-checkpoint-segment workspace buffers that eliminate inter-segment atomic contention entirely, with a final deterministic
+einsum
+reduction on the host.
+
+8.4.2
+Local Accumulation for Per-Position Gradients
+
+For
+\nabla\mathcal{S}_{t,c}
+, the negative contribution (from segments starting at
+t
+) is the same position for all
+k
+values. Instead of
+K\times\text{tiles}
+atomic operations, we accumulate locally:
+
+\texttt{grad\_cs\_t\_local}\leftarrow\mathbf{0}\in\mathbb{R}^{C_{\text{PAD}}}
+;
+
+1
+
+for
+
+k\leftarrow 1
+
+to
+
+K
+
+do
+
+2
+
+for
+
+each tile
+
+do
+
+3
+
+\texttt{grad\_cs\_t\_local}\mathrel{-}=\sum_{c^{\prime}}\mu_{\text{tile}}(t,k,c,c^{\prime})
+;
+
+//
+Register accumulation
+
+\texttt{atomic\_add}(\nabla\mathcal{S}_{t},\texttt{grad\_cs\_t\_local})
+;
+
+//
+Single write
+
+Algorithm 3
+
+Local Accumulation for
+\nabla\mathcal{S}_{t}
+
+Speedup
+:
+K\times\text{tiles}\to 1
+atomic per position (e.g.,
+1000\times 4=4000\to 1
+at
+K=1000
+,
+C=64
+).
+
+8.4.3
+Per-Duration Accumulation for Duration Bias
+
+For
+\nabla\mathcal{B}_{k,c}
+, we accumulate across all tiles for each
+k
+, then write once:
+
+for
+
+k\leftarrow 1
+
+to
+
+K
+
+do
+
+1
+
+\texttt{grad\_db\_k\_local}\leftarrow\mathbf{0}\in\mathbb{R}^{C_{\text{PAD}}}
+;
+
+2
+
+for
+
+each tile
+
+do
+
+3
+
+\texttt{grad\_db\_k\_local}\mathrel{+}=\sum_{c^{\prime}}\mu_{\text{tile}}(t,k,c,c^{\prime})
+;
+
+4
+
+\texttt{atomic\_add}(\nabla\mathcal{B}_{k},\texttt{grad\_db\_k\_local})
+;
+
+//
+Once per
+k
+
+Algorithm 4
+
+Per-Duration Accumulation for
+\nabla\mathcal{B}_{k}
+
+Speedup
+:
+\text{tiles}\to 1
+atomic per
+(t,k)
+pair.
+
+8.4.4
+Segment-Isolated Workspace Buffers
+
+For shared parameters (
+\nabla\mathcal{T}
+,
+\nabla\mathcal{B}
+), cross-segment atomic contention introduces non-determinism. We allocate per-segment workspace buffers:
+
+\texttt{grad\_tr\_workspace}\in\mathbb{R}^{B\times N_{\text{segments}}\times K\times C_{\text{PAD}}\times C_{\text{PAD}}}
+
+(8.1)
+
+(Padded to
+C_{\text{PAD}}
+to prevent out-of-bounds access from masked Triton threads; sliced back to
+C
+before reduction.)
+
+Each checkpoint segment writes to its own slice, eliminating inter-segment atomics. The final reduction uses deterministic host-side operations:
+
+\displaystyle\nabla\mathcal{T}_{k,c^{\prime},c}
+
+\displaystyle=\texttt{einsum}(\text{``bskij, b}\to\text{kij''},\texttt{workspace.sum(dim=1)},\nabla_{\text{out}})
+
+(8.2)
+
+\displaystyle\nabla\mathcal{B}_{k,c}
+
+\displaystyle=\texttt{einsum}(\text{``bskc, b}\to\text{kc''},\texttt{workspace.sum(dim=1)},\nabla_{\text{out}})
+
+(8.3)
+
+Determinism
+: The segment-wise sum is deterministic (fixed order), and
+einsum
+performs a single reduction pass.
+
+Memory cost
+:
+O(B\cdot N_{\text{ckpt}}\cdot K\cdot C^{2})
+workspace, which is acceptable since
+N_{\text{segments}}\approx\sqrt{T/K}
+is typically small (e.g., 10–100 for
+T=100\text{k}
+,
+K=1000
+).
+
+8.5
+Online Logsumexp for Tiled
+\beta
+Reduction
+
+The adaptive loop tiling described in the main text tiles the destination label dimension in blocks of size
+\tau
+. Since the
+\beta
+reduction spans multiple tiles, we use the standard online logsumexp pattern from FlashAttention
+Dao et al. 2022
+(tracking a running maximum and rescaled sum of exponentials across tile boundaries) to compute exact logsumexp without materializing the full
+C_{\text{PAD}}\times C_{\text{PAD}}
+matrix.
+
+Two-pass tile normalization for marginals.
+Marginal computation (Algorithm
+2
+, line 7) also tiles across destination labels. A naive approach would normalize each tile independently, but different tiles would use different local maxima, causing inconsistent marginals and 10–400% gradient errors when
+C>\tau
+. The implementation uses a two-pass strategy: Pass 1 sweeps all tiles to compute a single global maximum
+m^{*}=\max_{c}(\tilde{\boldsymbol{\alpha}}_{t}+\tilde{\psi}+\tilde{\boldsymbol{\beta}})
+; Pass 2 reprocesses all tiles using
+m^{*}
+as a fixed normalizer, ensuring every tile produces marginals on the same scale.
+
+8.6
+Additional Numerical Stability Measures
+
+Beyond emission baseline centering and checkpoint boundary normalization (both described in the main text), the implementation employs several additional stability measures.
+
+Log-domain.
+All forward-backward computations use logsumexp:
+\text{LSE}(\mathbf{x})=\max(\mathbf{x})+\log\sum_{i}\exp(x_{i}-\max(\mathbf{x}))
+.
+
+NEG_INF guards.
+When all logsumexp inputs are
+-10^{9}
+, the subtraction
+x-\max(x)=0
+instead of remaining at
+-\infty
+. Guards detect this case (
+\max<-10^{9}+1
+) and return
+-\infty
+directly.
+
+Float64 accumulation.
+Gradient tensors for shared parameters use float64 to prevent non-determinism from
+atomic_add
+floating-point non-associativity. Error scales as
+O(\sqrt{T\times K\times C})
+per operation; float64 reduces this from
+{\sim}10^{-3}
+(float32) to
+{\sim}10^{-10}
+(negligible).
+
+Log-scale clamping.
+The log-scale factor
+\log s=\max(\boldsymbol{\alpha})+\mathcal{N}_{i}-\log Z
+is clamped to
+[-700,0]
+before
+\exp()
+. The upper bound of
+0
+reflects that segment marginals are probabilities (
+s\leq 1
+); the lower bound of
+-700
+prevents float64 underflow (
+\exp(-710)\approx 0
+).
+
+Intermediate clamping.
+Before computing the joint log-probability
+\tilde{\boldsymbol{\alpha}}_{t}+\tilde{\psi}+\tilde{\boldsymbol{\beta}}
+, each term is clamped to
+[-10^{6},10^{6}]
+. This prevents float overflow when three large-magnitude terms are summed, without affecting valid values (which are
+O(\sqrt{T})
+after checkpoint normalization).
+
+Masking.
+Invalid positions use
+-10^{9}
+(not
+-\infty
+) to avoid NaN in gradients.
+
+Variable-length batches.
+For sequences ending at
+L<T
+, the normalization shift is masked to zero for
+t>L
+, freezing
+\mathcal{N}_{\text{accum}}
+at the correct value.
+
+8.7
+Emission Baseline: Extended Notes
+
+Padding semantics.
+
+The implementation computes the baseline using a
+masked mean
+over valid positions only:
+
+\nu_{b,c}=\frac{1}{L_{b}}\sum_{u=0}^{L_{b}-1}f_{\theta}(u,c)
+
+(8.4)
+
+where
+L_{b}
+is the true (unpadded) sequence length for batch element
+b
+. Padding tokens (
+u\geq L_{b}
+) do not influence the baseline, so the effective model is independent of padding scheme and padded length
+T
+. For the primary use case of fixed-length genomic windows (
+L_{b}=T
+for all batch elements), this reduces to the ordinary mean over the full sequence.
+
+Semantics-preserving alternative.
+
+A semantics-preserving alternative exists: build prefix sums on the centered residuals
+\bar{f}_{\theta}(t,c)
+but reconstruct the original segment score at evaluation time via
+(\mathcal{S}_{s+k,c}-\mathcal{S}_{s,c})+\nu_{b,c}\cdot k
+. This retains the numerical benefit (
+O(\sqrt{T})
+cumulative sum magnitude) without altering the semi-CRF distribution. We use the globally-centered variant instead for three reasons: (1) the adaptive prior provides empirically useful regularization in label-imbalanced genomic sequences; (2) the learned duration bias
+\mathcal{B}_{k,c}
+, with
+K\times C
+free parameters, can absorb the average effect of
+\nu_{b,c}
+, so the prior primarily regularizes per-sample variation rather than imposing a fixed bias (parametric duration models with
+O(C)
+parameters cannot represent the linear-in-
+k
+correction and likely require the reconstruction variant instead); and (3) the reconstruction variant requires propagating
+\nu_{b,c}
+into the Triton kernel as an additional argument, adding complexity for marginal benefit in the fixed-length-window regime where
+L_{b}=T
+.
+
+8.8
+Implementation Correspondence
+
+Table
+8.2
+maps mathematical notation to code variables for reference.
+
+Math
+
+Code Variable
+
+Notes
+
+\mathcal{S}_{t,c}
+
+cum_scores[:, t, c]
+
+Built from centered emissions
+
+f_{\theta}(t,c)
+
+scores
+/
+projected
+
+Raw encoder output
+
+\nu_{b,c}
+
+_center_scores(scores, lengths)
+
+Masked mean over valid
+L_{b}
+
+\mathcal{T}_{c^{\prime},c}
+
+transition[c_src, c_dst]
+
+Source-first storage
+
+\mathcal{B}_{k,c}
+
+duration_bias[k-1, c]
+
+0-indexed in code
+
+\boldsymbol{\alpha}
+
+ring_buffer
+/
+alpha_ring
+
+Size
+K
+
+\boldsymbol{\beta}
+
+beta_ring
+
+Size
+2K
+
+\mathcal{P}^{\text{start}}
+
+proj_start
+
+Optional,
+(B,T,C)
+
+\mathcal{P}^{\text{end}}
+
+proj_end
+
+Optional,
+(B,T,C)
+
+\Omega
+
+ring_checkpoints
+
+Saved at intervals
+
+\mathcal{N}
+
+log_norm_checkpoints
+
+Cumulative log-norm
+
+\Delta
+
+checkpoint_interval
+
+\approx\sqrt{TK}
+
+C_{\text{PAD}}
+
+C_PAD
+
+_next_power_of_2(C)
+
+\tau
+
+TILE_C
+
+Adaptive
+
+–
+
+grad_tr_workspace
+
+(B,N_{\text{ckpt}},K,C_{\text{PAD}},C_{\text{PAD}})
+
+–
+
+grad_db_workspace
+
+(B,N_{\text{ckpt}},K,C_{\text{PAD}})
+
+Table 8.2:
+Mapping between mathematical notation and implementation.
+N_{\text{ckpt}}
+denotes number of checkpoint segments.
+
+9
+Semi-Markov CRF Backend Algorithms
+
+This supplement summarizes the semi-CRF inference backends benchmarked in the main text, with complexity analysis and provenance for each.
+
+9.1
+Notation
+
+All notation follows the main text; see also the notation table in Appendix
+8
+. We additionally use
+n=(K+1)\cdot C
+for the expanded state-space size and
+\mathbf{W}_{t}
+for the transition matrix at position
+t
+in tree-structured backends.
+
+Important Distinction: Edge Tensor Materialization.
+
+All backends in this supplement assume the edge potential tensor
+\psi\in\mathbb{R}^{B\times(T-1)\times K\times C\times C}
+is
+pre-materialized
+before inference. This
+O(TKC^{2})
+tensor dominates memory for large
+T
+, regardless of which backend processes it. True
+T
+-independent memory–where edge potentials are computed on-the-fly from
+O(TC)
+cumulative scores–is achieved only in the
+fused Triton kernel
+(Appendix
+8
+).
+
+9.2
+Semiring Abstraction
+
+All backends use the standard semiring dynamic programming framework
+Goodman 1999
+: substituting the
+(\oplus,\otimes)
+operations yields the partition function (Log semiring), Viterbi path (Max semiring),
+k
+-best lists, samples, or entropy from the same algorithm; see Rush
+Rush 2020
+, Table 2 for the full catalog of semirings and their gradient interpretations. For large state spaces, we provide checkpointing wrappers that trade
+2\times
+compute for reduced memory
+Chen et al. 2016
+.
+
+9.3
+Provenance
+
+Backend
+
+Source
+
+Binary tree (dense)
+
+pytorch-struct
+Rush 2020
+
+Binary tree (sharded)
+
+pytorch-struct
+Rush 2020
+
+Linear scan (standard)
+
+pytorch-struct
+Rush 2020
+
+Linear scan (vectorized)
+
+This work
+
+Streaming linear (PyTorch)
+
+This work
+
+Block-triangular
+
+This work
+
+Banded (analysis)
+
+This work
+
+Streaming (Triton kernel)
+
+This work
+
+Table 9.1:
+Algorithm provenance. The Triton kernel (bottom) is the key contribution: it computes edge potentials on-the-fly, achieving true
+T
+-independent memory and enabling genome-scale inference.
+
+9.4
+Backend 1: Binary Tree (Parallel Scan)
+
+The binary tree algorithm is the default semi-Markov implementation in
+pytorch-struct
+
+Rush 2020
+. It reformulates the forward recursion as semiring matrix products over an expanded state space of size
+n=(K+1)\cdot C
+, where each state
+(k,c)
+represents “
+k
+time steps remaining in a segment of label
+c
+” (see Rush
+Rush 2020
+for the full transition matrix construction). The forward pass
+\mathbf{A}_{1:T}=\mathbf{W}_{1}\otimes\cdots\otimes\mathbf{W}_{T}
+is computed via binary tree reduction in
+O(\log T)
+parallel depth.
+
+Complexity.
+
+Time:
+O(T(KC)^{3})
+. Space:
+O(T(KC)^{2})
+. The quadratic memory in
+KC
+causes OOM before the depth advantage is realized. A sharded variant
+Rush 2020
+adds gradient checkpointing
+Chen et al. 2016
+to reduce memory to
+O(\sqrt{T}(KC)^{2})
+with
+2\times
+compute overhead, extending the viable regime from
+n<100
+to
+n<150
+.
+
+9.5
+Backend 2: Block-Triangular Sparsity (Experimental)
+
+At a tree node of span
+S
+, the duration constraint
+k_{1}+k_{2}\leq S
+means only
+\frac{K(K+1)}{2}
+duration pairs are feasible, yielding block-triangular sparsity.
+
+Representation.
+
+Store only blocks
+(k_{1},k_{2})
+satisfying
+k_{1}+k_{2}\leq S
+, each block being dense
+C\times C
+. This halves storage vs. dense at relevant spans.
+
+Sparse Multiplication.
+
+For block-triangular matrices
+\mathbf{C},\mathbf{D}
+:
+
+\mathbf{E}[k_{1},k_{3}]=\bigoplus_{k_{2}:k_{1}+k_{2}\leq S,\,k_{2}+k_{3}\leq S}\mathbf{C}[k_{1},k_{2}]\otimes\mathbf{D}[k_{2},k_{3}]
+
+(9.1)
+
+Practical Outcome.
+
+In PyTorch/CUDA experiments, block-triangular storage did
+not
+yield speedups at typical sparsity levels. The overhead of indirect indexing and non-contiguous memory access outweighed savings from skipping
+\sim
+50% of blocks. GPUs prefer well-tuned dense kernels unless sparsity exceeds
+\sim
+90%.
+
+9.6
+Backend 3: Linear Scan
+
+The standard linear scan is the reference semi-Markov implementation in
+pytorch-struct
+
+Rush 2020
+. It implements the textbook semi-CRF forward recursion
+\tilde{\alpha}_{t}(c)=\text{LSE}_{k,c^{\prime}}[\tilde{\alpha}_{t-k}(c^{\prime})+\tilde{\psi}(t,k,c,c^{\prime})]
+sequentially over positions, avoiding the
+O((KC)^{2})
+intermediate storage of tree backends. A vectorized variant replaces inner loops with batched tensor operations, yielding 2–3
+\times
+speedup.
+
+Complexity.
+
+Time:
+O(TKC^{2})
+. Space:
+O(TC)
+for forward messages, or
+O(KC)
+with ring buffer; in both cases the pre-materialized edge tensor adds
+O(TKC^{2})
+, which dominates. Depth:
+O(T)
+.
+
+9.7
+Backend 4: Streaming Linear Scan
+
+The streaming linear scan reduces
+forward message
+memory from
+O(TC)
+to
+O(KC)
+via a ring buffer (
+\tilde{\alpha}_{t}(c)=\boldsymbol{\alpha}[t\bmod K,c]
+). However, this PyTorch implementation still requires the pre-materialized edge tensor as input.
+
+Complexity.
+
+Time:
+O(TKC^{2})
+. Space:
+O(TKC^{2})
+for edge tensor +
+O(KC)
+for ring buffer. True
+T
+-independent memory requires computing edges on-the-fly via the prefix-sum decomposition (main text, Eq. (
+4
+)), achieved only in the fused Triton kernel (Appendix
+8
+).
+
+9.8
+Complexity Summary
+
+Backend
+
+Work
+
+Memory
+
+Depth
+
+Notes
+
+Binary tree (dense)
+
+O(Tn^{3})
+
+O(Tn^{2})
+
+O(\log T)
+
+n<100
+
+Binary tree (sharded)
+
+O(Tn^{3})
+
+O(\sqrt{T}n^{2})
+
+O(\sqrt{T})
+
+n<150
+
+Block-triangular
+
+O(Tn^{3})
+
+\sim\frac{1}{2}O(Tn^{2})
+
+O(\log T)
+
+Not faster
+
+Banded
+
+O(Tn^{3})
+
+\to O(Tn^{2})
+
+O(\log T)
+
+Not viable
+
+Linear scan
+
+O(TKC^{2})
+
+O(TKC^{2})^{*}
+
+O(T)
+
+General
+
+Streaming linear (PyTorch)
+
+O(TKC^{2})
+
+O(TKC^{2})^{*}
+
+O(T)
+
+Ring buffer for
+\alpha
+
+Streaming (Triton kernel)
+
+O(TKC^{2})
+
+O(\sqrt{T/K}\cdot KC)^{\dagger}
+
+O(T)
+
+Genome-scale
+
+Table 9.2:
+Backend comparison.
+n=(K+1)\cdot C
+.
+∗
+Dominated by pre-materialized edge tensor.
+†
+Working memory is
+O(KC)
+(ring buffers); checkpoint memory grows sublinearly as
+O(\sqrt{T/K}\cdot KC)
+. Edges computed on-the-fly; see Appendix
+8
+.
+
+9.9
+Duration Distributions
+
+The duration bias
+\mathcal{B}_{k,c}
+can be learned as
+K\times C
+free parameters or constrained to standard parametric forms (Geometric, Negative Binomial, Poisson, Uniform), reducing the parameter count to
+O(C)
+and encoding inductive bias about expected segment lengths.
+
+10
+Infeasibility of Banded Backends for Tree-Structured Semi-CRF Inference
+
+This appendix analyzes a natural optimization for exact semi-CRF
+Sarawagi and Cohen 2004
+inference: using banded or block-sparse matrix kernels inside a binary-tree (parallel-scan) formulation of the dynamic program. The conclusion is negative: within this formulation, banded storage can reduce cost only at the smallest spans, but cannot prevent near-dense intermediate operators at the levels that dominate runtime and memory.
+
+Scope.
+The claims below apply to
+exact
+tree-structured implementations that represent node-to-node combination as semiring matrix products over an expanded state space of size
+\Theta(KC)
+. This does not rule out approximate inference (e.g., pruning) or alternative exact formulations that do not materialize these operators.
+
+10.1
+Notation
+
+We consider a sequence of length
+T
+, equivalently boundary indices
+0,1,\dots,T
+. The maximum segment length is
+K
+, and the label/state count is
+C
+.
+
+Two matrices are used as simplifying models:
+
+Boundary reachability (global boolean model).
+Define
+B\in\{0,1\}^{(T+1)\times(T+1)}
+by
+
+B[i,j]=\begin{cases}1&\text{if }1\leq j-i\leq K\\
+0&\text{otherwise.}\end{cases}
+
+(10.1)
+
+This captures the monotone-time constraint “a single segment advances forward by at most
+K
+boundaries.” For instance, with
+T=5
+and
+K=2
+, the matrix
+B
+has
+B[0,1]=B[0,2]=B[1,2]=B[1,3]=\cdots=1
+, but
+B[0,3]=0
+(since
+3-0=3>K
+).
+
+Duration compatibility at a tree node (local pattern).
+At a tree node of span length
+S
+, partial states are indexed by a duration
+d\in\{1,\dots,D\}
+where
+D=\min(K,S)
+, and a label
+y\in\{1,\dots,C\}
+. The quantity
+D
+caps the duration states at the actual feasible range for the current span: durations cannot exceed the span
+S
+, nor can they exceed the global maximum
+K
+. Feasible left/right duration pairs satisfy
+d_{1}+d_{2}\leq S
+. For each feasible duration pair, label interactions are typically dense, yielding
+block-dense
+sparsity.
+
+Effective bandwidth.
+
+For a square matrix
+M
+whose indices have been flattened to
+\{1,\dots,n\}
+, define the (structural) bandwidth
+
+\mathrm{bw}(M)\;=\;\max\{\,|i-j|\;:\;M[i,j]\text{ is structurally nonzero}\,\}.
+
+(10.2)
+
+For boolean matrices, “nonzero” means
+1
+; for semiring score matrices, it means “not masked / not
+-\infty
+.” A banded representation with half-bandwidth
+b
+requires
+\mathrm{bw}(M)\leq b
+(after any chosen permutation).
+
+10.2
+Local Incompatibility Pattern Is Triangular, Not Diagonal-Banded
+
+At an internal tree node of span
+S
+, a standard combine operation must account for left and right partial durations
+d_{1},d_{2}
+that together fit inside the span:
+
+d_{1}+d_{2}\leq S.
+
+(10.3)
+
+In the
+(d_{1},d_{2})
+plane, this feasible set is an anti-diagonal triangle. A diagonal band, by contrast, corresponds to
+|d_{1}-d_{2}|\leq b
+. These shapes overlap only partially, and the mismatch becomes pronounced as soon as
+S
+is a nontrivial fraction of
+K
+.
+
+To make “not narrow-banded under any ordering” precise, it suffices to lower bound the minimum achievable bandwidth.
+
+Proposition 1
+
+(Bandwidth lower bound from a clique)
+.
+
+Fix
+S
+, let
+D=\min(K,S)
+, and define a binary matrix
+M_{S}\in\{0,1\}^{(DC)\times(DC)}
+indexed by pairs
+(d,y)\in\{1,\dots,D\}\times\{1,\dots,C\}
+, with
+
+M_{S}[(d_{1},y_{1}),(d_{2},y_{2})]=1\quad\Longleftrightarrow\quad d_{1}+d_{2}\leq S.
+
+(10.4)
+
+For any simultaneous row/column permutation
+\pi
+,
+
+\mathrm{bw}\!\left(P_{\pi}^{\top}M_{S}P_{\pi}\right)\;\geq\;C\Big\lfloor\frac{S}{2}\Big\rfloor-1.
+
+(10.5)
+
+Proof.
+
+Let
+m=\lfloor S/2\rfloor
+. For any
+d,d^{\prime}\leq m
+,
+d+d^{\prime}\leq 2m\leq S
+, so all states in
+
+U=\{1,\dots,m\}\times\{1,\dots,C\}
+
+(10.6)
+
+are mutually adjacent in the undirected graph induced by
+M_{S}
+; hence
+U
+is a clique of size
+|U|=mC
+. For any linear ordering of a clique on
+n
+vertices, the first and last vertices are adjacent, so the bandwidth is at least
+n-1
+.
+∎
+
+Consequence.
+When
+S
+is moderate (e.g.,
+S\approx K
+) and
+C
+is not tiny, the best achievable bandwidth is already a large fraction of the dense width
+DC
+. In the extreme case
+S\geq 2K
+–since
+D=K
+when
+S\geq K
+, the condition
+d_{1}+d_{2}\leq S
+with
+d_{1},d_{2}\leq K
+is always satisfied when
+S\geq 2K
+–the matrix
+M_{S}
+is structurally dense.
+
+10.3
+Fill-In Under Composition in a Boolean Reachability Model
+
+Even if the local operator were genuinely banded, repeated composition widens the support.
+
+Lemma 2
+
+(Boolean powers widen linearly)
+.
+
+Let
+B
+be the boundary adjacency matrix defined above, and interpret multiplication over the boolean semiring (
+OR
+as addition,
+AND
+as multiplication). Then
+(B^{m})[i,j]=1
+if and only if there exists a path of exactly
+m
+segments from
+i
+to
+j
+. For
+m\geq 1
+,
+
+(B^{m})[i,j]=1\quad\Longleftrightarrow\quad m\leq j-i\leq mK,
+
+(10.7)
+
+and therefore
+\mathrm{bw}(B^{m})=\min(T,\,mK)
+.
+
+Proof.
+
+A path of
+m
+segments advances by
+\delta_{1}+\cdots+\delta_{m}
+with each
+\delta_{t}\in\{1,\dots,K\}
+, hence
+m\leq j-i\leq mK
+. Conversely, if
+r=j-i
+satisfies
+m\leq r\leq mK
+, then
+r
+can be written as a sum of
+m
+integers in
+[1,K]
+(e.g., start from all ones and distribute the remaining
+r-m
+units without exceeding
+K
+).
+∎
+
+Implication for a balanced binary tree.
+
+In a balanced binary tree
+Blelloch 1990
+, combining two children corresponds (in this simplified reachability model) to composing reachability over a larger number of segments. The relevant parameter
+m
+therefore grows geometrically with tree level, so
+\mathrm{bw}(B^{m})
+increases rapidly and saturates at the dense width on the order of
+\log_{2}(T/K)
+levels. The reachability pattern becomes near-dense well before the root, so a banded container offers little benefit at the levels that dominate the total work.
+
+10.4
+Why Matrix Reordering Helps Only at Very Small Spans
+
+A reasonable countermeasure is to apply bandwidth-reducing permutations (e.g., Reverse Cuthill–McKee
+Cuthill and McKee 1969
+; see also
+George and Liu 1981
+). Proposition
+1
+already limits what is possible at a single node: cliques force large bandwidth regardless of ordering.
+
+At the global scale, once composition produces near-complete reachability, permutations cannot help substantially. One clean sufficient condition is “undirected completeness”: if for every unordered pair of indices
+\{u,v\}
+at least one of
+M[u,v]
+or
+M[v,u]
+is structurally nonzero, then the induced undirected graph is a clique and the bandwidth is
+n-1
+under any ordering.
+
+Empirical bandwidth ratios.
+
+The accompanying bandwidth report (available on github with the codebase) evaluates several orderings across
+(K,C,S)
+. Summarizing
+\mathrm{bw}_{\text{best}}/(n-1)
+by span fraction
+S/K
+: for small spans (
+S\leq K/2
+), best-case bandwidth ratios ranged from
+\approx 0.23
+to
+\approx 0.68
+(mean
+\approx 0.44
+); for moderate spans (
+K/2<S\leq K
+), ratios ranged from
+\approx 0.78
+to
+\approx 0.99
+(mean
+\approx 0.90
+); for large spans (
+S\geq K
+), ratios were
+\geq 0.97
+and often exactly
+1.0
+. Thus, reordering can reduce bandwidth when spans are very small, but offers negligible benefit once spans approach
+K
+, the regime that dominates higher tree levels.
+
+10.5
+Practical Implications for Exact Semi-Markov Backends
+
+The computation and memory of tree-structured backends are dominated by higher tree levels, where local duration compatibility is near-dense (Proposition
+1
+) and multi-step composition produces near-dense support (Lemma
+2
+). Block-triangular formats that match the triangular geometry reduce storage by roughly half, but in our experiments, indirect indexing overhead negated this at typical sparsity levels, consistent with the well-known GPU performance pattern that moderate block sparsity underperforms dense kernels unless sparsity exceeds
+{\sim}90
+%.
+
+If sparsity is essential, it must be introduced by approximation (e.g., segment filtering
+Zaratiana et al. 2023
+or hybrid architectures
+Ye and Ling 2018
+;
+Kong et al. 2016
+), which enforce value sparsity rather than relying on structural sparsity that does not persist under composition.
+
+11
+Linear and Near-Linear CRF Implementations
+
+This supplement documents the specialized
+K=1
+(linear CRF) and
+K=2
+(near-linear CRF) implementations in
+flash-semicrf
+. These optimized paths eliminate ring buffer overhead for common sequence labeling tasks while maintaining compatibility with the streaming Semi-CRF interface.
+
+11.1
+Overview
+
+The streaming Semi-CRF module automatically dispatches to specialized implementations based on the maximum segment duration
+K
+:
+
+K
+
+Implementation
+
+Rationale
+
+K=1
+
+LinearCRFStreaming
+
+Standard linear-chain CRF; no duration loop
+
+K=2
+
+SemiCRFK2Streaming
+
+Explicit 2-step history; avoids ring buffer edge cases
+
+K\geq 3
+
+SemiCRFStreamingTriton
+
+Full ring buffer architecture
+
+Table 11.1:
+Automatic dispatch by maximum segment duration. When full boundary projections (
+\mathcal{P}^{\text{start}}
+,
+\mathcal{P}^{\text{end}}
+) are active,
+K=1
+and
+K=2
+dispatch falls through to the generic
+K\geq 3
+streaming path. Scalar boundaries (
+\pi^{\text{start}}
+,
+\pi^{\text{end}}
+) are folded into
+\mathcal{S}
+and do not affect dispatch.
+
+Triton Kernel Scope.
+
+The specialized
+K=1
+and
+K=2
+paths are implemented only in PyTorch. The Triton streaming kernel requires
+K\geq 3
+for correct ring buffer operation. This is intentional: the PyTorch implementations are already efficient for small
+K
+, and the Triton kernel’s complexity is justified only when ring buffers and checkpointing provide substantial memory savings.
+
+11.2
+Notation
+
+Symbol
+
+Description
+
+Shape
+
+T
+
+Sequence length
+
+scalar
+
+C
+
+Number of labels (states)
+
+scalar
+
+B
+
+Batch size
+
+scalar
+
+\mathcal{S}_{t,c}
+
+Cumulative projected scores
+
+(B,T+1,C)
+
+\mathcal{T}_{c^{\prime},c}
+
+Transition scores (source
+c^{\prime}
+to dest
+c
+)
+
+(C,C)
+
+\mathcal{B}_{k,c}
+
+Duration bias for duration
+k
+, label
+c
+
+(K,C)
+
+\tilde{\alpha}_{t}(c)
+
+Log-forward message at position
+t
+, label
+c
+
+(B,C)
+
+\tilde{\beta}_{t}(c)
+
+Log-backward message
+
+(B,C)
+
+\pi_{c}^{\text{start}}
+
+Learnable scalar start boundary
+
+(C,)
+
+\pi_{c}^{\text{end}}
+
+Learnable scalar end boundary
+
+(C,)
+
+\mathcal{P}^{\text{start}}_{t,c}
+
+Full start boundary projection
+
+(B,T,C)
+
+\mathcal{P}^{\text{end}}_{t,c}
+
+Full end boundary projection
+
+(B,T,C)
+
+Table 11.2:
+Notation. Tilde (
+\tilde{\cdot}
+) denotes log-domain quantities. Durations are 1-indexed in the equations:
+k\in\{1,\ldots,K\}
+, stored at 0-indexed positions
+k{-}1
+in the implementation.
+
+11.3
+Score Centering
+
+Score centering follows the main text
+(Section
+3.2
+): the per-sequence baseline
+
+\nu_{b,c}
+is subtracted from raw projected scores before constructing
+the cumulative sum
+\mathcal{S}
+, controlling cumulative magnitude from
+
+O(T)
+to
+O(\sqrt{T})
+. For variable-length batches, the baseline is
+computed as a masked mean over the
+L_{b}
+valid positions (see
+Appendix
+8
+for padding semantics).
+
+Invariance of emissions.
+
+Centering does not change the
+per-position emission scores:
+\mathcal{S}_{t,c}-\mathcal{S}_{t-1,c}=f_{\theta}(t{-}1,c)-\nu_{b,c}
+, and the
+constant
+\nu_{b,c}
+cancels in the forward recurrence (it shifts all
+labels equally at each timestep). However, centering keeps the absolute
+magnitude of
+\mathcal{S}
+bounded, which matters for content scores
+spanning many positions when
+K>1
+.
+
+11.4
+Sequence Boundary Handling
+
+flash-semicrf
+supports two boundary mechanisms that control how sequence start and end positions are scored. These interact differently with the
+K=1
+and
+K=2
+fast paths.
+
+11.4.1
+Scalar Boundaries (Zero-Overhead Folding)
+
+When
+use_sequence_boundaries=True
+, learnable vectors
+\pi^{\text{start}}\in\mathbb{R}^{C}
+and
+\pi^{\text{end}}\in\mathbb{R}^{C}
+are activated (initialized to zero, equivalent to
+pytorch-crf
+’s
+start_transitions
+/
+end_transitions
+). These add label-dependent scores at sequence boundaries:
+\pi_{c}^{\text{start}}
+rewards (or penalizes) label
+c
+at the start of a sequence, and
+\pi_{c}^{\text{end}}
+at the end.
+
+Rather than threading boundary parameters through the forward and backward kernels, scalar boundaries are
+folded directly into the cumulative scores
+via prefix-sum arithmetic:
+
+\displaystyle\mathcal{S}_{b,0,c}
+
+\displaystyle\leftarrow\mathcal{S}_{b,0,c}-\pi_{c}^{\text{start}}
+
+(11.1)
+
+\displaystyle\mathcal{S}_{b,L_{b},c}
+
+\displaystyle\leftarrow\mathcal{S}_{b,L_{b},c}+\pi_{c}^{\text{end}}
+
+(11.2)
+
+Why this works.
+
+The content score for a segment
+[s,t)
+is
+\mathcal{S}_{t,c}-\mathcal{S}_{s,c}
+. By subtracting
+\pi^{\text{start}}
+from position 0:
+
+•
+
+Any segment starting at
+s=0
+gets content score
+(\mathcal{S}_{t,c}-\mathcal{S}_{0,c})+\pi_{c}^{\text{start}}
+.
+
+•
+
+Segments not starting at 0 are unaffected (their
+\mathcal{S}_{s,c}
+and
+\mathcal{S}_{t,c}
+both remain unchanged).
+
+Similarly, adding
+\pi^{\text{end}}
+to position
+L_{b}
+adds it to any segment ending at
+t=L_{b}
+.
+
+Consequence for dispatch.
+
+Because the folding modifies
+\mathcal{S}
+
+before
+the forward/backward functions are called, the
+K=1
+and
+K=2
+fast paths remain active. The
+LinearCRFStreaming
+and
+SemiCRFK2Streaming
+autograd functions are boundary-agnostic–they operate on the already-modified
+\mathcal{S}
+with zero additional overhead.
+
+Gradient flow.
+
+Gradients with respect to
+\pi^{\text{start}}
+and
+\pi^{\text{end}}
+flow automatically through the modified cumulative scores via standard autograd:
+
+\displaystyle\nabla_{\pi_{c}^{\text{start}}}\mathcal{L}
+
+\displaystyle=-\nabla_{\mathcal{S}_{b,0,c}}\mathcal{L}
+
+(11.3)
+
+\displaystyle\nabla_{\pi_{c}^{\text{end}}}\mathcal{L}
+
+\displaystyle=\nabla_{\mathcal{S}_{b,L_{b},c}}\mathcal{L}
+
+(11.4)
+
+11.4.2
+Full Boundary Projections (Fallthrough to Generic Path)
+
+When
+use_boundary_projections=True
+, position-dependent boundary scores
+\mathcal{P}^{\text{start}}_{t,c}
+and
+\mathcal{P}^{\text{end}}_{t,c}
+are computed by linear layers applied to the encoder hidden states. These provide richer expressiveness than scalar boundaries, allowing the model to learn position-specific start/end preferences.
+
+When full boundary projections are active, the
+K=1
+and
+K=2
+fast paths are
+skipped
+. Dispatch falls through to the generic
+K\geq 3
+streaming path, which handles boundaries via the
+HAS_BOUNDARIES
+flag in the Triton kernel (or the PyTorch reference equivalent).
+
+Composition with scalar boundaries.
+
+If both
+use_sequence_boundaries
+and
+use_boundary_projections
+are enabled, the scalar vectors are added to the projection tensors at the boundary positions:
+
+\displaystyle\mathcal{P}^{\text{start}}_{b,0,c}
+
+\displaystyle\leftarrow\mathcal{P}^{\text{start}}_{b,0,c}+\pi_{c}^{\text{start}}
+
+(11.5)
+
+\displaystyle\mathcal{P}^{\text{end}}_{b,L_{b}-1,c}
+
+\displaystyle\leftarrow\mathcal{P}^{\text{end}}_{b,L_{b}-1,c}+\pi_{c}^{\text{end}}
+
+(11.6)
+
+In this case the boundary projections trigger the generic path regardless, so the scalars compose additively within that path rather than folding into
+\mathcal{S}
+.
+
+Rationale for fallthrough.
+
+The full boundary projections require per-position boundary scores to be threaded through the forward recurrence. The generic kernel already supports this via
+HAS_BOUNDARIES
+. Duplicating that logic in the specialized
+K=1
+/
+K=2
+PyTorch paths would add complexity for a niche use case.
+
+11.5
+K=1: Linear CRF
+
+When
+K=1
+, every segment has duration 1, reducing the Semi-CRF to a standard linear-chain CRF. The forward recurrence simplifies to:
+
+\tilde{\alpha}_{t}(c)=\text{emit}_{t}(c)+\log\sum_{c^{\prime}=1}^{C}\exp\bigl(\tilde{\alpha}_{t-1}(c^{\prime})+\mathcal{T}_{c^{\prime},c}\bigr)
+
+(11.7)
+
+where the emission score is computed via prefix-sum difference:
+
+\text{emit}_{t}(c)=\mathcal{S}_{t,c}-\mathcal{S}_{t-1,c}+\mathcal{B}_{1,c}
+
+(11.8)
+
+When scalar boundaries are active, the boundary scores are already embedded in
+\mathcal{S}
+(Section
+11.4.1
+), so the recurrence above implicitly includes
+\pi_{c}^{\text{start}}
+at
+t=1
+and
+\pi_{c}^{\text{end}}
+at
+t=L_{b}
+without any modification to the algorithm.
+
+11.5.1
+Initialization Convention
+
+Following the
+pytorch-crf
+convention, we use
+uniform initialization
+:
+
+\tilde{\alpha}_{0}(c)=0\quad\forall c\in\{1,\ldots,C\}
+
+(11.9)
+
+This is equivalent to assuming a uniform distribution over initial states. At
+t=1
+:
+
+\tilde{\alpha}_{1}(c)=\text{emit}_{1}(c)+\log\sum_{c^{\prime}=1}^{C}\exp(\mathcal{T}_{c^{\prime},c})
+
+(11.10)
+
+Interaction with Sequence Boundaries.
+
+When
+use_sequence_boundaries=True
+, learnable parameters
+\pi^{\text{start}}_{c}
+and
+\pi^{\text{end}}_{c}
+are activated (initialized to zero). These are
+not
+applied by modifying
+\tilde{\alpha}_{0}
+–instead they are folded into
+\mathcal{S}
+via the prefix-sum trick (Section
+11.4.1
+). The forward algorithm still sees
+\tilde{\alpha}_{0}(c)=0
+; the boundary effect appears in the emission scores. At initialization (
+\pi^{\text{start}}=\mathbf{0}
+), behavior is identical to the boundary-free case. After training,
+\pi^{\text{start}}
+and
+\pi^{\text{end}}
+provide independent expressiveness beyond the transition matrix.
+
+11.5.2
+Algorithm
+
+Algorithm
+5
+presents the optimized
+K=1
+forward pass.
+
+Input:
+
+Cumulative scores
+\mathcal{S}\in\mathbb{R}^{B\times(T+1)\times C}
+,
+Transitions
+\mathcal{T}\in\mathbb{R}^{C\times C}
+,
+Duration bias
+\mathcal{B}\in\mathbb{R}^{1\times C}
+(optional),
+Lengths
+\ell\in\mathbb{Z}^{B}
+
+Output:
+
+Log partition
+\log Z\in\mathbb{R}^{B}
+
+\tilde{\boldsymbol{\alpha}}\leftarrow\mathbf{0}\in\mathbb{R}^{B\times C}
+;
+
+//
+Uniform initialization
+
+for
+
+t\leftarrow 1
+
+to
+
+T
+
+do
+
+1
+
+\mathbf{e}_{t}\leftarrow\mathcal{S}[:,t,:]-\mathcal{S}[:,t-1,:]+\mathcal{B}_{1}
+;
+
+//
+Emission
+
+//
+Standard linear CRF recurrence
+
+\tilde{\boldsymbol{\alpha}}_{\text{new}}\leftarrow\text{LogSumExp}_{c^{\prime}}(\tilde{\boldsymbol{\alpha}}[:,c^{\prime}]+\mathcal{T}_{c^{\prime},:})+\mathbf{e}_{t}
+;
+
+2
+
+//
+Update only active sequences
+
+\tilde{\boldsymbol{\alpha}}\leftarrow\texttt{where}(t\leq\ell,\tilde{\boldsymbol{\alpha}}_{\text{new}},\tilde{\boldsymbol{\alpha}})
+;
+
+3
+
+\log Z\leftarrow\text{LogSumExp}_{c}(\tilde{\boldsymbol{\alpha}}[\ell])
+;
+
+//
+Final reduction
+
+return
+
+\log Z
+;
+
+4
+
+Algorithm 5
+
+Linear CRF Forward (
+K=1
+)
+
+Note.
+
+When scalar boundaries are active,
+\mathcal{S}
+has already been modified per Equations (
+11.1
+)–(
+11.2
+). The algorithm is unchanged; the boundary scores appear implicitly in the emission differences.
+
+11.5.3
+Complexity
+
+•
+
+Time
+:
+O(TC^{2})
+– matrix-vector products at each timestep
+
+•
+
+Space
+:
+O(BC)
+– single
+\alpha
+vector per batch element
+
+•
+
+No checkpointing
+: Full
+\alpha
+history stored for backward pass (
+O(BTC)
+)
+
+The space overhead for storing full
+\alpha
+history is acceptable because
+K=1
+implies short-to-moderate sequences where the
+O(BTC)
+cost is manageable.
+
+11.6
+K=2: Near-Linear CRF
+
+When
+K=2
+, segments can have duration 1 or 2. Rather than using the general ring buffer (which has edge cases at
+K=2
+due to modular arithmetic with small indices), we use explicit 2-step history variables.
+
+11.6.1
+Forward Recurrence
+
+At each position
+t
+, we combine contributions from both durations:
+
+\tilde{\alpha}_{t}(c)=\text{LogSumExp}\Bigl(\underbrace{\text{score}_{k=1}(t,c)}_{\text{duration 1}},\;\underbrace{\text{score}_{k=2}(t,c)}_{\text{duration 2}}\Bigr)
+
+(11.11)
+
+where:
+
+\displaystyle\text{score}_{k=1}(t,c)
+
+\displaystyle=\text{emit}_{t-1:t}(c)+\log\sum_{c^{\prime}}\exp(\tilde{\alpha}_{t-1}(c^{\prime})+\mathcal{T}_{c^{\prime},c})
+
+(11.12)
+
+\displaystyle\text{score}_{k=2}(t,c)
+
+\displaystyle=\text{emit}_{t-2:t}(c)+\log\sum_{c^{\prime}}\exp(\tilde{\alpha}_{t-2}(c^{\prime})+\mathcal{T}_{c^{\prime},c})
+
+(11.13)
+
+The emission scores are:
+
+\displaystyle\text{emit}_{t-1:t}(c)
+
+\displaystyle=\mathcal{S}_{t,c}-\mathcal{S}_{t-1,c}+\mathcal{B}_{1,c}
+
+(11.14)
+
+\displaystyle\text{emit}_{t-2:t}(c)
+
+\displaystyle=\mathcal{S}_{t,c}-\mathcal{S}_{t-2,c}+\mathcal{B}_{2,c}
+
+(11.15)
+
+11.6.2
+Algorithm
+
+Algorithm
+6
+presents the optimized
+K=2
+forward pass using explicit history variables.
+
+Input:
+
+Cumulative scores
+\mathcal{S}
+, Transitions
+\mathcal{T}
+, Duration bias
+\mathcal{B}\in\mathbb{R}^{2\times C}
+, Lengths
+\ell
+
+Output:
+
+Log partition
+\log Z\in\mathbb{R}^{B}
+
+\tilde{\boldsymbol{\alpha}}^{(1)}\leftarrow\mathbf{0}\in\mathbb{R}^{B\times C}
+;
+
+//
+\alpha[t-1]
+
+\tilde{\boldsymbol{\alpha}}^{(2)}\leftarrow-\infty\in\mathbb{R}^{B\times C}
+;
+
+//
+\alpha[t-2]
+(invalid at
+t=1
+)
+
+for
+
+t\leftarrow 1
+
+to
+
+T
+
+do
+
+1
+
+//
+Duration
+k=1
+: segment from
+t-1
+to
+t
+
+\mathbf{e}_{k=1}\leftarrow\mathcal{S}[:,t,:]-\mathcal{S}[:,t-1,:]+\mathcal{B}_{1}
+;
+
+2
+
+\mathbf{s}_{k=1}\leftarrow\text{LogSumExp}_{c^{\prime}}(\tilde{\boldsymbol{\alpha}}^{(1)}[:,c^{\prime}]+\mathcal{T}_{c^{\prime},:})+\mathbf{e}_{k=1}
+;
+
+3
+
+if
+
+t\geq 2
+
+then
+
+4
+
+//
+Duration
+k=2
+: segment from
+t-2
+to
+t
+
+\mathbf{e}_{k=2}\leftarrow\mathcal{S}[:,t,:]-\mathcal{S}[:,t-2,:]+\mathcal{B}_{2}
+;
+
+5
+
+\mathbf{s}_{k=2}\leftarrow\text{LogSumExp}_{c^{\prime}}(\tilde{\boldsymbol{\alpha}}^{(2)}[:,c^{\prime}]+\mathcal{T}_{c^{\prime},:})+\mathbf{e}_{k=2}
+;
+
+6
+
+\tilde{\boldsymbol{\alpha}}_{\text{new}}\leftarrow\text{LogSumExp}(\mathbf{s}_{k=1},\mathbf{s}_{k=2})
+;
+
+7
+
+else
+
+8
+
+\tilde{\boldsymbol{\alpha}}_{\text{new}}\leftarrow\mathbf{s}_{k=1}
+;
+
+9
+
+//
+Shift history
+
+\tilde{\boldsymbol{\alpha}}^{(2)}\leftarrow\tilde{\boldsymbol{\alpha}}^{(1)}
+;
+
+10
+
+\tilde{\boldsymbol{\alpha}}^{(1)}\leftarrow\texttt{where}(t\leq\ell,\tilde{\boldsymbol{\alpha}}_{\text{new}},\tilde{\boldsymbol{\alpha}}^{(1)})
+;
+
+11
+
+\log Z\leftarrow\text{LogSumExp}_{c}(\tilde{\boldsymbol{\alpha}}^{(1)}[\ell])
+;
+
+12
+
+return
+
+\log Z
+;
+
+13
+
+Algorithm 6
+
+Semi-CRF Forward (
+K=2
+)
+
+11.6.3
+Complexity
+
+•
+
+Time
+:
+O(TC^{2})
+– two matrix-vector products per timestep
+
+•
+
+Space
+:
+O(BC)
+– two
+\alpha
+vectors per batch element
+
+•
+
+No ring buffer
+: Explicit variables avoid modular arithmetic overhead
+
+11.7
+Backward Pass and Gradients
+
+Both
+K=1
+and
+K=2
+implementations use the standard forward-backward algorithm for gradient computation. Because these paths do not use checkpointing, the full
+\alpha
+history is stored during the forward pass.
+
+Boundary transparency.
+
+When scalar boundaries are active, the backward pass requires no special handling because
+\pi^{\text{start}}
+and
+\pi^{\text{end}}
+have already been folded into
+\mathcal{S}
+(Section
+11.4.1
+). Gradients with respect to
+\pi^{\text{start}}_{c}
+and
+\pi^{\text{end}}_{c}
+flow automatically through the modified cumulative scores via standard autograd.
+
+11.7.1
+Marginal Computation
+
+The marginal probability for a segment spanning
+[t-k,t-1]
+with transition
+c^{\prime}\to c
+is:
+
+\mu(t,k,c,c^{\prime})=\frac{\exp\bigl(\tilde{\alpha}_{t-k}(c^{\prime})+\tilde{\psi}(t,k,c,c^{\prime})+\tilde{\beta}_{t}(c)\bigr)}{\exp(\log Z)}
+
+(11.16)
+
+where the edge potential is:
+
+\tilde{\psi}(t,k,c,c^{\prime})=(\mathcal{S}_{t,c}-\mathcal{S}_{t-k,c})+\mathcal{B}_{k,c}+\mathcal{T}_{c^{\prime},c}
+
+(11.17)
+
+Numerical safeguard.
+
+In the PyTorch reference implementation, the log marginal
+\tilde{\alpha}_{t-k}(c^{\prime})+\tilde{\psi}(t,k,c,c^{\prime})+\tilde{\beta}_{t}(c)-\log Z
+is clamped to
+[-80,80]
+before exponentiation. This prevents overflow/underflow when individual terms are large in absolute value but nearly cancel. The clamped range corresponds to
+\exp(\pm 80)\approx 5.5\times 10^{34}
+, well within float64 range.
+
+11.7.2
+Gradient Formulas
+
+Cumulative Scores.
+
+The gradient for
+\mathcal{S}_{t,c}
+accumulates contributions from segments ending at
+t
+(positive) and starting after
+t
+(negative):
+
+\nabla\mathcal{S}_{t,c}=\sum_{k,c^{\prime}}\mu(t,k,c,c^{\prime})-\sum_{k,c^{\prime}}\mu(t+k,k,c,c^{\prime})
+
+(11.18)
+
+Transitions.
+
+The gradient sums marginals over all positions and durations:
+
+\nabla\mathcal{T}_{c^{\prime},c}=\sum_{b}\frac{\partial\mathcal{L}}{\partial Z_{b}}\cdot\sum_{t,k}\mu_{b}(t,k,c,c^{\prime})
+
+(11.19)
+
+Duration Bias.
+
+The gradient for duration
+k
+sums over all segments of that duration:
+
+\nabla\mathcal{B}_{k,c}=\sum_{b}\frac{\partial\mathcal{L}}{\partial Z_{b}}\cdot\sum_{t,c^{\prime}}\mu_{b}(t,k,c,c^{\prime})
+
+(11.20)
+
+11.8
+Viterbi Decoding
+
+Both
+K=1
+and
+K=2
+implementations support Viterbi decoding for MAP inference. The algorithms follow the same structure as the forward pass, replacing LogSumExp with max and maintaining backpointers.
+
+11.8.1
+K=1 Viterbi
+
+Standard linear CRF Viterbi with backpointers for the best previous label at each position.
+
+11.8.2
+K=2 Viterbi
+
+Extended backpointers track both the best previous label
+and
+the best duration (1 or 2) at each position. The traceback reconstructs the segmentation by stepping back by the recorded duration.
+
+11.9
+Why Triton Kernels Require
+K\geq 3
+
+The Triton streaming kernel is designed for the general Semi-CRF case where ring buffers and checkpointing provide substantial memory savings. For small
+K
+, ring buffer indexing creates edge cases:
+
+•
+
+K=1
+: All positions map to ring index 0. The ring buffer degenerates to a single slot, providing no benefit over a simple variable.
+
+•
+
+K=2
+: Indices alternate between 0 and 1. Wraparound logic is fragile and provides minimal memory savings over explicit variables.
+
+•
+
+K\geq 3
+: Ring buffer provides meaningful history separation. Checkpointing amortizes over multiple segments, justifying the implementation complexity.
+
+The PyTorch implementations for
+K=1
+and
+K=2
+are already efficient (no kernel launch overhead, simple control flow), making Triton acceleration unnecessary.
+
+11.10
+Implementation Summary
+
+K
+
+Time
+
+Space
+
+Checkpointing
+
+Ring Buffer
+
+Backend
+
+1
+
+O(TC^{2})
+
+O(BC)
+
+No
+
+No
+
+PyTorch
+
+2
+
+O(TC^{2})
+
+O(BC)
+
+No
+
+No
+
+PyTorch
+
+\geq 3
+
+O(TKC^{2})
+
+O(BKC)
+
+Yes
+
+Yes
+
+Triton (GPU) / PyTorch (CPU)
+
+Table 11.3:
+Implementation characteristics by maximum segment duration.
+
+Automatic Dispatch.
+
+The
+semi_crf_streaming_forward
+function automatically routes to the appropriate implementation based on
+K
+. Users need not manage dispatch manually.
+
+11.11
+Functional Equivalence
+
+All three implementations (
+K=1
+,
+K=2
+,
+K\geq 3
+) compute the same partition function and gradients for their respective segment duration constraints. Specifically:
+
+•
+
+The
+K=1
+path produces identical results to the general streaming kernel with
+K=1
+(verified numerically).
+
+•
+
+The
+K=2
+path produces identical results to the general streaming kernel with
+K=2
+(verified numerically).
+
+•
+
+All paths support variable-length batches with proper masking.
+
+•
+
+The equivalence between
+K=1
+/
+K=2
+fast paths and the generic kernel holds
+only when full boundary projections are not active
+. When
+\mathcal{P}^{\text{start}}
+or
+\mathcal{P}^{\text{end}}
+are provided, dispatch bypasses the specialized paths entirely (Section
+11.4.2
+), so the question of equivalence does not arise. Scalar boundaries (
+\pi^{\text{start}}
+,
+\pi^{\text{end}}
+) are folded into
+\mathcal{S}
+before dispatch and do not affect equivalence.
+
+The specialized paths exist purely for performance optimization, not behavioral differences.
+

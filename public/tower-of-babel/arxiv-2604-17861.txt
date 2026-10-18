@@ -1,0 +1,893 @@
+GPUOS : A GPU Operating System Primitive for Transparent Operation Fusion
+Yiwei Yang, Xiangyu Gao, Yuan Zhou, Yuhang Gan, Yusheng Zheng, Andi Quinn
+
+Abstract
+. Modern deep learning workloads increasingly involve numerous small tensor operations—particularly in inference scenarios, attention mechanisms, and micro-batched training—where producing non-negligible kernel launch overhead. Traditional GPU computing models launch separate kernels for each operation, incurring significant CPU-GPU synchronization costs that can even exceed the actual computation time by orders of magnitude. We present GPUOS, a GPU runtime JIT system that reduces kernel launch overhead through a persistent kernel architecture combined with runtime operator injection. GPUOS deploys a single long-lived GPU kernel that continuously processes tasks from a host-managed work queue, avoiding repeated kernel launches entirely. To obtain operational flexibility by effectively supporting multiple types of operations, we leverage NVIDIA’s NVRTC to just-in-time compile new operators at runtime and dynamically inject them into the running kernel via device function pointer tables. This approach enables hot-swapping of GPU operators without kernel restarts or system recompilation. Our system introduces several key innovations: (1) a persistent worker kernel with atomic-synchronized task queues that eliminates per-operation launch overhead, (2) a runtime operator injection mechanism using NVRTC and relocatable device code that maintains an updatable jump table of device function pointers, (3) a dual-slot aliasing scheme enabling safe operator updates without suspending concurrent tasks, and (4) transparent PyTorch integration via TorchDispatch that automatically aggregates micro-operations into batched submissions. The system can support arbitrary tensor shapes, strides, data types, and broadcasting semantics through a generic tensor abstraction layer. Experimental results demonstrate that GPUOS achieves 15.3x speedup over standard PyTorch for workloads dominated by small operations, with particularly strong performance on micro-batched inference (up to 8.7x utilization) and attention computation patterns. Our transparent scheduler integrates well with the existing PyTorch code base while maintaining full compatibility with the PyTorch ecosystem. GPUOS provides a practical pattern for building GPU runtime systems that bridge the gap between operator flexibility and execution efficiency.
+
+
+
+1.
+Introduction
+
+1.1.
+From Big Batches to Tiny, Fast Ones
+
+Over the past decade, extensive efforts have been made to make GPUs faster in computation and larger in memory capacity.
+Vendor libraries saturate tensor cores with near-perfect efficiency. Compiler stacks like TVM and the PyTorch 2.0 toolchain fuse long chains of operations into heavyweight launches that minimize data movement. Memory hierarchies are carefully orchestrated to keep reuse patterns close to compute units. These optimizations remain crucial for offline training and dense inference, where batch sizes are large and execution patterns are regular.
+
+Yet, they do not fit well for current scenarios where Production machine learning systems increasingly serve latency-sensitive, micro-batch workloads where the very properties that once made the host-to-device handshake negligible now make it dominant. When a single user interaction requires hundreds of microsecond-scale kernel executions—each performing a small computation on limited data—a five-microsecond submission path is no longer an ignorable constant. It becomes a tax, applied one hundred times per request, that can dominate the total response time budget
+(
+18
+;
+19
+)
+.
+
+Consider the timeline traces from modern profilers. The GPU excels at mathematical operations, computing matrix multiplications and activations in blazing bursts. But between these bursts lies whitespace: the device sits idle while the host marshals the next kernel launch. The host, in turn, spends a surprising fraction of its time navigating the submission path—crossing into kernel space, updating driver structures, synchronizing state. For instance, if each of one hundred operations per token incurs five microseconds of overhead, it means half a millisecond of pure coordination cost before we’ve even considered the actual computation. Code is open sourced at
+https://github.com/Multi-V-VM/GPUOS/
+
+1.2.
+Our Approach
+
+To remedy the problem, we claim that
+the right unit to optimize in these scenarios is not an individual kernel but the boundary that incurs the launch itself
+. Therefore, instead of investing ever more ingenuity in making each launch cheaper—or trying to statically fuse away the multiplicity of small operations, which dynamism often defeats—GPUOS sidesteps the issue by launching the kernel exactly once and doing everything else inside.
+
+Concretely, we regard the persistent kernel as the medium; the message is a fundamental change in where scheduling resides. If the GPU is to stay busy, the source of work should not be a series of host calls separated by system calls and driver crossings. Instead, it should be a ring buffer visible to device threads that never sleep. These threads poll for work, grab task descriptors, dispatch to the appropriate operator through a function pointer table, and immediately return for the next task.
+
+Because models evolve and applications grow new features, this persistent runtime should be extensible without downtime. GPUOS accomplishes this through runtime compilation with NVRTC
+(
+17
+)
+and a device function-pointer table that can be updated safely under load via the CUDA Driver API
+(
+14
+)
+. When a new operator is needed (e.g., a custom attention variant or a novel activation function), the operations team does not have to roll the cluster or coordinate maintenance windows. They compile a small template to PTX (Parallel Thread Execution), load the module, resolve the function symbol, and publish a pointer into an inactive slot of the operator table. A version counter flip with store-release semantics makes the operator instantly callable by all device threads.
+
+1.3.
+The Mechanical Consequence
+
+The consequence of this relocation is promising. Launch overhead disappears as a factor within the steady-state execution loop. Device function calls—measured in nanoseconds—replace host submissions measured in microseconds. The whitespace between kernels in timeline traces shrinks until it is indistinguishable from instruction scheduling gaps within the persistent kernel itself. Tail latency improves because queuing and wakeup paths are deterministic and short. And because there is no need to predict which sequence of operations will occur next, GPUOS retains the semantics of eager execution while reaping the performance gains of persistent scheduling.
+
+We set out not to replace compilers or graphs, but to give them a complementary option that keeps the GPU fed when dynamism prevents capture, when shapes refuse to sit still, and when the system just needs to say:
+don’t launch—call
+.
+
+Our measured results—
+15.3\times
+on micro-batched element-wise operations,
+8.7\times
+on attention decoding,
+23.1\times
+on mixed pipelines, with 20–22% energy savings—aren’t products of exotic compiler stunts. They’re the arithmetic of removing a fixed cost applied too frequently. The system is complementary, integrates well with existing frameworks, and coexists with CUDA Graphs, MPS, and MIG, each mechanism pulling its weight where it excels.
+
+2.
+Motivation
+
+2.1.
+One Painpoint in Production
+
+We illustrate our motivation through a representative real-world case.
+Consider a real-time text generation service serving thousands of concurrent sessions. Each session decodes token-by-token, weaving together a pattern of attention kernels, vector additions, activation functions, small reductions, and key-value cache updates. The workload is inherently dynamic: prompt lengths vary wildly, control flow branches based on generated content, and new model features are deployed continuously to stay competitive.
+
+The engineering team upgraded to recent CUDA toolkits, enabled mixed precision everywhere possible, fused operations aggressively where the framework permitted, and experimented extensively with CUDA Graphs. In synthetic benchmarks—where prompts were short, predictable, and shape-stable—graphs delivered impressive results. But production reality proved unruly. Users paste entire paragraphs as prompts. Streaming inputs hiccup and stutter. Different code paths activate different operators. The shape of work per token is polymorphic in ways that complicate capture and replay.
+
+The timeline in the profiler shows unsatisfiable results. It looks like the teeth of a comb: the GPU computes intensely for tens of microseconds, then waits. The host issues the next launch and waits. The launch path is short in absolute time (e.g., 3–7 microseconds on modern systems) but the repetition makes it the dominant factor in the response-time budget. If a single token requires one hundred such micro-operations and each launch with associated synchronization costs five microseconds, causing around 500 microseconds of overhead per token, regardless of how efficiently the actual kernels execute.
+
+It might be useful for the developers to capture multiple graph variants to cover common shapes, but maintaining a stable of graphs proved error-prone. Recaptures were necessary when models changed. Graph replay paths sometimes fell back to eager execution in corner cases, quietly reintroducing the very overhead they sought to avoid. The conditional logic to select the right graph became its own source of complexity and latency.
+
+2.2.
+The Alternative Vision
+
+Different from the previously mentioned approach, an alternative is to flip the entire arrangement.
+Specifically, at process startup, the service brings up GPUOS and the persistent kernel takes residence on the GPU. This is a
+one-time setup cost
+: allocate the ring buffer in device memory, launch the persistent kernel with one block per streaming multiprocessor, and let those warps spin up. From this point forward, they never exit. Then, we can simply poll the ring buffer, waiting for work.
+
+When the first user request arrives, the PyTorch dispatch layer—instrumented with GPUOS integration—recognizes that the upcoming sequence of operations consists of small, launch-overhead-dominated kernels. Instead of calling
+cudaLaunchKernel
+repeatedly, it writes task descriptors into the ring buffer. Each descriptor is compact: an operator ID, pointers to input and output tensors, dimension parameters, and a few control flags. The submission is completed with a single store-release on a commit field, making the task visible to device threads.
+
+Device threads, already awake and polling, see the commit. They grab the work atomically, look up the operator ID in the function-pointer table, and dispatch. The operator executes as a device function call—not a kernel launch—completing in nanoseconds of scheduling overhead rather than microseconds. When it finishes, the thread immediately polls for the next task.
+
+When new operators are introduced by the machine learning developers (e.g., a custom rotary positional embedding with a parameterization) to better fit their specific use case, instead of recompiling PyTorch extensions, rebuilding Docker images, coordinating a rollout, and hoping nothing breaks, the process in GPUOS becomes different.
+
+To be specific, a small CUDA template—parameterized with the embedding’s specifics—is passed to NVRTC for just-in-time compilation. The PTX output is loaded as a module via the CUDA Driver API. The function symbol is resolved, yielding a device function pointer. This pointer is written into an inactive slot of the operator table. A version counter is incremented with store-release semantics. Warps in the persistent kernel observe the version change at well-defined points in their polling loop and atomically switch to the updated table. The operator becomes callable immediately, with zero downtime.
+
+The shape of work remains dynamic, evolving continuously with product features and model updates. But the launch boundary—the old chokepoint—has been absorbed into the device. The cost of coordination has collapsed from microseconds per operation to a single-digit number of nanoseconds for a function call.
+
+3.
+Background and Context
+
+3.1.
+Source of Launch Overhead
+
+When host code calls
+cudaLaunchKernel
+, the CUDA runtime marshals arguments, establishes a grid configuration, and issues a request through the runtime or driver API. This call crosses from user space into kernel mode, where the driver performs bookkeeping: updating stream queues, checking for dependencies, allocating resources, and programming hardware schedulers. Finally, the GPU hardware enqueues the work onto an execution stream.
+
+Under steady, coarse-grained loads, the latency of this path is easily amortized. A kernel that runs for milliseconds can tolerate even tens of microseconds of overhead as mere “noise"
+(
+19
+)
+. The ratio is favorable: if 10 microseconds of launch overhead precedes 1000 microseconds of execution, that’s a 1% tax—negligible and acceptable in most scenarios.
+
+However, in eager execution with abundant small operations, the launch overhead has big impact on the whole process.
+Even a null kernel—one that does no useful work—clocks in around 3–7 microseconds in public measurements and forum discussions
+(
+18
+)
+. For a kernel that executes in 10 microseconds, this represents 30–70% overhead. For operations that complete in single-digit microseconds, the overhead can exceed the computation time itself.
+
+The problem compounds when operations are serialized. A single request might involve a hundred distinct operations: attention computations, vector additions, activations, normalizations, reductions, cache updates. If each operation launches independently, the cumulative overhead can reach 300–700 microseconds—dominating the execution time for many workloads and directly impacting user-perceived latency.
+
+3.2.
+CUDA Graphs: Strengths and Limitations
+
+CUDA Graphs address this problem directly by moving preparation out of the hot path. If a program can capture a directed acyclic graph (DAG) of work and replay it as a single submission, the CPU cost per operation is replaced by a smaller CPU cost per
+graph
+
+(
+6
+)
+. Recent enhancements, including constant-time launch techniques for certain graph shapes
+(
+13
+)
+, have further reduced submission overhead.
+
+Graphs are elegant when applicable. They shine in scenarios with regular, repeatable execution patterns: training loops with fixed batch sizes, inference pipelines with stable shapes, and benchmark suites with controlled inputs. The captured graph becomes a reusable execution plan, amortizing the capture cost over many replays.
+
+However, graphs impose a promise of stability and repeatability that dynamic, control-flow-heavy inference workloads often cannot keep. Real-world challenges arise from multiple sources. First of all, variable shapes. Their different prompt lengths, varying sequence positions, and dynamic attention window sizes create polymorphic execution patterns that resist single-graph capture.
+The second challenge comes from control flow, where conditional layers, early exit strategies, and adaptive computation paths break graph capture unless every variant is pre-captured, leading to graph proliferation and management complexity that can become unwieldy in production.
+
+Late-binding operators further amplify these difficulties. New model features and custom operators injected at runtime cannot be incorporated into pre-captured graphs without expensive recapture operations that may interrupt service. Graph maintenance itself becomes a burden as updates to models or frameworks may invalidate captured graphs, requiring re-capture at inopportune times. Managing a stable of variant graphs to cover common cases introduces fragmentation and fallback paths that quietly reintroduce the very launch overhead the graphs were meant to avoid.
+
+In practice, production systems often maintain multiple graph variants to cover common shapes, with fallback to eager execution for uncommon cases. This hybrid approach helps but does not eliminate the fundamental tension: graphs want predictability, but modern ML systems evolve continuously.
+
+3.3.
+Persistent Threads: The Alternative Paradigm
+
+Persistent threads offer a different approach. Instead of launching many short-lived kernels, launch one long-lived kernel that pulls work from a queue. This idea predates modern machine learning but has enjoyed a renaissance in micro-batch inference because it directly targets the overhead we now care about
+(
+9
+)
+.
+
+The core concept is to maintain resident threads on the device that loop indefinitely, polling a shared work queue for tasks. When a task appears, a thread claims it, executes the work, and returns to polling. This eliminates per-operation launch overhead at the cost of keeping some threads always active.
+
+What distinguishes GPUOS from typical persistent-thread sketches is its ability to
+evolve the operator set without pausing the service
+. Traditional persistent kernels are compiled with a fixed set of operators, limiting flexibility. GPUOS extends the paradigm through dynamic operator injection: new operators can be compiled at runtime, loaded safely, and made callable without restarting the persistent kernel or interrupting in-flight work.
+
+3.4.
+Adjacent Mechanisms
+
+There are several mechanisms trying to improve the performance and GPUOS is complementary to them.
+
+For instance, MPS (Multi-Process Service) raises utilization by allowing multiple client processes to submit work cooperatively, avoiding the serialization that would otherwise occur with exclusive GPU access
+(
+16
+)
+. While essential for multi-tenant scenarios, MPS does not reduce per-kernel submission cost within a single tenant’s pipeline.
+
+Besides, MIG (Multi-Instance GPU) takes a different approach by partitioning a GPU into isolated slices with enforced resource limits and memory protection
+(
+15
+)
+. This mechanism is critical for strong multi-tenant guarantees in cloud environments, but remains orthogonal to within-tenant launch optimization. Dynamic Parallelism enables device-launched kernels, allowing a running kernel to spawn additional work
+(
+12
+)
+. Though powerful, it does not eliminate launch overhead but merely relocates the initiator to the device, while also introducing complexity in resource accounting and debugging.
+
+GPUOS can coexist with all these mechanisms. It can run as an MPS client, operate within a MIG slice, and complement dynamic parallelism for hierarchical work patterns. Each mechanism pulls its weight in the places where it excels.
+
+4.
+Design of GPUOS
+
+4.1.
+Architecture Overview
+
+Figure 1.
+GPUOS Architecture
+
+GPUOS consists of three primary components working in concert (shown in Figure
+1
+):
+
+Ring Buffer Communication Channel
+
+A lock-free, single-producer-single-consumer ring buffer resides in device-mapped memory, allowing the host to enqueue task descriptors and device threads to dequeue them with minimal synchronization overhead. Each descriptor is compact—typically 64–128 bytes—containing an operator ID, tensor pointers, dimension parameters, and control flags.
+
+The ring buffer uses atomic operations for synchronization: the host advances a write cursor with store-release semantics after writing a complete descriptor, and device threads poll a read cursor with load-acquire semantics. This ordering ensures that when a device thread observes a new task, all associated data is visible.
+
+Persistent Kernel Executor
+
+A single persistent kernel launches at process startup and never exits. By default, it occupies one thread block per streaming multiprocessor (SM), keeping resource footprint modest to coexist with large conventional kernels. Each warp in the persistent kernel independently polls the ring buffer, claims available work atomically, dispatches to the appropriate operator, and returns for the next task.
+
+The polling loop is carefully tuned to balance responsiveness against power consumption. In high-throughput scenarios, pure spin-polling minimizes latency. In lower-load scenarios, brief exponential backoff with pauses can reduce power draw without significantly impacting tail latency.
+
+Dynamic Operator Table
+
+The operator table is a device-resident array of function pointers, indexed by operator ID. Each entry points to a device function implementing a specific operation: element-wise addition, matrix multiplication kernels, attention mechanisms, activations, and so on.
+
+Crucially, the table can be updated at runtime through a carefully orchestrated protocol. The process begins with compiling the new operator to PTX using NVRTC, followed by loading the PTX module via the CUDA Driver API. The function symbol is then resolved to obtain a device function pointer, which is written to an inactive slot in the operator table. An atomic flip of a version counter with store-release semantics completes the update, allowing device threads to observe the version change and switch to the updated table. This protocol ensures that no thread ever sees a partially-updated table. Operator injection completes in milliseconds, making new functionality available without service interruption.
+
+4.2.
+Task Submission Protocol
+
+The host-side submission path is streamlined for minimal overhead:
+
+⬇
+
+//
+
+Prepare
+
+descriptor
+
+TaskDescriptor
+
+desc
+;
+
+desc
+.
+op_id
+
+=
+
+OP_ADD
+;
+
+desc
+.
+input_a
+
+=
+
+tensor_a
+.
+data
+();
+
+desc
+.
+input_b
+
+=
+
+tensor_b
+.
+data
+();
+
+desc
+.
+output
+
+=
+
+tensor_c
+.
+data
+();
+
+desc
+.
+size
+
+=
+
+tensor_a
+.
+size
+();
+
+//
+
+Enqueue
+
+atomically
+
+uint32_t
+
+slot
+
+=
+
+ring_buffer
+.
+acquire_slot
+();
+
+ring_buffer
+.
+write
+(
+slot
+,
+
+desc
+);
+
+ring_buffer
+.
+commit
+(
+slot
+);
+
+//
+
+store-release
+
+On the device side, warps poll and dispatch:
+
+⬇
+
+while
+
+(
+true
+)
+
+{
+
+TaskDescriptor
+
+desc
+;
+
+if
+
+(
+ring_buffer
+.
+poll
+(&
+desc
+))
+
+{
+
+//
+
+load-acquire
+
+operator_table
+[
+desc
+.
+op_id
+](
+desc
+);
+
+ring_buffer
+.
+release_slot
+();
+
+}
+
+}
+
+This design achieves submission latencies under 100 nanoseconds in favorable conditions, compared to 3–7 microseconds for traditional kernel launches—a 30–70
+\times
+reduction in coordination overhead.
+
+4.3.
+Memory Management and Safety
+
+GPUOS operates within PyTorch’s memory management framework. Tensors are allocated through PyTorch’s caching allocator, and GPUOS merely receives pointers to already-allocated memory. This integration ensures compatibility with existing code and avoids conflicts with PyTorch’s internal memory bookkeeping.
+
+For operator injection, GPUOS maintains a compiled module cache indexed by operator signature. When a new operator is requested, the system checks the cache before compiling. Compiled modules are retained in memory, and their function pointers remain valid for the process lifetime, avoiding repeated compilation overhead.
+
+Safety is enforced through multiple complementary layers. Template-based compilation forms the first line of defense: operators are compiled from curated templates with parameter substitution rather than arbitrary code, reducing the risk of malicious injection. Version-gated access provides the second layer, ensuring that device threads always read the operator table version atomically before indexing the table, guaranteeing they see a consistent snapshot. Bounds checking adds another safeguard by validating operator IDs before indexing the table, with out-of-range IDs triggering fallback to CPU execution and error reporting. Finally, audit logging records all operator injections with timestamps, source templates, and parameter values for post-hoc security review and forensic analysis.
+
+5.
+Implementation
+
+We implement GPUOS using 3793 lines of code in C++ and Python. By writing an extention of pytorch codebase, it’s fully compatible to be a plugin design to all pytorch projects.
+
+5.1.
+Integration with PyTorch
+
+GPUOS integrates with PyTorch through dispatch interposition at the autograd engine level. When PyTorch prepares to execute an operation, a dispatcher hook evaluates whether the operation is a good candidate for GPUOS submission (we call it filtering).
+To build such a filter, GPUOS evaluates multiple factors: the operation type (favoring element-wise operations, small reductions, and cache updates), tensor size (operations on small tensors benefit most from overhead reduction), execution context (prioritizing high-frequency operations in inner loops), and current load (falling back to conventional kernels if the ring buffer fills).
+
+Eligible operations are redirected to the GPUOS submission path. Ineligible operations proceed through PyTorch’s normal kernel launch path. This hybrid approach ensures that GPUOS accelerates where it helps most without introducing regression on workloads that don’t benefit.
+
+5.2.
+Operator Library
+
+The initial operator library covers common micro-batch inference primitives across several categories. Element-wise operations include addition, multiplication, ReLU, GELU, softmax, and layer normalization. Small matrix operations encompass vector-matrix products and small matrix multiplications that do not warrant full CUBLAS dispatch. Attention mechanisms cover scaled dot-product attention, rotary embeddings, and attention masking operations. Cache operations handle key-value cache updates, prefix matching, and cache compression, which are particularly frequent in autoregressive generation. Finally, reductions perform sum, max, and min operations over small dimensions.
+
+Each operator is implemented as a device function template accepting task descriptor parameters. Templates are instantiated and compiled on-demand as new shapes and data types are encountered during execution.
+
+5.3.
+Debugging and Observability
+
+Long-lived kernels can become opaque without good tooling. GPUOS addresses this through comprehensive instrumentation:
+
+Tracepoints
+
+Record task identifiers, enqueue timestamps, dequeue timestamps, execution times, and operator table versions for each operation. Tracepoints write to a circular buffer in device memory, sampled asynchronously by a host thread for minimal overhead.
+
+Performance counters
+
+Track ring buffer utilization, task throughput, operator dispatch frequencies, and stall events. Counters are exported through a simple query interface for monitoring dashboards.
+
+Kill switches
+
+Each operator table entry can be replaced with a stub function that immediately fails any task targeting that operator, returning an error code to the host. This allows quick disabling of misbehaving operators without full service restart.
+
+Visual profilers
+
+GPUOS emits markers compatible with NVIDIA Nsight and other profiling tools, allowing timeline visualization of task submission, execution, and completion events.
+
+5.4.
+GPUOS Syscall API Reference
+
+Table
+
+1
+summarizes the host-side API exposed by GPUOS for
+runtime management and integration with deep learning frameworks.
+The interface follows a minimal design, exposing only the controls
+necessary for initialization, task fusion, scheduling, and shutdown.
+
+The
+init()
+call creates the GPUOS runtime, allocates the device-visible
+ring buffer, and launches the persistent worker kernel. Once initialized,
+
+fuse()
+allows multiple small operations to be combined into a single
+aggregated submission, reducing per-operation overhead. The
+
+set_yield_every()
+function controls how frequently worker threads
+yield to avoid monopolizing GPU resources—useful in shared or MPS environments.
+The
+peek_queue()
+API provides introspection into the runtime queue
+state, reporting head, tail, and processed counts for monitoring and debugging.
+
+worker_alive()
+checks whether the persistent kernel remains active,
+while
+shutdown()
+performs an orderly termination by signaling worker
+exit and releasing GPU resources.
+
+Table 1.
+GPUOS host-side runtime API for persistent-kernel management and
+dynamic task fusion.
+
+Function
+
+Description
+
+init(capacity, threads_per_block)
+
+Initialize GPUOS runtime, allocate queue
+
+fuse()
+
+Fuse the runtime operation
+
+set_yield_every(every)
+
+Control task yield policy (0 = never yield)
+
+peek_queue()
+
+Query queue state (head, tail, processed count)
+
+worker_alive()
+
+Check if persistent worker kernel is running
+
+shutdown()
+
+Signal worker exit, free GPU resources
+
+6.
+Evaluation
+
+6.1.
+Experimental Setup
+
+Our evaluation uses single NVIDIA H100 GPUs (96GB) on supermicro X14-SBF with single socket Intel Xeon 6787P, single NVIDIA RTX 5090 GPU (32GB) on Z890 with Intel 285k installed and NVIDIA Digit Spark with GB10 GPUs (128GB) with CUDA 13.0. We compare GPUOS against three baselines
+
+Eager PyTorch
+(
+22
+)
+: Unmodified PyTorch 2.2 with eager execution.
+
+TorchScript
+(
+21
+)
+: Traced execution with PyTorch’s JIT compiler.
+
+CUDA Graphs
+(
+3
+)
+: Hand-captured graphs for regular segments of execution.
+
+Workloads include synthetic micro-benchmarks and production-representative inference scenarios.
+
+Micro-benchmarks
+have sequences of 100 element-wise operations on small tensors (1K–16K elements), repeated 1000 times to measure steady-state throughput and latency.
+
+Attention decoding
+is token-by-token generation with attention over varying context lengths (128–2048 tokens), measuring per-token latency and throughput.
+
+Mixed pipelines
+are realistic inference combining attention, FFN layers, normalizations, and activations, with dynamic control flow based on generated tokens.
+
+6.2.
+Performance Results
+
+Table 2.
+End-to-end speedup vs. eager PyTorch baseline
+
+Workload
+
+H100
+
+5090
+
+GB10
+
+Energy Saving
+
+Element-wise ops
+
+15.3\times
+
+11.3\times
+
+2.8\times
+
+22%
+
+Attention decoding
+
+8.7\times
+
+2.5\times
+
+2.1\times
+
+21%
+
+Mixed pipeline
+
+23.1\times
+
+15.3\times
+
+3.1\times
+
+20%
+
+The element-wise benchmark—where launch overhead is most pronounced—shows dramatic improvements. GPUOS reduces per-operation latency from
+\sim
+8 microseconds (5
+\mu
+s launch + 3
+\mu
+s execution) to
+\sim
+3.1 microseconds (100 ns dispatch + 3
+\mu
+s execution), translating to
+15.3\times
+speedup on H100
+11.3\times
+on 5090 and
+2.8\times
+on GB10. The better performance of baseline on GB10 is caused by the CPU-GPU fabric that in hardware optimize the launch kernel performance. So we only gain minor speed up over the baseline.
+
+Attention decoding benefits from eliminating repeated small kernel launches for query-key computations, softmax, and value aggregation. Per-token latency drops from
+\sim
+140 microseconds to
+\sim
+16 microseconds, an
+8.7\times
+improvement.
+
+The mixed pipeline scenario—most representative of real inference—achieves
+23.1\times
+speedup by accelerating the long tail of small operations between large matrix multiplications. This workload also demonstrates GPUOS’s ability to coexist with conventional kernels: large GEMMs still launch traditionally while surrounding micro-ops route through GPUOS.
+
+Energy savings of 20–22% result from reduced idle time and more efficient GPU utilization. The persistent kernel’s power footprint is modest (one block per SM), while eliminating thousands of launch-idle-launch cycles per request significantly reduces wasted energy.
+
+Figure 2.
+Attention Throughput compared to FlashAttention and Pytorch Compiled
+
+Figure 3.
+Multi-Process GPU Sharing Performance
+
+Figure 4.
+MIG Simulated Partition Performance
+
+As shown in
+Figure
+
+2
+, GPUOS delivers substantial gains in attention throughput,
+outperforming both FlashAttention
+(
+8
+)
+and PyTorch compiled mode.
+By maintaining a persistent kernel that continuously consumes queued operations,
+GPUOS eliminates the per-token launch latency characteristic of conventional GPU execution.
+This enables sustained high utilization across streaming attention workloads,
+particularly in small and mid-size tensor regimes where launch overheads dominate.
+The observed performance trend is consistent with prior findings in
+micro-batched inference systems
+(
+11
+;
+1
+)
+,
+demonstrating that minimizing host-device synchronization can yield
+order-of-magnitude throughput improvements even without modifying the model architecture.
+
+Figure
+
+3
+further highlights how GPUOS coexists with NVIDIA’s Multi-Process Service (MPS)
+(
+16
+)
+,
+achieving strong scaling under concurrent workloads.
+When multiple processes issue requests simultaneously, the persistent kernel maintains
+steady per-process performance by relying on a low-footprint, one-block-per-SM scheduling design.
+This avoids contention within the CUDA stream scheduler and allows efficient hardware sharing.
+The results show that GPUOS preserves high occupancy and predictable latency
+under concurrent inference sessions, aligning with earlier studies of GPU multi-tenancy and
+runtime partitioning
+(
+31
+;
+26
+)
+.
+
+Figure
+
+4
+examines GPUOS behavior under simulated MIG
+(
+15
+)
+
+(Multi-Instance GPU) partitions.
+Even when the GPU is subdivided into smaller logical slices with isolated resources,
+GPUOS maintains proportional performance scaling and consistent speedups (up to 3.4
+\times
+),
+demonstrating that its design generalizes across resource-isolated environments.
+Unlike approaches that rely on global launch control or driver-level graph replay,
+GPUOS’s lightweight device-side runtime remains effective even under reduced SM availability.
+This property is essential for next-generation multi-tenant cloud inference clusters,
+where MIG slicing and containerized deployment are standard practice
+(
+28
+;
+29
+)
+.
+
+6.3.
+Comparison with CUDA Graphs
+
+CUDA Graphs achieve
+6.2\times
+speedup on element-wise benchmarks when shapes are stable, but performance degrades to
+2.1\times
+when shapes vary due to recapture overhead. GPUOS maintains consistent performance across shape variation because it doesn’t rely on pre-captured patterns.
+
+In attention decoding with dynamic sequence lengths, CUDA Graphs require maintaining separate graph variants for different length ranges. Graph selection overhead and occasional fallbacks to eager execution limit speedup to
+4.3\times
+. GPUOS achieves
+8.7\times
+without graph management complexity.
+
+6.4.
+Scalability and Throughput
+
+GPUOS scales effectively with increasing concurrency. With one persistent kernel per GPU, throughput saturates at
+\sim
+800K operations/second on GB10. This represents a
+12\times
+improvement over eager execution’s
+\sim
+67K ops/sec, limited by launch serialization.
+
+Ring buffer contention is minimal until extreme concurrency (
+>
+64 concurrent host threads). At high load, the ring buffer size (default 4096 entries) provides adequate buffering to smooth transient bursts without stalls.
+
+7.
+Efficiency and Reliability Analysis
+
+7.1.
+Resource Usage
+
+Running an always-on kernel demands careful etiquette on shared devices. Even when a process owns a full GPU, it may schedule large kernels that shouldn’t be starved by an overeager persistent executor. GPUOS addresses this through conservative resource allocation: by default, it occupies only one block per SM, representing approximately 2–4% of total threads. It maintains modest register usage to preserve high occupancy for coexisting kernels and makes no attempt to saturate shared memory or other limited resources. Rather than displacing large conventional kernels, GPUOS fills the valleys between large launches, acting as a complement rather than a competitor.
+
+In strict multi-tenant environments, GPUOS can constrain itself to a MIG slice, ensuring complete isolation from neighbors
+(
+15
+)
+.
+
+7.2.
+Debugging and Failure Handling
+
+A long-lived kernel that continuously calls device functions could become an opaque tangle without good tooling. GPUOS invests heavily in observability through multiple mechanisms. Tracepoints record task IDs, timing information, and operator versions for each operation, providing a detailed execution history. Kill switches enable instant disabling of misbehaving operators by replacing their table entries with stubs that fail quickly and surface errors on the host. Audit logs track all operator injections with timestamps and source provenance for security review and debugging. Finally, GPUOS maintains compatibility with standard profilers like Nsight, allowing developers to leverage familiar tooling for performance analysis.
+
+When a newly injected operator misbehaves, a kill switch replaces its table entry with a stub that fails quickly and surfaces errors on the host. This fail-fast behavior prevents cascading failures and aids debugging.
+
+7.3.
+Security Considerations
+
+Runtime code loading demands sober security treatment. In production deployments, GPUOS should follow several key principles. First, compilation should be restricted to curated templates with parameterization rather than free-form code, limiting the attack surface. Second, compiled artifacts should be stored in a signed cache with integrity checks to prevent tampering. Third, comprehensive audit logs of injected functions with timestamps and source provenance must be maintained for forensic analysis. Fourth, injection rights should be restricted to authorized processes only, preventing unauthorized code execution. Finally, optional sandboxing through MIG can provide additional isolation in high-security environments.
+
+While single-tenant regimes reduce cross-tenant risk, prudent mitigation remains essential. The default should be to fall back to baseline paths when an operator isn’t recognized, failing safely.
+
+7.4.
+When Not to Use GPUOS
+
+GPUOS outperforms in specific scenarios. It targets a specific performance pathology: excessive launch overhead from abundant small operations. Where programs are naturally coarse-grained with large, efficient kernels, traditional execution paths suffice. Where execution is regular enough for CUDA Graphs to capture reliably, graphs may offer simpler deployment.
+
+It excels when operations are fine-grained, executing in microseconds to tens of microseconds. It proves valuable when execution patterns are dynamic and resist graph capture due to control flow or shape variation. It becomes essential when models evolve frequently, requiring flexible operator injection without service interruption. Finally, it delivers the most benefit when latency matters more than peak throughput, as in user-facing inference services.
+
+The larger architectural point is that GPUOS complements, rather than replaces, existing optimization strategies. It fills a gap where compilers and graphs struggle.
+
+8.
+Related Work
+
+Persistent threads are a long-established technique for amortizing kernel launch overheads by maintaining resident GPU threads that continuously fetch work from device memory. Originally proposed for irregular scientific workloads such as unstructured grid solvers and ray tracing
+(
+9
+;
+2
+;
+23
+)
+, the model has re-emerged in the context of modern ML inference pipelines where launch overhead dominates fine-grained execution. Systems such as
+Softshell
+
+(
+23
+)
+,
+Whippletree
+
+(
+24
+)
+, and
+RtGPU
+
+(
+32
+)
+demonstrated persistent scheduling for irregular graphics workloads, while
+Gunrock
+
+(
+27
+)
+applied similar principles to graph analytics. GPUOS extends this lineage by introducing
+dynamic operator injection
+, allowing operators to be compiled and patched into a running persistent kernel without relaunching or halting service, and by providing production-grade instrumentation and PyTorch integration for transparent deployment in ML inference systems.
+
+CUDA Graphs provide a complementary approach to reducing CPU-side overhead through DAG capture and replay
+(
+6
+;
+13
+;
+30
+;
+28
+)
+. Graphs are effective when workloads are regular and repeatable—typical in offline training and static inference—because they allow a batch of operations to be recorded once and replayed efficiently. However, their rigidity makes them less suitable for dynamic, control-flow-heavy workloads that evolve at runtime. GPUOS and CUDA Graphs can coexist: graphs handle the regular segments of computation, while GPUOS accelerates the dynamic fragments that defy static capture. Moreover, while CUDA Graphs optimize the launch process, their execution remains confined to a single process context
+(
+29
+)
+, limiting applicability in multi-tenant or composable runtime environments.
+
+CUDA Dynamic Parallelism (CDP)
+(
+12
+;
+10
+)
+allows kernels to launch other kernels directly from the device, reducing host involvement but not eliminating the underlying launch cost. CDP also introduces additional challenges in synchronization and resource accounting, often leading to lower effective occupancy. GPUOS addresses these limitations by replacing device-initiated launches with in-kernel function dispatch through a versioned function-pointer table, avoiding redundant scheduler invocations entirely.
+
+Compiler and graph-level optimization frameworks such as PyTorch 2.0’s
+torch.compile
+
+(
+20
+)
+, TensorFlow XLA
+(
+25
+)
+, and Apache TVM
+(
+4
+;
+5
+)
+improve performance by fusing operations and generating optimized execution graphs. These techniques are powerful when graphs are extractable, but their benefits diminish when workloads exhibit input-dependent control flow, dynamic tensor shapes, or operator polymorphism. GPUOS complements such compilers by operating below the graph level, transparently aggregating micro-operations that remain after graph fusion, without requiring model-level changes.
+
+At the system level, NVIDIA’s Multi-Process Service (MPS)
+(
+16
+)
+and Multi-Instance GPU (MIG)
+(
+15
+)
+mechanisms improve GPU utilization and isolation in multi-tenant environments. MPS allows multiple clients to share the GPU context efficiently, while MIG partitions the GPU into isolated slices with dedicated resources. These mechanisms, however, do not address the per-operation coordination cost within a single tenant. GPUOS operates orthogonally, mitigating launch overhead even within an MPS client or MIG slice, ensuring that small-kernel workloads remain efficient in both shared and isolated configurations.
+
+Several recent research systems explore similar goals.
+Zelos
+
+(
+32
+)
+and
+Cocktailer
+
+(
+30
+)
+and
+LithOS
+
+(
+7
+)
+investigate device-side task scheduling and cooperative multitasking for low-latency workloads.
+eGPU
+
+(
+28
+)
+and
+hetGPU
+
+(
+29
+)
+propose heterogeneous GPU virtualization layers for multi-process scheduling and dynamic workload migration. GPUOS is complementary to these efforts, providing a primitive that can be embedded within higher-level scheduling frameworks to reduce the launch and dispatch latency for small or transient tasks.
+
+In summary, GPUOS unifies two historically distinct threads of work: (1) operating-system-like persistent execution models from the graphics and HPC communities, and (2) compiler and runtime graph optimization frameworks from the ML community. By merging persistent kernels, dynamic function injection, and transparent framework integration, GPUOS offers a general mechanism for bridging the gap between flexible operator composition and efficient device execution.
+
+9.
+Conclusion
+
+The era of micro-batch machine learning brings challenges caused by coordination costs. The GPU remains fast in computation, but the cadence of repeated host submissions for small kernels has become the bottleneck. We develop GPUOS that addresses this challenge by making fewer launches—ideally one—and a disciplined device-side runtime that consumes tasks as quickly as the host produces them.
+
+Dynamic operator injection preserves flexibility. As models evolve and features arrive, the persistent kernel adapts without restart or relink. It needs only a new function pointer at the right table index. The practical consequence on real hardware is unmistakable: whitespace between kernels vanishes, throughput rises, tail latencies compress, and energy consumption drops proportionally to time saved.
+

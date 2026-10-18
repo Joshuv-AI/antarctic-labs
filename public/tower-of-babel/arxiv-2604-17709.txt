@@ -1,0 +1,1689 @@
+DeInfer: Efficient Parallel Inferencing for Decomposed Large Language Models Conference: 63rd ACM/IEEE Design Automation Conference; July 26–29, 2026; Long Beach, CA, USA 63rd ACM/IEEE Design Automation Conference (DAC ’26), July 26–29, 2026, Long Beach, CA, USA DOI: 10.1145/3770743.3804360 ISBN: 979-8-4007-2254-7/2026/07 CCS: Computing methodologies Neural networks CCS: Computing methodologies Parallel algorithms CCS: Computing methodologies Natural language processing
+You-Liang Huang, Xinhao Huang, Chengxi Liao, Zeyi Wen
+
+Abstract
+. Existing works on large language model (LLM) decomposition mainly focus on improving performance on downstream tasks, but they ignore the poor parallel inference performance when trying to scale up the model size. To mitigate this important performance issue, this paper introduces DeInfer, a high-performance inference system dedicated to parallel inference of decomposed LLMs. It consists of multiple optimizations to maximize performance and be compatible with state-of-the-art optimization techniques. Extensive experiments are carried out to evaluate DeInfer’s performance, where the results demonstrate its superiority, suggesting it can greatly facilitate the parallel inference of decomposed LLMs.
+
+
+
+†
+†
+cc-license:
+by
+
+1.
+INTRODUCTION
+
+Following the scaling law
+(
+10
+)
+, modern large language models (LLMs) usually have tens of billions of model parameters, which poses considerable challenges for model deployment and inference regarding memory footprint. To reduce the memory footprint, researchers have proposed a variety of model compression techniques, such as quantization
+(
+14
+)
+, model pruning
+(
+4
+)
+, and model decomposition
+(
+7
+;
+18
+)
+. Among these, decomposition-based compression has received relatively less attention than its counterparts. One key reason is that it is not inference-friendly, especially in a parallel setting.
+The parallel inference performance of decomposed LLMs cannot scale with the increase of compression ratios, as shown in Fig.
+1
+(a), nor the parallelism, as shown in Fig.
+1
+(b).
+
+To mitigate this performance issue, we propose DeInfer, a high-performance inference system dedicated to the parallel inference of decomposed LLMs. In this paper, we first identify three key performance bottlenecks and then elaborate on the details of DeInfer and how it is designed to eliminate these bottlenecks. After that, we carry out extensive and comprehensive experiments to evaluate the performance and scalability of DeInfer. To the best of our knowledge, there is no other work focusing on improving the performance of decomposed LLM parallel inference. The code is available in
+Github
+.
+
+(a)
+
+(b)
+
+Figure 1
+.
+Parallel inference throughput of decomposed LLaMA-3-70B on a cluster of 8
+\times
+A800 (80GB).
+
+2.
+PRELIMINARIES OF LLM DECOMPOSITION
+
+2.1.
+Background
+
+Low-rank decomposition can reduce model parameters by approximating the weight matrix with several smaller factorized matrices. Unlike hardware-dependent compression techniques (
+e.g.,
+unstructured pruning), low-rank decomposition is emerging as a promising technique for LLM compression
+(
+6
+;
+21
+;
+18
+;
+7
+;
+13
+;
+1
+;
+15
+)
+.
+Taking truncated Singular Value Decomposition (SVD) as an example, it substitutes the weight matrix
+W\in R^{m\times n}
+by the product of two smaller matrices
+A\in R^{m\times k}
+and
+B\in R^{k\times n}
+as follows.
+
+(1)
+
+W\approx AB
+
+where
+A=(U_{k}\sqrt{\Sigma_{k}})
+,
+B=(\sqrt{\Sigma_{k}}V_{k}^{T})
+,
+U_{k}\in R^{m\times k}
+and
+V_{k}^{T}\in R^{k\times n}
+are the top-
+k
+truncated matrices.
+\sqrt{\Sigma_{k}}\in R^{k\times k}
+is a diagonal matrix by the square-roots of the corresponding top-
+k
+singular values in
+\Sigma
+. This low-rank decomposition reduces the number of parameters from
+m\times n
+to
+(m+n)\times k
+, where users balance the trade-off between performance and model size by adjusting
+k
+.
+
+Model decomposition techniques have two advantages in terms of reducing the memory footprint. First, it can directly reduce the size of model parameters by replacing original pre-trained weights with two smaller matrices. Second, the KV cache can be compressed as a by-product of compressing
+K
+and
+V
+matrices in the attention layers, where the low-rank intermediate results between the two matrix multiplications now act as KV caches.
+
+However, these advantages in terms of reducing the memory footprint can turn out to be drawbacks in terms of inference efficiency. Additional matrix multiplications brought about by low-rank matrices and KV cache reconstruction inevitably cause computational overhead. More importantly, we notice that it would incur more significant performance degradation in a parallel setting. In the next subsection, we will elaborate on performance bottlenecks and problems that we observed in practice.
+
+2.2.
+Performance Bottlenecks
+
+2.2.1.
+Communication
+
+In low-rank decomposition, approximating one weight matrix with two smaller matrices introduces more
+reduce-sum
+operations in parallel inference.
+
+For example, in attention layers, as shown in Fig.
+2
+(a), there are four matrices,
+Q
+,
+K
+,
+V
+, and
+O
+before the model decomposition. A common technique here for applying tensor parallelism is to split them into several shards. Every process holds a small chunk of matrices, where
+Q
+,
+K
+, and
+V
+are column-wise splits, and
+O
+is row-wise split. During the forward, there is only one
+reduce-sum
+operation to accumulate the partial results of multiplication between
+O
+and the result of self-attention. However, after model decomposition, as shown in Fig.
+2
+(b), every matrix is replaced by two smaller matrices. For each paired low-rank matrices, there is a
+reduce-sum
+operation to keep the computation correct. In comparison, there are four
+reduce-sum
+operations in total instead of just one before model decomposition. More importantly, these additional operations are all
+reduce-sum
+, the collective communication primitive that has the highest cost in terms of bandwidth and latency. The situation is the same for the MLP layers.
+
+(a)
+
+(b)
+
+Figure 2
+.
+Self-attention computation is duplicated in parallel inference of decomposed LLMs.
+
+2.2.2.
+Duplicate Self-Attention Computation
+
+In attention layers, self-attention computation cannot be parallelized.
+
+As depicted in Fig.
+2
+(a), in the original model, with the column-wise parallel
+Q
+,
+K
+, and
+V
+, every process has a small fraction of data and can perform self-attention computation on their own data. After multiplying the row-wise parallel
+O
+, partial results will be accumulated with a
+reduce-sum
+operation, and each process has an identical copy. However, after model decomposition, as shown in Fig.
+2
+(b), there are three
+reduce-sum
+operations after multiplying upward projection matrices. At this moment, every process has an identical copy of data. Therefore, each process would perform a duplicate self-attention computation, which is very costly and totally unnecessary.
+
+2.2.3.
+Being incompatible with CUDA Graph
+
+CUDA Graph requires fixed arguments, but the results of the KV cache reconstruction have a dynamic shape.
+
+The latest LLM inference systems adopt paged KV cache management. Every process organizes a large chunk of GPU memory into a number of blocks, where a physical block can contain several slots of KV cache. Meanwhile, a block table is maintained to manage the mapping between logical blocks and physical blocks, where requests can only access logical blocks, and the inference system decides the swap-in and swap-out of physical blocks. When doing self-attention computation, the Flash Attention kernel takes the block table and base address as input, using an internal loop to fetch KV cache scatter in the blocks to perform the calculation
+(
+2
+;
+3
+)
+. For the original model, it is naturally compatible with a static computation graph,
+i.e.,
+CUDA Graph. However, for decomposed LLMs, things become totally different. During decoding, the number of KV cache is increasing, which means the size of KV cache reconstruction results are enlarging. The dynamic shape of the data conflicts with the requirement of building a static computation graph. Therefore, decomposed LLMs have to use a dynamic computation graph, which can cause considerable performance degradation.
+
+3.
+RELATED WORKS
+
+3.1.
+LLM Decomposition
+
+LLM decomposition adopts low-rank decomposition techniques that approximate weight matrices through products of low-rank matrices. Singular Value Decomposition (SVD) is a classic technique
+(
+6
+)
+, and the latest SVD-based methods introduce whitening techniques to mitigate the reconstruction error caused by outliers, which gives them superior performance in downstream tasks
+(
+21
+;
+18
+)
+. Atomic Feature Mimicking (AFM) is another common technique in LLM decomposition. It applies principle component analysis for the feature-based low-rank factorization
+(
+20
+)
+. In addition to different matrix factorization, the search for better truncation positions now become another promising area for LLM decomposition
+(
+17
+;
+9
+;
+8
+)
+. At the same time, researchers are also active in exploring the potential of low-rank decomposition in LLM inference.
+1
+and
+16
+tried to reduce memory footprint by storing cache in a low-rank manner.
+15
+operationalizes the attention mechanisms within low-dimensional eigenbases, achieving memory-efficient KV cache storage. Although much progress has been achieved in the development of LLM decomposition, there is still no attempt to explore what a decomposed LLM would be like in a parallel setting when using the state-of-the-art LLM inference systems (
+e.g.,
+vLLM
+(
+11
+)
+and SGLang
+(
+23
+)
+).
+
+3.2.
+DeInfer’s Position
+
+We need to emphasize that the primary goal and position of our work is completely different from the LLM decomposition work we discussed above.
+Instead of providing a novel LLM decomposition technique that has better performance in downstream tasks, our work aims to improve the parallel inference performance of decomposed LLMs.
+As for KV cache compression, storing the KV cache in a low-rank manner is a by-product of model decomposition and its reconstruction (on single GPU) is well-established in existing works. However, no attempts have been made to address the problems of KV cache reconstruction in a parallel setting (§
+2.2
+), and our DeInfer can address these problems.
+
+4.
+PROPOSED WORK
+
+In this section, our proposed system DeInfer will be elaborated. First, we will introduce a novel low-rank communication technique that can significantly reduce communication costs in decomposed LLMs. Then, we will give the details of other optimizations. In the end, we will demonstrate how our DeInfer can accommodate different LLM variants and model decomposition variants.
+
+4.1.
+Highly Efficient Low-rank Communication
+
+After model decomposition, we can obtain a downward projection matrix
+x_{v}
+and an upward projection matrix
+x_{u}
+from the original weight matrix
+x
+. We noticed that most attention layers and MLP layers in modern LLMs both are two sub-layers, thus there would be four sub-layers in total after model decomposition. Our key idea is that,
+instead of having a reduce-sum operation every two sub-layers in the normal latent space, we can rearrange the current computation pipeline to let communication happen in the low rank latent space
+. The rearranged computation pipelines are depicted in Fig.
+3
+.
+
+(a)
+
+(b)
+
+Figure 3
+.
+Low-rank communication design in decomposed LLaMA models.
+
+As shown in Fig.
+3
+, all downward projection matrices
+x_{v}
+in the first sub-layer are in column-wise parallel (in a
+split
+manner, where all matrices are first concatenated and then evenly split), followed by an
+all-gather
+operation in the low-rank latent space. After
+all-gather
+, each process now has identical low-rank data. In attention layers, the low rank data for
+K
+and
+V
+(
+i.e.,
+
+k_{low\_rank}
+and
+v_{low\_rank}
+) will be stored as KV cache, whose reconstruction will be elaborated in the next subsection. The upward projection matrices
+x_{u}
+are also in column-parallel (but in a
+shard
+way, where each process has a shard of the same matrices). At this point, to keep correct computation, the forward performs a batched matrix multiplication for the low-rank results with different upward matrix shards
+x_{u}
+, respectively,
+e.g.,
+
+k_{low\_rank}
+with
+k_{u}
+, and
+v_{low\_rank}
+with
+v_{u}
+. Each process has their small chunk of data ready to proceed to perform self-attention or activation computation.
+It’s noted that the decomposed LLMs now no longer have duplicate self-attention computation.
+In the second sub-layer, the downward projection matrix is in row-wise parallel, and upward projection matrix is identical in each process. Therefore, after multiplying the downward matrix, each process needs to have a
+reduce-sum
+operation to accumulate the partial results of all processes. Since every process has identical low-rank data and identical upward matrix, the output would also be identical.
+
+Layer
+
+Status
+
+Cost
+
+Total
+
+Bandwidth
+
+all-gather
+,
+O(n)
+
+reduce-sum
+,
+2O(n)
+
+Attention
+
+Unoptimized
+
+0
+
+2\times(2h+2h_{kv})
+
+4h+4h_{kv}
+
+DeInfer
+
+l_{q}+l_{k}+l_{v}
+
+2h
+
+l_{q}+l_{k}+l_{v}+2h
+
+MLP
+
+Unoptimized
+
+0
+
+2\times(2m+h)
+
+4m+2h
+
+DeInfer
+
+l_{up}+l_{gate}+l_{down}
+
+2h
+
+l_{up}+l_{gate}+l_{down}+2h
+
+LLaMA-3-70B
+
+†
+
+Unoptimized
+
+0
+
+167,936
+
+167,936
+(100%)
+
+DeInfer
+
+20,892
+
+2\times 8192
+
+37,276
+(
+\downarrow
+78%)
+
+\dagger
+
+: In LLaMA-3-70B, we have
+h=8192,h_{kv}=1024,m=28672
+. Under the compression ratio of 40% (evenly),
+l_{up}=l_{down}=l_{gate}=l_{q}=60\%h=4916
+and
+l_{k}=l_{v}=60\%h_{kv}=614
+.
+
+Table 1
+.
+Communication cost per token in a single Transformer block during forward pass (LLaMA-3-70B).
+
+To better understand how much bandwidth we can save through the communication, we analyze the bandwidth usage of LLaMA-3-70B in Table.
+1
+, where we compare the unoptimized decomposed LLMs with our DeInfer under the compression ratio of 40%.
+
+In Table.
+1
+,
+l_{X}
+means the number of reduced dimension of the matrix
+X
+,
+h
+is the hidden dimension,
+h_{kv}
+is the dimension of the
+K
+and
+V
+matrices, and
+m
+is the intermediate dimension in MLP. And the bandwidth of
+reduce-sum
+is double of
+all-gather
+. As demonstrated, DeInfer significantly reduces bandwidth usage by 78% through rearranging the computation pipeline.
+
+4.2.
+Integrating Paged Cache and CUDA Graph
+
+As depicted in Fig.
+4
+(a), Flash Attention kernel takes the KV cache (
+i.e.,
+base address of KV cache area),
+Query
+(
+i.e.,
+results of multiplying the
+Q
+matrix), and a block table as input. All input is fixed during the forward. However, after model decomposition, decoding can no longer use the static computation graph since the shape of KV cache reconstruction results is dynamic. Therefore, we re-design the computation of KV cache reconstruction to allow the decoding to be compatible with both paged cache and CUDA Graph. Our designed process for KV cache construction during decoding is shown in Fig.
+4
+(b). It has two stages, the
+preparation stage
+, where we are allowed to do any CPU and GPU operations for the CUDA Graph execution, and the
+graph replay stage
+, where only captured operations can be executed, and all operations must fulfill the requirements of CUDA Graph.
+
+DeInfer introduces two buffers for squeezing and temporally storing the KV cache and their corresponding reconstruction results. These two buffers are allocated in the initialization of the inference system. We noticed that iteratively copying the scattered KV cache is extremely time-consuming, thus DeInfer tries to copy as many blocks as possible at one time. In the preparation stage, DeInfer performs a scan to find which logical block is physically contiguous. At the same time, DeInfer derives a new block table called
+remapping index list
+. It acts as a block table, indicating which blocks in the buffer a sequence owns. In the graph replay stage, the physically contiguous KV caches are sequentially copied to the buffer, where the KV cache in the buffer is compact. Then, the compact KV cache multiplies upward matrices to finish the reconstruction. It is noted here that the results have a dynamic shape but a fixed memory address and we only need to use the GEMM kernel that has a large size to adapt for CUDA Graph. Overhead here is inevitable, but it can bring larger overall efficiency improvement by eliminating all kernel launch overhead. At this point, we can apply our customized in-place rotary position embedding kernel to the reconstruction results if the model needs. When everything is done, the buffer act as the original KV cache and
+remapping index list
+as the block table. They and
+Query
+are used to call Flash Attention kernel to complete self-attention computation.
+
+In addition to the highly efficient customized kernel, DeInfer also adopts other optimization techniques (
+e.g.,
+the communication-computation overlap and kernel fusion) to further improve the performance. We cannot introduce the technical details here due to page limit, but they can be found in DeInfer’s implementation.
+
+(a)
+
+(b)
+
+Figure 4
+.
+KV cache reconstruction process.
+
+4.3.
+Generalization
+
+Revisiting the low-rank communication in §
+4.1
+, our proposed method does not place any constraint on the shape of the weight matrix. DeInfer supports all tensor parallelism configurations as long as one matrix can be appropriately partitioned and evenly distributed. Therefore, DeInfer can support decomposed LLMs with variadic compression ratios,
+e.g.,
+weights in different layers have different compression ratios, and even
+Q
+,
+K
+and
+V
+in the same attention layer have different compression ratios. Additionally, for varying model decomposition methods, we have observed that there is a fundamental principle in matrix factorization,
+i.e.,
+no non-linear operations are introduced during factorization.
+This principle indicates that any more than two matrices derived from factorization can be absorbed into two matrices and then fit our DeInfer.
+
+Attn
+
+MLP
+
+Rotary Position
+
+Embed
+
+MHA
+
+MQA
+
+GQA
+
+MLA
+†
+
+non-GLU
+
+GLU-based
+
+\checkmark
+
+\checkmark
+
+\checkmark
+
+\checkmark
+
+\checkmark
+
+\checkmark
+
+\dagger
+
+: Almost only be used in Deepseek’s MoE models.
+
+Table 2
+.
+Attention and MLP variants supported by DeInfer.
+
+As for transformer-based LLMs, even though there are MoE decomposition methods
+(
+12
+)
+, our DeInfer now only supports non-MoE models. The supported LLM variants are reported in Table
+2
+. As shown, most variants can be supported by DeInfer, which includes but is not limited to
+LLaMA
+
+(
+5
+)
+,
+OPT
+
+(
+22
+)
+, and
+Qwen
+
+(
+19
+)
+models.
+
+5.
+EXPERIMENTS
+
+In this section, we evaluate our proposed DeInfer with the focus on the following three aspects:
+throughput analysis
+,
+latency analysis
+, and
+system-level analysis
+. Additionally, we conduct experiments to demonstrate the necessity of supporting CUDA Graph and how is the scalability of DeInfer. For demonstration, we implement DeInfer based on one of the state-of-the-art LLM inferencing systems,
+vLLM
+.
+
+5.1.
+Setup
+
+Our experiments are conducted on two hardware platforms: (1) 8
+\times
+A800 (80GB) with 2
+\times
+Intel Xeon-8358P and 2TB memory. (2) 8
+\times
+A6000 (48GB) with 2
+\times
+Intel Xeon-8358 and 512GB memory, where platform (1) has fully-connected NVLinks but platform (2) doesn’t have NVLinks. To demonstrate generalizability, we select LLaMA-65B, LLaMA-3-70B, and OPT-30B as foundation models because they encompass MHA and GQA in attention variants, non-GLU and GLU-based MLPs, and rotary embedding. The test scripts that we adopt are from the vLLM benchmark suite
+1
+1
+
+1
+
+https://github.com/vllm-project/vllm/tree/main/benchmarks
+for fair and replicable comparison.
+To the best of our knowledge, there is no other work on parallel inference of decomposed LLMs. Therefore, we implement a basic implementation of tensor parallelism (hereinafter referred to as Base).
+Our experiments compare the performance of DeInfer and Base, which also include system-level ablation studies and detailed analysis. Due to inconsistent GPU memory sizes between test platforms, we only keep configurations consistent in each experiment.
+
+5.2.
+Throughput Analysis
+
+We prepare two different scenarios to evaluate DeInfer’s throughput performance. In the first setting, there is a large batch size (512 for LLaMA-3-70B and LLaMA-65B, 768 for OPT-30B) but with a relatively smaller maximal sequence length (32 pre-fill tokens and the maximal sequence length is 160), whereas in the second setting, it is vice versa. The batch size is set to 64 for LLaMA-3-70B and LLaMA-65B, 192 for OPT-30B, where pre-fill tokens is 64 and the maximal sequence length is 512. The configuration is kept the same for each experiment setup. The results are shown in Fig.
+5
+and Fig.
+6
+, respectively for the first and the second setting. For the both scenarios, as shown in the figures, Base has poor performance and scalability on the three different models. In comparison, DeInfer shows a much better scalability and significantly outperforms Base by different extents.
+
+(a)
+
+Without NVLink
+
+(b)
+
+With NVLink
+
+Figure 5
+.
+Batched generation performance of different models under 40% compression ratio in the high load scenario on 8
+\times
+A800 (80GB).
+
+(a)
+
+Without NVLink
+
+(b)
+
+With NVLink
+
+Figure 6
+.
+Batched generation performance of different models in the mild load scenario under 40% compression ratio on 8
+\times
+A800 (80GB).
+
+Additionally, when enabling low-rank KV cache, there is a noticeable performance gap between the GQA model (LLaMA-3-70B) and the MHA models (LLaMA-65B and OPT-30B). This is because MHA models have more attention heads (64 in LLaMA-65B vs. 8 in LLaMA-3-70B), which means higher KV cache reconstruction cost. This difference brings tremendous advantages for LLaMA-3-70B in rebuilding the KV cache. In comparison, LLaMA-65B suffers a much greater performance degradation when enabling low-rank KV cache. Similarly, the OPT-30B can also witness the same problem.
+
+5.3.
+Latency Analysis
+
+In this subsection, we adopt the vLLM serving benchmark to evaluate the latency performance of our system, where there are three metrics used for performance assessment: Time-to-First Token (TTFT) and Inter-token Latency (ITL). The request in this experiment has 128 prompts that have 32 pre-fill tokens, and the system is required to generate 256 tokens for each prompt. The configuration is kept the same across different platforms. Experiments are conducted on the A800 platform and A6000 platform, whose results are reported in Table
+3
+and Table
+4
+, respectively.
+
+Metrics
+
+Methods
+
+LLaMA-3-70B
+
+LLaMA-65B
+
+OPT-30B
+
+TTFT (ms)
+
+Base
+
+21740
+
+19341
+
+6999
+
+DeInfer
+
+(
+\downarrow
+83%)
+3633
+
+(
+\downarrow
+82%)
+3489
+
+(
+\downarrow
+77%)
+1594
+
+DeInfer
+†
+
+(
+\downarrow
+83%)
+3703
+
+(
+\downarrow
+81%)
+3626
+
+(
+\downarrow
+76%)
+1704
+
+ITL (ms)
+
+Base
+
+812
+
+764
+
+311
+
+DeInfer
+
+(
+\downarrow
+79%)
+172
+
+(
+\downarrow
+76%)
+181
+
+(
+\downarrow
+68%)
+101
+
+DeInfer
+†
+
+(
+\downarrow
+74%)
+211
+
+(
+\downarrow
+59%)
+312
+
+(
+\downarrow
+39%)
+190
+
+\dagger
+
+: w/ enabling low-rank KV cache.
+
+Table 3
+.
+Serving performance of different models under a compression ratio of 40% on 8xA6000 (48GB) w/o. NVLink
+
+w/o. NVLink
+
+Metrics
+
+Methods
+
+LLaMA-3-70B
+
+LLaMA-65B
+
+OPT-30B
+
+TP=2
+
+TP=4
+
+TP=8
+
+TP=2
+
+TP=4
+
+TP=8
+
+TP=2
+
+TP=4
+
+TP=8
+
+TTFT (ms)
+
+Base
+
+8950
+
+10064
+
+10764
+
+8164
+
+9359
+
+10451
+
+3126
+
+3566
+
+3845
+
+DeInfer
+
+(
+\downarrow
+76%)
+2137
+
+(
+\downarrow
+79%)
+2110
+
+(
+\downarrow
+79%)
+2246
+
+(
+\downarrow
+73%)
+2192
+
+(
+\downarrow
+78%)
+2088
+
+(
+\downarrow
+83%)
+1812
+
+(
+\downarrow
+69%)
+960
+
+(
+\downarrow
+74%)
+927
+
+(
+\downarrow
+75%)
+944
+
+DeInfer
+†
+
+(
+\downarrow
+72%)
+2484
+
+(
+\downarrow
+79%)
+2102
+
+(
+\downarrow
+81%)
+2093
+
+(
+\downarrow
+73%)
+2216
+
+(
+\downarrow
+80%)
+1840
+
+(
+\downarrow
+80%)
+2085
+
+(
+\downarrow
+70%)
+940
+
+(
+\downarrow
+75%)
+878
+
+(
+\downarrow
+76%)
+906
+
+ITL (ms)
+
+Base
+
+156
+
+122
+
+96
+
+206
+
+103
+
+101
+
+54
+
+47
+
+47
+
+DeInfer
+
+(
+\downarrow
+31%)
+108
+
+(
+\downarrow
+28%)
+88
+
+(
+\downarrow
+9%)
+87
+
+(
+\downarrow
+44%)
+115
+
+(
+\downarrow
+12%)
+91
+
+(
+\downarrow
+13%)
+88
+
+(
+\uparrow
+6%)
+57
+
+(
+\downarrow
+0%)
+47
+
+(
+\downarrow
+2%)
+46
+
+DeInfer
+†
+
+(
+\downarrow
+8%)
+143
+
+(
+\downarrow
+6%)
+115
+
+(
+\uparrow
+9%)
+105
+
+(
+\uparrow
+220%)
+660
+
+(
+\uparrow
+244%)
+354
+
+(
+\uparrow
+114%)
+216
+
+(
+\uparrow
+424%)
+283
+
+(
+\uparrow
+228%)
+154
+
+(
+\uparrow
+115%)
+101
+
+w/ NVLink
+
+Metrics
+
+Methods
+
+LLaMA-3-70B
+
+LLaMA-65B
+
+OPT-30B
+
+TP=2
+
+TP=4
+
+TP=8
+
+TP=2
+
+TP=4
+
+TP=8
+
+TP=2
+
+TP=4
+
+TP=8
+
+TTFT (ms)
+
+Base
+
+1662
+
+1499
+
+1605
+
+1525
+
+1417
+
+1461
+
+724
+
+654
+
+649
+
+DeInfer
+
+(
+\downarrow
+12%)
+1463
+
+(
+\downarrow
+34%)
+983
+
+(
+\downarrow
+50%)
+797
+
+(
+\downarrow
+24%)
+1162
+
+(
+\downarrow
+38%)
+875
+
+(
+\downarrow
+49%)
+749
+
+(
+\downarrow
+20%)
+581
+
+(
+\downarrow
+32%)
+448
+
+(
+\downarrow
+32%)
+443
+
+DeInfer
+†
+
+(
+\downarrow
+17%)
+1377
+
+(
+\downarrow
+37%)
+948
+
+(
+\downarrow
+49%)
+817
+
+(
+\downarrow
+20%)
+1214
+
+(
+\downarrow
+36%)
+901
+
+(
+\downarrow
+46%)
+782
+
+(
+\downarrow
+12%)
+640
+
+(
+\downarrow
+21%)
+514
+
+(
+\downarrow
+30%)
+457
+
+ITL (ms)
+
+Base
+
+156
+
+115
+
+93
+
+191
+
+98
+
+94
+
+50
+
+42
+
+41
+
+DeInfer
+
+(
+\downarrow
+42%)
+90
+
+(
+\downarrow
+34%)
+76
+
+(
+\downarrow
+16%)
+78
+
+(
+\downarrow
+52%)
+92
+
+(
+\downarrow
+35%)
+64
+
+(
+\downarrow
+40%)
+56
+
+(
+\downarrow
+0%)
+50
+
+(
+\downarrow
+12%)
+37
+
+(
+\downarrow
+20%)
+33
+
+DeInfer
+†
+
+(
+\downarrow
+19%)
+127
+
+(
+\downarrow
+17%)
+96
+
+(
+\downarrow
+0%)
+93
+
+(
+\uparrow
+236%)
+642
+
+(
+\uparrow
+237%)
+330
+
+(
+\uparrow
+96%)
+184
+
+(
+\uparrow
+452%)
+276
+
+(
+\uparrow
+248%)
+146
+
+(
+\uparrow
+110%)
+86
+
+\dagger
+
+: w/ enabling low-rank KV cache.
+
+Table 4
+.
+Serving performance of different models under compression ratio of 40% on A800 (80GB) platform
+
+As reported, our DeInfer achieves significant latency decreases in both test platforms and different NVLink settings. When enabling low-rank KV cache, the performance of DeInfer shows different patterns. Generally, DeInfer suffers more in the MHA models (
+i.e.,
+LLaMA-65B and OPT-30B) than the GQA model (LLaMA-3-70B). The reason remains the same: more attention heads in MHA models, which can also explain why enabling NVLink does not help. However, DeInfer on the A6000 platform (Table
+3
+) shows a different performance pattern compared to it on the A800 platform, where on 8xA6000 we can observe a significant performance improvement when enabling low-rank KV cache. To explore the underlying reason, we profile the execution of Base and DeInfer, and the details are elaborated in the next subsection.
+
+5.4.
+System Profiling
+
+We report the breakdown of computation and communication profiled by NVIDIA Nsight Systems
+2
+2
+
+2
+
+https://developer.nvidia.com/nsight-systems
+in Table
+5
+. As shown, Base’s communication costs are predominant in experiments that do not enable NVLink, and things get worse as the parallelism increases. The exorbitant communication cost is thus the root cause of poor parallel inference performance. In comparison, DeInfer improves communication efficiency by reducing 80~90% communication cost. As parallelism increases, DeInfer shows incredible scalability. Moreover, since DeInfer eliminates duplicate self-attention computation, the computing time is reduced by 10~30%.
+
+TP
+
+w/o. NVLink
+
+w/ NVLink
+
+compute (ms)
+
+comm. (ms)
+
+total (ms)
+
+compute (ms)
+
+comm. (ms)
+
+total (ms)
+
+2
+
+(16%)
+2.352
+
+(84%)
+12.182
+
+(100%)
+14.534
+
+(73%)
+2.391
+
+(27%)
+0.891
+
+(100%)
+3.282
+
+(
+\downarrow
+23%)
+1.809
+
+(
+\downarrow
+92%)
+0.977
+
+(
+\downarrow
+81%)
+2.786
+
+(
+\downarrow
+25%)
+1.792
+
+(
+\downarrow
+74%)
+0.232
+
+(
+\downarrow
+39%)
+2.014
+
+4
+
+(7%)
+1.174
+
+(93%)
+14.853
+
+(100%)
+16.027
+
+(49%)
+1.176
+
+(51%)
+1.240
+
+(100%)
+2.416
+
+(
+\downarrow
+12%)
+1.038
+
+(
+\downarrow
+92%)
+1.156
+
+(
+\downarrow
+86%)
+2.194
+
+(
+\downarrow
+11%)
+1.041
+
+(
+\downarrow
+78%)
+0.267
+
+(
+\downarrow
+46%)
+1.308
+
+8
+
+(6%)
+1.112
+
+(94%)
+16.051
+
+(100%)
+17.163
+
+(45%)
+1.116
+
+(55%)
+1.369
+
+(100%)
+2.485
+
+(
+\downarrow
+29%)
+0.787
+
+(
+\downarrow
+92%)
+1.285
+
+(
+\downarrow
+88%)
+2.072
+
+(
+\downarrow
+30%)
+0.782
+
+(
+\downarrow
+82%)
+0.247
+
+(
+\downarrow
+59%)
+1.029
+
+•
+
+Tag:
+Base
+,
+DeInfer
+.
+(X%)
+indicates the proportion of total cost.
+(
+\downarrow
+X%)
+denotes time saved by DeInfer compared to Base.
+
+Table 5
+.
+Breakdown of execution time in a LLaMA-3-70B transformer layer on A800 with compression ratio of 40%.
+
+According to hardware specifications, NVIDIA RTX A800 (80GB)
+3
+3
+
+3
+
+https://www.techpowerup.com/gpu-specs/a800-sxm4-80-gb.c3966
+has a much larger memory bus and bandwidth than NVIDIA RTX A6000
+4
+4
+
+4
+
+https://www.techpowerup.com/gpu-specs/rtx-a6000.c3686
+. As for the discussion at the end of the last subsection (
+i.e.,
+distinct performance on different platforms), inference performance on the A6000 platform is not only limited to exorbitant communication cost but also to much smaller memory bandwidth. The advantage provided by DeInfer is so significant that it compensates more enough than the KV cache reconstruction cost. Therefore, we can witness a consistent performance improvement of DeInfer in the three models of different architectures on the A6000 platform.
+
+5.5.
+Scalability Analysis
+
+As demonstrated in Introduction (§
+1
+), one of the most important motivations of our work is the poor scalability of decomposed LLMs, which fails to scale up the performance as the compression ratio or the parallelism increases. In this experiment, we run benchmarks (
+i.e.,
+the high-load generation experiment in §
+5.2
+) on LLMs that are compressed to different extents to evaluate the scalability of DeInfer. The results are shown in Fig.
+7
+, where DeInfer shows excellent scalability. When the parallelism is 8 and compression ratio is 60%, DeInfer achieves a speed up of 2.25x and 8.81x for w/ NVLink and w/o. NVLink, respectively. Moreover, as the compression ratio increases, the performance of DeInfer can also gradually improve.
+
+Figure 7
+.
+Generation performance of LLaMA-3-70B of different compression ratios on A800 platform.
+
+5.6.
+Benefits of CUDA Graph
+
+Base’s decoding stage cannot support the static graph, which may cause significant performance degradation. To explore how much performance can be improved, we test two types of DeInfer, one with CUDA Graph and another without, in both throughput and serving experiments. The results are reported in Table
+6
+.
+
+Experiments
+
+Configurations
+
+LLaMA-3-70B
+
+LLaMA-65B
+
+w/o. NVLink
+
+w/ NVLink
+
+w/o NVLink
+
+w/ NVLink
+
+Throughput
+
+s1 (tokens/s)
+
+2068
+
+3488
+
+1435
+
+2011
+
+(
+\uparrow
+5%)
+2168
+
+(
+\uparrow
+10%)
+3834
+
+(
+\uparrow
+3%)
+1477
+
+(
+\uparrow
+9%)
+2217
+
+s2 (tokens/s)
+
+816
+
+831
+
+552
+
+660
+
+(
+\uparrow
+20%)
+978
+
+(
+\uparrow
+66%)
+1379
+
+(
+\uparrow
+6%)
+587
+
+(
+\uparrow
+8%)
+713
+
+Serving
+
+ITL (ms)
+
+118
+
+97
+
+279
+
+249
+
+(
+\downarrow
+3%)
+114
+
+(
+\downarrow
+5%)
+93
+
+(
+\downarrow
+28%)
+202
+
+(
+\downarrow
+31%)
+173
+
+•
+
+Tag:
+Base
+,
+DeInfer
+. Table reports performance of DeInfer that enables low-rank KV cache.
+
+Table 6
+.
+Performance improvement brought by static kernel execution graph, on 8xA800.
+
+Table
+6
+shows a general performance pattern. When NVLink is not enabled, the performance bottleneck remains the communication; therefore, supporting CUDA Graph does not help much. However, when NVLink is enabled and the performance bottleneck becomes the computation, we can notice a significant performance improvement in most scenarios. This is because the overhead of CUDA kernel launch is eliminated, which saves tremendous time and thus brings such a performance gain.
+
+6.
+CONCLUSION
+
+To mitigate the performance issue of decomposed LLM parallel inference, this work proposes DeInfer, a high-performance inference system dedicated to parallel inference of decomposed LLMs. It consists of a novel low-rank communication technique and other optimizations that can significantly improve the parallel inference performance. We integrate it into one of the state-of-the-art inference systems,
+vLLM
+. Extensive experiments are carried out, where results demonstrate the excellent scalability and efficiency of DeInfer, suggesting the practicality of DeInfer in parallel inference of decomposed LLMs.
+

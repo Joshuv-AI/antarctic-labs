@@ -1,0 +1,3325 @@
+POLAR: Online Learning for LoRA Adapter Caching and Routing in Edge LLM Serving
+Shaoang Li, Jian Li
+
+Abstract
+. Edge deployment of large language models (LLMs) increasingly relies on libraries of lightweight LoRA adapters, yet GPU/DRAM can keep only a small resident subset at a time. Serving a request through a non-resident adapter requires paging its weights from storage, incurring measurable latency. This creates a two-timescale online control problem: on a slow timescale, the system selects which adapters remain resident in fast memory, while on a fast timescale it routes each request to an adapter whose context-dependent utility is unknown a priori. The two decisions are tightly coupled: the cache determines the cost of exploration, and the router determines which adapters receive informative feedback. We formulate this joint caching-and-routing problem as a two-timescale contextual bandit and propose POLAR (Paging and Online Learning for Adapter Routing). POLAR pairs a cache-aware LinUCB router with an epoch-based cache controller. We study two variants. A fixed-epoch version provides a robust baseline with worst-case regret guarantees under arbitrary contexts. An epoch-doubling version, POLAR+ , adds forced exploration and improved cache optimization to achieve 𝒪 ~ ​ ( d ​ N ​ T + K ​ T ) \widetilde{\mathcal{O}}(d\sqrt{NT}+\sqrt{KT}) sublinear regret under stochastic regularity and cacheability conditions, where N N is the adapter count, K K the cache size, d d the context dimension, and T T the horizon. The routing term matches the standard contextual-bandit rate up to logarithmic factors, showing that the memory hierarchy does not fundamentally slow routing learning. Experiments using 15 real LoRA adapters for Qwen2.5-7B together with measured GPU paging latencies show that adaptive cache control substantially outperforms non-adaptive baselines and exhibits scaling trends consistent with the theory.
+
+
+
+1.
+Introduction
+
+Edge deployment of large language models (LLMs) is increasingly moving toward a modular design: a single base model is kept on device, while many downstream functionalities are implemented through lightweight adapters such as LoRA modules
+(
+7
+)
+. This architecture is attractive because it avoids replicating the full base model for every task or tenant, and makes it practical to support diverse behaviors including translation, summarization, recommendation, code generation, and domain-specific assistance on resource-constrained edge servers. However, this modularity introduces a systems bottleneck that is easy to overlook: while the adapter library may contain tens or hundreds of specialized adapters, GPU/DRAM can hold only a small subset at any time. The rest remain on local storage and can be accessed only through a slower path that incurs nontrivial loading delay
+(
+17
+;
+16
+;
+9
+)
+.
+
+Figure 1.
+Overview of
+POLAR+
+. The
+cache controller
+(slow timescale) updates the resident set
+C_{\ell}
+at each epoch boundary; the
+LinUCB router
+(fast timescale) selects an adapter for each request
+x_{t}
+. The library
+\mathcal{M}
+holds
+N
+adapters on SSD; the GPU keeps a resident set of size
+K
+that evolves
+C_{1}\to C_{2}\to C_{3}\to C_{4}\approx C^{\dagger}
+as epoch lengths double (green “
++
+” marks newly admitted adapters). Request
+x_{3}
+hits a cached adapter (hot path); request
+x_{8}
+needs an evicted adapter and pays the cold-path penalty.
+
+This memory-hierarchy constraint makes adapter residency a first-order systems decision rather than a mere implementation detail. In an interactive edge service, routing a request to a resident adapter yields a low-latency
+hot
+execution path, whereas routing it to a non-resident adapter requires a
+cold
+path, e.g., loading weights from SSD or flash into fast memory, which can substantially increase time-to-first-token and tail latency. Existing systems work has shown that LoRA loading and memory management are critical to end-to-end serving efficiency, but the missing online decision is
+which
+adapters should remain resident in fast memory in the first place. That decision is inherently dynamic: the most valuable resident set depends on the request stream, and that value is not known in advance.
+
+This yields a natural two-timescale architecture. On a slow timescale, the system control plane selects a resident working set of at most
+K
+adapters to keep in GPU/DRAM. Frequent reconfiguration is undesirable because loading new adapters incurs overhead and can destabilize service, so the resident set should change only periodically. On a fast timescale, the data plane routes each incoming request to an adapter. Crucially, the request need not be restricted to the current resident set: a non-resident adapter may still be the best choice for the query, but selecting it incurs an additional latency penalty. The resulting problem is therefore neither standard caching nor standard routing. The cache determines which adapters are cheap to access, while routing determines which adapters are used and thus which ones generate informative feedback for future decisions.
+
+The challenge is amplified by uncertainty. Adapter quality is request-dependent and typically unknown a priori: an adapter that performs well on one class of queries may be poor on another. Hence the system must learn, online, how adapter utility varies with context while simultaneously managing a scarce memory resource. This creates an endogenous feedback loop. If the resident set is poorly chosen, potentially useful adapters remain expensive to probe, slowing learning. If routing is shortsighted, the system may collect feedback only on currently cheap adapters and fail to discover better ones. In other words, the value of caching an adapter is not exogenous; it depends on the future routing policy, which itself depends on what has been learned so far.
+
+This raises the central question of the paper:
+
+How can an edge LLM service jointly learn which adapters to route requests to and which adapters to keep resident in fast memory, when adapter utility is context-dependent, cache updates operate on a slower control-plane timescale, and non-resident access incurs a measurable latency penalty?
+
+This coupled control problem differs fundamentally from prior work in adjacent areas. If all adapters were equally accessible, it would reduce to contextual model selection. If adapter quality were known ahead of time, it would reduce to cache management with fixed values; and if the resident set could be changed on every request without cost, it would collapse to a one-timescale paging model. None of these abstractions captures practical edge LLM serving. Existing systems such as S-LoRA
+(
+17
+)
+, FastLibra
+(
+26
+)
+, and EdgeLoRA
+(
+16
+)
+optimize adapter loading and memory sharing, but do not study the online decision problem of jointly learning adapter utility and managing residency under request-dependent performance.
+
+We study this problem through the lens of edge LLM serving and formulate it as a two-timescale online learning problem. The system hosts a fixed base LLM and a library of adapters on storage. Time is divided into epochs. At each epoch boundary, the controller selects a resident set of size at most
+K
+. During the epoch, each request arrives with a context vector, and the router selects an adapter from the full library. If the selected adapter is resident, the request follows the hot path; otherwise, it is served through the cold path and pays an additional latency penalty. We focus on the practically important regime in which the workload is approximately stable over the timescale of cache reconfiguration, so the target operating point is a steady resident set rather than continual cache churn. In this setting, the core online task is to learn which adapters deserve residency while still making good request-level routing decisions.
+
+To address this challenge, we propose
+POLAR
+(
+P
+aging and
+O
+nline
+L
+earning for
+A
+dapter
+R
+outing), a framework that mirrors the system hierarchy (Figure
+1
+).
+POLAR
+combines a fast-timescale cache-aware LinUCB router with a slow-timescale cache controller that updates the resident set only at epoch boundaries. We study two variants. The first,
+POLAR
+, uses fixed-length epochs and greedy cache updates, and serves as a robust baseline that applies under arbitrary context sequences. The second,
+POLAR+
+, augments this design with forced exploration, exact cache optimization, and geometrically increasing epochs. The role of
+POLAR+
+is not merely to improve constants: it overcomes the persistent cache-identification difficulty that remains in the unrestricted setting, and under additional workload regularity and cacheability conditions it achieves sublinear regret.
+
+The analysis reveals a technical obstacle that does not arise in either standard contextual bandits or standard online caching. In ordinary contextual bandits, uncertainty about an arm depends on how often that arm is sampled. Here, sampling itself is shaped by the memory hierarchy: resident adapters are cheaper to explore, while non-resident adapters are more expensive, so the cache changes the data-collection process. As a result, the slow-timescale cache decision is statistically coupled with the fast-timescale learner. Our results show that this coupling can nevertheless be controlled. For the fixed-epoch variant, we establish a worst-case regret guarantee under the linear contextual model, and show that the resulting linear cache gap is intrinsic under arbitrary contexts rather than an artifact of the proof. For
+POLAR+
+, we show that under stationary workload regularity and a natural cacheability condition, epoch doubling and forced exploration make the cumulative cache-identification error summable, yielding an overall sublinear regret bound. The routing term matches the standard contextual-bandit rate up to logarithmic factors, showing that the memory hierarchy does not fundamentally slow routing learning. To the best of our knowledge, this is the first such guarantee for joint adapter caching and contextual routing in edge LLM serving.
+
+Our contributions are summarized as follows.
+
+•
+
+We formulate edge LoRA serving as a two-timescale online control problem over a memory hierarchy, coupling slow resident-set selection with fast contextual routing under hot/cold latency asymmetry.
+
+•
+
+We propose
+POLAR
+and
+POLAR+
+, two two-timescale algorithms for joint adapter routing and cache placement.
+POLAR
+is a robust baseline under arbitrary contexts, while
+POLAR+
+adds epoch doubling, forced exploration, and improved cache optimization to obtain provably sublinear regret under additional structure.
+
+•
+
+We prove a worst-case regret bound for
+POLAR
+and show that its linear cache gap is intrinsic without workload regularity. We further prove a sublinear regret bound for
+POLAR+
+under stochastic regularity and cacheable diversity, with a routing term matching the standard contextual-bandit rate up to logarithmic factors.
+
+•
+
+We evaluate the proposed methods using real LoRA adapters on Qwen2.5-7B together with measured GPU paging latencies. The results show that adaptive cache control substantially reduces regret relative to non-adaptive baselines and exhibits scaling trends consistent with the theory.
+
+2.
+System Model
+
+We consider an edge device hosting a fixed base LLM and a library of
+N
+lightweight adapters (e.g., LoRA modules), indexed by
+\mathcal{M}=\{1,\dots,N\}
+. The full library resides on local storage, while only
+1\leq K\ll N
+adapters can be kept
+resident
+in fast memory (GPU/DRAM). A non-resident adapter can still serve a request through a slower path, e.g., paging from storage into fast memory, incurring an additional latency penalty.
+
+Time is slotted into rounds
+t=1,\dots,T
+, grouped into epochs
+\ell=1,2,\dots
+. At each round, the system observes a context
+x_{t}\in\mathbb{R}^{d}
+with
+\|x_{t}\|_{2}\leq 1
+. The problem operates on two timescales. On a
+slow
+timescale, the resident set
+C_{\ell}\subseteq\mathcal{M}
+with
+|C_{\ell}|\leq K
+is chosen at epoch boundaries and remains fixed during the epoch. On a
+fast
+timescale, the system selects an adapter
+a_{t}\in\mathcal{M}
+for each request, incurring low latency if
+a_{t}\in C_{\ell(t)}
+(
+hot
+), where
+\ell(t)
+denotes the epoch containing round
+t
+, and an additional latency penalty otherwise (
+cold
+). This two-timescale abstraction reflects practical edge serving stacks, where cache reconfiguration is a slower control-plane operation, while request routing is a fast data-plane decision.
+
+Reward model.
+Each adapter
+a
+has an unknown parameter
+\theta_{a}^{\star}\in\mathbb{R}^{d}
+with
+\|\theta_{a}^{\star}\|_{2}\leq 1
+, and a known cold-path penalty
+\lambda_{a}>0
+, which captures the additional latency of serving a request through a non-resident adapter. This penalty depends on the adapter and the memory/storage hierarchy, and is assumed measurable by profiling before deployment. The context
+x_{t}
+encodes request features such as task type, input length, or domain, and
+\theta_{a}^{\star}
+captures how adapter
+a
+responds to these features. The observed quality is
+
+(1)
+
+\displaystyle q_{t}(a)=\langle\theta_{a}^{\star},x_{t}\rangle+\eta_{t}(a),
+
+where
+\eta_{t}(a)
+is conditionally
+\sigma
+-sub-Gaussian given
+x_{t}
+, and only
+q_{t}(a_{t})
+is observed. The per-round reward is
+
+(2)
+
+\displaystyle r_{t}(a_{t};C_{\ell(t)})=q_{t}(a_{t})-\alpha\lambda_{a_{t}}\mathbf{1}\{a_{t}\notin C_{\ell(t)}\},
+
+where
+\alpha>0
+trades off service quality against latency. Thus, routing to a cold adapter is allowed, but pays an explicit penalty.
+
+Reconfiguring the resident set between epochs also incurs overhead. We model this by a switching cost
+\gamma|C_{\ell}\setminus C_{\ell-1}|
+with
+\gamma>0
+, which reflects the one-time cost of loading each newly admitted adapter into the cache at epoch boundaries. An online policy selects
+\{a_{t}\}
+and
+\{C_{\ell}\}
+to maximize
+
+(3)
+
+\displaystyle\max_{\pi}\mathbb{E}\!\left[\sum_{t=1}^{T}r_{t}(a_{t};C_{\ell(t)})\!-\!\sum_{\ell\geq 2}\gamma|C_{\ell}\setminus C_{\ell-1}|\right]\quad\text{s.t.}~|C_{\ell}|\leq K,\forall\ell.
+
+Benchmark and regret.
+Define the noiseless reward
+
+(4)
+
+\displaystyle\mu_{t}(a;C):=\langle\theta_{a}^{\star},x_{t}\rangle-\alpha\lambda_{a}\mathbf{1}\{a\notin C\}.
+
+We benchmark against an oracle that knows
+\{x_{t}\}_{t=1}^{T}
+and
+\{\theta_{a}^{\star}\}_{a\in\mathcal{M}}
+in hindsight and selects a
+single fixed cache
+
+C_{T}^{\star}
+together with the optimal per-round routing rule under that cache. We benchmark against a fixed resident set for two reasons. First, frequent cache reconfiguration is costly and undesirable in practical edge systems, so the target operating point is typically a stable working set rather than continual cache churn. Second, in the approximately stationary regime, a fixed cache provides the appropriate steady-state benchmark: the online problem is not to track arbitrary drift, but to learn which adapters deserve residency while paying routing exploration and occasional reconfiguration costs.
+
+The oracle value is
+
+(5)
+
+\displaystyle R^{\star}(T)=\max_{|C|=K}\sum_{t=1}^{T}\max_{a\in\mathcal{M}}\mu_{t}(a;C).
+
+Accordingly, we define the pseudo-regret as the gap between the online policy and the best fixed-cache policy in hindsight, while charging the online policy for the cache reconfiguration overhead incurred during learning:
+
+(6)
+
+\displaystyle\mathrm{Regret}(T)=R^{\star}(T)-\left[\sum_{t=1}^{T}\mu_{t}(a_{t};C_{\ell(t)})-\sum_{\ell\geq 2}\gamma|C_{\ell}\setminus C_{\ell-1}|\right].
+
+This regret depends only on the conditional mean rewards
+\mu_{t}
+, not on the noise realizations. Intuitively, it measures how far the online policy is from the best stationary cache-and-routing policy, plus the control-plane overhead required to discover that policy.
+
+Under i.i.d. contexts, it is useful to define the
+population-optimal cache
+
+(7)
+
+\displaystyle C^{\dagger}:=\arg\max_{|C|=K}F(C),~\text{where}~F(C):=\mathbb{E}_{x}\!\left[\max_{a\in\mathcal{M}}\mu(a;C;x)\right].
+
+The hindsight benchmark
+R^{\star}(T)/T
+is then the empirical counterpart of the population objective
+F(C^{\dagger})
+. The gap between them is controlled by the uniform deviation bound in Lemma
+D.5
+in Appendix
+D
+, at rate
+\mathcal{O}\big(\bar{B}\sqrt{K\log(eN/K)/T}\big)
+, where
+\bar{B}
+is a uniform per-round reward bound determined by
+\alpha
+and
+\lambda_{\max}
+(explicit form in Section
+4
+).
+
+3.
+Algorithms
+
+We present two variants of
+POLAR
+(
+P
+aging and
+O
+nline
+L
+earning for
+A
+dapter
+R
+outing). Both follow the same two-timescale design. On the
+fast
+timescale, a cache-aware LinUCB router selects an adapter for each request. On the
+slow
+timescale, a cache controller updates the resident set only at epoch boundaries. The key difference between the two variants is how the resident set is updated and how exploration is enforced.
+
+3.1.
+POLAR: A Fixed-Epoch Baseline
+
+We begin with a simple and practical baseline,
+POLAR
+(Algorithm
+1
+), which uses fixed-length epochs of
+H
+rounds. Within each epoch, the resident set remains fixed, and the router computes for every adapter a cache-aware upper-confidence score
+
+(8)
+
+\displaystyle\mathrm{score}_{t}(a)=\langle\hat{\theta}_{a},x_{t}\rangle+\beta_{t}\sqrt{x_{t}^{\top}V_{a}^{-1}x_{t}}-\alpha\lambda_{a}\mathbf{1}\{a\notin C_{\ell}\}.
+
+The first two terms are the standard LinUCB estimate and uncertainty bonus, where
+\hat{\theta}_{a}
+and
+V_{a}
+are the ridge estimate and regularized design matrix maintained by the algorithm (explicit form in Section
+4
+) and
+\beta_{t}
+is the confidence radius specified in Lemma
+C.1
+; the last term explicitly penalizes routing through the cold path. Thus,
+POLAR
+prefers resident adapters unless a non-resident adapter offers sufficient estimated quality gain to offset its latency penalty.
+
+At the end of each epoch, POLAR updates the resident set using a greedy marginal-gain rule based on the previous epoch’s contexts and current UCB estimates; the full pseudocode appears in Appendix
+B
+. Because this update incurs approximation loss and rarely selected adapters may remain poorly estimated,
+POLAR
+does not in general guarantee sublinear regret under our strongest benchmark (see Theorem
+4.1
+).
+
+Algorithm 1
+
+POLAR
+: Fixed-Epoch Routing with Greedy Cache Updates
+
+1:
+
+Input:
+epoch length
+H
+, cache size
+K
+, ridge
+\lambda>0
+,
+confidence sequence
+\{\beta_{t}\}
+, latency weight
+\alpha
+, switching cost
+\gamma
+
+2:
+
+Init:
+
+V_{a}\leftarrow\lambda I_{d}
+,
+b_{a}\leftarrow 0
+,
+
+\hat{\theta}_{a}\leftarrow 0
+for all
+a\in\mathcal{M}
+;
+choose initial cache
+C_{1}
+with
+|C_{1}|\leq K
+
+3:
+
+for
+epoch
+\ell=1,2,\dots,\lceil T/H\rceil
+
+do
+
+4:
+
+if
+
+\ell>1
+
+then
+
+5:
+
+C_{\ell}\leftarrow\textsc{GreedyCacheUpdate}\!\left(C_{\ell-1},\{\hat{\theta}_{a},V_{a}\},\{x_{t}\}_{t\in\mathrm{epoch}\,\ell-1}\right)
+
+6:
+
+Pay switching cost
+\gamma|C_{\ell}\setminus C_{\ell-1}|
+
+7:
+
+end
+
+if
+
+8:
+
+for
+
+t=(\ell-1)H+1,\dots,\min\{\ell H,T\}
+
+do
+
+9:
+
+Observe context
+x_{t}
+
+10:
+
+for
+each
+a\in\mathcal{M}
+
+do
+
+11:
+
+\mathrm{score}_{t}(a)\leftarrow\langle\hat{\theta}_{a},x_{t}\rangle+\beta_{t}\sqrt{x_{t}^{\top}V_{a}^{-1}x_{t}}-\alpha\lambda_{a}\mathbf{1}\{a\notin C_{\ell}\}
+
+12:
+
+end
+
+for
+
+13:
+
+Play
+a_{t}\in\arg\max_{a}\mathrm{score}_{t}(a)
+and observe
+q_{t}(a_{t})
+
+14:
+
+Update
+V_{a_{t}}\leftarrow V_{a_{t}}+x_{t}x_{t}^{\top}
+,
+
+b_{a_{t}}\leftarrow b_{a_{t}}+q_{t}(a_{t})x_{t}
+,
+
+\hat{\theta}_{a_{t}}\leftarrow V_{a_{t}}^{-1}b_{a_{t}}
+
+15:
+
+end
+
+for
+
+16:
+
+end
+
+for
+
+3.2.
+POLAR+: Epoch Doubling with Forced Exploration
+
+While
+POLAR
+captures the basic two-timescale control logic, its regret can remain linear due to two effects. First, the greedy cache update introduces a constant-factor approximation loss at every epoch. Second, adapters that are rarely selected by the router may never accumulate sufficiently accurate estimates, which in turn prevents the cache controller from confidently identifying the best resident set. To address both issues, we introduce
+POLAR+
+(Algorithm
+2
+), which is the main algorithmic variant studied in this paper.
+POLAR+
+strengthens
+POLAR
+in three ways.
+
+(i) Epoch doubling.
+Epoch
+\ell
+contains
+2^{\ell}
+exploitation rounds. As the epoch index grows, parameter estimates become more accurate, while the number of cache updates grows only logarithmically in
+T
+. This reduces control-plane churn and is key to making the cumulative cache-identification error summable.
+
+(ii) Forced exploration.
+At the start of each epoch,
+POLAR+
+executes a short forced exploration phase consisting of
+Nm_{\ell}
+round-robin plays, where each adapter is sampled
+m_{\ell}
+times independent of the current router estimates. This ensures every adapter receives informative observations, including adapters that would otherwise remain under-sampled because their current estimates or cold penalties make them unattractive. Operationally, this phase can be interpreted as a probing window inserted between cache updates.
+
+Algorithm 2
+
+POLAR+
+: Epoch Doubling with Forced Exploration
+
+1:
+
+Input:
+cache size
+K
+, ridge
+\lambda>0
+,
+confidence sequence
+\{\beta_{t}\}
+, latency weight
+\alpha
+,
+switching cost
+\gamma
+, failure level
+\delta
+, exploration constant
+\kappa>0
+.
+
+2:
+
+Init:
+
+V_{a}\leftarrow\lambda I_{d}
+,
+b_{a}\leftarrow 0
+,
+
+\hat{\theta}_{a}\leftarrow 0
+for all
+a\in\mathcal{M}
+;
+
+c_{0}\leftarrow\lceil\log(6Nd/\delta)\rceil
+
+3:
+
+for
+epoch
+\ell=0,1,2,\dots
+while
+t\leq T
+
+do
+
+4:
+
+m_{\ell}\leftarrow\kappa\cdot d(\ell+c_{0})
+
+5:
+
+Forced exploration:
+
+for the next
+Nm_{\ell}
+rounds,
+observe
+x_{t}
+, play the pre-scheduled round-robin adapter
+a_{t}
+,
+observe
+q_{t}(a_{t})
+, and update
+
+V_{a_{t}},b_{a_{t}},\hat{\theta}_{a_{t}}
+
+6:
+
+C_{\ell}\leftarrow\textsc{SolveCache}(\hat{F}_{n_{\ell}+Nm_{\ell}},K)
+
+7:
+
+Pay switching cost
+\gamma|C_{\ell}\setminus C_{\ell-1}|
+
+if
+\ell>0
+
+8:
+
+for
+the next
+2^{\ell}
+rounds (or until
+T
+is exhausted)
+do
+
+9:
+
+Observe context
+x_{t}
+
+10:
+
+for
+each
+a\in\mathcal{M}
+
+do
+
+11:
+
+\mathrm{score}_{t}(a)\leftarrow\langle\hat{\theta}_{a},x_{t}\rangle+\beta_{t}\sqrt{x_{t}^{\top}V_{a}^{-1}x_{t}}-\alpha\lambda_{a}\mathbf{1}\{a\notin C_{\ell}\}
+
+12:
+
+end
+
+for
+
+13:
+
+Play
+a_{t}\in\arg\max_{a}\mathrm{score}_{t}(a)
+and observe
+q_{t}(a_{t})
+
+14:
+
+Update
+V_{a_{t}}\leftarrow V_{a_{t}}+x_{t}x_{t}^{\top}
+,
+
+b_{a_{t}}\leftarrow b_{a_{t}}+q_{t}(a_{t})x_{t}
+,
+
+\hat{\theta}_{a_{t}}\leftarrow V_{a_{t}}^{-1}b_{a_{t}}
+
+15:
+
+end
+
+for
+
+16:
+
+end
+
+for
+
+(iii) Improved cache optimization.
+After the forced exploration phase, the cache controller selects the next resident set by maximizing an empirical cache utility
+\hat{F}_{n}(S)
+over all size-
+K
+sets. For the theory, we write this step abstractly as
+\textsc{SolveCache}(\hat{F}_{n},K)
+. Formally,
+
+\displaystyle\hat{F}_{n}(S)
+
+\displaystyle:=\frac{1}{n}\sum_{t=1}^{n}\max_{a\in\mathcal{M}}\hat{\mu}(a;S;x_{t}),
+
+(9)
+
+\displaystyle\hat{\mu}(a;S;x)
+
+\displaystyle:=\langle\hat{\theta}_{a},x\rangle-\alpha\lambda_{a}\mathbf{1}\{a\notin S\},
+
+is the empirical cache utility evaluated using the current parameter estimates over all historical contexts;
+n_{\ell}:=\sum_{j<\ell}(Nm_{j}+2^{j})
+denotes the number of rounds completed before epoch
+\ell
+. In the analysis of
+POLAR+
+, we instantiate
+SolveCache
+as the exact optimizer
+\arg\max_{|S|=K}\hat{F}_{n}(S)
+in order to isolate the statistical difficulty of cache identification from approximation effects. In practice, this step can be implemented by the same greedy procedure as Algorithm
+3
+or by any standard fast solver for monotone submodular maximization. When the adapter library is moderate, exact optimization is also feasible at epoch boundaries. Under i.i.d. contexts and the structural cacheability conditions in Assumptions
+1
+–
+2
+,
+POLAR+
+achieves
+\widetilde{\mathcal{O}}(\sqrt{T})
+sublinear regret; see Theorem
+4.2
+.
+
+Finally, note that neither
+POLAR
+nor
+POLAR+
+needs to know the latent hot set
+\mathcal{M}_{\mathrm{hot}}
+from Assumption
+2
+. Both routing and caching are carried out over the full adapter library
+\mathcal{M}
+. Moreover,
+POLAR+
+is
+anytime
+: all quantities are computed online from the current epoch index and past observations, without requiring prior knowledge of the horizon
+T
+.
+
+4.
+Regret Analysis
+
+We now analyze the two algorithmic variants introduced in Section
+3
+. This section establishes regret guarantees for the joint caching-and-routing problem and highlights the technical mechanisms that make these guarantees possible. In particular, we explain why the problem is not a routine combination of contextual bandits and online caching, and how the two-timescale structure shapes both the upper bounds and their proof techniques.
+
+At a high level, the main difficulty comes from the two-timescale coupling. The fast router must learn context-dependent adapter quality from bandit feedback, while the slow cache controller determines which adapters are cheap to access. This creates an endogenous feedback loop: the resident set changes the cost of exploration, and the routing policy determines which adapters receive informative observations. Consequently, caching is not merely a combinatorial action layered on top of a contextual bandit; it alters the data-collection process that drives learning.
+
+We first analyze
+POLAR
+under arbitrary contexts and show that it achieves a worst-case regret guarantee, but with a linear cache gap. We then show that this linear term is not a proof artifact of the analysis of
+POLAR
+. Rather, it reflects the intrinsic difficulty of cache identification without additional workload structure. Next, we study
+POLAR+
+under stationary workload regularity and cacheability assumptions, and show that under this added structure the cache-identification cost becomes summable, yielding an overall sublinear regret bound.
+
+Throughout the analysis, we use the following notation. Let
+V_{a,t}:=\lambda I_{d}+\sum_{s<t}\mathbf{1}\{a_{s}=a\}x_{s}x_{s}^{\top}
+be the regularized design matrix of adapter
+a
+up to round
+t
+, and
+\hat{\theta}_{a,t}:=V_{a,t}^{-1}\sum_{s<t}\mathbf{1}\{a_{s}=a\}q_{s}(a)x_{s}
+its ridge estimate. Let
+s_{a,t}:=\sqrt{x_{t}^{\top}V_{a,t}^{-1}x_{t}}
+denote the corresponding prediction width. We write
+\bar{B}:=2+\alpha\lambda_{\max},\lambda_{\max}:=\max_{a\in\mathcal{M}}\lambda_{a},
+so that
+\bar{B}
+is a uniform upper bound on the per-round pseudo-regret, since the quality difference is at most
+2
+and the largest cold-path penalty is
+\alpha\lambda_{\max}
+.
+
+4.1.
+Worst-Case Guarantee for
+POLAR
+
+We begin with the fixed-epoch baseline
+POLAR
+. This result applies under the basic linear contextual model with no distributional assumptions on the context sequence. It should therefore be viewed as a robustness baseline: even under arbitrary request sequences,
+POLAR
+controls the routing error and cache switching overhead. At the same time, Theorem
+4.1
+makes clear that without additional workload structure, the cache-identification cost can remain linear.
+
+Theorem 4.1 (Worst-case regret of POLAR).
+
+Assume the linear model (
+1
+), with
+\|\theta_{a}^{\star}\|_{2}\leq 1
+,
+\|x_{t}\|_{2}\leq 1
+, conditionally
+\sigma
+-sub-Gaussian noise, ridge parameter
+\lambda\geq 1
+, and bounded cold-path penalties
+\lambda_{a}\in(0,\lambda_{\max}]
+. Then, with probability at least
+1-\delta
+, Algorithm
+1
+satisfies
+
+(10)
+
+\displaystyle\mathrm{Regret}(T)\leq\underbrace{2\beta_{T}\sqrt{2NdT\log\Bigl(1+\frac{T}{d\lambda}\Bigr)}}_{\text{routing}}+\underbrace{\alpha\lambda_{\max}T}_{\text{cache gap}}+\underbrace{\Bigl\lceil\frac{T}{H}\Bigr\rceil K\gamma}_{\text{switching}}.
+
+Implications.
+Theorem
+4.1
+separates the overall regret into three distinct components.
+
+\triangleright
+
+Routing regret
+: The first term is the standard statistical price of learning context-dependent adapter quality under bandit feedback. Up to constants and logarithmic factors, this is the familiar LinUCB term.
+
+\triangleright
+
+Cache gap
+: The second term measures the cost of operating with a possibly suboptimal resident set. This is the extra difficulty introduced by the memory hierarchy: even if the router were optimal for the current cache, the cache itself may still be wrong.
+
+\triangleright
+
+Switching overhead
+: The third term is the control-plane cost of reconfiguring the resident set at epoch boundaries. This term has no analog in ordinary contextual bandits which do not model slow-timescale resident-set updates.
+
+Taken together, Theorem
+4.1
+shows that regret in edge adapter serving has three sources: a data-plane learning term, a cache-identification term induced by the memory hierarchy, and a control-plane switching term caused by cache reconfiguration.
+
+Remark 1 (Why standard analyses do not apply directly).
+
+Classical contextual bandit analyses control routing regret for a fixed action set, but do not model a slow-timescale resident-set decision that changes the effective access cost of each arm; see, e.g., standard analyses of linear contextual bandits and LinUCB
+(
+5
+;
+1
+)
+. Conversely, online caching and paging analyses typically assume that item values are known or exogenous, rather than learned from policy-dependent feedback. Our setting lies between these two worlds: the cache changes the future cost of observing adapters, and the router determines which adapters generate informative samples for future cache updates. This feedback coupling is precisely what makes the analysis nonstandard.
+
+Remark 2 (Why the linear cache term is intrinsic under arbitrary contexts).
+
+The linear cache term in Theorem
+4.1
+should not be interpreted as a weakness of
+POLAR
+alone. Rather, it reflects a genuine limitation of the unrestricted setting. Under arbitrary contexts, the long-run value of caching an adapter cannot, in general, be inferred from online observations alone, because the observations are themselves shaped by the current cache and routing policy. Without additional structure, the learner may never receive enough representative information to distinguish a globally valuable adapter from one that only appears useful under the current, possibly misleading, resident set. In this sense, the linear cache term captures the intrinsic difficulty of cache identification without workload regularity.
+
+Practical guidance.
+Theorem
+4.1
+also yields a simple systems-level tradeoff. A smaller epoch length
+H
+, equivalently a more frequent cache-update interval, allows the controller to react more quickly to newly learned information, but increases the switching term. A larger
+H
+reduces reconfiguration overhead, but leaves the system with a stale resident set for longer. Moreover, when the cold-path penalties
+\lambda_{a}
+are large, the cost of an incorrect resident set can dominate the routing regret, making cache identification the primary systems challenge. Thus, even the worst-case bound highlights why cache control and routing must be analyzed jointly rather than as separate components.
+
+Proof sketch.
+The proof decomposes regret by adding and subtracting
+\max_{a}\mu_{t}(a;C_{\ell(t)})
+, which yields three terms corresponding to routing, cache mismatch, and switching. The routing term is handled by standard confidence and elliptic-potential arguments for LinUCB. The key simplification in the worst-case analysis is that the cache term is controlled by a uniform per-round bound: the gap between any two resident sets is at most
+\alpha\lambda_{\max}
+, so one need not estimate long-run cache utility under arbitrary contexts. The switching term simply counts epoch boundaries and charges at most
+K\gamma
+per update. The full proof, together with the supporting confidence and submodularity lemmas, appears in Appendix
+C
+.
+
+4.2.
+Sublinear Regret via Epoch Doubling and Cacheability (
+POLAR+
+)
+
+Theorem
+4.1
+shows that worst-case robustness alone is not enough to eliminate the linear cache gap. We now show that this gap disappears once the workload has stable statistical structure and the adapter library contains a meaningful cacheable subset. This is the regime most relevant to stationary edge services: request types recur over time, some adapters repeatedly serve distinct traffic segments well, and cold-path access is expensive enough that keeping the right adapters resident matters.
+
+Theorem
+4.2
+shows that under this additional structure,
+POLAR+
+learns both
+which adapter to route to
+and
+which adapters deserve residency
+at sublinear cost. For analytical convenience we set
+\kappa=1
+throughout this section.
+
+Theorem 4.2 (Sublinear regret of POLAR+).
+
+Under Assumptions
+1
+and
+2
+, and the conditions of Theorem
+4.1
+, Algorithm
+2
+satisfies, with probability at least
+1-\delta
+,
+
+(11)
+
+\displaystyle\mathrm{Regret}(T)=\widetilde{\mathcal{O}}\bigg(\underbrace{\sigma d\sqrt{NT}}_{\text{routing}}+\underbrace{\bar{B}\sqrt{KT}}_{\text{cache identification}}\bigg).
+
+Implications.
+The routing term
+\sigma d\sqrt{NT}
+matches the minimax lower bound
+\Omega(d\sqrt{NT})
+for
+N
+-arm linear contextual bandits up to logarithmic factors and the noise level
+\sigma
+. This shows that the memory hierarchy does not fundamentally degrade routing efficiency:
+POLAR+
+learns adapter quality at the same rate as standard LinUCB, despite the additional caching layer. The cache-identification term
+\bar{B}\sqrt{KT}
+is the extra price of learning which
+K
+adapters deserve fast-memory residency. To the best of our knowledge, this is the first sublinear cache-identification guarantee for joint adapter caching and routing with unknown contextual utility.
+
+Regime interpretation.
+Theorem
+4.2
+is especially informative across different operating regimes. When
+K\ll N
+but the cold-path penalties are moderate, the routing term may dominate, and the main challenge is learning adapter quality. When cold-path access is expensive, the cache-identification term is the bottleneck, and learning the hot set is as important as learning per-request routing. In the degenerate case
+K=N
+, all adapters fit in memory and the cache term vanishes, reducing the problem to ordinary contextual routing. This matches the system intuition: when residency is no longer a constraint, the learning problem collapses to routing alone.
+
+What changes relative to Theorem
+4.1
+.
+Compared with Theorem
+4.1
+, the linear cache gap becomes
+\widetilde{\mathcal{O}}(\sqrt{T})
+, and the switching overhead drops from
+\mathcal{O}(T/H)
+to
+\mathcal{O}(\log T)
+under epoch doubling. This improvement requires additional workload regularity and cacheability structure. Moreover,
+POLAR+
+is anytime and does not require prior knowledge of the horizon.
+
+Assumptions and operational meaning.
+The sublinear result relies on two structural conditions that have clear interpretations in edge LLM serving. The first concerns workload stability. The second concerns whether the adapter library contains a meaningful hot set that is worth keeping resident.
+
+Assumption 1 (i.i.d. regularity).
+
+The contexts satisfy
+x_{t}\stackrel{{\scriptstyle\text{i.i.d.}}}{{\sim}}\mathcal{D}
+with
+
+(12)
+
+\displaystyle\mathbb{E}[x_{t}x_{t}^{\top}]\succeq\sigma_{\min}I_{d}
+
+for some
+\sigma_{\min}>0
+.
+
+Assumption
+1
+formalizes a stationary workload over the cache-control timescale: the service repeatedly sees a stable mixture of request types, and the feature map contains enough variation to identify adapter quality. This assumption should be interpreted over the timescale of cache learning and reconfiguration, not as a claim that edge traffic is globally static over arbitrarily long horizons. Rather, it states that over the horizon on which the cache is being learned, the workload is stable enough to admit a meaningful steady-state resident set.
+
+Assumption 2 (Cacheable diversity).
+
+There exists a subset
+\mathcal{M}_{\mathrm{hot}}\subseteq\mathcal{M}
+with
+|\mathcal{M}_{\mathrm{hot}}|\geq K
+such that for each
+a\in\mathcal{M}_{\mathrm{hot}}
+, the region
+
+(13)
+
+\displaystyle X_{a}\!:=\!\left\{x\!:\!a\!=\!\arg\max_{a^{\prime}\in\mathcal{M}}\mu(a^{\prime};C;x)\text{ for all }C\subseteq\mathcal{M}_{\mathrm{hot}},\ |C|=K\right\}
+
+satisfies:
+
+(i)
+
+Coverage:
+
+\Pr_{x\sim\mathcal{D}}(x\in X_{a})\geq p_{\min}
+.
+
+(ii)
+
+Margin:
+for every
+C\subseteq\mathcal{M}_{\mathrm{hot}}
+with
+|C|=K
+,
+
+(14)
+
+\displaystyle\inf_{x\in X_{a}}\left[\mu(a;C;x)-\max_{a^{\prime}\neq a}\mu(a^{\prime};C;x)\right]\geq\Delta_{\min}>0.
+
+(iii)
+
+Full-dimensionality:
+
+\mathbb{E}[xx^{\top}\mid x\in X_{a}]\succeq\sigma_{\min}I_{d}
+.
+
+(iv)
+
+Cache separability:
+
+(15)
+
+\displaystyle F(C^{\dagger})-\max_{\begin{subarray}{c}|S|\leq K\\
+S\not\subseteq\mathcal{M}_{\mathrm{hot}}\end{subarray}}F(S)\geq\Delta_{\mathrm{cache}}>0.
+
+(v)
+
+Hot dominance:
+
+(16)
+
+\displaystyle\alpha\cdot\min_{a\notin\mathcal{M}_{\mathrm{hot}}}\lambda_{a}>2,
+
+and we write
+
+(17)
+
+\displaystyle\Delta_{\mathrm{dom}}:=\alpha\min_{a\notin\mathcal{M}_{\mathrm{hot}}}\lambda_{a}-2>0.
+
+Assumption
+2
+captures the practical notion of a
+cacheable hot set
+. In many edge services, traffic is skewed: a subset of adapters repeatedly serves recurring request segments, and those adapters are precisely the ones that should remain resident. The coverage and margin conditions say that each hot adapter is useful on a nontrivial part of the workload and is clearly better there. The cache-separability condition says that the optimal resident set is meaningfully better than any cache that includes non-hot adapters. Finally, the hot-dominance condition says that for non-hot adapters, the cold-path latency is large enough that any quality gain they might offer is not sufficient to offset the paging penalty. Operationally, this means the service has a meaningful steady-state working set and that cold execution is expensive enough to make residency matter. These assumptions should therefore be viewed not merely as technical devices, but as identifiability conditions for steady-state cache learning in a stationary edge service.
+
+Remark 3 (Why Assumption
+2
+is not overly restrictive).
+
+Assumption
+2
+requires diversity only for the cacheable hot subset, not for the entire adapter library. After the bootstrap phase, the algorithm’s cache is shown to lie inside
+\mathcal{M}_{\mathrm{hot}}
+, so competition effectively occurs only among hot adapters. In particular, hot dominance ensures that cold adapters are never competitive under any hot cache once the estimation error is sufficiently small. This is the analog, in our two-timescale setting, of a margin condition in standard contextual bandits: it guarantees that the steady-state resident set is identifiable from online observations rather than requiring all adapters in the library to be equally learnable or equally relevant.
+
+Practical guidance.
+Theorem
+4.2
+suggests three design principles for edge LLM serving: cache updates should become less frequent as confidence improves; explicit probing is most valuable early, when the hot set is still being identified; and larger cold-path penalties increase the value of accurate cache selection. If memory is abundant enough to hold all adapters, the problem reduces to ordinary contextual routing.
+
+4.2.1.
+Proof Structure and Technical Insights
+
+A more detailed decomposition.
+The proof yields the following refined expansion:
+
+\displaystyle\mathrm{Regret}(T)\!\leq\!\underbrace{2\beta_{T}\sqrt{2NdT\log\Bigl(1+\frac{T}{d\lambda}\Bigr)}}_{\text{routing}}+\underbrace{c_{2}\frac{\sigma\sqrt{d\log(NLT/\delta)}+\sqrt{\lambda}}{\sqrt{\sigma_{\min}p_{\min}}}\sqrt{T}}_{\text{cache estimation}}
+
+(18)
+
+\displaystyle+\underbrace{c_{3}\bar{B}\sqrt{KT\log\Bigl(\frac{eNL}{K\delta}\Bigr)}}_{\text{cache concentration}}+\underbrace{K\gamma L}_{\text{switching}}\!+\!\underbrace{\sum_{\ell}Nm_{\ell}\bar{B}}_{\text{forced exploration}}\!+\!\underbrace{2^{\ell_{\star}}\bar{B}}_{\text{bootstrap}},
+
+where
+L=\lceil\log_{2}T\rceil
+and
+\ell_{\star}
+is the bootstrap epoch defined later in the proof.
+
+Each term has a distinct role. The first is the usual routing regret. The second is the price of estimating adapter utilities accurately enough for cache selection. The third is a uniform concentration term over all size-
+K
+resident sets. The fourth is the total control-plane churn from epoch updates. The fifth is the explicit probing cost incurred by forced exploration. The sixth is a transient bootstrap term until the algorithm has collected enough information to identify the relevant hot set. The key point is that the first three terms are
+\widetilde{\mathcal{O}}(\sqrt{T})
+, while the last three are lower-order for fixed problem parameters.
+
+Remark 4 (Why standard proof techniques still do not apply).
+
+Even under Assumptions
+1
+and
+2
+, the analysis is not a routine combination of contextual-bandit and caching arguments. The reason is that the resident set changes the information geometry of the problem. A non-resident adapter is not only more expensive to use; it is also less likely to be sampled by the optimistic router. Thus the algorithm may fail to learn about an adapter precisely because it is not resident, and may fail to cache it because it has not yet learned its value. This circular dependence does not appear in standard contextual bandits, nor in online caching with exogenous values.
+
+Proof idea and technical novelties.
+The proof has three conceptual stages.
+
+\triangleright
+
+Stage 1: Bootstrap.
+Forced exploration guarantees that every adapter receives i.i.d. samples regardless of the current cache. After a finite bootstrap epoch
+\ell_{\star}
+, two conditions hold simultaneously: (i) the routing confidence width is small enough to identify the best adapter on the relevant regions of the context space, and (ii) the empirical cache utility is accurate enough to distinguish hot caches from non-hot ones. This breaks the initial adverse feedback loop between cache and routing.
+
+\triangleright
+
+Stage 2: Geometric convergence.
+Once the bootstrap conditions hold, a virtuous cycle emerges. Better estimates improve routing and better routing yields more informative exploitation samples on hot regions. These samples sharpen the empirical cache utility, and better cache choices reduce cold-path penalties. Under epoch doubling, epoch
+\ell
+has
+2^{\ell}
+exploitation rounds while the residual per-epoch cache error decays as
+\mathcal{O}(2^{-\ell/2})
+. This is the key mechanism that turns a persistent cache gap into a summable one.
+
+\triangleright
+
+Stage 3: Collecting terms.
+The final regret bound follows by summing the routing term from the elliptic potential argument, the cache-estimation and concentration terms from the empirical cache utility, and the lower-order switching, probing, and bootstrap costs. The complete derivation appears in Appendix
+D
+.
+
+5.
+Experiments
+
+We evaluate
+POLAR
+and
+POLAR+
+in a measurement-calibrated simulation using real LoRA adapters, measured GPU paging latencies, and benchmark-derived adapter utilities. The experiments are designed to validate three aspects of the theory: (i) the sublinear scaling of
+POLAR+
+, (ii) the role of epoch doubling, forced exploration, and improved cache optimization, and (iii) the ability of
+POLAR+
+to learn a high-quality resident set while keeping control-plane churn low.
+
+5.1.
+Experimental Setup
+
+Adapters and base model.
+We use 15 community-contributed LoRA adapters for Qwen2.5-7B-Instruct
+(
+25
+)
+, downloaded from HuggingFace and spanning 15 domains, including math, reasoning, medical, clinical NER, finance, legal, education, cybersecurity, and creative writing. Together with the base model, this gives
+N=16
+arms. We include the base model as a special arm with
+\lambda_{\text{base}}=0
+, reflecting that it is always resident as part of the serving stack and therefore incurs no cold-path penalty; the cache controller thus effectively allocates its
+K
+slots among the
+15
+LoRA adapters. Adapters exhibit substantial heterogeneity in LoRA rank (8 to 64) and size (50 to 656 MB), which makes them suitable for studying memory-residency decisions under realistic edge constraints.
+
+Latency and quality calibration.
+For each adapter
+a
+, we measure the cold-path latency
+\lambda_{a}
+on an NVIDIA RTX 5080 GPU by loading the adapter through PEFT 20 times and recording the loading delay. The measured GPU load latencies range from 291 ms (rank-32, 50 MB) to 1263 ms (rank-64, 656 MB), confirming substantial heterogeneity in paging cost across adapters. In the simulation,
+\lambda_{a}
+is expressed in seconds (
+\lambda_{a}=\text{raw ms}/10^{3}
+), matching the reward scale of the quality parameters
+\theta_{a}^{\star}
+(normalized so that
+\|\theta_{a}^{\star}\|_{2}\leq 1
+). To instantiate the quality model, each adapter is evaluated on five benchmarks (MMLU, ARC-Challenge, HellaSwag, TruthfulQA, and GSM8K) using log-probability scoring, yielding the adapter-specific utility parameters
+\theta_{a}^{\star}
+used in the simulation. In particular, the measured adapter utilities differ meaningfully across domains: for example, the job-classifier adapter reduces MMLU accuracy from 0.70 to 0.42, while the cybersecurity adapter improves it to 0.74.
+
+Request generation and simulation.
+Contexts follow a power-law task distribution as in EdgeLoRA
+(
+16
+)
+. Thus, the evaluation should be understood as
+measurement-calibrated
+rather than a literal trace replay: real adapter latencies and benchmark-derived utilities are combined with a synthetic but workload-informed request stream. Each request is associated with a context vector encoding task information, and rewards are generated according to the linear contextual model in Section
+2
+. This design allows us to study the online control problem under realistic paging costs while keeping the underlying utility model transparent and reproducible.
+
+Simulation parameters.
+Unless otherwise stated, we use cache size
+K=5
+, context dimension
+d=5
+, epoch length
+H=200
+, noise level
+\sigma=0.05
+, switching cost
+\gamma=0.3
+, and ridge parameter
+\lambda=1
+. We set
+\alpha=0.5
+so that the average cache-miss penalty is comparable to the average utility gap (penalty/quality ratio
+\approx 1.1
+). For
+POLAR+
+, forced exploration uses
+\kappa=0.05
+, corresponding to
+Nm_{\ell}\approx 32
+rounds per epoch, about
+2\%
+of the horizon. All reported results are means
+\pm
+standard deviations over 5 random seeds.
+
+Baselines.
+We compare against four online baselines that pair LinUCB routing with standard cache policies:
+\varepsilon
+-Greedy Cache
+(
+\varepsilon=0.1
+with greedy submodular cache updates),
+LFU Cache
+,
+LRU Cache
+, and
+Static Cache
+(a random fixed cache with no updates). We additionally include an
+Oracle Cache + LinUCB
+reference, in which the cache is fixed at the hindsight-optimal set
+C_{T}^{\star}
+(defined in Section
+2
+) and LinUCB learns only the routing policy. This reference isolates the routing-side difficulty that remains even when cache learning is removed, and therefore serves as a routing-only lower reference for any online method that must learn the cache as well.
+
+Cumulative regret trajectory at T=100K.
+
+Figure 2.
+Cumulative regret.
+POLAR+
+flattens; heuristic baselines grow linearly.
+Cumulative regret trajectory at T=100K.
+
+Log-log regret scaling to T=500K.
+
+Figure 3.
+Regret vs.
+T
+(log-log).
+POLAR+
+overtakes
+POLAR
+at
+T\approx 5\times 10^{4}
+.
+Log-log regret scaling to T=500K.
+
+5.2.
+Main Results
+
+Figure
+3
+reports cumulative regret up to
+T=10^{5}
+. Both
+POLAR
+and
+POLAR+
+significantly outperform the heuristic baselines, with
+POLAR+
+achieving the lowest regret among all online methods. Relative to the Oracle Cache reference,
+POLAR+
+incurs only a modest overhead for learning the resident set online, while substantially closing the gap between heuristic caching and the offline-optimal cache. At
+T=10^{5}
+,
+POLAR+
+reaches
+288\pm 33
+, compared with
+493\pm 198
+for
+POLAR
+,
+
+1{,}538
+for the best heuristic baseline, and
+66\pm 50
+for Oracle Cache. Its regret curve visibly flattens after
+T\approx 3\times 10^{4}
+, consistent with sublinear growth.
+
+Figure
+3
+shows regret as a function of
+T
+on a log-log scale.
+POLAR+
+grows much more slowly than
+POLAR
+and the heuristic baselines, and its slope tracks Oracle Cache much more closely. In particular,
+POLAR+
+grows from
+219
+to
+530
+over a
+16.7\times
+increase in the horizon, while
+POLAR
+and the heuristic baselines grow substantially faster.
+POLAR+
+overtakes
+POLAR
+near
+T=5\times 10^{4}
+, and the gap widens as the horizon grows. This behavior empirically supports the
+\widetilde{\mathcal{O}}(\sqrt{T})
+scaling predicted by Theorem
+4.2
+.
+
+Regret vs latency weight alpha.
+
+Figure 4.
+Regret vs.
+\alpha
+.
+Regret vs latency weight alpha.
+
+Regret decomposition: quality loss vs latency cost.
+
+Figure 5.
+Operational regret decomposition vs.
+\alpha
+.
+Regret decomposition: quality loss vs latency cost.
+
+Regret vs epoch length H at T=100K.
+
+Figure 6.
+Regret vs. epoch length
+H
+.
+Regret vs epoch length H at T=100K.
+
+Final regret of each leave-one-out variant at T=100K.
+
+Figure 7.
+Leave-one-out final regret,
+T=10^{5}
+.
+Final regret of each leave-one-out variant at T=100K.
+
+Cumulative cache updates vs t for each variant.
+
+Figure 8.
+Cumulative cache updates.
+Cumulative cache updates vs t for each variant.
+
+Regret vs cache size K.
+
+Figure 9.
+Regret vs. cache size
+K
+.
+Regret vs cache size K.
+
+Ablation: UCB vs TS routing at T=100K.
+
+Figure 10.
+UCB vs TS routing,
+T=10^{5}
+.
+Ablation: UCB vs TS routing at T=100K.
+
+5.3.
+Theory-Facing Validation
+
+Sensitivity to latency weight
+\alpha
+.
+Figure
+5
+varies
+\alpha
+for
+T=10^{5}
+with
+\alpha\in\{0.1,0.2,0.5,1.0\}
+.
+POLAR
+’s regret stabilizes once
+\alpha\geq 0.5
+: after the cache identifies valuable adapters, routing naturally avoids cold penalties. In contrast,
+POLAR+
+’s regret increases with
+\alpha
+, consistent with the
+\bar{B}=2+\alpha\lambda_{\max}
+dependence in Theorem
+4.2
+. Static Cache is largely insensitive to
+\alpha
+because its random cache quality does not depend on the latency weight.
+
+Operational regret decomposition.
+To connect the experiments to Theorem
+4.2
+, Figure
+5
+decomposes cumulative regret into a
+quality loss
+and a
+latency cost
+. This is an operational decomposition rather than a literal term-by-term restatement of the theorem: quality loss reflects routing error, while latency cost captures the combined effect of cache misses and forced exploration. For
+POLAR+
+, the quality-loss component stays nearly constant at
+\approx 134
+across all
+\alpha
+, confirming that the routing term
+\sigma d\sqrt{NT}
+is independent of
+\alpha
+. Its latency cost grows approximately linearly (
+34\to 300
+), matching the predicted
+\bar{B}\propto\alpha
+scaling. By contrast,
+POLAR
+’s latency cost is near zero because its cache-aware UCB routing naturally avoids uncached adapters, but its quality loss is
+3.6\times
+higher (
+486
+vs.
+134
+) due to insufficient exploration. This explains why
+POLAR+
+overtakes
+POLAR
+at larger
+\alpha
+: the cost of forced exploration grows, but the resulting improvement in utility estimation and cache selection more than compensates.
+
+Effect of cache-update cadence.
+Figure
+10
+studies the fixed epoch length
+H\in\{50,100,200,500,1000\}
+at
+T=10^{5}
+.
+POLAR+
+is shown as a flat reference because it does not use a fixed epoch size; instead, its update schedule is determined by epoch doubling. The
+w/o doubling
+variant should be read as “
+POLAR+
+with fixed epochs,” i.e., it retains forced exploration and exact cache optimization but replaces geometric epoch growth with a fixed update interval
+H
+. Both
+POLAR
+and this
+w/o doubling
+variant improve as
+H
+grows over the tested range:
+POLAR
+drops from
+687
+at
+H=50
+to
+323
+at
+H=1000
+, and
+w/o doubling
+drops from
+11{,}725
+to
+1{,}225
+. Small
+H
+triggers more frequent greedy-cache updates (for
+POLAR
+) and more frequent forced-exploration phases (for
+w/o doubling
+), both of which add cumulative cost. Even at the best tested
+H=1000
+,
+POLAR
+still lags
+POLAR+
+(
+323
+vs.
+288
+) and
+w/o doubling
+remains
+4\times
+worse (
+1{,}225
+), showing that no fixed choice of
+H
+recovers the self-tuning behavior of
+POLAR+
+. This provides an empirical counterpart to the switching and cache-identification improvements highlighted by Theorem
+4.2
+.
+
+Ablation of POLAR+ components.
+Theorem
+4.2
+attributes
+POLAR+
+’s sublinear regret to three ingredients:
+epoch doubling
+,
+exact cache optimization
+, and
+forced exploration
+. We verify that each is necessary by leave-one-out ablations at
+T=10^{5}
+. Removing one component at a time yields three variants. POLAR (fixed epoch + greedy cache + no forced exploration) serves as a lower reference. Figure
+10
+reports the final regret at
+T=10^{5}
+for each variant.
+POLAR+
+achieves regret
+288
+; removing exact cache degrades it to
+402
+, indicating a moderate loss from replacing exact cache optimization with greedy updates. In contrast, removing epoch doubling inflates regret to
+4{,}674
+(
+16\times
+worse), while removing forced exploration yields
+1{,}788
+(
+6\times
+worse). These two ingredients are therefore especially load-bearing in practice.
+POLAR
+reaches
+493
+: higher than
+POLAR+
+but lower than either broken variant, because it pays no forced-exploration cost on top of a misconfigured schedule.
+
+Control-plane churn.
+Figure
+10
+reports the cumulative number of cache updates over time.
+POLAR+
+performs only
+\approx 9
+updates across
+10^{5}
+rounds, consistent with the
+\mathcal{O}(\log T)
+cache-refresh schedule induced by epoch doubling. Exact cache is inherently stable: the
+w/o doubling
+variant also performs only
+\approx 10
+updates, showing that its large regret comes mainly from repeated forced-exploration rounds rather than from additional switching. In contrast, greedy cache is noticeably more churny:
+w/o exact
+performs
+\approx 15
+updates under doubling, and
+POLAR
+(fixed-epoch greedy) reaches
+\approx 22
+updates, consistent with its
+\mathcal{O}(T/H)
+-style control-plane refresh. The
+w/o forced
+variant switches only twice: without unbiased context samples, exact cache locks onto a biased but stable suboptimum early and never revises. This explains its persistent regret despite its low switching count. Together, Figures
+10
+and
+10
+confirm that all three ingredients are load-bearing and epoch doubling is essential not only for regret scaling but for reducing control-plane churn.
+
+Learning the resident set.
+Theorem
+4.2
+predicts that
+POLAR+
+should learn a near-optimal resident set, not merely a good routing rule. Figure
+11
+tests this claim directly using two diagnostics: (i) the Jaccard similarity between the current cache
+C_{\ell(t)}
+and the hindsight-optimal cache
+C_{T}^{\star}
+, and (ii) the quality loss incurred by using
+C_{\ell(t)}
+as a fixed cache on the next
+2{,}000
+contexts. The right panel is the more direct validation of the theorem’s cache-identification objective, because Jaccard overlap is a strict set-level metric and can remain below one even when two caches induce very similar utility. Under this more operational measure,
+POLAR+
+converges rapidly to a high-quality resident set: its quality loss drops to
+\approx 2.6
+by
+t\approx 10^{3}
+, a
+6\times
+reduction from the initial value at
+t=200
+.
+POLAR
+eventually reaches a comparable Jaccard overlap, but only near
+t\approx 3\times 10^{4}
+, and its steady-state quality loss remains around
+5.7
+, roughly twice that of
+POLAR+
+. LRU and LFU, which react to request frequency rather than utility, stay near-constant at low Jaccard overlap and high quality loss throughout. Thus, while Jaccard is informative, the cache-quality-loss panel more directly shows that
+POLAR+
+identifies a near-optimal resident set much earlier than the alternatives.
+
+Figure 11.
+Cache learning diagnostic. Left:
+\mathrm{Jaccard}(C_{\ell(t)},C_{T}^{\star})
+over
+t
+. Right: quality loss of using
+C_{\ell(t)}
+on the next
+2{,}000
+contexts.
+POLAR+
+converges rapidly to a high-quality resident set; frequency-based policies do not.
+Jaccard(C_{ell(t)}, C_T*) and quality loss over t.
+
+5.4.
+Additional Sensitivity and Ablation
+
+Cache size
+K
+.
+Figure
+10
+varies cache size
+K
+at
+T=10^{5}
+. All methods benefit from larger caches, but
+POLAR+
+benefits the most: its regret improves from
+522
+at
+K=2
+to
+266
+at
+K=7
+because a larger cache reduces the cost of maintaining the hot set.
+POLAR
+is less sensitive to
+K
+, as its UCB routing naturally avoids uncached adapters.
+
+Routing strategy.
+We replace LinUCB with Linear Thompson Sampling
+(
+2
+)
+in both
+POLAR
+and
+POLAR+
+. Figure
+10
+shows that the two routing strategies perform similarly within fixed-epoch
+POLAR
+, but
+POLAR+
+benefits more clearly from UCB. We attribute this to the more stable interaction between deterministic optimism, forced exploration, and cache identification. We view this as a router ablation rather than a central validation of the theory.
+
+6.
+Related Work
+
+LoRA adapter serving.
+Recent systems work studies efficient multi-adapter LLM serving through cross-adapter batching and shared base-model execution
+(
+4
+;
+23
+)
+, unified memory management and paging for adapter weights and KV caches
+(
+17
+;
+26
+)
+, cold-start reduction and proactive prefetching
+(
+19
+;
+12
+)
+, and edge- or hardware-aware designs for fast adapter switching
+(
+16
+;
+20
+)
+. These works optimize the
+systems layer
+of multi-adapter serving, focusing on memory management, scheduling, and hardware efficiency. Our work operates at a different layer: given a mechanism for loading and evicting adapters, we study the online decision problem of which adapters to keep resident under uncertain, query-dependent utility.
+
+Contextual bandits and online routing for LLMs.
+Recent work applies bandit methods to online LLM or backend selection
+(
+14
+;
+22
+;
+10
+;
+27
+)
+. Closest in spirit on the learning side, Li and Li
+(
+8
+)
+study a two-timescale online deployment-and-routing problem for a streaming LLM inventory under per-query budget constraints, obtaining near-optimal
+\widetilde{\mathcal{O}}(T^{2/3})
+regret. Their setting, however, is fundamentally different from ours: they consider deployment over multiple models in a non-contextual environment, whereas we study a fixed base model with a library of adapters whose context-dependent utility must be learned under a memory hierarchy with hot/cold access asymmetry, a coupling not captured by existing regret analyses. Related work also considers semantic caching and cache-assisted routing
+(
+28
+;
+11
+)
+, but these works typically cache responses or route among equally available backends. In contrast, POLAR studies a coupled problem in which request-level routing and size-
+K
+adapter residency must be jointly optimized under memory constraints and paging-induced latency.
+
+Online caching.
+Classical online paging and caching focus on competitive analysis under adversarial request sequences
+(
+18
+;
+3
+)
+, while more recent work studies learning-augmented or regret-minimizing caching policies under stochastic demand
+(
+13
+;
+15
+;
+6
+)
+. Xu et al.
+(
+24
+)
+use deep reinforcement learning for mobile-edge LLM caching and inference offloading. These methods target content objects, responses, or full models with known or externally specified value. They do not model the setting studied here, where adapter utility is both
+context-dependent
+and
+unknown
+, and where caching and routing are statistically coupled because the cache changes which adapters are cheap to explore and the router changes which adapters are observed.
+
+7.
+Conclusion
+
+We introduced POLAR, a two-timescale online learning framework for joint adapter routing and cache placement in edge LLM serving. POLAR combines a cache-aware router with an epoch-based cache controller, and admits both worst-case and sublinear regret guarantees under different operating regimes. Our analysis shows that memory-residency constraints can be handled without fundamentally slowing routing learning. Experiments with real LoRA adapters and measured paging latencies support the theory and show clear improvements over non-adaptive baselines.
+
+Appendix A
+Notation Summary
+
+Table
+1
+collects the notation used throughout the paper, grouped by role: system model and benchmark, structural assumptions, algorithm parameters, LinUCB router quantities, and proof-specific constructs introduced in Appendices
+C
+and
+D
+.
+
+Table 1.
+Summary of notation.
+
+Symbol
+
+Meaning
+
+Sets, indices, and horizons.
+
+N,K,T,d
+
+library size, cache size, time horizon, context dimension
+
+\mathcal{M}=\{1,\dots,N\}
+
+adapter library
+
+t,\ell,\ell(t)
+
+round index, epoch index, and epoch containing round
+t
+
+L
+
+\lceil\log_{2}T\rceil
+, number of epochs used by
+POLAR+
+
+Contexts, adapters, and rewards.
+
+x_{t}\in\mathbb{R}^{d},\ a_{t}\in\mathcal{M}
+
+context (with
+\|x_{t}\|_{2}\leq 1
+) and selected adapter at round
+t
+
+\theta_{a}^{\star}\in\mathbb{R}^{d}
+
+true parameter of adapter
+a
+, with
+\|\theta_{a}^{\star}\|_{2}\leq 1
+
+q_{t}(a),\eta_{t}(a),\sigma
+
+observed quality (
+1
+), conditionally
+\sigma
+-sub-Gaussian noise, and its parameter
+
+\mu_{t}(a;C)
+
+noiseless reward
+\langle\theta_{a}^{\star},x_{t}\rangle-\alpha\lambda_{a}\mathbf{1}\{a\notin C\}
+
+r_{t}(a;C)
+
+realized reward
+q_{t}(a)-\alpha\lambda_{a}\mathbf{1}\{a\notin C\}
+
+\lambda_{a},\lambda_{\max}
+
+cold-path latency of adapter
+a
+;
+\lambda_{\max}=\max_{a\in\mathcal{M}}\lambda_{a}
+
+\alpha,\gamma
+
+latency/quality trade-off weight; switching cost per admitted adapter
+
+\bar{B}
+
+2+\alpha\lambda_{\max}
+, uniform per-round pseudo-regret bound
+
+Cache, benchmark, and regret.
+
+C_{\ell}\subseteq\mathcal{M}
+
+resident set in epoch
+\ell
+, with
+|C_{\ell}|\leq K
+
+C_{T}^{\star},C^{\dagger}
+
+hindsight-optimal and population-optimal fixed caches;
+C^{\dagger}=\arg\max_{|C|=K}F(C)
+
+F(C),\hat{F}_{n}(S)
+
+expected cache utility
+\mathbb{E}_{x}[\max_{a}\mu(a;C;x)]
+and its empirical counterpart from
+n
+samples
+
+\hat{\mu}(a;S;x)
+
+\langle\hat{\theta}_{a},x\rangle-\alpha\lambda_{a}\mathbf{1}\{a\notin S\}
+
+R^{\star}(T),\mathrm{Regret}(T)
+
+oracle value and pseudo-regret (Eq. (
+6
+))
+
+Stochastic regularity and cacheable diversity.
+
+\mathcal{D},\sigma_{\min}
+
+context distribution and minimum eigenvalue in Assumption
+1
+
+\mathcal{M}_{\mathrm{hot}}\subseteq\mathcal{M}
+
+cacheable hot subset, with
+|\mathcal{M}_{\mathrm{hot}}|\geq K
+
+X_{a},p_{\min}
+
+certified region for hot adapter
+a
+and its coverage probability
+\Pr_{x}(x\in X_{a})\geq p_{\min}
+
+\Delta_{\min},\Delta_{\mathrm{cache}}
+
+routing margin on
+X_{a}
+; cache-separability gap
+
+\Delta_{\mathrm{dom}}
+
+hot-dominance gap,
+\alpha\min_{a\notin\mathcal{M}_{\mathrm{hot}}}\lambda_{a}-2
+
+Algorithm parameters.
+
+H
+
+fixed epoch length used by
+POLAR
+
+\lambda\geq 1,\delta\in(0,1)
+
+ridge regularizer; target failure probability
+
+\kappa>0,c_{0}
+
+forced-exploration constant (
+POLAR+
+);
+c_{0}=\lceil\log(6Nd/\delta)\rceil
+
+m_{\ell},M_{\ell}
+
+per-arm forced plays
+\kappa\,d(\ell+c_{0})
+in epoch
+\ell
+; cumulative
+\sum_{j\leq\ell}m_{j}
+
+n_{\ell},H_{\ell}
+
+rounds completed before epoch
+\ell
+,
+\sum_{j<\ell}(Nm_{j}+2^{j})
+; epoch-
+\ell
+exploitation length
+\min\{2^{\ell},T-n_{\ell}-Nm_{\ell}\}
+
+T_{E},|F|
+
+total exploitation
+\sum_{\ell}H_{\ell}
+and forced-exploration
+\sum_{\ell}Nm_{\ell}
+rounds
+
+SolveCache
+
+cache-optimization primitive (
+\arg\max_{|S|=K}\hat{F}_{n}(S)
+in the analysis)
+
+LinUCB router quantities.
+
+V_{a}(V_{a,t}),b_{a},\hat{\theta}_{a}(\hat{\theta}_{a,t})
+
+design matrix
+\lambda I_{d}+\sum_{s<t}\mathbf{1}\{a_{s}=a\}x_{s}x_{s}^{\top}
+, response
+\sum_{s<t}\mathbf{1}\{a_{s}=a\}q_{s}(a)x_{s}
+, estimate
+V_{a,t}^{-1}b_{a}
+
+s_{a,t},\beta_{t}
+
+prediction width
+\sqrt{x_{t}^{\top}V_{a,t}^{-1}x_{t}}
+; LinUCB confidence radius (Lemma
+C.1
+)
+
+\mathrm{score}_{t}(a)
+
+cache-aware UCB score
+\langle\hat{\theta}_{a},x_{t}\rangle+\beta_{t}s_{a,t}-\alpha\lambda_{a}\mathbf{1}\{a\notin C_{\ell(t)}\}
+
+Proof-specific quantities (
+POLAR+
+).
+
+\ell_{0},\ell_{\mathrm{cache}},\ell_{\star}
+
+bootstrap epochs for the bonus (Lemma
+D.2
+) and cache-identification (Lemma
+D.6
+) conditions;
+\ell_{\star}=\max(\ell_{0},\ell_{\mathrm{cache}})
+
+M_{a,\ell}^{\mathrm{pre}},\widetilde{M}_{a,\ell}
+
+pre-exploitation plays of
+a
+in epoch
+\ell
+; full-dimensional plays (forced plus
+X_{a}
+-certified exploitation)
+
+I_{t}^{a}
+
+indicator
+\mathbf{1}\{x_{t}\in X_{a}\}
+
+\hat{\theta}_{a,\ell}^{\mathrm{pre}}
+
+ridge estimate from the
+M_{a,\ell}^{\mathrm{pre}}
+pre-exploitation samples
+
+\varepsilon_{\ell},\varepsilon_{\mathrm{all}}
+
+\max_{a\in\mathcal{M}_{\mathrm{hot}}}\|\hat{\theta}_{a,\ell}^{\mathrm{pre}}-\theta_{a}^{\star}\|_{2}
+;
+\max_{a\in\mathcal{M}}\|\hat{\theta}_{a}-\theta_{a}^{\star}\|_{2}
+
+\rho_{n}
+
+uniform cache-utility deviation bound (Lemma
+D.5
+)
+
+F_{\mathrm{hot}}(S),\hat{F}_{n}^{\mathrm{hot}}(S)
+
+hot-restricted cache utility
+\mathbb{E}_{x}[\max_{a\in\mathcal{M}_{\mathrm{hot}}}\mu(a;S;x)]
+and its empirical counterpart
+
+c_{1},c_{2},c_{3}
+
+absolute constants in the regret bound (
+4.2.1
+)
+
+Appendix B
+Greedy cache utility maximization procedure
+
+Algorithm 3
+
+GreedyCacheUpdate
+(C_{\mathrm{prev}},\{\hat{\theta}_{a},V_{a}\},\mathcal{D})
+
+1:
+
+Precompute
+
+\mathrm{UCB}_{t}(a):=\langle\hat{\theta}_{a},x_{t}\rangle+\beta_{t}\sqrt{x_{t}^{\top}V_{a}^{-1}x_{t}}
+
+for all
+(t,a)
+in
+\mathcal{D}
+
+2:
+
+for
+each
+t
+in
+\mathcal{D}
+
+do
+
+3:
+
+b_{t}\leftarrow\max_{a}(\mathrm{UCB}_{t}(a)-\alpha\lambda_{a})
+
+{all-cold baseline}
+
+4:
+
+\Delta_{t}(a)\leftarrow\max\{0,\mathrm{UCB}_{t}(a)-b_{t}\}
+for all
+a
+
+5:
+
+end
+
+for
+
+6:
+
+C\leftarrow\emptyset
+;
+\mathrm{best}_{t}\leftarrow 0
+for all
+t
+
+7:
+
+for
+
+i=1
+to
+K
+
+do
+
+8:
+
+For each
+a\notin C
+, compute
+
+g(a)=\sum_{t}\max\{0,\Delta_{t}(a)-\mathrm{best}_{t}\}-\gamma\mathbf{1}\{a\notin C_{\mathrm{prev}}\}
+
+9:
+
+a^{\star}\leftarrow\arg\max_{a\notin C}g(a)
+;
+
+break
+if
+g(a^{\star})\leq 0
+
+10:
+
+C\leftarrow C\cup\{a^{\star}\}
+and update
+\mathrm{best}_{t}
+
+11:
+
+end
+
+for
+
+12:
+
+return
+
+C
+
+Appendix C
+Proof of Theorem
+4.1
+(POLAR)
+
+We first state the supporting lemmas, then give the proof.
+
+Lemma C.1 (UCB confidence ellipsoid).
+
+Assume
+\|\theta_{a}^{\star}\|_{2}\leq 1
+,
+\|x_{t}\|_{2}\leq 1
+, and
+\eta_{t}(a)
+is conditionally
+\sigma
+-sub-Gaussian. Then with probability
+\geq 1-\delta
+, for all
+a\in\mathcal{M}
+and
+t\leq T
+,
+
+|x_{t}^{\top}(\hat{\theta}_{a,t}-\theta_{a}^{\star})|\leq\beta_{t}\,s_{a,t},
+
+where
+\beta_{t}:=\sigma\sqrt{d\log(1+\tfrac{t}{d\lambda})+2\log\tfrac{N}{\delta}}+\sqrt{\lambda}
+. Moreover,
+\beta_{t}\geq 0
+and
+\beta_{t_{1}}\leq\beta_{t_{2}}
+whenever
+t_{1}\leq t_{2}
+.
+
+Proof.
+
+Step 1 (Per-arm bound).
+Fix arm
+a
+. Let
+S_{a,t}:=\sum_{s<t}\mathbf{1}\{a_{s}=a\}\eta_{s}(a)x_{s}
+. Apply the self-normalized bound for vector-valued martingales
+(
+1
+, Theorem 1)
+with failure probability
+\delta^{\prime}=\delta/N
+:
+
+\|S_{a,t}\|_{V_{a,t}^{-1}}\leq\sigma\sqrt{2\log\frac{\det(V_{a,t})^{1/2}\det(\lambda I)^{-1/2}}{\delta/N}}.
+
+Since
+V_{a,t}(\hat{\theta}_{a,t}-\theta_{a}^{\star})=S_{a,t}-\lambda\theta_{a}^{\star}
+, the triangle inequality gives
+\|\hat{\theta}_{a,t}-\theta_{a}^{\star}\|_{V_{a,t}}\leq\|S_{a,t}\|_{V_{a,t}^{-1}}+\sqrt{\lambda}\|\theta_{a}^{\star}\|_{2}\leq\|S_{a,t}\|_{V_{a,t}^{-1}}+\sqrt{\lambda}
+.
+
+Step 2 (Log-det simplification).
+AM–GM on eigenvalues gives
+\det(V_{a,t})/\det(\lambda I)\leq(1{+}t/(d\lambda))^{d}
+. Hence the log-det term is at most
+\tfrac{d}{2}\log(1{+}t/(d\lambda))
+; substituting yields
+\beta_{t}
+.
+
+Step 3 (Union bound).
+Taking a union over
+N
+arms,
+\Pr(\exists a:\text{bound fails})\leq N\cdot\delta/N=\delta
+. The self-normalized bound
+(
+1
+)
+holds uniformly over all
+t\geq 0
+, so no additional union bound over time is needed.
+
+Step 4 (Monotonicity).
+
+t_{1}\leq t_{2}
+implies
+\beta_{t_{1}}\leq\beta_{t_{2}}
+by monotonicity of
+\log
+and
+\sqrt{\cdot}
+.
+
+Step 5 (Consequent).
+Cauchy–Schwarz in the
+V
+-norm:
+|x^{\top}u|\leq\|u\|_{V}\sqrt{x^{\top}V^{-1}x}
+.
+∎
+
+Lemma C.2 (Routing regret bound).
+
+On the event of Lemma
+C.1
+, with
+\lambda\geq 1
+,
+
+\sum_{t=1}^{T}\bigl[\max_{a}\mu_{t}(a;C_{\ell(t)})-\mu_{t}(a_{t};C_{\ell(t)})\bigr]\leq 2\beta_{T}\sqrt{2NdT\log(1+\tfrac{T}{d\lambda})}.
+
+Proof.
+
+On the confidence event, the LinUCB score
+\langle\hat{\theta}_{a},x_{t}\rangle+\beta_{t}s_{a,t}-\alpha\lambda_{a}\mathbf{1}\{a\notin C_{\ell(t)}\}
+upper-bounds
+\mu_{t}(a;C_{\ell(t)})
+for all
+a
+. Since
+a_{t}
+maximizes the score, the per-round gap satisfies
+\Delta_{t}\leq 2\beta_{t}\,s_{a_{t},t}\leq 2\beta_{T}\,s_{a_{t},t}
+. By Cauchy–Schwarz,
+\sum_{t}\Delta_{t}\leq 2\beta_{T}\sqrt{T\sum_{t}s_{a_{t},t}^{2}}
+. The elliptic potential lemma
+(
+1
+, Appendix C)
+gives
+\sum_{t}s_{a_{t},t}^{2}\leq 2Nd\log(1+T/(d\lambda))
+.
+∎
+
+Lemma C.3 (Submodularity of cache benefit).
+
+The cache benefit
+f(S):=\sum_{t=1}^{H}[\max_{a}\mu_{t}(a;S)-\max_{a}\mu_{t}(a;\emptyset)]
+is monotone non-decreasing and submodular.
+
+Proof.
+
+Write
+\mu_{t}(a;S)=v_{t}(a)-\mathrm{pen}(a)\cdot\mathbf{1}\{a\notin S\}
+where
+v_{t}(a):=\langle\theta_{a}^{\star},x_{t}\rangle
+and
+\mathrm{pen}(a):=\alpha\lambda_{a}\geq 0
+.
+
+Pointwise monotonicity.
+
+S\subseteq S^{\prime}
+implies
+\mu_{t}(a;S)\leq\mu_{t}(a;S^{\prime})
+for all
+a
+, hence
+\max_{a}\mu_{t}(a;S)\leq\max_{a}\mu_{t}(a;S^{\prime})
+.
+
+Single-step submodularity.
+Fix
+S\subseteq S^{\prime}
+and
+a_{0}
+; let
+b
+and
+c
+be the maximizers of
+\mu_{t}(\cdot;S^{\prime}\cup\{a_{0}\})
+and
+\mu_{t}(\cdot;S)
+, respectively.
+
+Case
+b=a_{0}
+:
+
+\mu_{t}(b;S^{\prime}\cup\{a_{0}\})=v_{t}(a_{0})\leq\max_{a}\mu_{t}(a;S\cup\{a_{0}\})
+(since
+a_{0}\in S\cup\{a_{0}\}
+), and
+\max_{a}\mu_{t}(a;S^{\prime})\geq\mu_{t}(c;S^{\prime})\geq\mu_{t}(c;S)
+.
+
+Case
+b\neq a_{0}
+:
+
+\max_{a}\mu_{t}(a;S^{\prime})\geq\mu_{t}(b;S^{\prime})=\mu_{t}(b;S^{\prime}\cup\{a_{0}\})
+, and
+\max_{a}\mu_{t}(a;S\cup\{a_{0}\})\geq\mu_{t}(c;S)
+.
+
+Both cases yield
+
+\displaystyle\max_{a}\mu_{t}(a;S^{\prime}\!\cup\!\{a_{0}\})+\max_{a}\mu_{t}(a;S)
+
+\displaystyle\quad\leq\max_{a}\mu_{t}(a;S\!\cup\!\{a_{0}\})+\max_{a}\mu_{t}(a;S^{\prime}).
+
+Summing over
+t
+gives submodularity.
+∎
+
+Proof of Theorem
+4.1
+.
+
+Conditioning on the event of Lemma
+C.1
+, we write
+
+\displaystyle\mathrm{Regret}(T)
+
+\displaystyle=\sum_{t}[\max_{a}\mu_{t}(a;C_{T}^{\star})-\mu_{t}(a_{t};C_{\ell(t)})]
+
+\displaystyle\quad+\sum_{\ell\geq 2}\gamma|C_{\ell}\setminus C_{\ell-1}|.
+
+Adding and subtracting
+\max_{a}\mu_{t}(a;C_{\ell(t)})
+gives
+\mathrm{Regret}(T)=\text{(I)}+\text{(II)}+\text{(III)}
+.
+
+(I)
+is bounded by Lemma
+C.2
+.
+
+(II):
+By monotonicity (Lemma
+C.3
+),
+
+\displaystyle\max_{a}\mu_{t}(a;C_{T}^{\star})-\max_{a}\mu_{t}(a;C_{\ell(t)})
+
+\displaystyle\quad\leq\max_{a}\mu_{t}(a;C_{T}^{\star})-\max_{a}\mu_{t}(a;\emptyset)\leq\alpha\lambda_{\max},
+
+since removing all cached arms costs at most
+\alpha\lambda_{\max}
+per round. Summing gives
+\alpha\lambda_{\max}T
+.
+
+(III):
+At most
+\lceil T/H\rceil
+epoch boundaries, each costing
+\leq K\gamma
+.
+∎
+
+Appendix D
+Proof of Theorem
+4.2
+(POLAR+)
+
+Lemma D.1 (Forced exploration controls bonus).
+
+Under
+1
+, after
+r
+cumulative rounds of forced exploration (round-robin) for arm
+a
+, with probability
+\geq 1-\delta^{\prime}
+:
+\lambda_{\min}(V_{a})\geq\lambda+\sigma_{\min}r/2
+, and consequently
+\beta_{t}\,s_{a,t}\leq\beta_{t}/\sqrt{\lambda+\sigma_{\min}r/2}
+for all
+\|x_{t}\|\leq 1
+.
+
+Proof.
+
+During forced exploration, arm selection is round-robin (independent of
+x_{t}
+), so arm
+a
+’s contexts are i.i.d. draws from
+\mathcal{D}
+. By
+1
+,
+\mathbb{E}[x_{t}x_{t}^{\top}]\succeq\sigma_{\min}I_{d}
+. A matrix Chernoff bound
+(
+21
+, Theorem 5.1.1)
+gives
+\lambda_{\min}(\sum_{s=1}^{r}x_{s}x_{s}^{\top})\geq\sigma_{\min}r/2
+with probability
+\geq 1-\delta^{\prime}
+, provided
+r\geq c\,d\log(d/\delta^{\prime})
+. Since
+V_{a}\succeq\lambda I+\sum x_{s}x_{s}^{\top}
+, the eigenvalue bound follows.
+∎
+
+Lemma D.2 (Bootstrap epoch).
+
+Under
+1
+–
+2
+, let
+M_{\ell}:=\sum_{j=0}^{\ell}m_{j}
+be the cumulative forced plays per arm through epoch
+\ell
+. There exists
+\ell_{0}
+such that for all
+\ell\geq\ell_{0}
+and
+a\in\mathcal{M}
+,
+\beta_{t}s_{a,t}<\Delta_{\min}/2
+on the confidence event.
+
+Proof.
+
+After
+\ell+1
+epochs of forced exploration (round-robin over all
+N
+arms), each arm has
+\geq M_{\ell}
+cumulative forced plays. By Lemma
+D.1
+, the bonus is at most
+\beta_{T}/\sqrt{\sigma_{\min}M_{\ell}/2}
+. This is
+<\Delta_{\min}/2
+when
+M_{\ell}>8\beta_{T}^{2}/(\sigma_{\min}\Delta_{\min}^{2})
+. Since
+M_{\ell}=\Theta(d\ell^{2})
+grows without bound, such
+\ell_{0}
+exists. After epoch
+\ell_{0}
+, each subsequent epoch contributes
+m_{\ell}
+further forced-exploration samples to every arm, so
+\lambda_{\min}(V_{a})
+continues to increase regardless of the exploitation policy (since
+V_{a}+x_{t}x_{t}^{\top}\succeq V_{a}
+). Because
+\beta_{t}\leq\beta_{T}
+remains bounded,
+\beta_{t}s_{a,t}\leq\beta_{T}/\sqrt{\lambda_{\min}(V_{a})}
+can only decrease, and the bonus condition persists for all subsequent epochs.
+∎
+
+Lemma D.3 (Correct arm selection).
+
+Under
+2
+, on the confidence event of Lemma
+C.1
+, suppose every arm’s exploration bonus satisfies
+\beta_{t}\,s_{a,t}<\Delta_{\min}/2
+for all
+a\in\mathcal{M}
+. Then for any context
+x\in X_{a^{\star}}
+and any hot cache
+C\subseteq\mathcal{M}_{\mathrm{hot}}
+with
+|C|=K
+, the LinUCB score of
+a^{\star}
+strictly exceeds that of every other arm (including cold arms).
+
+Proof.
+
+For
+a^{\prime}\neq a^{\star}
+and
+x\in X_{a^{\star}}
+:
+
+\displaystyle\mathrm{score}(a^{\star})
+
+\displaystyle\geq\mu(a^{\star};C;x)\geq\mu(a^{\prime};C;x)+\Delta_{\min}
+
+\displaystyle>\mu(a^{\prime};C;x)+2\beta\,s_{a^{\prime}}\geq\mathrm{score}(a^{\prime}).
+
+The first inequality uses confidence (UCB
+\geq
+true mean), the second uses the margin on
+X_{a^{\star}}
+, the third uses
+\Delta_{\min}>2\beta\,s_{a^{\prime}}
+, and the fourth uses confidence (score
+\leq
+true mean
++\,2\beta\,s
+). The margin in
+2
+quantifies over all
+a^{\prime}\neq a^{\star}
+(including cold arms), so score dominance holds with unrestricted routing over
+\mathcal{M}
+. In particular, for cold arms
+a^{\prime}\notin\mathcal{M}_{\mathrm{hot}}
+with
+a^{\prime}\notin C
+, hot dominance gives
+\mu(a^{\prime};C;x)\leq-1-\Delta_{\mathrm{dom}}
+, which is far below any cached hot arm, so the margin condition is satisfied a fortiori.
+∎
+
+Lemma D.4 (Exploitation play count).
+
+Under
+1
+–
+2
+, suppose the bonus condition of Lemma
+D.3
+holds throughout epoch
+\ell
+and the epoch-
+\ell
+cache satisfies
+C_{\ell}\subseteq\mathcal{M}_{\mathrm{hot}}
+. Then with probability
+\geq 1-\delta^{\prime}
+, each
+a\in\mathcal{M}_{\mathrm{hot}}
+receives at least
+p_{\min}\cdot 2^{\ell}/2
+exploitation plays.
+
+Proof.
+
+By Lemma
+D.3
+, LinUCB selects
+a
+on every context in
+X_{a}
+during exploitation. Since contexts are i.i.d., the number of such contexts in
+2^{\ell}
+rounds concentrates around
+p_{\min}\cdot 2^{\ell}
+. A Chernoff bound gives at least
+p_{\min}\cdot 2^{\ell}/2
+with probability
+\geq 1-\delta^{\prime}
+.
+∎
+
+Lemma D.5 (Uniform cache deviation).
+
+Let
+\varepsilon=\max_{a}\|\hat{\theta}_{a}-\theta_{a}^{\star}\|_{2}
+,
+F(S):=\mathbb{E}_{x}[\max_{a}\mu(a;S;x)]
+, and
+\hat{F}_{n}(S):=\frac{1}{n}\sum_{t=1}^{n}\max_{a}\hat{\mu}(a;S;x_{t})
+. Define
+\rho_{n}:=\varepsilon+\bar{B}\sqrt{2(K\log(eN/K)+\log(2/\delta^{\prime}))/n}
+. Then with probability
+\geq 1-\delta^{\prime}
+,
+
+\sup_{|S|\leq K}|\hat{F}_{n}(S)-F(S)|\leq\rho_{n}.
+
+Consequently, if
+\hat{C}\in\arg\max_{|S|\leq K}\hat{F}_{n}(S)
+, then for any fixed cache
+C_{0}
+with
+|C_{0}|=K
+,
+F(C_{0})-F(\hat{C})\leq 2\rho_{n}
+.
+
+Proof.
+
+Step 1.
+
+|\max_{a}\hat{\mu}(a;S;x)-\max_{a}\mu(a;S;x)|\leq\varepsilon
+for all
+S,x
+(pointwise Lipschitz of max).
+
+Step 2.
+For fixed
+S
+,
+Y_{t}:=\max_{a}\mu(a;S;x_{t})
+are i.i.d. with
+|Y_{t}|\leq\bar{B}
+. By Hoeffding with per-cache failure probability
+\delta^{\prime}_{0}:=\delta^{\prime}/(eN/K)^{K}
+,
+|\frac{1}{n}\sum_{t}Y_{t}-F(S)|\leq\bar{B}\sqrt{2\log(2/\delta^{\prime}_{0})/n}
+.
+
+Step 3.
+Union over at most
+(eN/K)^{K}
+caches of size
+\leq K
+; the total failure probability is at most
+(eN/K)^{K}\cdot\delta^{\prime}_{0}=\delta^{\prime}
+.
+
+Step 4 (uniform deviation).
+Combining steps 1–3:
+|\hat{F}_{n}(S)-F(S)|\leq\rho_{n}
+for all
+|S|\leq K
+.
+
+Step 5 (optimizer gap).
+
+F(C_{0})\leq\hat{F}_{n}(C_{0})+\rho_{n}\leq\hat{F}_{n}(\hat{C})+\rho_{n}\leq F(\hat{C})+2\rho_{n}
+.
+∎
+
+Lemma D.6 (Cache bootstrap).
+
+Under
+1
+–
+2
+, there exists
+\ell_{\mathrm{cache}}
+with
+M_{\ell_{\mathrm{cache}}}>\beta_{T}^{2}/(\sigma_{\min}\min(\Delta_{\mathrm{cache}},\Delta_{\mathrm{dom}})^{2})
+such that for all
+\ell\geq\ell_{\mathrm{cache}}
+:
+(i)
+the algorithm’s cache
+C_{\ell}:=\arg\max_{|S|=K}\hat{F}_{n_{\ell}+Nm_{\ell}}(S)
+satisfies
+C_{\ell}\subseteq\mathcal{M}_{\mathrm{hot}}
+, and
+(ii)
+for every hot cache
+S\subseteq\mathcal{M}_{\mathrm{hot}}
+, the estimated max
+\max_{a}\hat{\mu}(a;S;x)
+is achieved by a hot arm (estimated hot dominance), both with high probability.
+
+Proof.
+
+After
+\ell+1
+epochs of forced exploration, every arm
+a\in\mathcal{M}
+has
+\geq M_{\ell}
+plays. By Lemma
+C.1
+,
+\|\hat{\theta}_{a}-\theta_{a}^{\star}\|_{V_{a}}\leq\beta_{T}
+. By Lemma
+D.1
+,
+\lambda_{\min}(V_{a})\geq\sigma_{\min}M_{\ell}/2
+. Dividing:
+
+\|\hat{\theta}_{a}-\theta_{a}^{\star}\|_{2}\leq\frac{\beta_{T}}{\sqrt{\sigma_{\min}M_{\ell}/2}}
+
+for all
+a
+. Let
+\varepsilon_{\mathrm{all}}:=\max_{a\in\mathcal{M}}\|\hat{\theta}_{a}-\theta_{a}^{\star}\|_{2}
+.
+(i) Cache separability.
+By Lemma
+D.5
+with
+n=n_{\ell}+Nm_{\ell}
+(total observations when
+C_{\ell}
+is selected), writing
+\tilde{n}_{\ell}:=n_{\ell}+Nm_{\ell}
+,
+\sup_{|S|\leq K}|\hat{F}_{\tilde{n}_{\ell}}(S)-F(S)|\leq\rho_{\tilde{n}_{\ell}}
+where
+\rho_{\tilde{n}_{\ell}}:=\varepsilon_{\mathrm{all}}+\bar{B}\sqrt{2(K\log(eN/K)+\log(2/\delta^{\prime}))/\tilde{n}_{\ell}}
+. When
+2\rho_{\tilde{n}_{\ell}}<\Delta_{\mathrm{cache}}
+, any
+S\not\subseteq\mathcal{M}_{\mathrm{hot}}
+satisfies
+\hat{F}_{\tilde{n}_{\ell}}(S)\leq F(S)+\rho_{\tilde{n}_{\ell}}\leq F(C^{\dagger})-\Delta_{\mathrm{cache}}+\rho_{\tilde{n}_{\ell}}<F(C^{\dagger})-\rho_{\tilde{n}_{\ell}}\leq\hat{F}_{\tilde{n}_{\ell}}(C^{\dagger})
+. Therefore
+C_{\ell}\subseteq\mathcal{M}_{\mathrm{hot}}
+.
+
+(ii) Estimated hot dominance.
+Consider any hot cache
+S\subseteq\mathcal{M}_{\mathrm{hot}}
+with
+|S|=K
+. (Since both the oracle and algorithm optimize over
+|S|=K
+and
+K\geq 1
+, the cache is always nonempty.) By hot dominance
+2
+, for any
+x
+with
+\|x\|\leq 1
+: the best cached hot arm in
+S
+scores
+\max_{a\in S}\langle\theta_{a}^{\star},x\rangle\geq-1
+, while every non-hot arm
+a^{\prime}\notin\mathcal{M}_{\mathrm{hot}}
+scores
+\langle\theta_{a^{\prime}}^{\star},x\rangle-\alpha\lambda_{a^{\prime}}\leq 1-\alpha\min_{a^{\prime}\notin\mathcal{M}_{\mathrm{hot}}}\lambda_{a^{\prime}}=-1-\Delta_{\mathrm{dom}}
+(hot-but-not-cached arms remain in
+\mathcal{M}_{\mathrm{hot}}
+and are allowed in the max). The true gap is
+\geq\Delta_{\mathrm{dom}}
+. When
+2\varepsilon_{\mathrm{all}}<\Delta_{\mathrm{dom}}
+, estimation shifts each score by at most
+\varepsilon_{\mathrm{all}}
+, so estimated hot arm scores still exceed estimated cold arm scores (the gap
+\Delta_{\mathrm{dom}}-2\varepsilon_{\mathrm{all}}>0
+remains positive). Therefore
+\max_{a}\hat{\mu}(a;S;x)=\max_{a\in\mathcal{M}_{\mathrm{hot}}}\hat{\mu}(a;S;x)
+for all nonempty hot caches
+S
+.
+
+Both conditions hold for
+M_{\ell}>c\,\beta_{T}^{2}/(\sigma_{\min}\min(\Delta_{\mathrm{cache}},\Delta_{\mathrm{dom}})^{2})
+.
+∎
+
+Lemma D.7 (Estimation error with exploitation plays).
+
+Under
+1
+–
+2
+, let
+M_{a,\ell}^{\mathrm{pre}}
+denote the cumulative plays of arm
+a
+available at the start of epoch
+\ell
+’s exploitation phase, i.e., all previous epochs’ forced and exploitation rounds plus the current epoch’s forced exploration, but
+excluding
+epoch
+\ell
+’s exploitation. For
+\ell\geq\ell_{\star}+1
+where
+\ell_{\star}:=\max(\ell_{0},\ell_{\mathrm{cache}})
+(Lemmas
+D.2
+and
+D.6
+),
+M_{a,\ell}^{\mathrm{pre}}\geq c\,p_{\min}\cdot 2^{\ell-1}
+, and with probability
+\geq 1-\delta/5
+:
+
+\varepsilon_{\ell}:=\max_{a\in\mathcal{M}_{\mathrm{hot}}}\|\hat{\theta}_{a,\ell}^{\mathrm{pre}}-\theta_{a}^{\star}\|_{2}\leq\frac{c_{1}(\sigma\sqrt{d\log(NLT/\delta)}+\sqrt{\lambda})}{\sqrt{\sigma_{\min}\,p_{\min}\cdot 2^{\ell-1}}}.
+
+Here
+\hat{\theta}_{a,\ell}^{\mathrm{pre}}
+is the estimate computed from the
+M_{a,\ell}^{\mathrm{pre}}
+samples available when
+C_{\ell}
+is selected, ensuring no forward-looking dependence.
+
+Proof.
+
+Cumulative plays.
+Epochs
+j<\ell_{\star}
+contribute at least
+m_{j}
+forced plays each (exploitation play counts are not guaranteed before both bonus and cache bootstrap). Each epoch
+j
+with
+\ell_{\star}\leq j<\ell
+contributes
+m_{j}
+forced plays and
+\geq p_{\min}\cdot 2^{j}/2
+exploitation plays (Lemma
+D.4
+, whose hypotheses hold since
+j\geq\ell_{0}
+gives the bonus condition and
+j\geq\ell_{\mathrm{cache}}
+gives
+C_{j}\subseteq\mathcal{M}_{\mathrm{hot}}
+). Epoch
+\ell
+itself contributes
+m_{\ell}
+forced plays (but its exploitation has not yet occurred). Hence
+M_{a,\ell}^{\mathrm{pre}}\geq M_{\ell}+\frac{p_{\min}}{2}\sum_{j=\ell_{\star}}^{\ell-1}2^{j}\geq c\,p_{\min}\cdot 2^{\ell-1}
+, using
+\sum_{j=\ell_{\star}}^{\ell-1}2^{j}=2^{\ell}-2^{\ell_{\star}}\geq 2^{\ell-1}
+for
+\ell\geq\ell_{\star}+1
+.
+
+Design matrix.
+Both forced and exploitation plays from
+previous
+epochs contribute to
+V_{a,\ell}^{\mathrm{pre}}
+. Define the indicator
+I_{t}^{a}:=\mathbf{1}\{x_{t}\in X_{a}\}
+. Since
+X_{a}
+is a fixed set and
+x_{t}\overset{\text{i.i.d.}}{\sim}\mathcal{D}
+, the variables
+\{I_{t}^{a}\}
+are i.i.d. Bernoulli with
+\mathbb{E}[I_{t}^{a}]\geq p_{\min}
+. We identify two sources of independent samples for the design matrix:
+
+(a) Forced exploration:
+Round-robin arm assignment is predetermined (independent of
+\{x_{t}\}
+), so forced-exploration contexts for arm
+a
+are i.i.d. from
+\mathcal{D}
+.
+
+(b) Exploitation from
+X_{a}
+:
+On the confidence event with bonus
+<\Delta_{\min}/2
+(which holds for
+j\geq\ell_{\star}
+), Lemma
+D.3
+gives:
+I_{t}^{a}=1\Rightarrow a_{t}=a
+. Since
+I_{t}^{a}
+depends only on
+x_{t}
+(not on the algorithm’s state), the samples
+\{x_{t}:I_{t}^{a}=1\}
+form an i.i.d. draw from
+\mathcal{D}(\cdot\mid X_{a})
+, with
+\mathbb{E}[x_{t}x_{t}^{\top}\mid x_{t}\in X_{a}]\succeq\sigma_{\min}I_{d}
+by
+2
+(full-dimensional). Moreover,
+V_{a,\ell}^{\mathrm{pre}}
+includes these samples because
+a_{t}=a
+on
+\{I_{t}^{a}=1\}
+. Since
+X_{a}
+is a fixed (non-adaptive) set, thinning an i.i.d. sequence by the criterion
+x_{t}\in X_{a}
+preserves i.i.d.-ness of the selected sub-sequence. Combined with forced-exploration samples (also i.i.d.), Tropp’s matrix Chernoff for independent (not necessarily identically distributed) matrices applies.
+
+Let
+\widetilde{M}_{a,\ell}
+denote the number of full-dimensional plays (forced plays plus exploitation plays with
+I_{t}^{a}=1
+). By the coverage and play-count bounds,
+\widetilde{M}_{a,\ell}\geq M_{\ell}+\frac{p_{\min}}{2}\sum_{j=\ell_{\star}}^{\ell-1}2^{j}\geq c\,p_{\min}\cdot 2^{\ell-1}
+. A matrix Chernoff bound
+(
+21
+, Theorem 5.1.1)
+applied to the first
+\lfloor c\,p_{\min}\cdot 2^{\ell-1}\rfloor
+of these independent samples (a deterministic count), each with covariance
+\succeq\sigma_{\min}I_{d}
+, gives
+\lambda_{\min}(V_{a,\ell}^{\mathrm{pre}})\geq\lambda+\sigma_{\min}\widetilde{M}_{a,\ell}/c
+; additional samples only increase
+\lambda_{\min}
+.
+
+\ell_{2}
+bound.
+The self-normalized bound (Lemma
+C.1
+) gives
+\|\hat{\theta}_{a,\ell}^{\mathrm{pre}}-\theta_{a}^{\star}\|_{V_{a,\ell}^{\mathrm{pre}}}\leq\beta_{T}
+(using
+\beta_{t}\leq\beta_{T}
+for all
+t\leq T
+). Dividing by
+\sqrt{\lambda_{\min}(V_{a,\ell}^{\mathrm{pre}})}
+, which is
+{\geq}\sqrt{\sigma_{\min}p_{\min}\cdot 2^{\ell-1}/c}
+, yields the result. Union bound over
+N
+arms and
+L
+epochs.
+∎
+
+Proof of Theorem
+4.2
+.
+
+Define
+\mathcal{E}:=\mathcal{E}_{\mathrm{ucb}}\cap\mathcal{E}_{\mathrm{bonus}}\cap\mathcal{E}_{\mathrm{counts}}\cap\mathcal{E}_{\mathrm{cache}}\cap\mathcal{E}_{\mathrm{dev}}
+, where
+\mathcal{E}_{\mathrm{ucb}}
+is the confidence event of Lemma
+C.1
+(failure
+\leq\delta/6
+) and the remaining four are per-epoch events (bonus, play-count, cache-deviation, Hoeffding), each with per-epoch failure
+\leq\delta/(6\cdot 2^{\ell})
+(geometric allocation; total
+\leq 4\cdot\delta/6
+). By union bound,
+\Pr(\mathcal{E})\geq 1-\delta
+. All subsequent analysis is deterministic on
+\mathcal{E}
+.
+
+Let
+H_{\ell}:=\min\{2^{\ell},\,T-n_{\ell}-Nm_{\ell}\}
+denote the number of exploitation rounds in epoch
+\ell
+(equal to
+2^{\ell}
+except possibly the last truncated epoch), and let
+L:=\lceil\log_{2}T\rceil
+. Each epoch consists of
+Nm_{\ell}
+forced-exploration rounds followed by
+H_{\ell}
+exploitation rounds. Let
+|F|:=\sum_{\ell=0}^{L}Nm_{\ell}
+denote the total forced-exploration rounds. Since
+\max_{a}\mu_{t}(a;C_{T}^{\star})\leq 1
+and
+\mu_{t}(a_{t};C_{\ell(t)})\geq-1-\alpha\lambda_{\max}
+, each forced round incurs per-round regret at most
+\bar{B}
+, contributing at most
+|F|\bar{B}
+in total.
+All subsequent analysis applies only to exploitation rounds.
+
+Regret decomposition (exploitation rounds).
+Let
+
+C_{T}^{\star}:=\arg\max_{|C|=K}\sum_{t}\max_{a}\mu_{t}(a;C)
+
+denote the hindsight-optimal cache. By Lemma
+D.5
+with
+\varepsilon=0
+and failure probability
+\delta^{\prime}:=\delta/(2c)
+,
+
+\sup_{|C|=K}\Bigl|\tfrac{1}{T}\textstyle\sum_{t}\max_{a}\mu(a;C;x_{t})-F(C)\Bigr|\leq\bar{B}\sqrt{\tfrac{2\bigl(K\log\frac{eN}{K}+\log\frac{2}{\delta^{\prime}}\bigr)}{T}}\;=:\;\rho_{T}.
+
+Hence
+R^{\star}(T)\leq T\,F(C^{\dagger})+T\rho_{T}
+. Let
+T_{E}:=\sum_{\ell}H_{\ell}
+denote the total exploitation rounds. Writing
+TF(C^{\dagger})=|F|\,F(C^{\dagger})+T_{E}\,F(C^{\dagger})
+and splitting by round type:
+
+\displaystyle\mathrm{Regret}(T)
+
+\displaystyle\leq\underbrace{[|F|\,F(C^{\dagger})-\textstyle\sum_{t\in F}\mu_{t}(a_{t};C_{\ell(t)})]}_{\leq\,|F|\bar{B}}
+
+\displaystyle\quad+\bigl[T_{E}\,F(C^{\dagger})-\textstyle\sum_{t\in E}\mu_{t}(a_{t};C_{\ell})\bigr]+T\rho_{T}+\text{switching}.
+
+The exploitation-round contribution satisfies
+
+\displaystyle\mathrm{Regret}_{E}
+
+\displaystyle\leq\underbrace{\sum_{t\in E}[\max_{a}\mu_{t}(a;C_{\ell})-\mu_{t}(a_{t};C_{\ell})]}_{\text{routing}}
+
+\displaystyle\quad+\underbrace{T_{E}\,F(C^{\dagger})-\sum_{t\in E}\max_{a}\mu_{t}(a;C_{\ell})}_{\text{cache gap}}+T\rho_{T},
+
+where the sum
+\sum_{t\in E}
+runs over exploitation rounds only. The cache gap decomposes per epoch:
+
+\sum_{\ell}\bigl[H_{\ell}\,F(C^{\dagger})-\sum_{t\in\mathrm{exploit}\,\ell}\max_{a}\mu_{t}(a;C_{\ell})\bigr].
+
+Each per-epoch term splits as
+
+\displaystyle H_{\ell}[F(C^{\dagger})-F(C_{\ell})]
+
+\displaystyle\quad+\bigl[H_{\ell}\,F(C_{\ell})-\textstyle\sum_{t\in\mathrm{exploit}\,\ell}\max_{a}\mu_{t}(a;C_{\ell})\bigr],
+
+where the first part is the
+expected
+cache gap and the second is a realized-vs-expected deviation (controlled in absolute value via Hoeffding). The
+T\rho_{T}=\mathcal{O}(\bar{B}\sqrt{KT\log(eN/K)})
+benchmark concentration is absorbed into the cache concentration term below.
+
+Routing:
+Over exploitation rounds, Lemma
+C.2
+gives
+
+2\beta_{T}\sqrt{2NdT_{E}\log(1{+}T/(d\lambda))}\leq 2\beta_{T}\sqrt{2NdT\log(1{+}T/(d\lambda))}.
+
+Bootstrap phase (
+\ell<\ell_{\star}
+):
+For
+\ell<\ell_{\star}:=\max(\ell_{0},\ell_{\mathrm{cache}})
+, either the bonus condition or the cache separability condition may fail, so we cannot apply the refined per-epoch cache-gap analysis. The routing loss during these epochs is already covered by Lemma
+C.2
+above; the remaining
+cache gap
+is at most
+F(C^{\dagger})-\max_{a}\mu_{t}(a;C_{\ell})\leq 2
+per round (since
+F(C^{\dagger})\leq 1
+, and
+|C_{\ell}|\geq 1
+guarantees a cached arm with reward
+\geq-1
+, so
+\max_{a}\mu_{t}\geq-1
+), contributing
+\sum_{\ell=0}^{\ell_{\star}-1}2\cdot H_{\ell}\leq 2\cdot 2^{\ell_{\star}}\leq 2^{\ell_{\star}}\bar{B}
+to the total. After
+\ell_{\star}
+, Lemma
+D.2
+ensures the bonus condition
+\beta_{t}s_{a,t}<\Delta_{\min}/2
+holds for all arms, so Lemma
+D.3
+guarantees that each hot arm
+a
+is selected on its certified region
+X_{a}
+; this suffices for Lemma
+D.4
+to give geometric growth of informative plays. Lemma
+D.6
+ensures
+C_{\ell}\subseteq\mathcal{M}_{\mathrm{hot}}
+.
+
+Cache gap at epoch
+\ell\geq\ell_{\star}
+:
+By Lemma
+D.2
+, the bonus condition holds for all arms. By Lemma
+D.3
+, each hot arm is correctly selected on its region
+X_{a}
+, and Lemma
+D.4
+gives play counts for previous epochs. By Lemma
+D.6
+,
+C_{\ell}\subseteq\mathcal{M}_{\mathrm{hot}}
+. Since both
+C^{\dagger}
+and
+C_{\ell}
+lie in
+\mathcal{M}_{\mathrm{hot}}
+(the former by cache separability, the latter by Lemma
+D.6
+), Lemma
+D.6
+(ii) ensures
+estimated
+hot dominance:
+\max_{a}\hat{\mu}(a;S;x)=\max_{a\in\mathcal{M}_{\mathrm{hot}}}\hat{\mu}(a;S;x)
+for all hot caches
+S
+(because the all-arm estimation error is below
+\Delta_{\mathrm{dom}}/2
+, so the true dominance gap
+\Delta_{\mathrm{dom}}
+cannot be bridged by estimation noise). Similarly, true hot dominance gives
+\max_{a}\mu(a;S;x)=\max_{a\in\mathcal{M}_{\mathrm{hot}}}\mu(a;S;x)
+. Therefore, for every nonempty hot cache
+S\subseteq\mathcal{M}_{\mathrm{hot}}
+,
+
+\hat{F}_{n}(S)=\hat{F}_{n}^{\mathrm{hot}}(S),\qquad F(S)=F_{\mathrm{hot}}(S),
+
+where
+F_{\mathrm{hot}}(S):=\mathbb{E}_{x}[\max_{a\in\mathcal{M}_{\mathrm{hot}}}\mu(a;S;x)]
+and
+\hat{F}_{n}^{\mathrm{hot}}
+is its empirical counterpart. In particular, this holds for
+S=C^{\dagger}
+and
+S=C_{\ell}
+(both of size
+K\geq 1
+by definition). Lemma
+D.5
+(applied to the hot-restricted empirical utility with
+n=n_{\ell}+Nm_{\ell}
+observations and
+|\mathcal{M}_{\mathrm{hot}}|\leq N
+arms, so the same bound remains valid) gives
+
+\displaystyle F(C^{\dagger})-F(C_{\ell})=F_{\mathrm{hot}}(C^{\dagger})-F_{\mathrm{hot}}(C_{\ell})
+
+\displaystyle\quad\leq 2\varepsilon_{\ell}+2\bar{B}\sqrt{\tfrac{2(K\log(eN/K)+\log(12L/\delta))}{n_{\ell}+Nm_{\ell}}},
+
+where
+\varepsilon_{\ell}:=\max_{a\in\mathcal{M}_{\mathrm{hot}}}\|\hat{\theta}_{a,\ell}^{\mathrm{pre}}-\theta_{a}^{\star}\|_{2}\leq c_{1}/\sqrt{p_{\min}\cdot 2^{\ell-1}}
+(Lemma
+D.7
+).
+
+Realized vs. expected:
+
+C_{\ell}
+is determined by the history up to round
+n_{\ell}+Nm_{\ell}
+; epoch-
+\ell
+exploitation contexts are conditionally i.i.d. with
+|\max_{a}\mu(a;C_{\ell};x_{t})|\leq\bar{B}
+. By Hoeffding, the per-epoch deviation
+
+\bigl|H_{\ell}F(C_{\ell})-\textstyle\sum_{t\in\mathrm{exploit}\,\ell}\max_{a}\mu_{t}(a;C_{\ell})\bigr|\leq\bar{B}\sqrt{2H_{\ell}\log(6L/\delta)}
+
+with probability
+\geq 1-\delta/(6L)
+. Summing over epochs,
+
+\sum_{\ell}\bar{B}\sqrt{2H_{\ell}\log(6L/\delta)}\leq\bar{B}\sqrt{2\log(6L/\delta)}\cdot(2{+}\sqrt{2})\sqrt{T}.
+
+Since
+K\geq 1
+, this is dominated by the cache concentration term and is absorbed into the constant
+c_{3}
+.
+
+Summing the estimation term over epochs
+\ell\geq\ell_{\star}
+:
+The per-epoch estimation contribution is
+
+H_{\ell}\cdot 2\varepsilon_{\ell}=\frac{2^{\ell+1}c_{1}}{\sqrt{p_{\min}\cdot 2^{\ell-1}}}=\mathcal{O}\!\left(\sqrt{2^{\ell}/p_{\min}}\right).
+
+The geometric series
+\sum_{\ell=\ell_{\star}}^{L-1}\sqrt{2^{\ell}/p_{\min}}\leq(2{+}\sqrt{2})\sqrt{T/p_{\min}}
+yields the cache estimation term.
+
+Summing the concentration term over epochs
+\ell\geq\ell_{\star}
+:
+By Lemma
+D.5
+with
+\delta^{\prime}=\delta/(6L)
+, the per-epoch concentration contribution to the cache gap is
+
+H_{\ell}\cdot\bar{B}\sqrt{\tfrac{2(K\log(eN/K)+\log(12L/\delta))}{n_{\ell}+Nm_{\ell}}}.
+
+Since
+n_{\ell}=\sum_{j<\ell}(Nm_{j}+2^{j})\geq\sum_{j<\ell}2^{j}=2^{\ell}-1\geq 2^{\ell-1}
+, we have
+H_{\ell}/\sqrt{n_{\ell}+Nm_{\ell}}\leq\sqrt{2}\cdot\sqrt{2^{\ell}}
+. Summing the geometric series:
+\sum_{\ell=\ell_{\star}}^{L-1}\sqrt{2^{\ell}}\leq(2{+}\sqrt{2})\sqrt{T}
+. Combining yields the cache concentration term
+c_{3}\bar{B}\sqrt{KT\log(eNL/(K\delta))}
+, where the
+\log L
+factor arises from the per-epoch failure probability
+\delta/(6\cdot 2^{\ell})
+.
+
+Switching:
+
+K\gamma
+per epoch,
+L
+epochs.
+
+Forced exploration:
+Epoch
+\ell
+contributes
+Nm_{\ell}
+rounds at per-round pseudo-regret
+\leq\bar{B}
+. Total:
+\sum_{\ell}Nm_{\ell}\bar{B}=\mathcal{O}(Nd\bar{B}\log^{2}T)
+, which is
+o(T)
+.
+
+Collecting all terms.
+Combining the six contributions yields the detailed bound:
+
+\displaystyle\mathrm{Regret}(T)
+
+\displaystyle\leq\underbrace{2\beta_{T}\sqrt{2NdT\log(1{+}\tfrac{T}{d\lambda})}}_{\text{routing}}+\underbrace{\tfrac{c_{2}(\sigma\sqrt{d\log(NLT/\delta)}+\sqrt{\lambda})}{\sqrt{\sigma_{\min}\,p_{\min}}}\sqrt{T}}_{\text{cache est.}}
+
+\displaystyle\quad+\underbrace{c_{3}\bar{B}\sqrt{KT\log\tfrac{eNL}{K\delta}}}_{\text{cache conc.}}+\underbrace{K\gamma L}_{\text{switch}}+\underbrace{\textstyle\sum_{\ell}Nm_{\ell}\bar{B}}_{\text{forced}}+\underbrace{2^{\ell_{\star}}\bar{B}}_{\text{bootstrap}},
+
+where
+L=\lceil\log_{2}T\rceil
+and
+\ell_{\star}=\max(\ell_{0},\ell_{\mathrm{cache}})
+with
+
+\ell_{0}:\;M_{\ell_{0}}\geq\frac{c\,\beta_{T}^{2}}{\sigma_{\min}\,\Delta_{\min}^{2}},\quad\ell_{\mathrm{cache}}:\;M_{\ell_{\mathrm{cache}}}\geq\frac{c\,\beta_{T}^{2}}{\sigma_{\min}\,\min(\Delta_{\mathrm{cache}},\Delta_{\mathrm{dom}})^{2}}.
+
+For fixed problem parameters, the switching, forced, and bootstrap terms are all
+o(\sqrt{T})
+, so the leading behavior is
+\widetilde{\mathcal{O}}(\sigma d\sqrt{NT}+\bar{B}\sqrt{KT})
+.
+∎
+
+Proof summary.
+
+The six terms correspond to routing (Lemma
+C.2
+), cache estimation and concentration (Lemma
+D.5
+per epoch), switching (
+K\gamma
+per epoch), forced exploration (
+\sum_{\ell}Nm_{\ell}
+rounds), and bootstrap (
+2^{\ell_{\star}}
+rounds before bonus and cache conditions hold). Assumption
+2
+enables the chain: margin
+\to
+correct selection (Lemma
+D.3
+), coverage
+\to
+play counts (Lemma
+D.4
+), full-dimensionality
+\to
+design matrix growth (Lemma
+D.7
+).
+

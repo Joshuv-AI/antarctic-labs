@@ -1,0 +1,865 @@
+CacheFlow: Efficient LLM Serving with 3D-Parallel KV Cache Restoration
+Sean Nian, Jiahao Fang, Qilong Feng, Zhiyu Wu, Fan Lai, [0.5em] University of Illinois Urbana-Champaign
+
+Abstract
+KV cache restoration has emerged as a dominant bottleneck in serving long-context LLM workloads, including multi-turn conversations, retrieval-augmented generation, and agentic pipelines. Existing approaches treat restoration as a per-request tradeoff between recomputation and I/O transfer, recomputing KV states from scratch or offloading them from external storage (e.g., CPU memory or remote machines). However, existing advances fail to exploit parallelism across tokens, layers, and distributed deployments, and critically ignore resource contention under batched serving. We present CacheFlow, a KV cache restoration framework that rethinks cache restoration as a multi-dimensional parallel execution problem. CacheFlow introduces a unified 3D parallelism abstraction across tokens, layers, and GPUs, enabling fine-grained overlap of recomputation and I/O along the structural dependencies of transformer inference. At the core of CacheFlow is a batch-aware two-pointer scheduler that jointly optimizes compute and I/O allocation across requests by prioritizing operations with the highest marginal reduction in recomputation cost. Our evaluations show that CacheFlow reduces Time-To-First-Token (TTFT) by 10%–62% over existing advances across diverse models, workloads, and hardware.
+
+
+
+1
+Introduction
+
+The rapid adoption of Large Language Models (LLMs) in interactive and agentic applications has driven a fundamental shift toward long-context inference. Modern workloads, including multi-turn conversations
+(
+5
+)
+, retrieval-augmented generation (RAG)
+(
+15
+;
+18
+)
+, and tool-augmented agents
+(
+20
+)
+, rely heavily on reusing previously processed context. As a result, efficiently restoring the Key-Value (KV) cache, the intermediate latent representation of prior context, has become a first-class efficiency challenge, as KV cache restoration directly determines Time-To-First-Token (TTFT), a critical latency metric for user-facing systems
+(
+17
+;
+18
+)
+.
+
+Despite its latency-critical role, KV cache restoration remains fundamentally inefficient, incurring many seconds of latency for long-context requests. Existing advances expose a coarse-grained dichotomy: they either rely on prefill recomputation
+(
+1
+;
+13
+;
+10
+)
+, which regenerates KV cache from plaintext at high computational cost, or perform I/O-based restoration by offloading KV cache from external memory (e.g., CPU memory, SSD, or remote nodes
+(
+14
+)
+), which is constrained by bandwidth.
+
+While recent hybrid approaches
+(
+7
+;
+17
+;
+4
+)
+partially overlap computation and I/O, they remain fundamentally request-centric and fail to capture two key properties of modern LLM serving (§
+2
+). First, KV cache recomputation cost scales superlinearly: due to the quadratic complexity of attention, later tokens incur disproportionately higher cost, making naive recomputation inefficient for long contexts. This effect is exacerbated by workload heterogeneity, where requests span a wide spectrum of lengths to restore, from short system prompts to long multi-turn contexts.
+Second, production LLM serving is inherently batched and distributed across multiple GPUs, where compute and I/O resources are shared across requests. This introduces resource contention and straggler effects, rendering per-request optimization insufficient for maximizing overall efficiency.
+
+In this paper, we introduce CacheFlow, a serving system that rethinks KV cache restoration as a multi-dimensional parallel execution problem. Our key insight is that restoration is not a monolithic operation, but can be decomposed into fine-grained units that expose three complementary forms of parallelism: (i)
+Token-level parallelism
+: overlapping recomputation of earlier tokens with I/O transfer of later tokens, exploiting the causal dependency across tokens;
+(ii)
+Layer-level parallelism
+: pipelining recomputation of lower layers with transfer of higher-layer KV cache, leveraging the execution dependency of model layers;
+(iii)
+Multi-GPU parallelism
+: enabling concurrent restoration across GPUs, allowing each GPU to reconstruct the KV cache of its local model shard while preserving global correctness. Each exposes structured dependencies that can be exploited for parallel execution. This leads to a unified view:
+KV cache restoration is a multi-dimensional scheduling problem that requires jointly optimizing computation and I/O across requests and GPUs
+.
+
+However, realizing this vision introduces three fundamental challenges (§
+3
+). First, at the request level, determining the optimal composition of parallelism requires carefully balancing heterogeneous costs across tokens, as well as the interplay between compute and I/O capabilities. Second, at the multi-GPU level, enabling parallel restoration requires managing inter-device dependencies to preserve correctness while maximizing concurrency. Third, at the batch level, concurrent restoration across multiple requests introduces severe resource contention and straggler effects, requiring coordinated scheduling.
+
+Contributions.
+
+To address these challenges, we make the following contributions:
+
+•
+
+A new formulation of KV cache restoration as a multi-dimensional scheduling problem.
+We identify the interplay between quadratic recomputation cost and shared resource contention, and show that optimal restoration corresponds to balancing compute and I/O via a harmonic-mean bound (§
+3.1
+).
+
+•
+
+A novel 3D-parallel KV cache restoration framework.
+We introduce a unified execution model that orchestrates token-, layer-, and GPU-level parallelism via a novel batch-aware two-pointer scheduling strategy, enabling fine-grained overlap of recomputation and transfer. For distributed deployments, we introduce a lightweight state abstraction where each GPU stores boundary hidden states for concurrent restoration (§
+3.2
+-§
+3.3
+).
+
+•
+
+End-to-end system and evaluations.
+We implement CacheFlow atop existing serving stacks, vLLM
+(
+1
+)
+and LMCache
+(
+14
+)
+, seamlessly supporting existing LLM applications. We evaluate it across diverse models (Qwen3-8B, Qwen3-30B-A3B, and Llama-3.1-8B), realistic chatbot and agentic pipeline workloads, and hardware conditions. CacheFlow reduces TTFT by 10%–62% over existing advances (§
+4
+).
+
+2
+Background and Motivation
+
+LLM serving consists of two sequential stages: a
+prefill
+stage that processes the input context and produces the first output token, and a
+decode
+stage that autoregressively generates subsequent tokens
+(
+21
+)
+. During prefill, the model materializes the KV cache, intermediate representations of each token at every attention layer, which are retained in GPU memory to enable efficient reuse during decoding to avoid recomputation.
+
+KV cache as a first-order resource bottleneck.
+
+For a transformer with
+L
+layers,
+H
+attention heads, and per-head dimension
+d
+, serving a request of length
+N
+requires storing
+2\times L\times H\times d\times N
+elements in the KV cache. This linear scaling with respect to sequence length.
+
+With rapidly increasing context sizes in modern workloads, the KV cache becomes a dominant consumer of GPU memory.
+Figure
+1(a)
+shows that real-world workloads, including multi-turn chatbots and AI-assisted coding and tool-call agents, can reach over 20,000 tokens per request. This corresponds to KV cache sizes of 2.8 GB for models such as Qwen3-8B, 9.7 GB for Llama-3.1-405B for a single request, and even larger for reasoning-oriented models such as DeepSeek-R1. These requirements far exceed the memory capacity of a single GPU, forcing systems to either offload KV cache to lower tiers
+(
+14
+;
+17
+)
+or discard and recompute it on demand
+(
+1
+;
+21
+)
+.
+
+KV cache restoration becomes a key latency bottleneck.
+
+Restoring KV cache is on the critical path of prefill and directly determines Time-To-First-Token (TTFT), a key latency metric for interactive applications. However, existing strategies incur substantial latency.
+As shown in Figure
+1
+, recomputation can take over 1.2–1.5 seconds for long contexts on modern GPUs, far exceeding typical latency targets (
+\sim
+200 ms). In contrast, I/O-based restoration can be faster under ideal conditions (e.g., 80 Gbps), but is highly sensitive to bandwidth; under realistic conditions (e.g., 10 Gbps, typical disk or inter-node transfer in Amazon Cloud
+(
+7
+;
+15
+)
+), its latency can exceed that of recomputation. Consequently, neither approach alone provides robust performance across operating regimes.
+
+Limitations of existing advances.
+Existing systems largely reduce KV restoration to a
+per-request
+decision between recomputation and I/O transfer, or a coarse-grained hybrid of the two. While simple, this abstraction fails to capture three fundamental properties of modern LLM serving: (i)
+Non-uniform recomputation cost
+: The cost of recomputation is highly heterogeneous across tokens due to quadratic attention. Later tokens incur disproportionately higher cost; (ii)
+Underutilized structural parallelism
+: KV cache restoration exhibits inherent parallelism along multiple dimensions, including tokens (causal dependency), layers (feed-forward structure), and model shards (distributed execution), which existing designs fail to exploit; and (iii)
+Batch-level resource contention.
+Production serving executes many requests concurrently on shared compute and I/O resources. This introduces contention and straggler effects, rendering per-request optimization insufficient for maximizing system-wide throughput and latency.
+
+Addressing this challenge requires rethinking restoration as a coordinated parallel execution problem that adapts to heterogeneous costs, shared resources, and distributed environments.
+
+(a)
+Long lengths to restore.
+
+(b)
+Severe memory pressure.
+
+(c)
+High restoration costs.
+
+Figure 1:
+
+KV cache restoration is a fundamental bottleneck.
+
+(a) Real-world workloads, including multi-turn conversations (LMSys-Chat
+(
+24
+)
+, WildChat
+(
+23
+)
+) and agentic pipelines (SWE-Bench
+(
+6
+)
+), exhibit a high prevalence of long input prefixes that require KV cache reuse.
+(b) The KV cache footprint grows linearly with sequence length and quickly exceeds GPU memory capacity.
+(c) Recomputation incurs
+superlinear
+latency due to quadratic attention cost, while I/O restoration is bounded by bandwidth and degrades under realistic (e.g., 10–40 Gbps) conditions.
+
+3
+Methodologies
+
+We present CacheFlow, a KV cache restoration framework that rethinks restoration as a multi-dimensional parallel execution problem. As shown in Figure
+2
+, given a request with a cached prefix of
+N_{c}
+tokens, CacheFlow aims to minimize restoration latency by jointly optimizing recomputation and I/O across multiple structural dimensions.
+Our design is grounded in a unifying principle:
+KV cache restoration can be decomposed into a dependency graph over tokens, layers, and devices, and executed via coordinated parallel along these dimensions.
+
+We next introduce intra-request parallelism across tokens and layers (§
+3.1
+), then extend the design to distributed multi-GPU settings (§
+3.2
+), and finally address batch-level scheduling under shared resource constraints (§
+3.3
+).
+
+Figure 2:
+CacheFlow architecture and 3D parallelism workflow.
+
+3.1
+2D Restoration: Token- and Layer-wise Parallelism
+
+KV cache restoration exhibits highly non-uniform costs due to both algorithmic and system-level factors. Let
+T_{\text{comp}}(n)
+denote the cost of recomputing
+n
+tokens. Due to attention,
+T_{\text{comp}}(n)
+grows superlinearly (quadratically in dominant terms), while also exhibiting fixed overheads, such as kernel launches and memory movement (e.g., loading weight matrices from HBM to on-chip SRAM). As shown in Figure
+1(c)
+, recomputing 2 000 tokens incurs latency comparable to recomputing 500 tokens, largely due to fixed overheads. In contrast, I/O cost
+T_{\text{io}}(n)
+scales approximately linearly with data size but is bounded by bandwidth. This mismatch leads to a key challenge: how to partition restoration work such that recomputation and I/O are maximally overlapped while minimizing redundant cost?
+
+Unified Two-pointer Abstraction.
+
+To address these challenges, we introduce the first two dimensions of CacheFlow’s 3D parallelism: parallelism across the
+token
+and
+layer
+axes of the KV cache. Both dimensions share a common algorithmic foundation—a two-pointer, meet-in-the-middle strategy that executes recomputation and I/O loading from opposite ends of the dependency graph—but operate along different structural axes of the transformer:
+
+•
+
+Token-wise parallelism
+:
+Given a request with
+N_{c}
+cached tokens and a chunk size of
+C
+, we partition the prefix into
+\lceil N_{c}/C\rceil
+chunks indexed
+0,1,\ldots,\lceil N_{c}/C\rceil-1
+. We choose
+C
+to align with the preferred block size of FlashAttention
+(
+3
+)
+(typically 512 tokens), ensuring efficient kernel execution and high throughput. Two pointers are initialized at opposite ends: a
+compute pointer
+at chunk 0 and an
+I/O pointer
+at chunk
+\lceil N_{c}/C\rceil-1
+.
+The compute pointer advances forward, recomputing KV states for chunks
+0,1,2,\ldots
+, while the I/O pointer retreats backward, loading cached KV states for chunks
+\lceil N_{c}/C\rceil-1,\lceil N_{c}/C\rceil-2,\ldots
+from external storage. The two processes proceed concurrently and meet at an intermediate chunk, at which point restoration completes without redundant work. This design is particularly effective for long sequences, where prioritizing I/O for later chunks avoids disproportionately high recomputation cost.
+
+•
+
+Layer-wise parallelism
+:
+While token-wise restoration determines
+which token ranges
+to recompute versus load, it applies the same decision uniformly across all layers for each chunk. In contrast, layer-wise restoration decouples this decision across layers. Given a transformer with
+L
+layers, we initialize a
+forward pointer
+
+\ell_{\text{fwd}}
+at layer 0 and a
+reverse pointer
+
+\ell_{\text{io}}
+at layer
+L{-}1
+. The forward process recomputes activations bottom-up through layers
+0,1,2,\ldots
+, advancing
+\ell_{\text{fwd}}
+after each layer. In parallel, a loader retrieves cached KV states top-down through layers
+L{-}1,L{-}2,L{-}3,\ldots
+, retreating
+\ell_{\text{io}}
+accordingly. When the forward pass pointer reaches a point where all higher layers have already been restored via loading, the process identifies a
+cutover layer
+
+\ell
+and terminates loading. This design is more effective for relatively short sequences (e.g., a few hundred tokens), where recomputation cost is dominated by fixed overheads.
+
+Figure 3:
+The crossover point defines the threshold
+L_{\Delta}
+used by CacheFlow to switch between strategies.
+
+Adaptive Parallelism Strategy.
+
+While both strategies
+enable overlap between computation
+and I/O, yet exhibiting complementary strengths, maximizing overall restoration throughput requires deciding when to switch between token-wise and layer-wise parallelism.
+
+We observe that the choice reduces to identifying a sequence-length threshold,
+L_{\Delta}
+, at which token-wise restoration begins to outperform layer-wise restoration. Importantly,
+L_{\Delta}
+is largely content-agnostic, depending primarily on hardware characteristics. As shown in Figure
+3
+, we therefore can perform lightweight offline profiling across sequence lengths for both strategies and select the crossover point as
+L_{\Delta}=\min\{N\mid T_{\text{token}}(N)\leq T_{\text{layer}}(N)\}
+, which is then used to guide runtime decisions.
+
+3.2
+Extending to 3D: Multi-GPU Parallelism
+
+Practical LLM serving deployments often partition model layers across multiple GPUs
+(
+12
+)
+. Consider a transformer with
+L
+layers distributed across
+S
+stages, where stage
+s
+owns layers
+[\ell_{s}^{\text{start}},\ell_{s}^{\text{end}})
+and resides on a dedicated GPU. CacheFlow extends the 2D abstraction to a third dimension by enabling
+parallel restoration across model shards
+.
+
+Decoupling via Boundary Activations.
+
+Our key insight is that KV cache restoration across these stages can be decoupled and parallelized by its lightweight
+boundary activations
+—the input to the first layer of the next stage, which is much smaller than storing and loading the KV cache of all
+[\ell_{s}^{\text{start}},\ell_{s}^{\text{end}})
+layers. As such, each GPU can independently reconstruct the KV cache for its local shard, as it already possesses the required input states for recomputation.
+
+This design is naturally compatible with both token-wise and layer-wise restoration. Concretely, each GPU retrieves cached boundary activations for the prefix tokens and performs its local forward computation, which in turn triggers KV cache restoration (via the same two-pointer mechanism) for its assigned layers.
+Note that this phase depends only on cached boundary states rather than live intermediate activations, transforming KV cache restoration from a sequential pipeline into a concurrent, shard-local process, significantly improving overall latency.
+
+Theoretical Speedup of 3D Parallelism.
+
+We first restate the optimal performance bound for token- and layer-wise restoration under the two-pointer model. Let
+T_{\text{comp}}
+denote the time to fully recompute the cached prefix (across all
+L
+layers or tokens), and
+T_{\text{io}}
+the time to load it entirely from storage. For a split at position
+\ell
+, where segments
+[0,\ell)
+are recomputed and
+[\ell,L)
+are loaded, the total restoration time is:
+
+T(\ell)=\max\left(\frac{\ell}{L}\cdot T_{\text{comp}},\frac{L-\ell}{L}\cdot T_{\text{io}}\right).
+
+(1)
+
+The optimal split
+\ell
+minimizes this envelope and is achieved when the two terms are equal:
+
+\ell=\frac{L\cdot T_{\text{io}}}{T_{\text{comp}}+T_{\text{io}}}
+and
+T^{*}=\frac{T_{\text{comp}}\cdot T_{\text{io}}}{T_{\text{comp}}+T_{\text{io}}}
+. Thus, the optimal restoration time corresponds to the harmonic mean of computation and I/O costs. Intuitively, when I/O is fast (
+T_{\text{io}}\ll T_{\text{comp}}
+),
+\ell
+is small and most of the prefix is restored via loading; conversely, when I/O is slow (
+T_{\text{io}}\gg T_{\text{comp}}
+),
+\ell
+approaches
+L
+and recomputation dominates. Therefore, our two-pointer abstraction achieves the optimal performance across all regimes as
+T^{*}\leq\min(T_{\text{comp}},T_{\text{io}})
+.
+
+We next analyze the benefit of multi-GPU parallelism. Suppose the model is partitioned across
+S
+pipeline stages, each responsible for
+L/S
+layers on average. With boundary activations available, each stage can restore its local KV cache independently and in parallel. This yields per-stage costs of
+T_{\text{comp}}/S
+and
+T_{\text{io}}/S
+, respectively. Applying the same two-pointer optimality within each stage, the restoration time becomes:
+
+T^{*}_{\text{multi-GPU}}=\frac{T_{\text{comp}}/S\cdot T_{\text{io}}/S}{T_{\text{comp}}/S+T_{\text{io}}/S}=\frac{1}{S}\cdot\frac{T_{\text{comp}}\cdot T_{\text{io}}}{T_{\text{comp}}+T_{\text{io}}}=\frac{T^{*}}{S}.
+
+(2)
+
+Thus, multi-GPU parallelism achieves an
+ideal linear speedup
+proportional to the number of pipeline stages
+S
+. While this speedup may be moderated by load imbalance, our evaluations show that CacheFlow can approach the scaling limits of the hardware (§
+4.2
+).
+
+3.3
+Batch-level Scheduling over 3D Parallelism
+
+While 3D parallelism optimizes individual requests, real-world serving executes a batch
+\mathcal{R}
+of requests under shared compute and I/O resources. This introduces new challenges: requests exhibit heterogeneous KV cache lengths needed to restore and compete for shared compute and I/O resources, leading to straggler effects. For example, concurrently loading KV cache for multiple requests from the same storage tier can slow down per-request transfers. The key question then becomes: how can we maximize aggregate restoration throughput across a batch of requests under shared resource constraints?
+
+Batch-aware Two-Pointer Scheduling.
+
+We formulate batch restoration as a
+global scheduling problem
+over all requests and shared resources, and address it with a batch-aware two-pointer scheduling strategy. Our key insight is that the benefit of allocating I/O bandwidth to a request depends on how much recomputation it can avoid. Due to the quadratic cost of attention, requests with longer cached prefixes incur significantly higher recomputation cost, especially for later chunks. Therefore, transferring the KV cache for longer requests yields higher marginal benefit compared to shorter ones.
+
+Algorithm 1
+
+Batch-aware 3D Two-Pointer KV Cache Restoration
+
+1:
+
+Requests
+\mathcal{R}
+, chunk size
+C
+, threshold
+L_{\Delta}
+, GPU stages
+\{1,\dots,S\}
+
+2:
+
+for
+each
+r\in\mathcal{R}
+
+do
+
+\triangleright
+
+Initialize per-request pointers
+
+3:
+
+s_{r}\leftarrow(\texttt{token-wise}\ \textbf{if}\ N_{c}^{r}\geq L_{\Delta}\ \textbf{else}\ \texttt{layer-wise})
+
+4:
+
+(p^{\text{comp}}_{r},p^{\text{io}}_{r})\leftarrow\begin{cases}(0,\ \lceil N_{c}^{r}/C\rceil-1),&s_{r}=\texttt{token-wise}\\
+(0,\ L-1),&s_{r}=\texttt{layer-wise}\end{cases}
+
+5:
+
+end
+
+for
+
+6:
+
+while
+
+\mathcal{R}\neq\emptyset
+
+do
+
+7:
+
+\mathcal{R}_{\text{io}}\leftarrow
+Requests with largest remaining work per I/O channel (source)
+
+8:
+
+for
+each stage
+s=1,\dots,S
+
+in parallel
+
+do
+
+\triangleright
+
+Multi-GPU parallelism
+
+9:
+
+parallel do
+
+\triangleright
+
+Overlap I/O and compute
+
+10:
+
+for each
+
+r\in\mathcal{R}_{\text{io}}
+: load KV at
+p^{\text{io}}_{r}
+,
+p^{\text{io}}_{r}\leftarrow p^{\text{io}}_{r}-1
+
+11:
+
+for each
+
+r\in\mathcal{R}
+: recompute KV at
+p^{\text{comp}}_{r}
+,
+p^{\text{comp}}_{r}\leftarrow p^{\text{comp}}_{r}+1
+
+12:
+
+end
+
+for
+
+13:
+
+\mathcal{R}\leftarrow\{r\in\mathcal{R}\mid p^{\text{comp}}_{r}<p^{\text{io}}_{r}\}
+
+\triangleright
+
+Remove completed requests
+
+14:
+
+end
+
+while
+
+We extend the two-pointer abstraction to the batch setting by coordinating pointer advancement across requests. Each request maintains its own compute and I/O pointers, while a global scheduler allocates compute and I/O resources at each step. For I/O scheduling, CacheFlow prioritizes requests with the largest remaining recomputation cost (i.e., longest length to restore). Specifically, we maintain requests in descending order of their length to restore the KV cache, and prioritize transferring the KV cache of requests with the longest remaining lengths. This prioritization ensures that I/O is spent where it yields the greatest reduction in overall compute cost.
+
+Algorithm
+1
+illustrates the 3D-parallel restoration workflow.
+The scheduler operates in a
+progressive, chunk-level manner
+. After each chunk is processed (either recomputed or loaded), the system updates the remaining cost of each request and adjusts scheduling priorities. This enables dynamic adaptation to evolving resource availability and request progress, while preserving the optimality properties of the two-pointer design at the per-request level.
+
+4
+Evaluation
+
+4.1
+Experimental setup
+
+We implement CacheFlow atop vLLM
+(
+9
+)
+and LMCache
+(
+14
+)
+, enabling more efficient KV cache restoration without altering the model or the application.
+
+Models and Workloads.
+
+We evaluate CacheFlow on three representative LLMs spanning both dense and mixture-of-experts (MoE) architectures: Qwen3-8B, Llama-3.1-8B, and Qwen3-30B-A3B (MoE models with 3B active experts). These models exhibit diverse KV cache footprints and compute-to-I/O ratios, enabling us to stress-test different regimes.
+
+We construct workloads from three realistic serving datasets:
+(i)
+LMSYS-Chat
+
+(
+24
+)
+, which consists of real ChatGPT multi-turn conversational traces where successive turns share long prefixes, reflecting common chatbot deployments;
+(ii)
+WildChat
+
+(
+23
+)
+, a large-scale corpus of open-domain conversations with diverse tasks and languages, inducing a broad distribution of prefix lengths and reuse patterns; and
+(iii)
+SWE-Bench
+
+(
+6
+)
+, an agentic coding benchmark with repeated tool invocations over shared repository contexts, representing emerging agentic workloads with systematic prefix reuse.
+Together, these workloads cover both short- and long-context regimes.
+
+Hardware and Network Conditions.
+
+We conduct experiments on NVIDIA L40S (46 GB), A100 (40 GB), and H100 (80 GB) GPUs, covering both single-GPU and multi-GPU deployments.
+To systematically study the impact of I/O constraints, we evaluate different practical bandwidth conditions of 80 Gbps, 40 Gbps, and 10 Gbps, corresponding to typical Infiniband (RoCE) speed
+(
+7
+)
+, Lambda Lab SSD read speed, and Amazon Cloud inter-node bandwidth
+(
+15
+)
+, respectively.
+By default, we use 10 Gbps; we vary bandwidth and GPU type in later ablation studies (§
+4.3
+).
+
+Baselines.
+
+We compare CacheFlow against three advances:
+
+•
+
+vLLM
+
+(
+9
+)
+: recomputation-only restoration via standard prefill, representing the compute-bound extreme.
+
+•
+
+SGLang
+
+(
+25
+)
+: the state-of-the-art LLM serving framework that restores KV cache via HiCache, which extends RadixAttention caching to storage tiers.
+
+•
+
+LMCache
+
+(
+14
+)
+v0.3.1: pure KV cache loading without recomputation, representing the I/O-bound extreme and the state-of-the-art offloading system.
+
+•
+
+Cake
+
+(
+7
+)
+: the state-of-the-art hybrid restoration approach that partitions the prefix along the token dimension for individual requests.
+
+Metrics.
+We aim to minimize
+Time-To-First-Token
+(TTFT), which directly captures the latency impact of KV cache restoration on user-perceived responsiveness. We also report GPU compute utilization and I/O bandwidth utilization during restoration.
+
+4.2
+End-to-End Performance
+
+(a)
+WildChat Workloads
+
+(b)
+LMSys-Chat Workloads
+
+(c)
+Agentic pipeline (SWEBench)
+
+Figure 4:
+CacheFlow achieves lower serving latency than existing advances.
+
+CacheFlow reduces serving latency.
+
+Figure
+4
+shows the TTFT distribution across requests for WildChat, LMSys-Chat, and SWE-Bench. Across all workloads, CacheFlow consistently left-shifts the CDF, indicating lower latency at every percentile. Overall, CacheFlow achieves a 1.1
+\times
+–1.7
+\times
+reduction in TTFT compared to existing advances. The gains are most pronounced on LMSys-Chat and SWE-Bench, which feature longer contexts and thus incur higher KV restoration costs.
+Notably, the improvement widens in the tail (e.g., P90–P99), where straggler effects dominate. This highlights the effectiveness of our batch-aware two-pointer scheduling, which prioritizes high-impact restoration decisions and mitigates contention across requests, improving aggregate throughput and tail latency.
+
+CacheFlow improves resource utilization.
+
+Figure
+5
+reports average GPU and I/O utilization during KV cache restoration. LMCache saturates I/O bandwidth but achieves only 10% GPU utilization, as KV transfers throttle execution. Conversely, vLLM is compute-bound with 91% GPU utilization but idle I/O. In contrast, CacheFlow achieves 88% GPU and 78% I/O utilization by effectively overlapping recomputation and I/O, demonstrating that its multi-dimensional parallelism maximizes resource efficiency and directly reduces restoration latency.
+
+Figure 5:
+Resource utilization during KV restoration.
+CacheFlow keeps compute and I/O active.
+
+Figure 6:
+TTFT by input length.
+vLLM grows superlinearly with length.
+
+Figure 7:
+3D-parallelism ablation.
+Ablation comparison with the multi-GPU optimization disabled versus enabled.
+
+4.3
+Ablation Studies
+
+Breakdown by request lengths.
+Figure
+6
+breaks down CacheFlow’s performance across different request length regimes. We notice that recomputation-based methods (e.g., vLLM) exhibit superlinear latency growth, reflecting the quadratic cost of attention. In contrast, CacheFlow scales more gracefully by overlapping recomputation and I/O. As sequence length increases (from 6K to 30K), the performance gap between vLLM, SGLang and CacheFlow widens from 1.1
+\times
+to 1.7
+\times
+,
+demonstrating our two-pointer effectiveness, which prioritizes I/O for later tokens in long requests and bounds quadratic recomputation costs.
+
+(a)
+40 Gbps I/O speed.
+
+(b)
+80 Gbps I/O speed.
+
+Figure 7:
+Impact of I/O bandwidth on TTFT CDFs (SWEBench on H100).
+
+CacheFlow consistently improves TTFT at both 40 Gbps and 80 Gbps compared with the best baseline.
+
+(a)
+2xL40S deployments.
+
+(b)
+A100 deployments.
+
+Figure 8:
+Impact of GPUs on TTFT (SWEBench).
+
+CacheFlow improves TTFT on L40S and A100 by adapting the compute–I/O meeting point.
+
+Ablation of 3D parallelism.
+
+We next break down our 3D parallelism design by disabling the multi-GPU parallelism, so each GPU performs only 2D token- and layer-wise parallelism while maintaining sequential dependencies across GPUs. Figure
+7
+shows that 3D parallelism is complementary: without multi-GPU execution, average restoration latency rises from 0.21 s to 0.29 s (a 38% increase). Notably, even with only 2D parallelism, CacheFlow still outperforms vLLM by 24%, highlighting the effectiveness of our two-pointer design.
+
+Impact of I/O bandwidth.
+We evaluate CacheFlow under different network bandwidths to our end-to-end evaluations: 40 Gbps (typical of AWS g5.12xlarge inter-node links) and 80 Gbps (typical of GCP a2-ultragpu-8g inter-node links) on our H100 cluster. Figure
+7
+shows that CacheFlow consistently improves TTFT, yielding 1.7
+\times
+and 1.5
+\times
+speedups at 40 Gbps and 80 Gbps, respectively. These gains stem from CacheFlow’s adaptive two-pointer design: the recomputation pointer progresses forward while the I/O pointer retreats from the end of the tokens (layers), dynamically balancing compute and I/O. Under higher bandwidth, more KV cache can be loaded in parallel, further reducing restoration latency.
+
+Figure 9:
+CacheFlow improves latency by 1.6
+\times
+–2.6
+\times
+across batch sizes.
+
+Impact of GPU hardware.
+
+Figure
+8
+further ablates our previous setting by varying the hardware from H100s to 2xL40S and A100s on the Qwen3-MoE model, under 10 Gbps KV cache I/O transfer. We observe that CacheFlow consistently outperforms the baseline, achieving 1.6
+\times
+and 1.5
+\times
+speedups on L40S and A100, respectively. These results demonstrate that CacheFlow’s multi-dimensional parallelism effectively adapts to diverse hardware, delivering robust improvements.
+
+Impact of Batch Size.
+
+Figure
+9
+shows that CacheFlow persistently improves TTFT latency by 1.6
+\times
+–2.6
+\times
+across batch sizes (2, 4, and 8 on L40S, Llama-3.1-8B). This improvement becomes more pronounced with a larger batch size, confirming the effectiveness of our batch-aware design.
+
+5
+Related work
+
+KV cache compression.
+
+A large body of work reduces KV cache footprint via compression techniques, including quantization, token pruning, and architectural modifications.
+DiffKV
+(
+22
+)
+exploits the heterogeneous importance of tokens across attention heads and applies hierarchical quantization and pruning at a per-token granularity. BTP
+(
+11
+)
+applies different token pruning ratios over model layers.
+R-KV
+(
+2
+)
+and BumbleBee
+(
+8
+)
+identifies salient tokens using attention scores while preserving token diversity during pruning.
+These approaches reduce memory footprint and I/O volume, but are largely orthogonal to our work: they do not address the latency-critical restoration, nor the coordination between recomputation and I/O under shared resources.
+
+KV cache offloading and restoration.
+
+Recent systems focus on extending KV cache capacity via offloading and accelerating restoration.
+LMCache
+(
+14
+)
+and KVcached
+(
+19
+)
+enable KV cache management across heterogeneous memory tiers (e.g., GPU and remote nodes).
+HCache
+(
+4
+)
+proposes storing compact hidden states to accelerate restoration, but treats restoration as a uniform process, ignoring the heterogeneous cost across sequence positions and system contention.
+Continumm
+(
+10
+)
+predicts reuse patterns in agentic workflows and selectively offloads KV cache based on future access.
+KVFlow
+(
+16
+)
+formulates KV prefetching as a graph scheduling problem to capture dependencies across multi-agent pipelines.
+MoonCake
+(
+17
+)
+overlaps prefill computation with KV transfer to downstream decode stages. Instead, CacheFlow formulates KV cache restoration as a multi-dimensional scheduling problem over tokens, layers, and GPUs, enabling fine-grained overlap while accounting for batch contention.
+
+6
+Conclusion
+
+KV cache restoration has become a first-order bottleneck in long-context LLM serving, yet existing approaches treat it as a per-request tradeoff between recomputation and I/O. In this work, we argue that restoration is fundamentally a multi-dimensional parallel execution problem. We present CacheFlow, which introduces a unified 3D parallelism abstraction across tokens, layers, and GPUs, together with a batch-aware two-pointer scheduler that maximizes compute and I/O overlap under shared resources. Evaluations across diverse models, workloads, and hardware show that CacheFlow reduces TTFT by 10%–62%.
+

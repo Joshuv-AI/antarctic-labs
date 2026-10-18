@@ -1,0 +1,1731 @@
+Fleet : Hierarchical Task-based Abstraction for Megakernels on Multi-Die GPUs Thanks: Correspondence to: Sangeeta Chowdhary <sangeeta.chowdhary@amd.com>
+Sangeeta Chowdhary, Ryan Swann, Sean Siddens, Muhammad Osama, Stephen Neuendorffer, Alexandru Dutu, Karthik Sangaiah, Sandeepa Bhuyan, Samuel Bayliss, Ganesh Dasika
+
+Abstract
+. Modern GPUs adopt chiplet-based designs with multiple private cache hierarchies, but current programming models (CUDA/HIP) expose a flat execution hierarchy that cannot express chiplet-level locality or synchronization. This mismatch leads to redundant memory traffic and poor cache utilization in memory-bound workloads such as LLM inference. We present Fleet , a multi-level task model that maps computation to memory scopes. Fleet introduces Chiplet-tasks, a new abstraction that binds work and data to a chiplet and enables coordination through its shared L2 cache. Wavefront-, CU-, and device-level tasks align with existing abstractions, while Chiplet-tasks expose a previously unaddressed level of the hierarchy. Fleet is implemented as a persistent kernel runtime with per-chiplet scheduling, allowing workers within a chiplet to cooperatively execute tasks with coordinated cache reuse. On AMD Instinct MI350 with Qwen3-8B, Fleet achieves 1.3–1.5 × \times lower decode latency than vLLM at batch sizes 1–8 through persistent kernel execution and per-chiplet scheduling. At larger batch sizes, cooperative weight tiling increases L2 hit rate (from 12% to 54% at batch size 32 and from 39% to 61% at batch size 64), reducing HBM traffic by up to 37% and delivering 1.27–1.30 × \times speedup over a chiplet-unaware megakernel baseline.
+
+
+
+1.
+Introduction
+
+Modern GPU architectures have moved toward chiplet-based, multi-die designs as a way of continuing to improve compute density.
+For instance, AMD’s Instinct MI300X
+(
+1
+)
+and MI350/MI355 implement eight XCDs (Accelerator Complex Dies) with private 4 MB L2 caches while NVIDIA’s Blackwell integrates two dies on a single package
+(
+13
+)
+.
+This multi-die approach is critical for scaling AI compute, enabling more densely connected accelerators without scale-out networking.
+Yet the CUDA/HIP execution model (
+thread
+\rightarrow
+wavefront
+\rightarrow
+workgroup
+\rightarrow
+grid
+) has not adapted to this architectural shift.
+
+In particular, there is no direct way to express data affinity between
+groups of workgroups, or to scope work to a specific chiplet’s memory hierarchy. Both AMD and NVIDIA face this challenge, yet their approaches differ substantially (e.g., chiplet swizzling
+(
+6
+)
+), making platform-specific workarounds non-portable. The resulting gap is especially acute for LLM inference, where interactive chatbots, coding assistants, and voice agents demand sub-10 ms per-token decode
+(
+5
+)
+, a regime dominated by memory bandwidth.
+
+One response is “persistent kernel” programming
+(
+20
+;
+11
+)
+, where a kernel dispatches a grid of workgroups that matches the hardware dimensions and persists for the lifetime of the computation, rather than launching separate kernels per operator.
+
+Figure 1
+.
+AMD Instinct MI350 memory hierarchy. Each of 8 XCDs has 32 CUs and a private 4 MB L2 cache (TCC). All XCDs share a 256 MB MALL (Infinity Cache) before HBM3.
+
+This paper presents
+Fleet
+, a multi-level task model that maps operators to memory scopes matching their working sets.
+In
+Fleet
+, an application workload is partitioned into
+tasks
+with explicit dependencies between them.
+Tasks are scoped to different levels of the memory hierarchy:
+
+wavefront-tasks
+operate within a single wavefront using registers and LDS;
+
+CU-tasks
+occupy a single compute unit, communicating through the L1/LDS hierarchy;
+
+Chiplet-tasks
+span all workers on a chiplet, coordinating data access through the XCD-local L2 cache;
+and a
+device-task
+, comprised of eight Chiplet-tasks, collectively executes one operator across the entire device.
+When compared with CUDA/HIP, wavefront-tasks, CU-tasks, and device-tasks roughly correspond to familiar concepts of wavefronts, workgroups, and grids by design. The key new abstraction is the Chiplet-task, which enables the programmer to express behavior that is usefully scoped to chiplet boundaries and the corresponding L2 memory hierarchy. In this work, we use CU-tasks and Chiplet-tasks for compute operations.
+
+Fleet
+is implemented as a persistent kernel device-side runtime with per-chiplet scheduling.
+One workgroup per chiplet is designated as a
+scheduler
+; the rest are
+workers
+.
+Each scheduler retrieves task descriptors from a data structure in device memory and distributes these tasks to its local workers on the same chiplet.
+For Chiplet-tasks, the scheduler broadcasts the same task to all workers in a single chiplet, which can then cooperatively execute the workload with coordinated L2 reuse.
+For CU-tasks and wavefront-tasks, each scheduler dispatches individual tasks round-robin among the CUs in the same chiplet.
+This hierarchical dispatch leverages chiplet-local L2 coherence for low-overhead communication within a Chiplet-task, reducing the need for more expensive cross-chiplet synchronization.
+
+2.
+Background and Motivation
+
+The CUDA/HIP programming model was designed for monolithic GPUs, in which all CUs share a single unified L2 cache.
+Each level of the hardware memory hierarchy is mapped to a programming abstraction with a well-defined scope, as shown in Table
+1
+.
+On a monolithic GPU, any CU could access any L2 line with the same latency and bandwidth, so the programmer never needed to reason about
+where
+data was cached.
+
+Table 1
+.
+Memory hierarchy to programming model mapping on monolithic GPUs. On chiplet GPUs, the L2 scope breaks: it is physically partitioned across dies, but the programming model still treats it as device-scoped.
+
+Compute
+
+Memory
+
+CUDA/HIP
+
+Fleet
+
+Hierarchy
+
+Hierarchy
+
+Abstraction
+
+Abstraction
+
+SIMD
+
+Register file
+
+Wavefront
+
+Wavefront-task
+
+CU/SM
+
+LDS
+
+Workgroup
+
+CU-task
+
+Chiplet
+
+L2 cache
+
+—
+
+Chiplet-task
+
+Device
+
+HBM
+
+Device
+
+Device-task
+
+Widespread demand for larger models and higher throughput has driven GPU vendors to scale chip size beyond what monolithic designs can deliver. NVIDIA’s Blackwell architecture partitions a device into 2 chiplets each with a local L2 cache partition
+(
+7
+)
+. A globally coherent L2 cache is implemented across the L2 cache partitions. On the other hand, AMD’s MI300X and MI350 are implemented using eight chiplets (XCDs), each with a private, non-coherent 4 MB L2 cache as shown in Figure
+1
+. In either case, memory latency to data is non-uniform and will be lower if data is resident in the same chiplet, but there is not a direct way to view the device as a single CUDA/HIP device while controlling which workgroups are localized to which XCDs.
+
+This architectural shift introduces NUMA-like programming effects within a single device which were previously only present between devices.
+As a result, although memory bandwidth is abundant in these GPUs (5+ TB/s), L2 cache locality becomes a more important optimization goal. This is particularly acute in the AMD architecture, in which workgroups scheduled to different XCDs cannot share L2 data, resulting in increased L2 cache contention within an XCD and wasted bandwidth.
+
+We first detail AMD’s chiplet architecture and cache coherence model (§
+2.1
+), then characterize why LLM decode is memory-bound (§
+2.2
+), empirically demonstrate the performance cost of chiplet-unaware scheduling, and finally discuss limitations of prior graph-based approaches (§
+2.3
+).
+
+2.1.
+Chiplet GPU Architecture
+
+In this paper, we focus and evaluate our results on AMD’s Instinct MI350X architecture
+1
+1
+
+1
+
+We did not have access to a NVIDIA Blackwell GPU.
+. AMD’s MI300 series architectures (MI300X, MI350X, MI355X) integrate eight XCDs on a single package via advanced packaging.
+MI350 delivers 256 compute units (CUs) across 8 XCDs (32 CUs per XCD) with HBM3 bandwidth exceeding 5 TB/s.
+The devices also have 8 stacks of HBM (totaling 288 GB in MI350), which is visible in a single global address space, allowing workgroups running on any chiplet to access data in any HBM stack.
+Data is cached on-chip with both per-CU L1 cache and a per-XCD L2 cache. However unlike typical monolithic GPUs where all CUs share a unified L2 cache, the L2 cache in these GPUs is
+partitioned
+: each XCD has a private 4 MB L2 cache, for a total of 32 MB across the package.
+In addition to the L2 cache, both MI300X and MI350 include a 256 MB last-level cache (LLC), also called the Infinity Cache, which is shared across all eight XCDs.
+The LLC sits between L2 and HBM, serving as a victim cache for L2 evictions.
+
+When a HIP kernel executes, the workgroups in a grid are typically distributed across different XCDs by the hardware scheduler, allowing the grid to leverage all 32 MB of L2 cache.
+This workload distribution is effective when workgroups access independent data, but can be less efficient when workgroups access the same data from different chiplets.
+
+L2 cache coherence and scope control.
+
+When a CU on XCD
+i
+issues a global memory load, the request first checks XCD
+i
+’s local L2 cache.
+On a miss, the request traverses the Infinity Fabric to the IO die, where the request may be routed to HBM or to a peer XCD holding a dirty copy.
+The specific behavior on CDNA3/CDNA4 is governed by two scope bits (
+SC1
+,
+SC0
+) and a non-temporal bit (
+NT
+) on each memory instruction
+(
+2
+)
+.
+
+SC1
+and
+SC0
+encode the coherence scope:
+0_0
+=wave,
+0_1
+=group,
+1_0
+=device,
+1_1
+=system.
+Default loads and stores use
+SC1=0, SC0=0, NT=0
+(wave scope), which caches data in both L1 (TCP, read-only) and L2 with an LRU policy.
+With wave scope, the L2 treats data as local to the XCD: no cross-XCD coherence probes are issued, and stale copies on peer XCDs are not invalidated.
+Making data produced by XCD
+i
+visible to XCD
+j
+requires explicit software action: the producer must issue
+buffer_wbl2
+to write back dirty L2 lines, and the consumer must invalidate stale L2 entries.
+Operations at device or system scope (
+SC0=1
+or
+SC1=1
+) engage the coherence infrastructure: L2 uses a
+Coherent_Cache_Bypass
+policy that writes back modified lines before reissuing reads, ensuring cross-XCD visibility at the cost of higher latency.
+
+Implication for LLM Decode
+
+The practical consequence for LLM decode is that weight data, loaded via default instructions, is cached independently in each XCD’s L2 with no sharing. If two CUs on different XCDs read the same weight row, the data is fetched from HBM (or LLC) twice and cached in two separate L2 partitions. This leads to redundant memory traffic and reduced effective bandwidth utilization.
+
+Table 2
+.
+Characterization of chiplet-unaware LLM decode on MI350. Linear operations dominate compute time and have poor L2 utilization.
+
+Metric
+
+Linear
+
+Attention
+
+% of decode time
+
+95%
+
+5%
+
+Weight working set / layer
+
+368 MB
+
+—
+
+Weight per XCD (uniform)
+
+46 MB
+
+—
+
+XCD L2 cache capacity
+
+4 MB
+
+4 MB
+
+L2 hit rate (bs=1, no coop.)
+
+16.4%
+
+—
+
+Cycles per task
+
+\sim
+104K
+
+\sim
+3.8K
+
+2.2.
+LLM Decode is Memory and Kernel Launch Latency Bound
+
+LLM inference consists of two phases:
+prefill
+(processing the input prompt, compute-bound) and
+decode
+(generating tokens autoregressively, memory-bound)
+(
+4
+;
+17
+)
+.
+Decode dominates serving latency
+(
+16
+;
+8
+)
+and is the focus of this work.
+
+Each decode step for a transformer layer performs:
+
+(1)
+
+RMSNorm
+(
+23
+)
+(element-wise, negligible cost)
+
+(2)
+
+QKV projection:
+\mathbf{x}\cdot\mathbf{W}_{qkv}
+, where
+\mathbf{W}_{qkv}\in\mathbb{R}^{d\times 3d^{\prime}}
+
+(3)
+
+Multi-head attention with KV cache
+
+(4)
+
+Output projection:
+\mathbf{x}\cdot\mathbf{W}_{o}
+
+(5)
+
+RMSNorm + gate-up projection:
+\mathbf{x}\cdot\mathbf{W}_{gu}
+, where
+\mathbf{W}_{gu}\in\mathbb{R}^{d\times 2d_{ff}}
+
+(6)
+
+SiLU activation
+\times
+element-wise multiply
+
+(7)
+
+Down projection:
+\mathbf{x}\cdot\mathbf{W}_{down}
++ residual add
+
+For Qwen3-8B
+(
+18
+)
+(
+d{=}4096
+,
+d_{ff}{=}12288
+), the weight matrices total 368 MB per layer in bf16.
+At a batch size of 128, the activation matrices are
+128\times 4096\times 2=1
+MB, which is three orders of magnitude smaller than the weights.
+Hence, we focus on optimizations that reduce the external memory bandwidth used to load weights.
+The L2 cache could serve weight data at a much higher bandwidth than HBM (
+{\sim}
+100  TB/s aggregate across 8 XCDs vs. 5.3  TB/s for HBM). Still, a standard serving system executes each operation as a separate GPU kernel, resulting in almost 250 launches per decode token across 36 layers.
+Between launches, the L2 cache contents from one operator are not preserved for the next to maintain coherence at device synchronization barriers, forcing each kernel to reload its weights and activations from HBM independently.
+This motivates fusing all operators into a single persistent kernel that retains L2 state across operators.
+
+2.3.
+Limitations of CUDA/HIP Graph Capture
+
+CUDA and HIP graph capture
+(
+12
+)
+reduces kernel launch overhead by recording and replaying kernel sequences. In practice, serving frameworks such as vLLM and SGLang capture a separate graph for each batch size, because a captured graph bakes in kernel arguments, grid dimensions, and memory pointers; mismatched requests fall back to eager execution, causing multi-
+\times
+latency spikes.
+
+Beyond batch-size specialization, graphs inherit structural limitations that persistent megakernels do not
+(
+20
+;
+3
+;
+11
+)
+: dependent nodes still execute sequentially at kernel-scope with inter-kernel gaps, residual launch overhead (reduced but not eliminated), and no cross-kernel data reuse (kernel boundaries flush L2, forcing intermediates through HBM).
+
+Fleet
+avoids these trade-offs: as a persistent kernel, it pays the launch cost exactly once and delivers deterministic latency across all batch sizes.
+
+(a) Standard Scheduling
+XCD 0
+XCD 1
+XCD 2
+Weight
+matrix
+(b)
+Fleet
+XCD 0
+XCD 1
+XCD 2
+
+Figure 2
+.
+Standard block scheduling (a) assigns workers on the same XCD to different GEMMs, thrashing L2.
+Fleet
+’s scheduling (b) partitions weight columns across XCDs and coordinates all workers on each XCD to read the same partition, converting L2 misses into hits.
+
+3.
+The
+Fleet
+Task Model
+
+This section presents the
+Fleet
+task model from abstractions to mechanisms.
+We first define the four-level task hierarchy that maps operators to chiplet resource boundaries (§
+3.1
+).
+With the hierarchy defined, we describe cooperative tiling, the traversal order that converts L2 misses into hits (§
+4.1
+).
+Finally, we present the hierarchical synchronization protocol, which makes cross-task dependencies efficient on partitioned L2 caches (§
+5.2
+).
+
+3.1.
+Multi-Level Task Hierarchy
+
+The fundamental design principle of
+Fleet
+is that tasks should be written at the
+hardware granularity which matches the operator’s resource needs
+.
+Modern chiplet GPUs have a deep resource hierarchy (registers, shared memory, L2 cache, HBM), and each level has different capacity, bandwidth, and sharing characteristics.
+
+Fleet
+exposes this hierarchy through four task levels (Table
+3
+):
+
+Table 3
+.
+Multi-level task hierarchy in
+Fleet
+. Each level maps to a hardware resource boundary with specific memory scope and typical operators.
+
+Level
+
+HW Scope
+
+Memory
+
+Typical Op
+
+Workers
+
+Wavefront-task
+
+1 wavefront
+
+Regs, LDS
+
+SiLU, res. add
+
+1
+
+CU-task
+
+1 block
+
+LDS, L2
+
+Attn, RMSNorm
+
+1
+
+Chiplet-task
+
+1 XCD
+
+L2, HBM
+
+GEMM partition
+
+31
+
+Device-task
+
+8 XCDs
+
+Global HBM
+
+Full GEMM/attn
+
+248
+
+wavefront-tasks
+
+are the lightest units of work, executing within a single wavefront (64 threads on AMD).
+Element-wise operators naturally map to wavefront-tasks: SiLU activation, element-wise multiply, residual addition, and RoPE.
+
+CU-tasks
+
+occupy a single compute unit (workgroup), using LDS for intra-block communication and L2 for data access.
+Operators with moderate data requirements map to CU-tasks: individual attention heads, RMSNorm, and argmax/sampling.
+
+Chiplet-tasks
+
+span all workers on a single XCD (31 CUs out of 32 on MI350), with an explicit
+L2 cache budget
+.
+This is the key new abstraction: the programmer specifies the data partition, tiling, and L2 working set for each chiplet.
+GEMM operations typically map to Chiplet-tasks, with weight matrices partitioned so that each XCD processes a cache-friendly slice.
+
+Device-tasks
+
+coordinate 8 Chiplet-tasks (one per chiplet) to collectively execute one operator.
+Device-tasks have barrier semantics: a device-task completes only when all 8 Chiplet-tasks finish.
+Each XCD writes its columns at a strided offset within a shared output buffer, assembling the result in place without reduction. For operators that partition along the reduction dimension (e.g., split-K GEMM), the device-task can include a reduction phase after the chiplet-tasks complete.
+
+Task Dependence
+
+Inter-task dependencies are expressed as
+events
+: each task declares which event it signals on completion and which events it waits for.
+Because Chiplet-tasks group all workers on a chiplet into a single unit, only one event is needed per chiplet per dependency edge, rather than one per worker. This hierarchical representation reduces the number of cross-chiplet synchronization events by
+W\times
+(where
+W
+is workers per chiplet), a benefit we quantify in §
+5.2
+.
+
+4.
+Chiplet-aware GPU Optimization
+
+Chiplet-tasks give control over what data each chiplet accesses.
+This section demonstrates how to exploit that control to increase L2 cache utilization.
+We focus on a scenario central to LLM inference: linear layer GEMMs in dense models (§
+4.1
+).
+
+4.1.
+Optimizing Batched GEMV
+
+Batched matrix operations can provide copious amounts of data reuse since each weight is reused among multiple elements of the batch.
+Using
+Fleet
+, we can express this locality by partitioning the execution of a single linear layer into multiple Chiplet-tasks.
+For an [M,K] * [K,N] GEMM, we partition the output matrix column-wise so that each Chiplet-task computes an independent [M,K] * [K,N/8] = [M,N/8] sub-matrix.
+
+For typical operation sizes (such as the gate-up projection in the Qwen3-8B FFN, where each XCD’s partition is
+[4096,3072]
+= 24 MB in bf16), the weight matrices don’t completely fit in the 4 MB L2 cache.
+In order to ensure effective temporal reuse, we apply
+windowed M-major traversal
+(inspired by HipKittens Algorithm 1
+(
+6
+)
+) as shown in Figure
+3
+. This approach attempts to ensure that different CUs accessing the same weights do so in the same order, helping the L2 cache effectively reduce load bandwidth to external memory.
+
+In this scheme, within each Chiplet-task, each worker will compute a tile [m,n] of the output completely using [m, 0:K] tiles of activations and [0:K, n] tiles of weights before moving on to the next tile.
+Conceptually, we attempt to use all of the [0:K, 0] weights first, then process all for the [0:K, 1] weights, etc.
+
+We evaluate two strategies for distributing M-tiles (batch partitions) across XCDs:
+
+M-tile traversal.
+
+All 8 XCDs receive the same set of
+m\_tiles=\lceil B/T_{M}\rceil
+M-tiles, where
+B
+is the batch size and
+T_{M}
+is the GEMM tile height along the batch dimension.
+Within each XCD, workers iterate over M-tiles before advancing to the next weight column (N-tile).
+This means multiple workers on the same XCD process the same weight column at roughly the same time: the first worker loads the weight tile from HBM into L2, and subsequent workers hit L2.
+With
+R=\min(W,m\_tiles)
+workers sharing each weight tile, where
+W
+is the number of workers per XCD, the expected L2 hit rate for weights is
+(R-1)/R
+.
+If N-major ordering were used instead, consecutive workers would each read a different weight tile, preventing L2 reuse.
+
+M-split traversal.
+
+Each XCD is assigned a disjoint M-tile: XCD
+k
+processes M-tile
+k\bmod m\_tiles
+.
+When
+m\_tiles<8
+, multiple XCDs share the same M-tile, but each XCD’s workers process disjoint weight columns with no cooperative weight sharing.
+This isolates the benefit of Chiplet-task scheduling from L2 cooperative tiling.
+
+Note that if N-major ordering were used instead, consecutive workers would each read a
+different
+tile of weights. The resulting weights would take longer to load from external memory, and then would likely be evicted from the L2 cache as other rows of weights were required.
+
+Cache modifier policy.
+
+On CDNA3/CDNA4 AMD GPUs, each memory instruction carries scope and non-temporal (NT) bits that control L2 allocation policy.
+Specifically, the streaming behavior (using cache modifier bits
+sc1=1, nt=1
+) instructs the L2 to temporarily allocate data, enabling short-lived reuse, but to mark the line for immediate eviction when the cache needs space.
+This contrasts with the default cache all behavior, which uses standard LRU eviction and allows transient data to displace more valuable resident data. We exploit these modifiers with a three-tier cache policy:
+
+(1)
+
+Weight loads
+: cache-streaming (
+sc1=1, nt=1
+).
+Weight tiles are read once per GEMM and do not need to persist across layers, making them a natural fit for the streaming cache policy.
+Cooperative M-tile sharing still generates L2 hits because consecutive workers access the same weight column within a short temporal window, before the streaming policy evicts the line.
+
+(2)
+
+Activation stores
+: non-temporal (
+NT=1
+), bypassing L2 so that transient GEMM outputs, RMSNorm results, and SiLU activations do not evict weight tiles during cooperative execution.
+
+(3)
+
+Scheduler communication
+: non-temporal loads for cross-XCD event polling, bypassing stale L2 copies to read fresh values from HBM; intra-XCD communication uses volatile loads through the shared L2.
+
+(a) N-major traversal
+Weight columns
+[\text{K},\text{N}/8]
+n0
+n1
+n2
+n3
+n4
+n5
+Activations
+m0
+m1
+m2
+m3
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+(b) M-major traversal
+Weight columns
+[\text{K},\text{N}/8]
+n0
+n1
+n2
+n3
+n4
+n5
+0
+4
+8
+12
+16
+20
+1
+5
+9
+13
+17
+21
+2
+6
+10
+14
+18
+22
+3
+7
+11
+15
+19
+23
+
+Figure 3
+.
+Tile traversal order within one Chiplet-task (4
+\times
+6 output tile grid, 4 workers illustrated).
+Cell hue indicates which weight column is accessed; darker shading indicates later timesteps.
+(a) N-major: consecutive tiles advance along weight columns, so concurrent workers load distinct weight data, increasing L2 cache pressure.
+(b) M-major: consecutive tiles advance down activation rows and share the same weight column, increasing temporal L2 cache locality.
+
+Operator fusion and L2 residency.
+
+Fusing operators within a single Chiplet-task eliminates intermediate buffer writes that would otherwise flush the dirty writes from the L2 cache. We evaluated fusing the SiLU activation into the gate+up GEMM Chiplet-task, eliminating the separate SiLU task and its output buffer. This improves L2 hit rate from 9.4% to 17.4% at bs=1 for
+Fleet
+. Notably, fusing SiLU into a CU-task yields a comparable improvement (8.1% to 16.5%), indicating that the L2 benefit comes from eliminating intermediate buffer traffic rather than from XCD-scoped coordination. The fusion reduces one buffer write and one buffer read per layer, keeping activation data in registers/LDS rather than cycling through L2.
+
+N-split vs. K-split across XCDs.
+
+Fleet
+partitions GEMM output columns across XCDs (
+N-split
+), where each XCD computes an independent
+[M,N/8]
+slice with full K reduction and no cross-XCD synchronization.
+An alternative strategy partitions the reduction dimension (
+K-split
+)
+(
+15
+)
+: within a single XCD, multiple waves in a workgroup each handle
+K/k
+of the reduction, then merge partial results via intra-wave register shuffles and cross-wave LDS reduction, entirely on-chip with no atomics or global memory traffic.
+The two strategies are complementary: N-split with cooperative L2 management dominates at small batch sizes (bs=1–16) where persistent kernel scheduling overhead is the bottleneck, while K-split with wave-level reduction excels at bs
+\geq
+32 where full CU utilization and auto-tuned GEMM tiles are critical.
+
+5.
+System Design
+
+The previous section defined the task model, what tasks are, how they are dispatched, and how they synchronize.
+This section describes the system that executes this model: the compiler that generates task descriptors, the persistent kernel runtime, and the code generation pipeline.
+
+(a) Task Graph: 1 Transformer Layer (bs=1)
+Standard (1,407 tasks)
+RMSNorm
+1 task
+QKV Linear
+96 tasks
+Attention
+8+8 tasks
+O-Proj+Res
+256 tasks
+RMSNorm
+1 task
+Gate+Up
+192 tasks
+SiLU
+\times
+mul
+96 tasks
+Down+Res
+256 tasks
+Fleet
+(543 tasks)
+RMSNorm
+1 CU-task
+QKV Proj
+8 Chiplet-tasks
+Attention
+8+8 CU-tasks
+O-Proj+Res
+8 Chiplet-tasks
+RMSNorm
+1 CU-task
+Gate+Up+SiLU
+8 Chiplet-tasks
+Down+Res
+8 Chiplet-tasks
+No XCD awareness
+96–256 tasks per GEMM
+8 Chiplet-tasks per GEMM
+SiLU fused into Gate+Up
+(b) Runtime Dispatch on 2 XCDs
+XCD 0
+CU-task (round-robin)
+Sched
+W
+0
+W
+1
+W
+2
+…
+W
+30
+1 task
+per-worker task queues (global memory)
+4 MB L2 (shared by all workers on XCD 0)
+XCD 1
+Chiplet-task (broadcast)
+Sched
+W
+31
+W
+32
+W
+33
+…
+W
+61
+per-worker task queues (global memory)
+4 MB L2 (shared by all workers on XCD 1)
+
+Global
+
+events
+
+(HBM)
+
+buffer_wbl2
+sched polls
+
+Figure 4
+.
+Fleet
+system overview. (a) Task graph for one transformer layer at bs=1: standard dispatch decomposes each GEMM into 96–256 independent CU-tasks (1,407 total);
+Fleet
+uses eight Chiplet-tasks per GEMM (543 total, 2.6
+\times
+fewer), with SiLU fused into the gate+up Chiplet-task. (b) Runtime dispatch: each XCD has a scheduler that assigns CU-tasks round-robin to individual workers, or broadcasts Chiplet-tasks to all workers for cooperative execution with strided tiles. Task queues and event counters reside in global memory (HBM) but are naturally cached in the XCD-local L2; intra-XCD communication is implicitly coherent through the shared L2 without global acquire/release semantics. Cross-XCD signaling requires an explicit
+buffer_wbl2
+fence; schedulers poll the global event counter to detect upstream completion.
+
+5.1.
+Persistent Kernel Runtime
+
+Fleet
+extends the Mirage Persistent Kernel system
+(
+3
+)
+with chiplet-aware concepts and hierarchical synchronization. To implement this, our runtime launches a single CUDA/HIP kernel that occupies every CU on the GPU: one workgroup per XCD serves as a scheduler that dispatches work with L2-local affinity, while the rest serve as workers executing tasks. Each scheduler discovers its XCD identity by reading the hardware
+HW_ID
+register and maintains per-worker task queues in global memory.
+As a result, CUs occupied by scheduler blocks (8 of 256 CUs (3.1%) in MI350) are unavailable for computation. However, this allows schedulers to resolve event dependencies and to enqueue the next task concurrently with worker execution.
+Because schedulers perform only lightweight control operations (counter reads, queue writes, pointer arithmetic), we observe that workers rarely stall waiting for task assignment in our designs. However, in designs with very short executing tasks, scheduling overhead might become more significant.
+
+5.2.
+Hierarchical Synchronization
+
+Since
+Fleet
+replaces hardware-based work-dispatch mechanisms with scheduler threads running on CUs, synchronization costs directly impact dispatch throughput. On monolithic GPUs, device-scope atomics and fences are relatively cheap, all CUs share a single L2 cache, so coherence traffic stays on-chip. However, on chiplet architectures like MI350X, a device-scope atomic must be visible across all eight XCDs, each with its own 4 MB L2 partition. This requires coherence traffic over the inter-chiplet fabric, inflating atomic latency compared to an L2-local operation. Similarly, a device-scope fence (buffer_wbl2) flushes dirty cachelines from the local L2 to ensure cross-XCD visibility. This operation scales with the number of dirty lines and penalizes all subsequent memory accesses until the flush completes. To avoid these costs,
+Fleet
+uses a hierarchical synchronization scheme which matches each communication pattern to the narrowest memory scope sufficient for correctness:
+
+(1)
+
+Task queue (read-only).
+The global queue of task descriptors is populated before the megakernel launches and remains immutable during execution. Because no writer contention exists, workers and schedulers read task metadata without any synchronization.
+
+(2)
+
+Scheduler
+\to
+worker dispatch (L2-local).
+Each scheduler assigns tasks to workers on its own XCD by writing to per-worker queues using device-scope stores and atomics. Since both the scheduler and its workers reside on the same XCD, these accesses resolve in the local L2 cache without cross-XCD coherence traffic.
+
+(3)
+
+Worker
+\to
+worker coordination (L2-local).
+Workers within a Chiplet-task accumulate sub-task completion counts in per-XCD counters using device-scope atomics, which also resolve in the local L2. No fence is required because all participating workers share the same L2 partition.
+
+(4)
+
+XCD
+\to
+global signaling (GPU-scope).
+Only the last worker to complete on each XCD issues a single
+threadfence
+and updates the global event counter using a GPU-scope atomic (
+flat_atomic_add
+with
+sc0 sc1
+). This amortizes the expensive cross-XCD coherence cost across all workers in the XCD. Once the global counter reaches its threshold, the completing worker enqueues the event to the responsible scheduler’s queue to trigger downstream tasks.
+
+XCD 0 (L2 coherent)
+W
+0
+W
+1
+…
+W
+30
+L[0][e]
+no fence
+last?
+XCD 1 (L2 coherent)
+W
+31
+W
+32
+…
+W
+61
+L[1][e]
+no fence
+last?
+XCD boundary
+buffer_wbl2
+fence (L2
+\rightarrow
+HBM writeback)
+L{=}T
+?
+L{=}T
+?
+Global
+G[e]
+flat_atomic_add sc0 sc1
+Schedulers poll
+G[e]
+G\geq
+needed?
+dispatch downstream tasks
+
+Figure 5
+.
+Hierarchical synchronization protocol. Workers increment XCD-local L2 counters without fences (green). Only the last worker on each XCD issues a single
+buffer_wbl2
+fence and updates the global HBM counter (red). Schedulers poll the global counter to dispatch downstream tasks. This reduces cross-XCD fences compared to per-worker global signaling.
+
+Using these fine-grained scopes is more complicated, but generally more efficient, than generic fence operations. Device-scope fences such as CUDA/HIP’s
+__threadfence
+or
+__builtin_amdgcn_fence
+with
+__ATOMIC_RELEASE
+and “agent” scope generally lower to
+buffer_wbl2
+, which flushes dirty cachelines from the L2 cache. For wavefront-tasks and CU-tasks that execute on a single CU, workers signal completion directly via a GPU-scope atomic operation on the global event counter; no two-level counting is needed, since there is only one worker per task.
+
+For Chiplet-tasks, two-level counting issues at most one fence per XCD per event, and zero fences on XCDs with no tasks for that event.
+Fleet
+linear events have exactly eight tasks (one per XCD), so each triggers exactly eight fences total. By using L2-local counters for intra-chiplet coordination, two-level counting avoids per-worker global fences entirely, as shown in Figure
+5
+.
+
+5.3.
+Task Registration and Code Generation
+
+Fleet
+extends the Mirage
+(
+3
+)
+pipeline with
+Fleet
+-specific library code and new node descriptors for each Chiplet-task. The Mirage compiler generates GPU kernel code at model load time by compiling an abstract task graph into a runtime description that includes library code for each node. To generate a task graph based on Chiplet-tasks, we currently provide different input code to the Mirage compiler and do not rely on compiler-driven super-optimization. We leave compiler-driven super-optimization as future work, noting that it requires only an appropriate cost model for Chiplet-tasks.
+
+When operations are decomposed into Chiplet-tasks, the resulting task graph typically contains eight Chiplet-tasks for the operation, one for each physical XCD. We rely on the Mirage compiler to generate pointers for each tile at code generation time. (i.e., for a weight partition across eight XCDs, task
+k
+receives a pointer which is
+\text{base\_ptr}+k\times(N/8)\times K\times\text{sizeof(bf16)}
+). As a result, GPU kernel code does not typically need to consider which Chiplet-task it is executing; it simply reads a pointer to the current tile of data. However, within each Chiplet-task, each CU receives the same pointer, which avoids the scheduler needing to perform pointer arithmetic at task dispatch time. Instead, we modify the call emitted from the Mirage compiler to include the tile index within the XCD, generating a call to
+_execute_xcd_task(tile_idx)
+instead of
+_execute_task()
+. The implementation of the library is responsible for implementing different behaviors for each CU based on the tile index.
+
+6.
+End-to-end Evaluation
+
+6.1.
+Experimental Setup
+
+We perform evaluations on a single GPU AMD Instinct MI350X system. This device has 256 CUs across eight XCDs (32 CUs/XCD), 4 MB L2 per XCD, 256 MB shared LLC, and 288 GB HBM3.
+We compare against 2 baseline implementations:
+
+(1) Mirage MPK
+(
+3
+)
+ported to AMD MI350X: a chiplet-unaware persistent kernel using standard 2D GEMM tiling with no cooperative scheduling, serving as the
+internal baseline
+which isolates the effect of
+Fleet
+’s chiplet-aware optimizations;
+(2) vLLM
+(
+10
+)
+v0.17.2 on ROCm (
+--enforce-eager
+): standard per-operator kernel launches without persistent kernel, serving as the
+external baseline
+representing the state-of-the-art serving framework.
+
+Performance metrics were collected using a combination of HIP-level timing APIs, on-GPU cycle counters, performance counters and low-level tracing.
+All end-to-end latency results use 64 input tokens and 1024 output tokens, with decode-only TPOT (Time Per Output Token) reported.
+Decode latency is measured via GPU-side per-iteration timestamps (
+s_memrealtime
+
+(
+2
+)
+2
+2
+
+2
+
+A timer inside the kernel that gives more accurate measurements.
+), excluding prefill.
+
+6.2.
+End-to-End Decode Latency
+
+2^{0}
+2^{1}
+2^{2}
+2^{3}
+2^{4}
+2^{5}
+2^{6}
+0
+10
+20
+30
+Batch Size
+Decode Latency (ms/token)
+vLLM
+Mirage
+Fleet
+(M-tile)
+Fleet
+(M-split)
+
+Figure 6
+.
+Decode-only TPOT (ms/token) for Qwen3-8B (dense, bf16) on MI350.
+
+Fleet
+(M-tile) uses an M-major windowed traversal, in which consecutive workers share weight tiles in L2.
+
+Fleet
+(M-split) assigns each XCD a disjoint M-tile with no cross-worker weight sharing. Both use 16x64x256 CK GEMM tiles and cache-streaming weight loads.
+
+We evaluate
+Fleet
+on a dense Qwen3-8B
+(
+18
+)
+model (4096 hidden dim, 36 layers, 12288 FFN dim, GQA with 32 query / 8 KV heads) with bf16.
+
+Figure
+6
+compares four configurations:
+(1) vLLM
+(
+10
+)
+using hipblaslt/Tensile GEMMs with kernel-per-operator dispatch;
+(2) Mirage MPK
+(
+3
+)
+ported to MI350 with hierarchical scheduling but no chiplet awareness, using individual CU-tasks with no cooperative weight sharing;
+(3)
+Fleet
+(M-tile), which uses M-major windowed traversal so that consecutive workers within each XCD share weight tiles in L2; and
+(4)
+Fleet
+(M-split), which assigns each XCD a disjoint slice of the M (batch) dimension so that no two XCDs share weight tiles, isolating the scheduling benefit from the L2 reuse benefit.
+
+The chiplet-unaware Mirage baseline is already 1.34
+\times
+faster than vLLM at bs=1 (7.83 vs. 10.51 ms) due to persistent kernel launch overhead elimination.
+
+Fleet
+’s hierarchical Chiplet-task scheduling reduces this further to 6.82 ms (M-tile) and 6.73 ms (M-split), which is 1.54
+\times
+and 1.56
+\times
+faster than vLLM, respectively.
+At small batch sizes (bs=1–16), where
+m\_tiles=1
+and no cooperative weight reuse occurs, both
+Fleet
+variants perform similarly because the improvement comes entirely from reduced scheduling overhead: eight Chiplet-tasks per GEMM versus 96–256 CU-tasks in the Mirage baseline.
+
+The two
+Fleet
+variants diverge at bs
+\geq
+32, where
+m\_tiles\geq 2
+and cooperative weight sharing activates in M-tile mode.
+At bs=32, M-tile achieves 51.0% L2 hit rate versus 39.5% for M-split and 38.9% for Mirage (Table
+4
+), translating to 12.35 ms versus 13.37 ms and 15.62 ms, respectively.
+At bs=64, the gap widens further: M-tile reaches 61.4% L2 hit rate and 18.61 ms, while M-split falls to 47.4% and 23.40 ms, close to Mirage’s 24.10 ms, demonstrating that L2 cooperative tiling is the dominant factor at large batch sizes.
+
+At bs
+\geq
+32, vLLM’s latency flattens at
+{\sim}
+11–12 ms as hipBLASLt’s GEMM kernels (with wave-level K-splitting, §
+4.1
+) efficiently exploit the compute-bound regime.
+
+Fleet
+(M-tile) remains 1.06
+\times
+faster at bs=32 but is slower at bs=64, as the persistent kernel’s GEMM implementation does not yet include K-splitting optimizations for the compute-bound regime and attention optimizations.
+
+Decomposing the speedup: scheduling vs. L2 locality.
+
+The M-split variant provides a clean ablation: it uses Chiplet-task scheduling
+(eight tasks per GEMM) but assigns each XCD a disjoint M-tile, isolating the
+scheduling benefit from L2 cooperative weight reuse.
+
+At batch sizes 1–16,
+m\_tiles=1
+and no cooperative weight reuse occurs.
+Both M-tile and M-split perform similarly (1.13–1.16
+\times
+faster than Mirage),
+and Table
+4
+confirms that L2 hit rates and HBM traffic are nearly
+identical across all three configurations (
+{\sim}
+16–24% L2 hit rate,
+
+{\sim}
+2400–2800 GB HBM reads). The speedup at these batch sizes comes from reduced scheduler-to-worker communication overhead: each Chiplet-task requires a single dispatch from the scheduler to the workers on that XCD, whereas the standard decomposition issues many CU-level dispatches per GEMM.
+
+At bs=32,
+m\_tiles=2
+and the two variants diverge. M-tile, where consecutive
+workers share weight columns in L2, reaches 51.0% L2 hit rate and 1.27
+\times
+
+speedup over Mirage (12.35 vs. 15.62 ms). M-split, without weight sharing,
+achieves only 39.5% L2 hit rate and 1.17
+\times
+speedup (13.37 ms), consistent
+with the scheduling-only improvement at smaller batch sizes. The gap between
+them is directly attributable to L2 weight reuse, confirmed by HBM traffic:
+M-tile reads 3,190 GB versus Mirage’s 3,906 GB (18% reduction), while
+M-split shows no reduction (4,295 GB, Table
+4
+).
+
+At bs=64 (
+m\_tiles=4
+), four workers share each weight column and the L2
+benefit dominates. M-tile reaches 61.4% L2 hit rate and 1.30
+\times
+speedup
+(18.61 vs. 24.10 ms), reducing HBM reads from 6,203 GB to 3,925 GB (37%).
+M-split falls to 1.03
+\times
+(23.40 ms), nearly identical to Mirage, with no HBM
+reduction (7,426 GB).
+
+6.3.
+Roofline Analysis
+
+10^{0}
+10^{1}
+10^{2}
+10^{0}
+10^{1}
+10^{2}
+10^{3}
+ridge (245)
+bs=1
+bs=8
+bs=16
+bs=32
+1
+2
+4
+8
+16
+32
+HBM: 5.3 TB/s
+Operational Intensity (FLOP/byte)
+Attainable Performance (TFLOPS)
+Standard (theoretical)
+Fleet
+(theoretical)
+Mirage (measured)
+Fleet
+(measured)
+
+Figure 7
+.
+Roofline analysis of GEMM operations on MI350 (bf16 MFMA). Standard scheduling operates at nominal arithmetic intensity
+\text{AI}=B
+(batch size in FLOP/byte).
+Fleet
+’s L2 reuse increases effective AI by reducing HBM traffic:
+\text{AI}_{\text{eff}}=B/(1-\text{L2\ hit\ rate})
+. At bs=32 with 51% L2 hit rate,
+Fleet
+shifts the effective AI from 32 to 65, a 2.0
+\times
+rightward shift toward the ridge point (245).
+
+Figure
+7
+presents a roofline analysis of GEMM operations on MI350. Theoretical points (filled markers) plot each batch size at its nominal arithmetic intensity
+\text{AI}=B
+;
+Fleet
+’s L2 reuse increases the effective intensity to
+\text{AI}_{\text{eff}}=B/(1-\text{L2 hit rate})
+, shifting operations rightward toward the compute-bound regime. At bs=32, cooperative tiling increases effective intensity from 32 to 65 FLOP/byte. Measured points (open markers), obtained from hardware performance counters, corroborate this:
+Fleet
+achieves higher effective intensity than Mirage at each batch size, with the difference growing as L2 reuse increases. Table
+4
+reports the corresponding L2 hit rates and HBM traffic.
+
+6.4.
+L2 Hit Rate Model
+
+Table 4
+.
+L2 cache and HBM traffic for Qwen3-8B on MI350 (1024 decode tokens). HBM Rd/Wr are normalized to Mirage at each batch size (1.00
+\times
+). Measured via
+rocprofiler-sdk
+device counting mode.
+
+L2 Hit%
+
+HBM Rd (
+\times
+Mirage)
+
+HBM Wr (
+\times
+Mirage)
+
+BS
+
+Mirage
+
+NoSplitK
+
+Fleet
+
+(M-tile)
+
+Fleet
+
+(M-split)
+
+NoSplitK
+
+Fleet
+
+(M-tile)
+
+Fleet
+
+(M-split)
+
+NoSplitK
+
+Fleet
+
+(M-tile)
+
+Fleet
+
+(M-split)
+
+1
+
+16.4%
+
+23.4%
+
+16.9%
+
+17.0%
+
+0.98
+
+0.98
+
+0.99
+
+0.29
+
+0.32
+
+0.87
+
+2
+
+17.3%
+
+24.2%
+
+17.5%
+
+17.9%
+
+1.01
+
+1.01
+
+1.02
+
+0.71
+
+0.40
+
+0.76
+
+4
+
+18.2%
+
+25.1%
+
+18.9%
+
+19.2%
+
+0.98
+
+0.97
+
+0.98
+
+0.37
+
+0.29
+
+0.76
+
+8
+
+20.0%
+
+26.3%
+
+20.8%
+
+20.8%
+
+1.01
+
+1.00
+
+1.01
+
+0.60
+
+0.33
+
+0.38
+
+16
+
+22.2%
+
+28.7%
+
+23.7%
+
+23.5%
+
+0.99
+
+0.97
+
+0.98
+
+0.47
+
+0.45
+
+0.41
+
+32
+
+38.9%
+
+42.6%
+
+51.0%
+
+39.5%
+
+1.04
+
+0.82
+
+1.10
+
+0.45
+
+0.38
+
+0.40
+
+64
+
+39.0%
+
+41.9%
+
+61.4%
+
+47.4%
+
+1.08
+
+0.63
+
+1.20
+
+0.48
+
+0.44
+
+0.44
+
+The L2 hit rate from cooperative tiling can be modeled analytically. Under M-major traversal,
+R=\min(W,m\_tiles)
+workers process the same weight tile before advancing to the next column, yielding:
+
+(1)
+
+\text{L2 Hit}_{\text{weight}}=(R-1)/R=1-1/\min(W,m\_tiles)
+
+At bs=1 (
+R{=}1
+), the model predicts zero weight reuse, yet we measure 16.9%.
+This baseline L2 hit rate comes from
+fused SiLU
+: the gate and up projections are fused into a single GEMM over a concatenated
+[W_{\text{gate}};W_{\text{up}}]
+weight matrix, so the two halves share activation reads and generate L2 hits during the fused operation.
+Without fused SiLU, the measured L2 hit rate at bs=1 drops to
+{\sim}
+9%.
+At larger batch sizes, L2 hits serve data at aggregate L2 bandwidth (
+\sim
+100 TB/s across eight XCDs) rather than HBM (5.3 TB/s), amplifying effective memory bandwidth.
+
+Per-GEMM weight analysis.
+
+Table 5
+.
+Per-GEMM weight sizes for Qwen3-8B (bf16). L2 window = active working set per worker (one K-chunk tile).
+
+GEMM
+
+Weight
+
+Per-XCD
+
+L2 window
+
+Fits MALL?
+
+qkv_proj (
+4096{\times}6144
+)
+
+48 MB
+
+6 MB
+
+384 KB
+
+Yes
+
+o_proj (
+4096{\times}4096
+)
+
+32 MB
+
+4 MB
+
+256 KB
+
+Yes
+
+gate_up (
+4096{\times}24576
+)
+
+192 MB
+
+24 MB
+
+1.5 MB
+
+Yes
+
+down_proj (
+12288{\times}4096
+)
+
+96 MB
+
+12 MB
+
+256 KB
+
+Yes
+
+All 4 / layer
+
+368 MB
+
+46 MB
+
+—
+
+No
+(1.4
+\times
+)
+
+Table
+5
+shows per-GEMM weight sizes. While no GEMM’s per-XCD partition fits in the 4 MB L2, cooperative tiling ensures that the
+active
+working set, one K-chunk tile per worker,
+31\times 32\text{\,KB}\approx 1
+MB remains resident. This is why M-major traversal achieves high hit rates despite per-XCD partitions exceeding L2 capacity by up to 6
+\times
+.
+
+7.
+Related Work
+
+Mega-kernels for LLM inference.
+
+The HazyResearch mega-kernel
+(
+20
+)
+fuses an entire Llama decoder into one persistent kernel with an on-GPU interpreter, achieving 78% of H100 memory bandwidth at bs=1. FlashFormer
+(
+11
+)
+takes a similar whole-model fusion approach with pipelined shared buffers. Mirage MPK
+(
+3
+)
+introduces compiler-generated task graphs with event-driven synchronization, achieving 1.0–1.7
+\times
+speedup over SGLang/vLLM on A100/H100. All target monolithic NVIDIA GPUs with a unified L2;
+Fleet
+addresses the orthogonal challenge of chiplet architectures with partitioned L2.
+
+Cache-aware and chiplet-aware scheduling.
+
+Thread-block swizzling
+(
+21
+;
+9
+)
+and CUTLASS persistent GEMMs
+(
+12
+)
+improve L2 reuse but assume a unified cache. HipKittens
+(
+6
+)
+ports ThunderKittens
+(
+19
+)
+to AMD CDNA3/CDNA4 with XCD grouping, improving standalone GEMMs by up to 19%. Both optimize individual kernel launches;
+Fleet
+extends chiplet awareness to a persistent mega-kernel that coordinates GEMM, attention, normalization, and activation tasks using two-level event synchronization.
+
+Thread block clusters and topology-aware execution.
+
+NVIDIA’s thread block clusters
+(
+14
+)
+(Hopper/Blackwell) co-schedule blocks on the same graphics processing clusters (GPC) with DSMEM sharing, cluster-scope barriers, and TMA multicast. However, GPCs are a smaller granularity than a chiplet and lack a direct correspondence with the L2 level of memory hierarchy. In contrast,
+Fleet
+’s Chiplet-task model allows threads to coordinate across the entire L2 scope and can be efficiently implemented entirely in software.
+
+Mirage superoptimizer.
+
+Mirage
+(
+22
+)
+discovers optimal operator fusions via
+muGraphs
+.
+Fleet
+builds on Mirage’s MPK runtime
+(
+3
+)
+and adds chiplet awareness: where MPK dispatches tasks without regard for XCD boundaries,
+Fleet
+partitions weights across XCDs and coordinates workers via cooperative scheduling.
+The two are complementary: Mirage decides
+what to fuse
+;
+Fleet
+decides
+where to schedule
+.
+
+LLM serving systems.
+
+vLLM
+(
+10
+)
+(PagedAttention) and SGLang
+(
+24
+)
+(RadixAttention) are the dominant open-source serving frameworks. Both rely on CUDA/HIP kernel calls to low-level libraries, such as rocBLAS/hipBLASLt, which can implement some types of L2 optimization for core GEMM functions, but can make it difficult to express application-specific locality.
+Fleet
+provides a framework for arbitrary applications to leverage L2 locality, combined with a megakernel approach that avoids the runtime overhead of separate kernel invocations.
+
+8.
+Ablation Study
+
+Generality across chiplet architectures.
+
+The Chiplet-task abstraction is parameterized by chiplet count (
+X
+), workers per chiplet (
+W
+), and L2 capacity per chiplet (
+C
+).
+Fleet
+queries these at runtime, allowing the same task graph and scheduling logic to adapt to MI300X (8 XCDs, 38 CUs, 4 MB L2) and MI350 (8 XCDs, 32 CUs, 4 MB L2) without code changes. The abstraction itself is not AMD-specific: any chiplet GPU with partitioned L2 caches, including NVIDIA Blackwell
+(
+13
+)
+, could implement Chiplet-tasks with a platform-specific runtime backend. Existing serving frameworks (vLLM
+(
+10
+)
+, SGLang
+(
+24
+)
+) could adopt the abstraction incrementally; the key requirement is a software scheduler with task-to-chiplet mapping.
+
+Interaction with tensor parallelism.
+
+In multi-GPU serving, tensor parallelism (TP) shards weight matrices across GPUs before
+Fleet
+partitions within a GPU.
+
+Fleet
+operates on the local shard: if TP=4 reduces a GEMM’s
+N
+dimension by
+4\times
+, the per-XCD partition shrinks proportionally, potentially falling below the L2 capacity threshold and making cooperative dispatch unnecessary.
+The two levels compose naturally because TP is an inter-GPU partitioning and
+Fleet
+scheduling is an intra-GPU partitioning, with no interaction in the synchronization path.
+We leave multi-GPU evaluation to future work.
+
+Register pressure and occupancy.
+
+The persistent megakernel compiles all task types into a single GPU function, and the combined register footprint limits occupancy to a single wave per SIMD, eliminating latency hiding from wave switching. Every L2 miss directly stalls the MFMA pipeline, making the L2 hit rate even more critical. A per-task compilation strategy could reduce register pressure but would sacrifice the single-launch property; we consider this an inherent tradeoff of the megakernel approach. Hardware support for dynamic register allocation, as implemented in AMD’s RDNA architecture for graphics workloads, could mitigate this tradeoff by allowing each task type to consume only the registers it needs rather than the worst-case union.
+
+Limitations and future work.
+
+Our evaluation covers one model (Qwen3-8B dense) on a single GPU architecture (MI350). We do not evaluate multi-GPU configurations, prefill performance, or models requiring tensor parallelism to fit in memory. An interesting direction is to integrate with MLIR-based kernel compilers to provide a unified Python-to-GPU stack in which chiplet-aware scheduling and tile-level codegen share a common IR.
+
+9.
+Conclusion
+
+Chiplet GPUs partition compute and caches across dies, creating a NUMA-like memory hierarchy that kernel-at-a-time execution cannot exploit.
+Fleet
+addresses this with a persistent megakernel and software scheduler that operates as a tiny OS and replaces the hardware block dispatcher, enabling two optimizations that are difficult to express in current programming models: cooperative weight tiling across workers within each XCD, and a hierarchical two-level event synchronization that confines most coherence traffic to the local L2.
+On AMD Instinct MI350X with Qwen3-8B,
+Fleet
+achieves 1.3–1.5
+\times
+lower per-token decode latency than vLLM across bs=1–16. At small batch sizes, the gain comes from reduced dispatch overhead via Chiplet-task scheduling. At bs=32, cooperative M-major weight tiling raises L2 hit rates from 38.9% to 51.0%, reducing HBM read traffic by 18%. An M-split ablation, which uses Chiplet-task scheduling but no cooperative weight sharing, confirms that L2 reuse is the dominant source of speedup at larger batch sizes, while scheduling overhead reduction dominates at small batch sizes. These results demonstrate that software-managed scheduling can recover the L2 locality that chiplet architectures fragment, without requiring hardware changes.
+
