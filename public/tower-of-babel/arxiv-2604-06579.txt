@@ -1,0 +1,2775 @@
+SonicDB S6: A Storage-Efficient Verkle Trie for High-Throughput Blockchains
+Luigi Crisci, Lorenz Schüler, Herbert Jordan, Bernhard Scholz
+
+Abstract
+The Ethereum state database uses Merkle Patricia Trie (MPT), which suffers from large witness proof sizes and high storage overhead. Verkle Tries have been proposed as a replacement, offering witness proofs below 150 bytes through vector commitments and Inner Product Argument aggregation. However, deploying a Verkle Trie in a high-throughput, short block-time blockchain such as Sonic, which produces a block every 300 milliseconds, introduces substantial engineering challenges related to storage efficiency, commitment computation costs, and the need to serve both live and historical state queries in real time. We present SonicDB S6, a production Rust Verkle Trie database for the Sonic blockchain, which leverages its non-forking property to enable aggressive storage optimizations. Occupancy-aware node specializations, selected via an 𝒪 ⁡ ( k ​ n 2 ) \mathcal{O}(kn^{2}) dynamic program, reduce live storage by 98%. Delta nodes that record only changed slots reduce archive storage by 95%. Batched updates, multi-threaded commitment computation, and homomorphic Pedersen caching yield 2.85 × 2.85\times higher throughput than a persistent Geth Verkle baseline while sustaining production block-rate performance.
+
+
+
+1
+Introduction
+
+The Ethereum state layer stores balances, nonces, byte-code, and storage slots of accounts and is implemented as a Merkle Patricia Trie (MPT)
+[
+25
+,
+26
+,
+37
+]
+that
+suffers several limitations.
+Verkle Tries
+[
+7
+,
+27
+,
+6
+]
+have been proposed as a drop-in replacement for the Merkle Patricia Trie (MPT)
+[
+25
+,
+26
+,
+37
+]
+.
+Verkle Tries replace cryptographic hashing at each node of the Trie with vector commitments
+[
+8
+]
+using Pedersen commitments
+[
+28
+]
+that are instantiated over the Bandersnatch elliptic curve
+[
+24
+]
+.
+
+The key benefit is that they support
+position-binding openings
+
+[
+8
+]
+, resulting in witness proofs
+[
+13
+]
+of an order pair without supplying any sibling data.
+Witness proofs in the Merkle Patricia Trie require supplying all sibling nodes along the root-to-leaf path, resulting in witness proofs of on the order of several kilobytes per key-value pair.
+At block scale, the aggregate witness
+[
+12
+]
+for a single Ethereum block can reach tens of megabytes, making
+stateless clients
+
+[
+12
+]
+impractical.
+Network nodes that verify blocks without retaining the full state cannot verify them as efficiently when witness data is this large.
+In addition, the trie’s hexadecimal branching factor and variable-length encoding lead to deep, unbalanced structures with high read and write amplification
+[
+33
+]
+, placing mounting pressure on storage as state grows.
+
+Verkle Tries overcome the shortcomings of MPT’s witness proofs using Inner Product Argument (IPA) proof aggregation
+[
+2
+,
+4
+,
+3
+]
+, which reduces proof witness sizes from several kilobytes to under 150 bytes regardless of the Trie’s depth, enabling technologies such as stateless clients in the future.
+The higher branching factor of 256 also limits tree depth to at most 32 levels for 32-byte keys and unifies account and contract storage into a single key space, eliminating the per-contract storage tries of the MPT design. The advantages of Verkle’s proof witnesses have been experimentally demonstrated in
+[
+27
+]
+.
+
+Despite their theoretical appeal, building a Verkle Trie database suitable for production use in a high-throughput blockchain with very short time-to-finality, such as Sonic Labs
+[
+23
+]
+, introduces substantial engineering challenges.
+For example, SonicDB is developed for the Sonic blockchain, which produces a block every 300 milliseconds — 40 times faster than Ethereum’s 12-second block interval.
+Every commitment recomputation, node write, and storage allocation must complete within this tight budget.
+
+In addition, Verkle nodes nominally store 256 values or child pointers each. While the high branching factor keeps the Trie shallow, it also means that nodes are frequently sparsely populated, particularly at lower levels.
+A leaf node storing a single 32-byte value would still occupy more than 8 KiB if stored at full size.
+Storing all 256 slots regardless of occupancy results in enormous waste; designing a storage structure that adapts to actual usage while keeping lookup overhead low is therefore paramount.
+Another key challenge in any Verkle Trie implementation is the cost of recomputing the state root commitment after each block.
+A Pedersen commitment requires elliptic-curve scalar multiplication, which is roughly two to three orders of magnitude slower than the hash evaluations used in MPTs.
+Incremental updates mitigate this cost during ordinary state transitions, but the state root must be finalized within the block production window, leaving little room for unoptimized computation.
+
+Our Verkle Trie uses two distinct databases serving fundamentally different roles. The
+LiveDB
+maintains the current chain state for validators and observers, requiring low-latency reads and writes while retaining no history. The
+ArchiveDB
+supports historical queries by preserving the full sequence of past states and requires non-destructive, copy-on-write updates. Both databases must remain synchronized in real time: if the ArchiveDB falls behind the LiveDB, it becomes a bottleneck for the entire system. Serving both roles efficiently with a single underlying Verkle trie design requires careful architectural separation.
+
+This paper presents SonicDB S6, a Rust implementation of a Verkle Trie state database for the Sonic blockchain.
+SonicDB exploits the fact that Sonic is a non-forking blockchain, which eliminates the need to maintain diverging versions of the database at the same block height and enables more aggressive storage optimizations than would be possible in a general-purpose setting. SonicDB S6 makes the following contributions:
+
+•
+
+We introduce occupancy-aware node specializations with a subsumption property and an optimal selection via dynamic programming, reducing live database storage by 98% (from 1,078 GiB to 22 GiB) across 55 M blocks.
+
+•
+
+We propose delta nodes that store only changed slots relative to a base node while avoiding chaining, which together with specialization reduces archive storage by 95% (from 16,141 GiB to 809 GiB).
+
+•
+
+We present the SonicDB S6 architecture with batched updates, multi-threaded commitment computation, and cached Pedersen commitment state, achieving 2.85× higher throughput than a persistent Geth Verkle baseline while keeping archive performance at production block rate.
+
+The remainder of this paper is organized as follows.
+Section
+2
+provides background on Ethereum Verkle Tries, their structure, and their proof-size advantages over MPTs.
+Section
+3
+describes our forkless live and archive database design, including delta nodes.
+Section
+4
+presents the node specialization framework and its dynamic programming solution. Section
+5
+details the implementation layers and commitment computation optimizations.
+Section
+6
+evaluates storage efficiency and throughput against the Geth baseline.
+Section
+7
+surveys related work, and Section
+8
+concludes with directions for future work.
+
+2
+Background: Verkle Tries
+
+In the following section, we provide an overview of important concepts related to Verkle Tries, following the Ethereum specification
+[
+7
+]
+.
+
+Verkle Commitments.
+
+A
+commitment scheme
+is a cryptographic primitive that allows one party (the committer) to bind themselves to a chosen value without revealing it to a second party (the verifier).
+
+Vector commitments
+
+[
+8
+]
+extend this primitive to sequences of values
+(v_{1},v_{2},\ldots,v_{n})
+rather than a single message.
+In addition to the standard binding and hiding properties, vector commitments support
+position-binding openings
+: the committer can prove that
+v_{i}
+occupies position
+i
+in the committed sequence without disclosing the remaining values.
+This is the crucial property that enables compact proofs in Verkle tries, since a prover can certify a single key-value pair by producing an opening for that leaf’s position in the commitment, rather than hashing all sibling nodes as in a Merkle proof.
+Vector commitments also offer an
+updatability
+property: if
+v_{i}
+is replaced by
+v_{i}^{\prime}
+, the commitment can be updated incrementally without recomputing the cryptographic hashes from scratch.
+
+Ethereum’s Verkle trie proposal uses the
+Pedersen commitment
+scheme
+
+[
+28
+]
+, combined with the
+Inner Product Argument
+
+(IPA)
+[
+2
+,
+4
+]
+for efficient position-binding
+openings
+[
+8
+]
+.
+The Pedersen scheme is based on elliptic curve cryptography and derives its security from the
+discrete logarithm assumption
+: given a prime-order group
+\mathbb{G}
+of order
+p
+and two independently chosen generators
+g_{1},g_{2}\in\mathbb{G}
+whose discrete logarithm relationship is unknown, it is computationally infeasible to find
+x
+such that
+g_{1}=x\cdot g_{2}
+.
+Under this assumption, a Pedersen commitment to a pair of field elements
+v_{1},v_{2}\in\mathbb{F}_{p}
+is
+C=v_{1}g_{1}+v_{2}g_{2}
+, which is a single group element. The scheme generalizes to arbitrary-length vectors: given a set of generators
+g_{1},\ldots,g_{n}
+with no known discrete logarithm relationships, a commitment to
+(v_{1},\ldots,v_{n})
+is
+C=\sum_{i=1}^{n}v_{i}\,g_{i}
+.
+A key algebraic property of Pedersen commitments is
+additive homomorphism
+: for two value vectors
+V_{0}
+and
+V_{1}
+with respective commitments
+C_{0}
+and
+C_{1}
+,
+
+C_{0}+C_{1}=\operatorname{Commit}(V_{0})+\operatorname{Commit}(V_{1})=\operatorname{Commit}(V_{0}+V_{1}).
+
+This property is what makes IPA-based openings efficient: rather than revealing the full committed vector, a prover can convince a verifier of an inner product relation through a logarithmic-round interactive protocol, which translates into a compact non-interactive proof via the Fiat–Shamir heuristic
+[
+11
+]
+.
+
+In the Ethereum proposal, Pedersen commitments are instantiated over the
+Bandersnatch
+elliptic curve
+[
+24
+]
+.
+Bandersnatch is a twisted Edwards curve defined over the BLS12-381 scalar field, chosen because its native field arithmetic aligns with BLS12-381-based SNARK circuits, making proof verification highly efficient inside zero-knowledge proofs.
+Importantly, the Bandersnatch group order
+p
+is a 253-bit prime, which means the curve can natively commit to values of at most 252 bits.
+Values of 256 bits (i.e. 32 bytes), as used throughout the Ethereum state, therefore exceed the group order and must be handled with care, as described in the extension node encoding below.
+
+It is worth noting that computing a Pedersen commitment is considerably more expensive than computing a cryptographic hash.
+A commitment requires
+n
+scalar multiplications on an elliptic curve, each of which is roughly two to three orders of magnitude slower than a SHA-256 evaluation.
+Incremental updates mitigate this cost during ordinary state transitions, but initial Trie construction and proof generation remain computationally expensive.
+
+Node Structure.
+
+Figure 1
+:
+Ethereum Verkle Trie structure.
+
+The Ethereum Verkle Trie is composed of two types of nodes:
+inner
+nodes and
+extension
+nodes, with a branching factor (arity) of 256.
+Figure
+1
+illustrates an example instance of a Verkle Trie.
+Inner nodes (shown in blue in Figure
+1
+) act as the internal branching structure of the trie.
+Each inner node has up to 256 children, which may themselves be either inner nodes or extension nodes.
+The commitment of an inner node is the Pedersen commitment of its children’s commitments:
+
+C_{\mathrm{inner}}=\operatorname{Commit}(C_{1},C_{2},\ldots,C_{256}),
+
+(1)
+
+where
+C_{i}
+denotes the commitment of the child at position
+i
+.
+This recursive structure allows any sub-tree to be summarized by a single group element, enabling constant-size proofs regardless of Trie depth.
+Extension nodes (shown in orange in Figure
+1
+) form the leaves of the Trie and store up to 256 key-value pairs, indexed by the final byte of the 32-byte key.
+The first 31 bytes of the key, shared across all values in the node, are explicitly stored as the node’s
+stem
+, permitting early termination of lookups when no matching prefix exists.
+
+Because Bandersnatch has a 253-bit group order—smaller than the 256-bit range of Ethereum state values—extension nodes cannot commit to 32-byte values directly
+[
+7
+]
+.
+To resolve this, each value
+v_{i}\in\mathbb{B}_{32}
+is split into two 16-byte halves: a lower half
+v_{i}^{l}\in\mathbb{B}_{16}
+and an upper half
+v_{i}^{h}\in\mathbb{B}_{16}
+.
+Both halves fit comfortably within the curve’s 252-bit capacity.
+To distinguish between a leaf that does not exist and one that is explicitly set to zero, a marker bit is embedded in the lower half: the 129th bit of
+v_{i}^{l}
+is set to 1 if the value is present and 0 if absent, yielding the modified lower half
+v_{i}^{l,\mathrm{mod}}
+.
+This encoding is required to prevent an adversary from deleting state by writing zero values.
+The 256 modified value pairs are then committed as two intermediate Pedersen commitments, each covering half the leaf range:
+
+\displaystyle C_{1}
+
+\displaystyle=\operatorname{Commit}\bigl(v_{0}^{l,\mathrm{mod}},\,v_{0}^{h},\,v_{1}^{l,\mathrm{mod}},\,v_{1}^{h},\,\ldots,\,v_{127}^{l,\mathrm{mod}},\,v_{127}^{h}\bigr),
+
+(2)
+
+\displaystyle C_{2}
+
+\displaystyle=\operatorname{Commit}\bigl(v_{128}^{l,\mathrm{mod}},\,v_{128}^{h},\,v_{129}^{l,\mathrm{mod}},\,v_{129}^{h},\,\ldots,\,v_{255}^{l,\mathrm{mod}},\,v_{255}^{h}\bigr).
+
+(3)
+
+Finally, the commitment of the extension node as a whole incorporates a version marker (currently set to 1 to facilitate future state-expiry schemes
+[
+5
+]
+), the stem, and both sub-commitments:
+
+C_{\mathrm{ext}}=\operatorname{Commit}(1,\;\mathrm{Stem},\;C_{1},\;C_{2}).
+
+(4)
+
+Witness Proof
+
+A
+witness proof
+(or
+membership proof
+) is a cryptographic proof that a given key-value pair
+(k,v)
+is included in the Trie, without requiring the verifier to hold the entire Trie structure.
+Witness proofs are essential for
+stateless clients
+
+[
+12
+]
+: nodes that verify blocks without storing the full blockchain state.
+
+In an MPT, the integrity of each node is guaranteed by its parent storing the cryptographic hash of that node’s contents.
+To prove that a key-value pair
+(k,v)
+is present, a proper must supply a
+Merkle proof
+: the sequence of all sibling nodes encountered on the root-to-leaf path.
+The verifier recomputes each node’s hash from the leaf upward, checking at every level that the computed hash matches the value recorded in the parent, until the root hash is reconstructed and compared against a trusted value.
+At each level, the branching factor
+b
+determines the number of siblings, each contributing one hash (32 bytes for Keccak-256) to the proof.
+With
+b=16
+and depth
+d\approx 8
+–
+9
+(since
+16^{8}\approx 4\times 10^{9}
+), each level contributes up to
+(b-1)\times 32=15\times 32=480
+bytes, yielding witness sizes on the order of several kilobytes per key-value pair.
+
+Verkle Tries replace hashing with
+vector commitments
+, which support position-binding openings.
+A prover can reveal a single position
+v_{i}
+without exposing other values, using an IPA proof
+[
+2
+,
+4
+]
+of size logarithmic in the branching factor.
+Moreover, IPA proofs across levels can be
+aggregated
+
+[
+3
+]
+, so a full root-to-leaf witness fits in roughly 100–150 bytes regardless of Trie size.
+
+Two effects compound this improvement: the higher branching factor halves tree depth (since
+\log_{256}N=\tfrac{1}{2}\log_{16}N
+), and position-binding openings contribute a
+constant
+per level rather than
+\mathcal{O}(b)
+hashes.
+Together, they reduce witness sizes by roughly two orders of magnitude.
+
+Property
+
+MPT
+
+Verkle Trie
+
+Branching factor
+b
+
+16
+
+256
+
+Proof element per level
+
+(b-1)
+hashes
+
+1 IPA proof (aggregated)
+
+Bytes per level
+
+\sim
+480
+
+amortized
+\sim
+0–48
+
+Depth for
+10^{9}
+leaves
+
+\sim
+8
+
+\sim
+4
+
+Witness size
+
+\sim
+3–4 KiB
+
+<
+150 bytes
+
+Table 1
+:
+Witness size comparison between Merkle Patricia Trie (MPT)
+[
+25
+,
+26
+,
+37
+]
+and Verkle Trie
+[
+6
+]
+for a trie
+holding approximately
+10^{9}
+key-value pairs
+[
+27
+]
+.
+
+3
+Dual-Mode Storage: LiveDB and ArchiveDB
+
+Blockchain state management imposes two fundamentally different access requirements on the underlying database.
+Validators and observers require low-latency reads and writes against the
+current
+world state: given the state at block
+h
+, they must produce the state at block
+h+1
+with minimal latency, and have no need to retain any prior state of block height less than
+h
+.
+Archive nodes, by contrast, must respond to historical queries at arbitrary block heights, which demands that every state transition be preserved non-destructively and remain efficiently retrievable long after it occurred.
+
+In most blockchain implementations, both roles are served by a single general-purpose database, which forces an architectural compromise.
+Retaining the full history of state transitions introduces storage and write overhead that impairs validator performance, while the low-latency write patterns suited to block production are ill-adapted to the append-only workloads characteristic of historical access.
+
+Another complicating aspect of general-purpose designs is the need to support chain reorganizations, which require the database to maintain divergent state versions at the same block height until a single branch emerges as the chain’s canonical branch.
+Sonic, in common with a class of modern consensus protocols, provides a
+non-forking
+guarantee: each block has at most one canonical successor, so divergent versions never arise.
+This property removes the reorganization requirement entirely, and with it the need for the version-management and pruning machinery that general-purpose designs must carry.
+
+We exploit this guarantee by decomposing the state layer into two specialized databases, LiveDB and ArchiveDB
+[
+16
+,
+15
+]
+, each designed exclusively for its access pattern and each capable of applying optimizations that would be unsafe or inapplicable in a forking setting.
+
+Figure 2
+:
+LiveDB update of a single leaf node. Because no historical data
+is retained, changes are applied in place.
+
+LiveDB.
+
+The LiveDB serves the validator and observer roles.
+It maintains a single mutable image of the current world state and advances it from block
+h
+to block
+h+1
+via destructive in-place updates: modified values overwrite their predecessors directly, and no copy of the superseded state is retained.
+Consequently, storage reclamation occurs intrinsically as part of the update path, with no separate compaction or pruning pass required.
+
+Figure
+2
+illustrates a leaf-node update in the LiveDB.
+The absence of any versioning constraint means that nodes may be freely transformed between structural variants or deleted as block processing demands, without regard for any reader that might require an earlier version of the same node.
+This freedom enables occupancy-aware node specialization described in the next section.
+Every node can be held in whichever specialization minimizes its current storage footprint, and re-specialized whenever its occupancy changes, because the LiveDB carries no historical obligation.
+
+Figure 3
+:
+ArchiveDB update of a single leaf node. The changed node is
+copied and updated, and every ancestor up to the root is
+duplicated and updated with its new child identifier.
+
+ArchiveDB.
+
+The ArchiveDB serves the archive node role.
+It maintains a complete and queryable record of the world state at every block height through an append-only, copy-on-write update mechanism.
+When a node is modified, a new clone of the node is produced with a fresh identifier, and the modification propagates up the path to the root, where each ancestor is likewise copied and updated with the new child identifier.
+Nodes that are not touched by a given block are shared across versions without duplication, so the marginal storage cost of a block is proportional to the number of nodes on the modified root-to-leaf paths rather than to the size of the full Trie.
+
+Figure
+3
+illustrates this process for a single leaf update.
+The non-forking guarantee is essential here.
+The ArchiveDB never forks the version graph, and the copy-on-write chain forms a simple linear sequence, because each block has at most one successor.
+This eliminates the version-branching and garbage-collection complexity that would otherwise be required, and allows the archive to be structured as a compact, append-only log rather than a general persistent data structure.
+
+The principal cost of the copy-on-write scheme is storage amplification
+[
+33
+]
+.
+A single-slot update to a leaf node requires copying every node on the root-to-leaf path, and upper-level inner nodes, which are typically dense and are touched by nearly every block, are therefore duplicated at high frequency despite the fact that only a small fraction of their 256 child identifiers change per update.
+We address this amplification directly through the delta node mechanism.
+
+Delta nodes reduce the storage overhead of the ArchiveDB by recording only the slots that changed relative to a recent base node, rather than duplicating the full 256-slot layout on every copy-on-write operation.
+Under copy-on-write semantics, every block update to a leaf node forces a fresh copy of all inner nodes on the root-to-leaf path.
+Upper-level inner nodes are therefore rewritten on almost every block, yet typically only a small number of their 256 child identifiers change.
+Without delta compression, the storage cost per block update to a single slot is
+\Theta(d\cdot W)
+, where
+d
+is the depth of the modified node and
+W=256
+is the node width.
+For a fully populated inner node near the root,
+W\cdot 32
+bytes of child identifiers are copied even though all but a constant number are unchanged.
+
+Let
+N_{b}
+be a
+base node
+at block height
+h_{b}
+, storing the full array
+V_{b}\in\mathbb{B}_{32}^{256}
+of child identifiers (for an inner node) or values (for a leaf node).
+A
+delta node
+
+N_{\delta}
+at block height
+h_{\delta}>h_{b}
+is a pair
+
+N_{\delta}=(\mathit{id}(N_{b}),\;\Delta),
+
+where
+\Delta=\{(i_{1},v_{1}),\ldots,(i_{m},v_{m})\}
+is the set of
+m
+changed slots, with
+i_{j}\in[0,255]
+distinct and
+v_{j}\in\mathbb{B}_{32}
+. The logical content of
+N_{\delta}
+is the array
+V_{\delta}
+defined by
+
+V_{\delta}[i]=\begin{cases}v_{j}&\text{if }(i,v_{j})\in\Delta,\\
+V_{b}[i]&\text{otherwise.}\end{cases}
+
+A
+delta threshold
+
+\tau\in[1,256]
+governs when a delta node is promoted to a base node: if applying a further update would cause
+|\Delta|
+to exceed
+\tau
+, a new base node is written instead, and subsequent deltas reference it. Figure
+4
+shows the conversion between a base node and a delta node.
+
+Every delta node references a base node directly and never references other delta nodes.
+This is enforced by the promotion rule: once
+|\Delta|
+would exceed
+\tau
+, a full base node is materialized.
+The invariant guarantees that reading the logical content of any historical node requires exactly two
+node loads (one for the delta and one for its base), giving a read amplification factor of two, independent of block height or update frequency.
+Without this invariant, a chain of
+c
+deltas would require
+c+1
+loads, making the read cost unbounded as the chain’s length increases.
+
+Given an existing delta node
+N_{\delta}=(\mathit{id}(N_{b}),\Delta)
+and an incoming update set
+U=\{(i,v)\}
+, define the merged change set
+\Delta^{\prime}=(\Delta\setminus\{(i,\cdot):i\in\pi_{1}(U)\})\cup U
+, where
+\pi_{1}
+projects onto slot indices.
+If
+|\Delta^{\prime}|\leq\tau
+, a new delta node
+(\mathit{id}(N_{b}),\Delta^{\prime})
+is written. If
+|\Delta^{\prime}|>\tau
+, a new base node is materialized from
+V_{\delta}
+with
+U
+applied, and future delta nodes will reference it.
+Critically, the new delta always references
+N_{b}
+, not the previous
+N_{\delta}
+: this replaces the old delta entry in storage rather than appending to a chain.
+
+The on-disk representation of a delta node occupies
+
+S_{\delta}(m)=S_{\mathit{id}}+m\cdot(1+32)\;\text{bytes},
+
+where
+S_{\mathit{id}}
+is the size of a node identifier (8 bytes in our
+implementation),
+1
+byte encodes the slot index
+i\in[0,255]
+, and
+32
+
+bytes hold the value
+v_{j}
+. For
+m\leq\tau\ll 256
+, this is substantially
+smaller than the
+256\cdot 32=8{,}192
+bytes of a full node.
+A base node occupies the full specialization size as determined by the occupancy-aware
+layout described in Section
+4
+.
+Across a sequence of
+B
+blocks in which a given inner node changes
+k
+slots per block on average, the total storage cost with delta nodes is
+
+\left\lfloor\frac{B\cdot k}{\tau}\right\rfloor\cdot S_{\mathit{full}}\;+\;B\cdot S_{\delta}(k),
+
+compared with
+B\cdot S_{\mathit{full}}
+without delta nodes, giving a
+compression ratio approaching
+S_{\mathit{full}}/S_{\delta}(k)
+when
+
+k\ll\tau
+.
+
+The cached representation of a delta node extends its on-disk form with a
+materialized view
+: a copy of
+V_{b}
+with
+\Delta
+applied.
+This avoids a secondary lookup on every slot access once the node is resident in the cache.
+When a delta node is loaded from disk, the node manager fetches
+N_{b}
+(which may itself be served from cache), copies its data into the delta’s materialized view, and patches the
+|\Delta|
+changed slots.
+Subsequent reads of
+V_{\delta}[i]
+are
+\mathcal{O}(1)
+via direct array access.
+When a write guard is dropped, only the on-disk form (identifier plus change set) is flushed, keeping write amplification proportional to
+|\Delta|
+rather than to the full node width.
+This is illustrated in Figure
+5
+.
+
+Figure 4
+:
+Conversion between a base node and a delta node with delta size
+\tau=4
+.
+
+Figure 5
+:
+Loading a delta node: the on-disk form is read first, then the
+base node is fetched and merged to produce the materialized view.
+
+4
+Occupancy-aware Node Specialization
+
+Verkle nodes store 256 children or values, depending on whether the node is a leaf.
+Because the Trie is sparse (see experimental section) in a practical setup, many nodes do not use all their available slots in the node data structure.
+For example, leaf nodes at lower levels of the Trie often store only a few values, whereas inner nodes at lower levels often store only a few child IDs.
+Storing all 256 slots per node, especially when the majority are empty, would consume substantial space due to the sheer number of nodes and leaves in the Verkle Trie.
+
+(a)
+
+Full node
+
+(b)
+
+Sparse node
+
+(c)
+
+Delta node
+
+Figure 6
+:
+Composition details of Verkle leaf node variants
+
+Figure
+6
+shows the structure of our leaf nodes, which is similar for inner nodes.
+In the bottom half, the 256 value slots, the leaf stem, the used bits, and the commitment are stored on disk.
+The Verkle commitment is stored in a compressed 32-byte format and decompressed upon loading into main memory.
+The top half, instead, contains only cached data used for commitment computation, addressing
+\sim 50\%
+of the node size.
+
+One could argue that finding the optimal number of specializations to minimize space usage is straightforward: one specialization per node type and the number of possible children/values, e.g., a leaf node with one child, an inner node with one value, a leaf node with two children, etc.
+We refer to the specialization of an inner node as
+\texttt{Inner}_{i}
+, where
+i
+is the maximal number of children of the specialization, and of a leaf node as
+\texttt{Leaf}_{i}
+, where
+i
+is the maximal number of values.
+However, having one specialization per node type requires that, whenever a new child or value is added to an inner or leaf node, the node be specialized to include one more child or value.
+Conversely, children and values can be removed.
+
+For example, a leaf node with three values is transformed to a leaf node with four values
+\texttt{Leaf}_{3}\rightarrow\texttt{Leaf}_{4}
+or an inner node with ten children is transformed to an inner node with nine children
+\texttt{Inner}_{10}\rightarrow\texttt{Inner}_{9}
+.
+Transforming a specialization to another specialization can be expensive because it requires copying all data to a new object, obtaining a new storage ID, and freeing the previous ID, which must traverse the entire storage stack.
+Note that the individual operation is inexpensive in isolation, but it becomes expensive when many such transformations must be performed to maintain the database state when node specializations are used.
+
+Another downside of having many specializations is that they do not integrate well with node deletions and the reuse of disk space for deleted nodes.
+The offset of a node is encoded in its ID.
+The ID, in turn, is stored in its parent node.
+When a node is deleted, the nodes that follow it in the file are not necessarily shifted backward, as this would be very expensive.
+Instead, the deleted node’s offset is added to the free list, and the next time a new node is created, the offset is reused.
+As the tree grows, the node distribution changes, and the number of nodes in a given specialization may increase or decrease.
+This can temporarily result in many reusable offsets, which means disk space is occupied but not used to store actual data.
+Having more specializations would lead to greater changes in the node distribution and more reusable nodes, resulting in more occupied but unused disk space.
+
+To avoid the copying, we have a
+subsumption property
+.
+A specialization of type
+\textit{Leaf}_{i}
+can accommodate one to
+i
+children; similarly,
+\textit{Inner}_{i}
+can accommodate one to
+i
+values.
+For example, if the node specialization
+\textit{Leaf}_{4}
+can be used for node types
+\textit{Leaf}_{4}
+,
+\textit{Leaf}_{3}
+,
+\textit{Leaf}_{1}
+, and
+\textit{Leaf}_{1}
+.
+However, the fewer children/values a node type has in its specialization, the greater the space loss, since unoccupied leaves and children still occupy space in the specialization.
+
+Specialization Functions.
+
+We model storage optimization as a mathematical problem by introducing a
+specialization function
+that maps each node type to a representative specialization.
+
+Definition 1
+.
+
+A
+specialization function
+is a surjective function
+\varphi\colon[1,n]\to X
+satisfying:
+
+•
+
+|X|=k
+
+(cardinality constraint)
+
+•
+
+X\subseteq[1,n]
+
+(domain constraint)
+
+•
+
+\forall\,i\in[1,n]\colon i\leq\varphi(i)
+
+(coverage constraint)
+
+The function
+\varphi
+maps each node type
+i
+to a specialization
+i^{\prime}=\varphi(i)
+. Surjectivity ensures that all
+k
+specializations in
+X
+are actually used.
+The domain constraint requires every specialization to be a valid node type.
+The coverage constraint
+i\leq\varphi(i)
+ensures that a specialization has sufficient capacity for every node type assigned to it, since a node type with
+i
+children must be covered by a specialization with at least
+i
+children.
+We denote the set of all specialization functions with parameters
+n
+and
+k
+by
+\Phi^{k}_{n}
+; every
+\varphi\in\Phi^{k}_{n}
+must satisfy the three constraints of Definition
+1
+.
+Note that
+n\in X
+is forced: if
+\varphi(n)\neq n
+for any
+\varphi\in\Phi^{k}_{n}
+, the coverage constraint
+n\leq\varphi(n)
+is violated.
+We may therefore write
+X=X^{\prime}\cup\{n\}
+, where
+X^{\prime}\subseteq[1,n-1]
+and
+|X^{\prime}|=k-1
+.
+
+Space Cost.
+
+We define the space function
+s:[1,n]\rightarrow\mathbb{N}
+, denoting the number of bytes for a specialization.
+For example,
+i\mapsto q
+gives the number of bytes
+q
+for specialization
+i
+.
+We further assume that the space function is a monotonic function with the property:
+
+\forall i,j\in[1,n]:i\leq j\implies s(i)\leq s(j)
+
+With the coverage constraint, we can make the space function monotonic, as explained at the end of this sub-section.
+
+We can further simplify the space function. We can express the costs
+s(i)=h+j\delta
+where
+h
+is a constant storage overhead per node specialization, and for each value/child, we have extra costs of
+\delta
+bytes.
+This, of course, depends on the system and programming language implementation, as well as on whether the specialization can be expressed as a linear function of the number of values/children.
+
+Frequency Count.
+
+The mathematical model must account for the frequency of node types, as we observed in our experiments that the number of children/values per node is not uniformly distributed; some node types occur much less frequently than others, so introducing a specialization for them does not significantly reduce storage occupancy.
+We denote the frequency of a node type with the following function
+f:[1,n]\rightarrow\mathbb{N}
+.
+
+With functions
+f
+for the frequency distribution and
+s
+for space consumption, a mathematical program can be devised to express the optimization problem for node specialization.
+
+Definition 2
+.
+
+The cost of a specialization function
+\varphi
+is defined as follows,
+
+\textit{cost}(\varphi)=\sum_{i\in[1,n]}s(\varphi(i))f(i)
+
+The space consumption for a node type
+i
+is the space consumption of its specialization
+s(\varphi(i))
+multiplied by its frequency
+f(i)
+.
+The total consumption is the sum of the consumption across all node types.
+
+The mathematical program searches for an optimal specialization function among many possible specialization functions:
+
+Definition 3
+.
+
+The node specialization problem is defined by finding the specialization function
+\varphi
+with minimal cost
+\min_{\varphi\in\Phi^{k}_{n}}\textit{cost}(\varphi)
+.
+
+The mathematical program seeks a specialization function
+\varphi
+with minimal space usage.
+Among the optimal solutions
+\arg\min_{\varphi\in\Phi^{k}_{n}}\textit{cost}(\varphi)
+, there could be pathological solutions to the problem, in which
+k
+is either
+1
+or
+n
+.
+If
+k=1
+, we have a single specialization that must accommodate all possible occurring node types; hence, the solution is
+i\mapsto n
+for all
+i
+,
+1\leq i\leq n
+.
+If
+k=n
+, we have
+n
+specializations.
+Each node type must become its own specialization, i.e.,
+i\mapsto i
+.
+Both solutions will be suboptimal in practice due to non-uniform node frequencies and specialization costs.
+The sweet spot will be somewhere in between.
+
+Normalized Specialization Functions.
+
+Definition 4
+.
+
+We define a normalized specialization function
+\varphi_{X}^{n}
+by ordered set
+X=\{x_{1},\ldots,x_{k-1}\}\subseteq[1,n-1]
+with following construction for all
+k
+,
+1<k\leq n
+,
+
+\displaystyle i
+
+\displaystyle\mapsto x_{1}
+
+if
+i\in[1,x_{1}]
+
+\displaystyle i
+
+\displaystyle\mapsto x_{l}
+
+if
+i\in[x_{l-1}+1,x_{l}]
+, for all
+l
+,
+1<l<k
+
+\displaystyle i
+
+\displaystyle\mapsto n
+
+if
+i\in[x_{k-1}+1,n]
+
+For
+k=1
+, the normalized specialization function is the mapping
+i\mapsto n
+, for all
+i
+,
+1\leq i\leq n
+, where
+X
+is the empty set.
+
+A normalized specialization is an
+k
+-partitioning of the
+\varphi_{X}^{n}
+’s domain into consecutive disjoint intervals from
+1
+to
+n
+.
+
+We define the set of all ranges for a normalized specialization function by
+\mathbb{X}^{k-1}_{n-1}=\{X\subseteq[1,n-1]\mid|X|=k-1\}
+.
+The parameters of the normalized specialization function
+\varphi_{X}^{n}
+is reduced by one since the range
+X\in\mathbb{X}^{k-1}_{n-1}
+of a normalized function
+\varphi_{X}^{n}
+is the set
+X\cup\{n\}
+.
+
+Lemma 1
+.
+
+\forall X\in\mathbb{X}^{k-1}_{n-1}:\varphi_{X}^{n}\in\Phi^{k}_{n}
+
+(5)
+
+Proof.
+
+We verify the three conditions of Definition
+1
+.
+
+(Domain constraint)
+By construction,
+\varphi_{X}^{n}
+maps every
+i\in[1,n]
+to some element of
+X\cup\{n\}\subseteq[1,n]
+.
+
+(Cardinality constraint)
+The range of
+\varphi_{X}^{n}
+is exactly
+X\cup\{n\}
+, which has
+|X|+1=(k-1)+1=k
+elements, since
+n\notin X
+as
+X\subseteq[1,n-1]
+.
+
+(Surjectivity)
+Each element of
+X\cup\{n\}
+is the image of at least one element: every
+x_{l}\in X
+is the image of itself, and
+n
+is the image of itself.
+
+(Coverage constraint)
+Every
+i
+in an interval
+[x_{l-1}+1,x_{l}]
+satisfies
+i\leq x_{l}=\varphi_{X}^{n}(i)
+by definition of the interval. The same holds for the first interval
+[1,x_{1}]
+and the last interval
+[x_{k-1}+1,n]
+. Hence
+i\leq\varphi_{X}^{n}(i)
+for all
+i\in[1,n]
+.
+∎
+
+Lemma 2
+.
+
+Given an optimal specialization function
+\varphi\in\arg\min_{\varphi\in\Phi^{k}_{n}}\textit{cost}(\varphi)
+with range
+X\cup\{n\}
+where
+X
+does not contain
+\{n\}
+,
+
+\textit{cost}(\varphi)=\textit{cost}(\varphi_{X}^{n}).
+
+(6)
+
+Proof.
+
+The case
+k=1
+is immediate: both
+\varphi
+and
+\varphi_{X}^{n}
+are the constant map
+i\mapsto n
+, so their costs are equal.
+For
+k>1
+, let
+X=\{x_{1}<\cdots<x_{k-1}\}\subseteq[1,n-1]
+be the range of
+\varphi
+excluding
+n
+. We show that
+\textit{cost}(\varphi_{X}^{n})\leq\textit{cost}(\varphi)
+; since
+\varphi
+is optimal, this implies equality.
+We compare the terms
+s(\varphi(i))f(i)
+and
+s(\varphi_{X}^{n}(i))f(i)
+for each
+i\in[1,n]
+, considering three cases.
+
+1.
+
+\varphi(i)=\varphi_{X}^{n}(i)
+:
+The terms coincide trivially.
+
+2.
+
+\varphi(i)<\varphi_{X}^{n}(i)
+:
+We show this case is impossible.
+For any interval defining
+\varphi_{X}^{n}
+, the smallest element of
+X\cup\{n\}
+that is greater than or equal to
+i
+is assigned as
+\varphi_{X}^{n}(i)
+.
+Any element of
+X\cup\{n\}
+strictly smaller than
+\varphi_{X}^{n}(i)
+is at most
+x_{l-1}
+for some
+l
+, but then
+\varphi(i)\leq x_{l-1}<i
+, violating the coverage constraint
+i\leq\varphi(i)
+.
+
+3.
+
+\varphi(i)>\varphi_{X}^{n}(i)
+:
+Since
+\varphi_{X}^{n}(i)\leq\varphi(i)
+, monotonicity of
+s
+gives
+s(\varphi_{X}^{n}(i))\leq s(\varphi(i))
+, so the contribution of
+i
+to
+\textit{cost}(\varphi_{X}^{n})
+is no greater than its contribution to
+\textit{cost}(\varphi)
+.
+
+Summing over all
+i\in[1,n]
+, we obtain
+\textit{cost}(\varphi_{X}^{n})\leq\textit{cost}(\varphi)
+. Since
+\varphi
+is optimal, equality holds.
+∎
+
+Theorem 1
+.
+
+\min_{\varphi\in\Phi^{k}_{n}}\textit{cost}(\varphi)=\min_{X\in\mathbb{X}^{k-1}_{n-1}}\textit{cost}(\varphi_{X}^{n})
+
+(7)
+
+Proof.
+
+The inequality
+\min_{X\in\mathbb{X}^{k-1}_{n-1}}\textit{cost}(\varphi_{X}^{n})\geq\min_{\varphi\in\Phi^{k}_{n}}\textit{cost}(\varphi)
+follows from Lemma
+1
+, which shows that every normalized specialization function
+\varphi_{X}^{n}
+lies in
+\Phi^{k}_{n}
+, so the minimum over the smaller family cannot be smaller.
+For the reverse inequality, let
+\varphi\in\arg\min_{\varphi\in\Phi^{k}_{n}}\textit{cost}(\varphi)
+be an optimal specialization function with range
+X\cup\{n\}
+. By Lemma
+2
+, the normalized function
+\varphi_{X}^{n}
+satisfies
+\textit{cost}(\varphi_{X}^{n})=\textit{cost}(\varphi)
+. Hence
+\min_{X\in\mathbb{X}^{k-1}_{n-1}}\textit{cost}(\varphi_{X}^{n})\leq\textit{cost}(\varphi)=\min_{\varphi\in\Phi^{k}_{n}}\textit{cost}(\varphi)
+.
+Combining both inequalities proves the theorem.
+∎
+
+Searching for an optimal normalized specialization in the set
+\mathbb{X}^{k-1}_{n-1}
+also gives an optimal specialization function.
+Reducing the search space provides a handle for formulating the optimization problem as a dynamic program.
+
+Interval Costs.
+
+With a normalized specialization function
+\varphi_{X}^{n}
+, the domain
+[1,n]
+of node types is partitioned into
+k
+disjoint intervals
+[1,x_{1}]
+,
+[x_{1}+1,x_{2}]
+,
+\ldots
+,
+[x_{k-1}+1,n]
+.
+An interval
+[i,j]
+with
+1\leq i\leq j\leq n
+would represent node types with
+i,i+1,\ldots,j
+values/children that choose the specialization of node type
+j
+.
+The elements of an interval
+[i,j]
+are mapped to the same specialization, which is the last element
+j
+in the interval. An element in interval
+[1,x_{1}]
+is mapped to specialization
+x_{1}
+, an element in
+[x_{l-1}+1,x_{l}]
+is mapped to
+x_{l}
+, for all
+l
+,
+1<l<k
+and an element in
+[x_{k-1}+1,n]
+is mapped to
+n
+.
+Hence, we can compute the costs for node types in a domain interval
+[i,j]
+as follows,
+
+c(i,j)=\sum_{l=i}^{j}s(j)f(l)=s(j)\sum_{l=i}^{j}f(l)
+
+(8)
+
+since the node types
+l\in[i,j]
+use the specialization
+j
+.
+Given a normalized specialization function
+\varphi_{X}^{n}
+with its domain partitioning
+[1,x_{1}],[x_{1}+1,x_{2}],\ldots,[x_{k-2}+1,x_{k-1}],[x_{k-1}+1,n]
+we can express the costs over its disjoint sets
+
+\textit{cost}(\varphi_{X}^{n})=c(1,x_{1})+c(x_{1}+1,x_{2})+\ldots+c(x_{k-2}+1,x_{k-1})+c(x_{k-1}+1,n)
+
+Lemma 3
+
+(Cost Equivalence)
+.
+
+Let
+\varphi_{X}^{n}
+be a normalized specialization function with
+X=\{x_{1},\ldots,x_{k-1}\}\subseteq[1,n-1]
+.
+Then the interval-sum formula and the element-wise definition of cost coincide:
+
+c(1,x_{1})+\sum_{l=2}^{k-1}c(x_{l-1}+1,\,x_{l})+c(x_{k-1}+1,\,n)\;=\;\sum_{i=1}^{n}s\!\left(\varphi_{X}^{n}(i)\right)f(i).
+
+Proof.
+
+The intervals
+[1,x_{1}],\;[x_{1}+1,x_{2}],\;\ldots,\;[x_{k-1}+1,n]
+form a partition of
+[1,n]
+into
+k
+consecutive disjoint sets whose union is
+[1,n]
+.
+On each interval
+[x_{l-1}+1,x_{l}]
+(with the convention
+x_{0}=0
+and
+x_{k}=n
+), the normalized specialization function assigns the constant value
+\varphi_{X}^{n}(i)=x_{l}
+
+to every
+i
+in that interval.
+Therefore,
+
+\displaystyle\sum_{i=1}^{n}s\!\left(\varphi_{X}^{n}(i)\right)f(i)
+
+\displaystyle=\sum_{l=1}^{k}\sum_{i=x_{l-1}+1}^{x_{l}}s\!\left(\varphi_{X}^{n}(i)\right)f(i)
+
+\displaystyle=\sum_{l=1}^{k}\sum_{i=x_{l-1}+1}^{x_{l}}s(x_{l})\,f(i)
+
+\displaystyle=\sum_{l=1}^{k}s(x_{l})\sum_{i=x_{l-1}+1}^{x_{l}}f(i)
+
+\displaystyle=\sum_{l=1}^{k}c(x_{l-1}+1,\,x_{l}),
+
+which is precisely the interval-sum formula.
+∎
+
+To avoid computing the frequency counts
+\sum_{i\leq l\leq j}f(l)
+for each interval
+[i,j]
+, the cumulative frequency counts can be deduced by a recursive schema shown below:
+
+\displaystyle F_{0}
+
+\displaystyle=0
+
+\displaystyle F_{1}
+
+\displaystyle=f(1)
+
+\displaystyle F_{i}
+
+\displaystyle=F_{i-1}+f(i)
+
+\displaystyle i\in[2,n]
+
+where
+F_{i}=\sum_{j=1}^{i}f(j)
+for all
+i
+,
+1\leq i\leq n
+.
+The cumulative frequency count gives us the following identity:
+
+\sum_{i\leq l\leq j}f(l)=F_{j}-F_{i-1}
+
+(9)
+
+for all
+i,j
+where
+1\leq i\leq j\leq n
+.
+The costs can be reduced to the following calculation
+
+c(i,j)=s(j)\,(F_{j}-F_{i-1})
+
+(10)
+
+The computation for each interval becomes constant.
+We have
+\frac{n(n+1)}{2}
+intervals in the range from
+1
+to
+n
+and
+n
+steps for computing the cumulative frequency count.
+Hence, the worst-case runtime for computing the costs of all intervals is
+\mathcal{O}\!\left(n+\frac{n(n+1)}{2}\right)=\mathcal{O}(n^{2})
+.
+
+Dynamic Program.
+
+We construct a two-dimensional matrix
+Y
+that stores the minimum cost of partitioning the node types from
+1
+to
+n
+into at most
+k
+consecutive disjoint intervals that cover the entire node range.
+The
+j
+-th row represents the partitioning from node type
+1
+to
+j
+, and the
+l
+-th column represents an
+l
+-partitioning with
+l
+consecutive disjoint sets in the range from
+1
+to
+j
+covering the whole range.
+A disjoint interval represents a specialization for node types in the interval, using the last element in the interval as its specialization (cf. Definition
+4
+).
+
+The recurrence is:
+
+\displaystyle y_{j,1}
+
+\displaystyle=c(1,j)
+
+\displaystyle j\in[1,n]
+
+\displaystyle y_{1,l}
+
+\displaystyle=M
+
+\displaystyle l\in[2,k]
+
+\displaystyle y_{j,l+1}
+
+\displaystyle=\min_{1\leq i<j}\left(y_{i,l}+c(i+1,j)\right)
+
+\displaystyle j\in[2,n],\,l\in[1,k-1]
+
+where
+M
+is a sufficiently large constant representing an infeasible solution
+[
+36
+]
+.
+A single element cannot be split into more than one non-empty interval, hence
+y_{1,l}=M
+for
+l>1
+.
+The optimal cost of a
+k
+-partition of
+[1,n]
+is given by
+y_{n,k}
+.
+
+To establish correctness, we first verify that the problem has the optimal substructure property
+[
+10
+]
+.
+
+Lemma 4
+
+(Optimal Substructure)
+.
+
+Let
+\varphi_{X}^{n}
+with
+X=\{x_{1},\ldots,x_{k-1}\}
+be an optimal solution for the range
+[1,n]
+with
+k
+intervals and
+k>1
+.
+Then the restriction
+X^{\prime}=\{x_{1},\ldots,x_{k-2}\}
+is an optimal normalized specialization
+\varphi_{X^{\prime}}^{x_{k-1}}
+for the range
+[1,x_{k-1}]
+with
+k-1
+intervals.
+
+Proof.
+
+Suppose for contradiction that
+\varphi_{X^{\prime}}^{x_{k-1}}
+is not optimal for the range
+[1,x_{k-1}]
+with
+k-1
+intervals, and let
+\varphi_{\tilde{X}^{\prime}}^{x_{k-1}}
+be a strictly cheaper solution.
+Then
+\tilde{X}=\tilde{X}^{\prime}\cup\{x_{k-1}\}
+yields a
+k
+-interval solution for
+[1,n]
+with cost
+
+\textit{cost}(\tilde{X}^{\prime})+c(x_{k-1}+1,n)<\textit{cost}(X^{\prime})+c(x_{k-1}+1,n)=\textit{cost}(X),
+
+contradicting the optimality of
+X
+.
+∎
+
+Theorem 2
+
+(Correctness of
+\mathbf{Y}
+)
+.
+
+For all
+j\in[1,n]
+and
+l\in[1,k]
+, the entry
+y_{j,l}
+equals the minimum cost of any
+l
+-partition of
+[1,j]
+.
+
+Proof.
+
+By induction on
+j
+.
+
+Base case (
+j=1
+).
+The unique
+1
+-partition of
+[1,1]
+has cost
+c(1,1)
+, so
+y_{1,1}=c(1,1)
+is correct. For
+l>1
+, no
+l
+-partition of a single element exists, so
+y_{1,l}=M
+is correct.
+
+Inductive step (
+j>1
+).
+Assume the claim holds for all
+j^{\prime}<j
+. For
+l=1
+, the unique
+1
+-partition of
+[1,j]
+is the single interval with cost
+c(1,j)
+, which is correctly recorded by
+y_{j,1}
+. For
+l>1
+, every
+l
+-partition of
+[1,j]
+consists of an
+(l-1)
+-partition of
+[1,i]
+for some
+1\leq i<j
+, followed by the interval
+[i+1,j]
+. By the induction hypothesis,
+y_{i,l-1}
+gives the minimum cost of any
+(l-1)
+-partition of
+[1,i]
+. The recurrence
+
+y_{j,l}=\min_{1\leq i<j}\!\left(y_{i,l-1}+c(i+1,j)\right)
+
+therefore yields the minimum cost among all such decompositions, completing the induction.
+∎
+
+To reconstruct the actual optimal
+k
+-partition, we compute witness matrix
+\mathbf{W}
+alongside
+\mathbf{Y}
+for the recursive case that contains following witnesses:
+
+\displaystyle w_{j,l+1}
+
+\displaystyle=\arg\min_{1\leq i<j}\left(y_{i,l}+c(i+1,j)\right)
+
+\displaystyle j\in[2,n],l\in[1,k-1]
+
+where
+\arg\min
+returns the smallest
+i
+among all minimal indices, and other entries of the matrix can be set to arbitrary values, such as zero.
+
+The specializations in the set
+X
+for the normalized specialization function
+\varphi_{X}^{n}
+with
+X=\{x_{1},\ldots,x_{k-1}\}
+are then recovered from the witnesses by back-tracking:
+
+\displaystyle x_{k-1}
+
+\displaystyle=w_{n,k}
+
+(11)
+
+\displaystyle x_{l}
+
+\displaystyle=w_{x_{l+1},l+1}
+
+\displaystyle l\in[1,k-2]
+
+(12)
+
+Lemma 5
+
+(Witness–Partition Correspondence)
+.
+
+Let
+\varphi_{X}^{n}
+with
+X=\{x_{1},\ldots,x_{k-1}\}
+be an optimal normalized
+specialization function recovered by back-tracking through
+\mathbf{W}
+:
+
+\displaystyle x_{k-1}
+
+\displaystyle=w_{n,\,k},
+
+\displaystyle x_{l}
+
+\displaystyle=w_{x_{l+1},\,l+1},\quad l\in[1,k-2].
+
+Then for all
+l\in[1,k-1]
+, the witness
+w_{x_{l+1},\,l+1}
+equals
+x_{l}
+, i.e.,
+
+w_{x_{l+1},\,l+1}=x_{l}.
+
+Proof.
+
+We proceed by downward induction on
+l
+, from
+l=k-1
+down to
+l=1
+.
+
+Base case (
+l=k-1
+).
+
+By the definition of the recurrence,
+
+y_{n,\,k}=\min_{1\leq i<n}\!\left(y_{i,\,k-1}+c(i+1,\,n)\right),
+
+and the witness records
+
+w_{n,\,k}=\arg\min_{1\leq i<n}\!\left(y_{i,\,k-1}+c(i+1,\,n)\right).
+
+By the Correctness Theorem,
+y_{n,k}
+equals the minimum cost of any
+k
+-partition
+of
+[1,n]
+.
+The optimal normalized specialization
+\varphi_{X}^{n}
+achieves this minimum, and its last interval is
+[x_{k-1}+1,n]
+, so the split point
+i=x_{k-1}
+is a minimizer of the recurrence.
+Hence
+w_{n,k}=x_{k-1}
+.
+
+Inductive step.
+
+Suppose the claim holds for
+l+1
+, i.e.,
+w_{x_{l+2},\,l+2}=x_{l+1}
+, so that
+back-tracking has correctly recovered
+x_{l+1}
+.
+We show
+w_{x_{l+1},\,l+1}=x_{l}
+.
+
+By the recurrence,
+
+y_{x_{l+1},\,l+1}=\min_{1\leq i<x_{l+1}}\!\left(y_{i,\,l}+c(i+1,\,x_{l+1})\right),
+
+with witness
+
+w_{x_{l+1},\,l+1}=\arg\min_{1\leq i<x_{l+1}}\!\left(y_{i,\,l}+c(i+1,\,x_{l+1})\right).
+
+By the Optimal Substructure Lemma applied repeatedly from the full range
+[1,n]
+
+down to the prefix
+[1,x_{l+1}]
+, the restriction
+X^{\prime}=\{x_{1},\ldots,x_{l-1}\}
+
+is an optimal
+l
+-partition of
+[1,x_{l+1}]
+(using
+x_{l}
+as the last split point
+before
+x_{l+1}
+). Therefore the split
+i=x_{l}
+achieves
+
+y_{x_{l},\,l}+c(x_{l}+1,\,x_{l+1})=y_{x_{l+1},\,l+1},
+
+so
+i=x_{l}
+is a minimizer of the recurrence, and hence
+
+w_{x_{l+1},\,l+1}=x_{l}.\qed
+
+Worst-Case Runtime Complexity.
+
+Computing
+\mathbf{Y}
+requires filling
+n\times k
+entries, each requiring at most
+n
+comparisons, giving an overall complexity of
+\mathcal{O}(kn^{2})
+.
+If
+k=\mathcal{O}(n)
+, this reduces to
+\mathcal{O}(n^{3})
+.
+Precomputing all interval costs takes
+\mathcal{O}(n^{2})
+, which is dominated by the recurrence and hence can be neglected in the worst-case runtime complexity.
+
+Extension.
+
+The coverage constraint in Definition
+1
+permits the construction of a monotonic space function if some specializations with higher node-types are more space efficient than lower specializations.
+For example, we use a dense node representation (storing up to
+n
+children/values) in addition to a sparse representation that can have up to
+i
+values/children, for all
+i
+,
+1\leq i\leq n
+.
+However, the dense implementation becomes more space-efficient at a certain number of values/children, since the dense representation encodes its values/children without storing their indices, whereas the sparse specialization requires indices.
+In our implementation, after the specializations for node type 241, the dense representation for 256 node types becomes more efficient.
+To ensure that the dynamic program can still be used, we construct a new monotonic space function
+s^{\prime}:[1,n]\rightarrow\mathbb{N}
+from the original
+s
+by
+
+s^{\prime}(i)\mapsto\min_{i\leq l\leq n}s(l),
+
+which selects the cheapest available specialization for each node type
+i
+.
+If no cheaper representation exists,
+s^{\prime}(i)=s(i)
+. This local choice does not affect the optimality of the specialization.
+
+The construction of the new monotonic space function
+s^{\prime}\colon[1,n]\to\mathbb{N}
+from the original function
+s
+by
+s^{\prime}(i)=\min_{i\leq l\leq n}s(l)
+selects the cheapest available specialization for each node type
+i
+.
+If no cheaper representation exists,
+s^{\prime}(i)=s(i)
+.
+This local choice does not affect the optimality of the specialization.
+The function
+s^{\prime}
+is monotone: for any
+i\leq j
+in
+[1,n]
+, every index eligible when computing
+s^{\prime}(j)
+is also eligible when computing
+s^{\prime}(i)
+, since the minimization for
+s^{\prime}(i)
+ranges over a super set of that for
+s^{\prime}(j)
+.
+Taking a minimum over a larger set can only decrease or preserve the value, so
+s^{\prime}(i)\leq s^{\prime}(j)
+.
+
+For the optimization problem, the solution
+\varphi
+obtained using
+s^{\prime}
+must be re-interpreted in a post-processing step.
+The actual specialization
+\varphi^{\prime}
+remaps each specialization chosen under
+s^{\prime}
+to the corresponding minimizer under the original function
+s
+:
+
+\varphi^{\prime}(i)\mapsto\arg\min_{\varphi(i)\leq l\leq n}s(l)
+
+Another potential optimization is to consider the zero node where neither nodes nor values are stored.
+Zero nodes may arise from changes to inner nodes and leaves and require special care, though they can be handled programmatically and do not affect the optimization problem.
+
+5
+Implementation
+
+Our database uses a layered architecture in which each layer builds on the one below and exposes well-defined interfaces, mirroring the natural layering of the Verkle Trie specification itself.
+The architecture comprises five layers: (1) Interface to Transaction Manager, (2) Tree Implementation, (3) Node Manager, (4) Storage, and (5) File I/O. Our architecture supports concurrent read and write operations.
+
+Figure 7
+:
+Layered Architecture
+
+Transaction Manager Interface.
+
+The highest layer is the transaction manager interface, which provides the EVM with a way to query and update the database.
+The interface is split into the database and the state interfaces.
+The former provides functions for opening and closing the DB, creating checkpoints, and accessing live and archive states.
+This is implemented in
+lib.rs
+.
+The state interface provides functions for querying and updating the state, such as getting and setting account balances, nonces, storage slots, and code, and is implemented in
+database/verkle/state.rs
+.
+Because the transaction manager, as well as other components like the client, consensus, the VM, RPC, etc., are implemented in Go, the database and state interfaces are exposed to Go via FFI implemented in the file
+ffi/exported.rs
+.
+
+Figure 8
+:
+Layered Architecture
+
+Tree Implementation
+
+.
+The tree implementation provides an interface to read and write key-value pairs stored in the Verkle Trie and to compute root commitments.
+It consists of two sub-layers: the embedding layer and the Verkle Trie layer.
+The embedding layer maps the Ethereum state to key-value pairs.
+These key-value pairs are then stored using the Verkle Trie layer.
+Computing the key for a value is expensive, as it requires computing a Pedersen commitment. Therefore, we memoize computed keys to avoid redundant computations.
+The embedding can be found in
+database/verkle/embedding
+.
+There are two implementations of the verkle trie layer: an in-memory implementation for testing and a main
+managed-trie
+implementation that uses the node manager to access nodes and the storage layers to persist them.
+The in-memory implementation can be found in
+database/verkle/variants/simple
+and the
+managed-trie
+implementation in
+database/verkle/variants/managed
+.
+Generic tooling for working with managed tries, independent of the managed Verkle Trie, can be found in
+database/managed_trie
+.
+
+Node Manager.
+
+Figure 9
+:
+Layered Architecture
+
+The node manager owns all in-memory node instances and provides functions to create, delete, and access nodes.
+The node manager ensures that only a single copy of each node exists in memory at any time and provides access to them via read and write guards.
+It is an interface, of which there are two implementations:
+an
+in-memory
+node manager, which keeps all nodes in memory, used only for testing,
+and a
+cached
+node manager with limited capacity that evicts nodes, writing them to disk via the storage layer.
+
+The
+cached
+node manager uses
+quick_cache
+
+[
+31
+]
+, a high-performance concurrent cache for Rust, as its cache.
+It uses an eviction algorithm derived from CLOCK-PRO
+[
+14
+]
+and optimized for weak access patterns, such as loops and scans.
+The main difference with the well-known LRU algorithm is that, instead of using the
+recency
+of an item, i.e., the distance from the last inserted element for deciding which element to evict, it uses a metric called
+reuse distance
+, defined as the distance from the last time that specific element was requested.
+This allows
+quick_cache
+to avoid inserting elements that are requested only once in the cache, as their reuse distance is infinite.
+The main implication is that inserting an element into a full cache does not guarantee that it will be inserted into the main cache allocation.
+Instead,
+quick_cache
+inserts it into a secondary allocation called the
+ghost pool
+, which tracks previously requested elements.
+Whenever an element is requested and not present in the cache, it is looked up in the ghost pool to calculate its reuse distance and, if it is not found, inserted into the main cache allocation.
+However, this behavior is problematic for the node manager, as node ownership is delegated to the manager; therefore, it must ensure that the node remains in the cache after insertion.
+Therefore, elements are explicitly pinned before insertion.
+
+Much of the complexity is hidden in the
+LockCache
+component that wraps
+quick_cache
+and provides readwrite access guards to its elements,
+which are stored in a fixed-size array as
+RWLock
+, while
+quick_cache
+stores the array occupied slots.
+
+This decoupling is necessary because stable storage locations are required to hand out lock guards whose lifetimes are bound by the cache’s lifetime.
+
+quick_cache
+only returns copies of its internal elements, and therefore, a guard to it would refer to a temporary object.
+This structure has the great advantage that locking happens only in the
+LockCache
+, which concentrates all synchronization logic in a single place.
+Moreover, because only guards are given away, owning a write guard guarantees that no other reference to the node exists.
+This is especially important when updating the trie, as it allows for safe modifications of the tree.
+
+The
+CachedNodeManager
+implements the Node Manager interface, wrapping the
+LockCache
+and a storage backend.
+When a node is requested, the node manager first checks the cache; if it is not found, it retrieves it from the storage backend and caches it.
+It is also responsible for keeping the storage layers up to date when nodes are modified or deleted by flushing the changes to disk only when changes on the node are detected, i.e., when a write guard is dropped. All of these components can be found in
+node_manager
+.
+
+Storage Layers.
+
+Figure 10
+:
+Layered Architecture
+
+The storage layers sit on top of the file layers and are responsible for persisting nodes to disk and loading them into memory upon request.
+The nodes are stored in flat files as plain old data.
+Nodes have to implement an interface that allows them to be converted to and from bytes.
+This way, it is possible to use the in-memory representation of the nodes directly, which incurs minimal overhead, or (as is the case for the main implementation) convert them to a more compact format and serialize this format to disk.
+There is one file per node type, so all nodes stored in a given file have the same size.
+This enables fast random access by computing a node’s offset from its ID.
+Each node ID encodes both the file index and the node type.
+The offset can be obtained by extracting the index from the ID and then multiplying it by the node type size.
+
+NodeFileStorage manages a file for a specific node type and provides functions to read and write nodes to that file via the file layer.
+It also keeps track of the next available offset for new nodes and maintains a free list of deleted nodes to reuse their space.
+It is implemented in
+storage/file/node_file_storage
+
+FileStorageManager multiplexes multiple NodeFileStorage instances, one for each node type, and provides a unified interface for reading and writing the node enum.
+It also manages checkpoint creation, which ensures the database’s consistency and durability.
+The implementation of FileStorageManager can be found in
+storage/file/file_storage_manager
+
+StorageWithFlushBuffer is a purely optional layer that wraps a storage backend and adds a flush buffer on top of it.
+When nodes are modified or deleted, they are not immediately written to disk; instead, they are stored in the flush buffer and asynchronously written to disk by background workers.
+This move writes off the critical path, thereby accelerating cache eviction and ultimately reducing latency.
+It also ensures that nodes evicted from the cache can be read from this buffer until they are guaranteed to be persisted to disk.
+The implementation can be found in
+storage/storage_with_flush_buffer.rs
+
+File Layers.
+
+The file layer is the lowest level and is responsible for reading and writing raw bytes to and from disk.
+Two primary implementations are provided, which differ in their support for parallel operations.
+
+SeekFile
+utilizes the
+read
+
+[
+20
+]
+,
+write
+
+[
+21
+]
+, and
+lseek
+
+[
+18
+]
+system calls and is compatible with all platforms.
+All accesses are serialized using a mutex, which prevents parallel execution.
+
+NoSeekFile
+employs the
+pread
+and
+pwrite
+system calls
+[
+19
+]
+, which are available exclusively on Unix systems.
+Because these calls are cursor-independent, concurrent reads and writes to non-overlapping file regions can proceed in parallel.
+They also halve the number of system calls by eliminating the need for a preceding seek.
+Concurrent access to overlapping offsets is prevented by a fine-grained locking mechanism that maps offsets to mutexes.
+Two optional caching proxies,
+PageCachedFile
+and
+MultiPageCachedFile
+, can wrap either base implementation using a unified interface.
+These proxies serve requests from an in-memory buffer containing either a single 4 KiB page or multiple pages, respectively.
+When the target data is already cached, no system calls are required.
+On a page miss, if the current page is dirty, it is written back before loading the new page.
+Both proxies support direct I/O to bypass the operating system page cache.
+PageCachedFile
+serializes all accesses using a mutex, whereas
+MultiPageCachedFile
+permits concurrent accesses across different pages.
+All four implementations, along with the shared interface, are available in the storage file backend module
+[
+32
+]
+.
+
+5.1
+Trie Update and Commitment Pipeline
+
+Block finalization requires the database to complete two interdependent operations within Sonic’s 300-millisecond block window: applying all state mutations produced by the block’s transactions to the Verkle Trie, and recomputing the cryptographic state root commitment over the resulting structure.
+The two tasks are not independent: each inner node’s commitment depends recursively on its children’s commitments, so commitment recomputation cannot begin until the structural update is complete.
+Yet together they must fit within the same latency budget that governs block production.
+Meeting this budget requires optimizations at every level of the pipeline.
+The optimizations range from how mutations are assembled and delivered to the Trie, how the trie traversal is structured to minimize node accesses and synchronization overhead, and how the elliptic-curve arithmetic underlying the Pedersen commitment scheme is executed to exploit the scheme’s algebraic structure and the parallelism available in the hardware.
+
+We introduce a three-stage pipeline that processes blocks into an updated state root and applies optimizations at each stage. The first stage is the responsibility of the embedding layer.
+The second stage is carried out by the Verkle Trie layer in cooperation with the node manager.
+The third stage, commitment recomputation, is performed within the node manager layer.
+Each stage feeds directly into the next, and the design of each is constrained by both the requirements it must satisfy and the guarantees it can rely on from the stage preceding it.
+
+Stage 1 — Batch assembly (embedding layer).
+
+Upon block completion, the transaction manager delivers the full set of state mutations accumulated during the block’s execution: account nonces, balances, contract storage slot writes, and code updates.
+In a naive implementation, each mutation would be applied to the trie independently, requiring a separate root-to-leaf traversal for each key.
+For a block containing
+u
+mutations distributed across
+p
+distinct leaf nodes, this yields
+\mathcal{O}(u\cdot d)
+node accesses, where
+d\leq 32
+is the maximum trie depth.
+Since
+u
+can reach several thousand for a computationally intensive block, the traversal cost alone would represent a significant fraction of the block window.
+
+The embedding layer avoids this by transforming the entire mutation set into a single sorted
+update batch
+before any trie access occurs.
+Each mutation is first passed through the state embedding, which maps it to a
+(k,v)
+pair in the trie’s 32-byte key space. The resulting pairs are collected into a list and sorted lexicographically by key.
+The cost of this preprocessing step is
+\mathcal{O}(u\log u)
+, which is dominated by the sort.
+The embedding itself requires one Pedersen commitment computation per unique account address, with the results memoized to avoid redundant elliptic-curve operations across mutations that touch the same account.
+
+Organizing mutations into a sorted batch before Trie access confers three structural advantages that compound across the subsequent stages.
+First, multiple mutations to the same key within a single block are merged during batch assembly, so the trie is presented with at most one write per key per block, and intermediate values produced by intra-block state changes are never written to the trie at all.
+Second, because the complete set of mutations destined for any given node are known before that node is first accessed, the node manager can determine in advance whether a structural transformation (e.g., promoting a sparse node to a larger specialisation to accommodate additional slots) will be required, and if so, can allocate the target variant directly rather than performing a sequence of incremental promotions.
+Third, and most significantly for the ArchiveDB, batching ensures that each node on any root-to-leaf path is subject to at most one copy-on-write operation per block, regardless of how many of its slots are written.
+This bounds the number of fresh node identifiers allocated per block to the number of distinct paths traversed, and simplifies the version accounting logic considerably.
+
+Stage 2 — Breadth-first trie traversal (Verkle trie layer).
+
+The sorted update batch is handed to the root node, which partitions it into sub-batches for each affected child.
+Because the batch is sorted lexicographically by key, the first byte of each key determines which child receives each entry, and the partition can be computed by a single linear scan of the batch without copying any data: each sub-batch is represented as a contiguous slice of the original sorted list.
+This partitioning recurses level by level, with each node at depth
+\ell
+splitting its received sub-batch among its affected children at depth
+\ell+1
+, until the sub-batches reach the extension nodes at the leaves.
+The total work performed across all partitioning steps is
+\mathcal{O}(u\cdot d)
+comparisons, the same asymptotic cost as the naive per-mutation traversal, but with substantially lower constant factors because the sorted order eliminates redundant path re-traversals and because cache locality is improved by processing sibling nodes together.
+
+The traversal proceeds in a
+breadth-first, level-wise
+order rather than depth-first.
+This search order is required by the locking protocol because a node’s structural variant may change as a result of its update.
+For instance, when an incoming sub-batch causes the node to exceed its current specialization’s capacity, necessitating promotion to a larger variant with a new storage identifier, the parent must be informed of the node’s new identifier before the parent’s own write lock is released.
+Breadth-first traversal ensures that the parent’s lock is still held when the child’s identifier is updated.
+
+Concurrent access during traversal is managed by a
+hand-over-hand locking
+protocol.
+At any point during the traversal, the node manager holds write locks on all nodes at depth
+\ell-1
+that are parents of at least one node currently being processed, and on all nodes at depth
+\ell
+that are actively being updated.
+Before descending to depth
+\ell+1
+, locks are acquired on all nodes at that depth that will be needed.
+Once all nodes at depth
+\ell
+have been fully processed and their parent identifiers updated, the locks on depth
+\ell-1
+are released.
+At any instant, locks therefore span at most three consecutive levels of the Trie.
+As soon as the root’s write lock is released at the conclusion of the traversal, concurrent read queries to sub-trees that were not modified by the current block can proceed without contention, permitting the RPC layer and the archive reader to serve historical queries in parallel with
+the subsequent commitment recomputation.
+
+When a node must be promoted to a larger specialization to accommodate an incoming write, the target specialization size is determined from the sub-batch size before the node is accessed.
+The node manager, therefore, allocates the correct variant in a single operation, writes all incoming values directly into it, and releases the previous node identifier to the free list.
+This avoids the sequence of intermediate allocations and releases that would occur if mutations were applied one at a time under a per-mutation traversal, and reduces the transient fragmentation of the
+free list during high-write blocks.
+
+Stage 3 — Commitment recomputation (node manager layer).
+
+Once the Trie traversal is complete and all structural updates have been applied, the state root commitment must be recomputed over the set of nodes dirtied during the update.
+Commitment recomputation is the computationally dominant stage of the pipeline.
+Each Pedersen commitment to a vector of
+n
+field elements requires
+n
+elliptic-curve scalar multiplications over the Bandersnatch curve, and each such multiplication is roughly two to
+three orders of magnitude more expensive than a single SHA-256 evaluation.
+For a dense inner node with
+n=256
+children, a full commitment recomputation from scratch would require 256 scalar multiplications, which at current hardware speeds takes on the order of several milliseconds.
+This is well above the per-node budget, consistent with the 300-millisecond block window.
+Three complementary optimizations are applied to bring the aggregate commitment cost within budget: homomorphic incremental updates, adaptive multi-scalar multiplication windowing, and multi-threaded work-stealing parallelism.
+
+Homomorphic Incremental Updates.
+
+The Pedersen commitment scheme is additively homomorphic, and this property can be exploited to avoid full recomputation whenever only a subset of a node’s slots have changed.
+For a commitment
+C
+to a vector in which position
+i
+changes from
+a_{i}
+to
+a_{i}^{\prime}
+, the updated commitment satisfies
+
+C^{\prime}=C+(a_{i}^{\prime}-a_{i})\cdot G_{i},
+
+(13)
+
+requiring exactly one scalar multiplication and one group addition per modified slot, independent of the total vector length.
+For inner nodes, this update is applied at each position where a child commitment has changed: if
+\delta
+children are modified during a block, the inner node’s commitment requires
+\delta
+scalar multiplications rather than 256, reducing the cost by a factor of
+256/\delta
+.
+Since empirical data from Sonic’s history shows that the number of modified children per inner node per block is typically small (see Section
+6
+), this reduction is substantial in practice.
+
+For extension nodes, the two intermediate commitments
+C_{1}
+and
+C_{2}
+are maintained persistently in the node’s cached in-memory representation alongside the final node commitment
+C_{\mathrm{ext}}
+. Whenever a value slot changes,
+C_{1}
+or
+C_{2}
+is updated via Equation (
+13
+), and
+C_{\mathrm{ext}}
+is then updated incrementally from the new intermediate commitment, avoiding the recomputation of the stem scalar
+\mathrm{Stem}\cdot G_{2}
+which, as a product of a 31-byte field element and a fixed generator, is the most expensive single term in Equation (
+4
+).
+The three cached values —
+C_{1}
+,
+C_{2}
+, and
+C_{\mathrm{ext}}
+— together with the node’s slot data constitute the node’s in-memory footprint; they are not persisted to disk, and are reconstructed from the on-disk representation on first load.
+
+Adaptive Multi-scalar Multiplication Windowing.
+
+The scalar multiplications underlying both the incremental update formula and the full recomputation path are computed using a windowed signed multi-scalar multiplication algorithm with Booth recoding
+[
+1
+]
+.
+In this algorithm, each scalar is recoded into a signed digit representation with digit values in
+\{-(2^{w-1}-1),\ldots,2^{w-1}-1\}
+using a window of width
+w
+bits, and the required multiples of each generator point are precomputed and stored in a table of size
+2^{w-1}
+per generator.
+A larger window reduces the number of group operations per scalar at the cost of a larger precomputation table; the optimal window width therefore depends on both the cost of group operations and the number of generators actively involved in a given computation.
+
+The node manager selects the window width adaptively. When only generators
+G_{1}
+through
+G_{5}
+are active, a window of width
+w=16
+is used, reducing the number of group operations to
+\lceil 253/16\rceil=16
+per scalar at the cost of a precomputation table of
+5\times 2^{15}=163{,}840
+points, which is feasible given that these five generators are fixed and their tables can be computed once at initialisation. This is the case for the four-term extension node commitment
+C_{\mathrm{ext}}
+in Equation (
+4
+) and for the five-term key computation in the embedding layer.
+For all other computations, where up to 256 generators may be active, a window of
+w=10
+is used, balancing operation count against table size.
+Using
+w=16
+uniformly across all 256 generators would require
+256\times 2^{15}\approx 8.4
+million precomputed points, which exceeds the practical memory budget for a cache-resident node.
+
+Multi-threaded Work-stealing Traversal.
+
+The commitment updates across all dirty nodes are independent of one another within a given level of the trie: the updated commitment of a node at depth
+\ell
+depends on the updated commitments of its children at depth
+\ell+1
+, but not on those of its siblings.
+This level-wise dependency structure admits a natural parallel decomposition.
+The node manager implements this using a
+work-stealing thread pool
+: starting from the root, it recursively enqueues a commitment update task for each dirty child node, and each task in turn enqueues tasks for its own dirty children.
+Worker threads dequeue and execute tasks as they become available; when a thread exhausts its local task queue, it steals tasks from other threads’ queues.
+A parent task blocks on a lightweight barrier until all its child tasks have completed, then computes its own commitment update from the children’s results.
+They can be processed concurrently without synchronization beyond the per-node barriers because sibling subtrees are structurally independent.
+
+The work-stealing approach is effective when the dirty set is large enough to meaningfully exploit the hardware parallelism.
+When the dirty set is small (e.g., in blocks that touch only a handful of accounts) the overhead of task creation, queuing, and inter-thread synchronization exceeds the computational cost
+of the commitment updates themselves, and the parallelism yields a net
+slowdown.
+The node manager therefore measures the size of the dirty set before committing to the parallel path, and falls back to a sequential depth-first traversal over the dirty nodes when the set size falls below an empirically determined threshold.
+This adaptive dispatch ensures that the parallel implementation does not penalize light blocks while still delivering throughput gains for the computationally intensive blocks that dominate Sonic’s production workload.
+
+6
+Evaluation
+
+The goal of the experiments is to evaluate SonicDB S6 across two orthogonal dimensions: storage efficiency and throughput.
+On the storage side, we quantify how occupancy-aware node specializations and delta nodes reduce the on-disk footprint of both the LiveDB and the ArchiveDB relative to an unoptimized baseline and to the Geth Verkle implementation.
+On the throughput side, we measure how fast the database can process Sonic’s historical block sequence and compare against a persistent Geth Verkle baseline extended with a LevelDB backend.
+
+Metrics.
+
+Storage consumption is reported in gibibytes (GiB) at a fixed replay depth of 40 million blocks.
+In Ethereum-compatible blockchains,
+gas
+is the unit of computational work required to execute a transaction or smart contract operation.
+Each operation—such as an arithmetic instruction, a storage read, or a contract call—consumes a fixed or dynamic amount of gas defined by the protocol specification
+[
+37
+]
+.
+A block is subject to a
+gas limit
+, which caps the total computational work that can be included in a single block.
+Throughput is therefore naturally expressed in terms of gas processed per unit of time rather than transactions per second, since transactions vary widely in their computational complexity and a single transaction may consume anywhere from 21,000 gas (a plain transfer) to several million gas (a complex smart contract interaction).
+We report throughput in
+millions of gas per second
+(Mgas/s), computed as the total gas consumed by all transactions in a replay window divided by the elapsed wall-clock time.
+This metric captures both the database’s ability to sustain high-frequency block ingestion and the workload’s computational intensity, making it a more faithful indicator of production performance than block-per-second counts alone.
+End-to-end wall-clock replay time is reported as a secondary throughput indicator.
+
+Platform.
+
+All experiments were conducted on a commodity machine equipped with an AMD Ryzen 5 3600 CPU and 64 GB of RAM, running Go 1.25.7 and rustc 1.92.0.
+This hardware configuration is intentionally representative of machines available to ordinary Sonic or Ethereum node operators, ensuring that results are reproducible outside of a datacenter setting.
+
+Claims.
+
+The experiments are designed to substantiate three claims made in this paper.
+First, that the dynamic-programming-selected set of 10 node specializations reduces LiveDB storage by 98%, from 1,078 GiB to 22 GiB, while 512 specializations reduce it further at the cost of measurable throughput degradation.
+Second, that delta nodes, combined with node specializations, reduce ArchiveDB storage by 95%, from 16,141 GiB to 809 GiB, with inner delta nodes responsible for the dominant share of that reduction.
+Third, that the full SonicDB S6 stack achieves
+2.85\times
+higher throughput than the persistent Geth Verkle baseline, while the ArchiveDB remains within approximately 24% of LiveDB performance—fast enough to keep pace with Sonic’s production block rate of 300 milliseconds per block.
+
+6.1
+Node Type Frequency and Choosing k
+
+Figures
+11
+and
+12
+show the distribution of actual slot usage across inner and leaf nodes for both the LiveDB and the ArchiveDB, measured over the first 55 million blocks of Sonic history.
+The distributions are heavily skewed toward low occupancy in both cases.
+In the LiveDB, 95.7% of leaf nodes store at most 3 of the 256 values, and 87.6% of inner nodes have no more than 11 children.
+This extreme sparsity confirms that allocating the full 256-slot layout for every node would result in massive storage waste, and motivates the node specialization framework described in Section
+4
+.
+The ArchiveDB exhibits a similarly skewed distribution, though the copy-on-write update semantics introduce a broader tail, as nodes that are frequently modified accumulate more slots over successive versions.
+Figure
+13
+further illustrates the dynamic interplay between node creation and deletion in the LiveDB over the first 1.4 million blocks.
+The figures show that as the trie evolves, nodes are repeatedly promoted to larger specializations when their occupancy grows, and their former storage slots are released to the free list rather than immediately reclaimed.
+
+This behavior produces a characteristic pattern in which the number of reusable offsets rises sharply whenever a wave of specialization upgrades occurs, temporarily widening the gap between total allocated slots and slots that are actively storing data. There is a discrepancy: instead of being freed, nodes are put into free lists so that future node instantiations can reuse them. The figure shows that this gap can be substantial, underscoring that the choice of specialization granularity directly affects not only the per-node storage footprint but also the efficiency of space recycling.
+Taken together, these observations establish the empirical foundation for the storage optimizations presented in this paper: the Trie is sparse, node occupancy is non-uniformly distributed, and the number of distinct specializations must be carefully balanced to avoid excessive fragmentation and reuse overhead.
+
+(a)
+
+Inner
+
+(b)
+
+Leaf
+
+Figure 11
+:
+Distribution of actual slot usage in Verkle nodes of a LiveDb
+
+(a)
+
+Inner
+
+(b)
+
+Leaf
+
+Figure 12
+:
+Distribution of actual slot usage in Verkle nodes of an ArchiveDB
+
+Figure 13
+:
+Reusable vs. total node counts and used node counts of a LiveDB
+
+Figure 14
+:
+Pareto frontier - Size vs Mgas/s Leaf Specializations
+
+Figure
+14
+shows the Pareto frontier of the space usage and performance for different leaf node specializations, where the y-axis shows the space usage in GB and the x-axis shows the performance in Mgas/s. It is clear that having more specializations introduces significant overhead, resulting in a loss of up to 10 Mgas/s as the number of specializations increases from 16 to 256. Moreover, space usage does not decrease significantly with additional specializations, saving 100 MiB for the same specialization range. To find the best possible
+k
+, we seek the tangent line to the Pareto frontier that passes through the origin of the graph. This gives us a geometric approximation optimizing the ratio between gas rate and storage size, i.e.,
+xf^{\prime}(x)-f(x)=0\implies f^{\prime}(x)=\frac{f(x)}{x}
+. For our experiments, a good value for
+k
+is 16.
+
+For the rust implementation, we used the dynamic programming model described in Section
+4
+to compute the optimal specializations for leaf nodes, and decided to use 10 specializations: 9, 15, 21, 256 children for inner nodes, and 1, 2, 5, 18, 146, 256 values for leaf nodes.
+
+6.2
+Throughput
+
+As a comparison, we used the Geth Verkle implementation.
+However, the original Geth implementation of the Verkle trie runs entirely in memory; thus, the number of blocks that can be processed is limited by available memory.
+Moreover, the verkle implementation has been discontinued and removed starting from Geth v1.17.0
+1
+1
+
+1
+
+https://github.com/ethereum/go-ethereum/pull/33461
+.
+To enable a fair comparison, we extended the Geth Verkle implementation to include a LevelDB storage backend.
+Our implementation
+2
+2
+
+2
+
+https://github.com/0xsoniclabs/carmen/tree/herbert/geth_vt_persistent/go/database/vt/geth2
+depends directly on
+go-verkle
+
+[
+34
+]
+, with some parts of the code such as the trie embedding ported from go-Ethereum v.16.9, and supports both Live and Archive modes.
+The LevelDB backend follows the design of the go-ethereum MPT LevelDB backend closely to ensure a fair representation of the original intended implementation of the Verkle trie in Geth.
+
+Figure 15
+:
+LiveDB vs Geth Verkle (LevelDB) performance for the first 40M blocks.
+
+Figure
+15
+shows the performance comparison of the LiveDB and Geth Verkle (with LevelDB) for the first 40M blocks.
+Our implementation outperforms the Geth Verkle implementation by a factor of 3.2x, taking 42h43m to process the first 40M blocks, compared to 137h53 m for the Geth Verkle implementation.
+
+Figure 16
+:
+LiveDB vs ArchiveDb performance for the first 40M blocks.
+
+Figure
+16
+shows the performance comparison of the LiveDB and ArchiveDb Rust implementations.
+The archive implementation takes 56h12m, 24% slower than the live implementation but still in the same order of magnitude, which is required for the archive to stay in sync with the network.
+
+6.3
+Disk Size
+
+0
+100
+200
+300
+400
+500
+600
+700
+800
+900
+no spec.
+10 spec.
+512 spec.
+Geth Verkle
+817.1
+17.9
+15.2
+25.6
+Size (GiB)
+
+Figure 17
+:
+Comparison of LiveDb Sizes in GiB for 40M blocks
+
+Figure
+17
+shows the comparison of LiveDB sizes for 40M blocks.
+Using 10 specializations computed using the dynamic programming model reduces the storage space by 97.8%, from 817.1 GiB to 17.9 GiB.
+Using all 512 possible specializations reduces storage space by an additional 15%, achieving 15.2 GiB, but introduces a significant performance overhead, as shown in Figure
+14
+.
+On the other hand, Geth Verkle uses 25.6 GiB of storage, which is 40% larger than our Rust file implementation.
+It is worth noting that the Geth Verkle LevelDB backend compresses the stored data, while our file implementation does not.
+
+0
+0.2
+0.4
+0.6
+0.8
+1
+1.2
+1.4
+1.6
+1.8
+\cdot 10^{4}
+no delta, no spec.
+no spec., w/ delta
+10 spec., no delta
+10 spec., w/ delta
+16{,}141
+11{,}710
+5{,}241
+809
+Size (GiB)
+
+Figure 18
+:
+Comparison of Archive Sizes in GiB for 40M blocks
+
+Figure
+18
+shows a comparison of ArchiveDB sizes for 40M blocks.
+Here, we have used two combinations of optimizations: node specializations and delta nodes.
+We can see that the two optimizations are complementary and both contribute to the overall reduction in size.
+The delta node alone reduces the size by 25.48%, while the node specializations alone reduce the size by 67.53%. The combination of the two optimizations reduces the size by 94.99%, going from 16141 GiB to 809 GiB.
+
+Figure 19
+:
+Archive DB growth rate with different combinations of delta node implementations.
+
+As shown before, the delta nodes are responsible for a significant reduction in the overall size of the archive database.
+To better understand the impact of delta nodes on the archive database’s growth rate, we can examine how different combinations of delta node implementations affect it.
+Figure
+19
+shows the growth rate of the archive database for the first 4M blocks with different combinations of delta node implementations.
+It is clear that the inner delta nodes have the greatest impact on the growth rate of the archive database, as they grow quickly due to ArchiveDB’s copy-on-write nature.
+
+7
+Related Work
+
+Raju et al.
+[
+30
+]
+propose to use merkelized log-structured merge trees (mLSM) as the storage backend for Ethereum.
+Their main objectives are to reduce read and write amplification while still providing authenticated storage.
+To this end, they build on LSM trees, using immutable binary Merkle Tries instead of SSTables for authenticated storage.
+The root hashes of all sub-trees are combined into a single root hash.
+They maintain a lookup cache for each level of the LSM tree to speed up reads, and a bloom filter for each sub-tree to quickly determine whether a key may be present in that sub-tree.
+Furthermore, they batch updates in memory and write them as a single contiguous chunk.
+
+Reads of frequently used keys are served from the cache.
+For uncached keys, bloom filters help quickly determine whether a key may be in a sub-tree and avoid unnecessary tree traversals.
+This means a cache hit exhibits a worst-case runtime complexity of
+\mathcal{O}(1)
+disk operations.
+A cache miss has an amortized complexity of
+\mathcal{O}(\log N)
+, where
+N
+is the number of nodes in the sub-tree containing the key (amortized because Bloom filters may produce false positives, which would require multiple tree traversals).
+And because there are multiple sub-trees, each containing only a fraction of the total keys, the depth of each sub-tree is smaller than that of a single large tree containing all keys.
+
+Insertions and updates are batched and written out as a new Merkle Trie.
+This allows for one contiguous write operation, which is more efficient than many random writes.
+Creating a new sub-tree may trigger compactions of existing sub-trees.
+However, each update is guaranteed to be written only once to each level of the LSM tree.
+This means in the worst case, there are
+\mathcal{O}(H)
+writes for each update, where
+H
+is the number of levels in the LSM tree.
+
+One challenge with authenticated storage is that the LSM tree’s compaction algorithm must be deterministic.
+However, this is only an engineering challenge.
+
+Choi et al. proposed the Layered Merkle Patricia Trie (LMPT)
+[
+9
+]
+, a high-performance data structure for transaction processing systems.
+The main improvement over MPT is to split the trie into three smaller tries: a flat key-value store, a snapshot MPT serialized on disk, and an intermediate and a delta MPT in memory, serving as L2 and L1 caching layers, respectively.
+Reading operations follow a hierarchical organization, first in the Delta MPT, then in the Intermediate MPT, and finally in the storage, thereby significantly reducing I/O amplification.
+LMPT maintains both a flat key-value and an MPT view over the stored data, enabling fast data retrieval for non-authenticated reads with the former and authenticated reads with the latter.
+Writes are stored on the delta MPT, while a background thread merges the intermediate MPT into the underlying storage, allowing non-blocking updates.
+Upon reaching a specified threshold, the intermediate MPT is flushed to storage and replaced with the actual delta MPT, leaving the higher cache level empty.
+Compared with our approach, LMPT is significantly more difficult to implement because it requires maintaining and synchronizing three MPTs.
+In addition, it’s not Ethereum-compatible.
+
+Yang et al.
+[
+38
+]
+propose SALT, which reduces the read and write amplification incurred by authenticated reads when using a pure tree data structure and improves the storage efficiency for the lower sparse levels of the tree.
+They use a combination of a complete tree for the upper levels and flat buckets for the lower levels.
+Each bucket represents one sub-tree, but flattens all nodes into a strongly history-independent hash table.
+This way, the sparsity is no longer a problem.
+Additionally, there is now only a single commitment for each bucket, in addition to the commitments for the nodes in the upper part.
+The upper part of the tree and the commitments of the buckets are small enough to reside in memory.
+This means that authentication does not require any disk accesses.
+Since the upper part of the tree is in memory and hash maps allow point queries, both read and write operations require only a single disk access (except for bucket resizing).
+
+NOMT (Nearly-Optimal Merkle Trie)
+[
+29
+]
+is a merkelized database optimized for commodity hardware.
+In particular, it is designed to exploit modern SSD performance by packing data into 4KB pages to maximize SSD bandwidth and employing several techniques to hide latency, e.g., batching and DMA.
+NOMT is composed of two main components: Bitbox, a Merkle page store used for authenticated reads, and Beatree, a raw key-value store implemented as a custom B-Tree for serving state reads in 1 I/O.
+Each page stores a rootless B-tree of depth 6, allowing retrieval of
+2^{6}
+nodes in a single I/O.
+In addition, NOMT exploits DMA CPU idle time to generate witness proofs during fetch operations.
+However, the high latency of SSDs necessitates batching queries, a latency-hiding technique that requires a parallel EVM.
+In addition, it is unclear how an archive could be implemented, as it would require page duplication to keep reads aligned, incurring up to 4KB of 32-byte memory overhead for a single-node update.
+
+LVMT
+[
+22
+]
+uses authenticated multi-point evaluation trees (AMT)
+[
+35
+]
+as the underlying commitment scheme for an authenticated storage data structure.
+AMTs are an extension of KZG polynomial commitments
+[
+17
+]
+that offer faster proof generation at the cost of a logarithmic (instead of constant) proof size and the need to maintain additional proof-generation metadata.
+By storing
+key-version
+pairs within a hierarchy of AMTs, LVMT avoids costly elliptic curve multiplications on updates, as each value update increments the version by one.
+Values are stored as
+key-version-value
+triples in a separate append-only MPT that is created for each block.
+While LVMT has been shown to boost blockchain system throughput on real Ethereum traces by up to 2.7x, its multi-tree architecture introduces significant complexity for both implementation and proof verification, and the large amounts of required metadata necessitate sharding techniques to achieve good performance.
+
+8
+Conclusion
+
+We presented SonicDB S6, a production Rust implementation of a Verkle trie state database for the Sonic blockchain. Motivated by Sonic’s 300-millisecond block time and the need to serve both live and historical state queries in real time, we developed three principal contributions. First, occupancy-aware node specializations with a subsumption property, optimally selected via an
+\mathcal{O}(kn^{2})
+dynamic programming algorithm, reduce live database storage by 98%, from 1,078 GiB to 22 GiB across 55 million blocks of Sonic history. Second, delta nodes that store only changed slots relative to a base node, without chaining, reduce archive storage by 95%, from 16,141 GiB to 809 GiB, making it feasible to operate a full archive node on commodity hardware. Third, a layered architecture that combines batched trie updates, multi-threaded commitment computation via a work-stealing thread pool, and homomorphic caching of intermediate Pedersen commitment state achieves
+2.85\times
+higher throughput than a persistent Geth Verkle baseline while maintaining archive performance within production block-rate requirements.
+

@@ -1,0 +1,1123 @@
+Nexus: Transparent I/O Offloading for High-Density Serverless Computing
+JooYoung Park, Kevin Nguetchouang, Jovan Stojkovic, Likun Zhang, Riccardo Mancini, Marco Cali, Dmitrii Ustiugov
+
+Abstract
+. Serverless platforms rely on KVM-based virtual machines (VMs) to ensure strong isolation and compatibility with the rich ecosystem of libraries and images. However, current architectures tightly couple application logic with I/O processing, forcing every VM to duplicate a heavyweight communication fabric—comprising cloud SDKs, RPC frameworks, and the TCP/IP stack. Our analysis reveals this duplication consumes over 25% of a function’s memory footprint, and may double the CPU cycles in VMs compared to bare-metal execution. Prior attempts to mitigate this using WebAssembly or library OSes sacrifice compatibility, forcing developers to migrate code and dependencies to low-level languages. We introduce Nexus, a serverless-native KVM hypervisor that transparently decouples compute from I/O. Nexus intercepts the communication fabric at the high-level API boundary, remoting it to a shared host backend via zero-copy shared memory. This completely extracts the infrastructure tax from the guest without requiring any user code modifications. Furthermore, this structural separation unlocks asynchronous optimizations: by leveraging ingress routing hints, Nexus completely overlaps input payload prefetching with VM restoration and safely defers output writes off the critical path. Compared to the AWS Firecracker baseline, Nexus reduces node-level CPU and memory consumption by up to 44% and 31%, respectively, and increases deployment density by 18% atop TCP and 37% atop RDMA, demonstrating that KVM-based serverless architectures can achieve high density while retaining ecosystem compatibility.
+
+
+
+1.
+Introduction
+
+In serverless clouds, application developers offload deployment and data management to the provider, focusing only on their application logic, which is defined as a set of functions, instances of which the provider scales on demand. However, this model is economically viable only if the providers can maximize deployment density by colocating hundreds to thousands of function instances on a worker node. This extreme multi-tenancy requires strong isolation, so providers tend to deploy instances in dedicated VMs
+(
+2
+;
+54
+;
+45
+)
+. Besides isolation, these general-purpose VMs provide seamless ecosystem compatibility for application developers, i.e., supporting popular libraries and SDKs along with the familiar POSIX interface. This deployment model, however, comes with non-negligible overheads towards the two key deployment constraints: CPU cycles and memory in the cloud fleet.
+
+In this paper, we ask the fundamental question:
+how can cloud providers achieve high deployment density while retaining ecosystem compatibility?
+To answer that, we examine the root causes of resource inefficiencies in such environments.
+Since serverless functions are stateless, they transfer data between caller and callee functions via external remote storage services
+(
+28
+;
+51
+;
+42
+)
+.
+To facilitate this securely, current architectures force every function instance to load and execute its networking stack, RPC libraries, and cloud service SDKs, which we refer to as the
+communication fabric
+.
+Hence, each instance couples application logic with the required I/O processing within its sandbox, leading to massive memory footprint duplication and CPU overhead from repeatedly crossing virtualization boundaries, substantially reducing deployment density.
+
+To understand the key factors preventing higher deployment density, we break down CPU cycles and memory footprint on worker nodes in a serverless cluster across the application and virtualization stacks.
+Our study of CPU cycle breakdown reveals that communication fabric execution often accounts for the largest fraction (74%) on the worker nodes, exacerbated by virtualization and the inefficiency of the high-level language runtimes chosen by application developers who prioritize time-to-market.
+As for the memory footprint on a worker node, the communication fabric accounts for over 25% of a function’s total memory footprint.
+Thus, this massive replication of the communication fabric across 100s of VMs colocated on each node results in gigabytes of memory occupied by duplicate code.
+
+We argue that these overheads are intrinsic to current architectures that tightly couple application logic with I/O processing within isolated sandboxes, thereby imposing additional penalties in serverless environments. This coupled design strictly serializes the execution critical path (sandbox init, fetch, compute, write) and inflates function initialization times due to bloated memory snapshots.
+
+Previously proposed systems aim to mitigate the above issues, but often at the expense of compatibility, which is essential for customers of production serverless platforms. These systems tend to rely on WebAssembly
+(
+50
+)
+, library OSes
+(
+35
+;
+63
+)
+, or single-address-space mechanisms
+(
+35
+;
+15
+)
+, introducing disruptive changes into the programming and deployment models, requiring rewriting application code to use their API or manual decomposition of the computing and IO, as in Dandelion
+(
+32
+)
+. Disconnected from the rich Linux and popular libraries ecosystem, such solutions make code maintenance and support for popular runtimes extremely challenging
+(
+62
+;
+61
+;
+59
+)
+. Thus, cloud providers tend to prioritize ecosystem compatibility over lightweight hypervisors; for example, Google Cloud Run notably reverted from its custom lightweight sandbox, gVisor
+(
+54
+)
+, back to a fully compatible KVM-based hypervisor in its second generation
+(
+9
+)
+.
+
+To showcase that high deployment density can be achieved without compromising compatibility and performance under strict SLOs,
+we introduce
+Nexus
+, a serverless-native KVM-based hypervisor. Nexus slashes the per-VM CPU and memory overheads of the communication fabric and virtualization stack while preserving full compatibility with the conventional FaaS programming model. Nexus achieves this efficiency by fundamentally decoupling I/O processing from the application logic, transparently offloading I/O handling to a shared, highly concurrent backend service running natively on the host. In Nexus, function instances still run in dedicated VMs but communicate via fully backward-compatible provider SDK frontend libraries. These thin frontends enable communication with the shared backend via API remoting over zero-copy shared memory
+(
+64
+;
+44
+;
+26
+)
+, removing the heavy networking stacks from the guest.
+
+Nexus efficiently reuses CPU cycles and memory—previously occupied by the duplicated communication fabric—to host a greater number of co-resident function instances.
+Furthermore, Nexus’s decoupled architecture enables several asynchronous optimizations that are incompatible with traditional, coupled designs. First, by leveraging deterministic routing hints injected by the platform’s ingress layer, Nexus completely overlaps input payload prefetching with VM bootstrapping. Second, Nexus allows the function to finish processing the invocation before writing its output payloads back to remote storage; the host backend independently completes the background write while retaining at-least-once execution semantics. Crucially, Nexus achieves this with zero user code modifications while hardening the node’s threat model, as the cluster orchestrator provisions least-privilege identity tokens directly to the trusted backend, keeping raw provider credentials entirely out of the untrusted guest VM.
+
+We prototype Nexus by extending Firecracker
+(
+2
+)
+with a shared-memory communication transport—running atop TCP and RDMA—and a frontend library that transparently remotes the AWS S3 SDK API. We evaluate Nexus deployed atop a Knative cluster using the vHive framework
+(
+57
+)
+and a mix of compute- and I/O-intensive functions from the vSwarm benchmark suite
+(
+1
+)
+. We show that Nexus reduces node-level CPU and memory usage by up to 44% and 31%, respectively, yielding a 37% improvement in deployment density under strict response-time SLOs, with RDMA accounting for 50% of this gain. Furthermore, Nexus reduces warm- and cold-start latencies by 39% and 10%, respectively, bringing response times within 20% of those of an ecosystem-incompatible, WASM-based hypervisor, proving that extreme density and high performance do not require sacrificing legacy compatibility.
+
+2.
+Background on Serverless Clouds
+
+2.1.
+Programming Model & Economy
+
+In the serverless paradigm, developers focus on their applications, while deployment and resource management are handled by the cloud provider. Developers write business logic as stateless functions in high-level languages, such as Python and NodeJS
+(
+52
+)
+, use third-party libraries for processing, and connect them into application workflows. These functions typically rely on cloud SDKs to interact with remote storage and on RPC libraries to handle function invocations. Specifically, our analysis of 362 functions from the 50 most popular applications in the AWS Serverless Application Repository
+(
+5
+)
+shows that
+82\%
+of these functions use cloud provider SDKs (AWS S3, ElastiCache, DynamoDB) to communicate across functions, making provider SDKs the de facto standard for I/O in serverless clouds.
+
+To make this execution model economically viable, cloud providers must heavily amortize infrastructure costs by maximizing deployment density, by collocating hundreds to thousands of function instances on each worker node. This extreme multi-tenancy necessitates stringent security boundaries, lean sandboxes, and execution environment with minimal CPU and memory overheads.
+
+Also, serverless cloud programming and deployment models require seamless ecosystem compatibility. Existing applications are heavily anchored to high-level languages by domain-specific dependencies—such as Python’s machine learning ecosystem and Node.js’s extensive API SDKs. These dependencies introduce significant migration barriers because they lack the maturity of high-performance compiled runtimes like C++ or Rust. Consequently, preserving compatibility with existing FaaS programming models, containerized deployment strategies, and POSIX interfaces is imperative to minimize migration friction, reduce time-to-market, and simplify maintenance.
+
+2.2.
+Today’s Serverless Cloud Architecture
+
+Figure
+1
+shows a modern serverless platform, similar to AWS Lambda
+(
+2
+)
+and Google Cloud Run
+(
+16
+;
+29
+)
+, comprising a cluster manager that handles incoming function invocations via its Load Balancer, which routes HTTP API invocations (relying on an underlying RPC stack) to active function instances right away or after requesting new instances from the autoscaler. The autoscaler monitors instance load and adjusts the number of instances by sending commands to the VM manager that creates VM instances and configures their CPU and memory quotas.
+
+Figure 1
+.
+Traditional serverless architecture overview.
+
+Figure
+1
+show the function invocation lifecycle that consists of five steps: The invocation first arrives at the load balancer that forwards it to a function instance, which listens for it with its RPC interface
+\raisebox{-.9pt} {1}⃝
+, such as gRPC
+(
+17
+)
+, hosted on a worker node.
+
+\raisebox{-.9pt} {2}⃝
+Upon receiving a request, the instance starts processing the invocation, typically followed by using the cloud SDK API to fetch required inputs from remote storage (e.g., AWS S3, DynamoDB, ElastiCache, Azure Blob Storage
+(
+4
+;
+3
+;
+40
+)
+) over HTTP.
+\raisebox{-.9pt} {3}⃝
+Then, the user code performs its core computation logic.
+\raisebox{-.9pt} {4}⃝
+It then stores the resulting data back to the remote storage via the provider SDKs.
+\raisebox{-.9pt} {5}⃝
+Finally, the instance returns a response to the invocation caller through the same RPC interface, before moving to processing the next invocation.
+
+Each instance encapsulates a fully virtualized stack running an HTTP server with a user-defined handler that operates atop of the
+communication fabric
+that comprises the RPC protocol used by the invocations and a variety of provider SDKs necessary for communication with storage and cache services, which operate atop the TCP/IP in the guest OS and virtio devices emulated by the hypervisor.
+
+Most providers use general-purpose MicroVMs
+(
+2
+;
+45
+;
+7
+;
+6
+;
+8
+)
+that support the entire POSIX API, offering substantial compatibility for application developers, albeit at the cost of increased memory and CPU overhead, thereby reducing deployment density.
+Providers disable guest memory sharing among the co-resident VMs to prevent timing attacks
+(
+2
+;
+57
+;
+43
+)
+, causing substantial memory duplication and extra CPU overheads inherent in the virtualization and communication fabric stack, which may significantly reduce the overall deployment density, elevating today’s serverless cloud’s operational costs.
+
+Next, we analyze the implications of this serverless architecture on the overall CPU and memory resource usage, and identify the key factors that limit the deployment density.
+
+3.
+Quantifying Deployment Density Limits
+
+We quantify the compute (§
+3.1
+) and memory (§
+3.2
+) overheads of the serverless communication fabric and virtualization stack, analyzing their root causes and why prior alternatives fail. Our study evaluates vSwarm
+(
+1
+)
+functions on Knative/Firecracker
+(
+2
+)
+, overcommitting 280 VMs per worker node to match prior setups (details in §
+6
+).
+
+3.1.
+CPU Overheads
+
+We analyze the CPU overheads limiting deployment density by decomposing worker-node cycles into three components: aggregate usage, intrinsic cloud I/O stack overhead, and virtualization overhead (§
+2
+).
+
+3.1.1.
+Worker Node Cycle Distribution.
+
+We first study the aggregate CPU cycle distribution on a worker node running instances of a representative, balanced mix of 10 vSwarm functions. The load generator is configured so that each function contributes equally to CPU utilization. Figure
+2(a)
+shows that the guest user space constitutes the largest fraction of CPU cycles (74%), while a substantial 25% is spent in the kernel space, split between the host (16%) and guest kernel space (9%). In today’s serverless architecture, the guest-user fraction includes both the user handler and the communication fabric, which incur overhead for constructing storage requests, marshaling data, managing connections, and executing the cloud I/O stack.
+Also, the guest-kernel and host-kernel cycles are not application logic either; they are the cost of driving that I/O through the virtualized network stack.
+To pinpoint the exact overheads, we further break down these layers with a microbenchmark.
+
+(a)
+
+CPU cycles distribution on a worker node.
+
+(b)
+
+CPU cycles on a synthetic PUT workload.
+
+(c)
+
+CPU instructions on a synthetic PUT workload.
+
+(d)
+
+CPU cycles, bare-metal vs. virtualized for Go and Python.
+
+Figure 2
+.
+CPU cycles breakdown: (a) overall on a worker node across host and guest domains; (b) CPU cycles and (c) instructions for a synthetic single-PUT workload across different communication fabrics (TCP vs. SDKs) and (d) CPU cycles across bare-metal and virtualized environments.
+
+3.1.2.
+Decomposing Transport Cost from SDK Cost
+
+To isolate communication fabric overhead from application logic, we profile a synthetic benchmark that performs a 1MB PUT to MinIO
+(
+41
+)
+(a production-ready, S3-compliant datastore) using
+perf
+. We compare a baseline TCP socket-representing the minimum software cost for network transfer-against the MinIO and AWS S3 SDKs in Python and Go
+(
+52
+)
+.
+
+Figures
+2(b)
+show that the cloud I/O stack is inherently compute-intensive, driven largely by user-space tasks like request construction, serialization, authentication, and connection management. Compared to TCP, the MinIO SDK increases CPU cycles by 3x and 5x (for Python and Go, respectively), which we attribute to the increase in the number of executed instructions by 3x and 4.5x, respectively, due to the SDK overhead, as shown in Figure
+2(c)
+. The AWS SDK similarly inflates cycles by 6x and 13x, which correlates with a similar increase in the instruction count. Crucially, this I/O overhead is coupled to the user’s language choice, with Python being less efficient than Go
+(
+52
+)
+. Such architecture binds user logic and I/O processing within the same VM; thus, providers have to inherit the user’s runtime inefficiencies, making it impossible to independently offload I/O to a more efficient language.
+
+3.1.3.
+The Amplification of Virtualization
+
+Next, we examine the CPU cycle breakdown for the same I/O path running inside a Firecracker VM, using the same MinIO microbenchmark. The goal is to see how much sandboxed execution within a VM impacts the I/O path. Figure
+2(d)
+compares native execution with VM execution for the same single-PUT workload.
+Across all configurations, virtualization roughly doubles the total cycle overhead.
+We attribute this to the communication fabric running in the VM, which causes cross-boundary operations and triggers many KVM exits, which we study in detail in §
+7.2.1
+.
+The communication fabric must route its network packets through the guest kernel network stack, virtualized network devices, and the host kernel network stack. Thus, these intermediate layers require CPU cycles, which is overhead that steals CPU time that would have been allocated to the actual functions’ logic.
+
+In summary, the heavy communication fabric inflates user-space cycles, while the virtualized network stack amplifies the kernel-space cycles due to the hypervisor activity.
+
+3.2.
+Memory Overheads
+
+Figure 3
+.
+Breakdown of memory footprint for each component during function execution averaged across vSwarm workloads.
+
+Beyond CPU cycles, serverless infrastructure inflates VM memory footprint, limiting deployment density. We quantify this using vSwarm workloads (§
+6
+) reading/writing to MinIO, deriving
+VmRSS
+from
+/proc/(pid)/smaps
+. To isolate components additively, we measure: (1) a Hello World function over vsock
+(
+19
+)
+(guest-OS baseline), (2) the same function using gRPC over TCP (RPC overhead), (3) adding the AWS S3 SDK for GET/PUT operations (SDK overhead), and (4) full vSwarm workloads.
+
+Figure
+3
+reveals that the Cloud SDK (
+19\%
+) and RPC library (
+5\%
+) consume over
+25\%
+of a function’s total memory footprint.
+Serverless providers disable guest memory page sharing across VMs to prevent timing attacks
+(
+65
+;
+11
+)
+,
+resulting in this heavyweight communication fabric being duplicated within every isolated VM. A node hosting hundreds of instances
+(
+2
+)
+wastes gigabytes of physical memory, severely restricting multi-tenant density and inflating provider costs.
+
+3.3.
+Why Coupled Design is Ill-Suited for Serverless?
+
+The above compute and memory overheads are not merely implementation artifacts; they are intrinsic to the current serverless architecture, which tightly couples application logic with I/O processing and the communication fabric within isolated sandboxes. This coupled design inherently limits deployment density and induces serialization delays:
+
+Inflated Restoration Times.
+
+To mitigate cold starts, providers increasingly rely on snapshot-and-restore mechanisms. However, because the memory footprint is bloated by heavy, I/O-centric SDKs and replicated RPC stacks (Figure
+3
+), the snapshots are excessively large. Reading these bloated images from disk and restoring them to memory significantly prolongs the time to restore function, thereby defeating the purpose of rapid scaling.
+
+Strict Execution Serialization.
+
+The tight coupling of compute and I/O forces the function’s lifecycle onto a strictly serialized critical path. An invocation must sequentially: restore the snapshot, fetch the payload from remote storage, execute the user logic, and write the results back. In this coupled design, the function’s code drives its own I/O, which cannot start before VM bootstrapping finishes.
+
+3.4.
+Can Alternative Solutions Help?
+
+Prior works long ago identified the overheads of virtualization in the context of memory virtualization
+(
+38
+;
+57
+)
+, bootstrapping time
+(
+12
+;
+37
+)
+, and I/O processing
+(
+18
+)
+. However, most of them focused on reducing the CPU and memory overheads of the coupled designs rather than on a clean-slate solution.
+Many works propose swapping conventional, KVM-based virtualized sandboxes in favor of specialized environments:
+library operating systems
+(
+58
+;
+15
+;
+63
+)
+and single-address-space
+(
+35
+;
+30
+;
+50
+)
+mechanisms.
+While these lightweight sandboxes reduce CPU and memory overhead, they forego backward compatibility with the FaaS programming model and POSIX API required for seamless usage of high-level language runtimes popular in serverless
+(
+52
+)
+and a wide range of publicly available libraries and modules.
+
+Recognizing that the tight coupling of compute and I/O limits efficiency inherently, a recent system, Dandelion
+(
+32
+)
+, has structurally separated these domains. In particular, Dandelion explicitly separates computation from I/O, but requires manual application rewriting with a new API and, often, in a different language because maintaining the popular interpreted and JIT-ed runtimes is notoriously challenging
+(
+62
+)
+.
+Thus, in practice, serverless application programmers prioritize time-to-market over potential efficiency gains over pursuing efficiency goals at the cost of losing compatibility with the developer ecosystem, i.e., the wide variety of libraries, modules, and base images available for high-level languages, such as Python for machine learning. An illustrative example is the fate of gVisor
+(
+54
+)
+, a unikernel-like hypervisor that Google used in the first generation of Cloud Run but subsequently reverted to a KVM-based hypervisor in the second generation
+(
+9
+)
+.
+
+In contrast, an ideal architecture must ensure high deployment density without disrupting the developer experience.
+
+4.
+Nexus Design
+
+Given the insights from §
+3
+, we introduce
+Nexus
+, a serverless-native I/O hypervisor that fundamentally rethinks function execution. We build Nexus with three main ideas.
+
+First, Nexus
+decouples I/O from compute
+, by offloading I/O handling from each VM to a separate execution domain.
+Nexus separates user computation from provider-managed I/O and executes the latter in a shared node-local backend. This removes the duplicated infrastructure stack from the common path, reducing the compute and memory overhead (§
+3.1
+–§
+3.2
+), and the inflated restoration time caused by bloated VM state (§
+3.3
+).
+At the same time, Nexus preserves ecosystem compatibility by keeping the user-visible invocation and service APIs unchanged and by retaining a legacy path for uncommon networking behaviors.
+
+Second, Nexus makes
+I/O asynchronous with respect to VM execution
+.
+Once I/O is no longer tied to the lifetime of a single VM, Nexus can overlap remote fetches with VM creation and allow remote writes to complete after the function invocation’s processing completes.
+This breaks the strict restore–fetch–compute–write serialization, identified in §
+3.3
+, and shortens the critical path of the invocation.
+Nexus does so while preserving safety: the backend takes responsibility for performing the I/O transfer, e.g., to remote storage, on behalf of the function instance, which can then proceed to execute the next incoming invocation.
+
+4.1.
+Architecture and Abstractions
+
+Figure 4
+.
+Nexus serverless architecture overview.
+
+As illustrated in Figure
+4
+, Nexus fundamentally reshapes the serverless worker node while leaving the overarching cluster control plane—comprising the load balancer and autoscaler—entirely unmodified. On the worker node, the architecture is split into two distinct execution domains: a lightweight Nexus frontend residing within each isolated tenant virtual machine, and a trusted, highly concurrent Nexus backend operating natively on the host.
+
+The core of the Nexus design is establishing the remoting boundary at the high-level application programming interfaces of cloud service SDKs and function invocation RPCs. Instead of executing this heavyweight communication fabric inside the guest, the user’s function interacts with the thin Nexus frontend, which seamlessly forwards these operations to the Nexus backend. The backend, acting as a shared data plane for all co-resident VMs, encapsulates the network rate limiter, the full SDK logic, and the transmission control protocol stack. This transparent offloading successfully amortizes the infrastructure tax across the host without violating the expected semantics of the conventional serverless programming model.
+
+To ensure strict POSIX compliance and support for arbitrary workloads, the architecture defines a bifurcated network flow comprising a fast path and a legacy path. Compliant cloud invocations and managed storage requests travel over the optimized, low-latency fast path, using low-latency virtual sockets for control messages and zero-copy shared memory for bulk data transfers between the frontend and backend. Conversely, if a function bypasses the provider interfaces to perform low-level networking, it triggers the legacy path, which transparently falls back to standard virtualized Ethernet devices governed by the same fixed-rate-limiting mechanisms as the baseline architecture.
+
+4.2.
+Anatomy of an Invocation
+
+Figure 5
+.
+Function execution lifecycle with RPC management and cloud storage access offloading.
+
+This decoupled architecture fundamentally transforms the traditionally serialized serverless lifecycle into a highly pipelined and asynchronous execution model, as depicted in Figure
+5
+. In the baseline coupled architecture (§
+2.2
+), a serverless platform must strictly serialize the VM restoration, runtime initialization, fetching of remote inputs, and the execution of user logic. By shifting the invocation termination to the host backend, Nexus effectively hides network latency from the VM’s critical path and unlocks asynchronous optimizations that significantly speed up cold and warm invocations (§
+7.2
+).
+
+4.2.1.
+Invocation Interception and Parallel Provisioning
+
+When a new request arrives at a worker node, the shared Nexus backend acts as the authoritative first recipient, completely shielding the guest environment from the initial network transaction. Instead of routing incoming network packets through the host bridge and into the guest operating system’s network stack, the backend terminates the RPC connection natively on behalf of the function instance. This early interception is a critical departure from existing architectures, as it grants the host infrastructure immediate visibility into the request payload before the function instance’s VM is ready.
+
+Because the backend fully owns this early lifecycle phase, it can instantly evaluate the request metadata and orchestrate the necessary provisioning in parallel. Upon unpacking the RPC, the backend simultaneously triggers the host’s VM manager to begin restoring a VM from its snapshot on disk. This eliminates the baseline inefficiency in which the RPC server cannot even begin accepting connections until the entire VM and guest runtime have fully booted and initialized.
+
+4.2.2.
+Asynchronous Input Prefetching
+
+To overlap network communication with compute provisioning, Nexus capitalizes on the predictable nature of serverless data dependencies. Our manual analysis of 362 functions from the 50 most popular applications in the AWS Serverless Application Repository
+(
+5
+)
+shows that
+96\%
+of functions have deterministic inputs known at invocation time.
+Crucially, extracting these hints requires zero modifications to the user’s application code. Modern serverless orchestration frameworks and event sources (e.g., AWS API Gateway, Step Functions, or Knative Eventing) inherently parse incoming event payloads to route requests. Nexus leverages this existing platform infrastructure by having the cluster’s ingress layer automatically promote known data dependencies—such as target S3 bucket and key names found in the JSON trigger event—directly into the RPC metadata headers before the invocation ever reaches the worker node.
+
+The Nexus backend parses these embedded hints to completely overlap the remote input fetching with the VM’s bootstrap phase. Using the provider’s managed credentials for that specific function, the backend immediately authenticates and initiates the remote storage
+GET
+operation. By the time the VM is fully restored and the user handler is invoked, the input payload is either actively streaming or already fully downloaded, effectively masking the network delay from the guest’s execution timeline.
+
+Furthermore, this prefetching mechanism is tightly integrated with the system’s memory management. The backend uses the payload-size metadata provided in the invocation hints to precisely allocate a dedicated shared memory region tailored to the incoming object’s dimensions. This guarantees optimal memory utilization on the host and ensures that the guest environment does not need to dynamically resize buffers or handle complex memory allocations during the critical path of its execution.
+
+4.2.3.
+Streaming Fallback for Opaque Payloads
+
+While hint-based prefetching covers most standard serverless workflows, Nexus must robustly handle scenarios in which input sources are entirely dynamic. For the minority of functions where input hints cannot be determined prior to execution (a mere 4% of the 362 functions in the AWS repository
+(
+5
+)
+),
+or where the payload size is completely opaque to the caller, the system cannot safely preemptively map a perfectly sized shared memory region. In these edge cases, Nexus safely defaults to synchronous data retrieval using fixed-size circular buffers established between the frontend and the backend.
+
+This streaming fallback mechanism guarantees correct execution and strictly bounds memory consumption for arbitrary workloads, preventing memory exhaustion attacks or faults caused by unexpectedly large payloads. The frontend continuously pulls chunks of data through the circular buffer as the user function consumes the input stream.
+While this approach is highly resilient, it inherently sacrifices the latency benefits of overlapped network transfers because the payload dimensions cannot be preemptively mapped and fetched during the VM boot phase (§
+7.2.1
+).
+
+4.2.4.
+Transparent I/O Remoting During Compute
+
+Once the VM is fully initialized and the user handler begins executing its core logic, it issues requests to retrieve its required data. In a traditional, coupled architecture, calling a cloud storage SDK triggers a cascading sequence of complex operations: constructing an HTTP request, establishing a secure socket layer connection, and pushing packets through the heavily layered guest and host network stacks. In the Nexus architecture, these calls bypass the traditional guest networking stack entirely.
+
+The Nexus frontend acts as a lightweight interception stub. When the user code issues a standard SDK call, the frontend merely traps this request at the API boundary. Because the backend has already prefetched the necessary data based on the initial RPC hints, no actual network transmission occurs during this phase. The frontend simply immediately returns a pointer to the data residing in the strictly pre-allocated shared memory region pre-populated with the retrieved input data. This dramatically reduces the number of CPU cycles consumed by the guest and eliminates the virtualization overhead typically associated with heavy I/O processing (§
+2(a)
+).
+
+4.2.5.
+Asynchronous Output and Early VM Release
+
+The final bottleneck in a coupled serverless architecture occurs during the teardown phase. Functions typically conclude by issuing a remote
+PUT
+operation to persist their outputs to a cloud storage bucket. In the baseline system, the VM compute resources are held captive, sitting completely idle while waiting for the remote storage service to process the write and return a network acknowledgment. Nexus introduces an opt-in optimization that makes these remote writes fully asynchronous, drastically increasing deployment density by freeing compute resources sooner.
+
+When the function completes its computation and issues a remote write, the frontend delegates the payload directly to the backend and immediately returns control to the function runtime. The function safely terminates its execution phase, allowing the worker node to immediately recycle or release the VM compute resources for subsequent warm invocations. The backend, now holding the output payload, independently drives the network write to completion in the background without tying up a dedicated VM.
+
+Crucially, this aggressive early-release mechanism does not compromise the platform’s strict consistency guarantees. To perfectly preserve the at-least-once execution semantics expected by serverless developers
+(
+14
+;
+34
+)
+, Nexus buffers the function’s final RPC execution response. The backend only releases this final success response back to the caller after the remote storage layer explicitly acknowledges the successful write operation. If the background write fails, the backend accurately propagates the error, ensuring the caller never observes a successful execution for before the data has been persisted.
+
+4.3.
+Control and Data Plane Mechanisms
+
+To ensure that crossing the virtualization boundary does not introduce prohibitive latency that would negate the benefits of offloading, Nexus completely circumvents standard virtual network devices. Instead, it employs a highly specialized, dual-channel transport design that distinctly separates orchestration traffic from bulk object payload transfers.
+
+4.3.1.
+Control and Data Plane Separation
+
+Nexus splits communication between the frontend and the host backend strictly based on payload size and latency requirements. Lightweight control messages, RPC invocation metadata, and small SDK API requests require microsecond-scale responsiveness. To accommodate this, Nexus routes the control plane over a low-overhead host-guest socket connection. Within our AWS Firecracker prototype
+(
+2
+)
+, this is implemented by exposing
+virtio-vsock
+within the guest VM. The hypervisor then binds this interface to a Unix Domain Socket on the host, providing a highly reliable, low-latency channel for the backend to consume and govern execution.
+
+Conversely, bulk data payloads moving to and from remote cloud storage must avoid the severe CPU penalties associated with socket-buffer copying and kernel network stack traversals. Nexus routes these large transfers through a dedicated data plane built entirely on zero-copy shared memory. This is implemented utilizing file-backed memory initialized with the
+MAP_SHARED
+flag, which Firecracker subsequently surfaces to the guest operating system as an emulated peripheral component interconnect device. By mapping this region directly into both the guest and host address spaces, the frontend and backend can exchange gigabytes of payload data without a single memory copy.
+
+4.3.2.
+SDK Remoting Implementation
+
+The API remoting logic bridging these two planes consists of a deliberately thin interception library within the guest VM. This frontend stub cleanly mirrors the standard AWS Python Boto3 SDK and gRPC interfaces, ensuring that user applications require absolutely zero code modifications. When a function invokes a storage method, the frontend simply marshals the request parameters and pushes them across the control socket, leaving the heavy lifting of connection pooling, cryptographic signing, and HTTP request formatting to the host.
+
+We implement the Nexus backend with 7827 Golang LoC and the frontend with 645 Python LoC, given Python’s dominance in serverless clouds
+(
+52
+)
+. The frontend is compatible with the AWS boto3 S3 GET/PUT API.
+Using Go for the Nexus backend balances extreme concurrency with highly efficient memory and CPU utilization, allowing a single backend process to effortlessly multiplex I/O for hundreds of co-resident VMs. Furthermore, because the backend directly controls the physical networking stack, it is entirely free from guest operating system constraints.
+
+Nexus’s decoupled architecture enables seamless support for multiple network types. Specifically, commodity hosts can run the Nexus backend over TCP, whereas more advanced setups can run Nexus over an RDMA network, supporting kernel-bypassed remote direct memory access for data transfers (§
+7.2.1
+) – transparently to applications. When a Nexus backend retrieves an object via RDMA, the physical network interface card places the payload directly into the shared memory region, bypassing both the host and guest kernels. When operating on legacy hardware or communicating with storage endpoints lacking RDMA capabilities, the backend gracefully and transparently falls back to TCP.
+
+4.3.3.
+Security and Isolation of Shared Memory
+
+Consolidating I/O operations within a shared host component necessitates uncompromising security guarantees to satisfy production cloud requirements. Nexus maintains extreme multi-tenant isolation by strictly enforcing that memory is never globally accessible across co-resident VMs. The system provisions a dedicated, one-to-one mapping of an isolated shared memory region exclusively between a single tenant’s frontend and the trusted host backend. There is no peer-to-peer mapping; thus, a compromised VM cannot read, write, or even address the data plane of a neighboring function.
+
+Furthermore, the Nexus backend itself operates entirely within the cloud provider’s trusted host environment and is written in a memory-safe language, structurally preventing standard buffer overflow attacks from leaking cross-tenant data. For defense-in-depth deployments, cloud providers can further lock down these dedicated memory mappings using hardware-assisted memory protection extensions, such as Intel MPK
+(
+20
+)
+or Arm CHERI
+(
+60
+)
+, as demonstrated by prior works
+(
+32
+;
+15
+)
+. These hardware constraints ensure that even if the backend is compromised, unauthorized memory access remains physically isolated at the silicon level.
+
+Beyond memory isolation, Nexus fundamentally hardens the serverless threat model through centralized, least-privilege credential management. In a traditional architecture, raw provider credentials (e.g., AWS secret access keys) must be injected directly into the untrusted guest VM to enable SDK operations, creating a severe vulnerability in the event of arbitrary code execution or a sandbox escape. Nexus completely eliminates this attack vector. The cluster orchestrator provisions short-lived, least-privilege identity and access management (IAM) tokens specifically bound to each function sandbox, securely supplying them exclusively to the trusted host backend. Because the Nexus backend authenticates and fetches remote objects on behalf of the function, the raw cryptographic keys are never exposed to the user’s execution environment, drastically reducing the blast radius of a compromised workload.
+
+4.4.
+Resource Management and Billing
+
+Nexus resource management operates similarly to the baseline design, where each VM runs in a cgroup, and each virtio-thread is limited to the fixed transmission rate, e.g., at 600Mbps, similar to AWS Lambda
+(
+23
+)
+.
+We implement a similar rate-limiting mechanism in the Nexus backend using
+golang.org/x/time/rate
+for each SDK client. If a function instance requires several clients, e.g., to communicate with AWS S3 and DynamoDB, the rate limit is divided equally for each client. In our experiments, we observe little sensitivity to the transmission rate above 600 Mbps for the function mix we use for evaluation, which includes both compute- and I/O-intensive functions.
+
+5.
+Discussion and Limitations
+
+Consolidating I/O processing into a shared host backend inherently widens the cross-tenant fault domain. Nexus mitigates this via a memory-safe implementation and a stateless, crash-only design: if the daemon faults, a host supervisor rapidly restarts it while frontend stubs transparently retry requests, converting potential failures into transient latency spikes. For stricter security, production deployments could further enforce silicon-level isolation using hardware memory protection extensions (e.g., Intel MPK, CHERI).
+
+Furthermore, while kernel-bypassing RDMA maximizes our peak deployment density gains (37%), the architectural decoupling alone yields an 18% improvement over standard TCP. This confirms that Nexus’s structural separation provides fundamental resource efficiency even on commodity network hardware. Finally, although prototyped for Python workloads, extending Nexus to other prevalent FaaS runtimes (e.g., Node.js, Java) relies on a deliberately thin frontend interception stub (
+\sim
+600 LoC). This avoids the complex, low-level runtime modifications typical of ecosystem-incompatible sandboxes, preserving the developer experience across languages.
+
+6.
+Methodology
+
+Hardware and software setup.
+For all experiments, we use a 10-node c6620 CloudLab cluster. Each node has a 28-core Intel Xeon Gold 5512U CPU fixed at 2.1 GHz, 128 GB of DRAM, and a 100 Gbps Intel E810-XXV NIC. We run vHive
+(
+57
+)
+running Knative
+(
+29
+)
+v1.13 on top of Kubernetes
+(
+31
+)
+v1.29, and use Firecracker
+(
+2
+)
+v1.14 hypervisor for isolating as function instances. Upon cold starts, the system restores function instances running in Firecracker VMs from a snapshot with REAP
+(
+57
+)
+, the technology that pre-records and inserts the functions’ working sets into the VMs to minimize page faults. The guest OS is Linux v6.1 with Ubuntu 24.02.
+We deploy one master node, one load-generator node, 4 worker nodes, and 4 nodes for remote storage to make sure storage is never a bottleneck in our setup. The storage nodes run MinIO
+(
+41
+)
+, a widely used open-source distributed storage service used in industry, behind Istio
+(
+22
+)
+, and serve as the object store for the data path.
+
+Workloads
+
+We use ten Python functions from the vSwarm
+(
+1
+)
+suite, ordered from the most I/O-intensive to the most compute-intensive: stack training’s reducer (ST-R), lightweight ML inference (LR-S), encryption (AES), web serving (WEB), stack training’s trainer (ST-T), RNN serving (RNN), JSON deserialization (MAP, RED), CNN Serving (CNN), and image resize (IR).
+These workloads encompass a broad spectrum of compute- and I/O-intensive functions, with compute-to-I/O execution time ratios ranging from 10% to 90%, effectively representing serverless behavior
+(
+46
+)
+. To drive representative arrival patterns, we use In-Vitro
+(
+56
+)
+, which plays sampled Azure Function traces
+(
+47
+;
+39
+)
+.
+We sample these traces so that CPU utilization for each workload type, e.g., web serving and map-reduce, stays the same. We run the trace for 32 minutes, including a 2-minute warm-up period. After warmup, we introduce 20 new functions (2 sets of workload suites), increasing CPU load by 5% across the cluster at each load step.
+
+Deployment density and other metrics.
+
+We define deployment density, our key optimization metric, as the maximum number of user functions a cluster can serve while satisfying the target SLO (p99 latency < 5
+\times
+unloaded latency calculated for each function individually). Deployment density can also be considered the throughput of a serverless system, since each function deployment incurs a series of invocations, as shown in the sampled trace.
+We also evaluate the system’s CPU and memory footprint as key deployment-density constraints, along with warm and cold response times.
+
+Systems, variants, and comparison scope.
+
+We compare four configurations.
+The first configuration,
+Baseline
+, illustrates the current paradigm of VM-based serverless computing, maintaining both the gRPC server and the Boto3 SDK within the VM environment. Next is
+Nexus-TCP
+, which offloads provider SDK operations and streamlines the invocation RPC path. The third,
+Nexus-Async
+, implements input prefetching and the early release of VMs for remote write operations on top of Nexus-TCP.
+Finally, we have
+Nexus
+, which replaces TCP transport with RDMA.
+We also compare against
+Faasm
+
+(
+50
+)
+, a state-of-the-art for WebAssembly-based hypervisor that foregoes compatibility with the programming model and image ecosystem.
+
+7.
+Evaluation
+
+In this section, we evaluate the design and implementation of Nexus.
+We first evaluate whether Nexus improves deployment density in a cluster with a realistic mix of functions (§
+7.1
+), and then explain the resulting gains through an ablation-driven analysis of warm-path CPU cycles, memory footprint, and cold-start latency (§
+7.2
+). We then compare Nexus against Faasm, a WebAssembly-based lightweight hypervisor, in a focused case study to gauge the remaining efficiency gap to a lightweight but ecosystem-incompatible runtime.
+
+7.1.
+End-to-End Evaluation
+
+(a)
+
+End-to-End Latency.
+
+(b)
+
+CPU Utilization.
+
+(c)
+
+Memory Utilization.
+
+Figure 6
+.
+End-to-End latency evaluation and resource utilization as deployment density scales. Each deployed function serves a trace sampled from the Azure Functions production dataset
+(
+47
+)
+.
+
+We begin with an end-to-end mixed-workload trace replay to show how Nexus improves deployment density.
+We run a mix of functions, and each function can have multiple instances running concurrently in the cluster. We follow a synchronous autoscaling policy used by AWS Lambda
+(
+55
+)
+, which adjusts the number of instances on demand for each function.
+Each VM is configured with 512MB of memory, and the compute budget is limited to 1 vCPU by Cgroup, based on the function configurations used in AWS Lambda
+(
+52
+)
+.
+We measure slowdown (99th percentile latency normalized to the unloaded median latency) for each function as we sweep the number of deployed functions, until the geometric mean slowdown violates the SLO. Each function comes with a dedicated trace sampled from Azure Function traces that the load generator replays to its instances, which scale on demand.
+
+Figure
+6(a)
+shows that Baseline sustains up to 320 deployed functions while meeting the target SLO, whereas Nexus-TCP and Nexus-Async sustain 380 and Nexus sustains 440, respectively, corresponding to the deployment density gains of 18% and 37%, respectively.
+
+To explain these benefits, we analyze the cluster resource usage across the worker nodes.
+Figures
+6(b)
+and
+6(c)
+show the averaged CPU and memory utilization as we sweep the load. To compare resource efficiency at a common operating point, we examine the largest scale Baseline can support: 180 functions. At that point, Nexus-TCP reduces CPU and memory utilization by 35% and 36%, respectively, and Nexus-Async reduces CPU and memory utilization by 36% and 40%, respectively, compared to Baseline, while Nexus reduces CPU utilization by 44% and memory utilization by 31%.
+
+Taken together, these results show that Nexus serves more functions under the same latency target while using worker resources more efficiently.
+The gain comes from two complementary effects: First, Nexus-TCP removes the duplicated communication fabric from each tenant VM and amortizes it in a shared backend
+which uses the Go programming language to execute the cloud I/O SDK, which is more efficient in terms of CPU cycles than Python.
+Second, Nexus further reduces host CPU cycles by replacing TCP with RDMA.
+TCP operations constantly engage the host user and the host kernel, whereas RDMA bypasses the host kernel during communication and directly maps the payload to a shared memory region, resulting in fewer CPU cycles per transfer than TCP.
+Also, Nexus-Async shows lower memory utilization than Nexus-TCP due to asynchronous output and early VM release, which increases VM utilization.
+
+7.2.
+Efficiency Analysis & Ablation Study
+
+To explain the deployment density gains observed in the end-to-end study, we conduct an ablation study and an efficiency analysis, revisiting the defined density constraints: CPU and memory. We analyze how Nexus’s compute and I/O separation, as well as latency-overlapping optimizations, reduce warm-path CPU overhead (§
+7.2.1
+) and the memory footprint (§
+7.2.2
+), and quantify the implications for cold-start latency (§
+7.2.3
+).
+
+7.2.1.
+CPU Cycles
+
+Figure 7
+.
+Warm latency across vSwarm workloads normalized to Baseline. Nexus reduce guest-side I/O processing.
+
+We first evaluate the impact of compute and I/O decoupling on warm execution latency using the same set of vSwarm functions as described in §
+6
+.
+We measure unloaded latency by deploying a single function instance and repeatedly sending a request, discarding the first, for each workload.
+
+Figure
+7
+shows that, compared to Baseline, Nexus-TCP, Nexus-Async, and Nexus reduce warm latency by 19%, 22%, and 39% on average, respectively.
+The benefit is strongly workload-dependent, favoring the I/O-intensive workloads, which benefit from the optimized I/O data path via the shared memory transport of Nexus. I/O-heavy workloads, such as Linear Regression-Serving (LR-S) and Stack Training-Reducer (ST-R), improve the most, with latency reductions of 75% and 78%, respectively, whereas a compute-heavy workload, such as the CNN-based image recognition workload, improves by only 8%.
+
+Figure 8
+.
+CPU cycles breakdown for each workload under the three studied systems, normalized per invocation: Baseline(left), Nexus-TCP(center) & Nexus (right) across
+Hk(host kernel)
+,
+Hu(host user)
+,
+Gk(guest kernel)
+and
+Gu(guest user)
+spaces.
+
+Figure 9
+.
+kvm exit
+and
+kvm vcpu wakeup
+event rates across vSwarm workloads normalized per invocation. Nexus reduces both rates compared to baseline (
+1.0
+).
+
+To identify the source of these gains, we collect CPU cycle breakdowns and KVM activity measurements for each function under load. Here, to break down the cycle distribution across the user/kernel/guest/host layers, we run a separate experiment for each function, with several instances of the same function serving invocations. To minimize noise from the control plane and instance creation, we set the number of function instances to a fixed value.
+To collect the CPU cycle breakdown per invocation, we use the
+perf
+
+(
+36
+)
+tool to measure them across the entire node, using a
+perf
+argument to break the collection into guest and host user and kernel space, and report them normalized to the baseline. For KVM activity, we use the
+perf
+-
+kvm
+tool and deduct per invocation. The results are normalized to the baseline.
+
+Figure
+8
+shows that Nexus reduces total CPU cycles per request by 37%, on average. This reduction is accompanied by a 28% average drop in guest-user cycles.
+The largest savings again appear in the I/O-intensive workloads as presented before (LR-S, ST-R, and ST-T), which also exhibit the sharpest declines in KVM activity.
+Figure
+9
+shows a 53% drop in KVM exits and a 70% drop in KVM vCPU wakeups, on average, which correlate well with the warm latency reductions in Figure
+7
+.
+Nexus further cuts host-kernel cycles by 54% relative to Nexus-TCP because of RDMA bypassing the standard networking stack.
+Although host user-space cycles increase by 71%, this increase reflects work moving out of the guest and into Nexus’s shared backend, where it can be executed more efficiently because it’s written in Go, so the total number of cycles still falls.
+However, compute-intensive workloads, e.g., CNN, benefit less from Nexus, since they are highly dominated by computation during execution.
+
+Overall, these results show that the warm-path latency improvement comes from eliminating redundant guest-side I/O, collapsing much of the guest-host virtual devices’ communication path into a shared-memory communication path between VMs and Nexus’s backend, and further reducing kernel involvement when RDMA replaces TCP, since RDMA bypasses the traditional networking stack.
+
+7.2.2.
+Memory Footprint
+
+Figure 10
+.
+Per-function instance memory footprint across vSwarm workloads, normalized to Baseline. Nexus reduces per-VM memory footprint by consolidating the communication fabric out of the VM to Nexus’s backend.
+
+Figure 11
+.
+Worker node memory footprint breakdown across various deployment densities. Nexus amortized the shared communication fabric on the Nexus’s backend, consistently reducing the footprint by 10-21%.
+
+We next show that offloading the communication fabric raises the memory ceiling that limits deployment density, as well as CPU cycles.
+Figure
+3
+evaluates this at the instance level by separating the optimizations into two additive configurations: Nexus (SDK Only) offloads the cloud SDK, but not RPC, to the Nexus backend, whereas Nexus offloads both cloud I/O SDK and platform RPC layer. We did not add Nexus-Async to this experiment as it has the same memory footprint as Nexus.
+
+Across all workloads, per-instance memory drops from 169 MB in Baseline to 140 MB with SDK-only offload and to 134 MB with communication-fabric offload, corresponding to average reductions of 17% and 20%, respectively.
+Even functions that rely heavily on large libraries, such as CNN/RNN and LR-S, which use PyTorch and Pandas, respectively, consistently shed about 30–40 MB.
+These savings arise because Baseline carries communication fabric within every VM, whereas Nexus consolidates that state in the Nexus backend shared among all the co-resident VMs, leaving only a thin frontend in the guest.
+
+At the node level, the same trend persists as the number of co-resident instances grows. Figure
+11
+shows that total node memory remains about 21% lower as we scale the number of function instances per worker. This consistency indicates that the backend cost is amortized across tenants rather than growing in proportion to the number of VMs. Importantly, the shared Nexus backend, written in Go, is more memory-efficient than the Python library running inside the baseline VMs, so remoting services’ SDK API to Nexus is sensible if at least one instance per node uses that service.
+
+7.2.3.
+Cold Latency Breakdown
+
+Figure 12
+.
+
+Normalized cold-start latency breakdown across the vSwarm suite. Nexus reduces total cold-start delays by overlapping input prefetching with VM creation and shrinking the mandatory snapshot footprint.
+
+Figure 13
+.
+Snapshot working set size in pages during snapshot restoration
+(
+57
+)
+. Nexus drastically reduces the number of memory pages the hypervisor reads from disk.
+
+We next analyze cold-start latency to understand how Nexus reduces it by invoking functions one at a time. With instrumentation, we capture the latency breakdown (Figure
+12
+) and the number of working set pages retrieved during the VM restoration from a snapshot (Figure
+13
+).
+Figure
+12
+shows that Nexus reduces cold-start latency by 10% on average relative to Baseline, particularly in working set insertion time and I/O processing.
+
+The first reason for the speedup is a 40% reduction in working-set insertion time. Figure
+13
+explains why: by offloading the communication fabric out of the VM, Nexus reduces the working set of guest memory pages by 31%, on average, allowing the hypervisor to fetch fewer pages during restoration, which accelerates it.
+
+The second reason is the reduction in input retrieval and writeback time (I/O) on the critical path.
+Nexus-TCP reduces the I/O component by 58% due to faster I/O processing, as for warm invocations (§
+7.2.1
+).
+Nexus-Async further reduces I/O processing time by 75% by overlapping I/O with instance restoration and initialization, and moving writeback off the critical path (§
+4
+), in contrast to the baseline, where VM creation, compute, and I/O processing are serialized.
+Finally, Nexus reduces I/O processing by 81% by accelerating payload transfers with RDMA, bypassing the kernel.
+
+These gains are partially offset by Nexus backend’s establishing and managing connections on behalf of the VMs,
+reflected in
+Add Server
+category in Figure
+12
+, which are subject to further optimizations. Specifically RDMA connection setup that contributes to increase this category the most.
+Nevertheless, Nexus still achieves a net 10% reduction in cold-start latency, on average, by enabling faster, leaner restoration and breaking the baseline’s strict restore-then-fetch serialization.
+
+7.3.
+Comparison with a Lightweight WASM Hypervisor: Faasm Case Study
+
+Figure 14
+.
+Execution time, per-invocation CPU cycles breakdown, and memory footprint of AES encryption workload under the 3 studied systems: Baseline, Nexus, and Faasm.
+
+Finally, we compare Nexus efficiency with Faasm
+(
+50
+)
+, a state-of-the-art WASM-based hypervisor, quantifying the gap between Nexus and its ecosystem-incompatible alternatives, such as Dandelion
+(
+32
+)
+, whose efficient runtime is also based on WASM, using the compute-I/O balanced AES function.
+1
+1
+
+1
+
+Faasm dropped support for Python and its module ecosystem due to the maintenance challenges they impose
+(
+21
+)
+; hence, in Faasm, we instead use a C++ benchmark version, comparing it to the corresponding AES benchmark running in Nexus.
+
+Comparing the latency and CPU cycles per invocation collected with
+perf
+under medium load, one can see that Faasm and Nexus differ by a moderate 20-25% (Figures
+14
+a and
+14
+b).
+2
+2
+
+2
+
+The high kernel cycle usage in Faasm is caused by the large amount of time spent in page faults triggered during Faasm’s control plane execution (Faabric), which bootstraps WASM sandboxes (see the flamegraph in the
+Supplementary material
+). This is also why Faasm’s total cycles exceed Nexus cycles despite the lower latency.
+
+However, since given Nexus still boots a general-purpose VM with a guest OS, it still uses 3.5
+\times
+more memory than Faasm (
+14
+c), which alone may not justify the WASM porting and maintenance challenges (§
+3.4
+).
+
+8.
+Related Work
+
+Serverless Sandboxing and Lightweight Isolation.
+
+Production platforms rely on conventional VMs
+(
+2
+;
+45
+)
+for strong isolation, but duplicating the guest OS and communication fabric in every instance limits deployment density.
+Unikernels and library OSes
+(
+33
+;
+27
+;
+49
+;
+63
+)
+shrink footprints by collapsing the execution environment, while single-address-space designs
+(
+35
+;
+30
+)
+eliminate inter-function isolation within workflows.
+Other approaches abandon standard virtualization entirely via WebAssembly
+(
+50
+;
+10
+)
+, lightweight threads
+(
+13
+)
+, or kernel-bypass execution
+(
+15
+;
+58
+)
+.
+All of these sacrifice compatibility with the FaaS programming model, high-level runtimes, or POSIX
+(
+62
+;
+61
+;
+59
+)
+.
+Orthogonally, cold-start optimizations
+(
+57
+;
+12
+;
+37
+;
+18
+;
+38
+)
+speed up snapshot restoration and memory management but do not address snapshot bloat caused by the per-VM communication fabric.
+Nexus retains a full KVM-based VM and POSIX environment but extracts only the duplicated communication fabric, reducing both steady-state overhead and snapshot size while compounding with existing cold-start techniques.
+
+API Remoting and I/O Offloading.
+
+Splitting functionality across execution boundaries is well established, from datacenter disaggregation
+(
+48
+)
+to accelerator remoting
+(
+64
+;
+53
+)
+.
+In networking, LineFS
+(
+26
+)
+, Junction
+(
+15
+)
+, and Palladium
+(
+44
+)
+offload RPC, TCP, or file-system processing to host threads, SmartNICs, or DPUs—operating at the transport or storage layer and typically requiring specialized hardware.
+Nexus remotes at the cloud SDK API boundary instead, a higher-level, stable interface that lets it offload request construction, authentication, serialization, and connection management on commodity hardware, while remaining orthogonally compatible with hardware-accelerated transports.
+
+Serverless Data Management and I/O Separation.
+
+Several systems redesign serverless data paths and state management. Pocket
+(
+28
+)
+provides ephemeral storage tiers, Cloudburst
+(
+51
+)
+co-locates caches with executors, OFC
+(
+42
+)
+caches intermediate data, Boki
+(
+24
+)
+offers shared logs, and Nightcore
+(
+25
+)
+optimizes inter-function RPCs. These systems fundamentally optimize backend storage or data-passing abstractions, yet they natively retain the heavyweight communication fabric coupled within each isolated guest VM. Nexus is entirely orthogonal and complementary to these approaches; it transparently offloads the transport layer of these optimized backends to achieve even higher efficiency.
+
+Dandelion
+(
+32
+)
+also structurally separates compute from I/O, but requires developers to manually rewrite applications, forfeiting POSIX and mature ecosystem compatibility. In contrast, Nexus achieves
+transparent
+separation at the standard provider SDK boundary. By shifting the maintenance of interception stubs to the cloud provider, Nexus extracts the I/O tax from the KVM sandbox without requiring any user code modifications, securing high efficiency while preserving legacy compatibility.
+
+9.
+Conclusion
+
+Serverless computing has long operated under an assumption: strict multi-tenant isolation requires packing the entire execution and infrastructure stack into every individual sandbox. Through Nexus, we demonstrate that this tightly coupled architecture is a fundamental bottleneck to cloud efficiency. By cleanly separating application logic from I/O and offloading the latter to a shared host backend, Nexus redefines the serverless virtualization boundary. We show that Nexus increases deployment density by 37%.
+
+Acknowledgements.
+
+The authors thank the members of the HyScale lab at NTU Singapore for their constructive discussions and feedback on this work. This project is supported by the Ministry of Education, Singapore, under its Academic Research Funds Tier 2 MOE-T2EP20124-0002.
+
