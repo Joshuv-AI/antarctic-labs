@@ -1,0 +1,2066 @@
+GateANN: I/O-Efficient Filtered Vector Search on SSDs Conference: ;
+Nakyung Lee ∗ , Soobin Cho ∗ , Jiwoong Park, Gyuyeong Kim †
+
+Abstract
+. We present GateANN, an I/O-efficient SSD-based graph ANNS system that supports filtered vector search on an unmodified graph index. Existing SSD-based systems either waste I/O by post-filtering, or require expensive filter-aware index rebuilds. GateANN avoids both by decoupling graph traversal from vector retrieval. Our key insight is that traversing a node requires only its neighbor list and an approximate distance, neither of which needs the full-precision vector on SSD. Based on this, GateANN introduces graph tunneling. It checks each node’s filter predicate in memory before issuing I/O and routes through non-matching nodes entirely in memory, preserving graph connectivity without any SSD read for non-matching nodes. Our experimental results show that it reduces SSD reads by up to 10× and improves throughput by up to 7.6×.
+
+
+
+†
+†
+footnotetext:
+∗
+Equal contribution.
+†
+Corresponding author. Code available at
+https://github.com/GyuyeongKim/GateANN-public
+.
+
+1.
+Introduction
+
+High-dimensional vectors have become a universal representation for unstructured data across diverse applications, from recommendation systems to retrieval-augmented generation (RAG)
+(
+Malkov and Yashunin 2020
+;
+Johnson et al. 2021
+;
+Yao et al. 2025
+;
+Hu et al. 2025
+;
+Ray et al. 2025
+)
+, driving demand for nearest-neighbor search at scale.
+Since exact search is prohibitively expensive, approximate nearest neighbor search (ANNS) is preferred, and graph-based indexes are widely adopted for their superior latency–recall tradeoff
+(
+Malkov and Yashunin 2020
+;
+Kim et al. 2025
+;
+Jang et al. 2023
+;
+Mohoney et al. 2025
+)
+.
+Recently, SSD-based graph indexes (e.g., DiskANN
+(
+Subramanya et al. 2019
+)
+, PipeANN
+(
+Guo and Lu 2025
+)
+) have made large-scale vector search practical on a single commodity server.
+To scale beyond memory capacity, these systems store full-precision vectors and graph topology on NVMe SSDs, retaining only compressed vectors in memory for approximate distance computation.
+
+In practice, vector search queries rarely target the entire dataset.
+Instead, they often restrict results using metadata predicates such as document type, time range, access-control lists, or product category.
+Such
+filtered search
+is common in production vector databases
+(
+Wang et al. 2021
+;
+Ingber and Liberty 2025
+)
+.
+Unfortunately, existing SSD-based graph indexes use
+post-filtering
+: they fetch candidate nodes from SSD, compute exact distances, and discard nodes that do not satisfy the predicate.
+This wastes substantial work.
+For example, if only 10% of the dataset matches the filter, then 90% of SSD reads and exact-distance computations are spent on data that will never appear in the final result.
+Under high load, this wasted work becomes the throughput bottleneck (§
+2.2
+).
+
+A natural alternative is
+pre-filtering
+that checks the filter before issuing I/O and skips non-matching nodes.
+However, the characteristic of graph search makes this difficult, because a visited node is both a candidate result and a routing state whose neighbors guide the search.
+Skipping a non-matching node can therefore disconnect important traversal paths, sharply reducing performance and recall.
+The core challenge is that non-matching nodes are useless as results, yet often essential for traversal.
+
+Prior work on filtered search
+(
+Gollapudi et al. 2023
+)
+addresses this challenge by building a filter-aware graph index.
+This improves I/O efficiency, but at the cost of flexibility.
+They require expensive index rebuilds when the filter schema changes, and are typically limited to a fixed class of predicates such as equality filters.
+They do not naturally support ad-hoc predicates such as subset conditions over multi-label metadata or range predicates over continuous attributes.
+As a result, existing SSD-based systems remain stuck between two undesirable choices: either waste SSD I/O with post-filtering, or rebuild specialized indexes for restricted predicate types.
+In this context, we ask the following question:
+Can we achieve I/O efficiency for filtered vector search on an unmodified graph index while supporting any filter predicates?
+
+To answer this question affirmatively, this paper introduces GateANN, an I/O-efficient SSD-based graph ANNS system for filtered search.
+Our key insight is that traversing a node requires only two pieces of information: its neighbor list and an approximate distance estimate, neither of which requires the full-precision vector stored on the SSD.
+Based on this, GateANN
+decouples graph traversal from vector retrieval
+by keeping the neighbor list and approximate distances in memory, enabling pre-filtering without harming graph connectivity.
+To realize this, GateANN introduces
+graph tunneling
+: for nodes that fail the filter, the search traverses through them using only in-memory routing metadata without issuing any SSD read.
+This adds moderate memory overhead (e.g., 6 GB for 100M vectors), which is tunable by adjusting the number of in-memory neighbors per node.
+
+We evaluate GateANN on datasets ranging from 10M to 1B vectors with both synthetic and real multi-label metadata
+(
+Simhadri et al. 2024
+)
+.
+Across these workloads, GateANN reduces SSD I/Os by up to 10
+\times
+relative to post-filter baselines and improves throughput by up to 7.6
+\times
+at 10% selectivity while maintaining comparable recall.
+As filters become more selective, the gains grow further.
+GateANN also closes the gap with in-memory search: it matches or surpasses in-memory Vamana in single-thread latency despite using SSD.
+
+In summary, this paper makes the following contributions:
+
+•
+
+We identify the fundamental tension in filtered SSD-based graph search: post-filtering wastes SSD I/O and computation, while naive pre-filtering breaks graph connectivity and collapses recall (§
+2
+).
+
+•
+
+We present GateANN, which decouples graph traversal from vector retrieval through pre-I/O filter checking and graph tunneling, enabling I/O-efficient filtered search on an unmodified graph index (§
+3
+).
+
+•
+
+We evaluate GateANN on datasets from 10M to 1B vectors with synthetic and real metadata, showing up to 10
+\times
+fewer SSD I/Os and up to 7.6
+\times
+higher throughput than SSD-based post-filter baselines at comparable recall (§
+5
+).
+
+2.
+Background and Motivation
+
+We begin by reviewing SSD-based graph ANNS (§
+2.1
+), then explain the I/O dilemma in filtered vector search (§
+2.2
+). We next motivate the need for I/O-efficient pre-filtering on unmodified graph indexes (§
+2.3
+).
+
+2.1.
+SSD-Based Graph ANNS
+
+Graph-based approximate nearest neighbor search (ANNS) organizes vectors as a proximity graph, where each vector is a node and edges connect approximate neighbors.
+Given a query, the search starts from an entry point and greedily traverses toward nodes that appear progressively closer to the query, returning the closest visited nodes as approximate nearest neighbors
+(
+Malkov and Yashunin 2020
+;
+Subramanya et al. 2019
+;
+Guo and Lu 2025
+)
+.
+
+At the billion scale, storing full-precision vectors in memory is often infeasible on a commodity server
+(
+Jang et al. 2023
+;
+Tian et al. 2024
+;
+Tian et al. 2025
+;
+Xu et al. 2023
+;
+Wu et al. 2025
+)
+.
+For example, storing 128-dimensional float32 vectors together with a degree-64 graph at a scale of one billion points requires approximately 768 GB of memory, far exceeding the memory capacity of a commodity server.
+This motivates SSD-based graph ANNS systems such as DiskANN
+(
+Subramanya et al. 2019
+)
+that place node records on NVMe SSDs while keeping only compressed vectors in memory using Product Quantization (PQ) for approximate distance estimation.
+In DiskANN, each node occupies a 4 KB-aligned record containing its full-precision vector and neighbor list.
+Search proceeds in rounds: the system selects a beam of promising candidates, issues SSD reads for them, waits for the batch to finish, and then continues.
+
+PipeANN
+(
+Guo and Lu 2025
+)
+improves over this batch-and-wait design by using
+io_uring
+to pipeline reads asynchronously.
+Instead of waiting for an entire batch, it continuously submits reads, polls completions, and processes nodes while keeping many I/Os in flight.
+This overlap substantially improves throughput.
+However, in both systems, graph traversal still incurs a random SSD read for every expanded node, and each read costs tens to hundreds of microseconds.
+As a result, per-node SSD I/O remains the dominant cost.
+
+2.2.
+The I/O Dilemma in Filtered Vector Search
+
+Filtered vector search is common.
+
+Production queries rarely search the entire dataset.
+Enterprise RAG restricts by document type and access control, legal search filters by jurisdiction and time range, and e-commerce search narrows by product category.
+Such metadata predicates are pervasive in practice
+(
+Wang et al. 2021
+;
+Ingber and Liberty 2025
+;
+Zhang et al. 2023
+;
+Patel et al. 2024
+)
+.
+We define the
+selectivity
+
+s
+of a filter as the fraction of the dataset that satisfies it.
+Selectivities in the 1–10% range are common in both benchmark and production settings
+(
+Jin et al. 2026
+;
+Microsoft 2025
+;
+Zilliz 2024
+)
+.
+
+Post-filtering is general, but wastes SSD I/O.
+
+Existing SSD-based graph ANNS systems such as DiskANN and PipeANN handle filters by
+post-filtering
+: they fetch every candidate node from SSD and only then check whether the node satisfies the predicate.
+This approach is general and index-agnostic, but it pays full per-node cost—SSD I/O, exact distance computation, and candidate management—regardless of whether the node matches the filter.
+This means that, for example, at selectivity
+s=0.1
+, 90% of SSD reads are wasted on fetching non-matching nodes that cannot appear in the final result.
+
+This waste becomes costly under multi-threads.
+In Figure
+1
+(a), we can see that PipeANN outperforms DiskANN by overlapping I/O and computation across the number of threads.
+However, as concurrency increases, they converge on similar throughput because both ultimately spend most of their budget processing nodes that fail the filter.
+
+(a)
+Throughput scaling.
+
+(b)
+Post-filter vs. naïve pre-filter.
+
+Figure 1.
+Motivating experiments on BigANN-100M with 10% selectivity. (a) Post-filtering systems plateau early because of wasted per-node work. (b) Naïve pre-filtering destroys graph connectivity, degrading throughput and recall.
+
+Naïve pre-filtering saves I/O, but breaks graph search.
+
+A natural alternative is to push the predicate before I/O and skip nodes that fail the filter.
+However, this is fundamentally problematic for graph search: non-matching nodes are not only poor result candidates, but also routing states that connect the search to other regions of the graph.
+Skipping their expansion prevents the search from reaching their neighbors, even when those neighbors match the predicate.
+Because many paths between matching nodes pass through non-matching nodes, pre-filtering fragments the graph over matching nodes into many small disconnected components, particularly at low selectivity.
+
+Figure
+1
+(b) confirms this.
+At the same throughput, naïve pre-filtering achieves much lower recall than post-filtering, and its maximum recall plateaus at
+{\sim}
+57% even at 2.7K QPS, compared to
+>
+99% for post-filtering.
+Increasing the search list size
+L
+cannot overcome this limitation since unreachable components remain invisible regardless of how many candidates the traversal explores.
+
+Filter-aware indexes improve efficiency, but sacrifice flexibility.
+
+Prior work on filtered search incorporates label information directly into the index structure.
+For example, Filtered-DiskANN (F-DiskANN )
+(
+Gollapudi et al. 2023
+)
+augments the graph with label-aware connectivity and entry points, reducing unnecessary I/O.
+However, they require the label space to be known at build time.
+Supporting a new predicate or changing the taxonomy requires rebuilding the index, which can take days at the billion scale.
+They also cannot handle ad-hoc predicates such as subset predicates over multi-label metadata or range predicates over continuous attributes.
+
+(a)
+Post-filtering
+
+(b)
+Filter-aware index
+
+(c)
+GateANN
+
+Figure 2.
+Different approaches for filtered vector search.
+
+2.3.
+Toward I/O-Efficient Pre-filtering
+
+Rethinking why pre-filtering seems impractical.
+
+Prior work has regarded pre-I/O filter checking as incompatible with graph search, because skipping a non-matching node appears to discard not only a bad result candidate but also a useful routing state.
+This leaves an all-or-nothing choice: either fetch every visited node from SSD and apply post-filtering, or skip non-matching nodes and risk losing graph connectivity.
+
+The problem is not pre-filtering itself, but the coupling between traversal and I/O in existing systems.
+Today, a node’s neighbor list is stored alongside its vector in a single disk sector; the only way to discover a node’s neighbors is to read that sector from SSD.
+This means that even determining the next traversal hop requires a disk I/O, regardless of whether the node matches the filter.
+
+Insight: the missing piece is already small.
+
+Graph traversal requires only two types of information per node: a neighbor list and an approximate distance estimate.
+Existing SSD-based systems already keep compressed vectors in memory for approximate distance computation.
+However, the neighbor list is tightly coupled with full-precision vectors in SSDs.
+Since neighbor lists are lightweight compared to the full vectors, they can be maintained entirely in memory at a fraction of the cost of full-precision vectors.
+
+Our approach.
+
+By leveraging the above insight, GateANN decouples graph traversal from vector retrieval by maintaining a compact neighbor list in memory.
+Before issuing any SSD I/O, GateANN checks each candidate node’s filter predicate against this in-memory metadata.
+Nodes that do not satisfy the predicate are traversed purely in memory, preserving graph connectivity without incurring a disk read.
+Nodes that do satisfy the predicate trigger an SSD fetch for exact distance computation.
+Because GateANN operates directly on the original graph rather than a rebuilt, filter-specific index, it supports arbitrary predicates without any index modification.
+
+Trade-off.
+
+This design introduces a deliberate memory–I/O trade-off.
+Avoiding SSD reads for filter-failing nodes requires storing neighbor lists in memory.
+At billion scale, the additional memory footprint is about 63 GB at the default setting, and can be reduced to 34 GB with fewer neighbors or increased to 123 GB for better tunneling quality.
+This overhead is practical on commodity servers with 128–512 GB of memory, and is attractive because SSD access is more expensive than in-memory traversal.
+Moreover, the overhead is tunable.
+Operators can retain fewer neighbors per node to reduce memory usage, trading some tunneling quality for a smaller memory footprint while still outperforming post-filtering baselines (§
+5.4.2
+).
+
+Table 1.
+Comparison with existing works.
+\triangle
+: partial (reduces but does not eliminate I/O for non-matching nodes).
+
+PipeANN
+(
+Guo and Lu 2025
+)
+
+F-DiskANN
+(
+Gollapudi et al. 2023
+)
+
+GateANN
+
+Filter type
+
+Post-filtering
+
+Filter-aware Index
+
+pre-filtering
+
+I/O-efficient
+
+\times
+
+\triangle
+
+\surd
+
+Any filter predicates
+
+\surd
+
+\times
+
+\surd
+
+No index rebuild
+
+\surd
+
+\times
+
+\surd
+
+Comparison to existing works.
+
+Figure
+2
+and Table
+1
+summarize how GateANN differs from prior approaches.
+Post-filtering in Figure
+2
+(a) reads every traversed node from SSD and applies the predicate only afterward, so non-matching nodes still incur full I/O and distance computation.
+A filter-aware index in Figure
+2
+(b) pre-builds label-specific subgraphs to confine traversal to matching nodes, reducing wasted I/O but requiring an index rebuild whenever the label changes.
+GateANN in Figure
+2
+(c) checks the predicate before I/O on the original graph: matching nodes follow the normal SSD path, while non-matching nodes are traversed in memory.
+This preserves graph connectivity and eliminates SSD I/O for filter-failing nodes, without restricting the predicate or rebuilding the index.
+
+Figure 3.
+GateANN overview.
+A candidate is first checked against the in-memory filter store.
+Filter-passing nodes follow the normal SSD path: an asynchronous read followed by exact distance computation.
+Filter-failing nodes are routed to the graph tunneling path: the neighbor store provides the adjacency list, PQ distances are computed in memory, and promising neighbors are inserted back into the candidate list.
+Both paths feed into the same sorted frontier.
+
+3.
+GateANN Design
+
+3.1.
+Overview
+
+Figure
+3
+shows the architecture of GateANN.
+The central design principle is to
+separate graph traversal from vector retrieval
+: whether a node’s full-precision vector is fetched from SSD should depend on whether the node can contribute to the query result, not on whether the node lies on the search path.
+
+GateANN realizes this by inserting a filter-aware dispatch stage into the asynchronous search pipeline.
+Each candidate is dispatched to one of two paths based on a lightweight in-memory predicate check.
+The two paths differ only in how a node is processed—both feed candidates into the same sorted frontier, so the rest of the search algorithm is unaffected.
+This preserves the asynchronous I/O pipeline
+(
+Guo and Lu 2025
+)
+intact while ensuring that every SSD read serves a node that can appear in the final result.
+The following subsections describe each component in detail.
+
+3.2.
+Key Components
+
+Filter store.
+
+The first component is the
+filter store
+, a memory-resident structure that holds each node’s filter metadata and supports
+O(1)
+predicate evaluation by node ID.
+The key design goal is to make every filter decision
+before
+any I/O, so that the system never pays the cost of an SSD read for a node that cannot contribute to the result.
+
+The filter store is intentionally decoupled from the graph index: it is loaded from a separate metadata file and can be replaced independently.
+This separation is what enables GateANN to support arbitrary predicates—equality, range, multi-label subset, or conjunctions thereof—without rebuilding the graph.
+Adding a new predicate type only requires providing the corresponding metadata; the graph index and the search algorithm remain unchanged.
+The memory cost scales with metadata size: a single-label equality filter requires one byte per node (100 MB at
+N{=}100
+M), while richer multi-label metadata requires more but remains a small fraction of the overall memory budget.
+
+GateANN places this check at the earliest point in the search pipeline, before both hot-node cache lookup and SSD submission.
+This placement is deliberate: a node that fails the filter should incur neither SSD I/O nor exact distance computation, so checking the predicate first removes all unnecessary work on non-matching nodes, not just SSD reads.
+
+Neighbor store.
+
+The second component is the
+neighbor store
+, which replicates each node’s adjacency list from the on-disk graph into memory.
+Its purpose is to enable tunneling.
+When a node fails the filter, the search needs to access the node’s neighbors to continue traversal, but the neighbors are normally embedded in the node’s SSD record alongside the full-precision vector.
+The neighbor store extracts just the adjacency information—a list of up to
+R_{\max}
+neighbor IDs per node—so that tunneling can proceed without any SSD read.
+
+Like the filter store, the neighbor store is built at load time from the existing on-disk index and does not modify it.
+Because each node in the Vamana graph stores neighbors in order of proximity, retaining the first
+R_{\max}
+entries preserves the closest and most useful neighbors for routing.
+The structure supports
+O(1)
+lookup by node ID, ensuring that tunneling adds negligible latency compared to the SSD read it replaces.
+
+Figure 4.
+Graph tunneling example.
+➊ Node
+B
+passes the filter and follows the normal SSD path.
+➋ Node
+C
+is selected next but fails the filter check.
+➌ GateANN reads
+C
+’s neighbors (
+N_{1}
+–
+N_{4}
+) from the neighbor store in memory.
+➍ PQ distances to the query are computed for each neighbor; neighbors below the frontier threshold (here
+0.45
+) are kept (
+N_{1}
+,
+N_{3}
+) and the rest (
+N_{2}
+,
+N_{4}
+) are discarded.
+➎ Promising neighbors are inserted into the candidate list, and
+C
+is marked visited but ineligible for results.
+
+3.3.
+Graph Tunneling
+
+Why tunneling?
+
+When a candidate fails the filter, the search must still be able to move through it.
+Otherwise, the traversal would stop at the boundary of a filtered-out region.
+GateANN addresses this by tunneling through the node in memory rather than fetching its vector from SSD.
+
+The key observation behind tunneling is that each node in a graph search serves two distinct roles: it is a
+result candidate
+that may appear in the final top-
+K
+, and a
+routing waypoint
+whose edges connect the search to other regions of the graph.
+Post-filtering conflates these roles, since every visited node is fetched from SSD regardless of whether it contributes to the result.
+Tunneling separates them: a node that fails the filter can never be a result candidate, so it only needs to fulfill its waypoint role.
+Fulfilling the waypoint role requires only the node’s adjacency list and approximate (PQ) distances, both of which reside in memory.
+
+This separation is effective because of a large cost asymmetry between the two paths.
+An SSD random read takes on the order of
+100\,\mu
+s, while a neighbor store lookup and PQ distance computation complete in sub-microsecond time—roughly two orders of magnitude faster.
+Tunneling therefore replaces the most expensive per-node operation with one that is
+{\sim}100\times
+cheaper, and the benefit scales with the fraction of visited nodes that fail the filter.
+
+This also clarifies the difference from naïve pre-filtering, which simply skips non-matching nodes without expanding their neighbors.
+Skipping breaks graph connectivity: if many consecutive nodes fail the filter, the search frontier becomes disconnected and recall collapses (as shown in §
+2
+).
+Tunneling avoids this by preserving neighbor expansion—it eliminates only the SSD read, not the graph traversal step.
+The search can therefore cross arbitrarily long non-matching regions through a sequence of cheap in-memory hops.
+
+Example.
+
+Figure
+4
+shows an example.
+The search has reached node
+A
+from query
+Q
+, and the candidate list is
+[C,A,B,D]
+.
+Node
+B
+, the next unvisited candidate, passes the filter and follows the normal SSD path (➊).
+The search then selects node
+C
+, which fails the filter (➋).
+Rather than issuing an SSD read, the system tunnels through
+C
+entirely in memory: it reads
+C
+’s neighbors from the neighbor store (➌), scores them with PQ distances (➍), and inserts the promising ones into the candidate list (➎).
+The candidate list is updated to
+[N_{1},N_{3},C,D]
+, and the search continues from
+N_{1}
+.
+Note that the net effect is that
+C
+served as a routing waypoint—connecting the search to new candidates
+N_{1}
+and
+N_{3}
+.
+
+Putting it together.
+
+Algorithm
+1
+summarizes the integrated search loop.
+The important structural property is that both paths, SSD retrieval and in-memory tunneling, feed candidates into the same sorted frontier.
+The rest of the search remains unchanged: the algorithm repeatedly selects promising frontier nodes, expands them, and returns the top-
+K
+filter-passing candidates.
+
+Algorithm 1
+
+GateANN search loop (simplified).
+
+1:
+
+Query
+q
+, filter predicate
+f
+, search list size
+L
+, result size
+K
+, I/O width
+W
+
+2:
+
+\mathcal{C}\leftarrow
+sorted candidate frontier, initialized with the entry point
+
+3:
+
+\mathcal{Q}\leftarrow\emptyset
+
+\triangleright
+in-flight SSD reads
+
+4:
+
+while
+
+\mathcal{C}
+has undispatched candidates
+or
+
+\mathcal{Q}\neq\emptyset
+
+do
+
+5:
+
+while
+
+|\mathcal{Q}|<W
+
+and
+
+\mathcal{C}
+has an undispatched candidate
+do
+
+6:
+
+c\leftarrow
+best undispatched candidate in
+\mathcal{C}
+
+7:
+
+if
+
+\mathit{filter\_store}[c]
+satisfies
+f
+
+then
+
+8:
+
+Submit asynchronous read for
+c
+’s SSD record
+
+9:
+
+Add
+c
+to
+\mathcal{Q}
+and mark
+c
+as dispatched
+
+10:
+
+else
+
+11:
+
+\mathit{nbrs}\leftarrow\mathit{neighbor\_store}[c]
+
+12:
+
+for
+each unvisited
+n\in\mathit{nbrs}
+
+do
+
+13:
+
+d_{n}\leftarrow\text{PQ\_dist}(q,n)
+
+14:
+
+if
+
+d_{n}
+improves the frontier threshold
+then
+
+15:
+
+Insert
+(n,d_{n})
+into
+\mathcal{C}
+
+16:
+
+end
+
+if
+
+17:
+
+end
+
+for
+
+18:
+
+Mark
+c
+as visited and filter-failing
+
+19:
+
+end
+
+if
+
+20:
+
+end
+
+while
+
+21:
+
+for
+each completed read
+r
+returned by the SSD
+do
+
+22:
+
+Compute the exact distance for
+r
+
+23:
+
+Expand
+r
+’s neighbors from the returned SSD record
+
+24:
+
+Insert promising neighbors into
+\mathcal{C}
+
+25:
+
+Remove
+r
+from
+\mathcal{Q}
+and mark
+r
+as visited
+
+26:
+
+end
+
+for
+
+27:
+
+end
+
+while
+
+28:
+
+return
+top-
+K
+filter-passing candidates from
+\mathcal{C}
+
+3.4.
+Design Implications and Trade-offs
+
+Approximate distances for tunneling.
+
+Graph tunneling uses PQ distances rather than exact distances from full vectors.
+This is acceptable because traversal only needs a good priority signal to decide which neighbors to explore next, not the precise ranking required for the final result set.
+PQ distances are used solely to order frontier expansion; final results are always drawn from filter-passing nodes evaluated with exact distances.
+
+Two factors may affect tunneling quality.
+First, tunneled nodes are prioritized with PQ distances rather than exact distances.
+Second, when
+R_{\max}<R
+, the in-memory adjacency contains only a subset of each node’s neighbors, potentially missing some routing paths.
+Both influence which routes the search explores first, but neither changes the final-result rule above.
+PQ errors also do not accumulate across hops in the way path-based approximation might suggest.
+Each candidate is rescored independently against the original query, and the frontier is globally resorted after every expansion.
+An approximation at one hop may alter the frontier ordering temporarily, but it does not propagate as a chained numerical error.
+When needed, the system can compensate by modestly increasing the search list size
+L
+, and we evaluate that trade-off in §
+5
+.
+
+Consecutive non-matching nodes.
+
+At low selectivity, a tunneled node often exposes neighbors that also fail the filter.
+GateANN handles this case naturally.
+If a neighbor later becomes the best frontier candidate and still fails the filter, the system tunnels through it as well.
+In this way, single-hop tunneling composes into multi-hop traversal without any special multi-hop operator.
+
+Table 2.
+Memory overhead for
+N
+-size datasets.
+
+Component
+
+Formula
+
+Size (100M)
+
+Size (1B)
+
+Filter store (single-label)
+
+N
+B
+
+100 MB
+
+1 GB
+
+Filter store (multi-label)
+
+varies
+
+\sim
+900 MB
+
+\sim
+9 GB
+
+Neighbor store (
+R_{\max}=16
+)
+
+N\cdot 17\cdot 4
+B
+
+6.3 GB
+
+63 GB
+
+PQ vectors (baseline)
+
+N\cdot 32
+B
+
+3.2 GB
+
+32 GB
+
+This design has two advantages.
+First, it avoids materializing all nodes within multiple hops of a filtered region, which would grow the work exponentially.
+Second, it lets the frontier be re-ranked after every hop, preserving the best-first character of the search.
+The algorithm therefore moves through long filtered regions as a sequence of cheap in-memory expansions rather than a single large speculative expansion.
+
+Long non-matching stretches are a workload-dependent challenge.
+If filter predicates are strongly correlated with graph locality, the search may need to cross larger filtered regions before reaching matching nodes, which can require a larger frontier or a larger
+R_{\max}
+to maintain recall.
+We explicitly investigate these cases in the evaluation rather than assuming label independence.
+
+Memory overhead.
+
+The additional memory cost is the neighbor store:
+
+(1)
+
+\text{MEM}_{\text{neighbor}}=N\times(1+R_{\max})\times 4\penalty\ \text{bytes},
+
+where
+N
+is the number of nodes and
+R_{\max}
+is the number of in-memory neighbors retained per node.
+Table
+2
+shows representative sizes for
+N=100
+M and
+1
+B.
+Combined with the PQ vectors already kept by the baseline and a modest filter store, the total memory footprint remains practical on commodity servers.
+
+GateANN treats
+R_{\max}
+as a
+runtime
+parameter, not an index-build parameter: the neighbor store is constructed at load time by scanning the on-disk graph and extracting the first
+R_{\max}
+neighbors of each node, without modifying the index itself.
+Operators can therefore adjust
+R_{\max}
+freely across deployments or restarts without rebuilding the graph, unlike filter-aware indexes, which bake filter structure into the graph at build time.
+Larger values improve tunneling quality by exposing more candidate routes through non-matching regions, while smaller values reduce memory footprint and per-node in-memory work.
+
+Table 3.
+Datasets used in evaluation.
+
+Dataset
+
+Vectors
+
+Dim
+
+Type
+
+Labels
+
+BigANN-100M
+
+100M
+
+128
+
+uint8
+
+synth., 10 classes
+
+DEEP-100M
+
+100M
+
+96
+
+float
+
+synth., 10 classes
+
+YFCC-10M
+
+10M
+
+192
+
+uint8
+
+real,
+{\sim}
+200K tags
+
+BigANN-1B
+
+1B
+
+128
+
+uint8
+
+synth., 10 classes
+
+4.
+Implementation
+
+We implement GateANN in C++ by extending the PipeANN codebase
+(
+Guo and Lu 2025
+)
+.
+The implementation adds two read-only metadata structures and modifies the candidate dispatch path in PipeANN’s asynchronous search loop.
+
+Filter store.
+
+The filter store is allocated at index load time from a separate metadata file and is indexed by node ID.
+For single-label predicates, each entry stores a fixed-width label.
+For multi-label predicates, each entry stores the metadata needed for in-memory predicate evaluation, loaded from a sparse matrix representation.
+The structure is read-only during search and shared across all query threads.
+
+Neighbor store.
+
+The neighbor store stores up to
+R_{\max}
+neighbors per node in a contiguous array with fixed stride.
+It is built at load time by a sequential scan over the on-disk graph.
+We allocate it with
+mmap
+and
+MAP_POPULATE
+so that its pages are materialized before query processing begins.
+Like the filter store, the neighbor store is read-only and shared across query threads.
+
+Search loop integration.
+
+GateANN inserts the filter check before PipeANN’s SSD submission path.
+Candidates that satisfy the predicate follow the original path unchanged.
+Candidates that fail the predicate are expanded through the neighbor store using PipeANN’s existing PQ distance computation and candidate insertion routines.
+The I/O completion path,
+io_uring
+submission and completion logic, and PQ infrastructure are otherwise unchanged.
+
+(a)
+BigANN-100M: Recall vs. Latency
+
+(b)
+BigANN-100M: QPS vs. Recall
+
+(c)
+DEEP-100M: Recall vs. Latency
+
+(d)
+DEEP-100M: QPS vs. Recall
+
+Figure 5.
+Recall–latency (1 thread) and throughput–recall (32 threads) tradeoff curves on 100M-scale datasets. GateANN consistently outperforms both PipeANN and DiskANN across the entire recall range.
+
+5.
+Evaluation
+
+5.1.
+Methodology
+
+Testbed.
+
+All experiments run on a single server with two Intel Xeon Silver 4514Y CPUs (Sapphire Rapids, 32 physical cores supporting 64 logical cores), 256 GB DDR5, and a Samsung PM9A3 2 TB NVMe SSD (Gen4).
+For §
+5.4.3
+, we additionally use a Samsung 9100 PRO 4 TB NVMe SSD (Gen5).
+The server runs Ubuntu 22.04 with Linux kernel 5.15.
+
+Datasets.
+
+Table
+3
+summarizes the used datasets.
+BigANN-100M and DEEP-100M use synthetic, uniform 10-class labels, modeling the common category-based filtering scenario.
+YFCC-10M
+(
+Simhadri et al. 2024
+)
+uses real multi-label metadata (
+\sim
+200K tag vocabulary) with variable per-query selectivity.
+BigANN-1B validates scalability to billion-scale workloads.
+
+Compared systems.
+
+We compare five systems:
+
+•
+
+DiskANN
+
+(
+Subramanya et al. 2019
+)
+: synchronous beam search (
+W{=}8
+).
+
+•
+
+PipeANN
+
+(
+Guo and Lu 2025
+)
+: asynchronous pipelined search (
+W{=}32
+).
+
+•
+
+GateANN
+: asynchronous pipelined search with pre-I/O filter checking and graph tunneling (
+W{=}32
+,
+R_{\max}{=}32
+).
+
+•
+
+Vamana
+
+(
+Subramanya et al. 2019
+)
+: in-memory graph search (no SSD).
+
+•
+
+F-DiskANN
+
+(
+Gollapudi et al. 2023
+)
+: filter-aware graph index with per-label medoids and hard candidate filtering.
+
+DiskANN, PipeANN, and GateANN search the
+same
+standard Vamana graph index built with graph degree
+R{=}96
+and build-time search list
+L_{\text{build}}{=}128
+, with PQ compression (32 chunks).
+F-DiskANN uses a
+different
+index built by FilteredVamana, a label-aware construction that embeds filter information into the graph structure.
+
+Note that
+W
+has different semantics across systems: in DiskANN it is the synchronous beam width (all
+W
+reads must complete before the next round), while in PipeANN and GateANN it is the asynchronous pipeline depth (up to
+W
+concurrent in-flight I/Os).
+We follow each system’s recommended settings, as in the PipeANN paper
+(
+Guo and Lu 2025
+)
+.
+§
+5.4.8
+shows that GateANN’s throughput plateaus at
+W{\geq}8
+, so the specific choice of
+W{=}32
+does not inflate our results.
+
+Metrics.
+
+We report Recall@10, throughput (QPS), mean latency, and mean SSD I/Os per query.
+The search list size
+L
+is swept to trace Pareto curves.
+Latency experiments use 1 thread (CPU-pinned via
+taskset
+) to isolate per-query search efficiency without inter-thread contention; throughput experiments use 32 threads to stress the I/O pipeline.
+Default selectivity is 10% unless stated otherwise.
+
+5.2.
+Main Results
+
+5.2.1.
+Overall Performance
+
+Figure
+5
+shows the recall–latency and throughput–recall tradeoff curves on BigANN-100M and DEEP-100M.
+Each point corresponds to a different search list size
+L
+.
+
+Latency.
+
+On BigANN-100M, GateANN achieves
+{\sim}
+0.77 ms mean latency at 90% recall, which is 1.9
+\times
+faster than PipeANN and 13.0
+\times
+faster than DiskANN.
+The improvement is most pronounced at moderate recall targets (60–85%), where the majority of visited candidates fail the filter and are resolved entirely via in-memory tunneling.
+At high recall larger than 95%, GateANN remains faster than all baselines, though the gap narrows as the absolute number of filter-passing I/Os grows.
+On DEEP-100M, the trend holds with slightly larger absolute latencies due to DEEP’s float32 vectors (384 bytes per vector vs. BigANN’s 128 bytes), which increase the CPU cost of each exact distance computation without affecting GateANN’s I/O elimination.
+
+Throughput.
+
+GateANN achieves
+\sim
+16.0K QPS at 90% recall on BigANN-100M, compared to
+\sim
+2.1K for PipeANN, a 7.6
+\times
+improvement.
+The throughput advantage exceeds the latency advantage because 32 threads share a fixed CPU-side I/O processing budget: each SSD read triggers not only a disk access but also sector parsing, exact distance computation, and candidate management (§
+5.4.4
+).
+The I/O reduction in GateANN frees this budget, enabling throughput to scale with the number of threads rather than per-I/O overhead.
+The advantage persists across the recall.
+For example, at 95% recall, GateANN sustains a 6.9
+\times
+throughput gap.
+
+Figure 6.
+Throughput scaling from 1 to 32 threads on BigANN-100M,
+L{=}200
+.
+
+5.2.2.
+Scalability
+
+Figure
+6
+shows throughput from 1 to 32 threads at
+L{=}200
+.
+PipeANN plateaus at 8 threads (QPS at 8, 16, and 32 threads are virtually identical at
+{\sim}
+2.1K).
+DiskANN reaches
+{\sim}
+1.84K QPS at 32 threads, an 18
+\times
+ratio from 1 thread, but ultimately hitting the same ceiling.
+Both baselines converge despite PipeANN’s 6.7
+\times
+single-thread advantage, because, at high concurrency, both saturate the same aggregate I/O processing budget of
+{\sim}
+430K IOPS.
+
+GateANN breaks through this ceiling by eliminating 90% of I/Os and the per-node overhead that accompanies each one.
+At 1 thread, GateANN achieves 1.60K QPS, 2.4
+\times
+over PipeANN; at 32 threads, the gap widens to 9.8
+\times
+as GateANN reaches 20.5K QPS.
+The gap widens because, within the saturated I/O budget, throughput is inversely proportional to I/Os per query: PipeANN issues
+{\sim}
+206 I/Os per query while GateANN issues only
+{\sim}
+20, and the resulting 9.8
+\times
+gap closely matches the 10
+\times
+I/O reduction ratio.
+
+(a)
+Mean I/Os per query vs.
+L
+.
+
+(b)
+I/O reduction vs. selectivity.
+
+Figure 7.
+I/O reduction on BigANN-100M. (a) GateANN issues far fewer I/Os than PipeANN. (b) The measured reduction closely follows the theoretical expectation of
+1/s
+.
+
+5.2.3.
+I/O Reduction
+
+We next measure how many SSD I/Os GateANN eliminates and whether the reduction matches expectations.
+At selectivity
+s
+, a fraction
+s
+of visited nodes pass the filter and require SSD I/O; the remaining
+1{-}s
+are intercepted by pre-I/O filter checking.
+Hence, the expected I/O reduction is
+1/s
+compared to a post-filter baseline.
+
+Figure
+7
+(a) shows the mean I/Os per query as a function of
+L
+on BigANN-100M.
+At
+L{=}100
+, PipeANN issues
+\sim
+108 I/Os per query, while GateANN issues only
+\sim
+11, a 10.2
+\times
+reduction.
+The two curves are nearly parallel: as
+L
+grows, both systems visit proportionally more nodes, but GateANN intercepts the same fraction (
+1{-}s
+) at each step, confirming that the I/O reduction is a structural property of the filter mechanism, not an artifact of a particular
+L
+.
+Figure
+7
+(b) compares the measured reduction ratio against the expected
+1/s
+at three selectivities: 20.5
+\times
+at 5% (expected: 20
+\times
+), 10.2
+\times
+at 10% (expected: 10
+\times
+), and 5.1
+\times
+at 20% (expected: 5
+\times
+).
+The close match validates that pre-I/O filter checking with graph tunneling achieves the optimal I/O count without sacrificing graph connectivity.
+
+5.2.4.
+Performance at Billion-Scale
+
+We evaluate on BigANN-1B.
+The 1B index is built with
+R{=}128
+,
+L_{\text{build}}{=}200
+to accommodate the larger graph.
+At this scale,
+R_{\max}{=}32
+requires
+{\sim}
+123 GB of DRAM for the neighbor store; together with PQ codes (
+{\sim}
+32 GB), the total fits within the server’s 256 GB memory capacity.
+
+Figure
+8
+shows the recall–latency and throughput–recall tradeoff curves.
+At 90% recall with 32 threads, GateANN achieves 9.7K QPS, outperforming PipeANN at 1.7K QPS by 5.7
+\times
+and DiskANN at 1.4K QPS by 6.8
+\times
+.
+This confirms that GateANN’s pre-I/O filter checking and graph tunneling scale to billion-scale datasets without degradation.
+
+5.2.5.
+Real-World Labels: YFCC-10M
+
+(a)
+Recall vs. Latency (1 thread)
+
+(b)
+QPS vs. Recall (32 threads)
+
+Figure 8.
+Billion-scale results on BigANN-1B. GateANN’s advantage holds at 10
+\times
+the scale of the 100M experiments.
+
+Figure 9.
+Throughput–recall tradeoff curves on YFCC-10M with real multi-label filters (subset predicate).
+
+To test generality, we evaluate on YFCC-10M with real metadata tags from the BigANN benchmark
+(
+Simhadri et al. 2024
+)
+.
+Each vector has a variable number of tags from a vocabulary of
+\sim
+200K terms; a result is valid if the query’s tags are a subset of the result’s tags.
+This setting introduces variable per-query selectivity and more complex predicate evaluation.
+
+Figure
+9
+shows the throughput–recall tradeoff at 32 threads.
+GateANN dominates PipeANN across the entire overlapping recall range and extends significantly beyond PipeANN’s reach.
+At moderate recall (
+{\sim}35\%
+), GateANN achieves 16.7
+\times
+higher throughput, exceeding the 7.6
+\times
+advantage on BigANN-100M, because YFCC’s real tag distribution yields an average selectivity of
+{\sim}5\%
+.
+The top tag covers 34% of vectors, but most queries require rare tags.
+At this selectivity, GateANN reduces I/Os by 18.5
+\times
+, closely matching the expected
+1/s\approx 20\times
+prediction.
+The advantage persists at higher recall: at 77% recall, GateANN sustains 14.1
+\times
+throughput.
+PipeANN reaches
+{\sim}
+83% recall but only by pushing
+L
+to 20K, issuing 20K I/Os per query and dropping to 22 QPS—a throughput floor that makes further recall gains impractical.
+GateANN, by contrast, continues to 91% recall by tunneling through non-matching nodes in memory, sustaining 14 QPS even at its highest recall point while PipeANN stalls at 83% with comparable throughput.
+These results confirm that GateANN generalizes beyond synthetic single-label filters to real-world multi-label metadata with variable per-query selectivity.
+
+(a)
+Recall vs. Latency (1 thread)
+
+(b)
+QPS vs. Recall (32 threads)
+
+Figure 10.
+Comparison to Vamana (post-filtering).
+
+5.3.
+Comparison with Alternative Approaches
+
+5.3.1.
+In-Memory Search: Vamana
+
+We compare against Vamana
+(
+Subramanya et al. 2019
+)
+, which loads the full graph and all full-precision vectors into memory (
+{\sim}57
+GB) and applies post-filtering.
+Vamana computes exact distances for every visited node.
+Figure
+10
+(a) shows that GateANN achieves lower single-thread latency than Vamana at the same recall despite issuing SSD I/Os, because the CPU savings on non-matching nodes outweigh the I/O cost for matching ones.
+in Figure
+10
+(b) with 32 threads, Vamana’s throughput advantage becomes more apparent as in-memory computation scales freely with more threads while each SSD I/O carries fixed per-operation overhead, yet GateANN still reaches within 1.3
+\times
+of Vamana at 90% recall while using only
+{\sim}16
+GB versus
+{\sim}57
+GB, owing to pre-filtering.
+
+5.3.2.
+Filter-Aware Index: F-DiskANN
+
+(a)
+Recall vs. Latency (1 thread)
+
+(b)
+QPS vs. Recall (32 threads)
+
+Figure 11.
+Comparison with F-DiskANN. F-DiskANN uses a FilteredVamana index with label-aware edge routing and per-label medoid entry points.
+
+F-DiskANN
+(
+Gollapudi et al. 2023
+)
+builds a label-aware graph (FilteredVamana) that routes edges preferentially through same-label nodes.
+We evaluate using the official DiskANN codebase on BigANN-100M with 10-class labels.
+Figure
+11
+shows that F-DiskANN achieves high recall and reduces I/Os by
+{\sim}
+25% over DiskANN at 90% recall, confirming genuine routing benefit.
+However, the throughput improvement over DiskANN is modest—2.2K vs. 1.8K QPS at 32 threads—because at 10% selectivity each label covers 10M vectors, a subgraph large enough that post-filtering is not catastrophic.
+
+At 90% recall, GateANN achieves 16.0K QPS, outperforming F-DiskANN’s 2.2K QPS by 7.3
+\times
+in throughput.
+The same trend holds on DEEP-100M, where GateANN reaches 12.0K QPS versus F-DiskANN’s 883 QPS.
+The two approaches target different layers: F-DiskANN improves the
+graph structure
+by
+{\sim}
+25% I/O reduction, whereas GateANN optimizes the
+search engine
+with 10
+\times
+I/O reduction by eliminating reads for non-matching nodes.
+
+5.4.
+Deep Analysis
+
+Figure 12.
+QPS vs. Recall at 5%/10%/20% selectivity.
+
+5.4.1.
+Selectivity Sensitivity
+
+A key property of GateANN is that its benefit scales with filter restrictiveness: lower selectivity yields greater I/O reduction.
+We evaluate this by varying selectivity across 5%, 10%, and 20% on BigANN-100M with 32 threads.
+
+Figure
+12
+shows the throughput–recall at each selectivity.
+Two phenomena emerge: GateANN’s throughput
+increases
+as selectivity decreases (more tunneling, less I/O), while PipeANN’s throughput is roughly independent of selectivity since it reads every visited node regardless of filter match rate.
+At
+{\sim}90\%
+recall, GateANN outperforms PipeANN by: 11.7
+\times
+at 5%, 6.7
+\times
+at 10%, 3.6
+\times
+at 20%.
+The relationship confirms that GateANN’s I/O reduction tracks
+1/s
+and directly translates to throughput gains.
+
+5.4.2.
+DRAM–Performance Tradeoff
+
+(a)
+Throughput at 90% recall vs. DRAM overhead.
+
+(b)
+Tradeoff curves at different
+R_{\max}
+.
+
+Figure 13.
+Impact of maximum neighbors per node.
+
+To investigate the trade-off between the performance and memory usage, we sweep
+R_{\max}
+from 8 to 64 on BigANN-100M.
+Figure
+13
+(a) shows throughput at 90% recall as a function of DRAM overhead.
+Even
+R_{\max}{=}8
+at 3.4 GB delivers 2.2
+\times
+higher throughput than PipeANN; throughput peaks at
+R_{\max}{=}48
+with 19K QPS, 8.9
+\times
+over PipeANN, and drops at
+R_{\max}{=}64
+, confirming the diminishing-returns analysis in §
+3.4
+.
+Figure
+13
+(b) shows the full tradeoff curves.
+All
+R_{\max}
+configurations outperform PipeANN across the entire recall range.
+
+5.4.3.
+Impact of SSD Speed
+
+A natural question is whether faster SSDs diminish the benefit of GateANN.
+We compare the Gen4 PM9A3 and Gen5 Samsung 9100 PRO, which differ by approximately
+2\times
+in random 4 KB read throughput.
+
+Table
+4
+reveals each system’s SSD sensitivity.
+At 1 thread, DiskANN benefits the most (1.53
+\times
+) because every query serially waits for I/O; PipeANN’s asynchronous pipeline already hides most device latency, limiting its gain to 1.10
+\times
+; and GateANN sees no benefit (0.99
+\times
+) because its
+{\sim}
+25 I/Os per query leave the bottleneck entirely at CPU.
+At 32 threads, PipeANN shows
+zero
+benefit from the faster SSD.
+This is the key result: if the SSD were the saturated resource, doubling its IOPS capacity would improve throughput proportionally.
+The zero gain proves that the binding constraint is CPU-side per-I/O overhead—the processing chain triggered by each read, as quantified in §
+5.4.4
+.
+DiskANN benefits modestly (1.06
+\times
+) because its synchronous batching has lower per-I/O CPU overhead, leaving some room for reduced device latency to help.
+GateANN is likewise SSD-independent (1.04
+\times
+), but for a different reason: it has already eliminated the wasted I/Os, so there are few remaining reads to benefit from a faster device.
+The implication is that faster SSDs alone cannot solve the filtered search problem; reducing the
+number
+of I/Os, not the
+speed
+of each, is the effective lever.
+
+Table 4.
+Performance on Gen4 vs. Gen5 SSDs (BigANN-100M, Recall@10
+\geq
+90%). The Gen5/Gen4 column shows how much each system benefits from the faster SSD.
+
+Gen5/Gen4 (1 thread)
+
+Gen5/Gen4 (32 threads)
+
+DiskANN
+
+1.53
+\times
+
+1.06
+\times
+
+PipeANN
+
+1.10
+\times
+
+1.00
+\times
+
+GateANN
+
+0.99
+\times
+
+1.04
+\times
+
+5.4.4.
+Time Breakdown
+
+Table 5.
+Per-query time breakdown at
+{\sim}
+86–90% recall (1 thread, BigANN-100M).
+
+Component
+
+PipeANN (
+\mu
+s)
+
+%
+
+GateANN (
+\mu
+s)
+
+%
+
+SSD I/O (submit + poll)
+
+64
+
+4.3
+
+6
+
+0.9
+
+Tunneling (PQ + AdjIndex)
+
+—
+
+—
+
+338
+
+49.3
+
+Processing (exact dist.)
+
+1041
+
+69.5
+
+112
+
+16.3
+
+Other (list mgmt., loop)
+
+393
+
+26.2
+
+230
+
+33.5
+
+Total
+
+1498
+
+100
+
+686
+
+100
+
+Table
+5
+decomposes per-query latency at
+{\sim}
+86–90% recall (1 thread).
+In PipeANN, exact distance computation dominates (69.5%), while SSD I/O itself is only 4.3%—each I/O triggers an expensive processing chain that far exceeds the device access time.
+GateANN replaces this path with in-memory tunneling for non-matching nodes, shrinking processing by 9.3
+\times
+from 1041 to 112
+\mu
+s and total latency by 2.2
+\times
+from 1498 to 686
+\mu
+s.
+
+At 32 threads, the gap widens further.
+Because each I/O carries the full processing chain above—submission, polling, sector parsing, and distance computation—32 threads collectively exhaust their CPU budget at
+{\sim}
+430K aggregate IOPS, a CPU-side ceiling rather than an SSD limit (§
+5.4.3
+).
+Beyond this ceiling, throughput becomes inversely proportional to I/Os per query: PipeANN issues
+{\sim}
+206 I/Os (2.1K QPS) while GateANN issues
+{\sim}
+20 (20.5K QPS), yielding a 9.8
+\times
+gap that closely matches the 10
+\times
+I/O reduction.
+
+5.4.5.
+Skewed Label Distributions
+
+Real-world label distributions are typically skewed: a few labels are common while many are rare.
+We test robustness by replacing uniform labels with a Zipf distribution (
+\alpha{=}1.0
+, 10 classes), where the most common class covers 34% of vectors and the rarest covers only 3.4%.
+Queries are distributed uniformly across classes, creating a mix of high- and low-selectivity queries in each run.
+
+Figure
+14
+shows that GateANN maintains its advantage under skewed distributions.
+The mixed selectivities are favorable for GateANN: rare-class queries (3.4% selectivity) see even larger I/O reductions, while common-class queries (34%) still benefit because two-thirds of candidates fail the filter.
+The overall throughput improvement of 8.5
+\times
+over PipeANN reflects the selectivity-weighted average.
+
+5.4.6.
+Spatial Label Correlation
+
+(a)
+Recall vs. Latency (1 thread)
+
+(b)
+QPS vs. Recall (32 threads)
+
+Figure 14.
+BigANN-100M with Zipf-distributed labels (
+\alpha{=}1.0
+, 10 classes). Selectivity ranges from 3.4% (rare) to 34.1% (common) across queries.
+
+Figure 15.
+Effect of label–vector correlation. Labels are assigned via
+k
+-means:
+\alpha{=}0
+is random,
+\alpha{=}1
+assigns each node the label of its nearest cluster center.
+
+The preceding experiments assign labels uniformly at random, but real-world metadata often correlates with the vector space To measure the impact of such correlation, we assign labels using
+k
+-means clustering (
+k{=}10
+on BigANN-100M) with a mixing parameter
+\alpha
+: at
+\alpha{=}0
+labels are random; at
+\alpha{=}1
+each node receives the label of its nearest cluster center.
+Selectivity remains 10% (10 classes) at all
+\alpha
+.
+
+Figure
+15
+shows that spatial correlation affects achievable recall.
+At
+\alpha{=}0
+(random), the filtered 10-NN are scattered across the graph, capping recall at
+{\sim}
+88% because the unfiltered graph cannot bridge long chains of non-matching nodes.
+At
+\alpha{=}1
+(clustered), matching nodes form compact regions and both systems reach
+>
+99%.
+GateANN outperforms PipeANN at every
+\alpha
+, but the gap shrinks as correlation increases: at
+\alpha{=}0
+, GateANN eliminates
+{\sim}
+90% of I/Os; at
+\alpha{=}1
+, traversal naturally stays within the matching cluster, leaving fewer wasted I/Os to eliminate.
+
+5.4.7.
+Range Predicates
+
+(a)
+Recall vs. Latency (1 thread)
+
+(b)
+QPS vs. Recall (32 threads)
+
+Figure 16.
+Range predicate (L2-norm binning, 10 bins).
+
+(a)
+QPS vs.
+W
+at 93% recall.
+
+(b)
+Recall is invariant to
+W
+.
+
+Figure 17.
+Pipeline depth (
+W
+) sweep for GateANN on BigANN-100M. Recall is identical across all
+W
+; throughput plateaus at
+W{\geq}8
+(32 threads) and at
+W{\geq}4
+(1 thread).
+
+To validate that GateANN handles non-categorical predicates, we construct a range predicate by binning each vector’s L2 norm into 10 equal-frequency bins and selecting one bin per query (
+{\sim}
+10% selectivity).
+This predicate is purely geometric and creates concentric-shell-like regions in the vector space.
+
+Figure
+16
+shows latency and throughput curves.
+At
+{\sim}
+89% recall with 32 threads, GateANN achieves 2.8K QPS, 6.5
+\times
+higher than PipeANN’s 429 QPS; at 1 thread, GateANN reaches this recall at
+{\sim}
+2.8 ms vs.
+{\sim}
+2.6 ms for PipeANN, with DiskANN at
+{\sim}
+19 ms.
+All three systems plateau at
+{\sim}
+90% recall because norm-based bins create concentric shells whose boundaries cut across the graph structure, leaving the filtered subgraph sparsely connected regardless of
+L
+.
+The result confirms that GateANN is predicate-agnostic: it applies equally to range predicates without any change to the index or search algorithm.
+
+5.4.8.
+Pipeline Depth
+
+In PipeANN, pipeline depth
+W
+controls the number of concurrent in-flight I/Os via
+io_uring
+.
+Since GateANN issues
+{\sim}10{\times}
+fewer I/Os per query, one might expect a smaller
+W
+to suffice.
+We sweep
+W\in\{1,2,4,8,16,32\}
+on BigANN-100M.
+
+Figure
+17
+(b) confirms that recall is invariant to
+W
+. All values produce identical curves across
+L
+, since
+W
+affects only I/O scheduling, not candidate selection.
+Figure
+17
+(a) shows throughput at
+L{=}300
+(
+{\sim}
+93% recall).
+At 32 threads, throughput improves from
+W{=}1
+(8.1K QPS) to
+W{=}8
+(14.0K QPS), then plateaus through
+W{=}32
+(14.0K QPS).
+The remaining I/Os per query still benefit from concurrency, but 8 concurrent I/Os suffice to hide per-read latency.
+At 1 thread, throughput plateaus earlier (
+W{\geq}4
+,
+{\sim}
+1.0K QPS), confirming that a single thread is CPU-bound even at moderate depths.
+Note that tunneling naturally self-regulates the pipeline by injecting memory-resolved candidates (sub-microsecond) between I/O completions, partially compensating for the reduced I/O count.
+
+5.4.9.
+Ablation: I/O Elimination vs. CPU Savings
+
+(a)
+Recall vs. Latency (1 thread)
+
+(b)
+QPS vs. Recall (32 threads)
+
+Figure 18.
+Ablation on BigANN-100M (
+s{=}0.1
+).
+PipeANN (Early)
+checks the filter after each SSD read and skips exact distance computation for non-matching nodes;
+GateANN (Pre)
+additionally eliminates the SSD reads themselves.
+
+GateANN’s speedup comes from two sources: (i) eliminating SSD I/Os for non-matching nodes, and (ii) skipping exact distance computation on them.
+To separate these effects, we add an
+Early Filter
+variant (“PipeANN (Early)” in Figure
+18
+) that applies filtering
+after
+the SSD read.
+Non-matching nodes still incur the read but skip exact distance computation; neighbor expansion is unchanged to preserve connectivity.
+
+Figure
+18
+compares the three designs.
+At 1 thread (Figure
+18
+(a)), PipeANN (Early) and PipeANN (Post) are nearly identical: at 90% recall, latency is 1.54 ms vs. 1.56 ms.
+Skipping exact distance saves only
+{\sim}
+16
+\mu
+s per query because BigANN’s 128-dimensional vectors make each computation cheap (
+{\sim}
+90 ns).
+In contrast, GateANN (Pre) reduces latency to 0.77 ms, a 2.0
+\times
+improvement, by eliminating SSD reads.
+
+At 32 threads (Figure
+18
+(b)), the pattern is even clearer.
+PipeANN (Early) reaches 2085 QPS, almost identical to PipeANN (Post) at 2098 QPS, whereas GateANN (Pre) achieves 16017 QPS, 7.6
+\times
+higher.
+The reason is that removing distance computation without removing I/O does not address the bottleneck.
+As Table
+5
+shows, per-I/O cost at 32 threads is dominated by submission, polling, and sector parsing.
+Both PipeANN variants still issue
+{\sim}
+206 I/Os per query and hit the same
+{\sim}
+430K IOPS ceiling.
+Only GateANN eliminates the SSD reads themselves, confirming that
+what to read
+matters far more than
+what to compute
+.
+
+6.
+Related Work
+
+SSD-based graph ANNS.
+
+DiskANN
+(
+Subramanya et al. 2019
+)
+introduced SSD-resident graph search with synchronous beam search.
+Subsequent systems improve SSD efficiency through asynchronous I/O pipelines
+(
+Guo and Lu 2025
+)
+, locality-aware graph layout
+(
+Wang et al. 2024
+;
+Yue et al. 2025
+)
+, co-designed layout and async runtime
+(
+Zhao et al. 2026
+)
+, page-aligned node placement
+(
+Kang et al. 2025
+)
+, and direct-insert updates
+(
+Guo and Lu 2026
+)
+.
+SPANN
+(
+Chen et al. 2021
+)
+and OrchANN
+(
+Huan et al. 2025
+)
+adopt inverted-index designs but do not support metadata predicates.
+They retrieve every expanded node from SSD and typically handle filters through post-filtering.
+GateANN avoids fetching filter-failing nodes by decoupling graph traversal from vector retrieval, complementary to any on-disk graph index.
+
+Filtered ANNS.
+
+Most prior work targets in-memory settings.
+NHQ
+(
+Wang et al. 2023
+)
+builds a composite proximity graph with a fused vector-attribute distance, UNG
+(
+Cai et al. 2024
+)
+encodes label-set containment in edges, JAG
+(
+Xu et al. 2026
+)
+incorporates attribute distances at construction and transforms query predicates into continuous filter distances at search time, and ACORN
+(
+Patel et al. 2024
+)
+uniformly densifies HNSW edges so that predicate-induced subgraphs are navigable.
+Curator
+(
+Jin et al. 2026
+)
+complements graph indexes with partition-based subindexes for low-selectivity queries, and SIEVE
+(
+Li et al. 2025
+)
+selects among workload-specialized indexes via an analytical cost model.
+They embed filter information into the index at build time.
+On the disk side, Filtered-DiskANN
+(
+Gollapudi et al. 2023
+)
+constructs a single label-aware Vamana graph with per-label medoids, and NaviX
+(
+Sehgal and Salihoglu 2025
+)
+adapts HNSW for disk-resident graph databases with adaptive prefiltering.
+Our work differs from all of the above in two respects: it operates on an unmodified graph index, supporting arbitrary predicates without rebuild, and it targets SSD-resident search.
+
+7.
+Conclusion
+
+This paper presented GateANN, an I/O-efficient SSD-based system for filtered vector search.
+The key idea is to separate the lightweight routing information needed for traversal from the full-precision vectors needed for final ranking.
+This decoupling allows GateANN to check filters before issuing SSD reads and to traverse non-matching nodes using compact in-memory metadata, thereby avoiding wasted I/O while preserving graph connectivity and recall.
+Experimental results show that GateANN reduces SSD I/Os by up to 10
+\times
+and improves throughput by up to 7.6
+\times
+at comparable recall.
+

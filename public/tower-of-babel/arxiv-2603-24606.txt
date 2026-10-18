@@ -1,0 +1,634 @@
+Zero-Cost NDV Estimation from Columnar File Metadata
+Claude Brisson
+
+Abstract
+We present a method for estimating the number of distinct values (NDV) of a column in columnar file formats, using only existing file metadata–no extra storage, no data access. Two complementary signals are exploited: (1) inverting the dictionary-encoded storage size equation yields accurate NDV estimates when distinct values are well-spread across row groups; (2) counting distinct min/max values across row groups and inverting a coupon collector model provides robust estimates for sorted or partitioned data. A lightweight distribution detector routes between the two estimators. While demonstrated on Apache Parquet, the technique generalizes to any format with dictionary encoding and partition-level statistics, such as ORC and F3. Applications include cost-based query optimization, GPU memory allocation, and data profiling.
+
+
+
+1
+Introduction
+
+While building Theseus
+[
+12
+]
+, a GPU-accelerated distributed query engine at VoltronData, we needed NDV estimates to drive cost-based optimization–aggregate pushdown, join ordering, memory allocation for GPU kernels. Parquet’s
+distinct_count
+field is almost never populated: computing exact distinct counts is expensive, and most writers omit it. Sampling or maintaining HyperLogLog sketches would require accessing data or adding writer-side infrastructure, defeating the purpose of metadata-only planning.
+
+The question became:
+what cardinality information is already encoded in existing metadata?
+
+Dictionary-encoded columns store their uncompressed size per column chunk. Row groups store per-column min/max statistics. Neither was designed for cardinality estimation, but both encode it implicitly–at least locally, within individual row groups. This paper details techniques for generalizing these local signals into global NDV estimates for the entire column.
+
+The technique was implemented and validated on production workloads at VoltronData. When the company’s assets were liquidated, the implementation and experimental results were lost; this paper reconstructs the approach from memory.
+
+Contributions.
+
+1.
+
+A closed-form equation relating NDV to dictionary-encoded storage size, solved via Newton-Raphson (Section
+4
+).
+
+2.
+
+Recognition that row group min/max statistics function as implicit cardinality sketches, with NDV recovery via coupon collector inversion (Section
+5
+).
+
+3.
+
+A lightweight distribution detector that routes between the two estimators (Section
+6
+).
+
+4.
+
+Batch memory prediction using coupon collector analysis (Section
+8
+).
+
+2
+Background
+
+2.1
+Parquet Dictionary Encoding
+
+Apache Parquet organizes data into
+row groups
+, each containing one
+column chunk
+per column. Within a column chunk, Parquet employs dictionary encoding for low-to-medium cardinality columns
+[
+3
+]
+: a dictionary page stores the distinct values, and data pages store bit-packed indices into the dictionary.
+
+Dictionary Page Data Pages
++-------------+ +---+---+---+---+---+
+| "alice" 0 | | 0 | 2 | 1 | 0 | 2 | ...
+| "bob" 1 | +---+---+---+---+---+
+| "charlie" 2 | (indices, bit-packed)
++-------------+
+
+Each column chunk exposes a
+total_uncompressed_size
+field in its metadata, equal to the sum of dictionary and index pages before compression:
+
+S=\text{ndv}\times\text{len}+(N-\text{nulls})\times\lceil\log_{2}(\text{ndv})\rceil\,/\,8
+
+(1)
+
+where
+ndv
+is the number of distinct values,
+len
+the mean byte length of values,
+N
+the row count, and
+nulls
+the null count.
+
+2.2
+Row Group Statistics
+
+Parquet stores per-column min/max statistics in each row group
+[
+4
+]
+. These are designed for predicate pushdown–skipping row groups whose value ranges exclude a query predicate–but have not traditionally been used for cardinality estimation.
+
+Across
+n
+row groups, a column yields
+n
+pairs
+(\min_{i},\max_{i})
+. We exploit both the diversity of these values and the overlap patterns between consecutive ranges.
+
+3
+Approach Overview
+
+The two metadata signals have complementary strengths. Dictionary size inversion (Section
+4
+) is grounded in a storage equation whose accuracy depends on how distinct values are spread across row groups. It does not require statistical uniformity–values may have arbitrary frequency distributions within each row group. What matters is that most distinct values appear in most row groups, a condition we call
+well-spread
+. When row group ranges heavily overlap, this condition holds and dictionary inversion is accurate. Min/max diversity estimation (Section
+5
+) instead exploits the spread of extreme values across row groups; it is accurate for sorted or partitioned data, where dictionary inversion underestimates.
+
+Well-spread
+
+Sorted/Partitioned
+
+Low NDV
+
+Dictionary inversion
+
+accurate
+
+underestimates
+
+accurate
+
+Min/max diversity
+
+underestimates
+
+accurate
+
+underestimates
+
+Table 1:
+Complementary accuracy profiles of the two estimators.
+
+A distribution detector (Section
+6
+) classifies each column’s data layout by analyzing range overlap and monotonicity across row groups. The final estimate takes the maximum of both methods, bounded by type-specific constraints (Section
+7
+).
+
+4
+Dictionary Size Inversion
+
+4.1
+Core Equation
+
+Given the observable metadata tuple
+(S,N,\text{nulls},\text{len})
+, we solve Equation (
+1
+) for
+ndv
+:
+
+f(\text{ndv})=\text{ndv}\times\text{len}+(N-\text{nulls})\times\lceil\log_{2}(\text{ndv})\rceil\,/\,8-S=0
+
+(2)
+
+4.2
+Newton-Raphson Solution
+
+We apply Newton-Raphson iteration using the exact
+f
+but a continuous approximation for the derivative, since the ceiling function has zero derivative almost everywhere:
+
+\text{ndv}_{k+1}=\text{ndv}_{k}-\frac{f(\text{ndv}_{k})}{f^{\prime}(\text{ndv}_{k})},\qquad f^{\prime}(\text{ndv})\approx\text{len}+\frac{N-\text{nulls}}{8\cdot\text{ndv}\cdot\ln 2}
+
+(3)
+
+The ceiling discontinuities are small relative to the dominant linear term, and convergence is unaffected in practice. The initial guess
+\text{ndv}_{0}=S/\text{len}
+assumes index overhead is small. Convergence to a tolerance of
+10^{-6}
+is typically achieved in 5–10 iterations.
+
+4.3
+Estimating Mean Value Length
+
+The parameter
+len
+is not directly stored in metadata. For fixed-width types (integers, dates, timestamps), it is known exactly from the Parquet schema. For variable-length types, we estimate it from all distinct min and max values observed across row groups:
+
+\text{len}=\frac{1}{|\mathcal{V}|}\sum_{v\in\mathcal{V}}|v|,\qquad\mathcal{V}=\{\text{distinct mins}\}\cup\{\text{distinct maxs}\}
+
+(4)
+
+The sample size
+|\mathcal{V}|
+serves as a reliability indicator: more distinct extreme values yield a more representative length distribution. For a single row group, we fall back to
+\text{len}=(|\min|+|\max|)/2
+.
+
+4.4
+Plain Encoding Fallback
+
+When a column’s cardinality exceeds Parquet’s dictionary threshold (typically
+{\sim}1
+MB), the writer falls back to plain encoding
+[
+3
+]
+: no dictionary page is written, and data pages contain raw values instead of indices. The uncompressed size then satisfies
+S\approx(N-\text{nulls})\times\text{len}
+, which the solver interprets as very high NDV.
+
+We detect this condition by checking two indicators simultaneously:
+
+\text{likely\_fallback}=\left(\frac{\text{ndv}}{N-\text{nulls}}\geq 0.9\right)\;\land\;\left(\frac{S}{(N-\text{nulls})\times\text{len}}\in[0.8,\;1.2]\right)
+
+(5)
+
+When detected, the estimate should be treated as a lower bound rather than a point estimate: the true NDV is at least as high as the dictionary threshold, but the inversion equation no longer constrains it.
+
+5
+Min/Max Diversity Estimation
+
+5.1
+Row Group Extrema as Implicit Samples
+
+Each row group computes and stores the minimum and maximum values for each column. Across
+n
+row groups, let
+m_{\min}
+denote the number of distinct min values and
+m_{\max}
+the number of distinct max values. These counts reflect how many different values appear as row group extrema–a signal that depends on the underlying cardinality and the data distribution.
+
+5.2
+Coupon Collector Model
+
+The coupon collector problem models sampling with replacement from a finite population
+[
+5
+]
+. Drawing
+k
+items uniformly from
+N
+distinct values, the expected number of distinct values observed is:
+
+E[\text{distinct}]=N\times(1-e^{-k/N})
+
+(6)
+
+We model the
+n
+row group minima as
+n
+draws from the population of
+NDV
+distinct values:
+
+E[m_{\min}]=\text{NDV}\times(1-e^{-n/\text{NDV}})
+
+(7)
+
+An analogous equation holds for
+m_{\max}
+.
+
+5.3
+Inverting for NDV
+
+Given an observed count
+m
+(either
+m_{\min}
+or
+m_{\max}
+), we solve:
+
+g(\text{NDV})=\text{NDV}\times(1-e^{-n/\text{NDV}})-m=0
+
+(8)
+
+via Newton-Raphson with derivative:
+
+g^{\prime}(\text{NDV})=1-e^{-n/\text{NDV}}\cdot\left(1+\frac{n}{\text{NDV}}\right)
+
+(9)
+
+We compute separate estimates from
+m_{\min}
+and
+m_{\max}
+and retain the larger of the two.
+
+5.4
+Accuracy on Sorted Data
+
+For uniformly distributed data, row group minima cluster near the global minimum–we are sampling order statistics, not sampling uniformly from the value space. This causes min/max diversity to underestimate NDV.
+
+For sorted or partitioned columns, each row group covers a distinct value range. The minima and maxima are spread across the value space, producing more distinct extrema and tighter estimates:
+
+Uniform column (ndv=100, 50 row groups):
+Many row groups share similar min/max
+distinct_mins ~ 40
+
+Sorted column (ndv=100, 50 row groups):
+Each row group covers a different range
+distinct_mins ~ 50
+
+Min/max diversity produces better estimates precisely where dictionary inversion fails.
+
+6
+Distribution Detection
+
+To select the appropriate estimator, we classify each column’s data layout from the row group range patterns
+(\min_{i},\max_{i})_{i=0}^{n-1}
+.
+
+6.1
+Metrics
+
+Range overlap.
+
+We measure how much consecutive row group ranges intersect:
+
+\displaystyle\text{overlap}(r_{i},r_{i+1})
+
+\displaystyle=\max(0,\;\min(\max_{i},\max_{i+1})-\max(\min_{i},\min_{i+1}))
+
+(10)
+
+overlap_ratio
+
+\displaystyle=\sum_{i}\text{overlap}(r_{i},r_{i+1})\;/\;\text{total\_span}
+
+(11)
+
+Monotonicity.
+
+We track midpoint progression across row groups:
+
+\text{midpoint}_{i}=\frac{\min_{i}+\max_{i}}{2},\qquad\text{monotonicity}=1-\frac{\text{sign\_changes}(\Delta\text{midpoints})}{n-2}
+
+(12)
+
+6.2
+Classification
+
+•
+
+Sorted
+: non-overlapping ranges (overlap_ratio
+<0.1
+) and high monotonicity (
+>0.9
+)
+
+•
+
+Pseudo-sorted
+: moderate overlap (
+<0.3
+) with clear drift (monotonicity
+>0.7
+)
+
+•
+
+Well-spread
+: heavy overlap (
+>0.7
+)–most distinct values appear in most row groups; dictionary inversion is reliable
+
+•
+
+Mixed
+: otherwise–both estimates used conservatively
+
+7
+Combining Estimates
+
+7.1
+Hybrid Formula
+
+Given the complementary failure modes summarized in Table
+1
+, the final NDV estimate takes the maximum of both methods, bounded by the number of non-null values:
+
+\text{ndv\_final}=\min\bigl(\max(\text{ndv\_dict},\;\text{ndv\_minmax}),\;N-\text{nulls}\bigr)
+
+(13)
+
+Each method underestimates in different regimes, so the higher estimate is more likely correct.
+
+7.2
+Type-Specific Bounds
+
+For integer and date types, the value range provides a deterministic upper bound:
+
+\text{ndv}\leq\min(\max-\min+1,\;N-\text{nulls})
+
+(14)
+
+For single-byte strings (status codes, flags):
+
+\text{ndv}\leq\min({\sim}128,\;N-\text{nulls})\quad\text{(printable ASCII)}
+
+(15)
+
+7.3
+Schema Constraints
+
+When catalog metadata is available, schema constraints can provide tighter bounds than estimation. A foreign key column satisfies
+\text{ndv}\leq\text{row\_count}(\text{referenced table})
+.
+
+8
+Batch Memory Estimation
+
+GPU query engines process data in batches. Given a global NDV estimate, we predict the dictionary memory required for a batch of size
+B
+bytes without reading the batch.
+
+Applying the coupon collector model (Equation
+6
+), a batch containing
+B/\text{len}
+rows drawn from a dictionary of size
+D_{\text{global}}=\text{ndv}\times\text{len}
+requires:
+
+D_{\text{batch}}=D_{\text{global}}\times(1-e^{-B/D_{\text{global}}})
+
+(16)
+
+For
+n_{\text{batches}}=(N-\text{nulls})\times\text{len}\,/\,B
+, the total memory across all batches is:
+
+D_{\text{total}}=\frac{(N-\text{nulls})\times\text{len}}{B}\times D_{\text{global}}\times(1-e^{-B/D_{\text{global}}})
+
+(17)
+
+Limitation.
+
+This assumes well-spread data, where each batch sees a representative sample of distinct values. For sorted data, each batch contains a distinct value subset and may require a dictionary approaching
+D_{\text{global}}
+–the coupon collector model does not apply.
+
+9
+Applicability to Other Formats
+
+The technique requires two metadata features: (1) dictionary encoding with uncompressed size reporting, and (2) partition-level min/max statistics.
+
+Format
+
+Dictionary Size
+
+Partition Stats
+
+Applicable
+
+Parquet
+
+Yes
+
+Yes (row group)
+
+Yes
+
+ORC
+
+Yes
+
+Yes (stripe)
+
+Yes
+
+F3
+[
+11
+]
+
+Likely
+
+Likely
+
+Likely
+
+F3 decouples dictionary scope from row groups (IOUnits), offering finer-grained control than Parquet. Statistics support is expected but not yet fully documented
+[
+11
+]
+.
+
+10
+Evaluation
+
+10.1
+Production Deployment
+
+The technique was implemented and deployed in Theseus
+[
+12
+]
+, a distributed GPU-accelerated query engine. NDV estimates drove a memory-based cost model for aggregate pushdown decisions, enabling partial aggregates to be pushed below joins to reduce data volume before GPU operations.
+
+Production results on real-world Parquet datasets showed high accuracy, with errors typically below 10% for well-spread columns. Sorted columns exhibited systematic underestimation via dictionary inversion alone, which the min/max diversity estimator addressed effectively. The hybrid approach proved robust across the distribution types encountered in practice.
+
+The implementation and detailed experimental data were lost when VoltronData’s assets were liquidated. Reproduction on public benchmarks is planned.
+
+10.2
+Complexity
+
+Operation
+
+Time
+
+Space
+
+Metadata parsing
+
+O(n)
+
+O(1)
+
+Dictionary inversion
+
+O(1)
+
+O(1)
+
+Min/max diversity
+
+O(n)
+
+O(1)
+
+Length estimation
+
+O(n)
+
+O(1)
+
+Distribution detection
+
+O(n)
+
+O(1)
+
+Where
+n
+is the number of row groups. All operations are single-pass over the metadata. Distinct min/max counting uses a cardinality sketch (HyperLogLog) for
+O(1)
+space; length estimation uses a length histogram bounded by the number of distinct lengths observed.
+
+11
+Related Work
+
+Query optimization.
+Using cardinality statistics for cost-based planning dates to System R
+[
+1
+]
+, which introduced index cardinality (ICARD) for selectivity estimation. NDV remains central to modern optimizers.
+
+Cardinality estimation.
+HyperLogLog
+[
+6
+]
+provides near-optimal
+O(1)
+-space approximate counting, and CVM
+[
+2
+]
+offers a simpler streaming alternative. Both require processing the data stream. Sampling-based methods
+[
+7
+]
+trade accuracy for reduced scans. Our approach extracts estimates from existing metadata without additional storage or data access.
+
+Columnar statistics.
+Prior work uses row group statistics for predicate pushdown
+[
+8
+]
+and evaluates columnar storage formats
+[
+9
+]
+. We repurpose the same statistics for cardinality estimation.
+
+Dictionary encoding.
+Studies model encoding efficiency and compression trade-offs
+[
+10
+]
+but do not consider inverting metadata for NDV estimation.
+
+12
+Conclusion
+
+Columnar file metadata encodes sufficient information to estimate column cardinality without accessing data pages. By inverting the dictionary size equation and treating row group min/max values as implicit cardinality sketches, we achieve zero-cost NDV estimation. Distribution detection routes between the two complementary estimators, providing robustness across data layouts.
+
+Production deployment in Theseus demonstrated that the technique yields estimates accurate enough to drive cost-based optimization in a GPU-accelerated distributed query engine, with errors typically below 10% on the data distributions encountered in practice. The same approach applies to any columnar format with dictionary encoding and partition statistics.
+
+Appendix A
+Core Equations
+
+Dictionary size inversion:
+
+S=\text{ndv}\times\text{len}+(N-\text{nulls})\times\lceil\log_{2}(\text{ndv})\rceil\,/\,8
+
+(18)
+
+Coupon collector:
+
+m=\text{NDV}\times(1-e^{-n/\text{NDV}})
+
+(19)
+
+Batch dictionary size:
+
+D_{\text{batch}}=D_{\text{global}}\times(1-e^{-B/D_{\text{global}}})
+
+(20)
+

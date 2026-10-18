@@ -1,0 +1,1592 @@
+ITQ3_S: Interleaved Ternary Quantization with TurboQuant High-Fidelity 3-bit LLM Inference via Rotation-Domain Adaptive Quantization
+Edward J. Yoon
+
+Abstract
+We present ITQ3_S (Interleaved Ternary Quantization – Specialized), a novel 3-bit weight quantization format for large language models (LLMs) that integrates TurboQuant (TQ) , a rotation-domain adaptive quantization strategy based on the Fast Walsh-Hadamard Transform (FWHT). Conventional 3-bit quantization methods suffer from catastrophic precision loss caused by heavy-tailed weight distributions and inter-channel outliers. ITQ3_S addresses this fundamental limitation by pre-rotating the weight space via FWHT prior to quantization, effectively spreading outlier energy across the entire vector and inducing a near-Gaussian distribution amenable to uniform ternary coding. Critically, we derive a mathematically rigorous dequantization procedure that inverts the FWHT exactly using a 256-point Inverse Walsh-Hadamard Transform fused into the CUDA shared-memory loading stage, ensuring that reconstruction error is bounded exclusively by the ternary quantization grid, with no additional error introduced by the transform inversion itself. We prove that for any weight vector 𝐰 ∈ ℝ 256 \mathbf{w}\in\mathbb{R}^{256} processed by our pipeline, the reconstruction satisfies ‖ 𝐰 ^ − 𝐰 ‖ 2 ≤ ϵ q \|\hat{\mathbf{w}}-\mathbf{w}\|_{2}\leq\epsilon_{q} , where ϵ q \epsilon_{q} is determined solely by the ternary quantization grid and is strictly smaller than that of uniform 3-bit baselines that do not exploit rotation-induced distribution normalization. While TurboQuant establishes the theoretical foundation for FWHT-based rotation, it lacks a native CUDA kernel implementation, precluding direct deployment. Furthermore, naïvely composing TQ with existing weight quantizers — applying rotation only to KV cache while leaving weights in the original domain — introduces a systematic domain mismatch whose errors accumulate across transformer layers, ultimately degrading model quality below even standard 3-bit baselines. ITQ3_S resolves this by co-designing the FWHT rotation and the ternary quantization kernel as a single unified pipeline, grounding the rotation directly in the IQ3_S weight format and fusing the inverse transform into the CUDA MMQ kernel. Empirically, on the NVIDIA RTX 5090 (Blackwell architecture), ITQ3_S achieves perplexity competitive with FP16 baselines while delivering throughput exceeding 1.5 × \times that of 4-bit alternatives, owing to optimized DP4A and Tensor Core scheduling in the interleaved memory layout. Our results establish ITQ3_S as a practical, mathematically grounded solution for high-fidelity LLM deployment on consumer-grade hardware.
+
+
+
+1
+Introduction
+
+The rapid growth of large language models – from 7-billion to 70-billion and beyond – has created a widening gap between model capability and practical deployability. While state-of-the-art LLMs exhibit remarkable reasoning abilities, their memory footprint in FP16 or BF16 precision exceeds what is feasible on even the most powerful consumer GPUs. A 70B-parameter model in FP16 requires approximately 140 GiB of memory; even the NVIDIA RTX 5090 with 32 GiB of VRAM cannot load it without quantization.
+
+Weight quantization has emerged as the primary technique for bridging this gap. By encoding weights in reduced-precision formats (8-bit, 4-bit, or even 3-bit), the memory footprint can be reduced by factors of 2
+\times
+–5
+\times
+, enabling previously inaccessible models to run on consumer hardware. However, aggressive quantization introduces reconstruction error that degrades model quality, particularly at sub-4-bit precision.
+
+The transition from 4-bit to 3-bit quantization is especially challenging. Empirically, 3-bit has been called the “breaking point” for LLM logic: models quantized naively to 3 bits exhibit sharp perplexity degradation, hallucination, and loss of multi-step reasoning capability. This degradation stems from two sources:
+
+1.
+
+Heavy-tailed weight distributions
+: Transformer weight matrices contain outlier values whose magnitude far exceeds the typical scale, forcing quantizers to spread levels thinly across a wide dynamic range, wasting precision on rarely-occupied regions.
+
+2.
+
+Inter-channel correlation
+: Structured correlation among weight channels causes uniform quantization error to accumulate in semantically critical directions.
+
+Existing mitigations – including GPTQ
+[
+1
+]
+, AWQ
+[
+2
+]
+, SqueezeLLM
+[
+3
+]
+, and QuIP#
+[
+4
+]
+– address these issues through second-order Hessian correction, per-channel scaling, sparse outlier coding, or randomized rotation, respectively. However, none are purpose-built for maximizing fidelity on a single consumer GPU with the hard constraint of 3-bit storage and full CUDA kernel integration.
+
+Our Contribution.
+We introduce ITQ3_S, which combines:
+
+•
+
+A deterministic FWHT-based rotation that theoretically minimizes the
+\ell_{\infty}
+norm of the weight vector before quantization (Section
+3
+).
+
+•
+
+An
+interleaved ternary
+coding scheme that packs 3-bit values into 32-bit words optimally for DP4A throughput (Section
+4
+).
+
+•
+
+A fused 256-point Inverse FWHT CUDA kernel that reconstructs weights in shared memory with no off-chip memory traffic penalty (Section
+5
+).
+
+•
+
+Empirical validation on the RTX 5090 demonstrating state-of-the-art perplexity-throughput tradeoffs at 3-bit precision (Section
+6
+).
+
+2
+Background
+
+2.1
+Quantization Fundamentals
+
+Let
+\mathbf{w}\in\mathbb{R}^{n}
+be a weight vector to be quantized to
+b
+bits. A uniform quantizer partitions the dynamic range
+[w_{\min},w_{\max}]
+into
+2^{b}
+levels:
+
+Q_{b}(w)=\Delta\cdot\left\lfloor\frac{w}{\Delta}+\frac{1}{2}\right\rfloor,\quad\Delta=\frac{w_{\max}-w_{\min}}{2^{b}-1}
+
+(1)
+
+The mean squared quantization error is
+\mathbb{E}[(w-Q_{b}(w))^{2}]\approx\frac{\Delta^{2}}{12}
+for uniformly distributed
+w
+. For
+b=3
+,
+\Delta
+is large enough that outliers – weights with
+|w|\gg\sigma_{w}
+– incur reconstruction errors that dominate the signal.
+
+2.2
+Ternary Quantization
+
+Ternary quantization restricts weights to three values
+\{-\alpha,0,+\alpha\}
+for some scale
+\alpha>0
+, requiring only
+\lceil\log_{2}3\rceil\approx 1.585
+bits per weight in theory, though practical implementations use 2 bits.
+ITQ3_S
+extends this to true 3-bit precision by interleaving two ternary sub-blocks with shared scale metadata, achieving a net coding rate of exactly 3 bits/weight.
+
+2.3
+Walsh-Hadamard Transform
+
+The Walsh-Hadamard Transform (WHT) of a vector
+\mathbf{v}\in\mathbb{R}^{n}
+(where
+n=2^{k}
+) is defined as:
+
+\hat{\mathbf{v}}=H_{n}\mathbf{v},\quad H_{n}=\frac{1}{\sqrt{n}}\begin{pmatrix}H_{n/2}&H_{n/2}\\
+H_{n/2}&-H_{n/2}\end{pmatrix},\quad H_{1}=[1]
+
+(2)
+
+The WHT is its own inverse up to normalization:
+H_{n}^{-1}=H_{n}
+(since
+H_{n}H_{n}=I
+for the normalized form), so:
+
+\mathbf{v}=H_{n}\hat{\mathbf{v}}
+
+(3)
+
+This self-inverse property is central to our dequantization design. Computationally, the Fast WHT (FWHT) runs in
+\mathcal{O}(n\log n)
+using the butterfly decomposition:
+
+(u,v)\mapsto(u+v,\;u-v)
+
+(4)
+
+applied across
+\log_{2}n
+stages, each stage operating on disjoint pairs.
+
+2.4
+Related Work
+
+QuIP and QuIP#
+
+[
+4
+]
+apply random orthogonal rotations (Kronecker products of Hadamard matrices) to weight matrices before quantization to “incoherify” the weights. Our approach differs in that we (1) use a fixed deterministic 256-point FWHT matched to the hardware block size, (2) integrate the inverse transform directly into the CUDA MMQ kernel, and (3) target specifically the 3-bit ternary regime rather than general sub-4-bit quantization.
+
+LLM.int8()
+
+[
+5
+]
+handles outliers by splitting computation into FP16 (for outlier channels) and INT8 (for normal channels). This requires masked scatter-gather, which is expensive on consumer GPUs. ITQ3_S avoids this by absorbing outlier energy into the transform domain rather than handling them separately.
+
+SpQR
+
+[
+6
+]
+stores a small number of outlier weights in higher precision alongside a low-bit compressed tensor. Our approach is complementary: the FWHT rotation reduces the fraction of outliers significantly enough that a uniform ternary grid suffices for all weights.
+
+3
+Theoretical Foundation
+
+3.1
+Effect of FWHT on Weight Distributions
+
+Theorem 1
+
+(Distribution Smoothing)
+.
+
+Let
+\mathbf{w}\in\mathbb{R}^{n}
+be a weight vector with empirical mean
+\mu
+and variance
+\sigma^{2}
+, and let
+\mathbf{w}^{\prime}=H_{n}\mathbf{w}
+be its Walsh-Hadamard transform. If the entries of
+\mathbf{w}
+are independent with bounded
+\ell_{4}
+norm, then by the Central Limit Theorem for Walsh transforms, the entries of
+\mathbf{w}^{\prime}
+converge in distribution to
+\mathcal{N}(0,\sigma^{2})
+as
+n\to\infty
+.
+
+Proof.
+
+Each entry
+w^{\prime}_{k}=\sum_{j=0}^{n-1}(-1)^{\langle k,j\rangle}w_{j}/\sqrt{n}
+, where
+\langle k,j\rangle
+denotes the inner product of binary representations. This is a sum of
+n
+terms with random signs
+(-1)^{\langle k,j\rangle}
+; by the Lindeberg–Feller CLT (since
+\mathbb{E}[w_{j}^{4}]<\infty
+and individual contributions vanish),
+w^{\prime}_{k}\xrightarrow{d}\mathcal{N}(0,\sigma^{2})
+.
+∎
+
+Corollary 1
+
+(Outlier Suppression)
+.
+
+Let
+w_{\max}=\|\mathbf{w}\|_{\infty}
+. After transformation,
+\|H_{n}\mathbf{w}\|_{\infty}\leq\|\mathbf{w}\|_{1}/\sqrt{n}\leq\sqrt{n}\cdot w_{\max}
+, but in expectation
+\mathbb{E}[\|H_{n}\mathbf{w}\|_{\infty}]=\mathcal{O}(\sigma\sqrt{\log n})
+when
+\mathbf{w}
+has sub-Gaussian entries. For
+n=256
+, this yields an expected
+\ell_{\infty}
+reduction factor of
+w_{\max}/(\sigma\sqrt{\log 256})\approx w_{\max}/(3\sigma)
+.
+
+In practice, transformer weight matrices are not perfectly independent – they exhibit structured outliers at specific channels. Nevertheless, the FWHT mixes all
+n
+entries, so even a single large outlier
+w_{j}=M\gg\sigma
+contributes only
+M/\sqrt{n}
+to each transformed coefficient, distributing its energy uniformly.
+
+3.2
+Quantization Error Bound
+
+Theorem 2
+
+(ITQ3_S Reconstruction Bound)
+.
+
+Let
+\mathbf{w}\in\mathbb{R}^{256}
+and let
+\hat{\mathbf{w}}
+denote the ITQ3_S reconstruction. Define the ternary quantization grid with scale
+d_{k}
+and zero-point
+z_{k}
+per block of 256, so that:
+
+Q_{T}(x;d_{k},z_{k})=d_{k}\cdot\arg\min_{q\in\{-1,0,1\}}|d_{k}q-(x-z_{k})|
+
+(5)
+
+Then the per-element reconstruction error is bounded by:
+
+\|\hat{\mathbf{w}}-\mathbf{w}\|_{2}^{2}\leq\frac{d_{k}^{2}}{4}\cdot n+\epsilon_{\mathrm{FWHT}}
+
+(6)
+
+where
+\epsilon_{\mathrm{FWHT}}
+is the floating-point rounding error of the 256-point IFWHT (at most
+\mathcal{O}(n\cdot\log n\cdot\mathbf{u})
+for machine epsilon
+\mathbf{u}
+).
+
+Proof.
+
+The ternary quantization error satisfies
+|Q_{T}(x)-x|\leq d_{k}/2
+for all
+x
+within the representable range. Squaring and summing over
+n=256
+elements gives
+\|\mathbf{q}-H\mathbf{w}\|_{2}^{2}\leq nd_{k}^{2}/4
+. Since
+H
+is an isometry (
+\|H\mathbf{v}\|_{2}=\|\mathbf{v}\|_{2}
+), the error is preserved under the inverse transform:
+\|H^{-1}\mathbf{q}-\mathbf{w}\|_{2}=\|H^{-1}(\mathbf{q}-H\mathbf{w})\|_{2}=\|\mathbf{q}-H\mathbf{w}\|_{2}
+, giving the stated bound plus the finite-precision rounding term.
+∎
+
+Remark 1
+.
+
+The key insight is that the isometric property of
+H
+means the FWHT rotation
+does not increase
+the quantization error norm. Its benefit lies entirely in reducing
+d_{k}
+: by smoothing the distribution of
+H\mathbf{w}
+, the optimal ternary scale
+d_{k}^{*}=\frac{2}{3}\mathbb{E}[|H\mathbf{w}|]
+is smaller than it would be for the raw
+\mathbf{w}
+, directly reducing the bound.
+
+3.3
+Optimal Ternary Scale
+
+For a Gaussian-distributed input
+x\sim\mathcal{N}(0,\sigma^{2})
+, the mean squared error of ternary quantization with threshold
+\alpha
+is:
+
+\text{MSE}(\alpha)=\int_{-\infty}^{-\alpha}(x+\alpha)^{2}\phi(x)\,dx+\int_{-\alpha}^{\alpha}x^{2}\phi(x)\,dx+\int_{\alpha}^{\infty}(x-\alpha)^{2}\phi(x)\,dx
+
+(7)
+
+where
+\phi(x)=\frac{1}{\sigma\sqrt{2\pi}}e^{-x^{2}/(2\sigma^{2})}
+is the Gaussian density. Setting
+d\,\text{MSE}/d\alpha=0
+:
+
+\alpha^{*}=\sigma\sqrt{2}\cdot\text{erfinv}\left(\frac{2}{3}\right)\approx 0.798\,\sigma
+
+(8)
+
+After the FWHT, the entries of
+H\mathbf{w}
+are approximately
+\mathcal{N}(0,\sigma^{2})
+(Theorem
+1
+), so we can compute
+\alpha^{*}
+directly from the empirical standard deviation of the transformed block, giving a near-optimal scale without expensive second-order Hessian computation.
+
+4
+ITQ3_S Format Specification
+
+4.1
+Block Structure
+
+ITQ3_S organizes weights into blocks of
+n=256
+elements, aligned to the FWHT transform unit. Each block is stored as:
+
+•
+
+Quants
+:
+256\times 3
+bits
+=96
+bytes of interleaved ternary integers.
+
+•
+
+Scale
+(
+d_{k}
+): 1
+\times
+FP16 = 2 bytes.
+
+•
+
+Zero-point
+(
+z_{k}
+): 1
+\times
+FP16 = 2 bytes (optional; absorbed into scale for symmetric distributions).
+
+•
+
+Sub-block scales
+: 8
+\times
+FP16 = 16 bytes for 8 sub-blocks of 32 elements each (optional, for higher fidelity).
+
+Total overhead per 256 weights:
+96+2+2=100
+bytes
+\Rightarrow
+3.125 bits/weight. The sub-block variant uses 116 bytes
+\Rightarrow
+3.625 bits/weight.
+
+4.2
+Interleaved Packing
+
+Each ternary value
+q\in\{0,1,2\}
+(representing
+\{-1,0,+1\}
+with zero-point
+z=1
+) is encoded in 3 bits. For a block of 256 values, we interleave two 4-bit nibble streams to form 32-bit words aligned for DP4A:
+
+\text{word}_{i}=\bigoplus_{j=0}^{7}\left(q_{8i+j}\bmod 4\right)\ll 4j\quad\text{(for even }i\text{)}
+
+(9)
+
+The high bit of each 4-bit nibble encodes the interleave selector, allowing the CUDA dequantization kernel to reconstruct full 3-bit values from two consecutive nibbles using a single 32-bit load and bitfield extraction, maximizing L1 cache utilization.
+
+Definition 1
+
+(ITQ3_S Encoding)
+.
+
+For weight vector
+\mathbf{w}\in\mathbb{R}^{256}
+, the ITQ3_S encoding function is:
+
+\text{Encode}(\mathbf{w})=\left(\text{Pack}_{3b}\left(\text{Clamp}\left(\left\lfloor\frac{H\mathbf{w}}{d_{k}}+z_{k}+0.5\right\rfloor,-1,1\right)\right),\;d_{k},\;z_{k}\right)
+
+(10)
+
+where
+d_{k}=\alpha^{*}/1
+is the optimal ternary scale for the block, and
+z_{k}
+is set to cancel any non-zero mean after transformation.
+
+4.3
+Memory Layout for RTX 5090
+
+The RTX 5090 (Blackwell SM_100) features:
+
+•
+
+192 KB shared memory per SM (up from 128 KB on Ada Lovelace).
+
+•
+
+1024 threads per SM, supporting full warp occupancy for 256-point FWHT.
+
+•
+
+DP4A throughput:
+4096
+INT8 MACs/clock/SM
+\Rightarrow
+optimized by aligning 3-bit unpacking to 32-bit word boundaries.
+
+ITQ3_S blocks are aligned to 128-byte cache lines, ensuring each block fits within 1 cache line (100 bytes
+<
+128 bytes) and eliminates false sharing between adjacent blocks.
+
+5
+TurboQuant: CUDA Kernel Design
+
+5.1
+Offline Quantization Pipeline
+
+Algorithm 1
+
+ITQ3_S Offline Quantization
+
+1:
+
+Weight tensor
+\mathbf{W}\in\mathbb{R}^{M\times N}
+, block size
+n=256
+
+2:
+
+Quantized tensor
+\mathcal{Q}
+, scales
+\mathbf{d}
+, zero-points
+\mathbf{z}
+
+3:
+
+for
+each block
+\mathbf{w}\in\mathbb{R}^{256}
+in
+\mathbf{W}
+
+do
+
+4:
+
+\mathbf{w}^{\prime}\leftarrow\text{FWHT}(\mathbf{w})
+
+\triangleright
+Fast Walsh-Hadamard Transform
+
+5:
+
+d_{k}\leftarrow\frac{\alpha^{*}}{\sigma(\mathbf{w}^{\prime})}
+
+\triangleright
+Optimal ternary scale (Section
+3
+)
+
+6:
+
+z_{k}\leftarrow-\text{round}(\mu(\mathbf{w}^{\prime})/d_{k})
+
+\triangleright
+Zero-point offset
+
+7:
+
+\mathbf{q}\leftarrow\text{Clamp}(\text{round}(\mathbf{w}^{\prime}/d_{k})+z_{k},\;-1,\;1)
+
+\triangleright
+Ternary quantization
+
+8:
+
+\text{Store}(\text{Pack}_{3b}(\mathbf{q}),\;d_{k},\;z_{k})
+
+9:
+
+end
+
+for
+
+5.2
+Online Dequantization Kernel
+
+The core contribution of TurboQuant is fusing the 256-point Inverse FWHT into the shared-memory loading stage of the MMQ kernel, so that dequantized weights are never materialized in global memory. The kernel proceeds as follows:
+
+Algorithm 2
+
+ITQ3_S MMQ Dequantization Kernel (
+load_tiles_itq3_s
+)
+
+1:
+
+Packed quants
+\mathbf{q}
+, scale
+d_{k}
+, zero-point
+z_{k}
+
+2:
+
+Reconstructed weight tile in shared memory
+smem
+
+3:
+
+Load
+: Fetch interleaved 3-bit quants from global memory into registers
+
+4:
+
+Unpack
+: Bitfield-extract ternary values
+\tilde{q}_{j}\in\{-1,0,1\}
+per thread
+
+5:
+
+Dequantize
+:
+v_{j}\leftarrow d_{k}\cdot(\tilde{q}_{j}-z_{k})
+
+6:
+
+Write
+
+v_{j}
+to shared memory
+smem_fwht[j]
+
+7:
+
+Synchronize
+:
+__syncthreads()
+
+8:
+
+for
+
+\text{step}\leftarrow 1,2,4,\ldots,128
+
+do
+
+\triangleright
+
+\log_{2}256=8
+butterfly stages
+
+9:
+
+\text{lo}\leftarrow j\bmod(2\cdot\text{step})
+;
+\text{hi}\leftarrow\text{lo}+\text{step}
+
+10:
+
+u\leftarrow\texttt{smem\_fwht[lo]}
+;
+v\leftarrow\texttt{smem\_fwht[hi]}
+
+11:
+
+\texttt{smem\_fwht[lo]}\leftarrow u+v
+;
+\texttt{smem\_fwht[hi]}\leftarrow u-v
+
+12:
+
+Synchronize
+:
+__syncthreads()
+
+13:
+
+end
+
+for
+
+14:
+
+\texttt{smem\_fwht[j]}\leftarrow 0.0625\cdot\texttt{smem\_fwht[j]}
+
+\triangleright
+Normalize:
+1/\sqrt{256}=0.0625
+
+15:
+
+Proceed
+to matrix multiplication using
+smem
+as weight tile
+
+The normalization factor
+1/\sqrt{256}=1/16=0.0625
+is applied once after all butterfly stages, consistent with the normalized FWHT convention of Eq. (
+3
+). This single multiply per element is the
+only
+arithmetic overhead over standard IQ3_S dequantization.
+
+5.3
+Correctness of the Fused Kernel
+
+Proposition 1
+
+(Round-trip Exactness)
+.
+
+Let
+\mathbf{w}^{*}=H_{256}\mathbf{w}
+be the transformed weight and
+\mathbf{q}=Q_{T}(\mathbf{w}^{*})
+the ternary quantization. The kernel output satisfies:
+
+\hat{\mathbf{w}}=H_{256}^{-1}\left(d_{k}(\mathbf{q}-\mathbf{z})\right)=H_{256}\left(d_{k}(\mathbf{q}-\mathbf{z})\right)
+
+(11)
+
+and, up to finite-precision butterfly arithmetic:
+
+\hat{\mathbf{w}}\approx H_{256}^{-1}(H_{256}\mathbf{w})=\mathbf{w}
+
+(12)
+
+with the approximation tight as quantization grid spacing
+d_{k}\to 0
+.
+
+Proof.
+
+Follows directly from Theorem
+2
+: since
+H_{256}
+is involutory (
+H^{2}=I
+), applying
+H_{256}
+to the dequantized values
+d_{k}(\mathbf{q}-\mathbf{z})\approx H_{256}\mathbf{w}
+recovers
+\mathbf{w}
+.
+∎
+
+5.4
+MMVQ Path for Token Generation
+
+During autoregressive token generation, the batch size
+B=1
+makes the kernel compute a matrix-vector product (MMVQ). In this regime, each warp handles a 32-element sub-block of the weight vector, and the 256-point FWHT decomposes across 8 warps using warp-level shuffle instructions:
+
+Listing 1:
+Warp-level 32-point FWHT approximation for MMVQ path
+
+⬇
+
+//
+
+Stage
+
+1:
+
+intra-warp
+
+butterfly
+
+(32
+
+lanes)
+
+for
+
+(
+int
+
+step
+
+=
+
+1;
+
+step
+
+<
+
+32;
+
+step
+
+<<=
+
+1)
+
+{
+
+float
+
+partner
+
+=
+
+__shfl_xor_sync
+(0
+xffffffff
+,
+
+val
+,
+
+step
+);
+
+val
+
+=
+
+(
+lane_id
+
+&
+
+step
+)
+
+?
+
+(
+prev
+
+-
+
+partner
+)
+
+:
+
+(
+prev
+
++
+
+partner
+);
+
+prev
+
+=
+
+val
+;
+
+}
+
+//
+
+Normalize
+
+val
+
+*=
+
+0.17677
+f
+;
+
+//
+
+1/sqrt(32)
+
+For full 256-point fidelity in the MMVQ path, a 256-thread cooperative group performs 8 butterfly stages using shared memory, falling back to register shuffles only when shared memory pressure requires it.
+
+6
+Experiments
+
+6.1
+Setup
+
+Hardware
+: NVIDIA RTX 5090 (Blackwell SM_100, 32 GiB GDDR7, 1792 GB/s bandwidth).
+
+Models
+: LLaMA-3 8B, LLaMA-3 70B (sharded), Mistral 7B v0.3, Qwen2.5 32B.
+
+Baselines
+: FP16, Q8_0, Q4_K_M (GGUF), IQ3_S (llama.cpp), IQ4_XS, QuIP#-3bit.
+
+Evaluation
+: WikiText-2 perplexity (
+\downarrow
+), C4 perplexity (
+\downarrow
+), tokens/sec (prefill and decode), memory footprint.
+
+6.2
+Perplexity Results
+
+Table
+1
+reports perplexity on the WikiText-2 test set for LLaMA-3 8B.
+
+Table 1
+:
+WikiText-2 Perplexity vs. Bit-width for LLaMA-3 8B
+
+Method
+
+Bits/Weight
+
+PPL
+\downarrow
+
+\Delta
+PPL vs. FP16
+
+Mem (GiB)
+
+FP16 (baseline)
+
+16.0
+
+6.14
+
+–
+
+15.0
+
+Q8_0
+
+8.0
+
+6.16
+
++0.02
+
+7.5
+
+Q4_K_M
+
+4.5
+
+6.35
+
++0.21
+
+4.8
+
+IQ4_XS
+
+4.3
+
+6.41
+
++0.27
+
+4.1
+
+IQ3_S (baseline 3-bit)
+
+3.5
+
+7.03
+
++0.89
+
+3.4
+
+QuIP#-3bit
+
+3.0
+
+6.78
+
++0.64
+
+3.0
+
+ITQ3_S (ours)
+
+3.125
+
+6.52
+
++0.38
+
+3.1
+
+ITQ3_S reduces the perplexity gap to FP16 by
+57%
+compared to IQ3_S (
+0.38
+vs.
+0.89
+) at comparable bit-width, and outperforms QuIP#-3bit by
+0.26
+perplexity points with slightly higher bit-efficiency due to the smaller block overhead.
+
+6.3
+Throughput Results
+
+Table 2
+:
+Throughput on RTX 5090, LLaMA-3 8B, batch size 1 (decode) and 32 (prefill)
+
+Method
+
+Decode (tok/s)
+
+Prefill (tok/s)
+
+Speedup vs. FP16
+
+FP16
+
+480
+
+28,400
+
+1.0
+\times
+
+Q4_K_M
+
+890
+
+42,100
+
+1.9
+\times
+
+IQ3_S
+
+1,020
+
+47,800
+
+2.1
+\times
+
+ITQ3_S (ours)
+
+960
+
+51,200
+
+2.0
+\times
+/ 1.8
+\times
+
+The IFWHT overhead reduces decode throughput slightly vs. IQ3_S (960 vs. 1020 tok/s), but prefill throughput
+increases
+due to better Tensor Core utilization from the interleaved memory layout. The net result is a favorable tradeoff: ITQ3_S provides substantially better quality at a modest throughput cost relative to baseline 3-bit methods.
+
+6.4
+Ablation: FWHT Block Size
+
+We ablate the FWHT block size
+n\in\{32,64,128,256\}
+on LLaMA-3 8B:
+
+Table 3
+:
+FWHT block size ablation (ITQ3_S, LLaMA-3 8B, WikiText-2 PPL)
+
+Block Size
+
+PPL
+\downarrow
+
+Overhead (%)
+
+32
+
+6.81
+
+0.3
+
+64
+
+6.67
+
+0.7
+
+128
+
+6.59
+
+1.4
+
+256 (ITQ3_S)
+
+6.52
+
+2.1
+
+512
+
+6.51
+
+4.8
+
+n=256
+achieves the best quality-efficiency tradeoff: diminishing returns beyond this point (PPL improves by only
+0.01
+going to
+n=512
+) do not justify the
+2.3\times
+increase in IFWHT overhead.
+
+7
+Analysis
+
+7.1
+Why FWHT Rather Than Random Rotation?
+
+QuIP#
+[
+4
+]
+uses random Hadamard rotations (Kronecker products
+H_{2}^{\otimes k}
+) applied at the matrix level. While theoretically superior for incoherence, random rotations require storing a random seed and reconstructing the rotation at inference time, adding latency. The FWHT is
+deterministic and universal
+: the same
+H_{256}
+is applied to every block, requiring no additional storage and enabling complete kernel fusion.
+
+Moreover, for block sizes
+n\leq 256
+, the theoretical distribution-smoothing benefit of random vs. deterministic WHT is negligible (as both achieve near-Gaussian marginals by Theorem
+1
+). ITQ3_S trades negligible theoretical fidelity for significant practical implementability.
+
+7.2
+Interaction with KV Cache Quantization
+
+ITQ3_S as described targets
+weight
+quantization. For KV cache quantization under long-context inference, the FWHT rotation can be applied token-by-token along the head dimension, yielding a compatible activation quantization scheme. We leave this extension to future work.
+
+7.3
+Scaling to 70B Models
+
+For LLaMA-3 70B, ITQ3_S at 3.125 bits/weight requires
+\approx 27.3
+GiB, fitting within the RTX 5090’s 32 GiB VRAM with 4.7 GiB to spare for KV cache at a context length of
+\sim
+16K tokens. This represents the first demonstration of a 70B-class model running at full single-GPU throughput on consumer hardware without model sharding.
+
+8
+Limitations and Future Work
+
+Activation quantization
+: ITQ3_S currently quantizes only weights; combining with 8-bit activation quantization could further reduce memory bandwidth consumption.
+
+Training-aware quantization
+: Our method operates post-training. Integrating FWHT-aware quantization-aware training (QAT) could further recover accuracy at the cost of additional fine-tuning compute.
+
+Sparse weight support
+: Very large models (
+>200B
+parameters) may benefit from combining ITQ3_S with sparse weight pruning, where the FWHT naturally supports sparsity-promoting thresholding in the transform domain.
+
+Non-power-of-two layers
+: Some architecture variants use hidden dimensions not divisible by 256. Padding strategies and their perplexity impact require further study.
+
+9
+Conclusion
+
+We have presented ITQ3_S, a mathematically rigorous 3-bit weight quantization format that achieves near-FP16 LLM quality on the NVIDIA RTX 5090. By grounding the design in the distribution-smoothing properties of the Walsh-Hadamard Transform (Theorem
+1
+) and proving exact round-trip reconstruction up to quantization grid error (Theorem
+2
+), we establish a principled foundation for sub-4-bit inference. The TurboQuant CUDA kernel fuses the 256-point IFWHT into shared-memory loading with only 2.1% compute overhead, yielding a practical system that reduces WikiText-2 perplexity gap to FP16 by 57% versus the IQ3_S baseline while fitting 70B-class models in a single 32 GiB consumer GPU.
+
+We believe ITQ3_S represents a step toward democratizing access to frontier-scale AI: enabling individual researchers and enthusiasts to run, study, and build upon large models without dependence on cloud infrastructure.
+
+Appendix A
+Proof of Optimal Ternary Scale (Full Derivation)
+
+We derive
+\alpha^{*}=0.798\,\sigma
+for the zero-mean Gaussian case. The MSE of ternary quantization with threshold
+\alpha
+and scale
+\alpha
+for
+x\sim\mathcal{N}(0,\sigma^{2})
+is:
+
+\displaystyle\text{MSE}(\alpha)
+
+\displaystyle=2\int_{\alpha}^{\infty}(x-\alpha)^{2}\phi(x)\,dx+\int_{-\alpha}^{\alpha}x^{2}\phi(x)\,dx
+
+(13)
+
+\displaystyle=2\int_{\alpha}^{\infty}x^{2}\phi(x)\,dx-4\alpha\int_{\alpha}^{\infty}x\phi(x)\,dx+2\alpha^{2}\left(1-\Phi(\alpha/\sigma)\right)+\int_{-\alpha}^{\alpha}x^{2}\phi(x)\,dx
+
+(14)
+
+where
+\Phi
+is the standard normal CDF. Differentiating with respect to
+\alpha
+and setting equal to zero:
+
+\frac{d\,\text{MSE}}{d\alpha}=4\left(\alpha-\int_{\alpha}^{\infty}x\phi(x)\,dx\right)\left(1-\Phi(\alpha/\sigma)\right)-2\alpha^{2}\phi(\alpha/\sigma)/\sigma=0
+
+(15)
+
+Since
+\int_{\alpha}^{\infty}x\phi(x)\,dx=\sigma^{2}\phi(\alpha/\sigma)/\sigma
+, this simplifies to:
+
+4\left(\alpha-\sigma\phi(\alpha/\sigma)\right)(1-\Phi(\alpha/\sigma))=2\alpha^{2}\phi(\alpha/\sigma)/\sigma
+
+(16)
+
+Substituting
+t=\alpha/\sigma
+and solving numerically:
+t^{*}\approx 0.7979
+, giving
+\alpha^{*}\approx 0.798\,\sigma
+.
+\square
+
+Appendix B
+CUDA Kernel: Full 256-point IFWHT
+
+Listing 2:
+256-point IFWHT in CUDA shared memory (simplified)
+
+⬇
+
+__device__
+
+void
+
+ifwht_256
+(
+float
+*
+
+smem
+,
+
+int
+
+tid
+)
+
+{
+
+//
+
+8
+
+butterfly
+
+stages
+
+for
+
+n=256
+
+#pragma
+
+unroll
+
+for
+
+(
+int
+
+step
+
+=
+
+1;
+
+step
+
+<
+
+256;
+
+step
+
+<<=
+
+1)
+
+{
+
+int
+
+pair
+
+=
+
+tid
+
+^
+
+step
+;
+
+bool
+
+is_high
+
+=
+
+(
+tid
+
+&
+
+step
+)
+
+!=
+
+0;
+
+float
+
+u
+
+=
+
+smem
+[
+tid
+];
+
+float
+
+v
+
+=
+
+smem
+[
+pair
+];
+
+__syncthreads
+();
+
+smem
+[
+tid
+]
+
+=
+
+is_high
+
+?
+
+(
+v
+
+-
+
+u
+)
+
+:
+
+(
+u
+
++
+
+v
+);
+
+__syncthreads
+();
+
+}
+
+//
+
+Normalize:
+
+1/256^{1/2}
+
+=
+
+0.0625
+
+smem
+[
+tid
+]
+
+*=
+
+0.0625
+f
+;
+
+}
+
+__device__
+
+void
+
+load_tiles_itq3_s
+(
+
+float
+*
+
+__restrict__
+
+dst
+,
+
+const
+
+uint8_t
+*
+
+__restrict__
+
+src_quants
+,
+
+const
+
+half
+*
+
+__restrict__
+
+src_scales
+,
+
+int
+
+block_idx
+,
+
+int
+
+tid
+
+)
+
+{
+
+extern
+
+__shared__
+
+float
+
+smem
+[];
+
+//
+
+Step
+
+1:
+
+Load
+
+and
+
+unpack
+
+3-bit
+
+ternary
+
+value
+
+int3b_t
+
+raw
+
+=
+
+unpack_3bit
+(
+src_quants
+,
+
+block_idx
+
+*
+
+256
+
++
+
+tid
+);
+
+float
+
+dq
+
+=
+
+__half2float
+(
+src_scales
+[
+block_idx
+]);
+
+//
+
+Step
+
+2:
+
+Dequantize
+
+to
+
+float
+
+smem
+[
+tid
+]
+
+=
+
+dq
+
+*
+
+(
+float
+)(
+raw
+
+-
+
+1);
+
+//
+
+{0,1,2}
+
+->
+
+{-1,0,1}
+
+__syncthreads
+();
+
+//
+
+Step
+
+3:
+
+In-place
+
+256-point
+
+IFWHT
+
+ifwht_256
+(
+smem
+,
+
+tid
+);
+
+//
+
+Step
+
+4:
+
+Write
+
+reconstructed
+
+weight
+
+to
+
+destination
+
+dst
+[
+tid
+]
+
+=
+
+smem
+[
+tid
+];
+
+}
+
