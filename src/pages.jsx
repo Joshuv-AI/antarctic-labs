@@ -22,6 +22,7 @@ import {
   loadBootstrap,
   getCachedArtifacts,
   getFullArtifact,
+  getDescription,
   onIndexReady,
   isIndexLoading,
 } from "./lib/catalog.js";
@@ -1400,6 +1401,18 @@ export function LibraryArtifact({ go, params, onReady }) {
     );
     return () => { live = false; };
   }, [params.id]);
+  // Rewritten description from the sidecar (2026-10-18 revamp); falls back
+  // to the catalog record's own description while loading or on failure.
+  const [descOverride, setDescOverride] = useState(null);
+  useEffect(() => {
+    let live = true;
+    setDescOverride(null);
+    getDescription(params.id).then(
+      (d) => { if (live) setDescOverride(d); },
+      () => { if (live) setDescOverride(null); }
+    );
+    return () => { live = false; };
+  }, [params.id]);
   // The entry's <title> / meta / JSON-LD need the catalog too: the app
   // shell applies generic Tower meta on navigation, so re-apply once the
   // record is available. Keyed on the entry id too: entry-to-entry
@@ -1476,8 +1489,8 @@ export function LibraryArtifact({ go, params, onReady }) {
             {artifact.year || ""}
           </p>
         )}
-        {artifact.description && (
-          <p className="tower-entry-lede">{artifact.description}</p>
+        {(descOverride || artifact.description) && (
+          <p className="tower-entry-lede">{descOverride || artifact.description}</p>
         )}
         <div className="tower-entry-actions">
           {artifact.source_url && (

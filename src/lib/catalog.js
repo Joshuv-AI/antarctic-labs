@@ -125,6 +125,32 @@ export function isCatalogPending() {
   return bootstrapPending !== null;
 }
 
+// Rewritten entry descriptions (2026-10-18 description revamp).
+// Sidecar sharded by artifact_id suffix: /tower-descriptions/<xx>.json,
+// each a {artifact_id: description} map. Loaded lazily per entry view and
+// cached per shard; a failed shard fetch resolves null (callers fall back
+// to the catalog record's own description).
+const descShardCache = {};
+const descShardPending = {};
+function descShardKey(artifactId) {
+  const s = String(artifactId || "").toLowerCase().slice(-2).replace(/[^a-z0-9]/g, "_");
+  return (s + "__").slice(0, 2);
+}
+export function getDescription(artifactId) {
+  const key = descShardKey(artifactId);
+  if (descShardCache[key]) {
+    return Promise.resolve(descShardCache[key][artifactId] || null);
+  }
+  if (!descShardPending[key]) {
+    descShardPending[key] = fetchJsonOnce(`/tower-descriptions/${key}.json`)
+      .then(
+        (data) => { descShardCache[key] = data || {}; descShardPending[key] = null; return descShardCache[key]; },
+        () => { descShardCache[key] = {}; descShardPending[key] = null; return descShardCache[key]; }
+      );
+  }
+  return descShardPending[key].then((shard) => shard[artifactId] || null);
+}
+
 // Find a full record by artifact_id, loading the full catalog on demand.
 export function getFullArtifact(artifactId) {
   if (fullCache) {
