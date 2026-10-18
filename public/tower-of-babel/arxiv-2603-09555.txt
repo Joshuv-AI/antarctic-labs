@@ -1,0 +1,2028 @@
+Compiler-First State Space Duality and Portable O ⁡ ( 1 ) O(1) Autoregressive Caching for Inference
+Cosmo Santoni
+
+Abstract
+State-space model releases are typically coupled to fused CUDA and Triton kernels, inheriting a hard dependency on NVIDIA hardware. We show that Mamba-2’s state space duality algorithm—diagonal state structure, chunkable recurrence, and einsum-dominated compute with static control flow—maps cleanly onto what XLA’s fusion and tiling passes actually optimise, making custom kernels optional rather than required. We implement the full inference path (prefill, cached autoregressive decoding) as shaped standard primitives under XLA, without hand-written kernels, and realise the architecture’s theoretical O ⁡ ( 1 ) O(1) state management as a compiled on-device cache requiring no host synchronisation during generation. The implementation runs unmodified on CPU, NVIDIA GPU, and Google Cloud TPU from a single JAX source. On TPU v6e across five model scales (130M–2.7B parameters), XLA-generated code reaches approximately 140 TFLOPS on single-stream prefill (15% MFU) and up to 64% bandwidth utilisation on decode. Greedy decoding matches the PyTorch/CUDA reference token-for-token across 64 steps, with hidden-state agreement within float32 rounding tolerance. The pattern transfers to any SSM recurrence satisfying the same structural conditions, on any platform with a mature XLA backend. The implementation is publicly available at https://github.com/CosmoNaught/mamba2-jax and merged into the Bonsai JAX model library.
+
+
+
+1
+Introduction
+
+The release of state-space models (SSMs) frequently couples architecture with implementation. While fused CUDA and Triton kernels are essential for extracting peak performance on NVIDIA GPUs, they introduce a hard hardware dependency for downstream users, framework integrations, and production deployments. Fortunately, the same algebraic properties that make state space duality (SSD) amenable to these hand-tuned kernels—diagonal state structure, chunkable recurrence, and compute dominated by batched contractions—also make it a highly viable target for compiler codegen on non-NVIDIA platforms.
+
+1.1
+Contributions
+
+The primary contribution is the pattern itself: the algorithmic properties and
+implementation choices that make SSD a viable compiler codegen target. The
+Mamba-2 case study validates the pattern on real hardware at scale. Both
+transfer to any SSM recurrence satisfying the conditions in
+Section
+3
+, on any platform with a mature XLA backend.
+
+1.
+
+A compiler-first SSD implementation pattern.
+The algorithmic
+properties that make compiler codegen viable, and the shaping, masking, and
+precision choices that enable fusion and tiling.
+
+2.
+
+Realising
+O(1)
+caching via compiled on-device control flow.
+A kernel-free Mamba-2 implementation that maps the theoretical
+O(1)
+state update to an autoregressive cache carried entirely on-device (Section
+4
+), running on CPU, GPU, and TPU v6e from a single source with no host synchronisation. The implementation is merged into the Bonsai JAX model library
+(
+JAX-ML 2025
+)
+and in active use.
+
+3.
+
+Utilisation evidence with device-ceiling context.
+XLA achieves up
+to
+{\sim}
+140 TFLOPS (15% MFU) on prefill and up to 64% HBU on decode on TPU
+v6e (Section
+5
+), placed against device ceilings.
+
+2
+Related Work
+
+Kernelised SSM implementations.
+
+The reference Mamba implementation
+(
+Gu and Dao 2023
+)
+ships fused CUDA and Triton
+kernels integral to its performance. Mamba-2
+(
+Dao and Gu 2024
+)
+extends this
+with Triton kernels tailored to the SSD algorithm’s chunked structure. Both are tightly coupled to NVIDIA GPUs. Community ports to AMD ROCm
+(
+LightOn 2024
+)
+and Apple MPS
+(
+Purohit 2026
+)
+have required substantial kernel adaptation or fallback to unoptimised paths. This work provides a portable, compiler-first implementation for target architectures lacking native Triton support, such as Google Cloud TPUs.
+
+JAX/XLA SSM ports.
+
+Existing JAX ports target Mamba-1
+(
+radarFudan 2024
+;
+Watson 2024
+)
+or provide
+minimal Mamba-2 implementations without caching or performance
+evaluation
+(
+repyt-margorp 2024
+)
+. None target the full SSD algorithm with
+autoregressive caching, and community reports indicate that pure JAX SSM
+implementations without custom kernels were too slow for practical
+training.
+
+Compiler-first and kernel-free precedents.
+
+JAX’s design philosophy
+(
+Bradbury et al. 2018
+)
+encourages composing standard primitives
+and delegating device-specific codegen to XLA.
+Pope et al. 2023
+demonstrated
+high-efficiency Transformer inference on TPUs using XLA-compiled code with careful
+partitioning but no custom kernels. The structured state space
+literature
+(
+Gu et al. 2022
+)
+has historically relied on custom CUDA kernels for
+the selective scan, but SSD’s algebraic structure — batched einsums with static control flow — is well-suited to compiler codegen.
+torch.compile
+(Dynamo/Inductor) offers a comparable compilation path for CUDA targets but has no mature TPU backend; it does not address the portability gap this work targets.
+
+3
+Why SSD Is Compiler-Friendly
+
+Viable targets for compiler codegen require a diagonal or otherwise structured state matrix (enabling analytic unrolling), a chunkable recurrence over fixed-size blocks, einsum-dominated compute over chunked tensors, and static control flow expressible as masks. Mamba-2’s SSD algorithm satisfies these conditions.
+
+3.1
+Chunking
+
+The recurrence is split into fixed-size chunks of
+L
+tokens (
+L=256
+throughout; see Section
+5.1
+). Within each chunk, the sequential recurrence unrolls into a parallel matrix computation; across chunks, a lightweight sequential scan propagates state.
+
+Chunk size governs a tradeoff: larger chunks increase arithmetic intensity of intra-chunk matmuls but also increase the working set. Chunks that are too small shift the balance toward inter-chunk sequential overhead.
+
+3.2
+Einsum Shaping
+
+All heavy computation is expressed as batched
+einsum
+contractions with axis layouts that map onto tiled GEMM calls. Inputs are reshaped so that batch, head, chunk, and sequence-within-chunk dimensions produce large contiguous matrix operands. The intra-chunk output:
+
+Y_{\text{diag}}=(L\odot CB^{\top})X
+
+becomes a single einsum over axes
+(batch, chunk, seq, head, state)
+that the compiler tiles directly onto matrix units. The surrounding element-wise operations (softplus, exponentials, lower-triangular masking) form memory-bound chains that fusion passes collapse into single passes over memory.
+
+3.3
+Masking versus Control Flow
+
+Where the algorithm requires conditional computation (e.g., the lower-triangular causal structure of the decay matrix), static masks preserve fusion while runtime branching breaks it. Applying
+tril
+to a pre-computed matrix lets XLA fuse the operation into surrounding element-wise chains. Runtime branching or host-side conditionals break fusion graphs and can force synchronisation.
+
+3.4
+Compiled On-Device Loops
+
+Autoregressive decoding threads state through a sequential loop. If this loop runs in Python on the host, each iteration incurs a host-device round-trip. Under XLA, at the 130M scale, a Python host loop achieves 662 tokens/second compared to 1588 tokens/second for a compiled
+fori_loop
+— a 2.4
+\times
+penalty. The gap narrows as per-step compute grows (the two paths converge above 780M parameters), but for small-to-medium models the loop execution strategy determines whether the
+O(1)
+cache advantage is realised.
+
+3.5
+Precision Management
+
+•
+
+Residual connections in
+float32
+to prevent accumulation drift through the layer stack.
+
+•
+
+Decay parameters in log-space (
+float32
+), exponentiated at compute time to avoid underflow.
+
+•
+
+Normalisation layers cast inputs to
+float32
+for variance computation, then cast back.
+
+•
+
+Matmul precision set to the highest available mode during correctness validation to suppress hardware-level rounding (e.g., TF32 on NVIDIA).
+
+These dtype annotations replace the fine-grained numeric control a custom kernel provides. Omitting any of them produces silent numerical divergence that accumulates through the layer stack (Section
+5.7
+).
+
+4
+A Complete Mamba-2 Case Study
+
+4.1
+Background: State Space Duality
+
+A continuous-time SSM maps an input signal
+x(t)\in\mathbb{R}^{N}
+to an output
+y(t)
+through a latent state
+h(t)\in\mathbb{R}^{N}
+:
+
+h^{\prime}(t)=Ah(t)+Bx(t),\quad y(t)=Ch(t)+Dx(t)
+
+where
+A\in\mathbb{R}^{N\times N}
+,
+B\in\mathbb{R}^{N\times 1}
+,
+C\in\mathbb{R}^{1\times N}
+, and
+D\in\mathbb{R}
+are learned parameters. Discretisation via zero-order hold with step size
+\Delta
+yields:
+
+h_{t}=\bar{A}h_{t-1}+\bar{B}x_{t},\quad y_{t}=Ch_{t}+Dx_{t}
+
+Mamba-2 makes
+B
+,
+C
+, and
+\Delta
+input-dependent and restricts
+A
+to a diagonal scalar per head. The discretised recurrence, unrolled over a chunk of
+L
+tokens, is equivalent to a structured matrix-vector product:
+
+Y_{\text{diag}}=(L\odot CB^{\top})X
+
+where
+L
+is a lower-triangular matrix of accumulated decay factors derived from
+\exp(\text{segsum}(A\cdot\Delta))
+. Inter-chunk state propagation is a separate recurrence over chunk-level states. The intra-chunk path is parallel (matrix multiplication); the inter-chunk path is sequential but lightweight.
+
+4.2
+SSD to JAX Primitive Mapping
+
+The complete
+ssd_forward
+function is under 60 lines of Python (available in the project repository
+(
+Santoni 2025
+)
+). XLA fuses element-wise chains (softplus
+\rightarrow
+clip
+\rightarrow
+exp
+\rightarrow
+einsum) into single megakernels and tiles the einsum contractions for the target device’s matrix units.
+
+Input:
+
+Token ids
+x_{1:T}
+, model parameters
+\theta
+, chunk size
+L
+
+Output:
+
+Logits
+\hat{y}_{1:T}
+, per-layer final chunk states
+\{h^{(\ell)}\}
+
+Embed and reshape:
+X\leftarrow\text{Embed}(x)\in\mathbb{R}^{B\times N_{c}\times L\times D}
+
+//
+N_{c}=T/L
+chunks
+
+for
+
+layer
+\ell=1,\ldots,N_{\text{layers}}
+
+do
+
+1
+
+Project:
+B_{t},C_{t},\Delta,X_{\text{proj}}\leftarrow\text{InputProj}^{(\ell)}(X)
+
+2
+
+Discretise:
+\bar{A}\leftarrow\exp(\texttt{softplus}(A^{(\ell)}_{\log})\cdot\Delta)
+
+//
+float32 upcast
+
+Decay matrix:
+\mathcal{L}\leftarrow\texttt{tril}(\exp(\texttt{segsum}(\log\bar{A})))
+
+3
+
+Intra-chunk:
+Y_{\text{diag}}\leftarrow(\mathcal{L}\odot C_{t}B_{t}^{\top})\,X_{\text{proj}}
+
+//
+batched einsum
+
+State accumulate:
+S\leftarrow\texttt{einsum}(B_{t},\bar{A},X_{\text{proj}})\to(B,N_{c},H,P,N)
+
+4
+
+Inter-chunk scan:
+S^{\prime}\leftarrow\texttt{einsum}(\bar{A}_{\text{chunk}},S)
+
+//
+sequential over chunks
+
+Combine:
+Y\leftarrow Y_{\text{diag}}+Y_{\text{cross}}(S^{\prime},C_{t})
+
+5
+
+Store
+h^{(\ell)}\leftarrow S^{\prime}[:,-1]\in\mathbb{R}^{B\times H\times P\times N}
+
+//
+final chunk state
+\to
+cache
+
+end for
+
+6
+
+\hat{y}_{1:T}\leftarrow\text{LMHead}(Y)
+
+7
+
+Algorithm 1
+
+SSD Prefill (one call, chunked parallel)
+
+Input:
+
+Prompt ids
+x_{1:P}
+, generation length
+G
+, model parameters
+\theta
+
+Output:
+
+Generated token ids
+\hat{x}_{P+1:P+G}
+
+\hat{y}_{1:P},\;\mathcal{C}\leftarrow\textsc{Prefill}(x_{1:P},\theta)
+
+//
+Algorithm
+1
+; init cache
+
+\hat{x}_{P+1}\leftarrow\arg\max\,\hat{y}_{P}
+
+1
+
+for
+
+t=P{+}1,\ldots,P{+}G{-}1
+
+do
+
+//
+compiled fori_loop, on-device
+
+2
+
+u_{t}\leftarrow\text{Embed}(\hat{x}_{t})
+
+3
+
+for
+
+layer
+\ell=1,\ldots,N_{\text{layers}}
+
+do
+
+4
+
+u_{t}^{(\ell)}\leftarrow\text{InProj}^{(\ell)}(u_{t})
+
+//
+project to inner dim
+
+Update conv state:
+\mathcal{C}.\text{conv}^{(\ell)}\leftarrow\texttt{roll\_and\_insert}(u_{t}^{(\ell)})
+
+5
+
+z_{t}\leftarrow\text{DepthwiseConv}(\mathcal{C}.\text{conv}^{(\ell)})
+
+6
+
+Project:
+B_{t},C_{t},\Delta_{t}\leftarrow\text{SSMProj}^{(\ell)}(z_{t})
+
+7
+
+Discretise:
+\bar{A}\leftarrow\exp(\texttt{softplus}(A^{(\ell)}_{\log})\cdot\Delta_{t}),\;\bar{B}\leftarrow\Delta_{t}\cdot B_{t}
+
+8
+
+SSM step:
+\mathcal{C}.\text{ssm}^{(\ell)}\leftarrow\bar{A}\,\mathcal{C}.\text{ssm}^{(\ell)}+\bar{B}\,z_{t}
+
+9
+
+end for
+
+10
+
+\hat{x}_{t+1}\leftarrow\arg\max\,\text{LMHead}(y_{t})
+
+//
+on-device
+
+end for
+
+11
+
+Algorithm 2
+
+Cached Autoregressive Decode (
+O(1)
+per step)
+
+4.3
+The
+O(1)
+State Cache
+
+O(1)
+state is a property of the SSM recurrence class; the contribution here is
+realising it in compiled on-device control flow as a JAX PyTree without host
+round-trips.
+
+Transformer KV-caches grow linearly with sequence length. SSMs compress history into a fixed-size state
+h\in\mathbb{R}^{H\times P\times N}
+. Generating the next token requires a depthwise convolution update over a sliding window of
+k{-}1
+cached inputs and a single-step recurrence
+h_{t}=\bar{A}h_{t-1}+\bar{B}x_{t}
+, both
+O(1)
+in sequence length.
+
+We implement
+Mamba2Cache
+as a dataclass containing per-layer SSM states and convolution states, registered as a JAX PyTree node so that
+jax.jit
+and
+jax.lax.fori_loop
+can trace and place it in compiled loops without host round-trips (Table
+12
+).
+
+No prior open Mamba-2 implementation in JAX carries a structured cache in compiled on-device control flow. Existing JAX SSM implementations either lack caching, target Mamba-1, use host-side loops, or remain incomplete
+(
+JAX Community 2024
+)
+.
+
+5
+Evaluation
+
+5.1
+Setup
+
+Hardware.
+All primary benchmarks run on Google Cloud TPU v6e (single chip, 918 TFLOPS BF16 peak, 1600 GB/s HBM bandwidth).
+1
+1
+
+1
+
+Google Cloud TPU v6e specifications:
+https://cloud.google.com/tpu/docs/v6e
+GPU portability validation runs on NVIDIA A100 40GB (312 TFLOPS BF16, 1555 GB/s HBM2).
+2
+2
+
+2
+
+NVIDIA A100 datasheet:
+https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/nvidia-a100-datasheet-us-nvidia-1758950-r4-web.pdf
+The same source code runs on all platforms.
+
+Models.
+Five pretrained Mamba-2 checkpoints from HuggingFace (
+state-spaces/mamba2-130m
+through
+state-spaces/mamba2-2.7b
+), spanning 130M to 2.7B parameters, all with
+state_size=128
+,
+head_dim=64
+,
+expand=2
+, and
+conv_kernel=4
+. Chunk size is fixed at
+L=256
+.
+
+Protocol.
+All experiments use batch size 1 to evaluate the latency-bound, single-user inference regime. Optimising this implementation for high-throughput serving (e.g., via continuous batching or dynamic memory paging) involves orthogonal scheduling concerns left to future work. Sequence lengths sweep from 128 to 4096 for decode and up to 8192 for prefill. Each decode step is a forward pass followed by deterministic on-device
+argmax
+inside the compiled decode loop; no sampling is applied. Throughput is generated tokens divided by wall-clock time, measured with
+time.perf_counter()
+around calls forced to complete via
+jax.block_until_ready()
+. All timing results are averaged over 5 runs after JIT warmup, with standard deviations below 0.3% of the mean.
+
+Metrics.
+Hardware-normalised utilisation metrics
+(
+Chowdhery et al. 2023
+)
+:
+
+MFU
+
+\displaystyle=\frac{F_{\text{XLA}}\;/\;t_{\text{wall}}}{\text{peak TFLOPS}\times 10^{12}},
+
+(1)
+
+HBU
+
+\displaystyle=\frac{B_{\text{XLA}}\;/\;t_{\text{wall}}}{\text{peak BW}\times 10^{9}},
+
+(2)
+
+where
+F_{\text{XLA}}
+and
+B_{\text{XLA}}
+come from the
+’flops’
+and
+’bytes accessed’
+fields of
+jax.jit(f).lower(*args).cost_analysis()
+, XLA’s ahead-of-time cost model. Both are compiler estimates at the HLO level.
+F_{\text{XLA}}
+is exact for einsum-dominated workloads.
+B_{\text{XLA}}
+is an unfused byte count; where fusion collapses intermediate buffers, actual HBM traffic may be lower than estimated,
+making the reported HBU an upper bound on true bandwidth efficiency.
+
+Baseline.
+The cached implementation is compared against a JIT-compiled non-cached baseline that recomputes the full forward pass at every decoding step; both paths use identical model functions on identical hardware, differing only in whether
+Mamba2Cache
+is maintained across decode steps.
+
+Software versions and reproducibility.
+Exact versions, flags, and invocation commands are in Appendix
+A.3
+.
+
+5.2
+Autoregressive Throughput
+
+Figure 1:
+Autoregressive generation on Cloud TPU v6e across five model scales and six sequence lengths.
+(a)
+Speedup from caching.
+(b)
+Generation latency: cached (solid) grows linearly, non-cached (dashed) grows quadratically.
+(c)
+Per-step throughput: cached throughput is flat regardless of sequence length; non-cached throughput collapses.
+
+Across all configurations, p99 decode latency across 5 timed runs deviates by less than 0.3% from the per-configuration mean. Full per-configuration throughput numbers are in Appendix
+B.1
+.
+
+The identical source on an NVIDIA A100 produces the same
+O(1)
+scaling with no code changes (Appendix
+B.7
+).
+
+5.3
+Peak Memory
+
+Figure 2:
+Peak memory during autoregressive generation on Cloud TPU v6e. Cached decoding (solid) is constant; non-cached (dashed) grows linearly. At sequence length 4096, the 2.7B non-cached path consumes over 16 GB versus a constant 10.9 GB cached.
+
+Peak memory is measured via the JAX device runtime (peak-bytes-in-use counter), reporting on-device HBM allocation. The cache stores per-layer SSM states of shape
+(B,H,P,N)
+and convolution states of shape
+(B,D_{\text{conv}},k{-}1)
+, neither of which depends on sequence length. The non-cached path materialises the full
+(1,L)
+token buffer and intermediate activations at each step, scaling linearly. The cached footprint (e.g., 10.9 GB for the 2.7B model at 5.4 GB of BF16 parameters) includes XLA’s ahead-of-time workspace buffers for intermediate activations and compiler-managed scratch space; the
+O(1)
+property is that this footprint is constant with respect to sequence length, not that it equals the parameter size. Full per-configuration memory numbers are in Appendix
+B.2
+.
+
+Prefill peak memory is flat across sequence lengths for
+mid-size models (370M–780M) up to 8192 tokens. The SSD
+recurrence processes fixed blocks of
+L=256
+tokens, and
+XLA reuses intermediate activation buffers across chunks
+rather than allocating proportionally to sequence length.
+Peak memory is therefore dominated by parameters and
+compiler workspace until the sequence-dependent outputs
+exceed this fixed allocation at 16384 tokens, producing
+the sharp increase visible across all models. The 130M
+model lacks this plateau because its small parameter
+footprint does not mask the sequence-dependent growth. Full prefill memory data is in Appendix
+B.2
+.
+
+5.4
+Hardware Utilisation and Device-Ceiling Context
+
+Prefill throughput is compute-bound, while decode throughput is memory-bandwidth bound. Both are reported against TPU v6e peak specifications (918 TFLOPS BF16, 1600 GB/s HBM bandwidth).
+
+Figure 3:
+Hardware utilisation on Cloud TPU v6e.
+(a)
+Prefill MFU versus model size at three prompt lengths.
+(b)
+Decode HBU versus sequence length. HBU varies by less than 1.7 percentage points across sequence lengths for every model.
+
+5.4.1
+Prefill (Compute Path)
+
+Prefill MFU (%) by Prompt Length
+
+Model
+
+1024
+
+4096
+
+8192
+
+130M
+
+6.22
+
+8.23
+
+7.68
+
+370M
+
+7.47
+
+9.04
+
+7.60
+
+780M
+
+10.62
+
+11.33
+
+8.20
+
+1.3B
+
+12.53
+
+11.67
+
+8.39
+
+2.7B
+
+15.23
+
+12.96
+
+9.71
+
+Table 1:
+Prefill compute efficiency on TPU v6e (batch size 1, peak = 918 TFLOPS BF16).
+
+At the 2.7B scale, XLA reaches approximately 140 TFLOPS—15% of the v6e’s 918
+TFLOPS BF16 peak. Single-sequence prefill cannot reach arithmetic balance on this
+chip: saturating compute requires
+{\sim}
+574 FLOPs/byte, a threshold batch size 1
+does not cross. 15% MFU is consistent with the roofline ceiling for single-sequence prefill on this chip.
+The MFU pattern reflects two competing effects. For smaller models at shorter
+sequences, increasing
+N_{c}
+improves intra-chunk matmul tiling efficiency —
+larger
+N_{c}
+produces larger contiguous operands that tile more effectively onto
+matrix units — which explains the MFU
+increase
+from 1024 to 4096 tokens
+visible in the 130M–780M models. Beyond approximately 4096 tokens, the sequential
+inter-chunk scan imposes a latency cost growing as
+O(N_{c})
+serial device dispatches;
+at
+N_{c}=32
+this occupies a sufficient fraction of wall time to reduce measured MFU
+across all model sizes, even though the inter-chunk FLOP count remains small relative
+to the intra-chunk matmuls.
+
+5.4.2
+Decode (Bandwidth Path)
+
+Decode HBU (%) by Sequence Length
+
+Model
+
+128
+
+256
+
+512
+
+1024
+
+2048
+
+4096
+
+130M
+
+51.62
+
+52.29
+
+52.87
+
+53.13
+
+53.26
+
+53.32
+
+370M
+
+57.88
+
+58.65
+
+59.07
+
+59.29
+
+59.32
+
+59.32
+
+780M
+
+62.07
+
+62.59
+
+62.80
+
+62.87
+
+62.93
+
+62.99
+
+1.3B
+
+61.22
+
+61.55
+
+61.69
+
+61.77
+
+61.86
+
+61.87
+
+2.7B
+
+63.43
+
+63.74
+
+63.91
+
+64.00
+
+64.06
+
+64.08
+
+Table 2:
+Decode memory-bandwidth efficiency on TPU v6e (peak = 1600 GB/s).
+
+At 64% HBU the 2.7B decode path saturates most of the available bandwidth.
+
+5.5
+JIT Compilation Overhead
+
+For the 2.7B model, XLA requires up to 43 seconds to compile the decode path at sequence length 4096. In serving, the compiled HLO persists across requests. For iterative research, this is the primary latency overhead of the kernel-free approach. Full JIT timing data is in Appendix
+B.4
+.
+
+5.6
+Numerical Correctness
+
+While
+float32
+addition is non-associative and differing accumulation
+orders compound through 24 residual layers to produce minor absolute drift (
+2{\times}10^{-4}
+), we verify that this drift is functionally benign. Greedy decoding from the same prompt matches the PyTorch/CUDA reference token-for-token across 64 generation steps. Because the discrete token trajectories are identical, this provides strong evidence that downstream zero-shot accuracy and perplexity under greedy decoding will strictly mirror the upstream reference model. Table
+3
+gives the supporting hidden-state and logit tolerances: the 130M checkpoint on a 512-token input passes
+element-wise at
+1{\times}10^{-5}
+relative and
+2{\times}10^{-4}
+absolute. These tolerances are non-zero because XLA and Triton tile and schedule reduction trees differently. The same drift appears between any two independent
+float32
+implementations with distinct reduction paths. Cached decoding compared against a full-sequence JAX forward pass on the same input produces logits within
+1.3{\times}10^{-4}
+max absolute error.
+
+Golden outputs are generated on GPU using the official
+mamba_ssm
+PyTorch/CUDA
+package (v2.2.2) with
+torch.float32
+throughout and TF32 disabled, against our
+JAX implementation with
+jax_default_matmul_precision="highest"
+, both on
+NVIDIA A100.
+
+Output
+
+Relative Tolerance
+
+Absolute Tolerance
+
+Status
+
+Last hidden state
+
+1\times 10^{-5}
+
+1\times 10^{-4}
+
+Pass
+
+Logits (first 256)
+
+1\times 10^{-5}
+
+2\times 10^{-4}
+
+Pass
+
+Table 3:
+Numerical parity against the PyTorch reference (
+mamba_ssm
+,
+130M checkpoint, 512 tokens). Tolerances apply element-wise.
+
+5.7
+Ablation Studies
+
+5.7.1
+Static Masking Preserves Fusion
+
+The baseline
+segsum
+applies a lower-triangular causal mask via
+jnp.tril
+, a static constant that XLA folds into the surrounding fusion chain (
+cumsum
+
+\to
+subtraction
+\to
+mask
+\to
+
+exp
+). The ablated variant replaces this with a
+jax.lax.fori_loop
+iterating over the chunk dimension (256 iterations), applying the mask row by row via
+dynamic_slice
+and
+dynamic_update_slice
+. It reflects how a developer reasoning about causal masking as “for position
+i
+, attend only to positions
+0\ldots i
+” would naturally write it.
+
+Masking Strategy
+
+Prefill (tokens/s)
+
+Output
+
+Static mask (
+jnp.tril
+)
+
+42,631
+
+Bitwise identical
+
+Dynamic row-wise mask (
+fori_loop
+)
+
+7,330  (
+-82.8\%
+)
+
+Table 4:
+Masking ablation on TPU v6e (1.3B model, BF16, prompt length 1024). Both produce bitwise identical output; the dynamic variant breaks XLA’s fusion chain.
+
+5.7.2
+Decay Exponentiation Requires
+float32
+
+The baseline computes
+\bar{A}=\exp(A_{\log})
+after casting to
+float32
+. The ablated variant keeps the exponentiation in BF16. BF16 truncation in the decay compounds through the 130M checkpoint’s 24 layers, producing error sufficient to shift the output distribution and affect downstream sampling (Table
+5
+). The
+float32
+upcast is a correctness requirement.
+
+Decay Dtype
+
+Max Absolute Error (Logits)
+
+float32
+(baseline)
+
+0.0
+
+bfloat16
+
+0.013
+
+Table 5:
+Decay precision ablation on TPU v6e (130M checkpoint, 24 layers, BF16, prompt length 1024).
+
+5.8
+Limitations
+
+Single-hardware utilisation profiling.
+MFU and HBU are reported only on TPU v6e. The code runs on v4, v5e, GPU, and CPU, but XLA backends differ in fusion strategy and scheduling, and utilisation may vary.
+
+Fixed chunk size.
+All experiments use
+L=256
+. The optimal value likely varies with model size and hardware; a systematic ablation is left to future work.
+
+Fixed batch size.
+All experiments use batch size 1, the standard
+single-user inference setting. The prefill path at 15% MFU reflects
+insufficient arithmetic intensity at this batch size; the v6e requires
+
+918/1.6\approx 574
+FLOPs/byte to balance. High-throughput batched
+serving involves scheduling concerns — continuous batching, dynamic memory
+paging — outside this work’s scope.
+
+No downstream task evaluation.
+Correctness is verified at the
+hidden-state, logit, and token-sequence level; perplexity and task accuracy
+are not independently evaluated.
+
+Irregular and data-dependent operations.
+Operations with data-dependent memory access (e.g., gather/scatter over runtime indices), warp-level synchronisation (e.g., custom intra-warp reductions), or data-dependent control flow (e.g., early exit on convergence) exploit hardware features that no current compiler exposes through standard primitives. SSD avoids all of these, but other SSM variants or attention mechanisms may not.
+
+Compiler maturity as a dependency.
+The approach transfers to any compiler with the capabilities described in Section
+3
+, but an XLA backend for a new hardware target may not immediately match the fusion and tiling quality of the mature TPU and GPU backends.
+
+6
+Conclusion
+
+Mamba-2’s SSD algorithm has algebraic properties—diagonal state structure, static control flow, einsum-dominated compute—that map cleanly onto what XLA’s fusion and tiling passes actually optimise. That alignment is why a kernel-free implementation reaches 64% HBU on decode and 15% MFU on single-stream prefill without bespoke hardware intrinsics, and why the same source runs unmodified on CPU, GPU, and TPU. The engineering decisions that matter are specific: static masks over dynamic loops, compiled
+fori_loop
+over host iteration,
+float32
+decay exponentiation, and cache state registered as a JAX PyTree. Each has a measurable consequence; the ablations show what happens without them. Together, they close the gap between the theoretical
+O(1)
+cache and a deployed implementation that carries no host round-trips during generation.
+
+For any SSM recurrence satisfying the conditions in Section
+3
+, on any platform with a mature XLA backend, custom kernels are now optional rather than required.
+
+Appendix A
+Experimental Details
+
+A.1
+Supported Checkpoints
+
+All five model sizes (130M–2.7B) are loaded from the original HuggingFace weights (
+state-spaces/mamba2-*
+) and run on CPU, GPU, and TPU without custom kernels.
+
+A.2
+Benchmark Configurations
+
+Decode sweep:
+5 models
+\times
+6 sequence lengths (128–4096)
+\times
+3 methods (cached scan, cached host, non-cached host)
+\times
+5 timed runs after JIT warmup. Prompt length fixed at 16 tokens.
+
+Prefill sweep:
+5 models
+\times
+3 prompt lengths (1024, 4096, 8192)
+\times
+5 timed runs. XLA cost analysis extracted per configuration.
+
+A.3
+Reproducibility
+
+Component
+
+Version / Value
+
+JAX
+
+0.9.0
+
+jaxlib
+
+0.9.0.1
+
+XLA / libtpu (TPU runtime)
+
+Bundled with jaxlib 0.9.0.1
+
+Python
+
+3.12
+
+Flax (NNX)
+
+0.12.4
+
+PyTorch (golden outputs)
+
+2.10.0
+
+mamba_ssm
+(golden outputs)
+
+2.2.2
+
+Bonsai core (PR #103)
+
+a907b75
+
+Bonsai caching (PR #131)
+
+d8f8d11
+
+HuggingFace checkpoint IDs
+
+state-spaces/mamba2-130m
+
+state-spaces/mamba2-370m
+
+state-spaces/mamba2-780m
+
+state-spaces/mamba2-1.3b
+
+state-spaces/mamba2-2.7b
+
+jax_default_matmul_precision
+
+"highest"
+(correctness); default (throughput)
+
+torch.backends.cuda.matmul.allow_tf32
+
+False
+(golden outputs)
+
+Chunk size
+L
+
+256
+
+BF16 compute dtype
+
+All throughput and ablation runs
+
+Table 6:
+Software versions and configuration flags.
+
+Benchmark scripts, configuration files, and reproduction instructions are in the project repository
+(
+Santoni 2025
+)
+.
+
+Appendix B
+Additional Results
+
+B.1
+Full Decode Throughput
+
+Throughput (Tokens/Second) by Sequence Length
+
+Model
+
+Method
+
+128
+
+256
+
+512
+
+1024
+
+2048
+
+4096
+
+130M
+
+Cached
+
+1588
+
+1609
+
+1627
+
+1635
+
+1639
+
+1641
+
+Non-Cached
+
+903
+
+898
+
+626
+
+278
+
+132
+
+56
+
+370M
+
+Cached
+
+626
+
+634
+
+639
+
+641
+
+641
+
+641
+
+Non-Cached
+
+495
+
+348
+
+205
+
+124
+
+39
+
+18
+
+780M
+
+Cached
+
+318
+
+321
+
+322
+
+322
+
+323
+
+323
+
+Non-Cached
+
+311
+
+229
+
+129
+
+60
+
+24
+
+9
+
+1.3B
+
+Cached
+
+188
+
+189
+
+190
+
+190
+
+190
+
+190
+
+Non-Cached
+
+185
+
+99
+
+66
+
+32
+
+13
+
+7
+
+2.7B
+
+Cached
+
+94
+
+94
+
+95
+
+95
+
+95
+
+95
+
+Non-Cached
+
+95
+
+63
+
+40
+
+17
+
+8
+
+3
+
+Table 7:
+Autoregressive decoding throughput on TPU v6e (batch size 1,
+fori_loop
+scan path).
+
+B.2
+Full Memory Tables
+
+Peak Memory (MB) by Sequence Length
+
+Model
+
+Method
+
+128
+
+256
+
+512
+
+1024
+
+2048
+
+4096
+
+130M
+
+Cached
+
+545.6
+
+545.6
+
+545.6
+
+545.6
+
+545.6
+
+545.6
+
+Non-Cached
+
+565
+
+585
+
+624
+
+702
+
+857
+
+1169
+
+370M
+
+Cached
+
+1591.9
+
+1591.9
+
+1591.9
+
+1591.9
+
+1591.9
+
+1591.9
+
+Non-Cached
+
+1644
+
+1696
+
+1799
+
+2007
+
+2422
+
+3251
+
+780M
+
+Cached
+
+3322.8
+
+3322.8
+
+3322.8
+
+3322.8
+
+3322.8
+
+3322.8
+
+Non-Cached
+
+3401
+
+3478
+
+3634
+
+3945
+
+4566
+
+5809
+
+1.3B
+
+Cached
+
+5620.2
+
+5620.2
+
+5620.2
+
+5620.2
+
+5620.2
+
+5620.2
+
+Non-Cached
+
+5724
+
+5827
+
+6035
+
+6450
+
+7279
+
+8938
+
+2.7B
+
+Cached
+
+10861.8
+
+10861.8
+
+10861.8
+
+10861.8
+
+10861.8
+
+10861.8
+
+Non-Cached
+
+11035
+
+11208
+
+11553
+
+12244
+
+13627
+
+16392
+
+Table 8:
+Peak memory during autoregressive generation on TPU v6e (batch size 1).
+
+Prefill Peak Memory (MB)
+
+Model
+
+1024
+
+4096
+
+8192
+
+16384
+
+130M
+
+1,049
+
+2,393
+
+4,150
+
+7,494
+
+370M
+
+7,494
+
+7,494
+
+7,494
+
+9,877
+
+780M
+
+9,877
+
+9,877
+
+9,877
+
+12,998
+
+1.3B
+
+12,998
+
+12,998
+
+13,070
+
+18,840
+
+2.7B
+
+15,654
+
+16,851
+
+18,440
+
+OOM
+\dagger
+
+\dagger
+Exceeds 32 GB HBM on a single TPU v6e chip.
+
+Table 9:
+Prefill peak memory on TPU v6e (batch size 1).
+
+B.3
+Hardware Utilisation Summary
+
+Figure 4:
+Fraction of hardware peak on Cloud TPU v6e. Solid bars: best prefill MFU (% of 918 TFLOPS); faded bars: mean decode HBU (% of 1600 GB/s). Utilisation increases with model size in both regimes.
+
+B.4
+JIT Compilation Details
+
+JIT Compilation Time (seconds)
+
+Model
+
+Prefill (1024)
+
+Decode (128)
+
+Decode (4096)
+
+130M
+
+5.5
+
+5.6
+
+2.5
+
+370M
+
+10.2
+
+13.0
+
+6.4
+
+780M
+
+13.0
+
+13.7
+
+12.6
+
+1.3B
+
+10.2
+
+14.9
+
+21.4
+
+2.7B
+
+15.8
+
+19.5
+
+43.0
+
+Table 10:
+XLA JIT compilation time on TPU v6e. One-time costs; subsequent calls reuse the compiled program.
+
+B.5
+Platform Portability
+
+Platform
+
+Model
+
+Seq Len
+
+TPS (Cached)
+
+Correct
+\dagger
+
+CPU (x86-64)
+
+130M
+
+128
+
+7
+
+✓
+
+TPU v6e
+
+130M
+
+128
+
+1,588
+
+✓
+
+NVIDIA A100
+
+130M
+
+128
+
+210
+
+✓
+
+\dagger
+Logits match the PyTorch reference within tolerances of Table
+3
+.
+
+Table 11:
+Cross-platform portability. All platforms run identical source code.
+
+B.6
+On-Device vs. Host-Loop Execution
+
+Figure 5:
+Decode strategy comparison on Cloud TPU v6e. For small models (130M, 370M), the on-device
+fori_loop
+delivers substantially higher throughput. For larger models (
+\geq
+780M), per-step compute dominates and the paths converge.
+
+Throughput (Tokens/Second)
+
+Model
+
+Method
+
+128
+
+1024
+
+4096
+
+130M
+
+Cached (scan)
+
+1588
+
+1636
+
+1639
+
+Cached (host)
+
+662
+
+729
+
+751
+
+Non-Cached
+
+903
+
+278
+
+56
+
+370M
+
+Cached (scan)
+
+643
+
+649
+
+650
+
+Cached (host)
+
+392
+
+391
+
+390
+
+Non-Cached
+
+495
+
+124
+
+18
+
+780M
+
+Cached (scan)
+
+327
+
+327
+
+329
+
+Cached (host)
+
+325
+
+326
+
+327
+
+Non-Cached
+
+311
+
+60
+
+9
+
+1.3B
+
+Cached (scan)
+
+193
+
+193
+
+193
+
+Cached (host)
+
+192
+
+192
+
+192
+
+Non-Cached
+
+185
+
+32
+
+7
+
+2.7B
+
+Cached (scan)
+
+96
+
+96
+
+96
+
+Cached (host)
+
+97
+
+96
+
+96
+
+Non-Cached
+
+95
+
+17
+
+3
+
+Table 12:
+Decode strategy comparison on TPU v6e. The minor 1 token/s inversion at the 2.7B scale (97 vs 96) is within expected measurement noise at convergence.
+
+B.7
+GPU Portability
+
+Figure
+6
+and Table
+13
+illustrate the throughput scaling on this architecture. The exact same source code runs out-of-the-box on NVIDIA A100.
+
+Figure 6:
+Autoregressive decode throughput on NVIDIA A100 (batch size 1).
+Cached throughput rises with sequence length because the fixed 16-token
+prefill amortises across more generation steps; per-step decode rate is
+constant. OOM at 2.7B, sequence length 4096.
+
+Throughput (Tokens/Second) by Sequence Length
+
+Model
+
+Method
+
+128
+
+256
+
+512
+
+1024
+
+2048
+
+4096
+
+370M
+
+Cached
+
+107.9
+
+137.5
+
+153.3
+
+164.1
+
+167.6
+
+170.2
+
+Non-Cached
+
+155.5
+
+115.6
+
+71.2
+
+38.9
+
+17.1
+
+7.1
+
+780M
+
+Cached
+
+82.6
+
+94.2
+
+102.7
+
+107.3
+
+109.5
+
+110.6
+
+Non-Cached
+
+101.1
+
+70.8
+
+41.5
+
+22.0
+
+8.6
+
+3.9
+
+1.3B
+
+Cached
+
+58.6
+
+65.2
+
+67.9
+
+70.2
+
+71.6
+
+72.1
+
+Non-Cached
+
+66.4
+
+44.0
+
+25.9
+
+12.8
+
+5.8
+
+2.8
+
+2.7B
+
+Cached
+
+32.0
+
+34.6
+
+35.9
+
+36.5
+
+36.9
+
+OOM
+
+Non-Cached
+
+33.8
+
+23.8
+
+14.4
+
+6.4
+
+3.1
+
+OOM
+
+Table 13:
+Decode throughput on NVIDIA A100 (batch size 1). Cached throughput rises with sequence length because a fixed 16-token prefill amortises across more generation steps; per-step decode rate is constant.
+
+Appendix C
+Exact SSD Einsum Signatures
+
+Literal
+jnp.einsum
+strings used in the SSD forward pass. Axis labels:
+b
+=batch,
+c
+=chunk,
+l
+/
+s
+=sequence-within-chunk,
+h
+=head,
+n
+=state,
+p
+=head_dim,
+z
+=target chunk.
+
+# Intra-chunk output Y_diag
+Y = jnp.einsum(’bclhn,bcshn,bhcls,bcshp->bclhp’, C, B, L, X)
+
+# State accumulation (per-chunk hidden states)
+states = jnp.einsum(’bclhn,bhcl,bclhp->bchpn’, B, decay, X)
+
+# Inter-chunk recurrence (scan update)
+new_states = jnp.einsum(’bhzc,bchpn->bzhpn’, decay_chunk, states)
+

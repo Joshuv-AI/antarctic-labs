@@ -1,0 +1,1327 @@
+DuaLip-GPU Technical Report
+Gregory Dexter, Aida Rahmattalabi ∗ , Sanjana Garg, Qinquan Song, Ruby Tu, Yuan Gao, Yi Zhang, Zhipeng Wang ∗ , Rahul Mazumder
+
+Abstract
+
+
+
+
+1
+1
+footnotetext:
+Corresponding authors: arahmattalabi@linkedin.com, zhipwang@linkedin.com
+
+1
+Introduction
+
+Linear programs (LPs) underpin many large-scale decision systems: ranking, allocation, and a broad class of matching problems solved on recurring cadences in production. Prior work in this lineage—
+ECLIPSE
+’s ridge-regularized dual ascent and LinkedIn’s open-source
+DuaLip
+in a Scala/Spark stack—showed that first-order methods can scale to these settings, but the original system was tightly coupled to two fixed schemas and a CPU-centric runtime that made new formulations difficult to express and prevented effective use of modern accelerators.
+
+We re-architect this solver for reuse and for modern hardware. The result is a Python library and system that co-designs (i) a compositional interface for plugging in problem logic, (ii) an algorithmic package suitable for extreme-scale LPs with decomposable ‘‘simple constraints’’ (defined subsequently), and (iii) GPU execution techniques needed to realize the available parallelism in practice. Rather than a single ‘‘call a solver’’ entry point, the library exposes operator-level roles that allow new LP formulations and projection maps representing simple constraint families to be added locally while the solve loop and diagnostics remain unchanged
+2
+2
+
+2
+
+Code for the presented LP solver is available at
+https://github.com/linkedin/DuaLip
+.
+.
+
+The architecture is intentionally
+general
+: it is designed for a broad class of LPs beyond any single schema. In this report, however, we focus on LPs with
+matching constraints
+as our primary application domain, since these workloads dominate our production usage and expose the most stringent algorithmic and systems bottlenecks. We therefore use matching LPs as a running case study for the library and its implementation.
+
+On these matching workloads, our design achieves order-of-magnitude wall-clock gains of
+at least
+10\times
+faster
+than the prior distributed CPU
+DuaLip
+to reach a fixed sub-optimality gap while providing predictable scaling from one to many GPUs.
+
+Contributions.
+This work brings together three strands informed by production use:
+
+•
+
+Operator-centric programming model and library interface.
+We replace DuaLip’s schema-bound, template-based interface (multi-objective optimization vs. single-block matching) with an operator-centric model tailored to ridge-regularized dual ascent. Problem logic is expressed only through three primitives:
+objectives/
+(encapsulating the data and dual gradient computation),
+projections/
+(blockwise projections onto a decomposable constraint polytope), and an
+optimizer/
+(which performs dual ascent using the dual gradient), while the solve loop, diagnostics, and distributed primitives are shared. This separation enables support for new formulations—such as incorporating multiple constraint families—with minimal additional code and purely local composition.
+
+•
+
+Algorithmic improvements for ridge-regularized dual ascent.
+Building on the ECLIPSE/DuaLip framework, we strengthen the underlying method with Jacobi-style row normalization, primal scaling and a simple continuation scheme for the regularization parameter
+\gamma
+. We analyze the impact of these changes on conditioning and first-order optimizer convergence.
+
+•
+
+GPU execution and sparse layout for extreme-scale LPs.
+We show how to realize the available parallelism on GPUs by choosing sparse layouts aligned with the constraint structure, batching projection operators to amortize kernel launches, and using a distributed pattern that communicates only the dual variables. For the structured matching workloads we study, these system-level choices alone provide at least
+10\times
+wall-clock speedup over the prior distributed CPU DuaLip under matched stopping criterion.
+
+Together, these changes turn ridge-regularized dual ascent from a specialized, schema-bound deployment into a flexible, high-performance solver architecture suitable for modern GPU-accelerated pipelines. In the remainder of the report, we formalize the matching LPs that motivate our design, describe the operator-centric programming model, develop the algorithmic enhancements, and detail the GPU execution mechanisms, with experiments on extreme-scale matching workloads.
+
+2
+Related Work
+
+Our work builds on multiple threads of prior research.
+
+First-order methods for large-scale linear programs.
+
+Projected first-order methods have recently emerged as a practical approach for massive LPs, most notably PDLP
+[
+2
+]
+and its GPU implementation cuPDLP
+[
+4
+]
+. These solvers provide strong theoretical convergence guarantees and demonstrate competitive performance on high-precision benchmarks, including routing problems and general LP instances. However, their implementations rely on carefully engineered custom kernels optimized for generic sparse matrix–vector operations, thereby treating the constraint matrix as an unstructured operator. As a result, they do not explicitly leverage dual decomposition or diagonal-block structure and have not been demonstrated to scale to the extreme problem sizes characteristic of our target workloads.
+
+In contrast, our setting targets extreme-scale matching and allocation workloads with highly structured constraint families and moderate precision requirements. Rather than pursuing uniform high-accuracy solutions, we emphasize rapid convergence to economically meaningful dual solutions under decomposable constraint structure. Our approach explicitly exploits diagonal-block and matching-specific structure in the dual updates, enabling distributed decomposition across columns and efficient aggregation via collective communication. This structural specialization differentiates our method from general-purpose first-order LP solvers.
+
+Large-scale matching and allocation.
+
+A substantial literature addresses weighted matching and assignment at scale, including specialized bipartite matching solvers and network-flow-based formulations. While these approaches achieve strong performance for canonical matching constraints, they are typically restricted to fixed constraint classes (e.g., degree constraints, capacity constraints) and do not naturally accommodate additional arbitrary linear constraints that arise in production allocation systems.
+
+In contrast, our formulation preserves the flexibility of general linear programming while retaining the computational advantages of matching structure in the dual. This allows us to encode heterogeneous constraint families without modifying the core solver.
+
+Ridge-regularized dual ascent.
+
+The ridge-regularized dual formulation introduced by
+3
+demonstrated that adding
+\ell_{2}
+regularization to the primal induces smoothness in the dual, enabling scalable first-order optimization for extreme-scale allocation.
+6
+further developed efficient projection algorithms and integrated these ideas into a reusable Scala/Spark system (DuaLip).
+
+However, prior implementations were tightly coupled to CPU-centric data formats and rigid declarative schemas. In particular, the system exposed only a small number of fixed templates (e.g., single-block matching and multi-objective optimization), making it difficult to express problems with multiple interacting constraint families or more general block structure without modifying the solver internals. These limitations motivated a redesign centered on composability, flexible constraint specification, and GPU-native execution.
+
+High-performance tensor frameworks.
+
+Our implementation leverages modern array-programming frameworks such as PyTorch
+[
+5
+]
+, enabling concise expression of sparse–dense operations, batched projections, and distributed collectives. Unlike custom low-level kernels tailored to a fixed LP abstraction, this approach allows rapid iteration over algorithmic variants and structural formulations while retaining high performance on contemporary GPU clusters.
+
+Together, these strands of work inform the programming model, algorithmic design, and distributed execution mechanisms underlying the present solver.
+
+3
+Problem Setting
+
+Many large-scale optimization tasks in industry reduce to solving very large linear programs on a recurring cadence, e.g., daily, weekly, or per model update. Examples include email and notification allocation in ECLIPSE
+[
+3
+]
+, content and opportunity assignment in DuaLip
+[
+6
+]
+, and recent marketplace-shaping problems such as promoting inactive members
+[
+1
+]
+. In each case, the LP instance changes as new scores, eligibility signals, or demand arrive, but the underlying structure of the formulation remains stable.
+
+In such recurring regimes, the primary challenge is not merely solving a single large LP to high precision, but ensuring stability, scalability, and fast convergence as the data change across runs. Classical LP formulations are inherently non-strongly convex and often exhibit degeneracy. Introducing
+\ell_{2}
+regularization in the primal induces strong convexity, yielding a smooth dual objective with Lipschitz-continuous gradients. This results in faster convergence under first-order dual methods, and creates a well-conditioned structure that is amenable to distributed decomposition. In recurring industrial workloads, these properties are often more critical than attaining an exact vertex solution of the original LP.
+
+3.1
+Preliminaries
+
+We are given an LP of the form:
+
+\displaystyle\min~~\mathbf{c}^{T}\mathbf{x}~~\text{such that }\mathbf{A}\mathbf{x}\leq\mathbf{b},\mathbf{x}\in\mathcal{C},
+
+(1)
+
+where
+\mathbf{x}\in\mathbb{R}^{n}
+is the vector of primal variables,
+\mathbf{c}
+is the vector of primal objective coefficients,
+\mathbf{A}\in\mathbb{R}^{m\times n}
+and
+\mathbf{b}
+specify the “complex” constraints, and
+\mathcal{C}
+denote the “simple” constraints polytope.
+
+We adopt the algorithmic approach of ECLIPSE
+[
+3
+]
+, which perturbs the LP with ridge regularization and maximizes the resulting dual function using gradient-based methods. This approach is particularly efficient when the primal variables lie in certain common polytopes, which we describe later. Concretely, ECLIPSE augments the primal objective in Eq. (1) with a ridge term
+\frac{\gamma}{2}\|\mathbf{x}\|_{2}^{2}
+and solves the resulting Lagrangian relaxation.
+
+Let
+\bm{\lambda}\in\mathbb{R}^{m}
+denote the dual values of the complex constraints. The dual objective is defined as:
+
+\displaystyle g(\bm{\lambda})=\min_{\mathbf{x}\in\mathcal{C}}\mathbf{c}^{T}\mathbf{x}+\frac{\gamma}{2}\|\mathbf{x}\|_{2}^{2}+\bm{\lambda}^{T}(\mathbf{A}\mathbf{x}-\mathbf{b})
+
+(2)
+
+By Danskin’s theorem,
+\nabla\mathbf{g}(\bm{\lambda})
+may be efficiently computed by
+\nabla\mathbf{g}(\bm{\lambda})=\mathbf{A}\mathbf{x}_{\gamma}^{*}(\bm{\lambda})-\mathbf{b}
+, where
+\Pi
+is the projection to
+\mathcal{C}
+, and:
+
+\displaystyle\mathbf{x}_{\gamma}^{*}(\bm{\lambda})=\Pi_{\mathcal{C}}\left(\frac{-1}{\gamma}(\mathbf{A}^{T}\bm{\lambda}+\mathbf{c})\right).
+
+Any optimization algorithm that depends only on the gradient
+\nabla\mathbf{g}(\bm{\lambda})
+may then be used to maximize
+g(\bm{\lambda})
+over
+\bm{\lambda}\geq\mathbf{0}
+, and hence the perturbed primal LP by strong duality. We take this algorithmic approach due to the substantial reduction in communication overhead when
+\Pi
+can be applied in a distributed manner. This is the case for many important applications of extreme-scale linear programming in industry.
+
+3.2
+Matching Problem Formulation
+
+Despite the generality of our approach, we focus on extreme-scale matching problems in which users are assigned to items subject to shared impression-capacity constraints. Formally, let the decision variable
+x_{ij}
+denote the assignment of a source (e.g., user)
+i\in[I]
+to a destination (e.g., campaign or item)
+j\in[J]
+. For each user
+i
+, define the block vector
+
+\mathbf{x}_{i}:=(x_{i1},\ldots,x_{iJ})^{\top},
+
+and stack these blocks to form the full decision vector
+
+\mathbf{x}=\big[\,\mathbf{x}_{1};\ldots;\mathbf{x}_{I}\,\big].
+
+Let
+E\subseteq[I]\times[J]
+denote the set of feasible source–destination pairs.
+
+The coupling constraints arise from shared destination-level requirements—such as budget, pacing, frequency, or delivery limits that apply collectively to all users eligible for a given destination. For instance:
+
+\displaystyle\sum_{i\in[I]}a_{ij}x_{ij}
+
+\displaystyle\leq d_{j}
+
+\displaystyle\forall j\in[J],\quad\text{(destination capacity)}
+
+(3)
+
+In matrix form,
+\mathbf{A}
+can be written as
+
+\mathbf{A}=\begin{bmatrix}a_{11}&\cdots&0&a_{21}&\cdots&0&a_{I1}&\cdots&0\\
+\vdots&\ddots&\vdots&\vdots&\ddots&\vdots&\vdots&\ddots&\vdots\\
+0&\cdots&a_{1J}&0&\cdots&a_{2J}&0&\cdots&a_{IJ}\end{bmatrix},
+
+which can be viewed as a horizontal concatenation of diagonal blocks.
+Consequently,
+\mathbf{A}
+is highly sparse: entries are zero both due to the block-diagonal structure and because many coefficients
+a_{ij}
+vanish for ineligible pairs. This structured and unstructured sparsity is a key property that we exploit to enable efficient matrix–vector multiplications, as discussed in Section
+6
+.
+
+In addition, we often impose user-level impression capacity constraints that can be expressed as simple “box” or “simplex” constraints
+[
+6
+]
+, applied independently to each block
+\mathbf{x}_{i}\in\mathcal{C}_{i}
+. In extended form, these constraints are written as:
+
+\displaystyle\sum_{j\in[J]}x_{ij}
+
+\displaystyle\leq 1
+
+\displaystyle\forall i\in[I],\quad\text{(per-user capacity)}
+
+(4)
+
+\displaystyle 0\leq x_{ij}
+
+\displaystyle\forall(i,j)\in E.\quad\text{(feasibility)}
+
+(5)
+
+Simple constraints
+
+In the above example, constraints (4), (5) form simple polytopes (simplex) that admit efficient projection algorithms. More generally, when assigning user to items the impression capacity of a user may be represented through a “box-cut” or “simplex” inequality constraint, which can be applied to each block
+\mathbf{x}_{i*}
+independently
+[
+6
+]
+. We refer to these constraints as
+simple constraints
+. See
+[
+6
+]
+for detailed examples of such polytopes and their associated projection procedures.
+
+Exploiting this separable structure allows the user-side constraints to be handled implicitly within the primal subproblem, without introducing explicit dual variables for them. Consequently, when matching
+I
+users to
+J
+items, the number of explicit dual variables can be reduced from
+I+J
+to
+J
+. This substantially reduces communication overhead, since only the destination-level dual variables must be synchronized across GPUs when computing
+\nabla\mathbf{g}(\bm{\lambda})
+.
+
+Matching constraints
+
+We now describe the structure of the complex constraints
+\mathbf{A}\mathbf{x}\leq\mathbf{b}
+for matching problems. This structure closely follows the formulation in
+ECLIPSE
+
+[
+3
+]
+, which motivated the modern ridge-regularized dual-ascent approach, but is more general than the version implemented in Scala/Spark DuaLip, which permitted at most a single matching block. Here we allow an arbitrary number of matching constraint families, each interacting with user blocks in a simple element-wise fashion.
+
+In matching problems, the complex constraints couple many users through shared destinations—budget, pacing, frequency, or delivery constraints that apply to all
+i
+such that
+(i,j)\in E
+. Because each such constraint enters the LP in an element-wise manner on each
+\mathbf{x}_{(i)}
+, the constraint matrix has a diagonal block structure across sources.
+
+Definition 1
+
+(Complex constraint matrix for matching problems)
+.
+
+Given decision variables
+\mathbf{x}
+stacked as above, the complex constraint matrix
+\mathbf{A}\in\mathbb{R}^{mJ\times IJ}
+is defined blockwise across sources as
+
+\mathbf{A}\;=\;\begin{bmatrix}\mathbf{D}_{11}&\mathbf{D}_{12}&\cdots&\mathbf{D}_{1I}\\
+\mathbf{D}_{21}&\mathbf{D}_{22}&\cdots&\mathbf{D}_{2I}\\
+\vdots&\vdots&\ddots&\vdots\\
+\mathbf{D}_{m1}&\mathbf{D}_{m2}&\cdots&\mathbf{D}_{mI}\end{bmatrix},\qquad\mathbf{D}_{ki}\in\mathbb{R}^{J\times J}\text{ diagonal for every }(k,i),
+
+(6)
+
+where
+k=1,\dots,m
+indexes distinct constraint families. Each diagonal block
+\mathbf{D}_{ki}
+acts element-wise on the
+i
+th variable block,
+\mathbf{x}_{(i)}
+.
+
+This formulation captures the structured matching constraints used in
+ECLIPSE
+while allowing multiple such families (budget, pacing, fairness, frequency, etc.) to appear simultaneously. The diagonal structure of
+\mathbf{D}_{ki}
+is a key property exploited throughout the paper: it simplifies the dual gradient, enables efficient sparse layouts and projection batching on GPUs, and allows for sharp conditioning results such as those in Section
+5
+.
+
+4
+Programming Model and Library Architecture
+
+The previous Scala Spark version of DuaLip
+[
+7
+]
+enabled the first production deployments, but it supported only two rigid schemas and relied on an object model that made extensions costly. Its runtime also fit poorly with common numerical tooling and Python workflows, so diagnostics and tuning were largely manual. We re
+-
+architect LP solving in an
+imperative, operator
+-
+level array/tensor programming model
+(PyTorch
+-
+style, define
+-
+by
+-
+run) rather than a task
+-
+level “call a solver” API. Concretely, the hot path is an explicit dataflow of sparse matrix–vector operators
+(\mathbf{A}\mathbf{x},\ \mathbf{A}^{\top}\bm{\lambda})
+and blockwise projections, orchestrated by a small maximizer. This boundary is deliberate: it exposes the kernels that dominate runtime, lets us vary sparse layouts/kernels and projection operators, and maps cleanly to GPU execution, without rewriting the solve loop.
+
+The library is built to support this
+general
+setting: LPs with (i) simple constraints that decompose cleanly over blocks of variables, making projection-based methods natural, and (ii) sparse complex constraints for which the dominant operations are repeated applications of
+\mathbf{A}\mathbf{x}
+and
+\mathbf{A}^{\top}\bm{\lambda}
+. This covers a broad class of assignment, allocation, and routing problems encountered by vertical teams across the organization, and is the level at which the programming model and solver interface are designed.
+
+Within this general template,
+matching
+problems are a particularly important and pervasive subclass. Here, each “source” has its own block of variables and simple constraints, while cross-source constraints, e.g., budgets, pacing, and frequency caps, interact with each block through simple element-wise terms. As shown in prior work, this yields a distinctive diagonal block structure in the complex constraint matrix. We formalize this structure in Definition
+1
+and show that it enables highly efficient GPU kernels, batched projection operators, and effective preconditioning. While the focus of this paper is on matching workloads, the library itself is not restricted to a single matching block or even to matching constraints alone; the same abstractions apply to any LP whose simple constraints decompose over blocks and whose complex constraints can be implemented via sparse operator calls.
+
+While the remainder of the paper uses matching LPs as a running example, the library interfaces in this section make no reference to matching-specific notions. The library consists of three decoupled components with minimal contracts:
+
+Component
+
+Constructed from
+
+Must provide (single method)
+
+Maximizer
+
+Algorithm settings (step policy, iteration budget, flags)
+
+maximize(obj, initial_value)
+
+\rightarrow
+
+Result
+
+ObjectiveFunction
+
+LP tensors and metadata (
+\mathbf{A},\mathbf{b},\mathbf{c}
+) plus a supplied
+ProjectionMap
+
+calculate(
+\lambda
+,
+\gamma
+)
+
+\rightarrow
+
+ObjectiveResult
+
+ProjectionMap
+
+Mapping from primal columns/blocks to projection operators (simplex, box-cut, …)
+
+project(block_id, v)
+
+\rightarrow
+projected
+v
+
+Table 1
+:
+Core objects, what constructs them, and the single required method each exposes.
+
+A new LP formulation implements an
+ObjectiveFunction
+, which encapsulates the LP parameters and a method for computing
+\nabla\mathbf{g}(\bm{\lambda})
+from a dual value
+\bm{\lambda}
+. In practice, this involves ensuring that the matrix-vector products
+\mathbf{A}\mathbf{x}
+and
+\mathbf{A}^{T}\bm{\lambda}
+can be efficiently represented and computed on GPU. Additionally, the computation of the gradient requires computing the projection
+\Pi(\mathbf{x}_{\gamma}^{*}(\bm{\lambda}))
+to the simple constraint polytope,
+\mathcal{C}
+. The simple constraints tend to be broadly applicable, e.g., per-user simplex constraints or unit box constraints, and so the projection operators may be reused across new LP formulations. The
+ObjectiveFunction
+class provides an encapsulation of the LP formulation that exposes a method to compute the gradient. This means that
+Maximizer
+may be a variety of optimization algorithms that perform the dual ascent of
+\mathbf{g}(\bm{\lambda})
+over the dual feasible space
+\bm{\lambda}\geq\mathbf{0}
+.
+
+We take the stance that solving extreme-scale LPs necessitates a level of efficiency that requires flexible low-level modification of the core algorithmic primitives, particularly the gradient computation, in order to be applied across various formulations in practice. At the same time, it is necessary that these modifications take minimal engineering effort, and that shared primitives and sensible defaults can be shared across applications. This solver architecture has the advantage that the major algorithmic components are reflected in the code structure, and so modifying any part only require local modifications. The total solver for a use case is then a composition of the high-level components, much like how a model in PyTorch is constructed via high-level composition of the model architecture, loss function, optimization algorithm, etc.
+
+In contrast, the Spark Scala-based solver provided a single declarative entry point with support for the two strict schemas that then invoke the necessary algorithm components through inheritance hierarchies. We have found that this structure makes it difficult to accommodate new constraints even when they are efficient to represent algorithmically, such as a global count constraint in a matching problem,
+\sum_{ij}x_{ij}\leq m
+. While it’s trivial to compute
+\mathbf{A}\mathbf{x}
+and
+\mathbf{A}^{\top}\bm{\lambda}
+for this constraint, appending it to the matching problem in the Spark Scala solver requires extensive changes across the code base.
+
+The implementation is Python
+-
+native to align with common numerical stacks and to support instrumentation and iteration. Optional hooks for experiment logging/tuning, structured diagnostics, and standard debugging wrap the same calls without altering these interfaces.
+
+5
+Optimization Algorithm
+
+Our solver follows the ridge-regularized dual ascent framework of Section
+3.1
+: given the smoothed dual
+g(\bm{\lambda})
+, we run a first-order method that accesses
+g
+through its gradient
+\nabla\mathbf{g}(\bm{\lambda})=\mathbf{A}\mathbf{x}_{\gamma}^{*}(\bm{\lambda})-\mathbf{b}
+and the projection operators that define
+x_{\gamma}^{*}(\bm{\lambda})
+. The Scala/Spark DuaLip implementation instantiated this framework with a variant of Nesterov Accelerated Gradient Descent (AGD) and a small set of alternative optimizers, which required careful, instance-specific tuning to obtain reliable convergence on large matching problems and was sensitive to the choice of scaling and regularization.
+
+In this section, we keep the same dual formulation but redesign the optimization stack so that a
+single
+configuration works robustly across the matching workloads of Definition
+1
+. Concretely, we introduce three changes: (i) conditioning of the dual problem via Jacobi-style row normalization, (ii) a simple continuation schedule for the ridge parameter
+\gamma
+that balances curvature against approximation error, and (iii) balancing the smoothing of the ridge term along coordinates via primal coordinate scaling. Conceptually, these techniques apply whenever we have access to the constraint matrix
+\mathbf{A}
+(and its row/column statistics), the simple-constraint projections, and the smoothed dual objective, so they are compatible with the operator-centric programming model of Section
+4
+.
+
+5.1
+Algorithm enhancements
+
+A central area of focus in improving the DuaLip solver was to improve the performance and robustness of the ridge-regularized dual ascent method that underpins this line of work. The basic framework of Section
+3.1
+admits many first-order instantiations; in practice, the dominant convergence issues we observed on production matching workloads stemmed from three sources: (i) poor conditioning of
+\mathbf{A}\mathbf{A}^{\top}
+in the dual, (ii) tradeoff between convergence speed and solution quality with the ridge regularization term and (iii) heterogeneous scales in the primal variables that interact badly with the quadratic regularizer. We address these in turn via Jacobi-style row normalization, a simple regularization schedule, and primal scaling.
+
+Jacobi preconditioning / row normalization.
+
+Our first enhancement is to improve the conditioning of the dual problem by rescaling the complex constraints. We assume
+\mathbf{A}
+is full row rank. Intuitively, when some rows of
+\mathbf{A}
+have much larger norms than others, gradient steps for the smoothed dual move too cautiously in some directions and too aggressively in others.
+
+When the projection operator is inactive (or the identity), the dual gradient reduces to
+
+\nabla\mathbf{g}(\bm{\lambda})\;=\;-\frac{1}{\gamma}\bigl(\mathbf{A}\mathbf{A}^{\top}\bm{\lambda}+\mathbf{A}\mathbf{c}\bigr)\;-\;\mathbf{b},
+
+so the Hessian is
+
+\nabla^{2}\mathbf{g}(\bm{\lambda})\;=\;-\frac{1}{\gamma}\,\mathbf{A}\mathbf{A}^{\top}.
+
+The convergence of first-order methods on
+g
+is therefore governed by the conditioning of
+\mathbf{A}\mathbf{A}^{\top}
+.
+
+We apply a standard row-scaling transform. Let
+
+\mathbf{D}=\mathrm{diag}\!\bigl(\|\mathbf{A}_{1*}\|_{2}^{-1},\ldots,\|\mathbf{A}_{m*}\|_{2}^{-1}\bigr)
+
+for all rows with nonzero norm (rows with
+\|\mathbf{A}_{r*}\|_{2}=0
+are redundant and may be dropped or left unscaled with
+\mathbf{D}_{rr}=1
+), and define the row-scaled system
+
+\mathbf{A}^{\prime}=\mathbf{D}\mathbf{A},\qquad\mathbf{b}^{\prime}=\mathbf{D}\mathbf{b}.
+
+Because
+\mathbf{D}
+has positive diagonal entries, row scaling preserves the feasible set exactly:
+
+\{\,\mathbf{x}:\mathbf{A}\mathbf{x}\leq\mathbf{b}\,\}\;=\;\{\,\mathbf{x}:\mathbf{A}^{\prime}\mathbf{x}\leq\mathbf{b}^{\prime}\,\}.
+
+Moreover,
+
+\mathbf{A}^{\prime}\mathbf{A}^{\prime\top}\;=\;\mathbf{D}(\mathbf{A}\mathbf{A}^{\top})\mathbf{D},\qquad\mathbf{D}^{2}=\mathrm{diag}(\mathbf{A}\mathbf{A}^{\top})^{-1}\ \ \text{(on nonzero rows)},
+
+so row normalization is precisely Jacobi preconditioning of the dual Hessian
+-\nabla^{2}\mathbf{g}(\bm{\lambda})=\frac{1}{\gamma}\mathbf{A}\mathbf{A}^{\top}
+.
+
+For the matching constraint matrix of Definition
+1
+,
+\mathbf{A}
+is a horizontal concatenation of diagonal subblocks across sources, so
+\mathbf{A}\mathbf{A}^{\top}
+is a sum of (nearly) diagonal matrices (one per source) and is therefore close to diagonal in practice. Enforcing
+\mathrm{diag}(\mathbf{A}^{\prime}\mathbf{A}^{\prime\top})=\mathbf{I}
+tightly clusters the spectrum; in the ideal diagonal/orthogonal case it yields
+\mathbf{A}^{\prime}\mathbf{A}^{\prime\top}=\mathbf{I}
+and condition number
+1
+.
+
+The following lemma formalizes this intuition under a simple statistical model for the matching blocks.
+
+Lemma 5.1
+.
+
+Let
+\mathbf{A}=[\mathbf{A}_{1}~\cdots~\mathbf{A}_{I}]\in\mathbb{R}^{mJ\times IJ}
+with user blocks
+
+\mathbf{A}_{i}\in\mathbb{R}^{mJ\times J}
+that are i.i.d. across
+i
+and diagonal by rows as in
+Definition
+1
+. Let
+\mathbf{D}_{\mathrm{exp}}=\mathrm{diag}\!\big(\mathbb{E}\|\mathbf{A}_{1*}\|_{2}^{2},\ldots,\mathbb{E}\|\mathbf{A}_{m_{2}*}\|_{2}^{2}\big)^{-1/2}
+
+and
+\widetilde{\mathbf{A}}=\mathbf{D}_{\mathrm{exp}}\mathbf{A}
+. Then
+\mathrm{diag}\!\big(\mathbb{E}[\widetilde{\mathbf{A}}\widetilde{\mathbf{A}}^{\top}]\big)=\mathbf{I}
+.
+If, in addition, for
+r\neq s
+,
+
+\mathbb{E}\!\big[\langle\mathbf{A}_{r*},\mathbf{A}_{s*}\rangle\big]\;\leq\;\eta\,\sqrt{\mathbb{E}\|\mathbf{A}_{r*}\|_{2}^{2}\,\mathbb{E}\|\mathbf{A}_{s*}\|_{2}^{2}}\quad\text{with }\eta\in[0,1),
+
+then
+
+\kappa\!\big(\mathbb{E}[\widetilde{\mathbf{A}}\widetilde{\mathbf{A}}^{\top}]\big)\;\leq\;\frac{1+(m-1)\eta}{\,1-(m-1)\eta\,}.
+
+Thus, under mild cross-row correlation assumptions, row normalization nearly equalizes the eigenvalues of
+\mathbf{A}\mathbf{A}^{\top}
+in expectation for matching workloads, which stabilizes dual first-order updates.
+
+Regularization decay
+
+The preconditioning above addresses the dominant factor when the simple constraints are inactive: in that regime, the condition number of
+\mathbf{A}\mathbf{A}^{\top}
+controls the convergence rate of first-order methods. However, the ridge parameter
+\gamma
+enters separately through the
+smoothness
+(and effective strong convexity) of the smoothed dual.
+
+Next, we consider how to set the regularization hyperparameter over the course of optimization. While
+\gamma
+does not affect the conditioning of
+\mathbf{A}\mathbf{A}^{\top}
+, it has a substantial effect on the smoothness of the objective. On the one hand, one prefers small
+\gamma
+to avoid perturbing the original LP. Lemma 2 in
+3
+guarantees that there is always a range of sufficiently small
+\gamma
+values that allow exact recovery of a solution to the un-smoothed LP. On the other hand, the Lipschitz constant of the gradient is only bounded by
+\|\mathbf{A}\|_{2}^{2}/\gamma
+(see Lemma 3 in
+[
+3
+]
+), so very small
+\gamma
+leads to a poorly conditioned dual problem and slow progress in practice.
+
+To balance convergence speed and solution fidelity, we implement a simple continuation scheme in which
+\gamma
+is initialized at a moderately large value (for stable, fast early progress) and then decayed on a pre-specified schedule and rate as the algorithm approaches a good dual solution. Since
+\gamma
+directly affects the smoothness of the dual objective, we scale the maximum AGD step size proportionally with the decay of
+\gamma
+to maintain stability across transition points. Overall, this approach allows for faster convergence in early iterations, while ensuring the final solution is not greatly perturbed from the true LP solution.
+
+Primal scaling
+
+A limitation of the ridge-regularized formulation used in
+ECLIPSE
+and
+DuaLip
+is that the quadratic smoothing term
+\frac{\gamma}{2}\|\mathbf{x}\|_{2}^{2}
+implicitly assumes all coordinates of
+\mathbf{x}
+are on a comparable scale.
+When some entries of
+\mathbf{x}
+differ in magnitude by several orders, the regularization either dominates small coordinates or becomes negligible for large ones.
+For moderate
+\gamma
+, the term
+\frac{\gamma}{2}\|\mathbf{x}\|_{2}^{2}
+can distort the objective geometry and shift the optimal solution away from the true LP optimum, while for extremely small
+\gamma
+the smoothing becomes ineffective and the dual landscape loses the curvature needed for fast convergence.
+
+A simple remedy is to introduce a diagonal scaling of the primal coordinates.
+Let
+\mathbf{v}\in\mathbb{R}^{n}_{>0}
+be a vector of positive scale factors, and define the scaled variables:
+
+\mathbf{z}\;=\;\mathbf{D}_{v}\,\mathbf{x},\qquad\mathbf{D}_{v}:=\mathrm{diag}(\mathbf{v}),
+
+so that
+\mathbf{x}=\mathbf{D}_{v}^{-1}\mathbf{z}
+.
+Substituting into the regularized primal yields
+
+\min_{\mathbf{z}\in\mathbf{D}_{\mathbf{v}}^{-1}\mathcal{C}}\;(\mathbf{D}_{v}^{-1}\mathbf{c})^{\top}\mathbf{z}\;+\;\tfrac{\gamma}{2}\|\mathbf{z}\|_{2}^{2}\quad\text{s.t.}\quad\mathbf{A}\mathbf{D}_{v}^{-1}\mathbf{z}\leq\mathbf{b},
+
+where
+
+\mathbf{D}_{\mathbf{v}}^{-1}\mathcal{C}\;:=\;\{\mathbf{z}\in\mathbb{R}^{n}\;:\;\mathbf{D}_{\mathbf{v}}^{-1}\mathbf{z}\in\mathcal{C}\}.
+
+Equivalently,
+
+\min_{\mathbf{x}\in\mathcal{C}}\;\mathbf{c}^{\top}\mathbf{x}\;+\;\tfrac{\gamma}{2}\|\mathbf{D}_{v}\mathbf{x}\|_{2}^{2}\quad\text{s.t.}\quad\mathbf{A}\mathbf{x}\leq\mathbf{b}.
+
+Hence, two algebraically equivalent perspectives arise:
+(i) generalize the regularizer to
+\tfrac{\gamma}{2}\|\mathbf{x}\|_{\mathbf{D}_{v}^{2}}^{2}=\frac{\gamma}{2}\mathbf{x}^{\top}\mathbf{D}_{v}^{2}\mathbf{x}
+, i.e. replace
+\gamma\mathbf{I}
+by
+\gamma\mathbf{D}_{v}^{2}
+, or
+(ii) rescale the primal space by
+\mathbf{D}_{v}
+, setting
+
+\mathbf{c}^{\prime}=\mathbf{D}_{v}^{-1}\mathbf{c},\qquad\mathbf{A}^{\prime}=\mathbf{A}\mathbf{D}_{v}^{-1}.
+
+Either view leads to the same optimization problem after change of variables.
+Choosing
+\mathbf{v}
+according to typical magnitudes of the primal coordinates
+(or the column norms of
+\mathbf{A}
+)
+balances the contribution of each coordinate in the ridge term and normalizes the effective curvature of the smoothed dual.
+This scaling prevents the regularizer from either overwhelming or vanishing on particular coordinates, yielding a well-conditioned dual objective for any moderate
+\gamma
+.
+
+6
+GPU System/Algorithm Enhancements
+
+We now turn to the system design needed to run this solver efficiently on modern hardware. In production settings, new formulations must converge reliably with minimal engineering effort and without extensive hyperparameter retuning. The ridge-regularized dual ascent algorithm we adopt from prior work is particularly well suited to this regime: its smoothing improves stability across recurring solves, and each iteration parallelizes cleanly across blocks while requiring synchronization only of the dual variables. This makes the method naturally compatible with distributed GPU execution and low-overhead deployment of new, stable formulations.
+
+The matching LPs of Definition
+1
+expose massive sparse linear operators and blockwise projections that map well to GPUs, but the original Scala/Spark DuaLip stack is tied to a JVM/CPU runtime and cannot easily leverage accelerator-friendly layouts or communication patterns. Our goal in this section is to capture most of the performance benefits that custom C++/CUDA implementations (e.g., PDLP-style systems) would offer, while keeping the implementation lightweight by building on PyTorch’s sparse and distributed primitives. We do so by choosing sparse tensor layouts that respect the matching constraint structure, batching projections to avoid tiny kernels, and using a simple multi-GPU execution pattern that reuses the same code across formulations.
+
+Sparse tensor computation
+
+In practice, the constraint matrix in Definition
+1
+has two sources of sparsity (i) structured sparsity from the block diagonal form, and, (ii) unstructured sparsity within the diagonal blocks since only a fraction of source-destinations pairs are eligible due to external factors.
+
+We may efficiently operate on such constraint matrices as follows. Let
+\mathbf{A}
+as in Definition
+1
+with a single matching constraint family, i.e.,
+
+\displaystyle\mathbf{A}=[\mathbf{D}_{1},\ldots,\mathbf{D}_{I}],\quad\mathbf{x}=[\mathbf{x}_{(1)};\ldots;\mathbf{x}_{(I)}]
+
+We exploit both the structured and unstructured sparsity by storing constraint matrices in Compressed Sparse Column (CSC) format with columns ordered by destination
+j
+, so all variables corresponding to a given source live contiguously in memory. Each column of the sparse tensor representation,
+\mathcal{T}
+, is such that
+\mathcal{T}[:][i]=\mathop{\mathrm{diag}}(\mathbf{D}_{i})
+.
+
+At fixed numeric precision, CSC stores exactly the structure we need: one integer pointer per column, one integer row index per nonzero, and one value per nonzero. Additionally, this allows us to immediately invoke the entry-wise arithmetic operations for the dual ascent algorithm with optimized GPU tensor operations. In contrast, the tuple/sequence approach used in the Scala version incurs pointer/boxing overhead, poorer cache locality, and conversion/sorting before math kernels, all of which raise memory traffic and wall-time without adding information.
+
+Batched projection operator
+
+Columns in the CSC layout tensor,
+\mathcal{T}
+, align with the destination-partition of
+3
+, which is ideal for sparse matrix-vector products when leveraging the block diagonal structure, but it is still inefficient for per-slice projections if launched one column at a time on GPU (tiny kernels, launch overhead, low occupancy). We therefore keep the CSC tensor representation but execute projections on
+dense, padded batches
+.
+
+The batching scheme uses logarithmically spaced buckets: we group columns by slice length into ranges
+[2^{t-1},2^{t})
+. For each bucket we gather the relevant slices into a single dense slab (padding to the bucket’s upper bound), apply one batched projection kernel (e.g., unit-box clamp or simplex), and scatter the results back. Geometric bucketing limits padding waste to below a factor of two within each bucket, so temporary memory remains within a small constant factor of the true nonzeros, while the number of GPU launches is only
+1+\lfloor\log_{2}s_{\max}\rfloor
+, where
+s_{\max}
+is the maximum slice length.
+
+This turns many irregular, low-occupancy calls into a handful of high-occupancy, coalesced operations without abandoning the compact CSC storage. It also integrates cleanly with PyTorch’s batched dense kernels, while the prior sequence-of-tuples style hampers efficient packing and requires extra conversions before math.
+
+Distributed GPU communication
+
+We use
+torch.distributed
+with the
+nccl
+backend and a single
+process group across all GPUs. Columns of
+\mathcal{T}
+(and
+\mathbf{c}
+, consistently)
+are partitioned across devices in a balanced column split of the CSC-format
+matrices, while
+\bm{\lambda}
+and the constraint vector
+\mathbf{b}
+are replicated on
+every device. Rank 0 generates and partitions the full dataset on CPU, then distributes each
+rank’s column partition via a collective
+scatter
+, followed by a
+
+broadcast
+of the shared constraint vector
+\mathbf{b}
+. For a
+fixed
+\bm{\lambda}
+, each device computes its local slice of
+
+\mathbf{x}_{\gamma}^{*}(\bm{\lambda})
+and its contribution to the dual quantities,
+leveraging the simple-constraint decomposition (per-
+i
+projections and
+destination-separable blocks) to avoid cross-device dependencies during
+computation.
+
+The communication volume per step depends only on the dual dimension
+|\bm{\lambda}|
+, not on the number of nonzeros or the per-GPU column partition. Each iteration proceeds as follows:
+
+1.
+
+Every rank computes its local gradient contribution, local objective
+value, and local regularization penalty concurrently on its own CUDA
+device.
+
+2.
+
+A
+reduce
+(SUM, to rank 0) aggregates the gradient
+(
+|\bm{\lambda}|
+floats) and two scalars (objective, regularization).
+
+3.
+
+Rank 0 performs the accelerated gradient-ascent update, producing new
+iterates
+\bm{\lambda}_{1}
+and
+\bm{\lambda}_{2}
+.
+
+4.
+
+Two
+broadcast
+calls (from rank 0) distribute updated
+
+\bm{\lambda}_{1}
+and
+\bm{\lambda}_{2}
+vectors, which form the momentum state used in the AGD update, to all other ranks.
+
+The per-step communication therefore consists of one
+reduce
+and two
+
+broadcast
+operations, each of size
+|\bm{\lambda}|
+, plus
+O(1)
+scalar
+reductions—independent of sparsity and the per-GPU column split. The same
+pattern applies in single-node multi-GPU and multi-node deployments.
+
+7
+Experiments
+
+We evaluate the proposed PyTorch implementation of DuaLip along three axes:
+(i) numerical parity with the production Scala implementation,
+(ii) system-level performance and multi-GPU scaling, and
+(iii) the impact of algorithmic enhancements such as preconditioning and regularization continuation.
+
+We use synthetic matching data to enable controlled scaling of problem size and sparsity. The data generation procedure and complete experimental setup are described in Appendix
+B
+.
+
+Implementation parity
+
+We first verify numerical equivalence between the PyTorch implementation and the original Scala solver. Figure
+1
+compares the dual objective trajectories across accelerated gradient descent (AGD) iterations in single- and multi-GPU settings.
+
+The trajectories exhibit near-perfect overlap across all configurations, confirming implementation-level parity. To quantify the discrepancy, Figure
+2
+reports the relative error in dual objective compared to the Scala solver. In all experiments, the relative error falls below 1% within the first 100 iterations and continues to decrease thereafter. These results demonstrate that the distributed PyTorch implementation faithfully reproduces the optimization dynamics of the production system.
+
+Figure 1
+:
+Scala–DuaLip (PyTorch) parity. Each panel shows the dual objective versus AGD iteration for the Scala and PyTorch implementations. The near-perfect overlap confirms numerical equivalence.
+
+Figure 2
+:
+Relative error in dual objective compared to the Scala solver. The error drops below 1% within the first 100 iterations across all settings.
+
+System Performance and Multi-GPU Scaling
+
+We next compare per-iteration runtime between Scala (Spark-based) DuaLip and the PyTorch GPU implementation. Using a fixed random seed, we generate identical problem instances compatible with the Scala solver input schema and evaluate both systems under comparable configurations.
+
+We do not include PDLP/cuPDLP in this runtime comparison, as existing GPU implementations operate on a single device and do not support the multi-GPU sharding regime required for our largest instances. Since our focus here is on scaling to extreme problem sizes under distributed execution, such a comparison would not reflect the intended deployment setting.
+
+Table
+2
+reports the average time per AGD iteration. For moderate problem sizes (25M sources), a single GPU already provides an order-of-magnitude improvement over Scala. As the problem size increases, model sharding across multiple GPUs becomes necessary to satisfy memory constraints. Beyond enabling larger instances, multi-GPU parallelization significantly reduces iteration time, achieving more than 10
+\times
+speedup relative to Scala and near-linear scaling within the GPU setting.
+
+DuaLip (PyTorch)
+
+Sources
+
+Scala
+
+1 GPU
+
+2 GPUs
+
+3 GPUs
+
+4 GPUs
+
+25M
+
+2.46
+
+0.27
+
+0.14
+
+0.09
+
+0.07
+
+50M
+
+3.44
+
+-
+
+0.27
+
+0.18
+
+0.13
+
+75M
+
+2.63
+
+-
+
+0.43
+
+0.29
+
+0.21
+
+100M
+
+3.33
+
+-
+
+-
+
+0.37
+
+0.27
+
+Table 2
+:
+Average time per AGD iteration (seconds). Number of destinations = 10,000, sparsity = 0.001. Multi-GPU sharding enables larger instances and yields substantial speedups over the Spark-based Scala implementation.
+
+Figure
+3
+further illustrates scaling behavior. Solve time decreases consistently as GPUs are added, and the achieved speedup approaches the ideal linear trend (3.86
+\times
+on 4 GPUs versus the ideal 4
+\times
+). This demonstrates that the solver effectively parallelizes gradient computation with minimal communication overhead.
+
+Figure 3
+:
+Scaling behavior across GPUs. (Left) Solve time versus number of GPUs for problem sizes between 25M and 100M sources. (Right) Speedup relative to a single GPU, approaching ideal linear scaling.
+
+Effect of Algorithmic Enhancements
+
+We now isolate the impact of two algorithmic improvements introduced in Section
+5
+: diagonal preconditioning and regularization continuation.
+
+Preconditioning.
+
+Figure
+4
+plots
+\log(|L-\hat{L}|)
+, where
+L
+is the dual objective and
+\hat{L}
+is the converged reference value. With diagonal preconditioning, convergence accelerates substantially, particularly in early iterations. This confirms that scaling the dual variables mitigates ill-conditioning arising from heterogeneous constraint magnitudes.
+
+Figure 4
+:
+Effect of diagonal preconditioning. We report
+\log(|L-\hat{L}|)
+for a 25M-source instance (10k destinations, 0.1% sparsity). Preconditioning significantly improves early-stage convergence.
+
+Regularization Continuation.
+
+Figure
+5
+evaluates the continuation strategy for the ridge parameter
+\gamma
+. Starting from a larger
+\gamma
+stabilizes and accelerates early optimization, while gradual decay ensures the final solution closely approximates the unregularized LP optimum. Decaying
+\gamma
+from 0.16 to 0.01 (halved every 25 iterations) yields faster convergence compared to using a fixed regularization level.
+
+Figure 5
+:
+Effect of regularization continuation. Decaying
+\gamma
+during optimization accelerates convergence while preserving solution fidelity.
+
+Reproducibility
+
+Code for reproducing all synthetic benchmarking experiments is available at
+https://github.com/linkedin/DuaLip
+.
+
+8
+Discussion and Limitations
+
+This report provided an overview of the principal architectural choices, algorithmic improvements, and GPU implementation strategies needed to address extreme-scale matching problems in an industrial setting. A natural next step is to further evaluate the core dual-ascent method on standard linear programming benchmarks beyond matching. In addition, because suitable real-world public datasets for extreme-scale matching LPs are scarce, the current evaluation relies on large synthetic instances. Establishing standardized benchmark suites and data sources would enable more comprehensive and reproducible empirical studies of extreme-scale matching LPs.
+
+Appendix A
+Additional theory
+
+A.1
+Proof of Lemma
+5.1
+
+Proof.
+
+Then
+
+\mathbf{A}\mathbf{A}^{\top}=\begin{bmatrix}\mathbf{A}_{1}&\cdots&\mathbf{A}_{I}\end{bmatrix}\begin{bmatrix}\mathbf{A}_{1}^{\top}\\
+\vdots\\
+\mathbf{A}_{I}^{\top}\end{bmatrix}=\sum_{i=1}^{I}\mathbf{A}_{i}\mathbf{A}_{i}^{\top}.
+
+Taking expectations and using i.i.d. blocks gives
+
+\mathbb{E}[\mathbf{A}\mathbf{A}^{\top}]=\sum_{i=1}^{I}\mathbb{E}[\mathbf{A}_{i}\mathbf{A}_{i}^{\top}]=I\,\mathbf{M}
+
+with
+\mathbf{M}=\mathbb{E}[\mathbf{A}_{1}\mathbf{A}_{1}^{\top}]
+.
+
+For the normalized matrix,
+
+\mathbb{E}[\widetilde{\mathbf{A}}\widetilde{\mathbf{A}}^{\top}]=\mathbf{D}_{\mathrm{exp}}\,\mathbb{E}[\mathbf{A}\mathbf{A}^{\top}]\,\mathbf{D}_{\mathrm{exp}}=I\,\mathbf{D}_{\mathrm{exp}}\,\mathbf{M}\,\mathbf{D}_{\mathrm{exp}}.
+
+By definition of
+\mathbf{D}_{\mathrm{exp}}
+,
+the
+(r,r)
+entry equals
+
+I\,\mathbb{E}\|\mathbf{A}_{r*}\|_{2}^{2}\,/\,\mathbb{E}\|\mathbf{A}_{r*}\|_{2}^{2}=1
+,
+so
+\mathrm{diag}\!\big(\mathbb{E}[\widetilde{\mathbf{A}}\widetilde{\mathbf{A}}^{\top}]\big)=\mathbf{I}
+.
+
+For
+r\neq s
+,
+
+\big|\mathbb{E}[\widetilde{\mathbf{A}}\widetilde{\mathbf{A}}^{\top}]_{rs}\big|=\frac{\big|\mathbb{E}\langle\mathbf{A}_{r*},\mathbf{A}_{s*}\rangle\big|}{\sqrt{\mathbb{E}\|\mathbf{A}_{r*}\|_{2}^{2}\,\mathbb{E}\|\mathbf{A}_{s*}\|_{2}^{2}}}\;\leq\;\eta.
+
+Thus each row of
+\mathbb{E}[\widetilde{\mathbf{A}}\widetilde{\mathbf{A}}^{\top}]
+has diagonal entry
+1
+
+and the sum of absolute off-diagonals at most
+(m-1)\eta
+.
+By Gershgorin’s disc theorem,
+all eigenvalues lie in
+[\,1-(m-1)\eta,\;1+(m-1)\eta\,]
+, giving
+
+\kappa\leq\frac{1+(m-1)\eta}{1-(m-1)\eta}.
+
+∎
+
+A.2
+Primal feasibility convergence
+
+We extend the theoretical analysis of
+[
+3
+]
+and
+[
+6
+]
+. In particular, we bound the
+\ell_{2}
+-norm primal infeasibility as a function of dual objective suboptimality, which allows one to apply standard first order convergence theory to obtain primal feasibility guarantees from the dual ascent method presented in Section
+3.1
+.
+
+Lemma A.1
+.
+
+Let
+\bm{\lambda}^{*}
+be the unique maximizer of the concave dual
+g
+associated with the LP
+1
+. If
+\bm{\lambda}\geq\mathbf{0}
+, then, primal infeasibility is bounded above as
+
+\bigl\|\left(\mathbf{A}\mathbf{x}_{\gamma}^{*}(\bm{\lambda})-\mathbf{b}\right)_{+}\bigr\|_{2}\leq\sqrt{\,2L\bigl(g(\bm{\lambda}^{*})-g(\bm{\lambda})\bigr)}\,,
+
+(7)
+
+where
+L=\|\mathbf{A}\|_{2}^{2}/\gamma
+is the Lipschitz constant of
+\nabla g
+, and for a vector
+\mathbf{v}
+, the operator
+(\mathbf{v})_{+}
+denotes the componentwise maximum with zero, i.e.,
+
+(\mathbf{v}_{+})_{i}=\max(v_{i},0).
+
+Proof.
+
+Let
+g
+be concave with
+L
+-Lipschitz gradient and define
+
+\bm{\lambda}_{+}\;=\;\Pi_{\mathbb{R}_{+}^{m}}\!\left(\bm{\lambda}+\frac{1}{L}\nabla\mathbf{g}(\bm{\lambda})\right),\qquad\mathbf{d}:=\bm{\lambda}_{+}-\bm{\lambda},\qquad\nabla_{+}\mathbf{g}(\bm{\lambda}):=\max(\nabla\mathbf{g}(\bm{\lambda}),\mathbf{0}).
+
+Note that
+\nabla_{+}\mathbf{g}(\bm{\lambda})=(\mathbf{A}\mathbf{x}^{\star}_{\gamma}(\bm{\lambda})-\mathbf{b})_{+}
+. By
+L
+-smoothness of
+g
+and concavity,
+
+g(\bm{\lambda}_{+})-g(\bm{\lambda})\;\geq\;\langle\nabla\mathbf{g}(\bm{\lambda}),\mathbf{d}\rangle-\frac{L}{2}\|\mathbf{d}\|_{2}^{2}.
+
+(8)
+
+Let
+\mathbf{y}:=\bm{\lambda}+\frac{1}{L}\nabla\mathbf{g}(\bm{\lambda})
+. Since
+\bm{\lambda}_{+}=\Pi_{\mathbb{R}_{+}^{m}}(\mathbf{y})
+,
+the projection optimality condition gives
+
+\langle\mathbf{y}-\bm{\lambda}_{+},\mathbf{u}-\bm{\lambda}_{+}\rangle\leq 0\qquad\forall\mathbf{u}\in\mathbb{R}_{+}^{m}.
+
+Choosing
+\mathbf{u}=\bm{\lambda}
+(valid since
+\bm{\lambda}\geq 0
+) yields
+
+\left\langle\bm{\lambda}+\frac{1}{L}\nabla\mathbf{g}(\bm{\lambda})-\bm{\lambda}_{+},\,\bm{\lambda}-\bm{\lambda}_{+}\right\rangle\leq 0.
+
+Substituting
+\mathbf{d}=\bm{\lambda}_{+}-\bm{\lambda}
+and simplifying,
+
+\left\langle\frac{1}{L}\nabla\mathbf{g}(\bm{\lambda})-\mathbf{d},\;-\mathbf{d}\right\rangle\leq 0\;\;\Longrightarrow\;\;\left\langle\nabla\mathbf{g}(\bm{\lambda}),\mathbf{d}\right\rangle\geq L\|\mathbf{d}\|_{2}^{2}.
+
+Plugging this into (
+8
+) gives
+
+g(\bm{\lambda}_{+})-g(\bm{\lambda})\;\geq\;L\|\mathbf{d}\|_{2}^{2}-\frac{L}{2}\|\mathbf{d}\|_{2}^{2}=\frac{L}{2}\|\mathbf{d}\|_{2}^{2}.
+
+Next, note that
+
+L\mathbf{d}=L(\bm{\lambda}_{+}-\bm{\lambda})=L\left(\Pi_{\mathbb{R}_{+}^{m}}\!\left(\bm{\lambda}+\frac{1}{L}\nabla\mathbf{g}(\bm{\lambda})\right)-\bm{\lambda}\right)=\max\!\bigl(\nabla\mathbf{g}(\bm{\lambda}),\,-L\bm{\lambda}\bigr),
+
+so
+\|L\mathbf{d}\|_{2}\geq\|\nabla_{+}\mathbf{g}(\bm{\lambda})\|_{2}
+.
+Therefore
+
+g(\bm{\lambda}_{+})-g(\bm{\lambda})\;\geq\;\frac{L}{2}\|\mathbf{d}\|_{2}^{2}=\frac{1}{2L}\|L\mathbf{d}\|_{2}^{2}\;\geq\;\frac{1}{2L}\|\nabla_{+}\mathbf{g}(\bm{\lambda})\|_{2}^{2}.
+
+Finally,
+
+g(\bm{\lambda}^{\star})-g(\bm{\lambda})\;\geq\;g(\bm{\lambda}_{+})-g(\bm{\lambda})\;\geq\;\frac{1}{2L}\|L\mathbf{d}\|_{2}^{2}\;\geq\;\frac{1}{2L}\|(\mathbf{A}\mathbf{x}^{\star}(\bm{\lambda})-\mathbf{b})_{+}\|^{2}_{2}.
+
+∎
+
+Appendix B
+Experiment setting
+
+Synthetic LP construction.
+
+We construct synthetic instances by first generating a sparse bipartite interaction graph and then assigning values and constraint coefficients on its edges. Given a target number of “requests”
+I
+, “resources”
+J
+, and a target sparsity level, we draw a lognormal “breadth” parameter for each resource
+j
+, normalize these to obtain probabilities
+p_{j}
+, and sample the number of incident requests
+K_{j}\sim\mathrm{Poisson}(p_{j}I\nu)
+, truncated at
+I
+, where
+\nu
+is the desired average number of nonzeros per row. For each resource
+j
+, we then select
+K_{j}
+distinct requests and create edges
+(i,j)
+. On each edge, we draw a resource-specific value scale
+v_{j}
+, a request-specific responsiveness factor
+u_{i}
+, and multiplicative noise
+\varepsilon_{ij}
+, and define a nonnegative value coefficient
+
+c_{ij}=\min\bigl(v_{j}u_{i}\varepsilon_{ij},\,c_{\max}\bigr).
+
+Constraint coefficients are taken to be scaled versions of these values,
+
+a_{ij}=s_{j}c_{ij},
+
+where the per-resource scale
+s_{j}
+is also drawn from a lognormal distribution. This construction yields a sparse matrix
+\mathbf{A}
+whose rows differ both in support size and magnitude (often by several orders), and a matching value matrix
+\mathbf{C}
+with the same sparsity pattern.
+
+Source capacities and right-hand side.
+
+Right-hand side source capacities
+b_{j}
+are chosen to make a nontrivial fraction of constraints active. Instead of taking
+b_{j}
+proportional to the sum
+\sum_{i}a_{ij}
+, we approximate the maximum feasible load each resource could receive under the per-request simplex constraint (each request can allocate to at most one resource) by a greedy assignment: for each request
+i
+, we identify the incident edge with the largest
+a_{ij}
+and assign that amount to the corresponding resource. Summing these contributions over requests gives a “greedy load”
+\ell_{j}
+for each resource, and we set
+
+b_{j}=\rho_{j}\bigl(\ell_{j}+\varepsilon\bigr),
+
+where
+\rho_{j}
+is drawn uniformly from
+[0.5,1.0]
+and
+\varepsilon>0
+is a small constant. This ensures that some resource constraints are binding while others remain slack in the optimal solution. The final LP data passed to the solver is the sparse CSC representation of
+\mathbf{A}
+, the corresponding value matrix (with signs adjusted to match our minimization convention), and the source capacity vector
+\mathbf{b}
+.
+
+Optimization algorithm.
+
+We optimize the regularized dual objective using a variant of Nesterov accelerated gradient ascent, following the implementation in
+[
+7
+]
+(
+AcceleratedGradientDescent.scala
+), translated directly into PyTorch.
+
+The method maintains a running estimate of the local Lipschitz constant based on recent gradient information, which is used to adaptively select the step size at each iteration. This allows the algorithm to respond to changes in local curvature while preserving the accelerated structure.
+
+To ensure numerical stability, the step size is capped by a maximum allowable value. If this cap is set too aggressively, the method may diverge due to curvature underestimation; if set too conservatively, convergence slows substantially. In practice, this cap plays a critical role in balancing robustness and convergence speed.
+
+All experiments use fixed hyper-parameters:
+
+max-step-size = 1e-3
+and
+
+initial-step-size = 1e-5
+,
+and ridge parameter
+\gamma=0.01
+unless otherwise noted.
+These values were held constant across problem sizes to ensure comparability.
+Optimization is terminated after a fixed number of iterations.
+

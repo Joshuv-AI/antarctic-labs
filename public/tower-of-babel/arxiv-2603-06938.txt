@@ -1,0 +1,1510 @@
+Swimba: Switch Mamba Model Scales State Space Models
+Zhixu Du 1, Krishna Teja Chitty-Venkata 2, Murali Emani 3, Venkatram Vishwanath 3 Hai Helen Li 1, Yiran Chen 1 1 Duke University 2 Red Hat, Inc. 3 Argonne National Laboratory
+
+Abstract
+Mixture-of-experts (MoE) is a common approach for increasing parameter capacity, but applying MoE to state space model (SSM) token mixers can multiply the cost of the recurrent state update. We study how to introduce expert specialization into selective SSMs while preserving computational efficiency. We show that MoE–SSM can refer to two designs: (1) MoE over separated SSMs, which maintains multiple state trajectories and thus scales compute with the number of experts; and (2) MoE-parameterized SSM, which mixes experts in parameter space, maintains a single state trajectory, and evaluates the recurrence once. Our method, Switch Mamba (Swimba), follows the second design by routing over expert-produced SSM streams. Theoretically, we establish well-definedness and stability for MoE-parameterized SSMs and characterize the relationship between the two designs. Empirically, we evaluate Swimba on standard benchmark tasks and measure real-time throughput and latency. Under matched FLOPs, Swimba achieves slightly better average performance than the baseline, with a small slowdown in real-time latency and throughput. Overall, these results suggest that parameter-space MoE can increase SSM capacity while keeping the dominant recurrence cost fixed.
+
+
+
+1
+Introduction
+
+State space models (SSMs) have become a practical alternative to attention for long-sequence modeling, combining recurrence with modern accelerator-friendly implementations. Recent selective SSM architectures such as Mamba
+[
+20
+]
+and its SSD reformulation in Mamba-2
+[
+11
+]
+show that linear-time token mixing can be competitive with full attention. At the same time, scaling language models often relies on mixture-of-experts (MoE) to increase parameter count without proportionally increasing computational overhead
+[
+34
+,
+13
+]
+. Most MoE work targets feed-forward blocks, where expert activation does not replicate a costly recurrent state update, with only a few works applying MoE to attention
+[
+39
+,
+9
+]
+.
+Extending MoE to SSM token mixers can retain the
+O(L)
+computational complexity while boosting layer capacity through MoE scaling. However, it introduces a different challenge. The core recurrence is the dominant cost in SSMs, so naive implementation can scale compute with the number of experts.
+
+Figure 1
+:
+Compute scaling view for token mixing. The x-axis is sequence length
+L
+and the y-axis is per-token computational overhead. Attention scales as
+O(L^{2})
+while SSMs scale as
+O(L)
+. Bubble area indicates parameter count, illustrating that MoE can increase parameters with only a small increase in per-token compute, motivating Swimba (MoE-SSM) designs.
+
+MoE-SSM
+can refer to two different designs, and the distinction matters for both efficiency and modeling behavior.
+MoE of separated SSMs
+maintains an expert-specific state trajectory and advances multiple recurrences in parallel. This resembles switching dynamics in state-space models
+[
+16
+]
+: each expert can store its own memory, but compute and state storage grow with the number of experts. In contrast,
+MoE-parameterized SSM
+keeps a single state trajectory and mixes experts in parameter space. Instead of running multiple recurrences and combining outputs, it forms one effective selective SSM by aggregating expert-dependent injection and readout streams, then evaluates the recurrence once with an SSD-style computation
+[
+11
+]
+.
+
+Much of the prior MoE–SSM hybrid literature increases capacity by interleaving MoE MLP blocks with dense SSM mixers
+[
+26
+,
+30
+,
+1
+]
+. For approaches that apply MoE within the SSM block, existing work is largely engineering-driven and often does not distinguish between the two MoE–SSM designs
+[
+38
+]
+. Without a clear taxonomy, it is easy to conflate these designs and their scaling properties.
+
+This paper focuses on MoE-parameterized SSMs. We present
+Switch Mamba (Swimba)
+, an MoE-parameterized SSM layer that preserves a single-pass recurrence. Swimba builds on Mamba-2
+[
+11
+]
+: each expert produces candidate selective SSM streams, and a token-level router computes mixture weights. We then mix the expert-dependent SSM streams in parameter space and run a single SSM evaluation to update the recurrence. In our implementation, specialization enters through routing-weighted SSM streams, while state evolution remains a single trajectory. This design targets the central efficiency goal of SSMs: it avoids replicating the expensive recurrence across experts, while scaling the number of model parameters.
+
+We also provide formal theoretical statements that motivate the MoE-parameterized SSM design choice. Specifically, Theorem
+3.1
+shows that mixing in parameter space preserves the single-SSM structure required by Mamba-2 for efficiency. Theorem
+3.2
+shows that the recurrence cost does not scale with the number of experts. Under a contractive transition, Theorem
+3.3
+shows that stability can be controlled through bounds on the mixed streams. Finally, we relate MoE-parameterized SSMs to the MoE of separated SSMs baseline: Theorem
+3.4
+identifies regimes where the two agree, and Theorem
+3.5
+characterizes the mismatch introduced when routing varies over time, while still allowing increased expressivity from input-dependent mixtures.
+
+Empirically, we build Swimba on the Nemotron-H-8B
+[
+4
+]
+hybrid backbone, replacing each Mamba-2 token-mixing layer with our MoE-parameterized SSM layer while keeping the rest of the architecture unchanged. We evaluate against the Nemotron-H-8B baseline on standard benchmark tasks. We compare model FLOPs to the baseline and benchmark end-to-end decoding with
+vLLM
+
+[
+24
+]
+under matched settings. Across these evaluations, Swimba achieves slightly better average performance than the baseline at comparable total FLOPs, while showing a small slowdown in real-time latency and throughput. Prior results
+[
+6
+]
+indicate that increasing the number of experts while keeping the number of active experts fixed has limited impact on latency and throughput, suggesting that Swimba retains favorable scaling behavior.
+
+Our contributions can be summarized as follows:
+
+•
+
+We distinguish two MoE–SSM designs,
+MoE of separated SSMs
+and
+MoE-parameterized SSMs
+, and explain how this distinction determines scaling in compute and memory. We provide theoretical results on well-definedness, stability, and the relationship between the two designs.
+
+•
+
+We introduce Swimba, an MoE-parameterized SSM layer that mixes expert-dependent streams in parameter space and preserves SSM computation as a single recurrence evaluation.
+
+•
+
+We evaluate Swimba on standard benchmarks and report compute- and decoding-oriented measurements (FLOPs analysis and
+vLLM
+throughput/latency) under matched settings. Swimba achieves slightly better average performance than the baseline at comparable runtime cost, suggesting strong potential for scaling.
+
+2
+Background
+
+Notation.
+The input sequence has length
+T
+, with
+X\in\mathbb{R}^{T\times P}
+and output
+Y\in\mathbb{R}^{T\times P}
+. We write
+X_{t}\in\mathbb{R}^{P}
+and
+Y_{t}\in\mathbb{R}^{P}
+for the
+t
+-th token. We use
+h_{t}\in\mathbb{R}^{N\times P}
+for the latent state, which can be viewed as
+P
+independent states
+\{h_{t,p}\in\mathbb{R}^{N}\}_{p=1}^{P}
+broadcast across channels. Parameters
+A
+,
+B
+, and
+C
+have shapes
+\mathbb{R}^{N\times N}
+,
+\mathbb{R}^{N\times P}
+, and
+\mathbb{R}^{N\times P}
+, respectively. Parameters
+A_{t}
+,
+B_{t}
+, and
+C_{t}
+refers to the time-varying parameters at time
+t
+, sharing the same shape as
+A
+,
+B
+, and
+C
+. We use
+E
+to denote the total number of experts in an MoE model and
+E_{e}(\cdot)
+to denote the
+e
+-th expert function.
+
+2.1
+State Space Models
+
+State Space Models (SSMs) provide a framework for modeling sequences by discretizing a continuous-time system. The system maps a 1-D input function
+x(t)\in\mathbb{R}\to y(t)\in\mathbb{R}
+via a latent state
+h(t)\in\mathbb{R}^{N}
+evolving according to the differential equation
+h^{\prime}(t)={A}h(t)+{B}x(t)
+.
+In deep learning, this system is discretized (typically via Zero-Order Hold) with a timescale parameter
+\Delta
+, resulting in the recurrence:
+
+h_{t}=\overline{{A}}h_{t-1}+\overline{{B}}x_{t},\quad y_{t}={C}^{\top}h_{t},
+
+(1)
+
+where the discrete parameters are
+\overline{{A}}=\exp(\Delta{A})
+and
+\overline{{B}}=(\Delta{A})^{-1}(\exp(\Delta{A})-{I})\cdot\Delta{B}
+.
+Structured SSMs like S4
+[
+21
+]
+constrain the transition matrix
+{A}
+(e.g., to be diagonal plus low-rank) to enable efficient training via global convolutions.
+
+2.2
+Mamba and State Space Duality (SSD)
+
+Selective SSMs.
+Mamba
+[
+20
+]
+introduced the
+selection mechanism
+, making the parameters
+{B},{C},
+and
+\Delta
+functions of the input
+x_{t}
+. This time-variance allows the model to filter information based on content but precludes the use of efficient convolutions, necessitating a hardware-aware parallel scan (prefix sum).
+
+Mamba-2 and SSD.
+Dao and Gu
+[
+11
+]
+reformulated selective SSMs under the framework of
+State Space Duality
+(SSD). They prove that if the transition matrix
+{A}
+is structured as a scalar-identity matrix (i.e.,
+{A}=a{I}
+), the recurrent SSM is mathematically dual to a structured attention mechanism. Specifically, the sequence transformation can be viewed as a matrix multiplication
+Y={M}X
+, where
+{M}
+is a semiseparable matrix masked by the decay
+a
+.
+This duality allows the computation to be decomposed into chunks, utilizing efficient matrix multiplication (Tensor Cores) within chunks and linear recurrence between chunks. We denote this core operator as:
+
+Y=\mathrm{SSD}({A},{B},{C},{X}).
+
+(2)
+
+Crucially, this formulation maintains
+\mathcal{O}(T)
+inference complexity while allowing for parallel training.
+
+2.3
+Mixture of Experts and Switching Dynamics
+
+Mixture of Experts (MoE) scales model capacity without increasing inference cost by conditionally activating subsets of parameters
+[
+34
+]
+. A learnable router
+R(x_{t})
+computes a probability distribution
+\pi_{t}
+over
+E
+experts and selects a sparse active set of indices
+\mathcal{K}t
+(Top-
+k
+). The output is a weighted sum of the active expert computations:
+
+y_{t}=\sum_{e\in\mathcal{K}t}\pi_{t,e}E_{e}(x_{t}).
+
+(3)
+
+We compute routing logits
+g_{t}\in\mathbb{R}^{E}
+and routing probabilities
+\pi_{t}
+via a softmax:
+
+\pi_{t}=\mathrm{softmax}(g_{t}),\qquad\sum_{e=1}^{E}\pi_{t,e}=1.
+
+(4)
+
+We use
+\pi_{t}
+directly as mixture weights. With top-
+k
+sparsity, we keep the softmax values on the active set and set the rest to zero, without renormalization. In Transformers, MoE is typically applied to the feed-forward networks (FFN)
+[
+13
+]
+.
+
+3
+MoE-SSM
+
+3.1
+Selective SSM and SSD
+
+A selective SSM defines the sequence transformation
+X\mapsto Y
+by
+
+h_{t}=A_{t}h_{t-1}+B_{t}X_{t},\qquad Y_{t}=C_{t}^{\top}h_{t}.
+
+(5)
+
+Following Mamba-2’s channelwise convention, (
+5
+) is understood per channel:
+
+h_{t,p}=A_{t}h_{t-1,p}+b_{t,p}x_{t,p}
+and
+y_{t,p}=c_{t,p}^{\top}h_{t,p}
+.
+We denote by
+
+Y=\mathrm{SSM}(A,X,B,C)
+
+(6)
+
+the structured state-space computation ( SSM) that evaluates (
+5
+) over
+t=1,\dots,T
+.
+In this work,
+\mathrm{SSM}(\cdot)
+is unchanged.
+Our method specifies how the streams
+(A_{t},B_{t},C_{t})
+and the effective injected input are produced from a mixture of experts, while the evaluation itself remains a single SSM pass.
+
+3.2
+MoE-parameterized SSM
+
+Each expert
+e\in\{1,\dots,E\}
+provides candidate selective SSM streams
+
+\{A_{t}^{(e)},\,B_{t}^{(e)},\,C_{t}^{(e)},\,X_{t}^{(e)}\}_{t=1}^{T}.
+
+Rather than instantiating
+E
+separate dynamical systems, we form a single selective SSM by mixing these expert-dependent quantities in parameter space using
+\pi_{t}
+.
+As a result, the model maintains one state trajectory
+\{h_{t}\}
+and executes
+\mathrm{SSM}
+once.
+
+In our implementation, the expert-dependent streams
+\{B_{t}^{(e)},C_{t}^{(e)},X_{t}^{(e)}\}
+are produced from the same token features
+X_{t}
+using expert-specific linear projections, matching the Mamba-2 style of generating token-dependent parameters.
+At the same time, we share the transition across experts and time:
+
+A_{t}^{(e)}\equiv A\qquad\text{for all }e,t,
+
+(7)
+
+so expert diversity enters through the injection and readout streams, not through separate transitions.
+
+With routing probabilities
+\pi_{t}
+, we form one effective state update by mixing the injected input term and the readout:
+
+h_{t}=Ah_{t-1}+\sum_{e\in\mathcal{K}_{t}}\pi_{t,e}\,B_{t}^{(e)}X_{t}^{(e)},
+
+(8)
+
+Y_{t}=\Big(\sum_{e\in\mathcal{K}_{t}}\pi_{t,e}C_{t}^{(e)}\Big)^{\top}h_{t},
+
+(9)
+
+where
+\mathcal{K}_{t}
+is either all experts or the top-
+k
+active set.
+This is the critical point: we never create expert-specific states, so the recurrence is evaluated once, and the SSM computation remains a single pass.
+
+There are two natural ways to combine MoE with SSMs.
+One option is to mix expert outputs after running multiple expert recurrences; the other is to mix expert-dependent parameters and keep a single recurrence.
+We choose the second option because it preserves the main computational advantage of SSM while still allowing token-dependent specialization through
+(B_{t}^{(e)},C_{t}^{(e)},X_{t}^{(e)})
+and
+\pi_{t}
+.
+
+3.3
+Alternative: MoE of separated SSMs
+
+For completeness, we define MoE of separated SSMs as the design that maintains an independent state per expert:
+
+h_{t}^{(e)}=Ah_{t-1}^{(e)}+B_{t}^{(e)}X_{t}^{(e)},\qquad Y_{t}=\sum_{e\in\mathcal{K}_{t}}\pi_{t,e}\,(C_{t}^{(e)})^{\top}h_{t}^{(e)}.
+
+(10)
+
+This design can represent a mixture of distinct hidden trajectories, but it typically requires advancing multiple recurrences and storing expert-specific states, which directly increases memory and compute with the number of active experts.
+Fig.
+2
+uses a causal figure to depict the difference between these two MoE–SSM designs.
+
+(a)
+
+(b)
+
+Figure 2
+:
+Two MoE–SSM designs with different state and compute scaling. (a) MoE-parameterized SSM (parameter-space mixing) keeps a single hidden-state trajectory and mixes expert-produced streams before a single recurrence evaluation. (b) MoE over separated SSMs maintains one state trajectory per expert and combines expert outputs, which requires advancing multiple recurrences resulting computation scales with number of experts.
+
+3.4
+Theoretical properties
+
+We now summarize the formal statements that motivate the design and defer full proofs to Appendix
+A
+.
+Throughout, routing changes the streams fed into SSM, but it does not change the SSM evaluation itself.
+
+The first question is whether parameter-space mixing breaks the SSM structure required by SSM.
+It does not: after mixing, the layer is still a single selective SSM with state size
+N
+, which means we can reuse the same SSM implementation and the same type of structural analysis as in Mamba-2.
+
+Theorem 3.1
+
+(Single-SSM structure under MoE routing)
+.
+
+Fix
+T,N,P,E
+.
+Assume
+A\in\mathbb{R}^{N\times N}
+and, for each
+t
+and
+e
+, streams
+B_{t}^{(e)},C_{t}^{(e)}\in\mathbb{R}^{N\times P}
+and
+X_{t}^{(e)}\in\mathbb{R}^{P}
+are given.
+Let
+\pi_{t}\in\mathbb{R}^{E}
+satisfy
+\pi_{t,e}\geq 0
+and let
+\mathcal{K}_{t}\subseteq[E]
+denote the active set (dense or top-
+k
+).
+Define mixed streams
+
+\widetilde{U}_{t}:=\sum_{e\in\mathcal{K}_{t}}\pi_{t,e}\,B_{t}^{(e)}X_{t}^{(e)},\qquad\widetilde{C}_{t}:=\sum_{e\in\mathcal{K}_{t}}\pi_{t,e}\,C_{t}^{(e)}.
+
+Then (
+8
+)–(
+9
+) is exactly a single selective SSM
+
+h_{t}=Ah_{t-1}+\widetilde{U}_{t},\qquad Y_{t}=\widetilde{C}_{t}^{\top}h_{t},
+
+with state size
+N
+, independent of
+E
+and independent of sparsity in
+\mathcal{K}_{t}
+.
+
+This statement is immediate once the recurrence is written in terms of
+\widetilde{U}_{t}
+and
+\widetilde{C}_{t}
+: MoE changes the effective injection and readout, so the model stays in the same family as a standard selective SSM layer.
+
+Next, we formalize the computational reason for mixing in parameter space.
+The dominant cost in SSM comes from evolving the state over
+T
+steps; our design evolves that state once, whereas the separated alternative evolves it once per expert.
+
+Theorem 3.2
+
+(Recurrence complexity does not scale with
+E
+)
+.
+
+Let
+\mathcal{C}_{\mathrm{step}}(N,P)
+be the per-step cost of one SSM/SSM state update with state size
+N
+and
+P
+channels.
+Assume mixing the expert streams at time
+t
+costs
+\mathcal{C}_{\mathrm{mix}}(k,P)
+when at most
+k
+experts are active.
+Then the MoE-parameterized SSM forward pass costs
+
+\mathcal{O}\!\left(T\,\mathcal{C}_{\mathrm{step}}(N,P)+T\,\mathcal{C}_{\mathrm{mix}}(k,P)\right).
+
+In contrast, a separated MoE that advances all
+E
+expert states each step costs
+
+\mathcal{O}\!\left(T\,E\,\mathcal{C}_{\mathrm{step}}(N,P)\right).
+
+The comparison highlights the intended scaling: increasing the number of experts increases parameters, but it does not multiply the expensive part of the computation, because the recurrence is not replicated.
+The additional work is confined to routing, expert projections, and the mixing operation.
+
+A practical concern is whether rapid expert switching can destabilize the dynamics.
+With a contractive transition matrix
+A
+, stability reduces to bounding the mixed injection and mixed readout streams.
+
+Theorem 3.3
+
+(BIBO stability under a contractive transition)
+.
+
+Assume
+\|A\|\leq\rho<1
+in an induced matrix norm.
+Assume there exist constants
+U,C>0
+such that for all
+t
+,
+
+\|\widetilde{U}_{t}\|\leq U
+and
+\|\widetilde{C}_{t}\|\leq C
+.
+Then for any
+h_{0}
+and all
+t\in[T]
+,
+
+\|h_{t}\|\leq\rho^{t}\|h_{0}\|+\frac{1-\rho^{t}}{1-\rho}\,U,
+
+\|Y_{t}\|\leq C\left(\rho^{t}\|h_{0}\|+\frac{1-\rho^{t}}{1-\rho}\,U\right).
+
+The bound reflects a standard SSM behavior: a stable transition forgets the distant past at a geometric rate.
+Routing can affect the state only through the injected term
+\widetilde{U}_{t}
+, so controlling that term is sufficient to prevent state blow-up.
+
+Finally, we clarify how the parameter-mixed model relates to the separated MoE baseline.
+The separated model can keep expert-specific memories through distinct trajectories
+\{h_{t}^{(e)}\}
+, whereas our model compresses the dynamics into one trajectory.
+This compression is exact in a natural commutative regime and otherwise introduces a mismatch that can be related to per-step differences between each expert injection and their mixture.
+
+Theorem 3.4
+
+(Separated vs parameter-mixed: equality regime and mismatch bound)
+.
+
+Assume all experts share
+A
+and initialize with
+h_{0}^{(e)}=0
+.
+Let the separated model follow (
+10
+) and the mixed model follow (
+8
+)–(
+9
+).
+If
+\pi_{t,e}\equiv\pi_{e}
+is time-invariant and
+C_{t}^{(e)}\equiv C_{t}
+for all
+e
+, then
+Y_{t}^{\mathrm{sep}}=Y_{t}^{\mathrm{mix}}
+for all
+t
+.
+More generally, if
+\|A\|\leq\rho<1
+and
+\|C_{t}^{(e)}\|\leq C
+, then
+
+\|Y_{t}^{\mathrm{sep}}-Y_{t}^{\mathrm{mix}}\|\leq C\sum_{e=1}^{E}\pi_{t,e}\,\|h_{t}^{(e)}-h_{t}\|,
+
+and each difference
+h_{t}^{(e)}-h_{t}
+satisfies a stable linear recursion driven by
+
+B_{t}^{(e)}X_{t}^{(e)}-\sum_{j}\pi_{t,j}B_{t}^{(j)}X_{t}^{(j)}
+.
+
+This theorem separates two effects.
+When routing is fixed and readout is shared, mixing commutes with the linear recurrence and the two models agree exactly.
+When routing varies, the separated model can preserve expert-specific information in its hidden states, while the mixed model aggregates those influences into one shared memory; the bound makes clear that the gap is controlled by how different each expert’s injected input is from the mixture at each step.
+
+The final question is whether parameter-space mixing increases modeling power or whether it is only an efficiency trick.
+Even in a simplified setting where each expert stream is a linear function of
+X_{t}
+, the router introduces an input-dependent combination over multiple parameter maps.
+This strictly enlarges the function class compared to a single-expert layer, while still requiring one recurrence.
+
+Theorem 3.5
+
+(Strict expressivity gain with one recurrence)
+.
+
+Consider a one-step specialization (
+T=1
+) with a single state update and readout.
+Assume each expert produces
+(B_{1}^{(e)},C_{1}^{(e)},X_{1}^{(e)})
+as linear projections of
+X_{1}
+, and routing uses
+\pi_{1}=\mathrm{softmax}(g_{1})
+with
+g_{1}
+a linear function of
+X_{1}
+.
+Then the set of functions representable by the MoE-parameterized layer strictly contains the set representable by any single-expert linear-projection layer, while both execute one state update.
+
+4
+Swimba (Switch Mamba) Architecture
+
+Figure 3
+:
+Swimba layer: an MoE-parameterized SSM token mixer built from a Mamba-2 block. Each expert applies its own input projections to produce candidate token-dependent streams (e.g.,
+B_{t}^{(e)},C_{t}^{(e)},X_{t}^{(e)}
+). At each layer, only a subset of experts is selected per token. The selected experts are combined by a weighted sum to form a single stream for the SSM computation.
+
+4.1
+Swimba layer
+
+We build the Swimba layer on top of Mamba-2
+[
+11
+]
+. Fig.
+3
+shows the Swimba layer architecture. In the original Mamba-2 layer, the in-projection maps each token’s hidden state to a higher dimension and slices the result into the parameters
+(A,X,B,C)
+. To apply an MoE-parameterized SSM, we replace this in-projection with an MoE module: multiple in-projection linear layers serve as experts, and a router selects which expert to activate for each token. The activated experts produce expert-specific parameters, which are aggregated when more than one expert is activated. The aggregated parameters are then fed into the SSM module to perform the SSM computation. The rest of the Mamba-2 layer is kept unchanged.
+
+For implementation, we preserve the Mamba-2 block wrapper and modify only how the SSM inputs are produced. We follow Mamba-2’s block design, which treats the inner mixer as
+(A,X,B,C)\mapsto Y
+and produces
+(A,X,B,C)
+in parallel at the beginning of the block.
+
+4.2
+Backbone
+
+We build a hybrid decoder-only language model using the Nemotron-H-8B
+[
+4
+]
+backbone configuration and replacing every Mamba-2 layer with our MoE-parameterized SSM layer. The model has 52 layers and follows the same hybrid layout: four self-attention layers are dispersed through depth, and the remaining layers alternate between Swimba layers and FFN layers. The first layer is a sequence-mixing layer, the last layer is an FFN, and self-attention layers (when present) precede the FFNs they pair with. The only architectural change is the sequence mixer: each original Mamba-2 layer is replaced by a Swimba layer, while the rest of the backbone is kept unchanged.
+
+4.3
+Pre-training
+
+We initialize from the Nemotron-H-8B checkpoint by copying all shared parameters and then introducing our MoE-parameterized SSM parameters (experts and routers) for each Swimba layer. During continued training, we update only the newly introduced expert and router parameters while keeping the copied backbone parameters fixed.
+We perform supervised fine-tuning on the
+Llama Nemotron Post-Training Dataset
+
+[
+2
+]
+, released as part of the Llama-Nemotron post-training resources. The dataset spans categories including math, code, science, instruction following, chat, and safety, and reports aggregate counts per category. We use only the SFT portion for teacher-forced training.
+We follow the dataset’s standard schema: each example provides an input chat as a list of role-based messages and a target output string.
+
+5
+Experiments
+
+Table 1:
+R sesults on standard benchmarks. Subscripts report standard deviation. Nemotron-H-8B and Swimba-14B are compared at similar FLOPs per token. The last row reports the unweighted average across tasks (and across normalized accuracies where provided). Swimba-14B improves on the baseline on most tasks and on the average score.
+
+Nemotron-H-8B
+
+Swimba-14B
+
+Task
+
+Accuracy
+
+Normalized accuracy
+
+Accuracy
+
+Normalized accuracy
+
+Arc-Challenge
+
+56.5_{\pm 1.4}
+
+60.3_{\pm 1.4}
+
+\mathbf{59.5}_{\pm 1.4}
+
+\mathbf{63.5}_{\pm 1.4}
+
+Arc-Easy
+
+84.0_{\pm 0.8}
+
+83.7_{\pm 0.8}
+
+\mathbf{84.5}_{\pm 0.8}
+
+\mathbf{84.1}_{\pm 0.8}
+
+BoolQ
+
+\mathbf{85.5}_{\pm 0.6}
+
+—
+
+84.9_{\pm 0.6}
+
+—
+
+Hellaswag
+
+61.9_{\pm 0.5}
+
+81.2_{\pm 0.4}
+
+\mathbf{64.2}_{\pm 0.5}
+
+\mathbf{84.9}_{\pm 0.4}
+
+MMLU
+
+71.7_{\pm 0.4}
+
+—
+
+\mathbf{75.0}_{\pm 0.4}
+
+—
+
+OpenbookQA
+
+\mathbf{35.4}_{\pm 2.1}
+
+\mathbf{47.4}_{\pm 2.2}
+
+34.9_{\pm 2.1}
+
+46.7_{\pm 2.2}
+
+PIQA
+
+81.7_{\pm 0.9}
+
+82.3_{\pm 0.9}
+
+\mathbf{82.0}_{\pm 0.9}
+
+\mathbf{82.5}_{\pm 0.9}
+
+RTE
+
+71.8_{\pm 2.7}
+
+—
+
+\mathbf{73.2}_{\pm 2.7}
+
+—
+
+WinoGrande
+
+76.7_{\pm 1.2}
+
+—
+
+\mathbf{79.1}_{\pm 1.2}
+
+—
+
+Average
+
+69.47
+
+70.98
+
+\mathbf{70.81}
+
+\mathbf{72.34}
+
+Table 2:
+Per-token inference FLOPs. Swimba-14B has essentially the same FLOPs per token as Nemotron-H-8B, indicating that using a single selected expert per Swimba layer does not materially change the dominant inference compute.
+
+Model
+
+FLOPs / token
+
+Nemotron-H-8B
+
+1.51263\times 10^{10}
+
+Swimba-14B
+
+1.51282\times 10^{10}
+
+We empirically evaluate the effectiveness and efficiency of Swimba and report the results in this section.
+
+Setup.
+We evaluate Swimba-14B against the Nemotron-H-8B baseline. Swimba-14B is configured with 4 experts per Swimba layer, and each token activates a single expert. We use LM-Evaluation-Harness
+[
+15
+]
+to evaluate model performance across several datasets. We measure inference efficiency using vLLM
+[
+24
+]
+with the Transformers backend engine on a single 40GB A100 GPU, across batch sizes and sequence lengths.
+
+Datasets.
+We evaluate on standard benchmarks that cover general language understanding, reasoning, and knowledge recall.
+BoolQ
+contains naturally occurring yes/no questions
+[
+7
+]
+.
+OpenBookQA
+assesses elementary science question answering
+[
+27
+]
+, and
+RTE
+evaluates textual entailment
+[
+10
+]
+. To measure broad world knowledge, we use
+MMLU
+, which spans 57 subjects across STEM and the humanities
+[
+22
+]
+. We also evaluate commonsense reasoning using
+PIQA
+for physical interactions
+[
+3
+]
+,
+WinoGrande
+for adversarial Winograd-style problems
+[
+33
+]
+, and
+HellaSwag
+for commonsense inference
+[
+37
+]
+. Finally, we include
+ARC-Challenge
+and
+ARC-Easy
+to test grade-school science question answering
+[
+8
+]
+.
+
+Metrics.
+We report both efficiency and performance metrics. For efficiency, we measure
+throughput
+, tokens processed or generated per second;
+FLOPs
+, floating-point operations per inference step; and
+latency
+, time from request to the start of generation. For performance with LM-Evaluation-Harness, we report
+accuracy
+, the fraction of examples where the correct choice has the highest total log-likelihood; and
+normalized accuracy
+, the fraction of examples where the correct choice has the highest length-normalized log-likelihood, computed by dividing each choice log-likelihood by its answer length in bytes
+
+5.1
+Model Evaluation
+
+We report benchmark results in Table
+1
+. Swimba-14B activates only one expert out of four, so its FLOPs are nearly the same as the Nemotron-H-8B baseline; we quantify this in the next section. Table
+1
+shows that Swimba-14B outperforms Nemotron-H-8B on most tasks and achieves comparable performance on the remaining tasks. Swimba-14B also improves the average score across all tasks. Overall, these results indicate that Swimba-14B improves performance while keeping FLOPs nearly unchanged.
+
+5.2
+Inference Efficiency
+
+We evaluate inference efficiency from two complementary angles. First, we analyze the theoretical compute cost of Swimba-14B and Nemotron-H-8B. Second, we benchmark end-to-end serving performance using vLLM, a production-style inference engine, to capture practical latency and throughput.
+
+FLOPs analysis.
+
+We use the PyTorch profiler
+[
+28
+]
+to estimate inference FLOPs. Specifically, we enable FLOP counting in the profiler during a forward pass; PyTorch reports per-operator FLOP estimates, which we then sum over all recorded operators to obtain the total forward-pass FLOPs. Table
+2
+shows that Swimba-14B and Nemotron-H-8B differ by less than
+0.2\%
+in FLOPs.
+
+Figure 4
+:
+Decoding throughput on vLLM versus batch size for multiple input-output sequence lengths, with the inset reporting the throughput ratio (Swimba/Nemotron). Swimba-14B remains close to the Nemotron-H-8B baseline in throughput with a slight drop.
+
+Figure 5
+:
+Latency on vLLM versus input-output sequence length for multiple batch sizes, with the inset reporting the ratio (Swimba/Nemotron). Latency trends are similar across sequence lengths, demonstrating slightly worse end-to-end cost between Swimba-14B and Nemotron-H-8B.
+
+vLLM
+throughput and latency.
+
+To measure practical inference efficiency, we benchmark decoding with
+vLLM
+
+[
+24
+]
+under identical settings for the baseline and our model. Fig.
+4
+reports end-to-end throughput and Fig.
+5
+reports latency. We sweep input-output sequence lengths and batch sizes. Across these settings, Swimba-14B has slightly lower throughput and higher latency than Nemotron-H-8B, with as low as a
+10\%
+slowdown.
+
+Despite having nearly the same FLOPs, Swimba-14B shows a larger runtime gap than FLOPs. We attribute this to routing overhead
+[
+18
+]
+, which can be relatively time-consuming. However, as we increase the number of experts, the parameter count grows while the throughput and latency remains largely unchanged as long as the number of activated experts is fixed
+[
+6
+]
+.
+
+6
+Related Work
+
+Efficient Sequence Modeling (SSMs and RNNs).
+
+Structured State Space Models (SSMs) originated from the HiPPO theory
+[
+19
+]
+and S4
+[
+21
+]
+, offering efficient alternatives to transformers
+[
+36
+]
+for long sequences. This lineage evolved through H3
+[
+14
+]
+and Hyena
+[
+31
+]
+, which replaced attention with long convolutions. Mamba
+[
+20
+]
+established the efficacy of input-dependent selection, while Mamba-2
+[
+11
+]
+reformulated the architecture under the SSD framework to leverage matrix multiplication accelerators. Parallel to SSMs, modern Recurrent Neural Networks (RNNs) such as RWKV
+[
+29
+]
+, RetNet
+[
+35
+]
+, and Griffin/Hawk
+[
+12
+]
+have also achieved transformer-competitive performance by linearizing attention or gating recurrence. Our method builds strictly upon the Mamba-2 SSD specification.
+
+Mixture-of-Experts (MoE) in Sequence Models.
+
+Sparse MoE is a dominant strategy for scaling model capacity while maintaining constant inference costs
+[
+34
+]
+. The field has progressed from early implementations to massive scale-out with GShard
+[
+25
+]
+and Switch Transformer
+[
+13
+]
+(top-1 routing). Later advances focus on routing stability and expert utilization, including Expert Choice
+[
+40
+]
+, Soft MoE
+[
+32
+]
+, and open-weights models like Mixtral
+[
+23
+]
+. While most approaches apply sparsity solely to the MLP (Feed-Forward) blocks, SwitchHead
+[
+9
+]
+and MoA (Mixture-of-Attention-Head)
+[
+39
+]
+demonstrated the utility of routing within the token-mixing layers, a concept our method adapts to the SSM context.
+
+MoE-SSM Hybrids.
+
+Combining MoE with linear-time architectures is an emerging frontier. The prevailing strategy is
+block-mixing
+, where standard SSM layers are interleaved with MoE-MLP layers. BlackMamba
+[
+1
+]
+and MoE-Mamba
+[
+30
+]
+pioneered this by replacing Mamba’s internal MLP or interleaving MoE blocks. Jamba
+[
+26
+]
+and Zamba
+[
+17
+]
+extended this by mixing Mamba, Attention, and MoE-MLP layers into hybrid macro-architectures. Most notably, the NVIDIA Nemotron-3 series
+[
+5
+]
+and Nemotron-H family
+[
+4
+]
+scale this to production levels, employing a hybrid architecture that interleaves Mamba-2 token mixers with MoE Feed-Forward Networks (FFNs). In these designs, the SSM dynamics remains dense; sparsity is extrinsic to the state transition. Routing Mamba (RoM)
+[
+38
+]
+shifts toward
+inner mixing
+by applying MoE to the linear projections surrounding the SSM core. However, these methods are primarily motivated by engineering considerations and do not distinguish between the two types of MoE–SSM. In contrast, our Swimba method performs
+parameter-space mixing
+: we route experts to generate the specific
+\mathbf{B}_{t}
+and
+\mathbf{C}_{t}
+that govern the state transition itself. By sharing the transition matrix
+\mathbf{A}
+and aggregating parameters rather than outputs, we maintain a single coherent state trajectory.
+
+7
+Conclusion
+
+We incorporate mixture-of-experts (MoE) specialization into SSM, while avoiding expert-dependent recurrence cost. We first formalize two MoE–SSM families, MoE of separated SSMs and MoE-parameterized SSM, and provide theoretical characterizations of these designs. We then propose Switch Mamba (Swimba), which routes over expert-produced SSM streams but mixes them in parameter space to retain a single hidden-state trajectory. Experiments evaluate a Swimba-14B model on standard benchmarks, and show improved average performance at essentially unchanged FLOPs per token. vLLM decoding measurements indicate slightly lower throughput and higher latency, consistent with routing overhead. Overall, these results support the effectiveness of Swimba under matched-compute constraints and suggest a practical path to scaling SSM capacity via MoE.
+
+Appendix A
+Proofs for Section
+3.4
+
+This appendix provides proofs for Theorems
+3.1
+–
+3.5
+.
+Unless stated otherwise, we work with the mixed model
+
+h_{t}=Ah_{t-1}+\widetilde{U}_{t},\qquad Y_{t}=\widetilde{C}_{t}^{\top}h_{t},
+
+(11)
+
+where
+
+\widetilde{U}_{t}:=\sum_{e\in\mathcal{K}_{t}}\pi_{t,e}\,B_{t}^{(e)}X_{t}^{(e)},\qquad\widetilde{C}_{t}:=\sum_{e\in\mathcal{K}_{t}}\pi_{t,e}\,C_{t}^{(e)}.
+
+(12)
+
+For the separated model we use
+
+h_{t}^{(e)}=Ah_{t-1}^{(e)}+B_{t}^{(e)}X_{t}^{(e)},\qquad Y_{t}^{\mathrm{sep}}=\sum_{e\in\mathcal{K}_{t}}\pi_{t,e}\,(C_{t}^{(e)})^{\top}h_{t}^{(e)}.
+
+(13)
+
+All statements are channelwise-compatible; one may read
+h_{t}\in\mathbb{R}^{N\times P}
+and apply the same arguments independently to each channel, or equivalently treat a fixed channel
+p
+and drop the subscript
+p
+.
+
+A.1
+Proof of Theorem
+3.1
+
+Proof A.1
+.
+
+Fix
+T,N,P,E
+and suppose
+A
+,
+\{B_{t}^{(e)},C_{t}^{(e)},X_{t}^{(e)}\}
+,
+\{\pi_{t}\}
+, and
+\{\mathcal{K}_{t}\}
+are given as in the theorem.
+Define
+\widetilde{U}_{t}
+and
+\widetilde{C}_{t}
+by (
+12
+).
+Then the proposed mixed update (
+8
+) can be rewritten as
+
+h_{t}=Ah_{t-1}+\widetilde{U}_{t},
+
+and the mixed readout (
+9
+) can be rewritten as
+
+Y_{t}=\widetilde{C}_{t}^{\top}h_{t}.
+
+This is exactly the defining form of a (time-varying) selective SSM with state size
+N
+driven by the input stream
+\widetilde{U}_{t}
+and read out by
+\widetilde{C}_{t}
+.
+The state dimension is the dimension of
+h_{t}
+, which is
+N
+by construction, and this does not depend on
+E
+or on the cardinality of
+\mathcal{K}_{t}
+.
+
+A.2
+Proof of Theorem
+3.2
+
+Proof A.2
+.
+
+The forward computation decomposes into two parts.
+
+First, the recurrence in (
+8
+) (or equivalently (
+11
+)) advances a single state trajectory for
+T
+steps.
+By definition, each step costs
+\mathcal{C}_{\mathrm{step}}(N,P)
+, hence the total cost of state evolution is
+T\,\mathcal{C}_{\mathrm{step}}(N,P)
+.
+
+Second, at each time
+t
+, the mixed injection term and mixed readout require forming the sums in (
+8
+)–(
+9
+).
+When at most
+k
+experts are active, these sums cost
+\mathcal{C}_{\mathrm{mix}}(k,P)
+by assumption, and therefore the total mixing cost is
+T\,\mathcal{C}_{\mathrm{mix}}(k,P)
+.
+
+Combining the two contributions yields
+
+\mathcal{O}\!\left(T\,\mathcal{C}_{\mathrm{step}}(N,P)+T\,\mathcal{C}_{\mathrm{mix}}(k,P)\right).
+
+For the separated design, one advances
+E
+state trajectories per step, each with cost
+\mathcal{C}_{\mathrm{step}}(N,P)
+, giving a total recurrence cost
+T\,E\,\mathcal{C}_{\mathrm{step}}(N,P)
+.
+The remaining costs (routing and output mixing) are lower order relative to the repeated recurrence and do not change the stated scaling.
+
+A.3
+Proof of Theorem
+3.3
+
+Proof A.3
+.
+
+Assume
+\|A\|\leq\rho<1
+and
+\|\widetilde{U}_{t}\|\leq U
+for all
+t
+.
+Unrolling the recursion (
+11
+) gives
+
+h_{t}=A^{t}h_{0}+\sum_{i=1}^{t}A^{t-i}\widetilde{U}_{i}.
+
+Taking norms and using submultiplicativity yields
+
+\|h_{t}\|\leq\|A^{t}\|\,\|h_{0}\|+\sum_{i=1}^{t}\|A^{t-i}\|\,\|\widetilde{U}_{i}\|\leq\rho^{t}\|h_{0}\|+U\sum_{i=1}^{t}\rho^{t-i}.
+
+The geometric series satisfies
+\sum_{i=1}^{t}\rho^{t-i}=\sum_{j=0}^{t-1}\rho^{j}=(1-\rho^{t})/(1-\rho)
+, hence
+
+\|h_{t}\|\leq\rho^{t}\|h_{0}\|+\frac{1-\rho^{t}}{1-\rho}\,U.
+
+For the output, we have
+Y_{t}=\widetilde{C}_{t}^{\top}h_{t}
+and thus
+
+\|Y_{t}\|\leq\|\widetilde{C}_{t}\|\,\|h_{t}\|\leq C\|h_{t}\|.
+
+Substituting the bound on
+\|h_{t}\|
+completes the proof.
+
+A.4
+Proof of Theorem
+3.4
+
+Proof A.4
+.
+
+We first prove the equality regime.
+Assume
+\pi_{t,e}\equiv\pi_{e}
+is time-invariant and
+C_{t}^{(e)}\equiv C_{t}
+for all
+e
+.
+Define the weighted average state
+
+\bar{h}_{t}:=\sum_{e=1}^{E}\pi_{e}\,h_{t}^{(e)}.
+
+Using the separated recurrence (
+13
+) and linearity,
+
+\bar{h}_{t}=\sum_{e=1}^{E}\pi_{e}\left(Ah_{t-1}^{(e)}+B_{t}^{(e)}X_{t}^{(e)}\right)=A\sum_{e=1}^{E}\pi_{e}h_{t-1}^{(e)}+\sum_{e=1}^{E}\pi_{e}B_{t}^{(e)}X_{t}^{(e)}=A\bar{h}_{t-1}+\widetilde{U}_{t},
+
+where
+\widetilde{U}_{t}=\sum_{e}\pi_{e}B_{t}^{(e)}X_{t}^{(e)}
+matches (
+12
+) with
+\mathcal{K}_{t}=[E]
+(or with any
+\mathcal{K}_{t}
+that contains exactly those
+e
+for which
+\pi_{e}\neq 0
+).
+Since
+h_{0}^{(e)}=0
+for all
+e
+, we have
+\bar{h}_{0}=0
+.
+The mixed model starts from
+h_{0}=0
+as well, so by uniqueness of solutions to the linear recursion,
+h_{t}=\bar{h}_{t}
+for all
+t
+.
+For the outputs,
+
+Y_{t}^{\mathrm{sep}}=\sum_{e=1}^{E}\pi_{e}\,C_{t}^{\top}h_{t}^{(e)}=C_{t}^{\top}\sum_{e=1}^{E}\pi_{e}h_{t}^{(e)}=C_{t}^{\top}\bar{h}_{t}=C_{t}^{\top}h_{t}=Y_{t}^{\mathrm{mix}},
+
+which proves equality.
+
+We next prove the stated mismatch bound.
+Assume
+\|C_{t}^{(e)}\|\leq C
+for all
+t,e
+.
+Write the difference as
+
+\displaystyle Y_{t}^{\mathrm{sep}}-Y_{t}^{\mathrm{mix}}
+
+\displaystyle=\sum_{e\in\mathcal{K}_{t}}\pi_{t,e}\,(C_{t}^{(e)})^{\top}h_{t}^{(e)}-\left(\sum_{e\in\mathcal{K}_{t}}\pi_{t,e}C_{t}^{(e)}\right)^{\top}h_{t}
+
+\displaystyle=\sum_{e\in\mathcal{K}_{t}}\pi_{t,e}\,(C_{t}^{(e)})^{\top}\left(h_{t}^{(e)}-h_{t}\right).
+
+Taking norms and applying the triangle inequality yields
+
+\|Y_{t}^{\mathrm{sep}}-Y_{t}^{\mathrm{mix}}\|\leq\sum_{e\in\mathcal{K}_{t}}\pi_{t,e}\,\|C_{t}^{(e)}\|\,\|h_{t}^{(e)}-h_{t}\|\leq C\sum_{e\in\mathcal{K}_{t}}\pi_{t,e}\,\|h_{t}^{(e)}-h_{t}\|.
+
+Extending the sum over all experts (with
+\pi_{t,e}=0
+outside
+\mathcal{K}_{t}
+) gives the bound as stated.
+
+Finally, define
+\delta_{t}^{(e)}:=h_{t}^{(e)}-h_{t}
+.
+Subtracting (
+11
+) from (
+13
+) gives
+
+\delta_{t}^{(e)}=A\delta_{t-1}^{(e)}+\left(B_{t}^{(e)}X_{t}^{(e)}-\widetilde{U}_{t}\right),
+
+which is a stable linear recursion when
+\|A\|\leq\rho<1
+.
+This identifies the driving term as the deviation of each expert injection from the mixture injection.
+
+A.5
+Proof of Theorem
+3.5
+
+Proof A.5
+.
+
+We give a concrete one-dimensional construction and then show that it cannot be represented by any single-expert linear-projection model under the stated specialization.
+
+Consider the setting
+T=1
+,
+N=P=1
+, and
+h_{0}=0
+.
+Let
+A=0
+.
+Let there be
+E=2
+experts and take
+\mathcal{K}_{1}=\{1,2\}
+.
+Define the expert streams so that the injected term is constant within each expert:
+
+B_{1}^{(1)}X_{1}^{(1)}\equiv 0,\qquad B_{1}^{(2)}X_{1}^{(2)}\equiv 1,\qquad C_{1}^{(1)}\equiv C_{1}^{(2)}\equiv 1.
+
+This choice is compatible with the assumption that these quantities are produced by linear projections of
+X_{1}
+by simply taking projections that ignore
+X_{1}
+and output constants (equivalently, linear maps applied to an augmented feature vector with a fixed bias coordinate; if biases are disallowed, the same construction can be obtained by restricting to inputs with an appended constant feature).
+With this choice, the mixed model (
+8
+)–(
+9
+) becomes
+
+h_{1}=\pi_{1,2},\qquad Y_{1}=h_{1}=\pi_{1,2}.
+
+Now choose the router logits as
+g_{1,1}=0
+and
+g_{1,2}=x
+, where
+x\in\mathbb{R}
+denotes the scalar input feature (that is,
+X_{1}=x
+) and
+g_{1,2}
+is a linear function of
+X_{1}
+.
+Then
+
+\pi_{1,2}=\frac{e^{x}}{1+e^{x}}=:\sigma(x),
+
+so the MoE-parameterized layer represents the logistic sigmoid function
+Y_{1}=\sigma(x)
+.
+
+We now argue that no single-expert linear-projection layer in this one-step specialization can represent
+\sigma(x)
+.
+Under the same specialization (
+T=1
+,
+h_{0}=0
+,
+A=0
+,
+N=P=1
+) and with one expert, the layer output takes the form
+
+Y_{1}=C_{1}(X_{1})\,B_{1}(X_{1})\,X_{1}^{\prime}(X_{1}),
+
+where
+B_{1}(\cdot)
+,
+C_{1}(\cdot)
+, and
+X_{1}^{\prime}(\cdot)
+are linear functions of
+X_{1}
+by assumption.
+Therefore
+Y_{1}
+is a polynomial in
+x
+of degree at most
+3
+.
+In particular,
+Y_{1}
+is an entire function whose third derivative is constant and whose fourth derivative is identically zero.
+
+In contrast,
+\sigma(x)
+is not a polynomial: its derivative satisfies
+\sigma^{\prime}(x)=\sigma(x)(1-\sigma(x))
+, which is nonzero for all
+x\in\mathbb{R}
+and decays to
+0
+only as
+x\to\pm\infty
+.
+A nonconstant polynomial cannot have this behavior; more directly, any nonzero polynomial diverges in magnitude as
+|x|\to\infty
+, while
+\sigma(x)
+remains bounded in
+(0,1)
+.
+Hence
+\sigma(x)
+cannot equal any polynomial on
+\mathbb{R}
+, and therefore cannot be represented by the single-expert linear-projection model in this specialization.
+
+This exhibits a function realizable by the two-expert MoE-parameterized layer but not by any single-expert linear-projection layer, while both execute one state update.
+

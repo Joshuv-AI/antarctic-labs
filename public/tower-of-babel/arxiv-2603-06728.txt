@@ -1,0 +1,2255 @@
+Orion: Characterizing and Programming Apple’s Neural Engine for LLM Training and Inference
+Ramchand Kumaresan
+
+Abstract
+Over two billion Apple devices ship with a Neural Processing Unit (NPU) — the Apple Neural Engine (ANE) — yet this accelerator remains almost entirely unused for large language model workloads. CoreML, Apple’s public ML framework, imposes opaque abstractions that prevent direct ANE programming and do not support on-device training. We present Orion , to our knowledge the first open end-to-end system that combines direct ANE execution, a compiler pipeline, and stable multi-step training with checkpoint resume in a single native runtime, bypassing CoreML entirely via Apple’s private _ANEClient and _ANECompiler APIs. Building on prior characterization work by maderix, who reverse-engineered the private API surface and benchmarked ANE hardware characteristics, we extend the public knowledge of ANE constraints to a catalog of 20 restrictions on MIL IR programs, memory layout, compilation limits, and numerical behavior — including 14 previously undocumented constraints discovered during Orion development. Orion includes a compiler that lowers a graph IR through five optimization passes to ANE-native MIL, and a runtime that manages IOSurface-backed zero-copy tensor I/O, program caching, and delta compilation for weight updates. A key contribution is delta compilation : since the ANE bakes weights at compile time, naïve training requires full recompilation per step ( ∼ \sim 4.2 s). We show that compiled programs can be surgically updated by unloading, patching the weight files on disk, and reloading — bypassing ANECCompile() entirely and reducing recompilation from 4,200 ms to 494 ms per step (8.5 × \times ), yielding a 3.8 × \times total training speedup. On an M4 Max, Orion achieves 170+ tokens/s for GPT-2 124M inference and demonstrates stable training of a 110M-parameter transformer on TinyStories for 1,000 steps in 22 minutes with zero NaN occurrences. We also present LoRA adapter-as-input, enabling hot-swap of low-rank adapters via IOSurface inputs without recompilation. We release Orion as open source under the MIT license.
+
+
+
+1
+Introduction
+
+Apple’s Neural Engine (ANE) is a dedicated neural processing unit present in every Apple silicon chip since the A11 Bionic (2017). With the M4 generation, the ANE delivers up to 38 TOPS (INT8) across 16 cores, rivaling discrete AI accelerators in raw throughput. Over two billion active Apple devices carry some variant of this hardware
+(
+2
+)
+. Yet despite this enormous installed base, the ANE remains a
+dark accelerator
+for large language models: no public framework supports LLM training on ANE, and inference frameworks universally target the GPU via Metal or the CPU.
+
+The root cause is Apple’s software stack. CoreML
+(
+2
+)
+, the only public interface to the ANE, operates as a black-box scheduler that decides at runtime whether to dispatch operations to the CPU, GPU, or ANE. Developers cannot force ANE execution, inspect ANE programs, or perform gradient computation. The ANE’s native instruction set — compiled from Apple’s Model Intermediate Language (MIL) — is undocumented, and the compilation and evaluation APIs reside in a private framework (
+AppleNeuralEngine.framework
+).
+
+Prior work has begun to crack this barrier. The maderix project
+(
+11
+;
+12
+;
+13
+)
+made the foundational breakthrough: reverse-engineering the private API calling sequence, demonstrating direct ANE dispatch from C, and producing the first empirical characterization of ANE hardware — including debunking Apple’s 38 TOPS specification (actual fp16 throughput:
+\sim
+19 TFLOPS), discovering the 32 MB SRAM performance cliff, measuring dispatch overhead (
+\sim
+0.095 ms), and identifying the
+\sim
+119 compilation-per-process limit. ANEgpt
+(
+1
+)
+extended this to transformer training, implementing forward and backward passes for a 110M-parameter model. Hollemans
+(
+9
+)
+documented ANE characteristics through CoreML-level experiments, establishing the preference for 1
+\times
+1 convolutions and
+[B, C, 1, S]
+tensor layouts. However, none of these efforts produced a complete system: ANEgpt could not resume training without NaN divergence, lacked a compiler, and used Python for orchestration; maderix’s characterization focused on hardware-level benchmarking without building an LLM runtime.
+
+We present
+Orion
+, which to our knowledge is the first open system to combine direct ANE execution with a compiler pipeline, reproducible inference, and stable multi-step training in a single native runtime. Our contributions are:
+
+1.
+
+ANE Characterization.
+A consolidated catalog of 20 ANE programming constraints (Section
+3
+), extending prior hardware-level characterization by maderix
+(
+12
+;
+13
+)
+with 14 newly discovered MIL IR restrictions, memory layout requirements, and numerical behaviors found during
+Orion
+development.
+
+2.
+
+Compiler.
+A graph IR with 27 operations lowered through five optimization passes (DCE, identity elimination, cast fusion, SRAM annotation, constraint validation) to ANE-native MIL, with 13 verified frontends plus LoRA-fused variants (Section
+4
+).
+
+3.
+
+Delta Compilation.
+A technique that bypasses
+ANECCompile()
+for weight updates by unloading compiled programs, patching weight files on disk, and reloading — reducing recompilation overhead from 4,200 ms to 494 ms (8.5
+\times
+) and eliminating the
+\sim
+119 compile-per-process limit entirely (Section
+5
+).
+
+4.
+
+Training on ANE.
+Stable multi-step training of a 110M-parameter transformer with automatic checkpoint resume, achieved by solving three NaN-inducing bugs through deferred compilation, fp16 overflow clamping, and gradient sanitization (Section
+7
+).
+
+5.
+
+LoRA Adapter-as-Input.
+Low-rank adapter matrices passed as IOSurface inputs rather than baked weights, enabling hot-swap of adapters without recompilation (Section
+6
+).
+
+6.
+
+Open-source release.
+A complete Objective-C runtime — Python is used only for one-time weight conversion from HuggingFace formats; inference, training, and benchmarking require no Python — with GPT-2 124M inference (170+ tok/s), Stories110M training (1,000 steps in 22 minutes), native BPE and SentencePiece tokenizers, released under the MIT license.
+
+2
+Background
+
+2.1
+Apple Neural Engine Hardware
+
+The ANE is a fixed-function accelerator optimized for convolution and matrix-multiply workloads in fp16 precision. Table
+1
+summarizes the hardware characteristics of the M4 Max generation, drawing on measurements by maderix
+(
+13
+)
+and confirmed independently in our experiments.
+
+Table 1
+:
+Apple Neural Engine hardware characteristics (M4 Max).
+
+Property
+
+Value
+
+Generation
+
+H16
+
+Neural Engine cores
+
+16
+
+Peak throughput (INT8, Apple spec)
+
+38 TOPS
+
+Peak throughput (fp16, measured
+1
+1
+footnotemark:
+
+1
+
+)
+
+\sim
+19 TFLOPS
+
+On-chip SRAM
+2
+2
+
+2
+
+Apple specifies 38 TOPS (INT8), but the ANE dequantizes INT8 to fp16 before computation. Actual measured peak is
+\sim
+19 TFLOPS fp16
+(
+13
+)
+; INT8 saves only memory bandwidth, not compute cycles.
+
+32 MB
+
+Evaluation queue depth
+
+127
+
+Dispatch overhead (XPC+IOKit)
+
+\sim
+0.095 ms
+
+Idle power
+
+Zero (hard power gating)
+
+3
+3
+footnotetext:
+Performance drops
+\sim
+30% when working sets exceed the 32 MB SRAM budget, forcing spills to DRAM
+(
+13
+)
+.
+
+The ANE operates on a
+compile-then-dispatch
+model. Programs are expressed in Apple’s Model Intermediate Language (MIL), compiled to E5 microcode by
+_ANECompiler
+, and evaluated via
+_ANEClient
+. All tensor I/O uses IOSurface-backed shared memory in a fixed
+[1, C, 1, S]
+layout (fp16), enabling zero-copy data transfer between the CPU and ANE.
+
+Critically, the ANE
+bakes weights at compile time
+: weight tensors are embedded in the compiled program and cannot be mutated post-compilation. Naïvely, this means every weight update during training requires full recompilation. However, as we show in Section
+5
+, compiled programs can be surgically updated by exploiting the unload/reload interface of
+_ANEModel
+, bypassing the compiler entirely.
+
+2.2
+The Private API Model
+
+Table
+2
+lists the key private classes used by
+Orion
+. These are loaded at runtime via
+dlopen()
+and
+objc_getClass()
+from
+/System/Library/PrivateFrameworks/AppleNeuralEngine.framework
+.
+
+Table 2
+:
+Private ANE API surface used by
+Orion
+.
+
+Class
+
+Role
+
+_ANEClient
+
+Singleton connection to ANE daemon
+
+_ANECompiler
+
+MIL
+\to
+E5 microcode compilation
+
+_ANEInMemoryModel
+
+In-memory model (no filesystem)
+
+_ANEInMemoryModelDescriptor
+
+Accepts MIL + weight blobs
+
+_ANEModel
+
+Holds compiled program handle
+
+_ANERequest
+
+Evaluation request specification
+
+_ANEIOSurfaceObject
+
+IOSurface wrapper for tensor I/O
+
+2.3
+Prior Work
+
+Three projects form the foundation for
+Orion
+:
+
+maderix
+
+(
+11
+;
+12
+;
+13
+)
+made the foundational contribution to direct ANE programming. The project reverse-engineered the private API calling sequence (compile
+\to
+load
+\to
+evaluate), demonstrated raw ANE dispatch from C, and produced the first empirical hardware characterization of the M4 ANE. Key findings include: (1) debunking Apple’s 38 TOPS specification by showing that INT8 is dequantized to fp16 before computation, yielding
+\sim
+19 TFLOPS actual throughput; (2) identifying the 32 MB SRAM performance cliff (30% throughput drop when exceeded); (3) measuring XPC+IOKit dispatch overhead at
+\sim
+0.095 ms; (4) showing that 1
+\times
+1 convolutions deliver 3
+\times
+better throughput than equivalent
+matmul
+operations; (5) discovering that deep operation graphs (16–64 ops) achieve 94% ANE utilization versus
+\sim
+30% for single operations; and (6) identifying the
+\sim
+119 compilation-per-process limit. These findings established both the feasibility and the performance envelope of direct ANE programming.
+
+ANEgpt
+
+(
+1
+)
+extended the maderix APIs to transformer training, implementing forward and backward passes for a 110M-parameter model on ANE. However, ANEgpt suffers from NaN divergence after the first training step on resume, uses Python for orchestration, generates MIL through string concatenation, and lacks a compiler or optimization pipeline.
+
+hollance/neural-engine
+
+(
+9
+)
+documented ANE characteristics through CoreML-level experiments, establishing the preference for
+[B, C, 1, S]
+tensor layouts and providing early guidance on which operations are ANE-friendly.
+
+Orion
+builds on all three: it uses the API calling sequence and hardware characterization from maderix, the training kernel structure from ANEgpt, and the layout insights from hollance.
+Orion
+’s contributions beyond this foundation are: (a) a compiler with graph IR, optimization passes, and verified code generation; (b) stable multi-step training with checkpoint resume (solving three NaN-inducing bugs); (c) 14 newly discovered MIL IR and memory constraints; and (d) a complete Objective-C runtime (Python is used only for one-time weight conversion) with inference, training, benchmarking, and native tokenizers.
+
+3
+ANE Characterization
+
+Table
+3
+presents a consolidated catalog of 20 ANE programming constraints. Six of these (#5, 7, 15, 17, and partially #6) were first documented by maderix
+(
+12
+;
+13
+)
+or hollance
+(
+9
+)
+through hardware-level benchmarking and API exploration. The remaining 14 constraints were discovered during
+Orion
+development through 161 engineering tasks spanning 18 sessions, primarily involving MIL IR compilation failures, evaluation errors, and silent numerical corruption encountered while building the compiler, training loop, delta compilation, and LoRA adapter system.
+
+Table 3
+:
+ANE constraint catalog. Source: P = prior work
+(
+12
+;
+13
+;
+9
+)
+, O = discovered during
+Orion
+development,
+∗
+confirmed by maderix/ANEgpt codebases. Prior-work constraints were independently confirmed on M4 Max.
+
+#
+
+Constraint
+
+Symptom
+
+Workaround
+
+Src
+
+1
+
+concat
+MIL op rejected by ANE compiler
+
+Compile failure
+
+Split into separate programs
+
+O
+
+2
+
+Multi-output buffers must have uniform sizes
+
+0x1d
+at eval
+
+Pad outputs to max size
+
+O
+
+3
+
+Multi-output surfaces ordered alphabetically
+
+Silent wrong data
+
+Name outputs in sorted order
+
+O
+
+4
+
+Minimum
+\sim
+49 KB IOSurface for eval
+
+0x1d
+at eval
+
+Pad seq dim
+\geq
+16
+
+O
+
+5
+
+\sim
+119 compilations per process limit
+
+Silent fail / crash
+
+exec()
+restart
+
+P
+
+6
+
+SDPA causal masks silently ignored
+
+Wrong attention
+
+Manual causal masking
+
+P
+∗
+
+7
+
+Weights baked at compile time
+
+Stale weights
+
+Recompile after update
+
+P
+
+8
+
+BLOBFILE offset is
+uint64(64)
+, not 128
+
+Garbage weights
+
+Correct offset in MIL ref
+
+O
+
+9
+
+MIL text must be
+NSData*
+, not
+NSString*
+
+Immediate crash
+
+Encode to UTF-8 data
+
+O
+
+10
+
+gelu
+is not a valid MIL activation
+
+Compile failure
+
+Tanh approximation
+
+O
+
+11
+
+Weight dict must be
+@{}
+, not
+nil
+
+Immediate crash
+
+Pass empty dictionary
+
+O
+
+12
+
+matmul
+transpose flags need named consts
+
+MIL rejection
+
+Emit
+const
+nodes
+
+O
+
+13
+
+conv
+does not support
+bias=
+param
+
+MIL rejection
+
+Separate add operation
+
+O
+
+14
+
+Output vars must ref live (post-opt) nodes
+
+Invalid program
+
+Update refs after DCE
+
+O
+
+15
+
+exec()
+restart overhead
+\sim
+50 ms
+
+Latency cost
+
+Batch steps per process
+
+P
+
+16
+
+32K-channel convolutions rejected
+
+Compile failure
+
+CPU fallback or chunking
+
+O
+
+17
+
+Conv 1
+\times
+1 is 3
+\times
+faster than
+matmul
+
+Performance gap
+
+Prefer conv formulation
+
+P
+
+18
+
+Multi-input surfaces must have uniform alloc sizes
+
+0x1d
+at eval
+
+Allocate all inputs at max size
+
+O
+
+19
+
+Multi-input surfaces ordered alphabetically
+
+Silent wrong data
+
+Name inputs in sorted order
+
+O
+
+20
+
+ANE reads flat buffer as packed
+[1,C,1,S]
+
+Silent wrong data
+
+Write packed data at buffer start
+
+O
+
+We organize these constraints into four categories:
+
+MIL IR Restrictions (#1, 6, 10, 12, 13, 16).
+
+The ANE compiler accepts a subset of MIL operations. Several operations that are valid in CoreML’s MIL specification are silently rejected or produce incorrect results on the ANE. Most critically, the
+concat
+operation (#1) causes immediate compilation failure, requiring all multi-tensor operations to be decomposed into separate programs. The
+gelu
+activation (#10) must be replaced with its tanh approximation:
+\text{GELU}(x)\approx 0.5x(1+\tanh[\sqrt{2/\pi}(x+0.044715x^{3})])
+.
+
+Memory and I/O Constraints (#2, 3, 4, 8, 9, 11, 18, 19, 20).
+
+The ANE has strict requirements on tensor memory layout. Multi-output programs require all output buffers to have identical byte sizes (#2), with outputs ordered alphabetically by their MIL variable names (#3). Symmetrically, multi-input programs require all input IOSurfaces to have the same allocation size (#18), with inputs also ordered alphabetically by MIL parameter name (#19). When input surfaces are over-allocated (padded to uniform size), the ANE reads the flat buffer as packed
+[1,C,1,S]
+data starting from byte 0, ignoring the surface’s nominal dimensions (#20). There is a minimum IOSurface size of approximately 49 KB (#4), meaning single-token tensors with shape
+[1, 768, 1, 1]
+(3,072 bytes in fp16) must be padded to at least
+[1, 768, 1, 16]
+(24,576 bytes). The BLOBFILE weight format uses an offset of 64 bytes from the chunk header (#8), not from the file start — an undocumented detail that causes silent weight corruption if incorrect. Constraints #18–20 were discovered during LoRA implementation (Section
+6
+), where adapter matrices of different shapes must be passed as multiple IOSurface inputs to a single program.
+
+Compilation Limits (#5, 7, 14, 15).
+
+The ANE compiler maintains internal state that limits each process to approximately 119 compilations before subsequent compilations silently fail (#5). Since weights are baked at compile time (#7), every training step requires recompilation of weight-bearing kernels.
+Orion
+v1.0 addressed this with an
+exec()
+restart strategy: after each training step, the process re-executes itself with updated checkpoint state, resetting the compilation counter at a cost of
+\sim
+50 ms (#15).
+Orion
+v2.0 eliminates this constraint entirely via delta compilation (Section
+5
+), which bypasses
+ANECCompile()
+by reloading existing program objects with updated weight files.
+
+Performance Characteristics (#16, 17).
+
+The ANE’s convolution engine delivers
+\sim
+3
+\times
+better throughput for 1
+\times
+1 convolutions compared to equivalent
+matmul
+operations (#17), first measured by maderix
+(
+13
+)
+and also noted by
+9
+. However, convolutions with very large channel counts (e.g., 32,000 for vocabulary projection) are rejected (#16), a new finding that requires CPU fallback for classifier layers.
+
+4
+System Design
+
+Orion
+is structured as five layers, shown in Figure
+1
+.
+
+Apple Neural Engine (private APIs:
+_ANEClient
+,
+_ANECompiler
+, MIL IR)
+Core Runtime (compile, eval, IOSurface I/O, program cache)
+Compiler (Graph IR
+\to
+5 optimization passes
+\to
+MIL codegen)
+Model Layer (configs, tokenizers, weight loading)
+CLI Applications (infer, train, bench)
+User-facing
+27 ops, 13 frontends
+Zero-copy, delta compilation
+E5 microcode
+
+Figure 1
+:
+Orion architecture stack. Each layer communicates only with its immediate neighbors. The compiler and runtime together abstract away ANE constraints from the model layer.
+
+4.1
+Compiler Pipeline
+
+The
+Orion
+compiler transforms a high-level graph IR into ANE-executable MIL programs. The graph IR supports 27 operations (Table
+4
+) and maintains explicit tensor shape information for all edges.
+
+Table 4
+:
+Graph IR operation categories (27 total).
+
+Category
+
+Operations
+
+Data
+
+input
+,
+const
+,
+identity
+
+Linear
+
+conv1x1
+,
+matmul
+
+Elementwise
+
+add
+,
+sub
+,
+mul
+,
+neg
+
+Activation
+
+relu
+,
+tanh
+,
+sigmoid
+
+Math
+
+exp
+,
+pow
+,
+sqrt
+,
+rsqrt
+
+Reduction
+
+reduce_sum
+,
+reduce_mean
+,
+reduce_max
+
+Shape
+
+reshape
+,
+transpose
+,
+split
+,
+pad
+,
+slice
+
+Other
+
+cast
+,
+softmax
+,
+concat_banned
+
+The optimization pipeline runs five passes in a fixpoint loop (maximum 20 iterations):
+
+1.
+
+Dead Code Elimination (DCE).
+Marks nodes reachable from outputs via backward walk; removes unreachable nodes.
+
+2.
+
+Identity Elimination.
+Removes no-op casts (same type), reshapes (same shape), and identity transpositions.
+
+3.
+
+Cast Fusion.
+Eliminates round-trip casts (e.g., fp16
+\to
+fp32
+\to
+fp16) that arise from mixed-precision patterns.
+
+4.
+
+SRAM Annotation.
+Estimates working-set size against the 32 MB on-chip SRAM budget; emits warnings when exceeded (performance degrades
+\sim
+30%).
+
+5.
+
+ANE Constraint Validation.
+Checks for banned operations (
+concat
+), minimum tensor sizes, weight dictionary requirements, and output variable liveness.
+
+After optimization, MIL codegen emits text-format MIL programs with BLOBFILE weight references. The compiler includes 13 verified frontends covering GPT-2 inference (prefill attention, prefill FFN, decode projection, decode FFN, final LayerNorm) and Stories110M training (forward attention, forward FFN, FFN backward, SDPA backward parts 1 and 2, QKV backward, classifier forward, vocabulary softmax). All 13 frontends have been verified structurally equivalent to hand-written MIL via an automated diff tool.
+
+4.2
+Runtime
+
+The runtime manages the lifecycle of ANE programs: compilation, caching, evaluation, and I/O. Key design decisions include:
+
+Program cache.
+Compiled programs are cached with composite keys (model name, layer index, sequence length, weight version). Cache hits skip the
+\sim
+11 ms compilation overhead per program.
+
+IOSurface I/O.
+All tensor data resides in IOSurface-backed memory, enabling zero-copy sharing between the CPU address space and the ANE. The runtime handles the transpose between CPU-native
+[seq, d_model]
+and ANE-native
+[1, d_model, 1, seq]
+layouts.
+
+Delta compilation.
+Rather than recompiling programs after each weight update, the runtime uses a surgical reload approach: unload the existing program from the ANE, update weight files (BLOBFILEs) on disk, and reload. This bypasses
+ANECCompile()
+entirely and eliminates the
+\sim
+119 compilation limit (Section
+5
+). The original
+exec()
+restart strategy (v1.0) has been superseded.
+
+4.3
+CPU/ANE Division of Labor
+
+Not all operations can or should run on the ANE. Table
+5
+shows the division of labor in
+Orion
+.
+
+Table 5
+:
+CPU/ANE work division. Operations are assigned based on ANE hardware constraints and performance characteristics.
+
+Operation
+
+Device
+
+Reason
+
+Transformer fwd/bwd (dx)
+
+ANE
+
+Compute-bound convolutions
+
+Token sampling
+
+CPU
+
+Sequential, branching logic
+
+Adam optimizer
+
+CPU
+
+Weights immutable on ANE
+
+\nabla W
+accumulation
+
+CPU
+
+cblas_sgemm via GCD
+
+NLL loss + gradient
+
+CPU
+
+gather
+not in MIL
+
+Classifier backward
+
+CPU
+
+32K channels rejected
+
+Embedding lookup
+
+CPU
+
+Table indexing
+
+4.4
+Inference Pipeline
+
+For GPT-2 124M inference,
+Orion
+implements bucketed prefill followed by autoregressive decode:
+
+1.
+
+Prefill.
+The prompt is tokenized, embedded on CPU, then processed through all 12 transformer layers on the ANE using prefill programs with sequence-length buckets (32, 64, 128, 256, 512, 1024). The KV cache is populated.
+
+2.
+
+Decode.
+Each subsequent token is processed through the full model on ANE with a minimum sequence dimension of 16 (to satisfy constraint #4). The KV cache is updated incrementally.
+
+3.
+
+Sampling.
+Logits are returned to CPU for temperature/top-
+p
+sampling.
+
+First-call latency includes ANE compilation (
+\sim
+1015 ms for 24 programs); subsequent calls use cached programs.
+
+4.5
+Training Pipeline
+
+For Stories110M training on TinyStories
+(
+7
+)
+:
+
+1.
+
+At startup, 72 ANE programs are compiled once (60 weight-bearing + 12 static SDPA backward kernels, 6 per layer). This is the only compilation in the entire training run.
+
+2.
+
+Forward pass: ANE executes
+fwdAttn
+(RMSNorm
+\to
+QKV
+\to
+SDPA
+\to
+
+W_{o}
+) and
+fwdFFN
+(RMSNorm
+\to
+SwiGLU) per layer.
+
+3.
+
+Loss: CPU computes NLL loss and gradient.
+
+4.
+
+Backward pass (dx): ANE executes
+ffnBwd
+,
+sdpaBwd1
+,
+sdpaBwd2
+,
+qkvBwd
+per layer.
+
+5.
+
+Weight gradients: CPU computes
+\nabla W
+via
+cblas_sgemm
+with GCD parallelism.
+
+6.
+
+Adam update on CPU; delta reload of 60 weight-bearing programs (
+\sim
+494 ms total). No recompilation, no process restart.
+
+5
+Delta Compilation
+
+The ANE’s compile-then-dispatch model creates a fundamental tension with gradient descent: every weight update requires new weights to be baked into compiled programs. In
+Orion
+v1.0, this meant full recompilation of 60 weight-bearing kernels per training step (
+\sim
+4,200 ms), consuming 83.9% of wall time. The
+\sim
+119 compilation-per-process limit (#5 in Table
+3
+) further required
+exec()
+restart after every step.
+
+5.1
+Key Insight
+
+Figure
+2
+contrasts the v1.0 and v2.0 weight update paths.
+
+v1.0: Full Recompile
+Adam Update
+Save BLOBFILE
+Parse MIL
+ANECCompile()
+Load Model
+Eval on ANE
+\sim
+70 ms/kernel
+\sim
+3 ms/kernel
+v2.0: Delta Reload
+Adam Update
+Save BLOBFILE
+Unload Model
+Write Files
+Reload Model
+Eval on ANE
+\sim
+9 ms/kernel
+No MIL parsing
+No ANECCompile()
+
+Figure 2
+:
+Weight update paths. v1.0 (left) creates new model descriptors and invokes the ANE compiler for every weight update (
+\sim
+70 ms/kernel). v2.0 (right) reuses existing model objects: unload, write new weight files, reload (
+\sim
+9 ms/kernel). The compiler is bypassed entirely.
+
+Compiled ANE programs are managed by
+_ANEModel
+objects that expose
+unloadWithQoS:
+and
+loadWithQoS:
+methods. When a model is unloaded, its backing weight files (BLOBFILEs) on disk can be modified. Reloading the model picks up the new weights
+without invoking
+ANECCompile()
+— the E5 microcode and MIL text are unchanged; only the weight data is refreshed. Crucially, when the MIL text and weight dictionary keys are identical, the ANE assigns the same
+hexStringIdentifier
+(a composite of three SHA-256 hashes), so the program’s internal identity is preserved across reloads.
+
+5.2
+Implementation
+
+Algorithm
+1
+shows the delta compilation procedure. For each of the 60 weight-bearing kernels:
+
+Algorithm 1
+
+Delta compilation (weight reload)
+
+1:
+
+Compiled program
+P
+with model handle
+M
+, new weight dict
+W^{\prime}
+
+2:
+
+M
+.
+unloadWithQoS(21)
+
+\triangleright
+Remove from ANE
+
+3:
+
+for
+each weight file path
+p
+in
+W^{\prime}
+
+do
+
+4:
+
+Write
+W^{\prime}[p]
+to disk at
+M
+.
+tmpDir
+/
+p
+
+\triangleright
+Update BLOBFILE
+
+5:
+
+end
+
+for
+
+6:
+
+M
+.
+loadWithQoS(21)
+
+\triangleright
+Reload with new weights
+
+This replaces the full compilation path: no
+_ANEInMemoryModelDescriptor
+creation, no MIL parsing, no
+ANECCompile()
+invocation. The implementation (
+orion_program_reload_weights
+in
+core/ane_runtime.m
+) handles ownership transfer of the temporary directory between old and new program states.
+
+5.3
+Results
+
+Figure
+3
+and Table
+6
+compare v1.0 (full recompile) and v2.0 (delta reload) training performance.
+
+Table 6
+:
+Training step time breakdown: v1.0 (full recompile) vs v2.0 (delta reload). Stories110M on M4 Max, lr=
+3\!\times\!10^{-4}
+, grad_accum=4.
+
+Metric
+
+v1.0
+
+v2.0
+
+Speedup
+
+Train time (compute)
+
+908 ms
+
+849 ms
+
+\sim
+1
+\times
+
+Recompile / reload time
+
+4,200 ms
+
+494 ms
+
+8.5
+\times
+
+Total step time
+
+5,108 ms
+
+1,345 ms
+
+3.8
+\times
+
+Recompile % of step
+
+83.9%
+
+36.8%
+
+-
+47.1 pp
+
+1000-step wall time
+
+\sim
+85 min
+
+22.4 min
+
+3.8
+\times
+
+Process model
+
+1 step/process
+
+Single process
+
+—
+
+Compiles during training
+
+72/step
+
+0
+
+Eliminated
+
+v1.0 Full Recompile
+v2.0 Delta Reload
+0
+2{,}000
+4{,}000
+6{,}000
+4{,}200
+494
+908
+849
+Training Configuration
+Time per Step (ms)
+Compute
+Recompile/Reload
+
+Figure 3
+:
+Training step time breakdown. v1.0 spends 83.9% of each step on full ANE recompilation (
+\sim
+4,200 ms for 60 kernels). v2.0’s delta reload reduces this to 494 ms by bypassing
+ANECCompile()
+entirely, yielding a 3.8
+\times
+total speedup.
+
+The 8.5
+\times
+recompile speedup comes from avoiding three expensive operations in the full compilation path: (1) creating new
+_ANEInMemoryModelDescriptor
+objects (
+\sim
+3 ms/kernel for MIL parsing), (2) invoking
+ANECCompile()
+(
+\sim
+30–80 ms/kernel), and (3) loading a new model identity (
+\sim
+30 ms/kernel). Delta reload replaces all three with a single unload–write–reload cycle (
+\sim
+8 ms/kernel).
+
+A critical engineering detail: when the new and old programs share the same
+hexStringIdentifier
+(which they do, since the MIL text is unchanged), they share the same temporary directory on disk. The old program’s ownership of this directory must be transferred before release, or the
+orion_release_program
+destructor will delete the shared directory, causing the new program to fail on its next reload.
+
+6
+LoRA Adapter-as-Input
+
+Since the ANE bakes weights at compile time, adapting a model to new tasks traditionally requires full recompilation. We implement LoRA
+(
+10
+)
+with a key architectural decision: adapter matrices
+A
+and
+B
+are passed as
+IOSurface inputs
+rather than baked weights. This enables hot-swap of adapters without any recompilation.
+
+6.1
+Architecture
+
+For a linear layer
+Y=XW_{\text{base}}
+, the LoRA-fused computation is:
+
+Y=XW_{\text{base}}+\alpha\cdot(XA)B
+
+(1)
+
+where
+W_{\text{base}}\in\mathbb{R}^{d\times d}
+is baked as a BLOBFILE weight, and
+A\in\mathbb{R}^{d\times r}
+,
+B\in\mathbb{R}^{r\times d}
+(rank
+r\ll d
+) are IOSurface inputs. The base weights remain compiled into the program; only the low-rank adapters are passed at evaluation time.
+
+The
+Orion
+compiler includes two LoRA frontends:
+
+•
+
+orion_frontend_lora_linear
+: Single linear layer with LoRA fusion.
+
+•
+
+orion_frontend_lora_attention
+: Full attention block with LoRA on Q, K, V, and O projections (8 adapter matrices as IOSurface inputs).
+
+6.2
+IOSurface Input Constraints
+
+Implementing LoRA revealed three new ANE constraints (#18–20 in Table
+3
+):
+
+1.
+
+Uniform input allocation
+(#18). All IOSurface inputs to a single program must have the same byte allocation size, even if the underlying tensors have different shapes. For LoRA attention with 8 adapter matrices of varying dimensions, all inputs are allocated at the maximum size.
+
+2.
+
+Alphabetical input ordering
+(#19). Input IOSurfaces are bound to MIL parameters in alphabetical order by parameter name, not by the order in which they appear in the function signature.
+
+3.
+
+Packed flat reads
+(#20). When an input surface is over-allocated (padded to uniform size), the ANE reads the flat buffer from byte 0 as packed
+[1,C,1,S]
+data, ignoring the surface’s nominal dimensions. Adapter data must be written starting at the buffer’s beginning.
+
+6.3
+Hot-Swap
+
+Once a base program is compiled with LoRA-fused frontends, swapping to a different adapter requires only changing the IOSurface input data — zero recompilation, zero program cache invalidation. Figure
+4
+illustrates the data flow.
+
+X
+W_{\text{base}}
+(baked)
+XW
+A
+(IOSurface)
+B
+(IOSurface)
+XA
+(XA)B
++
+Y
+Compiled in program
+Swappable at eval
+
+Figure 4
+:
+LoRA-fused linear layer. Base weights
+W_{\text{base}}
+are baked into the compiled ANE program (blue). Adapter matrices
+A
+,
+B
+are passed as IOSurface inputs (green) and can be swapped without recompilation.
+Y=XW_{\text{base}}+\alpha(XA)B
+.
+
+The
+OrionLoRAAdapter
+struct holds pre-allocated IOSurface tensors for all adapter matrices, loaded from BLOBFILE-format files via
+orion_lora_load()
+.
+
+7
+Numerical Stability
+
+Achieving stable training on the ANE required solving three interacting bugs that caused 100% NaN divergence after the first training step in the upstream ANEgpt system.
+
+7.1
+Bug 1: Stale Programs on Resume
+
+Root cause.
+ANE programs were compiled
+before
+checkpoint weights were loaded. The forward pass used stale (pre-checkpoint) weights, while the backward pass expected gradients consistent with the new weights. This created a weight mismatch that diverged within one step.
+
+Fix: Deferred compilation.
+Programs are now compiled
+after
+checkpoint loading, ensuring the weights baked into each program match the current optimizer state. Each process compiles exactly once with the correct weights.
+
+7.2
+Bug 2: fp16 Overflow Cascade
+
+Root cause.
+The ANE operates natively in fp16 (
+\pm
+65,504 dynamic range). Large intermediate activations overflowed to
+\pm\infty
+, which propagated through softmax and cross-entropy to produce NaN loss values.
+
+Fix: Activation clamping.
+Before softmax and layer normalization, activations are clamped to
+[-65504,+65504]
+:
+
+\hat{x}_{i}=\text{clamp}(x_{i},-65504,+65504)
+
+(2)
+
+This prevents overflow without affecting well-behaved activations (which are orders of magnitude smaller than the fp16 limit).
+
+7.3
+Bug 3: Corrupted BLOBFILE Weights
+
+Root cause.
+The BLOBFILE writer produced corrupted weight data when checkpoint tensor layouts did not match the expected MIL weight dictionary format. This caused silent numerical corruption — weights loaded without error but contained garbage values.
+
+Fix: Gradient sanitization.
+Before writing to BLOBFILE, all gradient values are sanitized: NaN
+\to
+0,
+\pm\infty\to\pm
+65504. Additionally, a validation pass detects corrupted weights early by checking for NaN/Inf values after BLOBFILE load.
+
+7.4
+Combined Effect
+
+Figure
+5
+shows the training loss before and after these fixes. The upstream system (ANEgpt) diverges to NaN at step 2 with 100% reproducibility. After the three-bug fix,
+Orion
+achieves stable training for 1,000 steps with zero NaN occurrences, verified across a 5-chain stress test, a v1.0 1,000-step run (loss: 12.3
+\to
+6.2,
+\sim
+85 min), and a v2.0 1,000-step run with delta compilation (loss: 12.3
+\to
+8.9, 22 min) (Section
+8
+).
+
+1
+2
+3
+4
+5
+13.6
+13.8
+14
+14.2
+14.4
+ANEgpt: NaN at step 2
+Training Step
+Loss
+Before fix (ANEgpt)
+After fix (Orion)
+
+Figure 5
+:
+Training loss before and after the three-bug NaN fix. ANEgpt diverges to NaN at step 2 with 100% reproducibility (red, dashed arrow indicates divergence to
+\infty
+).
+Orion
+achieves stable, monotonically decreasing loss across 5 steps with checkpoint resume (green).
+
+7.5
+Stability Validation
+
+To move beyond a single 5-step anecdote, we designed a structured stability stress test that exercises the full resume pipeline. We run 5 independent resume chains, each starting from the same pretrained weights, with each step executing in a fresh process (via
+exec()
+restart) to exercise the full checkpoint–load–compile–train–save cycle.
+
+Table 7
+:
+Training stability stress test results (Stories110M, lr=
+10^{-5}
+, grad_accum=4, M4 Max). Each chain is an independent 5-step resume sequence.
+
+Metric
+
+Value
+
+Resume chains tested
+
+5
+
+Steps per chain
+
+5 (each in a fresh process)
+
+Total training steps
+
+25
+
+NaN / Inf occurrences
+
+0 / 25
+
+Loss monotonically decreasing
+
+5 / 5 chains
+
+Step 1 loss (mean
+\pm
+std across chains)
+
+13.975\pm 0.003
+
+Step 5 loss (mean
+\pm
+std across chains)
+
+13.913\pm 0.007
+
+Step time (mean
+\pm
+std)
+
+913\pm 30
+ms
+
+Throughput (mean)
+
+0.612 TFLOPS
+
+exec()
+restart success rate
+
+25 / 25
+
+Table 8
+:
+Per-chain loss trajectories from the stability stress test. All chains decrease monotonically across all 5 steps with zero NaN.
+
+Step
+
+Chain 1
+
+Chain 2
+
+Chain 3
+
+Chain 4
+
+Chain 5
+
+1
+
+13.979
+
+13.978
+
+13.975
+
+13.974
+
+13.971
+
+2
+
+13.968
+
+13.965
+
+13.962
+
+13.961
+
+13.958
+
+3
+
+13.946
+
+13.949
+
+13.945
+
+13.941
+
+13.935
+
+4
+
+13.932
+
+13.927
+
+13.924
+
+13.926
+
+13.920
+
+5
+
+13.923
+
+13.916
+
+13.911
+
+13.911
+
+13.904
+
+Tables
+7
+and
+8
+report the results. Across 5 independent resume chains (25 total steps, each in a fresh process via
+exec()
+restart), we observe: (1) zero NaN or Inf values in any loss; (2) monotonically decreasing loss in every chain; (3) consistent loss across chains (step 1 std: 0.003, step 5 std: 0.007), indicating that the checkpoint–resume cycle introduces no drift; (4) stable throughput (
+913\pm 30
+ms/step, 0.612 TFLOPS); and (5) 100%
+exec()
+restart success.
+
+This does not constitute convergence to a useful language model — the 110M-parameter model would require thousands of steps for that — but it establishes that the
+Orion
+training loop is
+mechanically stable
+: the compile–forward–backward–update–checkpoint–restart cycle produces correct, reproducible numerical results across arbitrary resume boundaries. The engineering contribution is solving the three NaN-inducing bugs (Section
+7
+) that made this cycle impossible in the upstream ANEgpt system.
+
+8
+Evaluation
+
+All experiments run on a Mac Studio with Apple M4 Max (16 ANE cores, 40 GPU cores, 16 CPU cores, 64 GB unified memory) running macOS 15.
+
+8.1
+Inference Performance
+
+Table
+9
+and Figure
+6
+report GPT-2 124M inference throughput.
+Orion
+’s ANE full-forward path achieves 170 tokens/s in decode mode, with 100% top-1 argmax agreement against a CPU fp32 baseline (maximum logit error: 0.073 across 12 layers).
+
+Table 9
+:
+GPT-2 124M inference performance (M4 Max). CPU uses
+cblas_sgemm
+; ANE uses compiled MIL programs via private APIs.
+
+Configuration
+
+Throughput
+
+Latency (p50)
+
+CPU decode
+
+283 tok/s
+
+3.48 ms/tok
+
+ANE full forward (decode)
+
+170 tok/s
+
+5.76 ms/tok
+
+ANE prefill (first call)
+
+12 tok/s
+
+—
+
+ANE prefill (cached)
+
+165 tok/s
+
+—
+
+0
+50
+100
+150
+200
+250
+300
+350
+ANE Prefill (1st)
+ANE Prefill (cached)
+ANE Decode
+CPU Decode
+12
+165
+170
+283
+Throughput (tokens/s)
+
+Figure 6
+:
+GPT-2 124M inference throughput on M4 Max. First-call ANE prefill includes
+\sim
+1015 ms compilation time. CPU decode is faster due to ANE’s
+\sim
+2.3 ms IOSurface round-trip overhead per dispatch.
+
+The CPU decode path outperforms ANE decode due to the
+\sim
+2.3 ms IOSurface round-trip overhead per ANE dispatch. This overhead is amortized during prefill (longer sequences) but dominates for single-token decode. ANE compilation adds a one-time cost of
+\sim
+1015 ms for 24 programs, after which cached programs achieve 165 tok/s prefill throughput.
+
+CPU–ANE parity.
+
+The ANE and CPU inference paths produce
+identical
+token sequences. For the prompt “The meaning of life is,” both backends generate the exact same 64-token greedy continuation with 100% token-level agreement. This confirms that the manual SDPA decomposition (Section
+3
+), fp16
+\leftrightarrow
+fp32 conversions, and IOSurface data layout do not introduce observable numerical divergence at the output level.
+
+8.2
+Training Performance
+
+Table
+10
+compares Stories110M training performance under both the v1.0 (full recompile) and v2.0 (delta reload) regimes. Figure
+7
+shows the v1.0 loss curve over 1,000 steps.
+
+Table 10
+:
+Stories110M training performance (M4 Max). v1.0 uses full recompile +
+exec()
+restart per step; v2.0 uses delta reload in a single process.
+
+Metric
+
+v1.0
+
+v2.0
+
+Compute time (mean)
+
+908 ms/step
+
+849 ms/step
+
+Recompile / reload time
+
+4,200 ms/step
+
+494 ms/step
+
+Total step time
+
+5,108 ms/step
+
+1,345 ms/step
+
+Throughput
+
+0.612 TFLOPS
+
+0.656 TFLOPS
+
+1000-step wall time
+
+\sim
+85 min
+
+22.4 min
+
+NaN occurrences
+
+0 / 1,000
+
+0 / 1,000
+
+Process model
+
+1 step/process
+
+Single process
+
+Learning rate
+
+3\times 10^{-4}
+(fixed)
+
+3\times 10^{-4}
+(fixed)
+
+0
+200
+400
+600
+800
+1{,}000
+6
+7
+8
+9
+10
+11
+12
+13
+min: 6.19
+Training Step
+Loss
+v1.0 (
+\sim
+85 min, exec() restart)
+v2.0 (22 min, delta reload)
+
+Figure 7
+:
+Stories110M training loss on TinyStories over 1,000 steps (lr=
+3\!\times\!10^{-4}
+, grad_accum=4). v1.0 (blue): each step in a separate process via
+exec()
+restart,
+\sim
+85 min total, loss 12.3
+\to
+6.2. v2.0 (green): single process with delta reload, 22 min total, loss 12.3
+\to
+9.6, zero NaN in both. The v2.0 curve plateaus higher because the single-process data loader sees a different sample ordering than v1.0’s per-process restarts; the training loop itself is equally stable. The speedup is purely mechanical: 3.8
+\times
+less wall time for the same step count.
+
+In v1.0, the dominant bottleneck was compilation: each
+exec()
+cycle compiled 72 ANE programs (
+\sim
+4.2 s), then executed the forward/backward pass in
+\sim
+908 ms. With delta compilation (v2.0), 1,000 training steps complete in 22.4 minutes instead of
+\sim
+85 minutes — a 3.8
+\times
+wall-time speedup. The recompilation overhead drops from 83.9% to 36.8% of step time, and the entire training run executes in a single process with zero
+exec()
+restarts.
+
+Figure
+8
+illustrates the per-step time breakdown across the two versions.
+
+Compute
+Recompile/Reload
+Total
+0
+2{,}000
+4{,}000
+908
+4{,}200
+5{,}108
+849
+494
+1{,}345
+Component
+Time (ms)
+v1.0 (full recompile)
+v2.0 (delta reload)
+
+Figure 8
+:
+Per-step time breakdown: v1.0 vs v2.0. Compute time is nearly identical (
+\sim
+850–900 ms); the 3.8
+\times
+total speedup comes entirely from replacing full ANE recompilation (4,200 ms) with delta reload (494 ms).
+
+0
+10
+20
+30
+40
+50
+60
+70
+80
+90
+100
+Delta Reload
+22
+85
+Wall Time (minutes)
+3.8
+\times
+faster
+
+Figure 9
+:
+1,000-step training wall time comparison. v2.0 (delta reload) completes in 22 minutes vs
+\sim
+85 minutes for v1.0 (full recompile), a 3.8
+\times
+speedup. Both runs: Stories110M, TinyStories, lr=
+3\!\times\!10^{-4}
+, grad_accum=4, zero NaN.
+
+8.3
+Kernel Microbenchmarks
+
+Figure
+10
+shows individual kernel latencies, revealing the overhead structure of ANE dispatch.
+
+0.01
+0.1
+1
+10
+100
+Single-tok dispatch
+Weight swap eval
+ANE decode/tok
+Weight swap compile
+ANE prefill cached
+-3.51
+ms
+-1.9
+ms
+1.75
+ms
+2.42
+ms
+4.55
+ms
+Latency (ms, log scale)
+
+Figure 10
+:
+ANE kernel latencies (M4 Max, log scale). Single-token dispatch shows the bare XPC+IOKit overhead (
+\sim
+0.03 ms). The gap between dispatch and decode per-token (
+\sim
+5.78 ms) reflects IOSurface round-trip costs across 12 transformer layers.
+
+8.4
+ANE Acceleration of Specific Operations
+
+Table
+11
+shows that the ANE provides substantial speedups for specific operations, particularly softmax over large vocabularies.
+
+Table 11
+:
+ANE vs CPU latency for individual operations (Stories110M).
+
+Operation
+
+CPU
+
+ANE
+
+Speedup
+
+Classifier fwd (embed
+\times
+
+x
+)
+
+10.77 ms
+
+1.06 ms
+
+10.2
+\times
+
+Softmax (vocab=32000)
+
+81.11 ms
+
+2.40 ms
+
+33.8
+\times
+
+RMSNorm backward
+
+0.18 ms
+
+0.21 ms
+
+\sim
+1
+\times
+
+8.5
+Framework Comparison
+
+Table
+12
+positions
+Orion
+among existing frameworks for LLMs on Apple silicon.
+Orion
+is the only system that targets the ANE directly and supports training.
+
+Table 12
+:
+LLM frameworks on Apple silicon.
+Orion
+is unique in targeting the ANE directly for both training and inference, with delta compilation for weight updates and LoRA hot-swap.
+
+Framework
+
+Hardware
+
+Training
+
+ANE Direct
+
+Compiler
+
+Weight Update
+
+MLX
+(
+3
+)
+
+GPU
+
+Yes
+
+No
+
+Yes
+
+In-memory
+
+llama.cpp
+(
+8
+)
+
+CPU+GPU
+
+No
+
+No
+
+No
+
+N/A
+
+MLC-LLM
+(
+5
+)
+
+GPU
+
+No
+
+No
+
+Yes
+
+N/A
+
+CoreML
+(
+2
+)
+
+CPU/GPU/ANE
+
+No
+
+No
+
+Yes
+
+Recompile
+
+Orion
+
+ANE
+
+Yes
+
+Yes
+
+Yes
+
+Delta reload
+
+9
+Discussion
+
+NPU vs GPU tradeoffs.
+
+On the M4 Max, the GPU (via MLX or Metal) currently achieves higher absolute throughput for LLM inference than the ANE. The CPU baseline (283 tok/s) also outperforms ANE decode (170 tok/s) for GPT-2 124M due to per-dispatch IOSurface overhead. However, the ANE has three advantages: (1)
+zero idle power
+— the ANE is hard power-gated when unused, making it ideal for always-on inference; (2)
+dedicated silicon
+— ANE inference leaves the GPU and CPU entirely free for other workloads; (3)
+operation-specific speedups
+— softmax over large vocabularies is 33.8
+\times
+faster on ANE than CPU.
+
+Delta compilation resolves the training bottleneck.
+
+The ANE’s compile-then-dispatch model created a fundamental tension with gradient descent in v1.0: every weight update required full recompilation, consuming 83.9% of wall time. Delta compilation (Section
+5
+) resolves this by exploiting the
+_ANEModel
+unload/reload interface to update weights without invoking the compiler. This reduces recompilation overhead from 4,200 ms to 494 ms (8.5
+\times
+), bringing the recompile fraction down to 36.8%. The remaining 494 ms is dominated by disk I/O for BLOBFILE writes (
+\sim
+8 ms per kernel
+\times
+60 kernels); further optimization could target in-memory weight patching if the ANE’s IOSurface-backed model format permits it.
+
+Implications for other NPUs.
+
+Many of the constraints we document (Table
+3
+) are likely artifacts of the ANE’s microarchitecture and compiler, not fundamental NPU limitations. However, the pattern of undocumented restrictions, silent failures, and compile-time weight baking may apply to other vendor NPUs (Qualcomm Hexagon, Samsung NPU, Google TPU Edge). Our characterization methodology — systematic probing through private APIs — could be applied to these platforms.
+
+Limitations.
+
+Orion
+has several limitations: (1) it uses Apple’s private APIs, which may change without notice; (2) delta compilation still accounts for 36.8% of step time — further optimization (in-memory weight patching) may be possible; (3) the system has been validated on M4 Max only (other Apple silicon variants may have different ANE configurations); (4) training demonstrates stable optimization but has not been evaluated on downstream tasks; (5) quantization (INT8/INT4) is not yet supported; (6) no learning rate schedule (warmup/decay) is implemented; (7) LoRA inference integration is implemented for the compiler frontends and adapter loader but not yet wired into the full Stories110M inference pipeline.
+
+10
+Related Work
+
+On-device LLM inference.
+
+llama.cpp
+(
+8
+)
+pioneered efficient CPU/GPU inference for LLMs on consumer hardware, including Apple silicon via Metal. MLX
+(
+3
+)
+provides a NumPy-like array framework optimized for Apple’s unified memory architecture, targeting the GPU. MLC-LLM
+(
+5
+)
+uses TVM
+(
+4
+)
+compilation to generate GPU kernels. All three frameworks bypass the ANE entirely. CoreML
+(
+2
+)
+can schedule operations to the ANE but provides no control over this scheduling and does not support training.
+
+NPU characterization.
+
+16
+characterized mobile NPU behavior on Android devices, finding similar patterns of undocumented constraints and opaque scheduling.
+14
+proposed systematic benchmarking methodologies for NPUs. For the ANE specifically, maderix
+(
+12
+;
+13
+)
+produced the first hardware-level characterization through direct API access, measuring SRAM boundaries, dispatch overhead, and peak throughput. Our work extends this characterization to MIL IR-level constraints encountered during compiler and training loop development, and demonstrates that these constraints can be managed by a complete LLM system.
+
+Efficient training.
+
+FlashAttention
+(
+6
+)
+optimizes attention computation for GPUs through IO-aware tiling.
+Orion
+’s attention kernels are constrained by the ANE’s fixed instruction set rather than custom kernel design. On-device training surveys
+(
+15
+)
+note the absence of NPU-targeted training systems;
+Orion
+addresses this gap.
+
+ANE-specific work.
+
+Beyond the three projects discussed in Section
+2
+, the ANE has been targeted through CoreML model conversion (e.g.,
+coremltools
+), which allows indirect ANE execution but provides no guarantee of ANE scheduling and no training capability. The maderix characterization work
+(
+12
+;
+13
+)
+laid essential groundwork by demonstrating that direct ANE programming is viable and by establishing the hardware performance envelope.
+Orion
+builds on this foundation to deliver, to our knowledge, the first complete system combining direct ANE inference, stable training with checkpoint resume, and a compiler pipeline for transformer models.
+
+11
+Conclusion
+
+We presented
+Orion
+, to our knowledge the first open end-to-end system for programming Apple’s Neural Engine directly for both LLM inference and stable, resumable training. Building on the foundational hardware characterization by maderix
+(
+11
+;
+12
+;
+13
+)
+, we extended the public knowledge of ANE constraints to a consolidated catalog of 20 restrictions, including 14 newly discovered MIL IR, memory, and I/O constraints.
+Orion
+’s compiler lowers a 27-operation graph IR through five optimization passes to ANE-native MIL, and its runtime manages the complexities of IOSurface I/O, program caching, and delta compilation.
+
+A key finding is that ANE’s compile-time weight baking — previously considered a fundamental bottleneck for training — can be circumvented via delta compilation: unloading compiled programs, patching weight files on disk, and reloading. This reduces per-step recompilation from 4,200 ms to 494 ms (8.5
+\times
+), enabling 1,000-step training in 22 minutes with zero NaN occurrences. We also introduced LoRA adapter-as-input, enabling hot-swap of low-rank adapters via IOSurface inputs without recompilation.
+
+The ANE represents a vast, untapped resource for on-device AI: billions of devices carry dedicated neural processing hardware that no public framework fully exploits. By releasing
+Orion
+as open source, we aim to enable the research community to build on this characterization and develop the next generation of NPU-native AI systems.
+
+Open source.
+
+Orion
+is available at
+https://github.com/mechramc/Orion
+under the MIT license. The repository includes all runtime source code (Objective-C), Python scripts for one-time weight conversion from HuggingFace formats, benchmark harness, and documentation.
+

@@ -1,0 +1,2441 @@
+Enhancing OLAP Resilience at LinkedIn
+Praveen Chaganlal, Jia Guo, Vivek Vaidyanathan, Dino Occhialini, Sonam Mandal, Subbu Subramaniam, Siddharth Teotia, Tianqi Li, Xiaxuan Gao, Florence Zhang
+
+Abstract
+. Real-time OLAP datastores are critical infrastructure for modern enterprises, powering interactive analytics on petabyte-scale datasets with subsecond latency requirements. As these systems become integral to service architectures, maintaining strict SLAs under failures, load spikes, and cluster changes is as important as raw performance. We present a set of resiliency mechanisms developed for Apache Pinot at LinkedIn, applicable to modern OLAP systems broadly. We introduce Query Workload Isolation (QWI), which provides workload-level CPU and memory budgeting across Pinot’s broker and server tiers via fine-grained resource accounting and sub-millisecond enforcement, delivering predictable tail latency and fairness with under 1% overhead. We present Impact-Free Rebalancing for SLA-safe data movement during routine operations (e.g., upgrades, scale-out, and recovery), and Maintenance Zone Awareness to place replicas across fault domains and mitigate correlated failures. We also describe Adaptive Server Selection , which routes queries using real-time load and performance signals to avoid slow or failing nodes while preserving balanced utilization. Together, these mechanisms form a holistic resiliency framework deployed in production at LinkedIn, enabling stable query latency and high availability at scale.
+
+
+
+*
+*
+footnotetext:
+All code available at
+https://github.com/apache/pinot
+
+1.
+Introduction
+
+OLAP datastores provide interactive insights on massive data in domains ranging from finance, advertising, and social networks. Modern real-time analytics applications require subsecond query latency on PB-scale datasets at high QPS. To meet these needs, companies rely on OLAP engines (e.g., Druid, Pinot, ClickHouse, AnalyticDB) that run on large clusters and ingest streaming data continuously. For example, Alibaba’s AnalyticDB deployment spans more than 2,000 nodes and 10+ PB of data. With OLAP datastores becoming an important piece of the real-time service architecture, upholding strict SLAs becomes as important as providing low-latency analytics. In this paper, we present several Pinot features and mechanisms built at LinkedIn from the perspective of Operations and Resilience, which can be generically applicable to modern OLAP systems.
+
+1.1.
+Apache Pinot Architecture Overview
+
+Apache Pinot
+(
+32
+)
+is a real-time distributed OLAP system designed for low-latency analytics. Pinot consumes events from streaming ingestion pipelines such as Kafka
+(
+18
+)
+, Kinesis
+(
+1
+)
+, and Pub/Sub
+(
+27
+)
+, or from data lakes
+(
+29
+)
+via batch processing systems such as Spark
+(
+19
+)
+, Hive
+(
+17
+)
+, and MapReduce
+(
+20
+)
+. Pinot indexes data as soon as it is ingested, providing a platform for building real-time dashboards on continuous streaming data. Pinot can achieve query latencies as low as 20ms at the 99th percentile.
+
+The system is organized as three logical tiers (Figure
+1
+):
+
+Figure 1
+.
+(Simplified) Pinot architecture.
+Block diagram with controller, brokers, servers, segment store, and minions; arrows show query routing from broker to servers and metadata coordination from controller.
+
+(1)
+
+Controller.
+Manages administrative tasks such as adding, deleting, and configuring Pinot tables and their segments. The controller maintains segment-to-instance mappings in the metadata store and coordinates cluster-wide operations.
+
+(2)
+
+Broker.
+The entry point for Pinot queries. Brokers perform scatter–gather execution by selecting target servers using routing tables, dispatching sub-queries in parallel, and aggregating/merging partial results into a final response returned to the client.
+
+(3)
+
+Server.
+Hosts segments (Pinot’s term for shards) and executes queries. Servers perform the heavy lifting in query processing, scanning indexed data, applying filters, and computing partial aggregations that are sent back to brokers.
+
+Pinot has a flexible, horizontally scalable architecture that allows service providers to tune hardware for particular applications according to constraints of cost, maximum tolerated latency at a desired throughput, data retention, and schema. At LinkedIn, Pinot serves high-throughput, low-latency site-facing applications such as Who-Viewed-My-Profile
+(
+41
+)
+, advertiser analytics
+(
+39
+)
+, Talent Insights
+(
+40
+)
+, and session feed item selection
+(
+38
+)
+, as well as non-mission-critical applications such as internal dashboards and ad-hoc data analysis.
+
+Pinot was built at LinkedIn and open-sourced in 2015. Since then, notable features have been added, including the multi-stage query engine
+(
+11
+)
+(enabling operations like JOIN and window functions
+(
+53
+)
+), plug-in based ingestion mechanisms
+(
+15
+)
+, support for real-time only tables, UPSERT
+(
+16
+)
+, and the Pinot SPI
+(
+12
+)
+. Beyond these functional capabilities, Pinot has also added features for easing operations and reducing cost, including new indexing mechanisms (JSON and Range indexes
+(
+13
+)
+), replica groups
+(
+14
+)
+, efficient controller resource usage
+(
+10
+)
+.
+
+1.2.
+Background
+
+This section provides a technical background on Pinot that is necessary to understand the new design in the following sections. We will refer back to these concepts frequently.
+
+Figure 2
+.
+Replica group assignment and routing
+
+Segment Assignment Strategies.
+Most data systems use consistent hashing for partition assignment; CRUSH
+(
+65
+)
+and CRUSHED
+(
+8
+)
+add topology-aware constraints but do not ensure fully even distribution or support capacity-based constraints. Helix
+(
+9
+)
+combines hard placement rules with soft resource constraints, but lacks assignment uniformity and rebalancing efficiency at Pinot’s scale.
+
+Pinot uses replica-group segment assignment. The controller maintains a static segment-to-server mapping: it assigns all segments to servers in a designated replica group, then mirrors this across the remaining groups, ensuring every segment is replicated once per group on different servers (Figure
+2
+, left). The layout is symmetric across replica groups (RGs). We define a
+Mirror Server Set
+(MSS) as the set of servers—one from each RG—hosting replicas of the same segment set. This mirrored structure enables seamless scaling, improved observability, A/B testing, and simpler operations.
+
+Routing Strategies.
+With
+N
+replica groups of
+M
+servers each, the broker picks a replica group at random for each query and fans out sub-queries to the
+M
+servers within it. Each group is a self-contained replica containing all segments, and the mirrored assignment ensures each server has an identical mirror in every other group. This allows Pinot to scale throughput (more replicas) and data size (more servers per replica) independently. If a server is unavailable (e.g., during deployment), the broker substitutes the corresponding mirror server from another group, keeping load reasonably balanced.
+
+1.3.
+Contributions
+
+Beyond raw performance, a modern OLAP system must be resilient to failures, load spikes, and cluster changes. This paper presents four mechanisms that strengthen Pinot’s ability to maintain low-latency analytics under adverse conditions:
+
+Query Workload Isolation (QWI).
+
+OLAP engines serving heterogeneous workloads on shared clusters face noisy-neighbor problems: complex queries can saturate resources, impacting co-located workloads. We present QWI, which introduces workload-level CPU and memory budgeting into Pinot’s query execution layer. QWI models each workload as a first-class entity with enforceable budgets propagated across brokers and servers, combining fine-grained resource accounting with deterministic enforcement. We also describe query killing mechanisms that preemptively terminate queries risking resource exhaustion, delivering predictable tails with less than 1% overhead.
+
+Maintenance Zone Aware Data Placement and Rebalance.
+
+Routine operations such as adding nodes, rolling upgrades, and failure recovery require data redistribution, which can disrupt query processing and degrade data availability if replicas are not placed with awareness of fault-domain topology. We present a two-part approach: first, a Maintenance Zone (MZ)–aware assignment algorithm that spreads replicas across fault domains using a greedy swap procedure with provable correctness guarantees, ensuring continued service even when an entire zone is drained; and second, an impact-free rebalance procedure that transitions from the current placement to the target assignment by draining query traffic before substantial data movement, enabling capacity changes without affecting SLAs.
+
+Adaptive Server Selection (ADSS).
+
+Query routing should dynamically choose hosts based on cluster conditions rather than relying on round-robin assignments. Drawing inspiration from prior work on adaptive routing
+(
+60
+)
+, we demonstrate how these strategies can be effectively applied to OLAP datastores while keeping scheduling overhead minimal. By routing queries to servers based on real-time load metrics, the system avoids slow nodes and meets low-latency guarantees even during failures.
+
+Together, these mechanisms—workload isolation, impact-free rebalancing, zone-aware placement, and adaptive routing—provide holistic resiliency for production OLAP deployments at cloud scale.
+
+2.
+Query Workload Isolation
+
+Modern OLAP platforms like Pinot run hundreds of heterogeneous workloads—interactive dashboards, recommendation pipelines, and near-real-time metrics—on shared compute clusters. Each workload has distinct query shapes, concurrency profiles, and latency SLOs, yet all contend for the same CPU and memory resources. This section presents Query Workload Isolation (QWI), a system that introduces workload-level resource budgeting into Pinot’s query execution layer.
+
+2.1.
+Motivation
+
+One-cluster-per-workload is impractical: traffic is bursty and diurnal, ingestion would be duplicated across silos, and operational effort scales with cluster count. Shared pools exploit statistical multiplexing to raise utilization; the challenge becomes
+safe sharing
+.
+
+Coarse controls fail because per-query cost is heavy-tailed: a microsecond aggregation and a multi-second high-cardinality join are both “one query” to QPS caps and concurrency limits. Even with conservative sizing, we observe a persistent mismatch between cluster and workload health: aggregate CPU remains modest while workloads miss SLOs. The culprit is interference—short-lived surges from expensive workloads monopolize resources on hosts they land on, starving co-tenants. Secondary effects (head-of-line blocking, retry storms, GC churn) amplify tail latency.
+
+These observations motivate QWI, which addresses resource management at two levels: (1)
+query-level accounting and killing
+to handle runaway individual queries, and (2)
+workload-level budgeting
+to enforce fair sharing across logical workload groups.
+
+2.2.
+Design Overview
+
+QWI models each workload as a first-class entity with enforceable CPU and memory budgets propagated across brokers and servers. The design satisfies four constraints:
+
+(1)
+
+End-to-end enforcement
+: isolation spans both tiers with consistent semantics.
+
+(2)
+
+Low overhead
+: less than 1% CPU and memory even at high QPS.
+
+(3)
+
+Local decisions
+: sub-millisecond responsiveness.
+
+(4)
+
+Robustness under churn
+: tolerates failures without violating budget semantics.
+
+The architecture has four components.
+QueryWorkloadConfig
+stores per-workload budgets in ZooKeeper.
+BudgetManager
+maintains a per-host ledger tracking remaining CPU and memory for each workload. The
+Resource Accountant
+continuously measures per-query consumption using lock-free sampling. The
+BudgetEnforcer
+applies admission control and in-execution enforcement.
+
+2.3.
+Resource Accounting
+
+The foundation of QWI is accurate, low-overhead measurement of per-query resource consumption. This is challenging in Pinot’s execution model: queries decompose into tasks distributed across thread pools, with each thread processing multiple segments. Combined with
+Java
+’s opaque memory management, attributing usage to individual queries is difficult.
+
+Existing approaches are not directly applicable. Trino’s allocation-time accounting blocks when memory is insufficient, conflicting with Pinot’s millisecond SLAs. Heuristic approaches (Spark, Lucene) require per-data-structure tuning, creating a maintenance burden and extra effort to retrofit each existing customize data structure.
+
+Algorithm 1
+
+Sample And Aggregate Metrics
+
+1:
+
+//
+T: execution threads
+
+2:
+
+//
+S: threadId
+\to
+<queryId, taskId>: task state from worker thread
+
+3:
+
+//
+M: threadId
+\to
+metric: metric from worker thread
+
+4:
+
+//
+previousTask: tid
+\to
+<queryId, taskId>
+
+5:
+
+//
+activeMetric: tid
+\to
+metric
+
+6:
+
+//
+inactiveMetric: queryId
+\to
+metric
+
+7:
+
+8:
+
+procedure
+
+sampleAndAggregate
+(T)
+
+9:
+
+activeQueries =
+\emptyset
+
+10:
+
+// sample the usage for each running thread
+
+11:
+
+for
+t
+\in
+T
+do
+//
+for each execution thread
+
+12:
+
+threadId = t.id // get thread id
+
+13:
+
+<queryId, taskId> = S(threadId) // current task the thread
+
+14:
+
+metric = M(threadId) // current usage metric
+
+15:
+
+activeQueries = activeQueries
+\cup
+{ queryId }
+
+16:
+
+<queryId’, taskId’> = previousTask(threadId)
+
+17:
+
+if
+<queryId’, taskId’> == <queryId, taskId>
+then
+
+18:
+
+// if the task has not changed, simply sample metric
+
+19:
+
+activeMetric(threadId) = metric
+
+20:
+
+else
+
+21:
+
+// if the task has switched since last observe
+
+22:
+
+// accumulate the metric as the prev task has finished
+
+23:
+
+inactiveMetric(queryId’) += activeMetric(threadId)
+
+24:
+
+previousTask(threadId) = <queryId, taskId>
+
+25:
+
+activeMetric(threadId) = metric
+
+26:
+
+end
+
+if
+
+27:
+
+end
+
+for
+
+28:
+
+29:
+
+// if the totalMemory allocation exceeds some point
+
+30:
+
+// aggregate the usage by queryId
+
+31:
+
+if
+usageThresholdCheck() == true
+then
+
+32:
+
+activeQueryToUsage: queryId
+\to
+metric
+
+33:
+
+for
+queryId
+\in
+activeQueries
+do
+
+34:
+
+activeQueryToUsage(queryId) += inactiveMetric(queryId)
+
+35:
+
+end
+
+for
+
+36:
+
+for
+t
+\in
+T
+do
+
+37:
+
+<queryId, taskId> = previousTask(t.id)
+
+38:
+
+metric = activeMetric(t.id)
+
+39:
+
+activeQueryToUsage(queryId) = metric
+
+40:
+
+end
+
+for
+
+41:
+
+// pluggable strategy based on activeQueryToUsage
+
+42:
+
+end
+
+if
+
+43:
+
+for
+queryId
+\in
+inactiveMetric
+do
+
+44:
+
+if
+queryId
+\notin
+activeQueries
+then
+
+45:
+
+inactiveMetric.remove(queryId)
+//remove finished queries
+
+46:
+
+end
+
+if
+
+47:
+
+end
+
+for
+
+48:
+
+end
+
+procedure
+
+We introduce sampling-based accounting that separates metric collection (per-thread, lock-free) from aggregation (centralized, periodic), as shown in Figure
+3
+. Upon accepting a task, each worker thread establishes a context with a
+\langle\text{queryID},\text{taskID}\rangle
+pair and periodically writes CPU time and memory metrics to a per-thread region using volatile primitives. Periodically, a dedicated sampler scans all threads, tracking task transitions to determine active queries and their resource consumption. Details described in Algorithm
+1
+. This design achieves less than 0.3% CPU overhead at 500 QPS, demonstrating fine-grained tracking without impacting latency.
+
+Figure 3
+.
+Resource accounting
+
+2.4.
+Workload Configuration and Budget Propagation
+
+Operators define workloads with explicit resource budgets that are enforced continuously, preventing any workload from consuming more than its fair share.
+
+The
+cpuCostNs
+budget specifies CPU time in nanoseconds per enforcement window, measured via
+ThreadMXBean
+. This metric is hardware-agnostic—it measures actual CPU cycles consumed rather than wall-clock time, providing consistent semantics across heterogeneous hardware. The
+memoryCostBytes
+budget specifies heap allocation in bytes per window, tracked via sampling-based accounting of per-query object allocations. The current implementation assumes homogeneous server configurations within a cluster; extending budget normalization to heterogeneous deployments (e.g., weighting by CPU generation, core count, or memory capacity) remains future work.
+
+⬇
+
+{
+
+"
+workloadName
+"
+:
+
+"
+analytics
+-
+workload
+"
+,
+
+"
+nodeConfigs
+"
+:
+
+[
+
+{
+
+"
+nodeType
+"
+:
+
+"
+SERVER
+"
+,
+
+"
+enforcementProfile
+"
+:
+
+{
+
+"
+cpuCostNs
+"
+:
+
+1
+.
+0
+e9
+,
+
+"
+memoryCostBytes
+"
+:
+
+5
+.
+0
+e9
+
+}
+,
+
+"
+propagationScheme
+"
+:
+
+{
+
+"
+type
+"
+:
+
+"
+TABLE
+"
+,
+
+"
+tables
+"
+:
+
+[
+"
+tableA
+"
+,
+
+"
+tableB
+"
+]
+
+}
+
+}
+
+...
+
+]
+
+}
+
+Figure 4
+.
+Example workload configuration with per-node resource budgets and table-level propagation.
+
+Figure 5
+.
+Budget propagation: controller derives per-host limits from workload config and pushes to relevant instances.
+
+A workload configuration specifies budgets separately for brokers and servers, with flexible propagation schemes (Figure
+4
+). The Pinot controller translates this logical budgets into per-host limits (Figure
+5
+). Propagation operates in two modes:
+table-level
+pushes budgets only to hosts serving specified tables, while
+tenant-level
+propagates to all hosts serving a tenant. This flexibility allows operators to scope budgets at the granularity that matches their workload boundaries.
+
+On each host, BudgetManager maintains a mapping from (workloadName, resourceType) to remaining budget, exposing
+tryCharge
+(lock-free, succeeds iff budget remains) and
+addOrUpdateWorkload
+(idempotent for safe reapplication). Budgets decrease monotonically within a window and reset when the window expires.
+
+2.5.
+Enforcement
+
+QWI enforces resource limits at two complementary levels.
+
+Query-level enforcement.
+
+Individual queries that threaten system stability are terminated based on resource thresholds. When heap usage reaches 85%, the most resource-intensive query is killed; at 99%, all queries are terminated to prevent OOM crashes. For latency-sensitive deployments, per-query CPU-time limits trigger earlier intervention. This provides a critical safety net—even without workload budgets configured, the system protects itself from runaway queries.
+
+Workload-level enforcement.
+
+Workload budgets enable proactive, continuous isolation. Each query is tagged with its workload, and resource consumption is charged against that workload’s budget. At admission, a provisional charge tests budget availability; if insufficient, the query is rejected immediately. During execution, threads periodically charge measured deltas (Figure
+6
+). When a workload exhausts its budget on a host, new queries are rejected and in-flight queries may be cancelled.
+
+The current design enforces strict per-workload budgets without support for bursting (temporarily exceeding budgets when cluster capacity is available) or quota stealing (borrowing unused budget from other workloads). These features are planned for future work, as they could improve utilization while requiring careful design to maintain isolation guarantees.
+
+Figure 6
+.
+Enforcement timeline: budgets refill each window; queries charge against their workload’s budget continuously.
+
+Algorithm 2
+
+Per-Thread Budget Enforcement
+
+1:
+
+//
+w: workload associated with query q
+
+2:
+
+//
+CPU, MEM: resource types
+
+3:
+
+4:
+
+procedure
+
+enforcebudget
+(q, w)
+
+5:
+
+prevCpu = threadCpuNow()
+
+6:
+
+prevMem = threadBytesNow()
+
+7:
+
+for
+each accounting interval
+do
+
+8:
+
+cpu = threadCpuNow()
+
+9:
+
+mem = threadBytesNow()
+
+10:
+
+cpuDelta = cpu - prevCpu
+
+11:
+
+memDelta = mem - prevMem
+
+12:
+
+13:
+
+// Charge CPU first, then memory
+
+14:
+
+// If either fails, cancel query
+
+15:
+
+if
+!tryCharge(w, CPU, cpuDelta)
+or
+!tryCharge(w, MEM, memDelta)
+then
+
+16:
+
+cancelQuery(q)
+
+17:
+
+break
+
+18:
+
+end
+
+if
+
+19:
+
+20:
+
+prevCpu = cpu
+
+21:
+
+prevMem = mem
+
+22:
+
+end
+
+for
+
+23:
+
+end
+
+procedure
+
+These two mechanisms are complementary: query-level enforcement handles individual outliers and emergency scenarios, while workload-level enforcement ensures fair sharing under normal operation. Both operate host-locally, bounding blast radius and avoiding coordination overhead.
+
+Workload-level enforcement operates at two stages of query processing. At admission, QWI performs a provisional charge against the workload’s budget before query planning; if insufficient budget remains, the query is rejected immediately, preventing exhausted workloads from queuing additional work. During execution, worker threads periodically charge their measured CPU and memory deltas; When a workload’s budget reaches zero on a host, QWI (1) stops admitting new queries for that workload and (2) may preemptively cancel in-flight queries, depending on configuration. All enforcement is strictly host-local—each broker and server maintains its own view of workload budgets and makes decisions independently. This bounds blast radius (a budget-exhausted workload on one host doesn’t affect other hosts) and avoids coordination overhead in the critical path.
+
+The enforcement window length
+W
+controls the tradeoff between responsiveness and stability: large windows behave like hard quotas that throttle until reset, while small windows act as rate limiters that smooth bursts. Our evaluation found that 5–10 second windows work best in production—shorter windows over-represent transient spikes when estimating p95-based budgets.
+
+QWI is designed for independent operation under partial failures. Hosts cache their assigned budgets locally, so enforcement continues uninterrupted even if the controller becomes unavailable. When a host restarts or misses a propagation message, it fetches current budgets from the controller on startup; the idempotent
+addOrUpdateWorkload
+API ensures safe reapplication without risk of duplicate or stale state.
+
+2.6.
+Evaluation
+
+We evaluated QWI across five dimensions: runtime overhead, budget enforcement accuracy, workload isolation effectiveness, fairness and parameter sensitivity. Experiments ran on three production-grade clusters, each with approximately 50 instances on Linux servers with 40 vCPUs (Intel Xeon E5-2680 v3), 128 GB RAM, and 3 TB SSD:
+
+(1)
+
+Cluster A
+: Lightweight aggregations, high throughput ( 1000 QPS/replica)
+
+(2)
+
+Cluster B
+: Compute-heavy group-by queries, moderate throughput ( 100 QPS/replica)
+
+(3)
+
+Cluster C
+: Mixed query complexity, latency-sensitive ( 30 QPS/replica)
+
+CPU (%)
+
+Heap (GB)
+
+P99 (ms)
+
+Cluster
+
+Base
+
++QWI
+
+Base
+
++QWI
+
+Base
+
++QWI
+
+A
+
+12.3
+
+12.4
+
+18.0
+
+18.4
+
+45
+
+45
+
+B
+
+21.8
+
+22.0
+
+18.5
+
+19.0
+
+65
+
+66
+
+C
+
+30.0
+
+30.3
+
+19.8
+
+20.3
+
+38
+
+38
+
+Table 1.
+Runtime overhead:
+<
+1% CPU, 0.5 GB heap, no P99 impact.
+
+Overhead.
+A practical isolation mechanism must impose minimal overhead on normal query execution. We replayed 24-hour production traces against each cluster with and without QWI enabled. As shown in Table
+1
+, QWI added less than 1% CPU overhead across all cluster types, from high-throughput lightweight queries (Cluster A) to compute-intensive workloads (Cluster B). Heap usage increased by approximately 0.5 GB due to per-query tracking structures. Critically, P99 latency remained unchanged, confirming that QWI’s sampling-based accounting does not introduce latency variability into the query path.
+
+(a)
+
+CPU cost
+
+(b)
+
+Memory cost
+
+Figure 7
+.
+Budget enforcement: without QWI (blue), cost scales with QPS; with QWI (red), cost flattens at budget (green).
+
+Budget enforcement.
+We evaluated whether QWI accurately enforces configured budgets under load increases. For each workload, we set CPU and memory budgets to match baseline usage, then gradually increased query volume by 10–50%. Figure
+7
+shows representative results from Cluster A. Without QWI (blue line), resource consumption scaled proportionally with QPS—a 50% traffic increase produced approximately 50% higher CPU and memory usage. With QWI enabled (red line), consumption flattened at the configured budget (green line) as excess queries were rejected. Across all clusters, CPU budget accuracy ranged from 95–100%, while memory accuracy ranged from 90–100%. The slightly lower memory accuracy reflects the inherent variability in per-query allocation patterns and the sampling-based measurement approach.
+
+Figure 8
+.
+Workload isolation: heavy workload degrades co-tenant P95 without QWI; with QWI, co-tenant recovers.
+
+Workload isolation.
+The critical test for QWI is whether it protects co-located workloads from interference—the noisy-neighbor problem that plagues multi-tenant OLAP deployments. We ran two workloads on shared infrastructure: a compute-heavy workload (Workload 1) and a latency-sensitive workload (Workload 2). Figure
+8
+shows P95 latency across three phases:
+
+(1)
+
+Baseline
+: Both workloads operate at steady state with P95 latencies of approximately 650 ms and 500 ms respectively, well within their SLA targets.
+
+(2)
+
+Without QWI
+: We increased Workload 1’s query complexity by introducing more expensive aggregation patterns. Both workloads’ P95 latencies spiked to over 6 seconds—a 10
+\times
+degradation—even though Workload 2’s traffic pattern was unchanged. This demonstrates the noisy-neighbor problem: resource contention from one misbehaving workload propagates to starve co-tenants of CPU and memory.
+
+(3)
+
+With QWI
+: Under identical conditions, Workload 2’s P95 returned to baseline (approximately 500 ms with less than 5% deviation) while Workload 1 was constrained to its configured budget. Excess queries from Workload 1 were rejected rather than allowed to consume shared resources.
+
+These results validate QWI’s core value proposition: workloads can safely share infrastructure without risking SLA violations from neighboring workloads. The protected workload experiences consistent latency regardless of co-tenant behavior.
+
+(a)
+
+Balanced
+
+(b)
+
+Skewed
+
+Figure 9
+.
+Enforcement fairness: kills follow per-host pressure, not cluster-wide quotas.
+
+Fairness.
+QWI’s per-host budget propagation should concentrate enforcement where pressure actually occurs. Figure
+9
+confirms this: under balanced load, query rejections distribute evenly across hosts; under skewed segment placement, rejections concentrate on heavily loaded hosts while lightly loaded hosts continue serving normally. This demonstrates that QWI tracks local resource pressure rather than enforcing rigid cluster-wide quotas.
+
+(a) CPU vs. window
+
+(b) Memory vs. window
+
+Figure 10
+.
+Window sensitivity: cost scales linearly with window length.
+
+Window sensitivity.
+
+The enforcement window
+W
+governs the responsiveness-stability tradeoff. Figure
+10
+shows that CPU and memory costs scale linearly with window length, confirming unbiased accounting. We recommend 5-second windows for production: shorter windows over-represent transient spikes in p95-based budgets, while longer windows delay response to sustained overload.
+
+Figure 11
+.
+Aggregation frequency: 1 ms achieves near-zero deviation from ground truth.
+
+Aggregation frequency.
+Sampling frequency significantly affects measurement accuracy (Figure
+11
+). At 1 ms intervals, deviation from ground truth is near zero; at 5–10 ms, errors reach 50–80% as short-lived queries complete between samples. The 1 ms default captures fine-grained behavior while adding less than 1% overhead.
+
+3.
+Maintenance Zone Aware Data Placement and Rebalance
+
+3.1.
+Motivation
+
+Pinot clusters frequently undergo lifecycle events—scaling up or down to match changing workload requirements, rolling upgrades, kernel patches, and failure recovery. These events require data redistribution (
+rebalancing
+) across servers, which introduces two interrelated challenges.
+
+First, the redistribution process itself can degrade query performance. In production, we observe latency impact caused by some combination of the following:
+
+(1)
+
+Downloading data consumes network and disk bandwidth
+
+(2)
+
+Page-cache eviction during disk writes
+
+(3)
+
+Index generation on newly loaded segments
+
+(4)
+
+Unbalanced segment load across hosts while data is being moved
+
+Second, after redistribution, replicas must be placed with awareness of the cluster’s fault-domain topology. In modern cloud and on-premise infrastructures, containerized services are orchestrated by cluster managers such as Kubernetes
+(
+34
+)
+, which automate deployment, failure recovery, and scaling. Operators rely on redundancy and proactive resource management—e.g., rescheduling workloads away from unhealthy nodes and performing rolling updates without disrupting active traffic. A critical concept underpinning such robustness is the notion of
+fault domains
+, referred to as
+Maintenance Zones
+(MZs) at LinkedIn. MZs represent logical groupings of resources (e.g., nodes, racks, power circuits, or availability zones) that share a common failure risk
+(
+2
+;
+47
+;
+6
+)
+. During planned operations (e.g., upgrades, kernel patches, or network/power maintenance), operators often drain one MZ at a time; to limit blast radius, cluster managers distribute workloads across MZs using placement constraints and topology-aware spreading
+(
+36
+)
+. However, Pinot’s replica-group-based assignment and routing (Section
+1.2
+) do not naturally align with MZ awareness, and pinning each replica group to a single MZ is too rigid under node churn and resizes.
+
+We address both challenges with a two-part approach: first, an MZ-aware assignment algorithm that computes a target placement maximizing replica diversity across fault domains, ensuring availability even when an entire zone is drained (Section
+3.2
+); and second, an impact-free rebalance procedure that transitions from the current state to the target assignment without degrading query SLAs (Section
+3.3
+).
+
+3.2.
+Maintenance Zone Aware Assignment
+
+We assume the following platform properties
+(
+46
+;
+45
+)
+:
+
+(1)
+
+Pods are provisioned from a fixed number of MZs; an even distribution across MZs is maintained.
+
+(2)
+
+When a node becomes unhealthy, its pods are evacuated and rescheduled
+(
+52
+;
+46
+)
+. When using local disks, node loss can drop local state (e.g., NVMe SSD), causing temporary unavailability during bootstrap
+(
+42
+)
+. The new node’s MZ is not guaranteed to match the old one, but the distribution in Assumption
+1
+is assumed to hold.
+
+(3)
+
+During cluster uplift, newly added nodes are spawned in (effectively) random MZs.
+
+(4)
+
+During cluster downlift, the operator specifies the number of pods/VMs to remove rather than specific nodes; removals may be effectively random
+(
+45
+)
+.
+
+Under these assumptions, a fixed mapping between replica groups and MZs is clearly too rigid. We therefore aim to design a data segment assignment algorithm that satisfies the following goals:
+
+(1)
+
+All assignments generated by the algorithm should achieve best-effort replica spreading across MZs, such that when one MZ is taken out for maintenance, the impact on data segment availability is minimized.
+
+(2)
+
+In addition to the distribution goal, any assignment change during the cluster lifecycle—i.e., initial migration, node swap, uplift, or downlift—should minimally perturb the existing assignment. This reduces the cost of data movement and transmission, as well as any capacity loss incurred during rebalancing.
+
+(3)
+
+Furthermore, in a realistic production environment, we require an operational model that is easy to operate and debug.
+
+Algorithm Design.
+
+As discussed in Section
+1.2
+, Pinot stores a static assignment map in the metadata store to perform instance assignment, as illustrated in Figure
+2
+. In this representation, Pinot explicitly maintains the mapping for one replica of each segment and keeps the other replicas mirrored. To recap, we refer to each column—a set of machines containing all segments—as a
+replica group
+, and each row—a set of machines hosting exactly the same set of segments—as a
+mirrored server set
+.
+
+To translate the design goals into a formal specification, we impose the following constraints:
+
+(1)
+
+When one MZ is down (due to maintenance, power outage, etc.), for each segment:
+
+(a)
+
+When
+R\leq MZ
+, no more than one replica of that segment goes down.
+
+(b)
+
+When
+R>MZ
+no more than
+\lceil R/MZ\rceil
+replicas go down.
+
+Here, we denote the number of MZs by
+MZ
+and the number of replica groups by
+R
+.
+
+(2)
+
+After scaling or node swaps occur, the number of segments that must be moved to satisfy Constraint
+1
+should be minimized.
+
+Algorithm 3
+
+Swap to Maintenance Zone Aware
+
+1:
+
+// S: The set of all mirror server sets
+
+2:
+
+procedure
+
+swapToMZAware
+(S)
+
+3:
+
+for
+
+s\in S
+
+do
+
+4:
+
+while
+dup(
+s
+)
+>
+0
+do
+
+5:
+
+for
+
+x\in s
+
+do
+
+6:
+
+// if
+x
+is an instance of an overpopulated MZ
+
+7:
+
+if
+isDuplicateMZ(
+x
+)
+then
+
+8:
+
+swapped
+\leftarrow
+false
+
+9:
+
+for
+
+s^{\prime}\in S\setminus\{s\}
+
+do
+
+10:
+
+for
+
+x^{\prime}\in s^{\prime}
+
+do
+
+11:
+
+m = dup(
+s
+)
+
+12:
+
+n = dup(
+s^{\prime}
+)
+
+13:
+
+swap(
+x^{\prime}
+,
+x
+)
+
+14:
+
+if
+dup(
+s
+) + dup(
+s^{\prime}
+)
+<
+m + n
+then
+
+15:
+
+swapped
+\leftarrow
+true
+
+16:
+
+break
+
+17:
+
+else
+
+18:
+
+swap(
+x
+,
+x^{\prime}
+) // revert swap
+
+19:
+
+end
+
+if
+
+20:
+
+end
+
+for
+
+21:
+
+if
+swapped == true
+then
+
+22:
+
+break
+
+23:
+
+end
+
+if
+
+24:
+
+end
+
+for
+
+25:
+
+if
+swapped == true
+then
+
+26:
+
+break
+
+27:
+
+end
+
+if
+
+28:
+
+end
+
+if
+
+29:
+
+end
+
+for
+
+30:
+
+end
+
+while
+
+31:
+
+end
+
+for
+
+32:
+
+end
+
+procedure
+
+Algorithm
+3
+presents the greedy algorithm we propose. We assume the system starts in a
+good
+state in which Constraint
+1
+is satisfied. This initial condition is easy to achieve: given a balanced distribution of nodes across MZs, we can construct a valid instance-partition assignment by filling each mirrored server set in a round-robin fashion over MZs. The challenge arises when node swaps or cluster scaling events occur and new servers come up in random MZs, potentially violating the availability guarantee. In particular, multiple instances of the same mirrored server set may end up in the same MZ, as shown in Eq.
+1
+, so that if the next maintenance or outage drains an overpopulated zone, more containers become unavailable than the tolerated capacity, degrading overall system availability.
+
+Our goal, therefore, is to prevent the system from entering such
+bad
+states during lifecycle operations. We define a mirrored server set (a
+row
+in the following description) as being in a good state if its instances respect the MZ balance implied by Constraint
+1
+, and in a bad state otherwise. The greedy algorithm then operates by iteratively repairing bad rows using swaps that restore them to good states while minimizing segment movement. Intuitively, it can be described as follows:
+
+For each bad
+row
+
+S_{\mathrm{bad}}
+that contains one or more overpopulated MZs, select an instance from an overpopulated MZ and find another
+row
+
+S^{\prime}
+(preferably another bad
+row
+) such that, after swapping the two instances: (i) the number of overpopulated MZs in each of
+S_{\mathrm{bad}}
+and
+S^{\prime}
+does not increase, and (ii) the total number of overpopulated MZs across
+S_{\mathrm{bad}}
+and
+S^{\prime}
+decreases by at least one, ensuring that each step makes progress without worsening any row.
+
+Correctness Proof.
+
+For conciseness, we present the proof for the upscaling case; the node-swap and downscaling cases can be shown using analogous arguments.
+
+Base Case.
+
+For
+R=1
+, the requirement is trivially satisfied, as each row contains only one instance, so no MZ can appear more than once in the same row.
+
+Inductive Hypothesis.
+
+Assume that for
+R=r
+, the requirement is satisfied; i.e., the
+r\times\mathrm{N_{i/rg}}
+instances have been properly assigned so that every row respects Constraint
+1
+. Here,
+r
+denotes the number of replica groups (the horizontal dimension in the figure), and
+\mathrm{N_{i/rg}}
+denotes the number of instances per replica group (the vertical dimension).
+
+Inductive Step.
+
+We now show that the requirement also holds for
+R=r+1
+after running the algorithm. We consider two scenarios.
+
+Scenario 1:
+r<\mathrm{MZ}
+.
+
+To extend the assignment to the
+(r+1)
+-th column, we arbitrarily populate the last column with new instances (denoted as
+\delta
+), one per row, and then execute Algorithm
+3
+. We claim that the algorithm terminates in a valid state.
+
+We prove this by contradiction. Suppose that, after running Algorithm
+3
+, we reach a configuration in which at least one
+bad
+row remains, yet no valid swap is possible. Formally, assume there exist
+p\neq 0
+bad rows and
+q
+good rows with
+p+q=\mathrm{N_{i/rg}}
+, and that no valid swap can occur between any bad row and any other row.
+
+Consider a bad row of the form
+
+(1)
+
+x_{i,1},x_{i,2},\dots,x_{i,r},\delta_{i}\quad\text{for}\quad i\in\{1,\dots,p\},
+
+and note that, since the row is bad and
+r<\mathrm{MZ}
+, there must be at least one duplicated MZ in this row. In particular, the MZ of
+\delta_{i}
+must already appear among
+\{x_{i,1},\dots,x_{i,r}\}
+.
+
+We now analyze why no valid swap is possible for this row.
+
+(1)
+
+Swapping with a good row.
+Any good row has the form
+
+x_{k,1},x_{k,2},\dots,x_{k,r},\delta_{k}\quad\text{for}\quad k\in\{1,\dots,q\}.
+
+For a swap between
+\delta_{i}
+and some element of this row to be invalid, we must be in one of the following cases:
+
+(1a)
+
+\delta_{i}
+is already present in the good row, i.e.,
+
+\delta_{i}\in\{x_{k,1},x_{k,2},\dots,x_{k,r},\delta_{k}\}.
+
+In this case, swapping
+\delta_{i}
+into the good row would introduce a duplicate MZ, making that row bad, and hence the swap is disallowed by the algorithm.
+
+(1b)
+
+\delta_{i}
+is not present in the good row.
+For the swap to be invalid, the bad row must remain bad after replacing
+\delta_{i}
+with some element from the good row. This can only happen if any element coming from the good row is already present in the bad row, i.e.,
+
+\{x_{k,1},x_{k,2},\dots,x_{k,r},\delta_{k}\}\subseteq\{x_{i,1},x_{i,2},\dots,x_{i,r}\}.
+
+However, this would require selecting
+r+1
+distinct elements from a set of size
+r
+, which is impossible. Thus Case (1b) itself cannot occur.
+
+Therefore, for a swap with any good row to be invalid, we must be in Case (1a): every good row must already contain
+\delta_{i}
+.
+
+(2)
+
+Swapping with another bad row.
+Any other bad row has the form
+
+x_{j,1},x_{j,2},\dots,x_{j,r},\delta_{j}\quad\text{for}\quad j\neq i,\ j\in\{1,\dots,p\}.
+
+The only way a swap between row
+i
+and row
+j
+can be invalid is if, after swapping, both rows remain bad:
+
+\displaystyle x_{i,1},x_{i,2},\dots,\delta_{i},\dots,x_{i,r},\delta_{j}
+
+\displaystyle\quad\text{(bad)},
+
+\displaystyle x_{j,1},x_{j,2},\dots,\delta_{j},\dots,x_{j,r},\delta_{i}
+
+\displaystyle\quad\text{(bad)}.
+
+In particular, for the second row to remain bad,
+\delta_{i}
+must already appear in it:
+
+\delta_{i}\in\{x_{j,1},x_{j,2},\dots,x_{j,r},\delta_{j}\}.
+
+Combining (1a) and the condition above, we conclude that
+every
+other row—good or bad—must already contain
+\delta_{i}
+.
+
+Since row
+i
+is bad, its MZ for
+\delta_{i}
+appears at least twice in that row (once as
+\delta_{i}
+in the
+(r+1)
+-th column and at least once among
+\{x_{i,1},\dots,x_{i,r}\}
+). All other
+\mathrm{N_{i/rg}}-1
+rows contain
+\delta_{i}
+at least once. Therefore, the total number of instances of
+\delta_{i}
+across all rows is at least
+
+2+(\mathrm{N_{i/rg}}-1)=\mathrm{N_{i/rg}}+1.
+
+However, when
+r\leq\mathrm{MZ}
+, any single MZ can host at most
+
+\frac{r\cdot\mathrm{N_{i/rg}}}{\mathrm{MZ}}\leq\mathrm{N_{i/rg}}
+
+instances in total. Thus an MZ containing
+\mathrm{N_{i/rg}}+1
+instances is impossible, yielding a contradiction.
+
+Hence, our assumption that the algorithm can get stuck with a bad row and no valid swap is false. Algorithm
+3
+must continue to make progress until all rows satisfy the requirement when
+r<\mathrm{MZ}
+.
+
+Scenario 2:
+r\geq\mathrm{MZ}
+.
+
+When
+r\geq\mathrm{MZ}
+, we first distribute instances so that each MZ receives exactly
+\lfloor r/\mathrm{MZ}\rfloor
+instances, and then execute Algorithm
+3
+as in Scenario 1. The system converges to a state where no more than
+\lceil R/\mathrm{MZ}\rceil
+instances originate from the same MZ. Since all MZs are present, the difference between the minimum and maximum number of instances per MZ is at most
+1
+, guaranteeing a balanced distribution that respects Constraint
+1
+.
+
+Thus, the claim holds for
+R=r+1
+whenever it holds for
+R=r
+. Combined with the base case, this completes the proof by induction for all
+R
+. The argument for minimal movement is more intuitive: in each step, the algorithm selects swaps that strictly reduce the number of overpopulated MZs, repairing two rows whenever possible (and at least one row otherwise), and never reintroduces imbalance into previously fixed rows. As a result, every swap makes monotonic progress toward a valid configuration, and no sequence of swaps can reach a valid state with fewer row updates.
+
+3.3.
+Impact-Free Data Rebalance
+
+Given a target assignment—whether computed by the MZ-aware algorithm above or by any other placement policy—the system must transition from the current state to the desired state without degrading query performance. One option is to manage resource consumption during data loading (e.g., throttling downloads, limiting index builds). However, such a solution would introduce substantial complexity into segment-loading code for operations that are relatively infrequent (in our experience, tables are uplifted quarterly based on traffic projections).
+
+We instead propose a simpler strategy: drain query traffic from hosts while they download substantial data. This approach is enabled by Pinot’s data model, which is mostly immutable with multiple serving replicas per segment.
+
+Pinot’s architecture allows tables to scale in three dimensions:
+
+(1)
+
+The replica count—scaling horizontally with traffic
+
+(2)
+
+The number of instances assigned to each replica—to accommodate changes in total data size or query patterns
+
+(3)
+
+The host size—allocating more powerful hosts
+
+We aimed to develop a generic approach that can adjust any combination of these dimensions while satisfying the following safety conditions:
+
+(1)
+
+Serving capacity reduction should be minimized during scaling. We should never have more than one unavailable replica. When increasing replication only, we should avoid any down replicas (if possible).
+
+(2)
+
+At any stage in the algorithm, we should minimize the extra data hosted by any server, to avoid server disks filling or unbalanced segment load.
+
+(3)
+
+Queries should be drained before substantial segments are added to a host. “Substantial” is defined as more segments than a regular data push for the table.
+
+State Model.
+
+We formalize the rebalancing problem as a state-transition system. Let
+H
+denote the set of all hosts and
+S
+the set of all segments for a given table. At any point during rebalancing, we maintain the following per-host segment sets:
+
+(1)
+
+\mathit{Initial}(h)
+: the segment assignment before rebalancing begins.
+
+(2)
+
+\mathit{Desired}(h)
+: the target assignment after rebalancing completes (e.g., as computed by the MZ-aware algorithm in Section
+3.2
+).
+
+(3)
+
+\mathit{Added}(h)=\mathit{Desired}(h)\setminus\mathit{Initial}(h)
+: segments that must be downloaded.
+
+(4)
+
+\mathit{Removed}(h)=\mathit{Initial}(h)\setminus\mathit{Desired}(h)
+: segments that must be dropped.
+
+At rebalance step
+n
+, the effective state of host
+h
+is:
+
+\mathit{Current}_{n}(h)=\mathit{Initial}(h)\cup\mathit{Added}_{n}(h)\setminus\mathit{Removed}_{n}(h)
+
+where
+\mathit{Added}_{n}(h)\subseteq\mathit{Added}(h)
+and
+\mathit{Removed}_{n}(h)\subseteq\mathit{Removed}(h)
+represent the segments added and removed so far. A host is
+converged
+when
+\mathit{Current}_{n}(h)=\mathit{Desired}(h)
+. Additionally, we track
+\mathit{Down}_{n}(h)\in\{0,1\}
+to indicate whether a host has been drained of queries at step
+n
+. The rebalance terminates when all hosts are converged and serving.
+
+Algorithm 4
+
+Impact-Free Rebalance Algorithm
+
+1:
+
+procedure
+
+rebalance
+(T)
+
+2:
+
+goal\leftarrow calculate\_desired(T)
+
+3:
+
+while
+
+goal\neq(current\leftarrow current\_state(T))
+
+do
+
+4:
+
+goal\leftarrow update\_if\_needed(goal)
+
+5:
+
+enable_converged_hosts(current)
+
+6:
+
+candidates\leftarrow
+
+select_hosts
+(
+current,goal
+)
+
+7:
+
+if
+
+candidates\neq\emptyset
+
+then
+
+8:
+
+for all
+
+host\in candidates
+
+do
+
+9:
+
+disable_queries(
+host
+)
+
+10:
+
+wait_for_inflight_queries(
+host
+)
+
+11:
+
+assign_segments(desired, host)
+
+12:
+
+end
+
+for
+
+13:
+
+else
+
+14:
+
+progress\_step(current,goal)
+
+15:
+
+end
+
+if
+
+16:
+
+end
+
+while
+
+17:
+
+end
+
+procedure
+
+18:
+
+function
+
+select_hosts
+(current, goal)
+
+19:
+
+H\leftarrow\emptyset
+
+20:
+
+for
+
+host\in by\_priority(hosts)
+
+do
+
+21:
+
+if
+
+\neg done(goal,host)\land safe(current,H,host)
+
+then
+
+22:
+
+H.add(host)
+
+23:
+
+end
+
+if
+
+24:
+
+end
+
+for
+
+25:
+
+return
+
+H
+
+26:
+
+end
+
+function
+
+Algorithm Design.
+The algorithm converges the current segment assignment to the desired state in a series of steps (Algorithm
+4
+). In each step, one of two actions is taken:
+
+(1)
+
+Rebalancing Step
+—one or more hosts are fully rebalanced to their desired assignment after draining queries.
+
+(2)
+
+Progress Step
+—a small percentage of segments are added to all hosts when no hosts can currently be fully drained.
+
+A
+rebalancing step
+proceeds as follows for each selected host
+h
+:
+
+(1)
+
+Disable queries on
+h
+(mark
+\mathit{Down}_{n}(h)=1
+).
+
+(2)
+
+Wait for all in-flight queries on
+h
+to complete.
+
+(3)
+
+Assign all remaining segments in
+\mathit{Added}(h)\setminus\mathit{Added}_{n}(h)
+to
+h
+and remove all segments in
+\mathit{Removed}(h)\setminus\mathit{Removed}_{n}(h)
+.
+
+(4)
+
+Wait for segment downloads to complete on
+h
+.
+
+(5)
+
+Re-enable queries on
+h
+(mark
+\mathit{Down}_{n+1}(h)=0
+).
+
+A host
+h
+is considered
+safe
+to rebalance at step
+n
+if draining it would not reduce the available replicas for any segment below a configurable threshold. Formally, for every segment
+s
+currently served by
+h
+:
+
+\sum_{h^{\prime}\in H\setminus\{h\}}\mathbf{1}[s\in\mathit{Current}_{n}(h^{\prime})\land\mathit{Down}_{n}(h^{\prime})=0]\;\geq\;T
+
+where
+T
+is the minimum required serving replicas (e.g.,
+R-1
+for single-replica headroom). Our implementation prioritizes hosts with the largest difference between current and desired states, maximizing progress per step.
+
+When no host can be safely picked—for example, because too many segments have reduced replication from prior steps—a
+progress step
+is executed instead. This step adds a small number of segments (comparable to a table’s regular daily data push) across all non-converged hosts, prioritizing segments with the fewest available replicas. Progress steps incrementally restore replication until hosts become safe to fully rebalance.
+
+Convergence and Safety.
+The algorithm guarantees monotonic progress: each rebalancing step fully converges at least one host, and each progress step strictly increases the total number of assigned segments. Since the target state is
+finite, termination is guaranteed. Safety Condition
+1
+holds because the host-selection check ensures replica availability never falls below the required threshold. Safety
+Condition
+2
+holds because hosts converge in a single step—unneeded segments are removed immediately—and progress steps add only small increments. Safety Condition
+3
+
+holds because queries are drained before any substantial segment reassignment. Finally, the implementation is designed for fault tolerance and operational simplicity: if the operator process is terminated
+mid-operation or the state store becomes unavailable, a subsequent invocation can resume from where it left off by deterministically recomputing the current state.
+
+3.4.
+Production Results
+
+We deployed both the MZ-aware assignment algorithm and the impact-free rebalance procedure in our production environment that spans
+\sim
+200 clusters, runs on 10,000+ server pods, hosts
+\sim
+250 tables, and
+
+\sim
+10 PB of data.
+
+Over the past 12 months, MZ-aware assignment has sustained over 99.9% production availability despite daily node churn of up to 7% per cluster and more than 50 on-demand scaling events, with incremental
+reassignments that avoid large-scale segment movement under steady-state operation. Before MZ-aware placement, draining a single maintenance zone could leave tables serving queries with up to 33% of their data missing. With MZ-aware assignment, zone drains complete with no impact on query completeness or latency.
+
+During the past 24 months of serving, impact-free rebalance has guaranteed safety, idempotency, and minimum operational effort during cluster scalings. Meanwhile, this procedure has also completed a zero-downtime, in-place migration of all Pinot production data from the legacy data distribution and deployment to the cloud-native infrastructure with MZ-aware layout within 6 months. This migration moved over 10 PB of segment data across thousands of server instances without a single SLA violation.
+
+4.
+Adaptive Server Selection
+
+4.1.
+Motivation
+
+The routing strategies described in Section
+1.2
+worked well initially, but organic traffic growth, onboarding of latency-sensitive applications, and cost-driven cluster consolidation required increasing the number of server instances per replica group. With replica-group-based routing, a single slow server—caused by background tasks, GC pressure, or a preceding expensive query—bounds the latency of every query routed to that group. Since the broker requires results from
+all
+servers, the overall latency is dictated by the slowest server, degrading P95/P99 at the broker level.
+
+4.2.
+Solution
+
+Rather than viewing the cluster as a set of replica groups, we treat it as a set of
+Mirror Server Sets
+(MSS), where each server within an MSS holds identical data (Figure
+2
+, right). Each broker maintains a local score for every server without centralized coordination. We adapt the adaptive replica selection techniques from C3
+(
+60
+)
+and ELS
+(
+59
+)
+to Pinot’s scatter-gather model, relying solely on each individual broker’s observed signals (per-<table, server> in-flight counts and response latencies) without server-side feedback or rate control. We provide three scoring algorithms, configurable per table: (1)
+In-flight requests
+; (2)
+Latency EMA
+
+(
+66
+)
+; and (3)
+Hybrid
+, which estimates queue depth and scores servers as:
+
+(2)
+
+\displaystyle\mathit{estimatedQ}
+
+\displaystyle=\mathit{Request}_{\mathit{inflight}}+Q_{\mathit{EMA}}+1
+
+(3)
+
+\displaystyle\mathit{Score}
+
+\displaystyle=(\mathit{estimatedQ})^{N}\cdot\mathit{Latency}_{\mathit{EMA}}
+
+where
+Q_{\mathit{EMA}}
+is the exponential moving average (EMA) of the broker’s past in-flight queue sizes, and
+Q_{\mathit{EMA}}+1
+forecasts future queue depth to mitigate herd behavior following C3’s cubic penalty intuition. The EMA is updated as
+Q_{\mathit{EMA}}\leftarrow\alpha\cdot Q_{\mathit{current}}+(1{-}\alpha)\cdot Q_{\mathit{EMA}}
+, where
+\alpha\sim 2/3
+is the smoothing factor controlling responsiveness vs. stability, and
+N\sim 3
+is a tunable exponent
+(
+60
+)
+. To mitigate synchronized oscillation when multiple brokers independently select the same server, we optionally replace argmin selection with a softmax-based probabilistic policy. Given an MSS with servers
+\{s_{1},\dots,s_{k}\}
+, each server is selected with probability:
+
+(4)
+
+P(s_{i})=\frac{e^{-\mathit{Score}(s_{i})\,/\,\tau}}{\sum_{j=1}^{k}e^{-\mathit{Score}(s_{j})\,/\,\tau}}
+
+where
+\tau
+is a scaling factor derived from the score magnitudes to prevent overflow. This converts scores into selection probabilities—lower-scored (better) servers receive higher probability but not exclusively. The key benefit is
+oscillation control
+: by introducing calibrated randomness, brokers no longer synchronize on the same “best” server at each scoring cycle, breaking the feedback loop that causes load swings between servers while still preserving effective traffic diversion from degraded servers (validated in Section
+4.3
+).
+
+4.3.
+Simulation Study
+
+To validate parameter choices and explore behaviors difficult to test in production, we built a discrete-time-step simulator that faithfully models Pinot’s broker-server architecture. Time advances in fixed 0.1 ms increments. Brokers and servers are modeled as independent components communicating through a pairwise message buffer. At each step: (i) new queries arrive according to the configured QPS and workload pattern, are assigned to brokers round-robin, and dispatched via each broker’s ADSS selector to the servers’ task queue; (ii) each server processes its task queue using a simulated thread pool, where each query is decomposed into segment workloads distributed across assigned threads; (iii) completed tasks are returned to the originating broker, updating the broker’s EMA statistics. Server degradation is modeled probabilistically: a slow server’s threads make progress at each step with probability
+p<1
+(e.g.,
+p{=}0.4
+for 60% throughput reduction), naturally producing the variable latency observed in production GC pauses and I/O contention. This discrete formulation ensures all strategies see identical arrival sequences, isolating the effect of the selection algorithm. The simulator is configurable along several axes: base server latency, aggregate QPS, number of brokers
+B
+and replicas
+S
+, EMA smoothing factor
+\alpha
+, exponent
+N
+, and latency prior.
+
+Strategy Comparison.
+
+We swept four workload profiles—high QPS / low latency (1500 QPS, 1.35 ms), moderate QPS / moderate latency (300 QPS, 20 ms), low QPS / high latency (30 QPS, 200 ms), and very high QPS / low latency (6000 QPS, 1 ms)—as well as a hybrid workload combining all three tiers (2400 QPS at 1 ms
++
+200 QPS at 10 ms
++
+40 QPS at 100 ms). Table
+2
+summarizes the behavioral differences across the four selectors.
+
+Table 2
+.
+Simulated selector behavior with one degraded server.
+
+Selector
+
+Diversion
+
+Oscillation
+
+Recovery
+
+Round Robin
+
+None
+
+N/A
+
+N/A
+
+In-Flight
+
+Fast
+
+High
+
+Immediate
+
+Latency EMA
+
+Gradual
+
+Low
+
+Slow
+
+Hybrid
+
+Fast
+
+Low
+
+2–3 s
+
+Across all profiles, the hybrid selector diverted traffic from the degraded server within 2–3 scoring cycles while maintaining stable QPS on healthy servers. The in-flight selector reacted equally fast but oscillated under high QPS due to lack of memory of past slowness. The latency-EMA selector avoided oscillation but adapted slowly under low-QPS workloads. On the hybrid workload, the hybrid selector generalized across all three latency tiers with a single parameter configuration.
+
+Softmax-Based Oscillation Control.
+
+We evaluated the softmax policy (Eq.
+4
+) on configurations with the most visible oscillation (1500QPS, 3 brokers, 5 replicas). Figure
+12
+compares the deterministic hybrid selector with the softmax variant: the softmax variant substantially smoothed QPS distribution across servers while preserving traffic diversion from degraded servers, confirming its effectiveness for oscillation control.
+
+Figure 12
+.
+Relative QPS per server over time: hybrid selector (above) vs. softmax variant (below).
+
+Edge Cases.
+
+Cold-start with a slow server
+: if a server is degraded from startup,
+\mathit{Latency}_{\mathit{EMA}}
+stays at zero, causing the hybrid score to funnel queries to the bad server. A small latency prior (e.g., 1 ms) eliminates this.
+Low-headroom cascading
+: when all servers operate near capacity and one degrades, redirected traffic overwhelms healthy servers. This motivates server headroom resize and server-side queue-depth limits—both deployed in production.
+
+4.4.
+Production Evaluation
+
+We evaluated Adaptive Server Selection in production at LinkedIn, where Pinot serves over 250K queries per second across 5,000+ server hosts, 1,400+ broker hosts, and 4,500+ tables.
+
+Routing Overhead.
+
+We benchmarked the hybrid selector against round-robin at 1,500 QPS using production query traces. Table
+3
+reports the results.
+
+Table 3
+.
+Routing-phase and end-to-end query latency (ms) at 1,500 QPS.
+
+Routing Phase
+
+Total Query Processing
+
+P50
+
+P95
+
+P98
+
+P50
+
+P95
+
+P98
+
+Baseline
+
+0.014
+
+0.021
+
+0.024
+
+4.6
+
+5.6
+
+6.5
+
+Adaptive
+
+0.019
+
+0.030
+
+0.033
+
+4.6
+
+5.4
+
+5.9
+
+The routing-phase overhead is sub-millisecond (under 0.01 ms increase at P50), negligible relative to total processing times of 4–7 ms. At P98, total query latency
+improved
+by approximately 9%, as the adaptive selector avoids routing to slower servers even under normal conditions.
+
+Effectiveness Under Server Slowness.
+
+We evaluated two failure modes in production. For
+prolonged slowness
+(disk failure, persistent GC pressure), the hybrid selector routes traffic away within seconds, maintaining stable P95/P99 broker latencies. For
+transient slowness
+(GC pauses, compaction), the exponential penalty (
+N{=}3
+) shifts traffic within one scoring cycle; as the server recovers, the score drops sharply, restoring traffic in 2–3 s. Transient spikes that previously caused P90 latency to exceed 1.5
+\times
+baseline were contained to under 10% deviation.
+
+Figure
+13
+illustrates a representative production incident. A misconfiguration in the JVM heap size on one Pinot server caused elevated query latencies (
+\sim
+20 ms at P95, versus sub-millisecond on healthy servers). The adaptive selector detected the degradation and routed QPS away (yellow) from the affected server to near zero within seconds. Once the issue was gradually resolved, QPS steadily ramped back up to the recovering server without manual intervention.
+
+Figure 13
+.
+ADSS in JVM misconfiguration incident: P95/P999 latency (top two) and QPS distribution (bottom).
+
+Latency Degradation Prevention.
+
+With replica-group routing and a replication factor of 3, a single slow server causes latency degradation for approximately 33% of queries. Adaptive Server Selection breaks this coupling by selecting within each MSS independently. Over a 12-week production window (January–March 2023), the
+latency degradation prevention rate
+consistently exceeded 90%, meaning fewer than 10% of queries experienced degradation during slowness events, compared to
+\sim
+33% under the baseline.
+
+Operational Impact.
+
+Slow-server alerts decreased by 97% (60
+\to
+2 per quarter) and engineering hours on slowness investigations by 89% (72
+\to
+8 h per quarter). Residual alerts correspond to cluster-wide events where
+all
+servers in an MSS degrade simultaneously—motivating the workload isolation mechanisms in Section
+2
+.
+
+5.
+Related Work
+
+Our work addresses four interrelated challenges in operating large-scale OLAP systems. We briefly survey related work and highlight key differences.
+
+5.1.
+Workload Management and Resource Isolation
+
+Classical data warehouses expose workload managers through admission control and scheduling
+(
+50
+;
+62
+)
+. Commercial engines such as Db2
+(
+31
+)
+, Oracle
+(
+51
+)
+, and SAP HANA
+(
+56
+)
+provide resource groups that cap CPU or memory, but typically implement static quotas at the process level. Cloud warehouses like BigQuery
+(
+28
+)
+, Redshift
+(
+3
+)
+, and Snowflake
+(
+24
+)
+manage resources at the cluster or pool level through slots or virtual warehouses. Query-level scheduling approaches include WiSeDB
+(
+43
+)
+, morsel-driven parallelism
+(
+37
+)
+, and IconqSched
+(
+69
+)
+. Multi-tenant isolation has been explored in F1 Query
+(
+55
+)
+, Liminal
+(
+58
+)
+, and SQLVM
+(
+49
+)
+. Cluster schedulers such as YARN
+(
+7
+)
+, Kubernetes
+(
+33
+)
+, and Borg
+(
+63
+)
+implement fairness at the job or container level.
+
+QWI differs by treating CPU time and allocated bytes as first-class, continuously enforced budgets rather than static quotas, using sampling-based accounting that requires no operator modifications, and enforcing budgets inside the OLAP engine across both brokers and servers with sub-millisecond responsiveness and negligible overhead.
+
+5.2.
+Adaptive Query Routing
+
+The “tail at scale” problem
+(
+25
+)
+shows how latency variability compounds under fan-out. C3
+(
+60
+)
+combines queue size estimation with latency measurements for Cassandra, achieving up to 3
+\times
+improvement at P99.9. Héron
+(
+54
+)
+extends replica selection to heterogeneous workloads, and Spotify’s ELS
+(
+59
+)
+uses exponential decay for latency estimation. Database-specific approaches include Cassandra’s dynamic snitch
+(
+5
+)
+, MongoDB’s nearest member routing
+(
+48
+)
+, and CockroachDB’s follow-the-workload
+(
+61
+)
+. Service mesh load balancers like Envoy
+(
+26
+)
+and L3
+(
+44
+)
+operate at the service level.
+
+Our approach differs by exploiting Pinot’s mirrored replica group layout: rather than treating replicas independently, we select the best-scoring server within each Mirror Server Set (MSS), preserving the operational benefits of symmetric assignment while achieving adaptive routing gains.
+
+5.3.
+Online Data Rebalancing
+
+Zero-downtime migration has been addressed by Shopify’s Ghostferry
+(
+57
+)
+for MySQL, Facebook’s TAO
+(
+21
+)
+via dual-write cutover, and Google Spanner
+(
+23
+)
+through automated load balancing. Systems like Vitess
+(
+64
+)
+, CockroachDB
+(
+61
+)
+, and TiDB
+(
+30
+)
+provide automatic rebalancing for transactional workloads, while Druid
+(
+67
+)
+coordinates segment movement through its coordinator.
+
+These approaches focus on data consistency but often overlook query latency impact. Our algorithm explicitly drains queries before substantial segment movement, uses a two-phase approach (rebalancing steps for safe hosts, progress steps when blocked), and respects replica availability thresholds throughout.
+
+5.4.
+Fault Domain and Zone Awareness
+
+CRUSH
+(
+65
+)
+provides topology-aware placement for Ceph; CRUSHED
+(
+8
+)
+improves uniformity in Apache Helix. Cassandra’s NetworkTopologyStrategy
+(
+4
+)
+, YugabyteDB
+(
+68
+)
+, and CockroachDB
+(
+22
+)
+support zone-aware replication. Kubernetes provides topology spread constraints
+(
+36
+)
+and pod disruption budgets
+(
+35
+)
+for zone-level fault tolerance.
+
+Existing approaches assume static zone assignments or full control over node placement. In our environment, the cloud platform controls zone assignment during uplifts and node replacements. Our greedy swap algorithm repairs MZ-awareness violations with minimal segment movement and provably converges to a valid state.
+

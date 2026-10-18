@@ -1,0 +1,1866 @@
+OBASE: Object-Based Address-Space Engineering to Improve Memory Tiering
+Vinay Banakar 1, 3 , Suli Yang 3 , Kan Wu 2 , Andrea C. Arpaci-Dusseau 1 , Remzi H. Arpaci-Dusseau 1 , Kimberly Keeton 3 1 University of Wisconsin-Madison 2 xAI 3 Google
+
+Abstract
+. Hardware and OS mechanisms for memory tiering are widely deployed, yet datacenters still overprovision DRAM. The root cause is hotness fragmentation : allocators place objects by size rather than access pattern, so hot and cold objects become interleaved within the same pages. A single hot object marks its page as active, trapping surrounding cold data in expensive DRAM. Our analysis of Google production workloads shows that up to 97% of the bytes in active pages are cold and unreclaimable. We propose address-space engineering : dynamically reorganizing virtual memory so that hot objects cluster into uniformly hot pages and cold objects into uniformly cold pages. We present OBASE , a compiler-runtime system for unmanaged languages that serves as an object-aware frontend for page-aware OS backends . OBASE tracks accesses via lightweight pointer instrumentation and migrates objects at runtime using a lock-free protocol that is safe under concurrency. By reorganizing the address space, OBASE enables unmodified backends (kswapd, TMO, TPP, Memtis) to tier memory effectively. Across ten concurrent data structures, six backends, and production traces from Meta and Twitter, OBASE improves page utilization by 2–4 × \times and reduces memory footprint by up to 70%, with only 2–5% overhead.
+
+
+
+1.
+Introduction
+
+Memory capacity, especially DRAM, has become the dominant cost driver in modern data centers, often accounting for 50% of server capital expenses
+(
+49
+;
+37
+;
+11
+)
+. Memory tiering promises a solution: by placing cold, less accessed data in cheaper, slower tiers—such as compressed memory, SSDs, or CXL-attached disaggregated memory
+(
+10
+;
+27
+;
+30
+;
+46
+;
+31
+;
+3
+)
+—one could significantly reduce the expensive DRAM capacity required, thereby lowering costs
+(
+53
+;
+37
+;
+32
+;
+50
+;
+14
+;
+43
+)
+.
+
+In principle, this approach shows great promise, primarily because in hyperscale workloads, only a small volume of memory is hot; the vast majority remains cold and un-accessed for extended periods. As shown in Figure
+1
+, across six different Google workloads
+(
+18
+)
+, only 1.7%–21.3% of bytes are accessed during the trace duration. Indeed, four of the six workloads access less than 3% of bytes, suggesting that we could reclaim 80% to 98% of DRAM for secondary tiers with minimal impact on application performance.
+
+In practice, however, realizable gains often fall short of this potential. Google reported offloading only 20% of infrequently accessed data to a compressed memory tier
+(
+31
+)
+, while Meta achieved similarly modest savings of 20% - 32%
+(
+53
+)
+, leaving a substantial gap between theoretical and realizable gains.
+
+The crux of this gap lies in a mismatch between how applications organize data and how the OS manages memory: applications access data at
+object
+granularity, which varies in size, while the OS manages memory at fixed-size
+page
+granularity (4KB, 2MB, or 1GB). Modern allocators place objects on pages with no regard for how these objects will be accessed in the future, often placing frequently accessed objects and rarely touched objects intermingled on the same page. As a result, a few hot bytes (e.g., a single object) would make a whole page active from the OS’s perspective, trapping the whole page in expensive DRAM. One can clearly see this phenomenon in Figure
+1
+, where even though only 3.2% of
+bytes
+are accessed in a workload Bravo, 91.8% of the
+pages
+are accessed, making them unfit candidates for reclamation. Similar trends can be observed across all six workloads.
+We term this phenomenon
+hotness fragmentation
+and identify it as the root cause of inefficient tiering in current hyperscalers. We quantify this fragmentation using the
+page utilization
+metric.
+
+Figure 1
+.
+
+The granularity gap in memory access of Google workloads.
+
+Dark Grey: The percentage of total memory
+bytes
+actually accessed. Light Grey: The percentage of total memory
+pages
+accessed. Red: The page utilization (calculated as Bytes Accessed / Pages Accessed, see §
+2.2
+for more details).
+
+To combat hotness fragmentation, we introduce
+address space engineering
+, which
+dynamically
+reorganizes objects within the address space so that objects with similar access intensities are grouped together. By segregating hot and cold objects, address space engineering promises to close the gap between theoretical and realizable memory savings. It creates a memory layout with uniformly cold pages that are significantly more amenable to tiering.
+
+Figure 2
+.
+
+Low Per-Page Utilization in Google Production Workloads.
+
+CDFs of page utilization for six widely deployed applications, shown for all pages combined (left), separately for 4KB pages (center), and 2MB pages (right).
+
+Crucially, by focusing on the address space
+layout
+, we decouple memory tiering into two orthogonal, allowing independent innovation within each: the
+layout
+(frontend) problem, which organizes objects to yield high-quality page candidates for reclamation; and the
+reclamation
+(backend) problem, which focuses on migration policies and mechanisms across different tiers. This separation allows us to reuse existing page-based tiering infrastructures—both swap-based
+(
+31
+;
+53
+)
+and byte-addressable
+(
+37
+;
+32
+;
+43
+)
+—and leverage future improvements in reclamation mechanisms. It also ensures that our layout optimization techniques remain applicable to future, currently non-existent memory tiers (e.g., CXL 3.0 fabrics or NVM). Further, it significantly lowers the adoption barrier for hyperscalers: rather than requiring changes to their existing tiering backends, address space engineering provides a superior memory layout that makes existing backends work more effectively.
+
+In this paper, we present
+O
+bject-
+B
+ased
+A
+ddress-
+S
+pace
+E
+ngineering (
+OBASE
+)
+, a compiler-runtime system that engineers the address space for
+unmanaged
+languages like C/C++.
+OBASE
+acts as an intelligent
+frontend
+for memory organization: it manages pointer-based data structures, transparently profiles object access using lightweight instrumentation to determine access intensity, and employs a novel lock-free protocol to migrate objects safely, clustering hot and cold objects together. As a result,
+OBASE
+prepares the memory layout for any OS
+backend
+, enabling them to work more effectively. Crucially,
+OBASE
+preserves standard language semantics, requiring minimal developer intervention.
+
+We evaluate
+OBASE
+with ten concurrent pointer-based data structures and six state-of-the-art reclamation and tiering backends
+(
+51
+;
+37
+;
+32
+;
+50
+;
+53
+)
+. Using key-value store workloads (YCSB) and production traces (Meta, Twitter), we demonstrate that
+OBASE
+improves page utilization (by 2-4x) and achieves higher memory savings (up to 70%) at the same performance overhead, or conversely, achieves equivalent savings with negligible performance impact.
+For tiered-memory configurations,
+OBASE
+achieves the same throughput with half the DRAM capacity.
+
+The rest of this paper is organized as follows. §
+2
+quantifies hotness fragmentation in production workloads and establishes the case for dynamic object reorganization. §
+3
+presents the design of
+OBASE
+, including the guide abstraction for object mobility, lightweight access tracking, and our pauseless lock-free migration protocol. §
+4
+details key implementation choices. §
+5
+evaluates
+OBASE
+across data structures, backends, and production traces.
+
+2.
+Case for Dynamic Object Reorganization
+
+In this section, we show that hotness fragmentation is both severe and unavoidable under static object placement.
+We introduce a metric to quantify fragmentation, analyze production traces from Google
+(
+18
+)
+, and demonstrate that object hotness changes continuously over time.
+Finally, we explain why unmanaged languages make dynamic reorganization especially challenging, motivating the design of
+OBASE
+.
+
+2.1.
+Page Utilization: A Metric
+
+The OS marks a page as “active” if it receives at least one access during a time window
+T
+.
+We define
+per-page utilization
+as the fraction of a touched page’s capacity that is actually accessed.
+Let
+P(T)
+be the set of touched pages during
+T
+, and let
+U(p,T)
+be the number of unique bytes accessed within page
+p
+during
+T
+.
+We then define the aggregate
+page utilization
+as:
+
+\text{Page Utilization}(T)=\frac{\sum_{p\in P(T)}U(p,T)}{\sum_{p\in P(T)}\text{Size}(p)}
+
+Low utilization means a page appears hot to the OS even when most of its bytes are cold.
+Previous work
+(
+4
+)
+demonstrated low page utilization for open-source databases (e.g., Redis, MongoDB) where 75–90% of accessed pages utilized less than 15% of their capacity for YCSB workloads.
+
+2.2.
+Fragmentation in Production Workloads
+
+To understand hotness fragmentation across a broader range of applications, we analyze memory access traces from six production workloads at Google
+(
+18
+)
+, collected using DynamoRIO
+(
+15
+)
+. We process each unique access, annotate pages as 4KB or 2MB using
+/proc/self/smaps
+, and count unique 64B cache lines touched per page. Based on instruction counts, core counts, and typical warehouse-scale CPU characteristics
+(
+29
+)
+, we estimate the traces capture up to
+\sim
+30s of steady-state execution.
+
+(a)
+
+Meta KV Trace.
+White horizontal bands indicate coordinated quiet periods where access drops across many keys. These bands reveal phased workload behavior.
+
+(b)
+
+Twitter Trace.
+
+A sparse, scattered pattern indicates sporadic hotness. A few keys on the far left remain consistently hot, but the majority exhibit bursty access with long idle gaps.
+
+Figure 3
+.
+Temporal Evolution of Key Hotness.
+Heatmaps showing access frequency (log scale) for the top 5M keys over logical time buckets (10M operations each). If hotness were static, we would observe continuous vertical bands on the left side of each plot. Instead, we see shifting phases (Meta) and intermittent bursts (Twitter), demonstrating that the hot working set evolves continuously.
+
+Figure
+2
+shows the cumulative distribution of per-page utilization for all workloads, ordered as: (a) aggregated across both page sizes, (b) 4KB pages only, and (c) 2MB pages only.
+
+Aggregated view.
+As shown in the first graph, aggregated for 4KB and 2MB pages, all workloads have low per-page utilization.
+Median utilization ranges from 8% for Tahoe to approximately 50% for Sierra.
+For most workloads, half of all touched pages waste over 70% of their capacity on cold data.
+
+4KB pages.
+
+Fragmentation is visible even at the smallest page size.
+Even with 4KB pages, for Tahoe and Yankee,
+\sim
+80% of pages have less than 20% utilization; for Bravo, 60% of pages have below 40% utilization; and Charlie, Whiskey, and Sierra have 35–40% of pages below 40% utilization. Thus, hotness fragmentation is inherent to access patterns and not merely an artifact of huge pages.
+
+2MB pages.
+
+Fragmentation worsens dramatically for 2MB huge pages. Tahoe, Bravo, and Yankee all exhibit extreme fragmentation: 85–90% of their huge pages utilize less than 10% of their 2MB capacity; even Sierra, the best-performing workload, has 40% of its huge pages below 20% utilization. The vast majority of huge pages—each consuming 512
+\times
+the capacity of a base page—holds over 1.8MB of cold data alongside a few accessed cache lines.
+
+Finding 1:
+Active pages are mostly cold: 70–90% of bytes in pages the OS considers hot receive no accesses.
+
+2.3.
+Object Hotness Changes Over Time
+
+One potential solution for hotness fragmentation is to segregate hot and cold objects at allocation time, using static hints or profiling.
+This strategy assumes that hotness is both identifiable at allocation time and relatively stable afterward.
+
+First, identifying hotness at allocation time is challenging because
+the same code path allocates objects with vastly different lifecycles. For example, in Redis and Memcached, a single
+SET
+handler allocates memory for all incoming records, yet one record might be a session token accessed every millisecond, while another is a user profile never touched again. Static analysis cannot distinguish these cases at allocation time. Second, this approach assumes that object hotness is relatively stable: objects identified as hot when allocated should remain hot throughout their lifetimes.
+
+We show that these assumptions do not hold. We analyze object-level traces from Meta
+(
+5
+)
+and Twitter
+(
+56
+)
+, which record operations in logical time (10M operations per bucket). Figure
+3
+visualizes access intensity for the top 5 million keys (ranked by total accesses) over 100 such buckets. If hotness were static, the most popular keys (left) would exhibit continuous vertical bands. Instead, both traces show significant churn: bursts of activity followed by long idle gaps.
+
+Meta: Phased hotness.
+
+The Meta workload shows coordinated phases where many keys become inactive at once, visible as white horizontal bands. Even keys that are repeatedly accessed overall alternate between active bursts and extended dormancy. A page packed with currently-hot objects eventually becomes a page dominated by cold objects as access patterns shift.
+
+Twitter: Sporadic hotness.
+
+The Twitter workload shows a sparse pattern.
+A small slice of keys remain consistently hot, but the majority exhibit brief access bursts separated by long idle gaps, even among the top 5 million keys.
+
+To quantify churn, we measure reuse-distance variability (75th to 25th percentile of number of operations between accesses to the same key).
+For mid-sized objects (64B–4KB), representing 94% of Meta keys and 98.2% of Twitter keys, 75% of keys have a reuse spread exceeding
+5\times
+, and 65% exceed
+30\times
+. Thus, access gaps for the majority of keys fluctuate by more than an order of magnitude.
+
+Finding 2:
+Hotness is transient; object hotness is neither knowable at allocation time nor stable over time. As a result, one-time placement cannot prevent hotness fragmentation, and dynamic object migration based on hotness change is required.
+
+2.4.
+Object Mobility in Unmanaged Languages
+
+Moving objects dynamically presents varying degrees of difficulty depending on the language runtime. Managed runtimes, such as the JVM and Go, can relocate objects during garbage collection by updating references atomically, making mobility relatively straightforward. In unmanaged languages like C++, however, programs assume that an object’s address is stable
+(
+6
+)
+, rendering dynamic object migration significantly more challenging.
+Thus, the challenge is not merely to reorganize the layout dynamically, but to do so while preserving pointer emantics.
+
+In this paper, we demonstrate how to enable object mobility in
+unmanaged
+languages specifically because of this challenge. By showing that address-space engineering is feasible even when object addresses are expected to be stable, we illustrate the broad applicability of our approach; techniques proven in C++ generalize naturally to managed runtimes.
+
+To make the problem tractable in an unmanaged context, we focus on
+pointer-based data structures
+, where elements are accessed indirectly through pointers. These structures are ubiquitous in memory-intensive applications (Table
+2
+). By instrumenting pointer dereferences, a system can intercept accesses and, when an object has moved, transparently redirect the pointer to the object’s new location. This mechanism must operate safely in highly concurrent environments, without resorting to coarse-grained locks or stop-the-world pauses that would negate the performance benefits of an improved memory layout.
+
+In §
+3
+, we show how
+OBASE
+provides this transparency and concurrency within the C++ execution model, enabling dynamic reorganization.
+
+3.
+O
+bject-
+B
+ased
+A
+ddress-
+S
+pace
+E
+ngineering
+
+Figure 4
+.
+OBASE
+Overview.
+
+OBASE
+acts as a frontend that organizes the virtual address space into hot and cold regions. The Object Collector monitors access via Guides and SODA, migrates objects using SAMA, and presents a re-organized address space to the OS backend.
+
+Our goal is to engineer an application’s address space so that page-based backends can efficiently reclaim or tier memory.
+
+OBASE
+achieves this by reshaping object placement: it dynamically clusters frequently-accessed ("hot") objects into dense regions and segregating inactive ("cold") objects into separate regions,
+OBASE
+increasing page utilization and exposing large pools of reclaimable memory to existing tiering mechanisms.
+
+OBASE
+operates in environments where the operating system manages memory in page-sized units and may migrate pages across tiers
+(
+30
+;
+31
+;
+47
+)
+.
+The design does not assume a particular tiering policy or memory hierarchy; it only assumes that backends observe per-page activity.
+By presenting backends with regions that are uniformly hot or cold,
+
+OBASE
+allows existing mechanisms—from traditional page reclaim (kswapd, zswap) to tiering engines (such as TMO, TPP, Memtis, and HeMem)—to make better decisions without becoming object-aware
+(
+53
+;
+31
+;
+37
+;
+32
+;
+43
+)
+.
+
+Achieving object-level placement with page-level backends requires overcoming four fundamental challenges:
+
+(1)
+
+Object mobility in unmanaged languages.
+C++ ties object identity to a physical location (address); relocation must be transparent and safe under aliasing.
+
+(2)
+
+Low-Overhead Access Tracking.
+The cost to track accesses to objects must be low, as hotness classification must run in the common path without degrading performance.
+
+(3)
+
+Dynamic adaptation.
+As §
+2.3
+showed, hotness shifts continuously; layout must evolve accordingly.
+
+(4)
+
+Safe concurrent migration.
+Objects must move without global pauses, even while threads hold pointers to them.
+
+3.1.
+System Overview
+
+OBASE
+realizes the frontend/backend separation: it continuously reorganizes object placement while leaving reclamation decisions to unmodified OS mechanisms. The following subsections describe how
+OBASE
+enables object mobility (§
+3.2
+), tracks accesses efficiently (§
+3.3
+), organizes the address space (§
+3.4
+), and migrates objects safely under concurrency (§
+3.5
+).
+
+Figure
+4
+illustrates the architecture.
+OBASE
+runs in a continuous control loop. All dereferences of managed objects pass through a lightweight
+guide
+abstraction, which records whether an object was accessed in the current time window. A background
+Object Collector (OC)
+, periodically processes this metadata to classify objects by access activity and decide whether they should reside in the NEW, HOT, or COLD heaps.
+Based on this classification, the OC reorganizes the address space by migrating objects between heaps using a safe, lock-free protocol based on
+Active Thread Counts (ATC)
+.
+Finally,
+OBASE
+exposes these organized regions to the OS through a
+Spatially-Aware Memory Allocator (SAMA)
+, which lays out each heap as a contiguous virtual range, enabling coarse-grained OS hints.
+This control loop ensures that the virtual address space continuously adapts to the application’s shifting working set while presenting page-based backends with clear hot and cold targets.
+
+3.2.
+Object Mobility in Unmanaged Languages
+
+OBASE
+decouples an object’s logical identity from its location using a lightweight
+guide
+abstraction. A guide carries the current location of the object as well as additional metadata needed by
+OBASE
+. Developers interact with objects by using guides rather than raw pointers. When a guide is dereferenced,
+OBASE
+resolves it to the object’s current address and records that the object was accessed (described in §
+3.3
+). The indirection layer is the mechanism that makes later relocation transparent; code that previously operated on pointers continues to operate on guides.
+
+Developers choose which pointers can participate in relocation by marking them with annotations (e.g., the pointers to keys and values in hash-table buckets or the record pointers in B+ trees). Guides are enforced through three compiler passes. A type-level pass identifies annotated pointers and rewrites their dereferences to invoke the guide. An instrumentation pass injects hooks at access sites so
+OBASE
+can observe uses without modifying application logic. A validation pass ensures that managed objects are not used in unsupported ways (e.g., pointer arithmetic over nodes or assumptions about physical contiguity). These passes allow developers to adopt
+OBASE
+incrementally, starting with the portions of a codebase where object residency matters most.
+
+3.3.
+Low-Overhead Access Tracking
+
+To classify objects by temperature,
+OBASE
+must observe which objects are accessed over time, but tracking must be cheap enough to run continuously. Existing mechanisms fall short at both ends of the spectrum. Hardware page table access bits operate at page granularity and cannot distinguish a few hot cache lines from megabytes of cold data on the same page
+(
+12
+;
+31
+)
+. Software profilers such as DynamoRIO and LLVM’s memory profiling provide fine-grained information but impose prohibitive overheads for always-on deployment
+(
+35
+;
+15
+)
+. Hardware sampling via PEBS offers lower overhead but provides statistical coverage rather than precise per-object tracking
+(
+1
+)
+.
+
+Instead,
+OBASE
+embeds access tracking directly into guide pointer dereferences, yielding object-level information without significant overhead. A guide overloads the dereference operator so that each access records that the underlying object was used. Modern 64-bit architectures reserve high-order address bits in canonical user-space pointers, so
+OBASE
+stores a small amount of per-object metadata in these unused bits
+(
+48
+)
+. Inline metadata avoids external side tables and ensures that recording access is part of normal pointer use.
+
+Metadata is updated on every dereference using a single atomic read–modify–write (RMW): an
+accessed
+bit is set if it has not already been set, thereby skipping subsequent updates to avoid unnecessary cache-coherence traffic for frequently touched objects. This design keeps the common path small, and the resulting per-access cost is comparable to a cache hit. The metadata also holds state used by the runtime to classify objects or coordinate relocation, without requiring separate allocations or indirection.
+
+To let the runtime observe all managed objects without walking application-specific pointer graphs,
+OBASE
+maintains a Sparse Object Data Activity (SODA) bitmap over the process heap. SODA records which virtual regions contain managed objects and enables the Object Collector (OC) to discover objects by scanning these regions rather than interpreting container internals.
+
+3.4.
+Dynamically Engineering the Layout
+
+The access signals from §
+3.3
+feed into a layout policy that continuously reorganizes the virtual address space. OBASE groups objects by observed temperature so that page-based backends see large, uniform regions rather than interleaved hot and cold data. Three logical heaps capture this temperature: NEW holds freshly allocated objects whose access pattern is not yet clear, HOT holds the current working set, and COLD holds objects inactive for multiple scan windows. Each heap occupies a dedicated virtual address range, so an object’s address directly encodes its temperature.
+
+Figure 5
+.
+Object Migration State Diagram.
+
+Objects transition between heaps based on access intensity. The Object Collector promotes accessed objects to HOT and demotes inactive objects to COLD, allowing SAMA to apply differential
+madvise
+policies to each region if required.
+
+Figure
+5
+shows the conceptual state machine. Objects transition between heaps as their observed access intensity changes over time: initial allocations start in NEW, recent activity promotes objects into HOT, and extended inactivity demotes objects into COLD. Objects in COLD that become active again are promoted back to HOT. This continuous reclassification tracks the application’s evolving working set instead of its allocation history.
+
+To realize these logical heaps in the virtual address space,
+OBASE
+employs a spatially-aware memory allocator (SAMA) that reserves a contiguous virtual address range for each heap and sub-allocates objects within that range. Contiguity is a deliberate design choice that allows coarse-grained OS hints to be applied to whole heaps rather than individual pages, exposing large pools of cold memory to page-based tiering systems. The Object Collector (OC) periodically scans SODA to classify each managed object. Objects touched since the last scan are candidates for promotion; objects that remain untouched accumulate evidence of coldness.
+
+Reacting to a single inactive window would make classification sensitive to transient bursts.
+OBASE
+therefore tracks a per-object Consecutive Inactive Window(CIW) counter: each scan window without an access increments CIW; any access resets it to zero. Objects whose CIW exceeds a cold threshold become eligible for demotion to COLD; objects in COLD that are accessed rejoin HOT. This hysteresis ensures that only sustained inactivity triggers migration to COLD.
+
+The cold threshold
+C_{t}
+governs when inactivity is treated as “cold enough” for demotion, and different workloads may require different thresholds to balance reclaim opportunities against performance.
+OBASE
+adjusts
+C_{t}
+gradually based on observed access behavior, raising it when demotions are frequently reversed (indicating intermittent re-use) and lowering it when few recently demoted objects are touched (indicating deeper coldness). Adjustments are additive to avoid large swings. The goal is for the threshold to converge to a value where COLD contains deeply inactive data, while HOT tracks the active working set. The details of our adaptive strategy are described more in §
+4
+.
+
+The cold threshold
+C_{t}
+governs how long an object must remain inactive before migration. Too aggressive and COLD objects are frequently re-accessed; too conservative and reclaimable memory lingers in HOT.
+OBASE
+adapts
+C_{t}
+using a promotion-rate target. We define the promotion rate (PR) as the fraction of the working set drawn from COLD heap in each scan window:
+
+PR=\dfrac{\text{unique COLD pages accessed}}{\text{working set size}}\times\dfrac{60}{\text{scan interval (s)}}
+
+Crucially,
+OBASE
+measures COLD-heap accesses regardless of where those pages physically reside—it cannot determine which tier a page occupies and does not attempt to. If the observed rate exceeds a target,
+C_{t}
+increases by one window; if below,
+C_{t}
+decreases. This additive adjustment converges to a workload-specific regime. The goal is not to minimize COLD-heap accesses, but to ensure that pages classified as COLD are
+safe targets
+for any backend policy. §
+4
+details initialization and tuning.
+
+By design,
+OBASE
+is decoupled from any specific backend. The base system reorganizes the address space but issues no reclamation hints. This separation is intentional: the value of address-space-engineering lies in making pages uniformly hot or cold, which improves the precision of any page-based mechanism. Backends such as kswapd, TMO, TPP, and Memtis observe per-page activity through their existing interfaces (PTE-A bits, PEBS samples, or PSI signals) and naturally make better decisions when COLD pages contain only cold objects.
+
+Optionally,
+OBASE
+can issue proactive hints to accelerate reclamation. In this hinted mode, once the promotion rate stabilizes below the target,
+OBASE
+marks COLD pages with
+MADV_COLD
+or
+MADV_PAGEOUT
+to signal that they are safe to reclaim. Similarly, SAMA may request huge pages for HOT (
+MADV_HUGEPAGE
+) to selectively improve TLB coverage over dense hot data. These hints are strictly advisory and complement rather than replace backend policies.
+
+3.5.
+Safe Concurrent Migration
+
+Reorganizing the address space requires relocating objects while application threads may hold pointers to them. In managed languages, garbage collectors solve this problem using load barriers or stop-the-world pauses. C++ offers neither: there is no runtime to intercept pointer loads, and production systems cannot tolerate pauses. OBASE must therefore migrate objects without blocking threads, while guaranteeing that every dereference sees a valid location. As described in §
+3.2
+, all dereferences pass through guides, so relocation reduces to atomically updating a single pointer-sized word. Callers never follow stale pointers and do not need explicit synchronization.
+
+Start of Public Function
+
+Guide Access
+
+End of Public Function
+
+createTAG
+
+addToTAG(Guide)
+
+destroyTAG
+
+Figure 6
+.
+Application Thread Execution Flow And Interaction With OC
+The left side shows the instrumented call graph, code is inserted in three scenarios as shown. Public functions create and destroy Thread-local Active Scope Guards (TAGs), maintaining nesting levels and registering the thread, in the Thread Activity Index (TAI). Guides increment active reference counts only if added to the TAG. Reference counts are decremented only when the outermost public function exits. Active Thread Count (ATC) is enabled only during
+PREPARE
+and
+ACTIVE
+states.
+
+Lightweight Scoping.
+
+An object can be migrated only when no thread is actively using it.
+Classic approaches—stop-the-world pauses or per-access load barriers—are unsuitable for C++ systems code
+(
+54
+;
+16
+;
+38
+)
+.
+Instead,
+OBASE
+introduces a per-object
+Active Thread Count
+(ATC) that tracks how many public data structure operations have observed a guide during a migration window. ATC captures the notion of active use: if a thread begins an operation that may dereference an object, ATC is incremented once for that scope; when the operation completes, ATC is decremented. Migration is permitted only when ATC reaches zero, indicating that no thread is currently executing an operation that could read or modify the object.
+
+ATC must be updated efficiently. Rather than incrementing ATC on every pointer dereference—which would impose unacceptable overhead—
+OBASE
+scopes tracking to public API boundaries. When a thread enters a data-structure operation (e.g., get, insert), it registers with a Thread-local Active Scope Guard (TAG); when the operation completes, the guard decrements ATC for all objects touched. This design reflects how C++ programmers reason about pointer validity: pointers are valid for the duration of the operation that obtained them, not indefinitely. Compiler instrumentation (detailed in §
+4.2
+) inserts the necessary hooks automatically.
+
+Active Windows via Epochs.
+
+Always-on ATC tracking would impose overhead even when no migration is in progress.
+OBASE
+therefore activates ATC only during periodic migration epochs. Outside these windows, guide dereferences record only access activity (§
+3.3
+) with no ATC overhead. When the OC initiates migration, it coordinates an epoch transition that ensures all active threads enable ATC tracking before any object is moved. This epoch-based activation confines the synchronization cost to brief, infrequent windows.
+
+Optimistic Migration.
+
+Given ATC=0,
+OBASE
+moves objects using an optimistic protocol inspired by optimistic concurrency control. The Object Collector copies the object to its target heap, then attempts to atomically swing the guide to the new address. If any thread accesses the object during the copy, the commit fails and the move is abandoned—the object remains in place, and the thread sees valid data. This optimistic approach has two key properties: (1) threads never block on migration, and (2) concurrent access safely vetoes relocation rather than observing inconsistent state. §
+4.5
+details the CAS-based protocol.
+
+Safety and Non-Blocking Progress.
+
+Safety follows from a single invariant: the guide is updated atomically, and migration aborts on any conflicting access. No thread can ever follow a stale pointer. Progress is non-blocking: application threads never wait on the collector, and the collector performs bounded work per object before committing or abandoning. Frequently accessed objects naturally resist migration (their ATC rarely reaches zero), while cold objects eventually move. The result is an address space that reshapes continuously without stop-the-world pauses, while preserving familiar pointer semantics.
+
+4.
+Implementation
+
+This section details
+OBASE
+’s concrete realization: the guide metadata encoding (§
+4.1
+), scope-guard data structures (§
+4.2
+), SODA bitmap layout (§
+4.3
+), controller parameters (§
+4.4
+), and the epoch-based migration protocol (§
+4.5
+).
+
+4.1.
+Guide Metadata Encoding and Heap Allocation
+
+Each guide uses the 48 bits required for canonical x86-64 user-space addresses and repurposes the upper 16 bits for metadata: 7 bits encode ATC (supporting up to 128 concurrent threads per object), 5 bits track CIW (up to 32 windows, or 60+ minutes at the default 120s interval), 2 bits identify the current heap (NEW, HOT, COLD), and 2 bits store the access and migration-lock flags. As 128-bit addressing becomes more prevalent
+(
+44
+)
+, implementations can expand these fields without changing the guide abstraction. We implement the three heaps using a Spatially-Aware Memory Allocator (SAMA) built on jemalloc’s extent management. SAMA reserves large
+mmap
+regions for each heap and sub-allocates objects within them, returning unused extents to the OS as objects migrate or are freed.
+
+4.2.
+Efficient Scope Guard Tracking
+
+Figure
+6
+illustrates the instrumented call graph.
+The compiler inserts three hooks:
+createTAG
+(green) at public API entry,
+
+addToTAG(guide)
+(purple) at each guide dereference, and
+destroyTAG
+(yellow) at public API exit.
+Public functions may call private helpers that also dereference guides; the TAG tracks all such accesses but only decrements ATC when the
+outermost
+public function returns. This nesting-aware design ensures that ATC remains positive throughout the entire operation, even when internal helpers are inlined or called multiple times.
+
+We implement TAGs using a
+BaseDeltaPtrSet
+that exploits pointer locality:
+it encodes pointers as a base address plus 32-bit deltas, grouping up to 16 nearby
+pointers within two cache lines. Insertion is O(1) when the pointer falls within an
+existing group; otherwise a new group is created in O(log G) time. Since pointers
+within a single operation cluster tightly (e.g., keys and values in the same bucket, nodes
+along a tree path), most insertions hit existing groups. Across the ten data structures
+in our evaluation, the median number of unique guides per operation ranges from 3
+(hash tables) to 12 (B+Tree traversals), keeping per-operation TAG overhead under
+100 ns.
+
+4.3.
+SODA Bitmap Structure and Object Discovery
+
+The Sparse Object Data Activity (SODA) bitmap uses a two-level structure to cover the heap address space without allocating storage for empty regions. SODA divides the address space into coarse-grained blocks; each block contains 64-bit words where individual bits indicate guide presence at fixed-size slots. Blocks are allocated lazily and reclaimed when empty. Because SODA tracks guide pointers rather than object addresses, it remains valid across relocations—the guide’s address does not change when the object moves. Memory overhead is one bit per potential guide slot plus block-level bookkeeping. The OC scans SODA at a configurable interval (120 s by default), chosen to align with cold-memory detection thresholds in warehouse-scale tiering systems
+(
+14
+;
+31
+)
+.
+
+4.4.
+Cold Threshold Controller
+
+OBASE
+initializes
+C_{t}
+to three scan windows; at the default 120 s interval, this is approximately six minutes of inactivity before demotion, consistent with the five-minute rule for tiered storage
+(
+2
+;
+19
+;
+20
+)
+. The target promotion rate of 1% is based on budgets used in production compressed-memory and CXL tiering deployments
+(
+31
+;
+14
+)
+.
+C_{t}
+is bounded between 1 and 32 windows.
+
+4.5.
+Epoch Protocol and Optimistic Migration
+
+As shown in Figure
+6
+the OC
+coordinates migration through three states (
+INACTIVE
+,
+PREPARE
+,
+and
+ACTIVE
+) using a global epoch counter and a Thread Activity Index (TAI).
+
+Epoch Transitions.
+
+In
+INACTIVE
+, ATC updates are disabled; dereferences only set access bits.
+When the OC initiates migration, it increments the epoch counter and enters
+
+PREPARE
+
+1
+. Threads entering public methods record the current
+epoch in the TAI (a small array indexed by thread-ID hash); exits clear their slot.
+The OC repeatedly scans the TAI; once every non-empty slot reflects the new epoch
+
+2
+, all active threads have enabled ATC tracking, and the OC enters
+
+ACTIVE
+. After migration completes, the OC returns to
+INACTIVE
+
+3
+. Crucially, threads never block—they simply record epoch participation,
+while the OC performs convergence checks.
+
+Optimistic Data Migration.
+
+Within
+ACTIVE
+, the OC migrates objects using a two-phase CAS protocol.
+For a candidate with ATC=0 and migration-lock clear, the OC:
+(1) Atomically sets the migration-lock bit (first CAS).
+(2) Allocates space in the target heap using SAMA and copies the object.
+(3) Constructs a new guide (new address, heap ID, reset CIW, cleared lock) and attempts to publish it (second CAS).
+If either CAS fails, the migration is abandoned.
+
+Race Resolution.
+
+Table
+1
+illustrates a race between migration and access.
+Every dereference performs an atomic RMW that sets the access bit and
+clears
+
+the migration-lock bit. If a thread accesses object
+x
+while the OC is copying it
+(
+t_{1}
+), the guide changes, the commit CAS fails (
+t_{2}
+), and
+x
+remains at its
+original address. The thread always sees valid data; concurrent access vetoes
+migration.
+
+Time
+
+Actor
+
+Action
+
+ATC
+
+Lock
+
+Outcome
+
+t_{0}
+
+OC
+
+read guide
+
+0
+
+0
+
+eligible
+
+t_{0}^{\prime}
+
+OC
+
+CAS: set lock
+
+0
+
+1
+
+copying begins
+
+t_{1}
+
+Thread
+
+dereference
+
+1
+
+0
+
+lock cleared
+
+t_{2}
+
+OC
+
+CAS: commit
+
+mismatch
+
+aborted
+
+If no thread intervenes between
+t_{0}^{\prime}
+and
+t_{2}
+:
+
+t_{2}^{\prime}
+
+OC
+
+CAS: commit
+
+0
+
+0
+
+success
+
+Table 1.
+Race between migration and concurrent access.
+
+A dereference at
+
+t_{1}
+modifies the guide, causing the OC’s commit CAS to fail. When no thread
+intervenes, both CAS operations succeed and the object moves.
+
+5.
+Evaluation
+
+We evaluate
+OBASE
+along four dimensions:
+
+E1: Effectiveness.
+
+Does
+OBASE
+reduce hotness fragmentation and memory footprint across different data structures and workloads? (§
+5.2
+)
+
+E2: Backend synergy.
+
+How much does
+OBASE
+improve the effectiveness of existing page-based reclamation and tiering backends? (§
+5.3
+)
+
+E3: Overhead and scalability.
+
+What runtime overheads do tracking and migration introduce, and how do they scale with thread count? (§
+5.4
+)
+
+E4: Dynamic behavior.
+
+How does
+OBASE
+adapt to changing hotsets in long-running, production workloads? (§
+5.5
+)
+
+5.1.
+Experimental Setup
+
+All experiments run on an Intel Xeon Gold 5218 (16 cores, SMT disabled) configured in
+performance
+governor mode with Ubuntu 22.04 and Linux kernel 6.12.
+The memory subsystem comprises two tiers: a fast tier of 2
+\times
+16 GB DDR4 DRAM modules at 2400 MHz, and a slow tier of 4
+\times
+128 GB Intel Optane DC Persistent Memory 100 modules at 2666 MHz.
+All six memory devices occupy distinct channels to maximize bandwidth.
+We configure Optane PMEM in
+Memory Mode
+and expose it as a separate NUMA node, creating a two-tier hierarchy representative of emerging CXL-attached memory deployments
+(
+34
+;
+37
+)
+.
+The Optane tier provides approximately 2.5
+\times
+higher access latency than local DRAM
+(
+55
+)
+, consistent with first-generation CXL memory characteristics
+(
+47
+)
+.
+For reclamation experiments requiring swap, we use a 512 GB Intel P4800X Optane SSD.
+
+Structure
+
+Concurrency Control
+
+Used In
+
+HashTable Harris
+(
+23
+)
+
+Lock-free algorithm
+
+NGINX
+
+HashTable Pugh
+(
+42
+)
+
+Fine-grained r/w lock
+
+Redis, Memcached
+
+HashTable Java CHM
+(
+40
+)
+
+Segmented bucket locks
+
+Linux kernel, HAProxy
+
+SkipList Coarse
+
+Global lock
+
+LevelDB/RocksDB
+
+SkipList Fraser
+(
+17
+)
+
+Lock-free algorithm
+
+Redis Sorted Sets
+
+SkipList Herlihy
+(
+24
+)
+
+Optimistic fine-grained
+
+Cassandra, CockroachDB
+
+B+Tree Coarse
+
+Global lock
+
+SAP HANA
+
+B+Tree OCC
+
+OCC w/ epoch reclaim
+
+VoltDB index
+
+MassTree
+(
+36
+)
+
+OCC + RCU
+
+MICA, Silo
+
+Adaptive Radix Tree
+(
+33
+)
+
+Fine-grained r/w lock
+
+DuckDB, PostgreSQL
+
+Table 2
+.
+Concurrent data structures evaluated with
+OBASE
+.
+
+These structures span lock-free, fine-grained, and coarse-grained concurrency mechanisms, demonstrating
+OBASE
+’s compatibility with diverse synchronization approaches.
+
+CrestDB testbed.
+
+We implemented CrestDB, a concurrent in-memory key-value store, to evaluate
+OBASE
+across diverse data structures and concurrency mechanisms.
+CrestDB integrates ten high-performance data structures spanning the concurrency-control spectrum (Table
+2
+), from lock-free algorithms to global locks.
+Many structures are borrowed from ASCYLIB
+(
+21
+)
+, which provides production grade implementations.
+This diversity demonstrates that
+OBASE
+’s compiler instrumentation and migration protocol are compatible with a wide range of synchronization approaches without structure-specific modifications.
+All data structures maintain guide pointers to key and value objects; CrestDB deep-copies inserted data, ensuring
+OBASE
+manages the authoritative copy rather than application-held aliases.
+Unless otherwise noted, CrestDB runs with six server threads and six client threads.
+
+Workloads.
+
+We use the YCSB benchmark suite with Zipfian-distributed keys to model skewed access patterns typical of production workloads.
+To evaluate real-world adaptivity, we replay production traces from Meta (CacheLib
+(
+5
+)
+, DBbench
+(
+7
+)
+) and Twitter (Cluster 7, Cluster 23)
+(
+56
+)
+.
+We evaluate
+OBASE
+using CrestDB, an in-memory key-value store configured with ten concurrent data structures spanning diverse synchronization mechanisms (Table
+2
+).
+Unless otherwise noted, CrestDB runs with six server threads and six client threads communicating over Unix domain sockets.
+
+Controller parameters.
+
+Unless otherwise noted,
+OBASE
+uses the controller described in §
+3.4
+: the Object Collector scans access metadata every 120 s, targets a promotion rate (PR) of 1%, and adjusts the cold threshold
+C_{t}
+by
+\pm 1
+window after each scan while keeping
+1\leq C_{t}\leq 32
+.
+We choose a conservative 1% target following production compressed-memory deployments
+(
+53
+;
+31
+)
+, which has proven effective across tiering backends with different latency characteristics.
+The optimal promotion rate is hardware-dependent: faster secondary tiers can tolerate higher cold-access fractions, while much slower tiers may require more conservative thresholds; exploring such hardware-aware tuning is left to future work.
+These defaults apply across all workloads; §
+5.5
+examines the dynamics of
+C_{t}
+adaptation over time.
+
+5.2.
+Effective Address-Space-Engineering (E1)
+
+We first evaluate whether
+OBASE
+achieves its core objective: reducing hotness fragmentation and converting unreclaimable cold data into reclaimable pages.
+We run CrestDB with all ten data structures under YCSB workloads A, B, and C with Zipfian keys.
+We load 10M keys with 30-byte keys and 1024-byte values, creating a 13 GiB dataset.
+Unless stated otherwise, all results in this section are measured after
+OBASE
+has converged (promotion rate below the 1% target).
+
+Figure 7
+.
+OBASE
+effectiveness (YCSB, 10M keys).
+
+Top: Page utilization improvement relative to the baseline allocator;
+OBASE
+increases utilization by 2–4
+\times
+across workloads and data structures.
+Bottom: RSS reduction after
+OBASE
+pages out the COLD heap (via Kswapd). Memory footprint shrinks by 65–72%.
+
+Page utilization.
+
+Figure
+7
+(a) reports page utilization before and after
+OBASE
+reorganizes objects into NEW, HOT, and COLD heaps.
+Initially, the data structures exhibit 18–20% utilization when measured over 120 s windows: most pages contain only a handful of accessed cache lines, reflecting the hotness fragmentation observed in production traces (§
+2
+).
+
+After three scan intervals, the Object Collector classifies objects based on guide access bits and migrates them into HOT or COLD heaps.
+Compared to the baseline,
+OBASE
+improves page utilization by 2
+\times
+for workload A (50% writes), approximately 3
+\times
+for workload B (5% writes), and up to 4
+\times
+for the read-only workload C.
+Across data structures, absolute utilization after convergence ranges from roughly 40% (workload A) to 80% (workload C).
+
+The variation across workloads reflects how the NEW and HOT heaps interact.
+Workload C has no updates: once objects are classified as hot, they remain in the HOT heap and no new objects are allocated there.
+Nearly all accessed bytes end up densely packed in a small number of HOT pages, and utilization approaches 80%.
+In workload B, occasional updates allocate fresh values in NEW, so the working set splits between NEW and HOT and overall utilization stabilizes around 60–70%.
+Workload A performs frequent updates, continuously injecting new objects into NEW.
+Utilization still roughly doubles, but cannot reach read-only levels because a larger fraction of hot objects reside in NEW during their initial epochs.
+
+The consistency of the improvement across ten structurally different data structures shows that
+OBASE
+’s benefits derive from object-temperature clustering rather than data-structure-specific layout optimizations.
+
+Memory footprint.
+
+Higher page utilization translates directly into reclaimable cold memory.
+Once the promotion rate falls below the 1% target—typically after 3–4 scan intervals (6–8 minutes) for YCSB—
+OBASE
+proactively issues
+MADV_PAGEOUT
+on the COLD heap.
+Figure
+7
+(b) shows the resulting RSS reduction relative to a baseline without reclamation.
+
+Across all data structures and workloads,
+OBASE
+reduces RSS by 65–72%.
+For workload B with 10M keys, the baseline uses 12.4 GiB; after
+OBASE
+converges and pages out COLD, RSS drops to 3.5–4.0 GiB.
+Because COLD pages contain almost exclusively inactive objects, proactive paging does not cause swap-in storms or noticeable throughput degradation (we quantify overheads in §
+5.4
+).
+
+Takeaway #1:
+OBASE improves page utilization across all data structures as it tracks object hotness without the semantic knowledge of each structure. This enables uniform hotness fragmentation reduction across diverse concurrency mechanisms.
+
+5.3.
+Backend Synergy (E2)
+
+The memory savings demonstrated in §
+5.2
+are valuable only if OS backends can exploit them without degrading performance.
+We now show that
+OBASE
+enables existing reclamation and tiering systems to achieve aggressive memory savings while preserving throughput.
+
+5.3.1.
+Reclamation Backends
+
+We run CrestDB with MassTree under YCSB-C in a memory-constrained configuration: the workload has a 13 GiB footprint but an active working set of approximately 4 GiB.
+We compare four reclamation strategies, each with and without
+OBASE
+as a frontend:
+
+•
+
+Kswapd:
+Linux’s background reclaimer, triggered by memory pressure from a co-located process.
+
+•
+
+Cgroup:
+Memory limit set to working-set size (4 GiB), forcing aggressive reclamation.
+
+•
+
+TMO:
+Meta’s PSI-based proactive reclaimer
+(
+53
+)
+.
+
+•
+
+OBASE
+Hinted:
+Proactive
+MADV_PAGEOUT
+on the COLD heap after convergence.
+
+For all configurations except
+OBASE
+Hinted, we disable
+OBASE
+’s proactive paging to isolate the benefit of address-space reorganization from the hinting mechanism.
+
+Figure 8
+.
+OBASE
+with reclamation backends (YCSB-C, MassTree).
+
+Top: RSS after convergence. Bottom: throughput.
+Without
+OBASE
+, backends face a trade-off between memory savings and performance.
+With
+OBASE
+(hatched bars), all backends achieve near-optimal memory savings with minimal throughput loss.
+
+Figure
+8
+reveals a fundamental trade-off that
+OBASE
+resolves.
+
+Without
+OBASE
+, backends must choose between memory efficiency and performance.
+Kswapd reduces RSS from 13 GiB to 7 GiB (1.8
+\times
+) with no throughput loss, but leaves 3 GiB of cold data trapped in mixed-temperature pages due to its page level view through PTE scans.
+Cgroup reaches 4 GiB (3.2
+\times
+), but throughput collapses by 38% as the kernel inevitably evicts hot objects.
+TMO achieves 6.5 GiB (2
+\times
+) with no throughput loss, but cannot reclaim further because PSI signals page-level pressure regardless of object-level coldness.
+
+With
+OBASE
+, all backends reach 4 GiB RSS—matching the most aggressive policy—with no throughput degradation.
+Kswapd now reclaims COLD pages preferentially; Cgroup no longer thrashes because evicted pages contain genuinely cold objects; TMO’s PSI probes no longer encounter mixed-temperature pages that resist reclamation.
+
+OBASE
+Hinted achieves the same result proactively, without relying on any backend policy.
+
+Takeaway #2:
+OBASE eliminates the memory-vs-performance trade-off that forces datacenter operators to balance aggressive reclamation against SLO compliance.
+
+5.3.2.
+Tiering Backends
+
+To demonstrate the memory tiering benefits of reduced hotness fragmentation, we evaluate
+OBASE
+with three page based migration systems: TPP
+(
+37
+)
+, AutoNUMA
+(
+50
+)
+, and Memtis
+(
+32
+)
+.
+
+Setup.
+
+We load CrestDB (MassTree) with 50M keys (30-byte keys, 1024-byte values), a 67 GiB dataset.
+We vary the DRAM:CXL ratio across three configurations: 1:4 (14.8 GiB DRAM), 1:8 (7.4 GiB DRAM), and 1:16 (3.9 GiB DRAM), with the remaining capacity on Optane PMEM.
+As in
+(
+32
+)
+, performance is normalized to a baseline where all data resides on the slow tier; values above 1.0
+\times
+indicate speedup from effective DRAM use.
+
+The hot-set mismatch.
+
+Without
+OBASE
+, the working set spans 16.3 GiB of pages at 21% utilization— slightly larger than the 1:4 DRAM budget of 14.8 GiB.
+No configuration can keep all accessed data in DRAM.
+With
+OBASE
+, the same logical working set compacts to 6.33 GiB at 57% utilization, fitting comfortably at 1:4 and 1:8 ratios.
+
+Figure 9
+.
+OBASE
+with tiering backends (YCSB-B, MassTree, 50M keys).
+
+Throughput normalized to CXL-only baseline (higher is better).
+Without
+OBASE
+, performance degrades as DRAM shrinks because the hot set cannot fit.
+With
+OBASE
+, the hot set compacts, enabling stable performance even at 1:16.
+
+TPP.
+
+TPP uses hysteresis-based promotion and proactive demotion to manage DRAM headroom.
+Figure
+9
+shows TPP achieves 1.65
+\times
+speedup at 1:4, degrading to 1.25
+\times
+at 1:16 as the DRAM budget shrinks below the fragmented hot set.
+With
+OBASE
+, TPP reaches 1.85
+\times
+at 1:4 and retains 1.45
+\times
+at 1:16—a 16% improvement at the most constrained ratio.
+
+AutoNUMA.
+
+AutoNUMA promotes any accessed remote page immediately, without hysteresis, causing thrashing when the hot set exceeds DRAM capacity.
+Without
+OBASE
+, AutoNUMA underperforms TPP by 15–20%, achieving only 1.05
+\times
+at 1:16—barely better than CXL-only.
+With
+OBASE
+, AutoNUMA matches TPP-alone performance: at 1:8,
+OBASE
++AutoNUMA (1.6
+\times
+) exceeds TPP alone (1.55
+\times
+).
+When pages are uniformly hot or cold, even naive promotion decisions become correct.
+
+Memtis.
+
+Memtis uses hardware sampling (PEBS) to identify hot pages, achieving the best baseline results: 1.8
+\times
+at 1:4 and 1.55
+\times
+at 1:16.
+With
+OBASE
+, Memtis improves to 1.95
+\times
+and 1.7
+\times
+, respectively.
+The gains are smaller (3–10% vs. 12–29% for TPP/AutoNUMA) because Memtis already captures much of the page-level signal—but even the most sophisticated page-level policy benefits from object-level reorganization.
+
+From Figure
+9
+,
+OBASE
+at ratio
+1:X
+performs comparably to baseline at
+1:(X/2)
+:
+OBASE
++TPP at 1:16 (1.45
+\times
+) approaches TPP alone at 1:8 (1.55
+\times
+).
+This arises because
+OBASE
+reduces the effective hot set by 2.5
+\times
+, allowing backends to achieve equivalent DRAM residency with half the capacity.
+For operators, this translates directly to cost savings:
+OBASE
+enables the same performance with half the DRAM, or doubles effective memory capacity of existing tiered deployments.
+
+Takeaway #3:
+OBASE compacts the hot set so it fits in smaller DRAM budgets, making page-based tiering backends effective.
+
+5.4.
+Overhead and Scalability (E3)
+
+Given the memory savings and backend improvements demonstrated above, we now quantify
+OBASE
+’s runtime costs.
+
+5.4.1.
+Steady-State Overhead
+
+Figure
+10
+(a) reports throughput and p90 latency overhead when no reclamation or tiering backend is active, normalized to an uninstrumented baseline.
+
+On average,
+OBASE
+reduces throughput by 2.5% and increases p90 latency by 5%.
+Hash tables see the smallest impact (1.5–3% throughput drop), while skiplists, B+Trees, and ART experience 3–5% overhead.
+This variation correlates with the number of guides touched per operation: hash table lookups dereference few nodes, whereas tree traversals visit more nodes and incur proportionally more tracking overhead.
+
+The overhead has two main sources:
+(1) a tagged-pointer read-modify-write on each guide dereference (4–5 ns, comparable to an L1 cache hit), and
+(2) TAG/ATC bookkeeping during
+ACTIVE
+migration epochs.
+The Object Collector runs in a dedicated thread and consumes less than 1% of CPU time.
+
+Figure 10
+.
+OBASE
+overhead and scalability (YCSB, 10M keys).
+
+Top: Throughput and p90 latency overhead across data structures. Overhead ranges from 1.5–5% depending on structure.
+Bottom: Scalability from 2 to 32 threads. Bars show absolute throughput; markers show overhead relative to baseline. Overhead remains bounded at 1–8% with no upward trend.
+
+5.4.2.
+Thread Scalability
+
+A natural concern is whether
+OBASE
+’s atomic operations become contention bottlenecks at higher thread counts.
+We measure scalability by varying CrestDB server threads from 2 to 32 on three representative data structures spanning different synchronization mechanisms: Hashtable Pugh (fine-grained locking), Skiplist Fraser (lock-free), and MassTree (OCC with epoch reclamation).
+
+Figure
+10
+(b) shows that throughput scales nearly linearly and overhead remains bounded at 1–8% regardless of thread count.
+Critically, overhead does not increase with concurrency: all three data structures exhibit similar overheads at 2 and 32 threads.
+
+This scalability follows from
+OBASE
+’s design: guide metadata updates target per-object state (no cross-thread contention), the test-and-set optimization skips redundant writes for hot objects, TAGs are thread-local, and ATC increments occur only during brief
+ACTIVE
+epochs.
+The 2–5% overhead is measured against a DRAM-only baseline with no memory pressure—an idealized scenario that production systems rarely enjoy.
+In the tiered-memory environments where
+OBASE
+is designed to operate, the comparison reverses: as §
+5.3
+showed, backends
+without
+
+OBASE
+suffer 10–38% throughput loss from poor page-selection decisions, while backends
+with
+
+OBASE
+match DRAM-only performance.
+
+Takeaway #4:
+OBASE imposes 2–5% overhead that remains constant as thread count increases, a modest cost relative to backend improvements demonstrated in §
+5.2
+–
+5.3
+.
+
+5.5.
+Real World Traces
+
+Synthetic workloads exercise controlled forms of skew, but production systems exhibit substantially more complex behavior: shifting hotsets, mixed read/write/delete ratios, and locality patterns that evolve over hours.
+We therefore evaluate
+OBASE
+on four real-world traces to assess whether its fragmentation-reduction benefits generalize beyond YCSB and whether the feedback controller adapts stably to long-term changes in access patterns.
+
+We evaluate four traces that span a range of access patterns:
+
+•
+
+Meta CacheLib
+
+(
+5
+)
+: Read-heavy (83% GET) with gradually shifting popular keys.
+
+•
+
+DBench Mixgraph
+
+(
+7
+)
+: Models Meta’s ZippyDB with key-range locality across 30 prefixes. Read-heavy (85% GET, 14% PUT, 1% SEEK).
+
+•
+
+Twitter Cluster 7
+
+(
+56
+)
+: High skew (
+\alpha{=}1.07
+) with small, concentrated working set of reads and writes.
+
+•
+
+Twitter Cluster 23
+
+(
+56
+)
+: Write-heavy (31% SET, 30% INCR) with low skew (
+\alpha{=}0.274
+) and deletes.
+
+These traces cover the spectrum from highly skewed (Cluster 7) to nearly uniform (Cluster 23), and from read-dominated (CacheLib) to write-heavy (Cluster 23).
+We replay each trace on CrestDB with ART and measure memory reduction and page utilization improvement.
+
+Figure 11
+.
+Production trace results.
+
+Memory reduction (left axis):
+OBASE
+Hinted vs. no-reclaim, and
+OBASE
++TMO vs. TMO-alone.
+Page utilization improvement (right axis, hatched) from address-space reorganization.
+
+Page utilization (E1).
+
+Page utilization improves by 1.8–3.4
+\times
+across traces.
+Cluster 23 shows the highest gain (3.4
+\times
+) because its low skew disperses accesses across many keys, yielding very low baseline utilization.
+Cluster 7’s high skew naturally concentrates accesses, so the baseline is already reasonable and the relative improvement is smaller (1.8
+\times
+).
+
+Memory reduction (E1, E2 & E4).
+
+Figure
+11
+shows that
+OBASE
+Hinted reduces RSS by 36–58% compared to no reclamation.
+Cluster 7 achieves the largest reduction (58%) because its high skew concentrates the working set into fewer hot objects; DBench shows the smallest (36%) because key-range locality spreads accesses more uniformly.
+Adding
+OBASE
+to TMO provides 15–30% additional savings, demonstrating
+that
+OBASE
+and TMO are complementary: TMO identifies reclaimable pages, while
+OBASE
+ensures those pages contain uniformly cold data.
+
+Figure 12
+.
+Cold threshold adaptation (Meta CacheLib).
+
+Promotion rate (black) and cold threshold
+C_{t}
+(red) over time. The controller automatically adjusts
+C_{t}
+to maintain the 1% target (purple).
+
+Adaptive cold threshold (E4).
+
+Figure
+12
+demonstrates
+OBASE
+’s ability to adapt to workload
+dynamics over 2.3 hours of the Meta CacheLib trace.
+At startup, the initial
+C_{t}{=}3
+causes premature demotions, spiking the promotion
+rate to 14%.
+The controller increments
+C_{t}
+each scan interval; within 25 minutes,
+C_{t}
+reaches
+18 and the promotion rate drops below the 1% target. Note that a high promotion rate during convergence
+does not indicate degraded performance
+:
+COLD heap pages remain in DRAM until
+OBASE
+(or any backend) explicitly pages them out.
+The promotion rate reflects workload behavior, not backend decisions;
+OBASE
+measures
+COLD-heap accesses regardless of where those pages physically reside.
+This decoupling is intentional:
+OBASE
+cannot determine which tier a page occupies,
+so it takes a backend-agnostic approach, keeping the promotion rate low to ensure that
+COLD pages are safe targets for any backend policy.
+
+Around
+t{=}5400
+s, a workload shift causes a brief spike, as previously cold keys
+become active; the controller raises
+C_{t}
+and the system re-converges as the new
+hotset stabilizes.
+Throughout the trace,
+C_{t}
+varies between 10–20 windows while maintaining the
+promotion rate near target, demonstrating that
+OBASE
+tracks workload evolution.
+
+Takeaway #5:
+OBASE delivers consistent memory savings across real world workloads with diverse characteristics, even provides benefits over state-of-the-art backends like TMO, and dynamically adapts to shifting access patterns.
+
+6.
+Related Work
+
+Object-Level Management.
+
+AIFM
+(
+45
+)
+and MIRA
+(
+22
+)
+manage memory at object granularity
+for disaggregated far memory.
+These systems bypass OS page-based memory management in favor of specialized user-space runtimes, AIFM builds on Shenango’s green threads and kernel-bypass networking, requiring explicit
+DerefScope
+guards around regions of far-memory access.
+
+OBASE
+takes a complementary approach: it acts as a
+frontend
+that reorganizes the address space for unmodified OS
+backends
+.
+We do not compare directly with AIFM or MIRA because they target custom runtimes and disaggregated memory setups.
+Conceptually, the systems solve different problems: AIFM manages placement between local and remote memory and optimizes remote access latency;
+
+OBASE
+improves page-level tiering decisions by eliminating hotness fragmentation within local memory.
+These approaches are orthogonal; AIFM’s local cache could, in principle, benefit from
+OBASE
+’s address-space organization when selecting objects to evict.
+Alaska
+(
+52
+)
+uses handle-based indirection for heap compaction
+but does not track object hotness or organize memory by access intensity.
+
+Allocation-Time Placement.
+
+Static placement approaches
+(
+13
+;
+9
+;
+39
+;
+57
+;
+28
+)
+make decisions at allocation time based on hints or profiling. As §
+2
+shows, object hotness is neither knowable at allocation nor stable over time.
+OBASE
+tracks access patterns at runtime, enabling migration based on observed behavior.
+
+Page-Level Tiering.
+
+TPP
+(
+37
+)
+, Memtis
+(
+32
+)
+, HawkEye
+(
+41
+)
+, and TMO
+(
+53
+)
+all operate at page granularity.
+OBASE
+is designed to enhance these backends, not replace them.
+
+Garbage Collection and Object Relocation.
+
+GCs have long exploited object relocation to improve locality: generational collectors cluster recently-allocated objects, and profile-guided approaches like Online Object Reordering
+(
+26
+)
+group hot objects during copying collection.
+GC-OS cooperation has also been explored: the Bookmarking Collector
+(
+25
+)
+avoids paging during collection by tracking outgoing pointers from evicted pages.
+
+OBASE
+differs from concurrent GCs in its approach to relocation safety.
+Systems like ZGC
+(
+54
+)
+and Shenandoah
+(
+16
+)
+use load barriers to redirect accesses to relocated objects, allowing relocation to proceed while threads hold stale pointers.
+
+OBASE
+instead adopts a
+quiescence-based
+approach inspired by epoch-based reclamation
+(
+17
+;
+8
+)
+and RCU
+(
+38
+)
+: it tracks the number of threads actively using each object (ATC) and only relocates when this count reaches zero.
+Any concurrent access aborts migration via CAS failure rather than requiring forwarding-pointer resolution.
+The key distinction from GC is purpose:
+GCs relocate to reclaim memory or improve cache locality, while
+OBASE
+relocates to improve
+page utilization
+–clustering objects so that OS tiering/reclaimation mechanisms see uniformly hot or cold pages.
+
+7.
+Conclusion
+
+OBASE
+shows that memory tiering improves when applications cooperate with the OS rather than bypass it.
+By reorganizing virtual address space so that page boundaries align with object temperature,
+OBASE
+makes existing backends more effective without modifying them.
+The approach has limitations: it requires developer annotation of relocatable pointers and applies only to pointer-based structures.
+However, the principle of address-space engineering extends beyond tiering.
+The same techniques could improve generational garbage collection (grouping by access intensity rather than age), reduce false sharing of pages across NUMA nodes (separating objects by access pattern), and strengthen isolation (grouping by trust level).
+The virtual address space is not just storage; it is a communication channel between applications and OS.
+OBASE
+shows that by engineering this channel, applications can express object-level semantics in a language page-based systems already understand and operate.
+
