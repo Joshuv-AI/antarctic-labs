@@ -2,10 +2,22 @@
 // Babel full-text reader.
 //
 // FOUNDATION (expandable): a draggable, edge-snapping floating orb that opens
-// a feature menu. Features register in FEATURES below; today there are two —
-// "Search", a Ctrl+F-style find-in-page bar, and "Contents", an Apple
-// Books-style table of contents. Adding a feature later =
+// a feature menu. Features register in FEATURES below; today there are three —
+// "Search", a Ctrl+F-style find-in-page bar, "Contents", an Apple
+// Books-style table of contents, and "Share", an Apple share-sheet style
+// panel with "Share from the Top" / "Share from Current Place" intents plus
+// an optional Apple Books-style passage highlight. Adding a feature later =
 // one registry entry + one panel component.
+//
+// The menu fans out D-pad style around the orb: up / inward-side / down,
+// swinging to an inward diagonal when the orb is parked too close to the
+// top or bottom edge for a straight slot. Slot order follows FEATURES order.
+//
+// Share links: bare entry URL = from the top; ?at=<char offset> jumps the
+// receiver to the sharer's scroll position; &hl=<start>-<end> additionally
+// highlights the passage in Apple Books yellow (rendered by the reader in
+// pages.jsx). Shared via the OS share sheet (navigator.share), falling back
+// to clipboard + toast.
 //
 // Motion internals (2026-10-14 rewrite — feel only, zero visual/behavior change):
 // - Pointer Events + setPointerCapture; 8px tap-vs-drag threshold.
@@ -149,11 +161,91 @@ const AssistiveGlyph = (
   </svg>
 );
 
+// Apple share glyph (SF Symbols square.and.arrow.up), same stroke style as
+// the other menu icons.
+const ShareIcon = (
+  <svg
+    viewBox="0 0 24 24"
+    width="26"
+    height="26"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M8 12.5V19a1.5 1.5 0 0 0 1.5 1.5h5A1.5 1.5 0 0 0 16 19v-6.5" />
+    <line x1="12" y1="14.5" x2="12" y2="4" />
+    <polyline points="8.2 7.8 12 4 15.8 7.8" />
+  </svg>
+);
+
+// Apple Books highlighter glyph: a slanted marker pen with its band, same
+// stroke style as the other menu icons. Used for the optional highlight
+// toggle in the share panel.
+const HighlighterIcon = (
+  <svg
+    viewBox="0 0 24 24"
+    width="26"
+    height="26"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M14.7 4.1l5.2 5.2-8.6 8.6-5.9 1.7 1.7-5.9z" />
+    <line x1="11.9" y1="12.9" x2="15.1" y2="16.1" />
+  </svg>
+);
+
+// Share row glyphs (smaller, 22px): arrow rising to the top edge, and a
+// crosshair marking the current place.
+const FromTopIcon = (
+  <svg
+    viewBox="0 0 24 24"
+    width="22"
+    height="22"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <line x1="5" y1="5" x2="19" y2="5" />
+    <line x1="12" y1="20" x2="12" y2="9" />
+    <polyline points="8.5 12.5 12 9 15.5 12.5" />
+  </svg>
+);
+const CurrentPlaceIcon = (
+  <svg
+    viewBox="0 0 24 24"
+    width="22"
+    height="22"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    aria-hidden="true"
+  >
+    <circle cx="12" cy="12" r="6.5" />
+    <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
+    <line x1="12" y1="2.5" x2="12" y2="6" />
+    <line x1="12" y1="18" x2="12" y2="21.5" />
+    <line x1="2.5" y1="12" x2="6" y2="12" />
+    <line x1="18" y1="12" x2="21.5" y2="12" />
+  </svg>
+);
+
 // --- Feature registry: one entry per assistive feature. The orb menu renders
 // these; selecting one opens its panel. --------------------------------------
 const FEATURES = [
   { id: "search", label: "Search", icon: MagnifierIcon },
   { id: "contents", label: "Contents", icon: ContentsIcon },
+  { id: "share", label: "Share", icon: ShareIcon },
 ];
 
 // ---------------------------------------------------------------------------
@@ -759,6 +851,262 @@ function ContentsPanel({
 }
 
 // ---------------------------------------------------------------------------
+// Share panel — Apple share-sheet style.
+//
+// Two intents: "Share from the Top" shares the bare entry URL; "Share from
+// Current Place" appends ?at=<char offset> captured from the sharer's scroll
+// position (probe at ~12% viewport headroom, mapped to a global offset via
+// the rendered chunk tops — the same technique ContentsPanel uses for
+// current-section tracking), so the receiver lands exactly where the sharer
+// was reading.
+//
+// Optional highlight (Apple Books-style marker toggle): when ON, the
+// sharer's live text selection inside the reader is captured and embedded as
+// &hl=<start>-<end>; the receiver scrolls there and sees the passage
+// highlighted in Apple Books yellow. No selection = position-only share plus
+// a hint toast. Sharing goes through the OS share sheet (navigator.share)
+// with a minimal message; where the API is unavailable the link is copied
+// to the clipboard with a toast instead.
+// ---------------------------------------------------------------------------
+const MAX_HL_CHARS = 20000; // cap so a huge selection can't bloat the URL
+
+function SharePanel({
+  text,
+  title,
+  chunkStarts,
+  shownChunks,
+  chunkElsRef,
+  anchorStyle,
+  onClose,
+}) {
+  const [hlOn, setHlOn] = useState(false);
+  const [toast, setToast] = useState(null);
+  const toastTimer = useRef(0);
+  const panelRef = useRef(null);
+
+  useEffect(() => {
+    if (panelRef.current) {
+      try {
+        panelRef.current.focus({ preventScroll: true });
+      } catch {
+        panelRef.current.focus();
+      }
+    }
+  }, []);
+
+  useEffect(
+    () => () => window.clearTimeout(toastTimer.current),
+    []
+  );
+
+  const flash = (msg) => {
+    setToast(msg);
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 2800);
+  };
+
+  // Global char offset at the read probe (~12% viewport headroom). Rendered
+  // chunks are always contiguous from 0, so pixel tops binary-search cleanly.
+  const probeOffset = useCallback(() => {
+    const probe = window.scrollY + window.innerHeight * 0.12;
+    const els = chunkElsRef.current;
+    let ci = 0;
+    let top = 0;
+    let nextTop = Infinity;
+    for (let i = 0; i < shownChunks; i++) {
+      const el = els[i];
+      if (!el) continue;
+      const t = el.getBoundingClientRect().top + window.scrollY;
+      if (t <= probe) {
+        ci = i;
+        top = t;
+      } else {
+        nextTop = t;
+        break;
+      }
+    }
+    if (nextTop === Infinity)
+      nextTop = document.documentElement.scrollHeight;
+    const chunkEnd =
+      chunkStarts[ci + 1] !== undefined ? chunkStarts[ci + 1] : text.length;
+    const frac = clamp(
+      (probe - top) / Math.max(1, nextTop - top),
+      0,
+      1
+    );
+    return Math.round(
+      chunkStarts[ci] + frac * Math.max(0, chunkEnd - chunkStarts[ci])
+    );
+  }, [chunkStarts, shownChunks, chunkElsRef, text]);
+
+  // The sharer's current position as a percentage, computed once while the
+  // panel is open (shown under "Share from Current Place").
+  const [pct] = useState(() =>
+    Math.round((probeOffset() / Math.max(1, text.length)) * 100)
+  );
+
+  // Global offset of a (node, offset) selection point inside the reader.
+  const pointGlobal = (node, off) => {
+    const host =
+      node.nodeType === 1 ? node : node.parentElement;
+    const chunkEl = host && host.closest(".tower-reader-chunk");
+    if (!chunkEl) return null;
+    const ci = chunkElsRef.current.indexOf(chunkEl);
+    if (ci < 0 || ci >= chunkStarts.length) return null;
+    try {
+      const r = document.createRange();
+      r.setStart(chunkEl, 0);
+      r.setEnd(node, off);
+      return chunkStarts[ci] + r.toString().length;
+    } catch {
+      return null;
+    }
+  };
+
+  // The sharer's live text selection as global {start, end}, or null when
+  // there is no usable selection inside the reader text.
+  const selectionOffsets = () => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+    const reader = document.querySelector(".tower-reader-text");
+    const range = sel.getRangeAt(0);
+    if (!reader || !reader.contains(range.commonAncestorContainer))
+      return null;
+    const a = pointGlobal(range.startContainer, range.startOffset);
+    const b = pointGlobal(range.endContainer, range.endOffset);
+    if (a === null || b === null || b <= a) return null;
+    const start = clamp(a, 0, text.length);
+    const end = Math.min(clamp(b, 0, text.length), start + MAX_HL_CHARS);
+    return { start, end };
+  };
+
+  const entryUrl = () =>
+    window.location.origin + window.location.pathname;
+
+  const doShare = async ({ url, message }) => {
+    const data = { title: title || "Tower of Babel", text: message, url };
+    if (
+      typeof navigator !== "undefined" &&
+      typeof navigator.share === "function"
+    ) {
+      onClose();
+      try {
+        await navigator.share(data);
+      } catch {
+        /* dismissed — silent */
+      }
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(`${message}\n${url}`);
+      flash("Link copied — paste it anywhere.");
+    } catch {
+      flash("Copy didn't work — long-press the address bar to copy the link.");
+    }
+  };
+
+  const shareFromTop = () => {
+    doShare({
+      url: entryUrl(),
+      message: `"${title}" — read the full text free in the Tower of Babel`,
+    });
+  };
+
+  const shareFromCurrent = () => {
+    const at = clamp(probeOffset(), 0, Math.max(0, text.length - 1));
+    let hlParam = "";
+    if (hlOn) {
+      const sel = selectionOffsets();
+      if (!sel) {
+        flash("Select text on the page first — then share.");
+        return;
+      }
+      hlParam = `&hl=${sel.start}-${sel.end}`;
+    }
+    doShare({
+      url: `${entryUrl()}?at=${at}${hlParam}`,
+      message: `"${title}" — jumping you right to where I was, in the Tower of Babel`,
+    });
+  };
+
+  return (
+    <div
+      ref={panelRef}
+      className="ra-share"
+      style={anchorStyle}
+      role="dialog"
+      aria-label={title ? `Share ${title}` : "Share this text"}
+      tabIndex={-1}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onClose();
+        }
+      }}
+    >
+      <div className="ra-share-header">
+        <h2 className="ra-share-title">Share</h2>
+        <button
+          type="button"
+          className="ra-share-close"
+          aria-label="Close share"
+          onClick={onClose}
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+            <line x1="6" y1="6" x2="18" y2="18" />
+            <line x1="18" y1="6" x2="6" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <button type="button" className="ra-share-row" onClick={shareFromTop}>
+        <span className="ra-share-row-icon" aria-hidden="true">
+          {FromTopIcon}
+        </span>
+        <span className="ra-share-row-text">
+          <span className="ra-share-row-title">Share from the Top</span>
+          <span className="ra-share-row-sub">Start at the beginning</span>
+        </span>
+      </button>
+      <button type="button" className="ra-share-row" onClick={shareFromCurrent}>
+        <span className="ra-share-row-icon" aria-hidden="true">
+          {CurrentPlaceIcon}
+        </span>
+        <span className="ra-share-row-text">
+          <span className="ra-share-row-title">Share from Current Place</span>
+          <span className="ra-share-row-sub">
+            You&rsquo;re at {pct}% — jumps right here
+          </span>
+        </span>
+      </button>
+      <button
+        type="button"
+        className="ra-share-row ra-share-hl"
+        role="switch"
+        aria-checked={hlOn}
+        aria-label="Highlight a passage when sharing from your current place"
+        onClick={() => setHlOn((v) => !v)}
+      >
+        <span className="ra-share-row-icon" aria-hidden="true">
+          {HighlighterIcon}
+        </span>
+        <span className="ra-share-row-text">
+          <span className="ra-share-row-title">Highlight a passage</span>
+          <span className="ra-share-row-sub">
+            Optional — select text, then share
+          </span>
+        </span>
+        <span className="ra-switch" data-on={hlOn} aria-hidden="true" />
+      </button>
+      {toast && (
+        <div className="ra-toast" role="status" aria-live="polite">
+          {toast}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // The orb + menu + panel shell
 // ---------------------------------------------------------------------------
 export default function ReaderAssist({
@@ -1043,7 +1391,7 @@ export default function ReaderAssist({
   useEffect(() => {
     if (!menuOpen) return;
     const onDocDown = (e) => {
-      if (e.target.closest && e.target.closest(".ra-menu, #ra-orb")) return;
+      if (e.target.closest && e.target.closest(".ra-menu-item, #ra-orb")) return;
       setMenuOpen(false);
     };
     const onKey = (e) => {
@@ -1072,13 +1420,45 @@ export default function ReaderAssist({
   const cx = orbX + ORB / 2;
   const cy = orbY + ORB / 2;
 
-  const menuStyle = useMemo(() => {
-    const mw = 140; // two feature icons side by side
-    const mh = 76;
-    const left =
-      cx > viewport.w / 2 ? cx - ORB / 2 - 12 - mw : cx + ORB / 2 + 12;
-    const top = clamp(cy - mh / 2, 12, Math.max(12, viewport.h - mh - 12));
-    return { left: Math.round(clamp(left, 12, Math.max(12, viewport.w - mw - 12))), top: Math.round(top) };
+  // Fan-out menu: feature icons orbit the orb D-pad style — up, inward-side,
+  // down, in FEATURES order. When the orb is parked too close to the top or
+  // bottom edge for a straight slot, that icon swings to an inward diagonal
+  // so it never clamps onto the orb. Every icon stays inside the viewport.
+  const fanItems = useMemo(() => {
+    const R = 26; // fan item radius (52px circle)
+    const d = ORB / 2 + 16 + R; // center distance from the orb center
+    const inward = cx > viewport.w / 2 ? -1 : 1; // away from the snapped edge
+    const minC = R + 10;
+    const maxX = Math.max(minC, viewport.w - R - 10);
+    const maxY = Math.max(minC, viewport.h - R - 10);
+    const slots = [
+      { dx: 0, dy: -1 }, // up
+      { dx: inward, dy: 0 }, // inward side
+      { dx: 0, dy: 1 }, // down
+    ];
+    return FEATURES.map((f, i) => {
+      const s = slots[i % slots.length];
+      let x = cx + s.dx * d;
+      let y = cy + s.dy * d;
+      if (s.dy !== 0) {
+        const clampedY = clamp(y, minC, maxY);
+        if (Math.abs(clampedY - cy) < d * 0.7) {
+          // Orb hugging the top/bottom edge: swing to the inward diagonal.
+          x = cx + inward * d * 0.72;
+          y = cy + s.dy * d * 0.72;
+        } else {
+          y = clampedY;
+        }
+      }
+      x = clamp(x, minC, maxX);
+      y = clamp(y, minC, maxY);
+      return {
+        ...f,
+        left: Math.round(x - R),
+        top: Math.round(y - R),
+        delay: i * 45,
+      };
+    });
   }, [cx, cy, viewport]);
 
   const panelStyle = useMemo(() => {
@@ -1124,14 +1504,19 @@ export default function ReaderAssist({
       </div>
 
       {menuOpen && (
-        <div className="ra-menu" style={menuStyle} role="menu" aria-label="Reading tools">
-          {FEATURES.map((f) => (
+        <div className="ra-fan" role="menu" aria-label="Reading tools">
+          {fanItems.map((f) => (
             <button
               key={f.id}
               type="button"
               className="ra-menu-item"
               role="menuitem"
               aria-label={`${f.label} this text`}
+              style={{
+                left: f.left,
+                top: f.top,
+                animationDelay: `${f.delay}ms`,
+              }}
               onClick={() => {
                 setMenuOpen(false);
                 setPanel(f.id);
@@ -1168,6 +1553,22 @@ export default function ReaderAssist({
           chunkStarts={chunkStarts}
           shownChunks={shownChunks}
           ensureChunk={ensureChunk}
+          chunkElsRef={chunkElsRef}
+          anchorStyle={panelStyle}
+          onClose={() => {
+            setPanel(null);
+            poke();
+            if (orbRef.current) orbRef.current.focus();
+          }}
+        />
+      )}
+
+      {panel === "share" && (
+        <SharePanel
+          text={text}
+          title={title}
+          chunkStarts={chunkStarts}
+          shownChunks={shownChunks}
           chunkElsRef={chunkElsRef}
           anchorStyle={panelStyle}
           onClose={() => {

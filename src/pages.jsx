@@ -1639,6 +1639,29 @@ function LibraryFullText({ artifact }) {
   const [text, setText] = useState(null);
   const [textError, setTextError] = useState(false);
   const [shownChunks, setShownChunks] = useState(1);
+  // Shared-link landing (?at=<char offset>[&hl=<start>-<end>]): a "Share from
+  // Current Place" link jumps the reader to the sharer's scroll position and,
+  // when present, highlights the shared passage in Apple Books yellow. Parsed
+  // once per entry mount — a share link is always a fresh page load, so stale
+  // params must never re-trigger on in-app navigation.
+  const [shareLanding] = useState(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const atRaw = q.get("at");
+      if (atRaw === null || !/^\d{1,9}$/.test(atRaw)) return null;
+      const at = parseInt(atRaw, 10);
+      let hl = null;
+      const hlRaw = q.get("hl");
+      if (hlRaw && /^\d{1,9}-\d{1,9}$/.test(hlRaw)) {
+        const [a, b] = hlRaw.split("-").map((n) => parseInt(n, 10));
+        if (b > a) hl = { start: a, end: Math.min(b, a + 20000) };
+      }
+      return { at, hl, done: false };
+    } catch {
+      return null;
+    }
+  });
+  const [shareHl, setShareHl] = useState(null); // {start, end} global offsets
   // The orb must never sit on top of the Tower boot loader: wait until the
   // boot overlay is fully dismissed before mounting it. Re-arms on every
   // entry navigation (the boot raises on each in-app tower visit).
@@ -1669,6 +1692,7 @@ function LibraryFullText({ artifact }) {
     setShownChunks(1);
     chunkElsRef.current = [];
     setActiveMark(null);
+    setShareHl(null);
     if (!canRead) return;
     fetch(url)
       .then((r) => {
@@ -1711,6 +1735,77 @@ function LibraryFullText({ artifact }) {
     return () => io.disconnect();
   }, [shownChunks, chunks.length]);
 
+  const chunkIndexOf = (off) => {
+    let lo = 0;
+    let hi = chunkStarts.length - 1;
+    let ans = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (chunkStarts[mid] <= off) {
+        ans = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return ans;
+  };
+
+  // Shared-link landing: once the text is in, force-render the chunks
+  // covering the jump target (and the highlight, when present), then scroll
+  // the exact offset into view with an instant jump — this is a link landing,
+  // not an in-page navigation. The highlight paints after the scroll's rAF
+  // so the Range rect is measured against the unmarked text node.
+  useEffect(() => {
+    if (!text || !shareLanding || shareLanding.done || chunkStarts.length === 0)
+      return;
+    const tlen = text.length;
+    const at = Math.min(shareLanding.at, Math.max(0, tlen - 1));
+    const hlEnd = shareLanding.hl
+      ? Math.min(shareLanding.hl.end, tlen)
+      : at;
+    const need = Math.max(
+      chunkIndexOf(at),
+      chunkIndexOf(Math.max(0, hlEnd - 1))
+    );
+    if (need >= shownChunks) {
+      setShownChunks((n) => Math.max(n, need + 1));
+      return; // effect re-runs once the chunks render
+    }
+    shareLanding.done = true;
+    const ci = chunkIndexOf(at);
+    const el = chunkElsRef.current[ci];
+    if (!el) return;
+    const headroom = window.innerHeight * 0.12;
+    requestAnimationFrame(() => {
+      let top = null;
+      const tn = el.firstChild;
+      if (tn && tn.nodeType === 3) {
+        try {
+          const s = Math.min(Math.max(0, at - chunkStarts[ci]), tn.length);
+          const r = new Range();
+          r.setStart(tn, s);
+          r.setEnd(tn, s);
+          top = r.getBoundingClientRect().top + window.scrollY - headroom;
+        } catch {
+          top = null;
+        }
+      }
+      if (top === null || Number.isNaN(top)) {
+        const rect = el.getBoundingClientRect();
+        top = rect.top + window.scrollY - headroom;
+      }
+      window.scrollTo({ top: Math.max(0, top), behavior: "auto" });
+      if (shareLanding.hl) {
+        setShareHl({
+          start: Math.min(shareLanding.hl.start, tlen - 1),
+          end: Math.min(shareLanding.hl.end, tlen),
+        });
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text, shownChunks, chunkStarts]);
+
   const stats = useMemo(() => {
     if (!text) return null;
     const words = countWords(text);
@@ -1719,6 +1814,40 @@ function LibraryFullText({ artifact }) {
       minutes: Math.max(1, Math.round(words / 200)),
     };
   }, [text]);
+
+  // Chunk body renderer: the search fallback <mark> takes precedence; the
+  // shared-passage highlight (Apple Books yellow) paints wherever the ?hl=
+  // range intersects the chunk.
+  const renderChunk = (c, i) => {
+    if (activeMark && activeMark.chunkIndex === i && !SUPPORTS_HIGHLIGHTS) {
+      return (
+        <>
+          {c.slice(0, activeMark.start)}
+          <mark className="ra-mark">
+            {c.slice(activeMark.start, activeMark.end)}
+          </mark>
+          {c.slice(activeMark.end)}
+        </>
+      );
+    }
+    if (shareHl && chunkStarts.length > 0) {
+      const gStart = chunkStarts[i];
+      const s = shareHl.start - gStart;
+      const e = shareHl.end - gStart;
+      if (s < c.length && e > 0) {
+        const cs = Math.max(0, s);
+        const ce = Math.min(c.length, e);
+        return (
+          <>
+            {c.slice(0, cs)}
+            <mark className="ra-share-mark">{c.slice(cs, ce)}</mark>
+            {c.slice(ce)}
+          </>
+        );
+      }
+    }
+    return c;
+  };
 
   return (
     <section className="tower-fulltext section" aria-label="Full text">
@@ -1771,17 +1900,7 @@ function LibraryFullText({ artifact }) {
               ref={(el) => { chunkElsRef.current[i] = el; }}
               className="tower-reader-chunk"
             >
-              {activeMark && activeMark.chunkIndex === i && !SUPPORTS_HIGHLIGHTS ? (
-                <>
-                  {c.slice(0, activeMark.start)}
-                  <mark className="ra-mark">
-                    {c.slice(activeMark.start, activeMark.end)}
-                  </mark>
-                  {c.slice(activeMark.end)}
-                </>
-              ) : (
-                c
-              )}
+              {renderChunk(c, i)}
             </p>
           ))}
           {shownChunks < chunks.length && (
