@@ -1300,6 +1300,10 @@ export default function ReaderAssist({
   // new word (global char offsets -> chunk -> text node -> Range).
   const speakHlRef = useRef(null);
   const speakBallRef = useRef(null);
+  // Manual-scroll detection during Listen (2026-10-18): if the user scrolls
+  // while audio plays, auto-scroll yields for 2.5s so it never fights them.
+  const userScrolledAt = useRef(0);
+  const autoScrolling = useRef(false);
   const speakBallTick = useRef(0);
 
   const clearSpeakHl = useCallback(() => {
@@ -1383,14 +1387,19 @@ export default function ReaderAssist({
         ball.classList.add("ra-speak-hop");
       }
       // Gentle auto-scroll: keep the spoken word in the middle band.
+      // Yields to manual scrolling — if the user scrolled in the last 2.5s,
+      // skip auto-scroll so it never fights their finger (2026-10-18).
       const vh = window.innerHeight;
       if (rect.top < vh * 0.22 || rect.bottom > vh * 0.78) {
-        try {
-          const y =
-            window.scrollY + rect.top - vh * 0.42;
-          window.scrollTo({ top: y, behavior: "smooth" });
-        } catch {
-          /* noop */
+        if (Date.now() - userScrolledAt.current > 2500) {
+          try {
+            const y = window.scrollY + rect.top - vh * 0.42;
+            autoScrolling.current = true;
+            window.scrollTo({ top: y, behavior: "smooth" });
+            setTimeout(() => { autoScrolling.current = false; }, 600);
+          } catch {
+            /* noop */
+          }
         }
       }
     },
@@ -1446,6 +1455,17 @@ export default function ReaderAssist({
     onWord: handleSpeakWord,
   });
   const listening = readAloud.status !== "idle";
+
+  // Track manual scrolls during Listen (2026-10-18): distinguishes the user's
+  // finger from our own auto-scroll so showSpeakWord can yield.
+  useEffect(() => {
+    if (!listening) return;
+    const onScroll = () => {
+      if (!autoScrolling.current) userScrolledAt.current = Date.now();
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [listening]);
 
   // Hide the Listen icon when speech synthesis is unavailable.
   const visibleFeatures = useMemo(
