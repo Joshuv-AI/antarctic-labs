@@ -1616,6 +1616,9 @@ export default function ReaderAssist({
     const onViewport = (w, h) => {
       const prev = vpRef.current;
       if (w === prev.w && h === prev.h) return;
+      // Guard against invalid dimensions (2026-10-18): iOS can fire resize
+      // with 0 height during scroll transitions — ignore those.
+      if (w < 50 || h < 50) return;
       vpRef.current = { w, h };
       setViewport({ w, h }); // menu/panel anchors re-derive from state
       if (dragRef.current) return; // mid-drag: keep the gesture, clamp to new bounds
@@ -1632,8 +1635,10 @@ export default function ReaderAssist({
         // Toolbar show/hide (iOS scroll) or keyboard wobble: pin the orb where
         // it is — this is the scroll-drift fix. topFrac is recomputed from the
         // pinned pixel position so the persisted model stays truthful.
+        // (2026-10-18): keep cur.x, don't snap to edge — snapping X on every
+        // toolbar wobble caused the visible jitter/place-switching.
         const side = cur.x + ORB / 2 < w / 2 ? "left" : "right";
-        const nx = edgeX(side, w);
+        const nx = clamp(cur.x, 0, Math.max(0, w - ORB));
         const ny = clamp(cur.y, 0, Math.max(0, h - ORB));
         const topFrac = clamp(
           (ny - MARGIN) / Math.max(1, h - ORB - MARGIN * 2),
