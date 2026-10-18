@@ -222,7 +222,6 @@ const lazyPage = (name) =>
   );
 const TowerOfBabel = lazyPage("TowerOfBabel");
 const LibraryArtifact = lazyPage("LibraryArtifact");
-const LibraryTextReader = lazyPage("LibraryTextReader");
 const SuggestEntry = lazyPage("SuggestEntry");
 const Government = lazyPage("Government");
 const Transmission = lazyPage("Transmission");
@@ -623,13 +622,6 @@ function App() {
             onReady={handleTowerReady}
           />
         )}
-        {matchedPattern === "/tower-of-babel/library/:id/text" && (
-          <LibraryTextReader
-            go={go}
-            params={pageParams}
-            onReady={handleTowerReady}
-          />
-        )}
         {path === "/tower-of-babel/library/suggest" && (
           <SuggestEntry go={go} />
         )}
@@ -649,8 +641,7 @@ function App() {
           path === "/tower-of-babel/api" ||
           path === "/tower-of-babel/library" ||
           path === "/tower-of-babel/library/suggest" ||
-          matchedPattern === "/tower-of-babel/library/:id" ||
-          matchedPattern === "/tower-of-babel/library/:id/text") && (
+          matchedPattern === "/tower-of-babel/library/:id") && (
           <div className="tower-vortex-layer" aria-hidden="true">
             <Suspense fallback={null}>
               <TypographyVortexCanvas
