@@ -1417,15 +1417,65 @@ export default function ReaderAssist({
   // headroom — the same "where I was reading" the share feature uses).
   const speakStartOffset = useCallback(() => {
     if (!text) return 0;
-    const probe = window.scrollY + window.innerHeight * 0.12;
+    // Use the browser's hit-testing to find the exact text under the
+    // viewport's reading position (2026-10-18): far more reliable than
+    // interpolating within chunk heights, which jumped to random spots.
+    const x = window.innerWidth / 2;
+    const y = window.innerHeight * 0.35;
+    let range = null;
+    try {
+      if (document.caretRangeFromPoint) {
+        range = document.caretRangeFromPoint(x, y);
+      } else if (document.caretPositionFromPoint) {
+        const pos = document.caretPositionFromPoint(x, y);
+        if (pos && pos.offsetNode) {
+          range = document.createRange();
+          range.setStart(pos.offsetNode, pos.offset);
+          range.collapse(true);
+        }
+      }
+    } catch {
+      range = null;
+    }
+    if (range) {
+      // Walk up to find which chunk element contains this point.
+      const els = chunkElsRef.current;
+      let node = range.startContainer;
+      // If it's a text node, get its parent element.
+      let el = node.nodeType === 3 ? node.parentElement : node;
+      // Walk up to find the chunk <p>.
+      while (el && els) {
+        const ci = els.indexOf(el);
+        if (ci >= 0 && ci < shownChunks) {
+          // Found the chunk. Compute offset within the chunk's text.
+          const chunkEl = els[ci];
+          const preRange = document.createRange();
+          preRange.selectNodeContents(chunkEl);
+          preRange.setEnd(range.startContainer, range.startOffset);
+          const localOff = preRange.toString().length;
+          return Math.min(
+            text.length,
+            Math.max(0, chunkStarts[ci] + localOff)
+          );
+        }
+        el = el.parentElement;
+      }
+      // Point didn't hit a chunk (e.g., header area) — fall through to
+      // the chunk-scan fallback below.
+    }
+    // Fallback: scan chunks for the one containing the probe (old logic,
+    // kept for browsers without caret hit-testing).
+    const probe = window.scrollY + window.innerHeight * 0.35;
     const els = chunkElsRef.current;
     let ci = 0;
     let top = 0;
     let nextTop = Infinity;
+    let firstTop = Infinity;
     for (let i = 0; i < shownChunks; i++) {
       const el = els[i];
       if (!el) continue;
       const t = el.getBoundingClientRect().top + window.scrollY;
+      if (t < firstTop) firstTop = t;
       if (t <= probe) {
         ci = i;
         top = t;
@@ -1434,6 +1484,9 @@ export default function ReaderAssist({
         break;
       }
     }
+    // If the probe is above the first chunk (user hasn't scrolled to text
+    // yet), start from the beginning — don't interpolate from page top.
+    if (probe < firstTop) return 0;
     if (nextTop === Infinity)
       nextTop = document.documentElement.scrollHeight;
     const chunkEnd =
