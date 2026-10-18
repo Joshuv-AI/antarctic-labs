@@ -25,20 +25,11 @@ import {
   onIndexReady,
   isIndexLoading,
 } from "./lib/catalog.js";
-// Two-level browse taxonomy for the library filter (revamp 2026-10-17):
-// top-level lanes + subcategories derived from the artifact_id prefix.
-// Pure module, no dependencies — see ./lib/tower-taxonomy.js.
-import {
-  TOWER_TOP_LABELS,
-  TOWER_SUBS,
-  towerBucketKey,
-  towerSubLabel,
-} from "./lib/tower-taxonomy.js";
 // The build-time manifest of hosted tower texts (2.4MB at current scale)
 // is NOT statically imported: it would ride inside the lazy pages chunk and
 // make every page pay for it. It loads as its own chunk, on demand, only on
-// the reader route (see LibraryTextReader) — preloaded from the entry page
-// so entry → text navigation usually has it cached. Module-level promise:
+// entry pages (see LibraryFullText) — preloaded while the entry paints
+// so the inline full-text section usually has it cached. Module-level promise:
 // one fetch per session; a failed load resolves null and callers treat
 // "unknown" optimistically (the text fetch itself 404s gracefully).
 let towerFilesPromise = null;
@@ -394,8 +385,6 @@ export function TowerOfBabel({ go, onReady }) {
 // ----- Tower of Babel / Library -------------------------------------------------
 const TOWER_SORTS = [
   { id: "title-asc", label: "Title A–Z" },
-  { id: "title-desc", label: "Title Z–A" },
-  { id: "creator-asc", label: "Creator A–Z" },
   { id: "year-desc", label: "Newest first" },
   { id: "year-asc", label: "Oldest first" },
 ];
@@ -497,17 +486,14 @@ function TowerCatalogError({ onRetry }) {
 }
 
 // Case-insensitive haystack for catalog search: title, creator, year,
-// description, collection, subcategory label, and tags. The subcategory
-// label (e.g. "CIA", "PLOS Journals") makes the revamp's buckets findable
-// by search too.
-function towerHaystack(a, subLabel) {
+// description, collection, and tags.
+function towerHaystack(a) {
   return [
     a.title || "",
     a.creator || "",
     a.year ? String(a.year) : "",
     a.description || "",
     a.collection || "",
-    subLabel || "",
     Array.isArray(a.tags) ? a.tags.join(" ") : "",
   ]
     .join("\n")
@@ -576,20 +562,12 @@ async function buildTitleOrder(artifacts, isCancelled) {
 // Chunked haystack build: 20k records per macrotask, so filtering data
 // never blocks the thread either. Output is identical to the old
 // artifacts.map(towerHaystack).
-async function buildHaystacks(artifacts, bucketKeys, isCancelled) {
+async function buildHaystacks(artifacts, isCancelled) {
   const out = new Array(artifacts.length);
   for (let from = 0; from < artifacts.length; from += 20000) {
     if (isCancelled()) return null;
     const end = Math.min(from + 20000, artifacts.length);
-    for (let i = from; i < end; i++) {
-      const a = artifacts[i];
-      const bk = bucketKeys[i];
-      const colon = bk.indexOf(":");
-      out[i] = towerHaystack(
-        a,
-        colon < 0 ? "" : towerSubLabel(a.collection, bk.slice(colon + 1))
-      );
-    }
+    for (let i = from; i < end; i++) out[i] = towerHaystack(artifacts[i]);
     await new Promise((r) => setTimeout(r, 0));
   }
   return out;
@@ -604,38 +582,16 @@ async function deriveTowerData(artifacts, isCancelled) {
     const key = artifacts[i].collection || "OTHER";
     counts[key] = (counts[key] || 0) + 1;
   }
-  // Two-level browse taxonomy (filter revamp 2026-10-17): one bucket key per
-  // record ("COLLECTION" or "COLLECTION:sub"), aligned with artifacts like
-  // haystacks. Subcategory partitions are exact — the union of a lane's
-  // sub-buckets is the lane itself — so the top-level filter result set is
-  // identical to the old collection filter (see parity-test.mjs).
-  const bucketKeys = new Array(artifacts.length);
-  const subCounts = {};
-  for (let i = 0; i < artifacts.length; i++) {
-    const bk = towerBucketKey(artifacts[i]) || artifacts[i].collection || "OTHER";
-    bucketKeys[i] = bk;
-    subCounts[bk] = (subCounts[bk] || 0) + 1;
-  }
   const titleOrder = await buildTitleOrder(artifacts, isCancelled);
   if (!titleOrder || isCancelled()) return null;
-  const haystacks = await buildHaystacks(artifacts, bucketKeys, isCancelled);
+  const haystacks = await buildHaystacks(artifacts, isCancelled);
   if (!haystacks || isCancelled()) return null;
   const data = {
     haystacks,
     counts,
-    subCounts,
-    bucketKeys,
-    collections: Object.keys(counts).sort(
-      (a, b) => counts[b] - counts[a] || (a < b ? -1 : a > b ? 1 : 0)
-    ),
+    collections: Object.keys(counts).sort(),
     order: {
       "title-asc": titleOrder,
-      "title-desc": titleOrder.slice().reverse(),
-      "creator-asc": artifacts
-        .map((_, i) => i)
-        .sort((p, q) =>
-          (artifacts[p].creator || "").localeCompare(artifacts[q].creator || "")
-        ),
       "year-desc": artifacts
         .map((_, i) => i)
         .sort((p, q) => (artifacts[q].year || 0) - (artifacts[p].year || 0)),
@@ -699,13 +655,9 @@ function TowerLibrarySection({ go, onReady }) {
     setDeriveSeq((n) => n + 1);
   };
   const failed = catalogError || deriveError;
-  // Live search + two-level browse filter + sort. Empty query/filter = show all.
-  // bucketFilter is "" (all), a lane ("PAPERS"), or a subcategory
-  // ("PAPERS:bio"). Click mechanics are unchanged from the old collection
-  // filter: click a chip to filter, click the active chip to clear,
-  // pagination resets on change, 50 rows per page with "Load more".
+  // Live search + collection filter + sort. Empty query/filter = show all.
   const [query, setQuery] = useState("");
-  const [bucketFilter, setBucketFilter] = useState("");
+  const [collectionFilter, setCollectionFilter] = useState("");
   const [sortId, setSortId] = useState("title-asc");
   // Pagination: 50 rows per page, user clicks "Load more". The full catalog
   // is never mounted at once — the DOM stays small so style recalc and
@@ -733,7 +685,7 @@ function TowerLibrarySection({ go, onReady }) {
     setMatchesExpanded(false);
     // Reset pagination to first 50 when filters change.
     setRowBudget(TOWER_ROWS_PER_PAGE);
-  }, [listQuery, bucketFilter, sortId]);
+  }, [listQuery, collectionFilter, sortId]);
   // Deep full-text search: same query, second mode. Debounced; searches the
   // full contents of every staged text via the build-time index. Title
   // results above are untouched by this.
@@ -765,28 +717,19 @@ function TowerLibrarySection({ go, onReady }) {
   // catalog — the hidden-flag approach this replaced kept input fast but
   // made every update walk everything. The memoized TowerRow re-renders
   // only when its own rank actually changes.
-  // Active lane for the subcategory row: the lane part of bucketFilter.
-  const activeLane = bucketFilter ? bucketFilter.split(":")[0] : "";
-  const activeSubs = TOWER_SUBS[activeLane] || [];
   const { rankMap, matchCount } = useMemo(() => {
     const map = new Map();
     if (!artifacts || !towerData) return { rankMap: map, matchCount: 0 };
-    // Two-level filter: a lane bucket ("PAPERS") matches every record whose
-    // bucket key starts with "PAPERS:" (the subcategory partition is exact,
-    // so this is identical to the old collection equality check); a
-    // subcategory bucket ("PAPERS:bio") matches its key exactly.
-    const bf = bucketFilter;
-    const bfLane = bf && bf.indexOf(":") < 0 ? bf + ":" : null;
     for (let k = 0; k < towerOrder.length; k++) {
       const i = towerOrder[k];
-      const bk = towerData.bucketKeys[i];
-      if (bf && bk !== bf && !(bfLane && bk.indexOf(bfLane) === 0)) continue;
       const a = artifacts[i];
+      if (collectionFilter && (a.collection || "OTHER") !== collectionFilter)
+        continue;
       if (q && !towerData.haystacks[i].includes(q)) continue;
       map.set(a.artifact_id, map.size + 1);
     }
     return { rankMap: map, matchCount: map.size };
-  }, [q, bucketFilter, sortId, towerOrder, artifacts, towerData]);
+  }, [q, collectionFilter, sortId, towerOrder, artifacts, towerData]);
   // Report ready exactly once when the section settles: the first 50 rows
   // have painted, or the error UI is up. The double rAF waits for paint;
   // the timeout fallback covers background tabs (and any dropped frame
@@ -883,54 +826,23 @@ function TowerLibrarySection({ go, onReady }) {
             <div className="tower-chips" role="group" aria-label="Filter by collection">
               <button
                 type="button"
-                className={`tower-chip${bucketFilter === "" ? " is-active" : ""}`}
-                onClick={() => setBucketFilter("")}
+                className={`tower-chip${collectionFilter === "" ? " is-active" : ""}`}
+                onClick={() => setCollectionFilter("")}
               >
                 All <span>{artifacts.length}</span>
               </button>
-              {towerData.collections.map((c) => {
-                const laneActive =
-                  bucketFilter === c || bucketFilter.indexOf(c + ":") === 0;
-                return (
-                  <button
-                    type="button"
-                    key={c}
-                    className={`tower-chip${laneActive ? " is-active" : ""}`}
-                    onClick={() =>
-                      setBucketFilter(bucketFilter === c ? "" : c)
-                    }
-                    aria-pressed={laneActive}
-                  >
-                    {TOWER_TOP_LABELS[c] || c} <span>{towerData.counts[c]}</span>
-                  </button>
-                );
-              })}
+              {towerData.collections.map((c) => (
+                <button
+                  type="button"
+                  key={c}
+                  className={`tower-chip${collectionFilter === c ? " is-active" : ""}`}
+                  onClick={() => setCollectionFilter(collectionFilter === c ? "" : c)}
+                  aria-pressed={collectionFilter === c}
+                >
+                  {c} <span>{towerData.counts[c]}</span>
+                </button>
+              ))}
             </div>
-            {activeSubs.length > 0 && (
-              <div
-                className="tower-chips tower-subchips"
-                role="group"
-                aria-label={`Filter ${TOWER_TOP_LABELS[activeLane] || activeLane} by subcategory`}
-              >
-                {activeSubs.map((s) => {
-                  const key = `${activeLane}:${s.id}`;
-                  const subActive = bucketFilter === key;
-                  return (
-                    <button
-                      type="button"
-                      key={s.id}
-                      className={`tower-chip${subActive ? " is-active" : ""}`}
-                      onClick={() =>
-                        setBucketFilter(subActive ? activeLane : key)
-                      }
-                      aria-pressed={subActive}
-                    >
-                      {s.label} <span>{towerData.subCounts[key] || 0}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
             <LibraryResults
               artifacts={artifacts}
               towerOrder={towerOrder}
@@ -1471,8 +1383,8 @@ function DeepMentions({ deep, go }) {
 }
 export function LibraryArtifact({ go, params, onReady }) {
   const [artifacts, catalogError, , retryArtifacts] = useArtifacts();
-  // Warm the tower-files manifest chunk while the user reads the entry, so
-  // the VIEW TEXT reader usually has it cached (see getTowerFiles above).
+  // Warm the tower-files manifest chunk while the entry paints, so the
+  // inline full-text section usually has it cached (see getTowerFiles above).
   // Fire-and-forget: it never blocks rendering and never changes the UI.
   useEffect(() => {
     getTowerFiles();
@@ -1549,9 +1461,7 @@ export function LibraryArtifact({ go, params, onReady }) {
     ["VERSION", artifact.version],
     ["LICENSE", artifact.license],
     ["RIGHTS", artifact.rights_status && artifact.rights_status.replace(/_/g, " ")],
-    ["ACCESS", artifact.download_status && artifact.download_status.replace(/_/g, " ")],
     ["CHECKSUM", artifact.checksum],
-    ["SOURCE", artifact.source],
   ].filter(([, v]) => v !== undefined && v !== null && v !== "");
   const status = artifact.download_status;
   return (
@@ -1570,18 +1480,6 @@ export function LibraryArtifact({ go, params, onReady }) {
           <p className="tower-entry-lede">{artifact.description}</p>
         )}
         <div className="tower-entry-actions">
-          {/* VIEW TEXT opens our hosted full text in the in-library reader —
-              every entry gets it; the reader itself handles entries whose
-              text isn't available yet. */}
-          <button
-            type="button"
-            className="tower-access-btn"
-            onClick={() =>
-              go(`/tower-of-babel/library/${artifact.artifact_id}/text`)
-            }
-          >
-            VIEW TEXT <span aria-hidden="true">→</span>
-          </button>
           {artifact.source_url && (
             <a
               className="tower-source-btn"
@@ -1624,6 +1522,7 @@ export function LibraryArtifact({ go, params, onReady }) {
           </ul>
         )}
       </section>
+      <LibraryFullText artifact={artifact} />
       {artifacts.length > 1 ? (
         <nav className="tower-entry-nav" aria-label="Browse entries">
           <button
@@ -1656,10 +1555,10 @@ export function LibraryArtifact({ go, params, onReady }) {
 }
 // ----- Library full-text reader ---------------------------------------------
 // In-library reading view: displays OUR hosted text for an entry instead of
-// linking out to the source. One shared template, so every entry gets a
-// VIEW TEXT button automatically — no entry is skipped. Entries whose text
-// isn't available (metadata-only backlog, restricted) get a clean empty
-// state, and the button appears for them automatically once their text lands.
+// linking out to the source. Merged into the entry page (see LibraryFullText
+// below) — one page, no extra click. Entries whose text isn't available
+// (metadata-only backlog, restricted) get a clean empty state, and the text
+// appears automatically once it lands.
 const READER_CHUNK_CHARS = 60000;
 
 // Split the text on line boundaries so rendered chunks never break mid-line.
@@ -1701,34 +1600,16 @@ function countWords(t) {
   return n === 0 ? 1 : n;
 }
 
-export function LibraryTextReader({ go, params, onReady }) {
-  const [artifacts, catalogError, , retryArtifacts] = useArtifacts();
-  // Full record loads on demand (the index has list fields only).
-  const [fullArtifact, setFullArtifact] = useState(null);
-  useEffect(() => {
-    let live = true;
-    setFullArtifact(null);
-    getFullArtifact(params.id).then(
-      (a) => { if (live) setFullArtifact(a); },
-      () => { if (live) setFullArtifact(null); }
-    );
-    return () => { live = false; };
-  }, [params.id]);
-  // Same entry-id keying as the entry page: re-apply the route meta on
-  // text-to-text navigation since the component does not remount.
-  useEffect(() => {
-    if (artifacts) applyMeta(window.location.pathname);
-  }, [artifacts, params.id]);
-
-  const indexRecord = artifacts
-    ? artifacts.find((a) => a.artifact_id === params.id)
-    : null;
-  const artifact = fullArtifact || indexRecord;
-
-  const status = artifact && artifact.download_status;
-  const url = artifact && artifact.download_url;
-  // Same C1 guard as the entry page: local /tower-of-babel/*.txt files are
-  // verified against the build-time manifest so the reader never 404s.
+// ----- Library full text (combined entry page) -------------------------------
+// 2026-10-18: the standalone reader route was merged into the entry page.
+// This renders the full-text section below the catalog record: download,
+// stats, chunked text body, and the ReaderAssist orb (unchanged).
+function LibraryFullText({ artifact }) {
+  const artifactId = artifact.artifact_id;
+  const status = artifact.download_status;
+  const url = artifact.download_url;
+  // Same C1 guard as the old reader: local /tower-of-babel/*.txt files are
+  // verified against the build-time manifest so the text never 404s.
   // External links are always attempted (and degrade gracefully on CORS).
   // The manifest loads as its own chunk (see getTowerFiles above), so the
   // check is async: while it loads, local files are treated optimistically
@@ -1740,10 +1621,8 @@ export function LibraryTextReader({ go, params, onReady }) {
     getTowerFiles().then((s) => {
       if (live) setTowerFiles(s);
     });
-    return () => {
-      live = false;
-    };
-  }, [params.id]);
+    return () => { live = false; };
+  }, [artifactId]);
   const isLocalTowerFile =
     typeof url === "string" && url.startsWith("/tower-of-babel/");
   const localFileExists =
@@ -1762,7 +1641,7 @@ export function LibraryTextReader({ go, params, onReady }) {
   const [shownChunks, setShownChunks] = useState(1);
   // The orb must never sit on top of the Tower boot loader: wait until the
   // boot overlay is fully dismissed before mounting it. Re-arms on every
-  // text navigation (the boot raises on each in-app tower visit).
+  // entry navigation (the boot raises on each in-app tower visit).
   const [bootGone, setBootGone] = useState(false);
   useEffect(() => {
     if (!document.querySelector(".tower-boot")) {
@@ -1841,146 +1720,84 @@ export function LibraryTextReader({ go, params, onReady }) {
     };
   }, [text]);
 
-  // Report ready once the text (or its loading/error/empty state) has
-  // painted, so the Tower boot overlay dismisses like the entry page.
-  useEffect(() => {
-    if (!onReady || !artifacts) return;
-    if (text === null && !textError && canRead) return;
-    let raf1 = 0;
-    let raf2 = 0;
-    raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => {
-        onReady();
-      });
-    });
-    return () => {
-      cancelAnimationFrame(raf1);
-      cancelAnimationFrame(raf2);
-    };
-  }, [onReady, params.id, artifacts, text, textError, canRead]);
-
-  if (catalogError) return <TowerCatalogError onRetry={retryArtifacts} />;
-  if (!artifacts) return null;
-  if (!artifact) {
-    return (
-      <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
-        <section className="inner-hero section">
-          <div className="section-index">FULL TEXT / {params.id}</div>
-          <h1>UNKNOWN ARTIFACT</h1>
-        </section>
-        <section className="tower-entry-record section">
-          <p className="body-copy">No artifact record exists for this id.</p>
-          <button className="text-link" onClick={() => go("/tower-of-babel/library")}>
-            BACK TO LIBRARY <span>↗</span>
-          </button>
-        </section>
-      </main>
-    );
-  }
   return (
-    <main className="page-shell inner-page tower-light tower-reader" id="main-content" tabIndex={-1}>
-      <section className="tower-reader-head section">
-        <div className="section-index">LIBRARY / {artifact.collection} / FULL TEXT</div>
-        <h1>{artifact.title}</h1>
-        {(artifact.creator || artifact.year) && (
-          <p className="tower-entry-byline">
-            {artifact.creator}
-            {artifact.creator && artifact.year ? " · " : ""}
-            {artifact.year || ""}
-          </p>
+    <section className="tower-fulltext section" aria-label="Full text">
+      <div className="section-index">FULL TEXT</div>
+      <div className="tower-reader-meta">
+        {isLocalTowerFile && localFileExists && (
+          <a className="tower-reader-download" href={url} download>
+            DOWNLOAD .TXT
+          </a>
         )}
-        <div className="tower-reader-meta">
-          <button
-            type="button"
+        {stats && (
+          <span className="tower-reader-stats">
+            {stats.words.toLocaleString()} WORDS · ~{stats.minutes} MIN READ
+          </span>
+        )}
+      </div>
+      {text === null && !textError && canRead && (
+        <p className="tower-reader-status">Preparing the full text…</p>
+      )}
+      {textError && (
+        <div className="tower-reader-empty">
+          <p className="body-copy">
+            The full text couldn&rsquo;t be loaded right now. You can still
+            open the file directly:
+          </p>
+          <a
             className="tower-source-btn"
-            onClick={() => go(`/tower-of-babel/library/${artifact.artifact_id}`)}
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
           >
-            <span aria-hidden="true">←</span> ENTRY
-          </button>
-          {isLocalTowerFile && localFileExists && (
-            <a className="tower-reader-download" href={url} download>
-              DOWNLOAD .TXT
-            </a>
-          )}
-          {stats && (
-            <span className="tower-reader-stats">
-              {stats.words.toLocaleString()} WORDS · ~{stats.minutes} MIN READ
-            </span>
+            OPEN FILE <span aria-hidden="true">↗</span>
+          </a>
+        </div>
+      )}
+      {!canRead && (
+        <div className="tower-reader-empty">
+          <p className="body-copy">
+            {status === "RESTRICTED"
+              ? "This entry is restricted — its text isn't available for distribution."
+              : "The full text for this entry is still being prepared. Check back soon — it appears here automatically once it lands."}
+          </p>
+        </div>
+      )}
+      {text !== null && (
+        <div className="tower-reader-text" role="document" aria-label={`Full text of ${artifact.title}`}>
+          {chunks.slice(0, shownChunks).map((c, i) => (
+            <p
+              key={i}
+              ref={(el) => { chunkElsRef.current[i] = el; }}
+              className="tower-reader-chunk"
+            >
+              {activeMark && activeMark.chunkIndex === i && !SUPPORTS_HIGHLIGHTS ? (
+                <>
+                  {c.slice(0, activeMark.start)}
+                  <mark className="ra-mark">
+                    {c.slice(activeMark.start, activeMark.end)}
+                  </mark>
+                  {c.slice(activeMark.end)}
+                </>
+              ) : (
+                c
+              )}
+            </p>
+          ))}
+          {shownChunks < chunks.length && (
+            <div className="tower-reader-more">
+              <div ref={sentinelRef} className="tower-reader-sentinel" aria-hidden="true" />
+              <button
+                type="button"
+                className="tower-source-btn"
+                onClick={() => setShownChunks(chunks.length)}
+              >
+                LOAD FULL TEXT
+              </button>
+            </div>
           )}
         </div>
-      </section>
-      <section className="tower-reader-body section">
-        {text === null && !textError && canRead && (
-          <p className="tower-reader-status">Preparing the full text…</p>
-        )}
-        {textError && (
-          <div className="tower-reader-empty">
-            <p className="body-copy">
-              The full text couldn&rsquo;t be loaded right now. You can still
-              open the file directly:
-            </p>
-            <a
-              className="tower-source-btn"
-              href={url}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              OPEN FILE <span aria-hidden="true">↗</span>
-            </a>
-          </div>
-        )}
-        {!canRead && (
-          <div className="tower-reader-empty">
-            <p className="body-copy">
-              {status === "RESTRICTED"
-                ? "This entry is restricted — its text isn't available for distribution."
-                : "The full text for this entry is still being prepared. Check back soon — the button appears here automatically once it lands."}
-            </p>
-            <button
-              type="button"
-              className="tower-source-btn"
-              onClick={() => go(`/tower-of-babel/library/${artifact.artifact_id}`)}
-            >
-              <span aria-hidden="true">←</span> BACK TO ENTRY
-            </button>
-          </div>
-        )}
-        {text !== null && (
-          <div className="tower-reader-text" role="document" aria-label={`Full text of ${artifact.title}`}>
-            {chunks.slice(0, shownChunks).map((c, i) => (
-              <p
-                key={i}
-                ref={(el) => { chunkElsRef.current[i] = el; }}
-                className="tower-reader-chunk"
-              >
-                {activeMark && activeMark.chunkIndex === i && !SUPPORTS_HIGHLIGHTS ? (
-                  <>
-                    {c.slice(0, activeMark.start)}
-                    <mark className="ra-mark">
-                      {c.slice(activeMark.start, activeMark.end)}
-                    </mark>
-                    {c.slice(activeMark.end)}
-                  </>
-                ) : (
-                  c
-                )}
-              </p>
-            ))}
-            {shownChunks < chunks.length && (
-              <div className="tower-reader-more">
-                <div ref={sentinelRef} className="tower-reader-sentinel" aria-hidden="true" />
-                <button
-                  type="button"
-                  className="tower-source-btn"
-                  onClick={() => setShownChunks(chunks.length)}
-                >
-                  LOAD FULL TEXT
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </section>
+      )}
       {text !== null && bootGone && (
         <ReaderAssist
           text={text}
@@ -1992,7 +1809,7 @@ export function LibraryTextReader({ go, params, onReady }) {
           onActiveMark={setActiveMark}
         />
       )}
-    </main>
+    </section>
   );
 }
 // ----- Government ----------------------------------------------------------
