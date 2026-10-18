@@ -1745,6 +1745,12 @@ function LibraryFullText({ artifact }) {
   const [text, setText] = useState(null);
   const [textError, setTextError] = useState(false);
   const [shownChunks, setShownChunks] = useState(1);
+  // Text background mode: cycles transparent -> light -> dark (2026-10-18).
+  // Only affects the .tower-fulltext section below the divider.
+  const [textMode, setTextMode] = useState("transparent");
+  const cycleTextMode = () => {
+    setTextMode((m) => (m === "transparent" ? "light" : m === "light" ? "dark" : "transparent"));
+  };
   // Shared-link landing (?at=<char offset>[&hl=<start>-<end>[,<start>-<end>...]]):
   // a "Share from Current Place" link jumps the reader to the sharer's scroll
   // position and, when present, highlights the shared passages in Apple Books
@@ -1986,7 +1992,7 @@ function LibraryFullText({ artifact }) {
   };
 
   return (
-    <section className="tower-fulltext section" aria-label="Full text">
+    <section className="tower-fulltext section" aria-label="Full text" data-textmode={textMode}>
       <div className="section-index">FULL TEXT</div>
       <div className="tower-reader-meta">
         {isLocalTowerFile && localFileExists && (
@@ -1999,6 +2005,19 @@ function LibraryFullText({ artifact }) {
             {stats.words.toLocaleString()} WORDS · ~{stats.minutes} MIN READ
           </span>
         )}
+        <button
+          type="button"
+          className="tower-textmode-btn"
+          onClick={cycleTextMode}
+          aria-label={`Text background: ${textMode}. Activate to switch mode.`}
+          title="Switch text background mode"
+        >
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 3v18" />
+          </svg>
+          <span className="tower-textmode-name">{textMode}</span>
+        </button>
       </div>
       {text === null && !textError && canRead && (
         <p className="tower-reader-status">Preparing the full text…</p>

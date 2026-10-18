@@ -1773,10 +1773,9 @@ export default function ReaderAssist({
       { dx: 0, dy: -1 }, // up
       { dx: inward, dy: 0 }, // inward side
       { dx: 0, dy: 1 }, // down
-      // 4th: outward-up diagonal. Pure outward would clamp onto the orb
-      // (the orb hugs the edge); the diagonal clears it and reads as a
-      // natural fan extension.
-      { dx: outward * 0.65, dy: -0.75 },
+      // 4th: outward-down diagonal. The old outward-up slot clamped onto the
+      // orb when snapped to an edge; down-diagonal clears it (2026-10-18).
+      { dx: outward * 0.65, dy: 0.75 },
     ];
     return visibleFeatures.map((f, i) => {
       const s = slots[i % slots.length];
