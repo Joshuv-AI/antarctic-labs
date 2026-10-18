@@ -1,0 +1,5407 @@
+DashAttention: Differentiable and Adaptive Sparse Hierarchical Attention
+Yuxiang Huang, Nuno M. T. Gonçalves, Federico Alvetreti, Lei Li, Xu Han, Edoardo M. Ponti, André F. T. Martins, Marcos V. Treviso
+
+Abstract
+Current hierarchical attention methods, such as NSA and InfLLMv2, select the top- k k relevant key-value (KV) blocks based on coarse attention scores and subsequently apply fine-grained softmax attention on the selected tokens. However, the top- k k operation assumes the number of relevant tokens for any query is fixed and it precludes the gradient flow between the sparse and dense stages. In this work, we propose DashAttention (Differentiable and Adaptive Sparse Hierarchical Attention), which leverages the adaptively sparse α \alpha -entmax transformation to select a variable number of blocks according to the current query in the first stage. This in turn provides a prior for the second-stage softmax attention, keeping the entire hierarchy fully differentiable . Contrary to other hierarchical attention methods, we show that DashAttention is non-dispersive, translating to better long-context modeling ability. Experiments with large language models (LLMs) show that DashAttention achieves comparable accuracy as full attention with 75% sparsity and a better Pareto frontier than NSA and InfLLMv2, especially in high-sparsity regimes. We also provide an efficient, GPU-aware implementation of DashAttention in Triton, which achieves a speedup of up to 3.3 × 3.3\times over FlashAttention-3 at inference time. Overall, DashAttention offers a cost-effective strategy to model long contexts. 1 1 1 Code available at https://github.com/fasa-org/dash-attention .
+
+
+
+1
+Introduction
+
+The complexity of long-context tasks is impacted by the quantity of information to be retrieved, its obfuscation (i.e., whether it is distinguishable from noise), and its distribution throughout the context (e.g., scattered or concentrated)
+[
+19
+,
+43
+]
+.
+Hence, to achieve good performance in such tasks, models must remain
+selective
+enough to ignore irrelevant tokens, but also
+sufficiently flexible
+to recover the positions that matter for a given query, irrespective of their number, position, or similarity to the rest of the context.
+Dense softmax attention
+[
+56
+]
+handles the second requirement but fails the first, since every visible token receives nonzero probability mass, which can cause dispersion
+[
+58
+]
+.
+Hard sparse routing methods such as top-
+k
+block selection
+[
+66
+,
+73
+]
+address the first requirement; however, they do so by imposing a fixed budget, sacrificing the second requirement, and by severing the differentiable path between coarse routing decisions and fine token-level attention.
+Therefore, achieving both query-dependent flexibility and stringent token-level selectivity remains an open challenge.
+
+This paper proposes DashAttention (Differentiable and Adaptive Sparse Hierarchical Attention), a multi-stage attention mechanism designed to meet both requirements.
+Instead of routing with a hard top-
+k
+operator over block scores, we route with
+\alpha
+-entmax
+[
+47
+]
+, an adaptive sparse distribution whose support is learned from the input itself and whose nonzero masses remain differentiable.
+The chunk-level probabilities are then consumed by a second online-softmax refinement stage that operates at full resolution, but only on tokens inside the routed chunks.
+This way, the model learns
+where
+and
+how much
+to look at coarsely, and
+what
+to read precisely, while keeping the entire hierarchy differentiable end-to-end.
+
+This design is motivated by both theory and practice.
+On the theory side, recent work has shown that softmax full attention can be dispersive in long contexts, whereas sparse alternatives such as
+\alpha\text{-entmax }
+can preserve concentration and improve long-context capabilities
+[
+58
+,
+57
+]
+.
+On the systems side, modern sparse attention methods almost always rely on a hierarchical decomposition, since selecting tokens based directly on attention scores is too expensive: the query-key multiplications must still be computed, leaving little opportunity to reduce computation
+[
+66
+,
+73
+,
+41
+]
+.
+Our key intuition is to combine these two ideas into a single hierarchical attention mechanism that is inherently adaptive, fully differentiable, and efficient.
+Our main contributions are as follows:
+
+•
+
+We analyze the limitations of top-
+k
+-based sparse attentions and introduce DashAttention, an end-to-end differentiable method that adaptively allocates sparsity across attention heads.
+
+•
+
+We integrate DashAttention into long-context continual pretraining and show that it outperforms existing hierarchical sparse attention methods while matching full-attention accuracy.
+
+•
+
+We present an efficient GPU-aware implementation of DashAttention that achieves speedups of 3.36
+\times
+and 1.35
+\times
+over FlashAttention-3 and InfLLMv2, respectively.
+
+Figure 1
+:
+High-level overview of DashAttention. Stage 0 builds chunk summaries by local SDPA; Stage 1 routes with
+\alpha\text{-entmax }
+to obtain an adaptively sparse support; Stage 2 refines at token resolution with a softmax whose logits are biased by
+d_{i,j}
+, derived from the router weights, maintaining full differentiability and FlashAttention compatibility. See Section
+3
+for details.
+
+2
+Background
+
+Standard scale dot-product attention.
+
+Given a set of matrices
+\bm{Q},\bm{K},\bm{V}\in\mathbb{R}^{n\times d}
+containing
+d
+-dimensional representations for
+n
+queries, keys, and values, the
+scale dot-product
+self-attention
+(SDPA) at a single head is computed as follows
+[
+56
+]
+:
+
+\bm{Z}=\frac{\bm{Q}\bm{K}^{\top}}{\sqrt{d}}\in\mathbb{R}^{n\times n},\quad\bm{P}=\pi\left(\bm{Z}+\bm{M}\right),\quad\bm{O}=\bm{P}\bm{V}\in\mathbb{R}^{n\times d},
+
+(1)
+
+where
+\bm{M}
+is the attention mask and
+\pi:\mathbb{R}^{n}\to\triangle_{n}
+is a transformation applied row-wise that maps logits to vectors in the
+n
+-dimensional probability simplex
+\triangle_{n}:=\{\bm{p}\in\mathbb{R}^{n}\,:\,\mathbf{1}^{\top}\bm{p}=1,\,\bm{p}\geq\mathbf{0}\}
+, with softmax being the most common choice.
+FlashAttention
+[
+11
+]
+efficiently implements Eq. (
+1
+) by reducing memory to
+\mathcal{O}(n)
+while preserving softmax semantics.
+
+Adaptively sparse attention:
+\alpha\text{-entmax }
+.
+
+Softmax attention is inherently dense, as every key receives a positive weight. A principled
+differentiable
+sparse alternative is the
+\alpha\text{-entmax }
+function
+[
+47
+]
+,
+
+\alpha\text{-entmax }(\bm{s})=[(\alpha-1)\bm{s}-\tau\bm{1}]_{+}^{\frac{1}{\alpha-1}},
+
+(2)
+
+where
+[\cdot]_{+}
+is the ReLU function, and
+\tau\in\mathbb{R}
+is the (unique) normalizing constant which ensures the output is a valid probability distribution,
+\sum_{i}\alpha\text{-entmax }(\bm{s})_{i}=1
+.
+Importantly, for
+\alpha>1
+,
+\alpha\text{-entmax }
+can produce sparse probability vectors.
+When
+\alpha\to 1
+,
+\alpha\text{-entmax }
+recovers softmax, whereas
+\alpha=2
+leads to sparsemax
+[
+42
+]
+;
+the sparsity increases monotonically with
+\alpha
+.
+This means that coordinates with
+(\alpha-1)s_{i}\leq\tau
+become exactly zero.
+As such,
+
+\alpha\text{-entmax }
+yields dynamic sparsity, where the pattern of zeros (as well as its number) depends on the input
+\bm{s}
+.
+Efficient GPU implementations for
+\alpha\text{-entmax }
+attention have been developed in AdaSplash
+[
+21
+,
+20
+]
+.
+More information on the
+\alpha\text{-entmax }
+transformation, including the distinction to top-
+k
+softmax, is provided in App.
+A
+.
+
+Hierarchical trainable sparse attention.
+
+Recently proposed pretraining-compatible sparse attention methods
+[
+66
+,
+73
+,
+41
+]
+typically adopt a coarse-to-fine hierarchical design: the context is divided into blocks or pages, summarized by lightweight representations, routed via top-
+k
+coarse relevance scores, and followed by exact token-level SDPA within the selected KV segments.
+However, their fixed top-
+k
+selection overlooks the heterogeneous information demands across tokens, attention heads, and layers.
+As shown in Sec.
+5.4
+, DashAttention dynamically allocates sparsity across tokens and heads, which is crucial for improving performance under a fixed sparsity budget.
+
+3
+DashAttention
+
+Motivation.
+
+The key innovation of DashAttention is that the coarse router is itself a sparse attention mechanism—specifically,
+\alpha
+-entmax from Eq. (
+2
+)—rather than a top-
+k
+truncation applied to dense scores. Since
+\alpha
+-entmax is fully differentiable, the hierarchical attention remains end-to-end trainable, while ensuring a level of sparsity adaptive to each specific token sequence. Hence,
+DashAttention is built around two complementary inductive biases:
+
+\alpha
+-entmax is used to suppress irrelevant chunks, whereas
+softmax is used to obtain a relative ranking inside small selected regions. The resulting attention is therefore
+sparse
+where sparsity is computationally useful, and
+dense
+where density is semantically meaningful.
+This combination also matters for optimization.
+In methods based on top-
+k
+block routing, the budget
+k
+itself becomes a central hyperparameter, and the support changes through a discontinuous top-
+k
+map; thus, gradients do not directly capture how routing scores should change block membership.
+In DashAttention, by contrast, the support is learned from the data, the coarse masses are differentiable, and the refinement stage preserves a direct gradient path from the final loss to the block-summarization (Stage 0) and block-routing (Stage 1) parameters.
+
+Problem setup and notation.
+
+Assume the model has model dimension
+d
+and head dimension
+d_{h}
+. We let
+h_{q}
+and
+h_{kv}
+denote the number of query and key-value heads, respectively.
+When using GQA
+[
+1
+]
+, we denote the query-group of the
+r
+th
+KV head as
+\mathcal{G}_{r}
+, and the grouping factor as
+g_{q}
+.
+We partition the prefix into contiguous chunks of size
+B
+, and denote the index set of chunk
+c
+by
+\mathcal{C}_{c}
+.
+For a query position
+i
+, DashAttention proceeds in three stages, illustrated in Fig.
+1
+:
+(Stage 0) we first summarize each chunk into a compact representation using local attention driven by a learned summarization head;
+(Stage 1) the query attends to these chunk summaries with
+\alpha\text{-entmax }
+, producing a sparse routing distribution; (Stage 2) only the routed chunks are expanded back to token resolution and refined with softmax.
+We explain each stage next.
+
+3.1
+Stage 0: Local Chunk Summarization
+
+Existing methods use mean pooling
+[
+73
+,
+41
+]
+or a learned MLP
+[
+66
+]
+to summarize each KV chunk. However, they are either less expressive or hard to adapt from a pretrained model.
+To mitigate that, we introduce a local-attention mechanism by using a learned query vector
+\bar{\bm{q}}\in\mathbb{R}^{h_{kv}\times d_{h}}
+initialized at zero. As a result, the model begins from a conservative mean-pooling regime and only gradually learns more expressive chunk summaries.
+During inference, we compute a summary vector for each chunk by a local SDPA as follows, where
+r\in\{1,\ldots,h_{kv}\}
+indexes the key-value head:
+
+\bar{\bm{k}}_{c}^{(r)}=\sum_{t\in\mathcal{C}_{c}}\frac{\exp\!\left(\langle\bar{\bm{q}}^{(r)},\,{\bm{k}}_{t}^{(r)}\rangle\,/\,\sqrt{d_{h}}\right)}{\sum_{u\in\mathcal{C}_{c}}\exp\!\left(\langle\bar{\bm{q}}^{(r)},\,{\bm{k}}_{u}^{(r)}\rangle\,/\,\sqrt{d_{h}}\right)}\;{\bm{k}}_{t}^{(r)}\,,
+
+(3)
+
+This design is more expressive than mean pooling used in MoBA and InfLLMv2, as it can be interpreted as a learned summary head that reads each chunk from within the chunk itself.
+It is also easier to adapt compared with MLPs used in NSA.
+At the start of training, the inner products in Eq. (
+3
+) are zero, causing the local softmax in Eq. (
+3
+) to reduce to uniform mean pooling.
+This enables a smooth transition from mean pooling to weighted average of the key vectors within the chunk.
+Notably,
+chunk summaries become fixed once a chunk has been fully generated, since the
+\bar{\bm{k}}_{c}
+only depends on
+\bm{k}
+’s from positions in
+\mathcal{C}_{c}
+.
+Therefore, this design also guarantees no additional recomputation during inference, aligned with previous chunk summarization methods.
+Ablation studies on local attention are conducted in App.
+F.5
+.
+
+3.2
+Stage 1: Entmax Chunk Routing
+
+Given each query head
+h
+associated with key-value head
+r=\lfloor h/g_{q}\rfloor
+, we compute chunk-level logits
+
+\bar{z}_{i,c}^{(h)}=\langle{\bm{q}}_{i}^{(h)},\,\bar{\bm{k}}_{c}^{(r)}\rangle\,/\,\sqrt{d_{h}}
+for all causal chunks
+c
+visible from position
+i
+.
+These logits are then transformed into a sparse chunk distribution with
+\alpha\text{-entmax }
+with a
+scaling factor
+\gamma
+:
+
+\hat{\bm{w}}_{i}^{(h)}=\alpha\text{-entmax}\!\left(\gamma\bar{\bm{z}}_{i}^{(h)}\right)\in\triangle_{\lfloor n/B\rfloor},\quad h\in\{1,2,\cdots,h_{q}\}.
+
+(4)
+
+The support
+\hat{\mathcal{S}}_{i}^{(h)}=\{c\mid w_{i,c}^{(h)}>0\}
+determines chunk positions that are retained for the next stage, while other chunks are discarded.
+Because routing is performed with
+\alpha\text{-entmax }
+rather than top-
+k
+, the support is not determined by a fixed budget.
+Instead, it is induced by the geometry of the chunk scores themselves. As a result, informative queries may route to many chunks, while sharp queries may route to very few, which enables dynamic sparsity allocation among different tokens, heads, and layers which is one of the defining advantages of DashAttention over fixed-budget sparse attention.
+
+We note that GQA is commonly used in modern LLMs. Therefore, when
+h_{q}>h_{kv}
+, multiple query heads share the same key-value head, so Stage 1 must produce a shared routed support for each GQA group.
+In DashAttention, for each group
+r\in\{1,\cdots,h_{kv}\}
+with member query heads
+\mathcal{G}_{r}
+, we average the head-wise probability scores:
+\bm{w}_{i}^{(r)}=\sum_{h\in\mathcal{G}_{r}}\hat{\bm{w}_{i}}^{(h)}/g_{q}\in\triangle_{\lfloor n/B\rfloor}
+, which remains sparse and with a support
+\mathcal{S}_{i}^{(r)}=\cup_{h\in\mathcal{G}_{r}}\hat{\mathcal{S}}_{i}^{(h)}
+determined jointly by the chunk-score geometry within
+\mathcal{G}_{r}
+.
+
+3.3
+Stage 2: Prior-Induced Sparse Softmax Attention
+
+Here, we derive the final stage of DashAttention. As mentioned in Sec.
+1
+, our goal is to make DashAttention both adaptively sparse and readily adaptable from softmax attention.
+To this end, we start from the variational form of softmax
+[
+6
+]
+:
+
+\text{softmax}(\bm{z})=\argmax_{\bm{p}\in\triangle_{n}}\bm{z}^{\top}\bm{p}-\operatorname{KL}(\bm{p}\,\|\,\bm{u}),
+
+(5)
+
+where
+\bm{u}
+denotes an uniform probability vector and
+\bm{z}
+the attention logits where
+z_{i,j}=\langle\bm{q}_{i},\bm{k}_{j}\rangle/\sqrt{d_{h}}
+and we omit the notation for attention heads for simplicity.
+Instead, we carry the knowledge from Stage 1 (
+\bm{w}
+) by varying the reference distribution in the
+\operatorname{KL}
+term from
+\bm{u}
+to another distribution
+\bm{g}\in\triangle_{n}
+, which is obtained from the block routing scores
+\bm{w}
+via
+\bm{g}=g_{\sigma}(\bm{w})
+and described in detail in Sec.
+3.4
+.
+We therefore obtain a token-grained sparse probability distribution that enables a block-sparse differentiable softmax computation. Given the Stage 1 scores of the
+i
+th
+token
+\bm{w}_{i}
+, we compute the attention probability at the
+i
+th
+token as follows:
+
+\bm{p}^{\text{route}}_{i}=\argmax_{\bm{p}\in\triangle_{n}}\bm{z}^{\top}_{i}\bm{p}-\operatorname{KL}\left(\bm{p}\,\|\,g_{\sigma}(\bm{w}_{i})\right),\quad p_{i,j}^{\text{route}}=\frac{g_{i,j}\exp(z_{i,j})}{\sum_{t\leq i}g_{i,t}\exp(z_{i,t})},
+
+(6)
+
+where
+{g}_{i,j}=g_{\sigma}(\bm{w}_{i})_{j}
+.
+By requiring
+g_{i,j}=0
+whenever
+w_{i,j}=0
+with an appropriate construction of
+g_{\sigma}
+, the resulting softmax attention becomes naturally sparse,
+since if
+g_{i,j}\to 0^{+}
+,
+-\operatorname{KL}(p_{j}\|g_{i,j})\to+\infty
+for any
+p_{j}>0
+, thereby masking Stage 2’s softmax probability with an entmax-computed dynamic mask.
+At the same time, the properties of dynamic sparsity and full differentiability are preserved through the entmax score
+\bm{w}
+.
+The final
+i
+th
+output becomes
+
+\bm{o}_{i}=\bm{V}^{\top}\bm{p}_{i}^{\text{route}}=\sum_{j\in\mathcal{S}^{\text{route}}_{i}}\frac{g_{i,j}\exp(z_{i,j})}{\sum_{t\in\mathcal{S}^{\text{route}}_{i}}g_{i,t}\exp(z_{i,t})}\cdot\bm{v}_{j},
+
+(7)
+
+where
+\mathcal{S}^{\text{route}}_{i}=\{c\mid g_{i,c}>0\}
+is shared within the same query group to enable similar matrix multiplication tiling layout with NSA
+[
+66
+]
+and InfLLMv2
+[
+73
+]
+.
+Note that this form is readily compatible with existing efficient attention kernels. In practice, we employ AdaSplash-2
+[
+20
+]
+for Stage 1 (
+\alpha\text{-entmax }
+attention) and FlashAttention
+[
+12
+]
+for Stage 2 (softmax attention), enabling efficient training and inference. Moreover, Eq. (
+7
+)
+is fully differentiable with respect to
+\bm{q}
+,
+\bm{k}
+,
+\bm{v}
+, and the prior score
+\bm{g}
+.
+As a result, in DashAttention gradients can propagate back to Stage 1’s
+\alpha\text{-entmax }
+scores
+\bm{w}
+, thereby making the local chunk summarization from Stage 0 trainable.
+
+3.4
+Controlling Prior Strength and Handling Diagonal Chunks
+
+Since the diagonal or near-diagonal region may contain fewer than
+B
+tokens, the Stage 1 priors
+\bm{g}=g_{\sigma}(\bm{w})
+cannot be obtained due to the absence of block summaries.
+At the same time, replacing
+\operatorname{KL}(\bm{p}\,\|\,\bm{u})
+with
+\operatorname{KL}(\bm{p}\,\|\,\bm{g})
+would drift the outcome
+\bm{p}_{i}^{\text{route}}
+to a coarsely estimated
+\bm{g}
+, since the summary vectors provide only an approximation of each block.
+Therefore, to properly estimate
+\bm{g}
+,
+we split the attention mass of
+\bm{w}
+into two branches: a routed branch
+\mathcal{R}_{i}
+over blocks selected in Stage 1, and a diagonal branch
+\mathcal{D}_{i}
+that requires prior estimation.
+To control the prior strength, we introduce a hyperparameter
+\sigma
+and construct a strength-reduced prior probability as follows:
+
+w^{\prime}_{i,j}=\frac{1}{B}\cdot\frac{w_{i,c(j)}^{\nicefrac{{1}}{{\sigma}}}}{\bm{1}^{\top}\bm{w}_{i}^{\nicefrac{{1}}{{\sigma}}}},
+
+(8)
+
+where
+c(j)
+represents the chunk associated with the
+j
+th
+element.
+As
+\sigma\to\infty
+, the prior gradually becomes uniform over the routed support:
+w_{i,j}^{\prime}\to 1/|\mathcal{R}_{i}|
+for
+j\in\mathcal{R}_{i}
+, while
+w_{i,j}^{\prime}=0
+for
+j\notin\mathcal{S}_{i}
+, thereby corresponding to only applying softmax on selected tokens without any additional prior from Stage 1.
+With that in mind, we define the prior transformation
+g_{\sigma}:\triangle_{\lfloor n/B\rfloor}\to\triangle_{n}
+as follows:
+
+g_{\sigma}(\bm{w}_{i})_{j}=g_{i,j}=\begin{cases}\lambda_{i}w_{i,j}^{\prime}\,,&j\in\mathcal{R}_{i},\\[5.0pt]
+\frac{1}{|\mathcal{D}_{i}|}(1-\lambda_{i})\,,&j\in\mathcal{D}_{i},\\[5.0pt]
+0,&\text{otherwise.}\end{cases}=\begin{cases}\frac{\lambda_{i}w_{i,c(j)}^{{\nicefrac{{1}}{{\sigma}}}}}{B\cdot\bm{1}^{\top}\bm{w}_{i}^{\nicefrac{{1}}{{\sigma}}}}\,,&j\in\mathcal{R}_{i},\\[5.0pt]
+\frac{1}{|\mathcal{D}_{i}|}(1-\lambda_{i})\,,&j\in\mathcal{D}_{i},\\[5.0pt]
+0,&\text{otherwise.}\end{cases}
+
+(9)
+
+Note that
+g_{\sigma}(\bm{w}_{i})
+is a probability vector and adds up to one.
+By this construction, the prior assigns probability mass
+\lambda_{i}
+to
+\mathcal{R}_{i}
+and
+1-\lambda_{i}
+to
+\mathcal{D}_{i}
+.
+In practice, we choose
+\lambda_{i}
+as a function of how informative the routing distribution is relative to a uniform baseline.
+Let
+\bm{u}_{\mathcal{R}_{i}}
+be the uniform distribution over the routed support and
+\bm{w}^{\prime}_{\mathcal{R}_{i}}
+denotes the probabilities of
+\bm{w}^{\prime}_{i}
+restricted to
+\mathcal{R}_{i}
+,
+then:
+
+\lambda_{i}=\operatorname{sigmoid}\!\left(\operatorname{KL}(\bm{u}_{{\mathcal{R}_{i}}}\,\|\,\bm{w}_{{\mathcal{R}_{i}}}^{\prime})+\log\frac{|\mathcal{R}_{i}|}{|\mathcal{D}_{i}|}\right),
+
+(10)
+
+This has an intuitive interpretation: if the block router is nearly uniform (
+\operatorname{KL}\approx 0
+), the model allocates mass roughly proportional to
+|\mathcal{R}_{i}|/(|\mathcal{R}_{i}|+|\mathcal{D}_{i}|)
+, whereas if the router is highly informative (large KL), more mass is given to the routed branch
+We also have
+\lim_{\sigma\to+\infty}\lambda_{i}=|\mathcal{R}_{i}|/(|\mathcal{R}_{i}|+|\mathcal{D}_{i}|)
+, showing that the priors can be weakened by utilizing a larger
+\sigma
+.
+Next, in Proposition
+3.1
+, we show a straightforward way to compute Eq. (
+9
+) in softmax attention.
+The proof is given in App.
+D
+.
+
+Proposition 3.1
+.
+
+Computing the attention output
+\bm{o}_{i}
+with Eq. (
+7
+) and Eq. (
+9
+) is equivalent to first calculate
+\mu_{i}=\operatorname{mean}_{j\in\mathcal{R}_{i}}\{\log w_{i,c(j)}\}
+, followed by
+
+d_{i,j}=\begin{cases}\frac{\log w_{i,c(j)}-\mu_{i}}{\sigma}\,,&j\in\mathcal{R}_{i},\\
+0\,,&j\in\mathcal{D}_{i}.\\
+\end{cases}\quad\bm{o}_{i}=\sum_{j\in\mathcal{R}_{i}\cup\mathcal{D}_{i}}\frac{\exp(z_{i,j}+d_{i,j})\cdot\bm{v}_{j}}{\sum_{t\in\mathcal{R}_{i}\cup\mathcal{D}_{i}}\exp(z_{i,t}+d_{i,t})}.
+
+3.5
+GPU-Aware Implementation
+
+We implement DashAttention in Triton
+[
+54
+]
+, consisting of three fused kernels that serve both prefill and incremental decoding, backed by a chunk-representation cache in HBM (High Bandwidth Memory).
+The three fused kernels (one per stage) are described below, with complete algorithms deferred to App.
+G
+.
+
+Stage 0 kernel.
+
+A single Triton kernel lets the learned per-head summary token
+\bar{\bm{q}}^{(r)}
+attend to its keys via an online softmax.
+Because at this stage the keys are also used as values, the same loaded
+\bm{K}
+tile will serve both purposes, so the chunk representation
+\bar{\bm{k}}_{c}^{(r)}
+in Eq. (
+3
+) is produced in a single pass with no extra HBM round-trip.
+Once a chunk is complete, it is written back, persisted in the chunk representation cache, and reused across all subsequent query positions and decoding steps.
+
+Stage 1 kernel.
+
+The chunk logits
+\bm{z}_{i}^{(h)}
+are formed by attending to the cached chunk representations.
+Since the number of chunks
+T_{c}=\lfloor n/B\rfloor
+is small (e.g.,
+T=256
+for
+n=16
+K with
+B=64
+), the entire chunk-score row typically fits in registers, and the entmax threshold
+\tau
+is solved in place by the AdaSplash-2 solver
+[
+20
+]
+.
+For GQA, we then average the entmax probabilities across each group’s query heads before pruning, keeping the support consistent within the KV group.
+The sparse support
+\mathcal{S}_{i}
+is stored as a bitpacked block mask
+\bm{M}_{i}\in\{0,1\}^{h_{kv}\times T_{c}}
+, packing 32 consecutive column chunks per
+int32
+, while the per-chunk routing bias
+d_{i,j}
+is materialized alongside for use in Stage 2.
+
+Stage 2 kernel.
+
+A masked FlashAttention kernel iterates over the chunks marked active in
+\bm{M}
+, walking the bitpacked mask.
+For each selected chunk, we add the per-chunk routing bias to the attention logits before the online softmax, in a single fused pass over
+\mathcal{S}_{i}
+, keeping the kernel fully compatible with FlashAttention.
+For incremental decoding, a split-KV variant partitions
+\bm{M}
+across thread blocks along the KV dimension, exposing enough parallelism to saturate the GPU for a single query
+[
+11
+]
+.
+For training, the backward pass can reuse
+\bm{M}
+thanks to the sparse
+\alpha
+-entmax Jacobian
+[
+47
+]
+.
+
+4
+Theoretical Analysis
+
+As shown in
+[
+57
+,
+21
+,
+20
+]
+, softmax attention suffers from
+dispersion
+in long-context settings: the Shannon entropy of its attention distribution
+\mathcal{H}(\bm{p})
+grows as
+\lim_{n\to\infty}\frac{\mathcal{H}(\bm{p})}{\log n}=1
+with sequence length
+n
+,
+making long-range dependency modeling increasingly difficult.
+Top-
+k
+sparse attention mitigates this issue by bounding the entropy by
+\log k
+.
+However, existing hierarchical sparse attention methods
+[
+66
+,
+73
+]
+combine GQA with post-softmax head aggregation before top-
+k
+selection, allowing dispersion to re-emerge during aggregation. We formalize this property as follows:
+
+Definition 4.1
+
+(Head aggregation)
+.
+
+Given
+f:\mathbb{R}^{n}\to\triangle_{n}
+, and
+H
+bounded sequence
+\{\bm{z}^{(h)}\}_{h=1}^{H}\subset\mathbb{R}^{n}
+, and the aggregation weights
+\theta=(\theta_{1},\cdots,\theta_{H})^{\top}\in\triangle_{H}
+, the aggregated probability is given by
+
+\operatorname{aggr}_{f}\left(\bm{z}^{(1)},\bm{z}^{(2)},\cdots,\bm{z}^{(H)};\bm{\theta}\right)=\sum_{h=1}^{H}\theta_{h}\cdot f\left(\bm{z}^{(h)}\right)\in\triangle_{n}.
+
+Thus, softmax head aggregation is dispersive by construction, whereas the entmax head aggregation in DashAttention is non-dispersive.
+
+Theorem 4.2
+
+(Dispersion in head aggregation, Informal)
+.
+
+Under any finite
+H
+and
+\theta\in\triangle_{H}
+:
+
+1. Softmax head aggregation, i.e.,
+f=\operatorname{softmax}
+, is dispersive;
+
+2. Denote
+\bm{p}^{(h)}=\alpha\operatorname{-entmax}(\bm{z}^{(h)})
+. If
+\|\bm{p}^{(h)}\|_{0}=\mathcal{O}\left(n^{\beta_{h}}\right)
+with
+\beta_{h}\in(0,1)
+, then entmax head aggregation, i.e.,
+f=\alpha\operatorname{-entmax}
+, is not dispersive.
+
+Since softmax head aggregation is dispersive, it can undermine the non-dispersive property of top-
+k
+sparse attention and lead to noisy selection. In contrast, DashAttention performs entmax head aggregation directly on sparse entmax scores, mitigating this issue and perform better on challenging retrieval tasks, such as MK1–MK3 in Table
+1
+. We provide a detailed proof in App.
+E
+.
+
+5
+Experiments
+
+We comprehensively evaluate DashAttention from multiple perspectives.
+First, we assess its task performance across representative benchmarks
+(Sec.
+5.1
+).
+Second, we analyze its computational efficiency (kernel inference speed)
+under different inference settings (Sec.
+5.2
+).
+Third, we examine the effectiveness–efficiency tradeoff induced by different sparsity configurations
+and compare the resulting Pareto frontiers against relevant baselines
+(Sec.
+5.3
+).
+Finally, we study the dynamic sparsity allocation behavior of DashAttention through ablations
+to better understand how it distributes computation across layers
+(Sec.
+5.4
+).
+
+Table 1:
+Results on RULER with a 16K context length. Best results in bold.
+
+Method
+
+RULER-16K
+
+Avg.
+\uparrow
+
+(%)
+
+Sparsity
+
+(%)
+
+SG1
+
+SG2
+
+SG3
+
+MK1
+
+MK2
+
+MK3
+
+MV
+
+MQ
+
+VT
+
+CWE
+
+FWE
+
+QA1
+
+QA2
+
+1B
+
+FullAttn
+
+100.0
+
+100.0
+
+100.0
+
+98.0
+
+78.0
+
+48.0
+
+87.0
+
+89.0
+
+17.6
+
+1.8
+
+66.7
+
+44.0
+
+36.0
+
+66.6
+
+0.0
+
+NSA
+
+98.0
+
+92.0
+
+86.0
+
+60.0
+
+20.0
+
+6.0
+
+56.0
+
+53.5
+
+25.6
+
+1.6
+
+60.7
+
+32.0
+
+36.0
+
+48.3
+
+75.0
+
+InfLLMv2
+
+100.0
+
+100.0
+
+100.0
+
+92.0
+
+52.0
+
+16.0
+
+94.0
+
+90.0
+
+40.8
+
+1.0
+
+59.3
+
+36.0
+
+30.0
+
+62.4
+
+75.0
+
+DashAttention
+
+100.0
+
+100.0
+
+96.0
+
+94.0
+
+70.0
+
+26.0
+
+89.5
+
+87.5
+
+46.0
+
+0.8
+
+63.3
+
+36.0
+
+34.0
+
+64.9
+
+75.7
+
+3B
+
+FullAttn
+
+100.0
+
+100.0
+
+98.0
+
+100.0
+
+94.0
+
+60.0
+
+96.0
+
+96.5
+
+20.4
+
+5.8
+
+19.3
+
+60.0
+
+50.0
+
+69.2
+
+0.0
+
+NSA
+
+100.0
+
+92.0
+
+90.0
+
+66.0
+
+24.0
+
+10.0
+
+64.5
+
+62.0
+
+19.2
+
+4.2
+
+28.7
+
+36.0
+
+40.0
+
+49.0
+
+75.0
+
+InfLLMv2
+
+100.0
+
+100.0
+
+98.0
+
+94.0
+
+56.0
+
+28.0
+
+95.5
+
+97.0
+
+22.8
+
+5.0
+
+16.0
+
+56.0
+
+48.0
+
+62.8
+
+75.0
+
+DashAttention
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+88.0
+
+40.0
+
+96.5
+
+95.5
+
+21.2
+
+1.6
+
+42.7
+
+52.0
+
+42.0
+
+67.7
+
+75.4
+
+8B
+
+FullAttn
+
+100.0
+
+100.0
+
+100.0
+
+98.0
+
+100.0
+
+96.0
+
+100.0
+
+99.5
+
+58.4
+
+49.2
+
+78.0
+
+78.0
+
+52.0
+
+85.3
+
+0.0
+
+NSA
+
+100.0
+
+82.0
+
+68.0
+
+60.0
+
+34.0
+
+12.0
+
+73.5
+
+74.5
+
+30.0
+
+42.8
+
+68.7
+
+36.0
+
+34.0
+
+55.0
+
+75.0
+
+InfLLMv2
+
+100.0
+
+100.0
+
+100.0
+
+98.0
+
+82.0
+
+52.0
+
+96.0
+
+98.0
+
+55.6
+
+42.4
+
+77.3
+
+66.0
+
+58.0
+
+78.9
+
+75.0
+
+DashAttention
+
+100.0
+
+100.0
+
+100.0
+
+98.0
+
+96.0
+
+86.0
+
+100.0
+
+99.0
+
+60.0
+
+49.6
+
+72.0
+
+72.0
+
+54.0
+
+83.6
+
+75.7
+
+Table 2:
+Results on HELMET with a 16K context length. Best results in bold.
+
+Method
+
+HELMET-16K
+
+Overall
+\uparrow
+
+(%)
+
+Sparsity
+
+(%)
+
+Recall
+
+ICL
+
+Rerank
+
+RAG
+
+LongQA
+
+Cite
+
+Summ.
+
+1B
+
+FullAttn
+
+66.6
+
+59.0
+
+13.9
+
+34.5
+
+40.1
+
+8.9
+
+4.2
+
+32.5
+
+0.0
+
+NSA
+
+23.4
+
+46.0
+
+15.0
+
+35.0
+
+34.6
+
+6.4
+
+4.4
+
+23.6
+
+75.0
+
+InfLLMv2
+
+43.7
+
+59.2
+
+15.5
+
+37.0
+
+38.7
+
+7.6
+
+4.9
+
+29.5
+
+75.0
+
+DashAttention
+
+51.8
+
+61.0
+
+16.5
+
+38.5
+
+36.4
+
+7.4
+
+6.7
+
+31.2
+
+75.4
+
+3B
+
+FullAttn
+
+78.6
+
+44.8
+
+25.3
+
+48.5
+
+42.5
+
+12.3
+
+9.7
+
+37.4
+
+0.0
+
+NSA
+
+29.9
+
+45.2
+
+20.5
+
+45.5
+
+39.7
+
+7.3
+
+7.1
+
+27.9
+
+75.0
+
+InfLLMv2
+
+58.0
+
+44.2
+
+24.8
+
+49.3
+
+47.7
+
+6.0
+
+9.8
+
+34.2
+
+75.0
+
+DashAttention
+
+66.9
+
+51.2
+
+20.0
+
+47.8
+
+35.9
+
+10.3
+
+8.3
+
+34.3
+
+75.4
+
+8B
+
+FullAttn
+
+98.3
+
+56.0
+
+37.8
+
+53.3
+
+52.4
+
+20.0
+
+16.5
+
+47.7
+
+0.0
+
+NSA
+
+35.0
+
+59.8
+
+27.9
+
+48.3
+
+51.0
+
+13.7
+
+14.7
+
+35.8
+
+75.0
+
+InfLLMv2
+
+81.4
+
+63.6
+
+36.8
+
+54.0
+
+53.2
+
+18.3
+
+13.7
+
+45.9
+
+75.0
+
+DashAttention
+
+88.3
+
+62.8
+
+39.7
+
+54.0
+
+52.3
+
+17.4
+
+13.7
+
+46.9
+
+75.4
+
+5.1
+Task Performance
+
+Baselines and Experimental Setup.
+
+Besides full attention (FullAttn), we compare DashAttention with other GQA-based hierarchical softmax attention methods under long-context adaptation, namely
+NSA
+[
+66
+]
+and InfLLMv2
+[
+73
+]
+, and follow the same long-context adaptation setting for all methods.
+Concretely, we start with models pretrained with softmax full attention, continue pretraining them on 16K long-context data (InfLLMv2-5B dataset
+[
+46
+]
+), and then apply a short SFT stage (MiniCPM-4 Dataset
+[
+53
+]
+). We use the 1B, 3B, and 8B variants of MiniCPM-4
+[
+53
+]
+as base models. During training, we gradually increase
+\alpha
+from
+1.25
+to
+1.5
+, and use
+\alpha=1.5
+for inference. For NSA and InfLLMv2 baseline models, we keep the sparsity to
+75\%
+during training.
+Full training details are in Appendix.
+B.1.1
+.
+
+Benchmark Datasets.
+
+We evaluate long-context performance on RULER
+[
+26
+]
+and HELMET
+[
+65
+]
+.
+Given the importance of matching sparsity ratios
+[
+43
+]
+, for NSA and InfLLMv2, we set the attention sparsity to
+75\%
+during both training and inference, whereas for DashAttention we tune the Stage 1 factor
+\gamma
+to match a comparable sparsity level.
+To assess general capabilities, we further evaluate on MMLU
+[
+59
+]
+, MMLU-Pro
+[
+23
+]
+, CSQA
+[
+51
+]
+, IFEval
+[
+75
+]
+, HellaSwag
+[
+68
+]
+, GSM8K
+[
+10
+]
+, MATH
+[
+24
+]
+, DROP
+[
+14
+]
+, MBPP
+[
+2
+]
+, and HumanEval
+[
+9
+]
+. Additional details are provided in App.
+B.1.2
+.
+
+Table 3:
+General task performance with 8B models. Best results in bold.
+
+Method
+
+MMLU
+
+MMLU-Pro
+
+CSQA
+
+IFEval
+
+HellaSwag
+
+GSM8K
+
+MATH
+
+DROP
+
+MBPP
+
+HumanEval
+
+Avg.
+
+FullAttn
+
+73.6
+
+46.1
+
+80.0
+
+80.0
+
+72.9
+
+76.3
+
+22.2
+
+11.3
+
+63.0
+
+69.5
+
+59.5
+
+InfLLMv2
+
+73.2
+
+45.6
+
+80.6
+
+79.0
+
+72.8
+
+77.1
+
+22.2
+
+10.3
+
+62.4
+
+67.7
+
+59.1
+
+NSA
+
+73.2
+
+46.3
+
+80.4
+
+80.0
+
+72.5
+
+75.1
+
+22.4
+
+10.5
+
+61.6
+
+70.1
+
+59.2
+
+DashAttention
+
+73.5
+
+46.2
+
+80.3
+
+80.7
+
+73.1
+
+76.8
+
+22.2
+
+10.7
+
+63.0
+
+67.7
+
+59.4
+
+Long-Context Performance.
+
+Table
+1
+(RULER) and Table
+2
+(HELMET) show that DashAttention consistently outperforms NSA and InfLLMv2 in terms of both performance and sparsity. In particular, results on RULER and the Recall task in HELMET demonstrate that DashAttention exhibits a significantly stronger capability in challenging long-context retrieval tasks. Moreover, DashAttention achieves better performance than the baselines across multiple model sizes and evaluation tasks.
+We further show in Table
+4
+that DashAttention can also inference with softmax full attention.
+
+Table 4:
+
+Long-context performance of DashAttention (DA) models with softmax full attention (FA).
+
+RULER
+
+HELMET
+
+FA
+
+DA+FA
+
+FA
+
+DA+FA
+
+1B
+
+66.6
+
+70.4
+
+32.5
+
+33.8
+
+3B
+
+69.2
+
+71.9
+
+37.4
+
+37.0
+
+8B
+
+85.3
+
+86.7
+
+47.7
+
+48.7
+
+DashAttention with Softmax Decoding.
+
+To close the gap with standard full softmax attention, we first investigate the impact of the chunk size in Stage 0 in App.
+F.2
+(Table
+7
+), where we find that reducing chunk size naturally leads to better results. However, this also reduces efficiency, as if chunk size is 1 (no chunking), DashAttention reverts to
+\alpha\text{-entmax }
+attention followed by softmax attention, and thus it incurs the total cost of both at inference time.
+An alternative is to simply use softmax at test time without Stage 0 and Stage 1, where highly optimized implementations already exist (e.g., in vLLM
+[
+33
+]
+and SGLang
+[
+74
+]
+).
+Table
+4
+reports the results of training with DA and inference with FA, showing even higher performance than FA-trained models.
+
+General Task Performance.
+
+We further evaluate DashAttention and the baselines on short-context general tasks to verify that DashAttention does not notably degrade short-context performance. During inference, both DashAttention and InfLLMv2 use softmax full attention, while NSA uses compressed attention without sparsity. As shown in Table
+3
+, DashAttention achieves performance on par with the original Full Attention model, and slightly outperforms NSA and InfLLMv2.
+
+5.2
+Efficiency Benchmark
+
+We benchmark DashAttention’s two-stage kernels in two regimes:
+prefill
+and
+decoding
+. We compare against
+FlashAttention3
+
+[
+48
+]
+,
+NSA
+
+[
+66
+]
+,
+2
+2
+
+2
+
+No official NSA implementation has been released; we thus use a open-source Triton implementation at
+https://github.com/XunhaoLai/native-sparse-attention-triton
+.
+and
+InfLLMv2
+
+[
+73
+]
+. All methods use a chunk size of
+64
+. We sweep chunk sparsity
+s\in\{75\%,87.5\%,93.75\%\}
+, with corresponding routing top-
+k
+equal to
+(1-s)\cdot N/64
+; the DashAttention active-block bitmask is randomized to the target sparsity to isolate the last stage’s cost. Prefill is run at batch size
+1
+and decoding at batch size
+24
+. See App.
+B.2
+for the full benchmark setup, including hardware and motivation for these batch sizes.
+
+Prefill.
+
+DashAttention is the fastest method at every operating point (Table
+5
+, left), with speedups over dense FlashAttention ranging from
+1.34\times
+to
+3.09\times
+. The gap over InfLLMv2 and NSA is widest at the densest setting, where these methods’ top-
+k
+overhead is least amortized, and narrows toward extreme sparsity, but DashAttention stays ahead in every cell.
+
+Decoding.
+
+In the memory-bound decoding regime (Table
+5
+, right), DashAttention is again the fastest at every operating point, reaching
+3.36\times
+over FlashAttention at
+n_{kv}{=}96
+K,
+s{=}93.75\%
+, against
+3.10\times
+for InfLLMv2. Compared to FA, the advantage grows monotonically with both context length and sparsity as the cost of dense attention eclipses Stage 1’s routing overhead. Compared to InfLLMv2, this result follows from DashAttention’s Stage 2 (Sec.
+3.5
+): we walk the bit-packed active-block mask in a single fused pass, avoiding the explicit top-
+k
+and per-query index materialization InfLLMv2 performs between its scoring and attention stages.
+
+Table 5
+:
+Wall-clock speedup over full attention with FlashAttention (higher is better). Columns are chunk sparsity
+s
+, the fraction of chunks not routed to Stage 2; the corresponding top-
+k
+is
+(1-s)\cdot N/64
+. Iv2 denotes InfLLMv2 and DA denotes DashAttention. Best results in bold.
+
+Prefill
+
+Decoding
+
+s=75\%
+
+s=87.5\%
+
+s=93.7\%
+
+s=75\%
+
+s=87.5\%
+
+s=93.7\%
+
+N
+
+NSA
+
+Iv2
+
+DA
+
+NSA
+
+Iv2
+
+DA
+
+NSA
+
+Iv2
+
+DA
+
+NSA
+
+Iv2
+
+DA
+
+NSA
+
+Iv2
+
+DA
+
+NSA
+
+Iv2
+
+DA
+
+16
+K
+
+0.71
+
+0.96
+
+1.34
+
+1.23
+
+1.63
+
+2.09
+
+1.91
+
+2.40
+
+2.87
+
+0.40
+
+1.20
+
+1.54
+
+0.43
+
+1.43
+
+1.67
+
+0.46
+
+1.73
+
+1.93
+
+32
+K
+
+0.76
+
+1.04
+
+1.39
+
+1.25
+
+1.67
+
+2.11
+
+2.19
+
+2.78
+
+2.94
+
+0.57
+
+1.46
+
+1.69
+
+0.65
+
+1.85
+
+2.26
+
+0.73
+
+2.29
+
+2.69
+
+64
+K
+
+0.82
+
+1.01
+
+1.55
+
+1.33
+
+1.77
+
+2.28
+
+2.24
+
+2.86
+
+3.02
+
+0.71
+
+1.59
+
+1.97
+
+0.95
+
+2.28
+
+2.69
+
+1.12
+
+2.92
+
+3.27
+
+96
+K
+
+0.82
+
+1.04
+
+1.63
+
+1.31
+
+1.73
+
+2.34
+
+2.32
+
+3.06
+
+3.09
+
+0.80
+
+1.73
+
+1.96
+
+1.04
+
+2.38
+
+2.72
+
+1.34
+
+3.10
+
+3.36
+
+5.3
+Cost-Effectiveness Analysis
+
+We combine performance and efficiency to examine each method’s accuracy–sparsity trade-off.
+
+60
+70
+80
+90
+20
+30
+40
+50
+Sparsity
+\to
+(%)
+Overall Accuracy
+\to
+(%)
+FullAttn
+NSA
+InfLLMv2
+DashAttention
+
+Figure 2
+:
+Accuracy–Sparsity Pareto frontiers on HELMET.
+
+For the 8B model, we sweep the sparsity (
+\gamma
+for DashAttention
+3
+3
+
+3
+
+While
+\alpha
+in
+\alpha\text{-entmax }
+also controls sparsity, we choose to adjust a temperature
+\gamma
+instead as it allows us to re-use kernels optimized for specific values of
+\alpha
+, such as
+\alpha=1.5
+in our case, which enjoys fast convergence and reduces all expressions to linear or quadratic operations; thus avoiding exponentials and logarithms and making the overall method faster.
+,
+k
+for NSA and InfLLMv2) of each sparse method to obtain points at increasing sparsity levels and report the resulting HELMET overall accuracy.
+DashAttention dominates NSA and InfLLMv2 across the sweep (Fig.
+2
+) and slightly exceeds full attention at low to moderate sparsity.
+As sparsity increases, the gap to the baselines widens sharply: at
+\sim
+90% sparsity, DashAttention retains 39.4% overall accuracy, exceeding InfLLMv2 by 9% and NSA by 19%.
+This highlights DashAttention’s adaptiveness: fixed top-
+k
+over-allocate easy queries or under-allocate hard ones, whereas
+\alpha\text{-entmax }
+reshapes the support adaptively.
+
+5.4
+Dynamic Sparsity Analysis
+
+0
+5
+10
+15
+20
+25
+30
+0.5
+0.6
+0.7
+0.8
+Layer
+Sparsity
+
+Figure 3
+:
+Per-layer attention sparsity.
+
+Since DashAttention uses
+\alpha\text{-entmax }
+in Stage 1 to induce sparsity, it can dynamically allocate sparsity across different layers according to the geometry of the Stage 1 scores.
+To show this property, we measure the sparsity of each layer using a 16K-length input from RULER-SG1. The analysis is shown in Fig.
+3
+.
+Notably, the early layers tend to remain denser, while the middle layers become sparser, automatically producing an effect similar to budget allocation strategies proposed in prior works
+[
+8
+,
+64
+,
+41
+]
+.
+
+6
+Related Work
+
+Attention and KV Cache Optimizations.
+
+Attention sparsification methods are developed to mitigate the computational and memory bottlenecks of long-context attention.
+Early approaches use static patterns, such as attention sinks
+[
+62
+]
+and sliding windows
+[
+4
+]
+, to approximate full attention, while later works introduce random
+[
+67
+]
+and dynamic patterns
+[
+72
+,
+31
+,
+32
+,
+71
+]
+, e.g., block sparsity
+[
+31
+,
+52
+]
+, to better exploit semantic structure.
+Prior methods further exploit head heterogeneity by assigning different sparse patterns to different attention heads
+[
+31
+,
+18
+,
+61
+,
+36
+]
+, improving long-context modeling.
+Although these optimizations significantly improve efficiency, they introduce a training-inference mismatch.
+In parallel, KV cache optimization methods have been proposed to reduce memory access cost and GPU memory usage.
+Eviction methods
+[
+72
+,
+35
+,
+7
+,
+3
+]
+permanently discard redundant KV pairs, while KV offloading methods
+[
+60
+,
+50
+,
+30
+]
+store most KV cache on CPU and fetch only query-relevant parts during decoding. KV cache compression can also be learned end-to-end through continued training
+[
+30
+,
+44
+,
+76
+]
+.
+KV quantization methods
+[
+25
+,
+40
+,
+69
+]
+further reduce memory footprint by storing KV cache in low-bit formats.
+These approaches are orthogonal to our method, as they primarily compress KV cache rather than optimize attention sparsity.
+
+Trainable Sparse Attentions.
+
+Recent approaches
+[
+34
+,
+16
+]
+integrate sparse attention into LLM training to reduce training–inference mismatch and improve task performance.
+SeerAttn
+[
+17
+]
+, NSA
+[
+66
+]
+, and MoBA
+[
+41
+]
+introduce trainable block-sparse attention into LLMs, using top-
+k
+selection over compressed attention scores to identify important blocks.
+InfLLMv2
+[
+73
+]
+improves the short-context inference efficiency of NSA by introducing a unified kernel in the final stage, while FSA
+[
+63
+]
+further extends this design to smaller GQA group sizes.
+HSA
+[
+39
+]
+introduces a local encoder to summarize each chunk, but adds substantial parameters and is less compatible with pretrained softmax models during long-context continual training.
+Other token-wise sparse attention methods, such as DSA
+[
+38
+]
+and CSA
+[
+13
+]
+, are highly effective only at large model scales and under the MLA
+[
+37
+]
+architecture.
+The performance of these proposed methods are bounded by a fixed top-
+k
+function, which does not introduce any dynamic property
+[
+70
+,
+45
+]
+.
+Another line of work seeks to accelerate
+\alpha\text{-entmax }
+for modern hardware
+[
+21
+,
+20
+]
+.
+However, they still require computing the full
+\bm{Q}\bm{K}^{\top}
+tensor, drastically limiting inference acceleration.
+Our method DashAttention bridges these two directions by introducing
+\alpha\text{-entmax }
+into hierarchical sparse attention while remaining easy to adapt from pretrained softmax models.
+
+7
+Conclusion
+
+We propose DashAttention, an end-to-end differentiable and adaptively sparse hierarchical attention mechanism. When integrated into long-context continual pretraining, DashAttention outperforms existing sparse attention methods (NSA and InfLLMv2) in terms of both performance and speed. DashAttention demonstrates a favorable cost-effectiveness trade-off in high-sparsity regimes and achieves speedups of 3.36
+\times
+and 1.35
+\times
+over FlashAttention-3 and InfLLMv2, respectively. One limitation of this work is that the DashAttention kernels have not yet been integrated into modern LLM serving frameworks, such as vLLM and SGLang, which is left for future work. We will also explore applying DashAttention to other model architectures, such as hybrid models
+[
+5
+]
+.
+
+Acknowledgments
+
+We would like to thank the SARDINE lab team for the helpful discussions.
+This work is supported by the National Natural Science Foundation of China (No. 62576186), and Tsinghua University Initiative Scientific Research Program.
+This work was supported by the project DECOLLAGE (ERC-2022-CoG 101088763), by the Portuguese Recovery and Resilience Plan through project C645008882-00000055 (Center for Responsible AI), and by FCT/MECI through national funds and, when applicable, co-funded EU funds under DOI:10.54499/UID/50008/2025: Instituto de Telecomunicações.
+Edoardo M. Ponti is supported by the ERC Starting Grant AToM-FM (ERC-2025-StG 101222956).
+
+Figure 4
+:
+Visualization of mappings for different values of
+\alpha
+, and top-
+k
+softmax with
+k=1,2
+.
+Each panel shows how
+p_{0}
+varies for the input
+\bm{z}=[0,z_{1},z_{2}]
+.
+Ent-prior softmax denotes a variant of softmax in which the softmax scores are scaled by an entmax prior. The prior is also generated from
+\bm{z}
+and normalized according to Proposition
+3.1
+.
+
+Appendix A
+The
+\alpha
+-entmax Mapping
+
+This appendix briefly reviews the
+\alpha
+-entmax transformation used in our coarse routing stage (Stage 1), and includes basic properties and calculation of
+\alpha
+-entmax.
+
+Variational View of Mappings to Probability Simplex.
+
+Given a vector of scores
+\bm{z}\in\mathbb{R}^{n}
+,
+\alpha
+-entmax maps
+\bm{z}
+to a probability vector by solving a regularized prediction problem over the simplex
+[
+47
+]
+:
+
+\alpha\text{-entmax }(\bm{z})=\argmax_{\bm{p}\in\triangle_{n}}\bm{p}^{\top}\bm{z}+H_{\alpha}(\bm{p}),\qquad\triangle_{n}=\left\{\bm{p}\in\mathbb{R}^{n}:\bm{p}\geq\mathbf{0},\ \mathbf{1}^{\top}\bm{p}=1\right\},
+
+(11)
+
+where
+H_{\alpha}
+is the Tsallis
+\alpha
+-entropy
+[
+55
+]
+:
+
+H_{\alpha}(\bm{p})=\begin{cases}\displaystyle\frac{1}{\alpha(\alpha-1)}\sum_{j=1}^{n}\left(p_{j}-p_{j}^{\alpha}\right),&\alpha\neq 1,\\[8.00003pt]
+\displaystyle-\sum_{j=1}^{n}p_{j}\log p_{j},&\alpha=1.\end{cases}
+
+(12)
+
+The parameter
+\alpha
+controls the shape of the regularizer and, consequently, the sparsity of the resulting distribution.
+The optimal solution has a thresholding form.
+There exists a scalar threshold
+\tau
+such that
+
+\alpha\text{-entmax }(\bm{z})_{i}=\left[(\alpha-1)z_{i}-\tau\right]_{+}^{\frac{1}{\alpha-1}},
+
+(13)
+
+where
+\tau
+is chosen so that the entries sum to one.
+Therefore, any coordinate satisfying
+(\alpha-1)z_{i}\leq\tau
+is assigned exactly zero mass.
+This property is central to our use of
+\alpha
+-entmax: the router does not merely downweight irrelevant chunks, but can remove them from the routed set altogether.
+
+Special Cases.
+
+The
+\alpha
+-entmax family contains softmax and sparsemax as limiting or special cases.
+As
+\alpha\to 1^{+}
+, the Tsallis entropy converges to Shannon entropy, and Eq. (
+11
+) recovers the standard softmax transformation.
+At
+\alpha=2
+, the mapping becomes sparsemax
+[
+42
+]
+, which is the Euclidean projection of the score vector onto the simplex, i.e.,
+\operatorname{sparsemax}(\bm{z})=\argmin_{\bm{p}\in\triangle_{n}}\|\bm{z}-\bm{p}\|_{2}
+.
+Intermediate values, such as
+\alpha=1.5
+, provide a useful compromise: they preserve differentiability while allowing exact zeros in the output distribution
+[
+47
+]
+.
+
+Computing the threshold.
+
+Evaluating
+\alpha\text{-entmax }
+reduces to finding the scalar threshold
+\tau
+in Eq. (
+13
+).
+For
+\alpha=2
+and
+\alpha=1.5
+, specialized algorithms are available
+[
+42
+,
+47
+]
+. For general
+\alpha
+,
+\tau
+can be obtained by root finding, such as bisection over a bounded interval
+[
+6
+]
+.
+Recent GPU implementations further accelerate this step with safeguarded higher-order updates
+[
+21
+,
+20
+]
+.
+
+Why it is useful for routing.
+
+In our setting,
+\alpha
+-entmax is applied at the chunk-routing level, where exact zeros have a direct computational interpretation: chunks assigned zero probability are not passed to the expensive second-stage attention computation.
+This differs from top-
+k
+softmax in two important ways.
+First, top-
+k
+fixes the number of selected chunks in advance, so the routing budget is an external hyperparameter rather than a consequence of the score distribution.
+By contrast,
+\alpha
+-entmax determines the active support from the scores themselves, allowing different queries and sequences to route to different numbers of chunks.
+Second, top-
+k
+changes support through a discrete selection operator; within a region where the selected set is fixed, gradients do not describe how an unselected chunk should change its score to enter the routed set.
+In
+\alpha
+-entmax, the routing probabilities arise from a continuous sparse transformation, so score changes near the boundary are reflected in the probability map rather than handled by a separate hard truncation step. Figure
+4
+illustrates that
+\alpha
+-entmax functions are smooth but cannot accelerate inference, since the full
+\bm{Q}\bm{K}^{\top}
+matrix must still be computed. In contrast, top-
+k
+softmax can accelerate inference but is non-smooth and stiff. With a suitable choice of
+\sigma
+, ent-prior softmax, similar to DashAttention, can be smoother and more dynamic than top-
+k
+softmax while still enabling inference acceleration through hierarchical attention.
+
+Differentiability of DashAttention.
+
+Entmax priors provide a native mechanism for enabling differentiability in hierarchical sparse attention. Unlike NSA, which relies on compressed attention to pass gradients to the first stage, or InfLLMv2, where the first stage is not trainable, our approach allows gradients to flow back through the routed chunks via 1.5-entmax.
+While 1.5-entmax can produce exact zeros, it admits a closed-form Jacobian within regions where the support remains fixed. At support-change boundaries, it is piecewise differentiable, analogous to sparsemax or ReLU. In practice, automatic differentiation applies the corresponding subgradient or Jacobian, enabling end-to-end gradient-based training. Therefore, from a computational perspective, DashAttention inherits the differentiability of
+\alpha
+-entmax and thus can be viewed as a fully end-to-end differentiable mechanism.
+
+Appendix B
+Reproducibility Settings
+
+B.1
+Performance Evaluation
+
+B.1.1
+Training
+
+We choose the 1B, 3B, and 8B base versions of MiniCPM-4
+[
+53
+]
+as our backbone models, motivated by their relatively large GQA group sizes. Specifically, the 1B model uses a group size of 8, while the 3B and 8B models adopt a group size of 16.
+We train all three models on InfLLM-5B
+[
+46
+]
+with a context length of 16K, followed by a short supervised fine-tuning (SFT) stage using the original MiniCPM-4
+[
+53
+]
+training data. We employ the WSD learning rate scheduler
+[
+27
+]
+, and conduct training using the Megatron framework
+[
+49
+]
+.
+All experiments are performed on 32 NVIDIA A800 GPUs with Intel® Xeon® Platinum 8470 CPUs running CentOS Linux 7 (Core), using
+bfloat16
+precision. For long-context continual pretraining, we train on 2.0B, 3.4B, and 5.0B tokens for the 1B, 3B, and 8B models, respectively. The subsequent SFT stage uses 0.6B, 1.3B, and 1.9B tokens correspondingly.
+Notably, long-context continual pretraining is a standard practice for modern LLM development; therefore, our method introduces neither additional training stages nor extra training overhead compared with full attention and other baselines.
+
+The DashAttention and baseline models are trained under the following settings. For NSA and InfLLMv2, we set the attention sink size to 64, the sliding window size to 1024, the block size to 64, and the total number of selected tokens to 4096. For DashAttention, the block size is also set to 64. We do not enforce attention to the sink tokens; instead, the sliding window consists of the diagonal block and the last block, resulting in a total size of 64–127 tokens. During training, we set
+t_{c}=1
+for the 1B and 3B models, and
+t_{c}=0.5
+for the 8B model. The parameter
+\alpha
+is gradually increased from 1.25 to 1.5 throughout training. We set
+\sigma=10^{6}
+for both 1B and 3B model, and
+\sigma=10^{8}
+for the 8B model in both training and inference.
+
+B.1.2
+Benchmarks
+
+We evaluate DashAttention against all baselines on RULER
+[
+26
+]
+and HELMET
+[
+65
+]
+. We use the official RULER benchmark suite to assess long-context performance, and Olmes
+[
+22
+]
+for HELMET evaluation. For each RULER task, we evaluate 50 samples, and for each HELMET task, 100 samples, using greedy generation. All reported metrics and averaging methods follow the official settings. The reported sparsity is computed by excluding the first 4096 tokens, as these tokens use full attention in NSA and InfLLMv2. For general tasks, we evaluate the trained models on MMLU
+[
+59
+]
+, MMLU-Pro
+[
+23
+]
+, CSQA
+[
+51
+]
+, IFEval
+[
+75
+]
+, HellaSwag
+[
+68
+]
+, GSM8K
+[
+10
+]
+, MATH
+[
+24
+]
+, DROP
+[
+14
+]
+, MBPP
+[
+2
+]
+, and HumanEval
+[
+9
+]
+, by using the LM-Evaluation-Harness
+[
+15
+]
+framework. For full attention, InfLLMv2, and DashAttention, we use softmax full attention during inference. For NSA, since removing the compressed attention during inference would cause training-inference mismatch, we inference the model with compressed attention scores but without sparsity in Stage 2.
+
+B.2
+Efficiency Evaluation
+
+Setup.
+
+All measurements were taken on a single NVIDIA GH200 GPU with CUDA 13.2, using PyTorch 2.10.0 and Triton 3.6.0 at
+bf16
+precision. Each kernel is wrapped with
+torch.compile
+and timed with Triton’s
+do_bench
+; we measure the attention kernels themselves, with query/key/value projections and token-level KV-cache management out of scope. The GQA configuration is fixed across methods:
+H_{q}{=}32
+query heads,
+H_{\mathrm{kv}}{=}2
+key/value heads, head dimension
+D{=}128
+, and a chunk size of
+64
+for all three sparse methods. We sweep
+N\in\{16,32,64,96\}
+K and chunk sparsity
+s\in\{75,87.5,93.75\}\%
+, with routing top-
+k=(1-s)\cdot N/64
+for the top-
+k
+baselines.
+
+Batch sizes.
+
+We run prefill at batch size
+1
+and decoding at batch size
+24
+. Prefill is set to batch size
+1
+to keep the Stage 1 chunk-score tensor within memory at
+N{=}96
+K. For decoding, batch size
+1
+latency is dominated by kernel-launch overhead, which CUDA graphs can mitigate, but we instead use
+24
+to operate outside that regime.
+
+Why we randomize the active-block bitmask.
+
+Stages 0 and 1 do not depend on the sparsity level
+s
+, so to sweep
+s
+we inject at Stage 2 a random bit-packed mask at the target sparsity rather than a router-produced one. This isolates the cost of Stage 2 at a controlled sparsity and matches the effective sparsity used by the top-
+k
+baselines.
+
+Scope.
+
+These are isolated attention-kernel benchmarks (i.e., no request scheduler, no paged KV cache, etc.) so they do not translate one-for-one to end-to-end TTFT or token throughput in a production serving stack. Integration into a serving framework such as vLLM or SGLang is the natural next step and we leave it to future work.
+
+B.3
+Performance and Efficiency Trade-Offs
+
+We report the Pareto frontier at the in-distribution context length of 16K
+in the main text. DashAttention’s effective sparsity is input-dependent and
+controlled at inference by the scaling factor
+t_{c}
+; we sweep
+
+t_{c}\in\{0.50,0.30,0.15,0.10\}
+, with
+t_{c}=0.5
+recovering the
+training operating point of the 8B checkpoint and the smaller values
+probing denser regimes. NSA and InfLLMv2 instead use a deterministic
+per-query top-
+k
+budget, with average density
+
+\text{top-}k\times B/L
+(
+B=64
+,
+L=16384
+). Targeting densities
+of
+10\%
+,
+20\%
+,
+30\%
+, and
+40\%
+of the prefix to span roughly the
+same range as DashAttention, we pick
+
+\text{top-}k\in\{26,51,77,102\}
+. Each point in the figure is
+plotted at its empirically measured density.
+
+Appendix C
+Extended Related Works
+
+In this section, we introduce the major related hierarchical trainable sparse attention and show the difference in the design between our method and existing methods.
+Since we position our work as a hierarchical, block-wise trainable sparse attention method, we empirically compare it with the state-of-the-art approaches, NSA and InfLLMv2. For other lines of work, such as element-wise sparse attention, we discuss their design principles to highlight their orthogonality to key-novelties of our proposed method.
+
+SeerAttention and MoBA.
+
+SeerAttention
+[
+17
+]
+and MoBA
+[
+41
+]
+are representative early works on trainable sparse attention. By compressing both Q and K vectors, these methods introduce dynamic block-sparse patterns through a top-
+k
+selection function. Both methods are integrated into model training, allowing the model to adapt to sparse attention patterns and mitigating the train–inference mismatch that arises when attention sparsity is applied. However, because Q is also compressed within each chunk along the sequence dimension, these methods are difficult to apply during decoding. In contrast, DashAttention selects KV chunks independently for each query, enabling exact alignment between training and inference as well as between prefill and decoding. This design improves long-context performance while accelerating both prefill and decoding.
+
+NSA and InfLLMv2.
+
+NSA
+[
+66
+]
+first introduces a separate KV selection mechanism by leveraging the group size in GQA to satisfy the Tensor Core GEMM shape constraints. It adopts three complementary attention patterns: sliding-window attention, block-sparse attention, and compressed attention. The compressed KV representations are produced by an MLP with additional parameters introduced during long-context continual pretraining. However, since compressed attention is integrated into the model architecture, it is difficult to remove even when performing inference on short-context inputs, which can slow down short-context inference.
+To address this issue, InfLLMv2
+[
+73
+]
+removes the compressed attention output from the final attention computation and replaces the MLP with mean pooling, thereby avoiding additional parameters. InfLLMv2 achieves both better performance and higher efficiency, and further provides an official efficient CUDA implementation. Nevertheless, both NSA and InfLLMv2 rely on top-
+k
+selection, which lacks dynamic adaptability when selecting the essential KV cache entries to attend to.
+DashAttention alleviates this limitation by introducing an entmax-based Stage 1 mechanism. Moreover, since DashAttention weakens the influence of prior scores through a large hyperparameter
+\sigma
+, it can also perform inference without Stage 1 scores and sparsity, aligning with the inference behavior of InfLLMv2. DashAttention also removes the overlapped block compression strategy introduced in NSA and InfLLMv2, resulting in fewer chunk summarizations and accelerating Stage 1 without causing substantial performance degradation. In this paper, we choose these methods as baselines to demonstrate the effectiveness of the dynamicity introduced by entmax-based Stage 1.
+
+Element-wise Sparse Attention.
+
+Adopted in DeepSeek-V3.2
+[
+38
+]
+and DeepSeek-V4
+[
+13
+]
+, element-wise hierarchical sparse attention methods, such as DSA
+[
+38
+]
+, CSA, and HCA
+[
+13
+]
+, have emerged as alternatives to block-selection methods by enabling finer-grained token selection. These methods typically train a token indexer to predict the importance of each KV position with respect to a given query input, supervised by an additional loss. Although they can achieve better performance than block-level sparse attention, their efficiency relies on large model scales and the use of the MLA architecture, which reduces the relative overhead introduced by the indexer. As a result, they are not directly compatible with the commonly adopted GQA architecture. In addition, these methods adopt a top-
+k
+selection function.
+Notably, DashAttention is not fundamentally incompatible with element-wise sparse attention: a coarse-level token indexer could also be combined with entmax-based selection techniques and our prior-based training method. However, because training extremely large LLMs with element-wise sparse attention is currently infeasible for us, we leave the integration of DashAttention with these methods to future work.
+
+HSA.
+
+HSA
+[
+28
+,
+29
+]
+has demonstrated the long-context performance and extrapolation capabilities. By using a local encoder and incorporating a
+[CLS]
+landmark token into the input sequence, HSA achieves strong long-context performance. However, the local encoder relies on a large number of newly introduced parameters and requires substantial training. Moreover, HSA cannot be directly adapted from existing pretrained softmax full-attention models, which limits its generalizability.
+In contrast, DashAttention’s local attention mechanism degenerates to mean pooling at the beginning of training, providing a smooth transition from an existing full-attention model to a DashAttention sparse-attention model. Since our comparison is conducted under a long-context continual pretraining setup, we exclude HSA as a baseline because it cannot be adapted from pretrained models.
+
+Appendix D
+Equivalent Attention Bias Form of Diagonal Estimation
+
+We start by re-stating the original proposition.
+
+Proposition
+3.1
+.
+
+Calculating the attention output
+\bm{o}_{i}
+with Eq. (
+7
+) and Eq. (
+9
+) is equivalent to first computing
+\mu_{i}=\operatorname{mean}_{j\in\mathcal{R}_{i}}\{\log w_{i,c(j)}\}
+, followed by
+
+d_{i,j}=\begin{cases}\dfrac{\log w_{i,c(j)}-\mu_{i}}{\sigma}\,,&j\in\mathcal{R}_{i},\\[3.99994pt]
+0\,,&j\in\mathcal{D}_{i},\\
+\end{cases}\quad\bm{o}_{i}=\sum_{j\in\mathcal{R}_{i}\cup\mathcal{D}_{i}}\frac{\exp(z_{i,j}+d_{i,j})\,\bm{v}_{j}}{\sum_{t\in\mathcal{R}_{i}\cup\mathcal{D}_{i}}\exp(z_{i,t}+d_{i,t})}.
+
+Proof.
+
+We start the proof by expanding
+\lambda_{i}
+:
+
+\lambda_{i}=\operatorname{sigmoid}\left(\operatorname{KL}(\bm{u}_{\mathcal{R}_{i}}\|\bm{w}^{\prime}_{\mathcal{R}_{i}})+\log\frac{|\mathcal{R}_{i}|}{|\mathcal{D}_{i}|}\right)=\frac{1}{1+\exp\left(-\operatorname{KL}(\bm{u}_{\mathcal{R}_{i}}\|\bm{w}_{\mathcal{R}_{i}}^{\prime})-\log\frac{|\mathcal{R}_{i}|}{|\mathcal{D}_{i}|}\right)}.
+
+Since
+\bm{u}_{\mathcal{R}_{i}}
+is uniform on
+\mathcal{R}_{i}
+, the KL term simplifies as
+
+\operatorname{KL}(\bm{u}_{\mathcal{R}_{i}}\|\bm{w}^{\prime}_{\mathcal{R}_{i}})=\sum_{j\in\mathcal{R}_{i}}\frac{1}{|\mathcal{R}_{i}|}\log\frac{1/|\mathcal{R}_{i}|}{w^{\prime}_{i,j}}=-\log|\mathcal{R}_{i}|-\frac{1}{|\mathcal{R}_{i}|}\sum_{j\in\mathcal{R}_{i}}\log w^{\prime}_{i,j}.
+
+Denote the geometric mean of
+\bm{w}^{\prime}_{i}
+on the routed support by
+
+\eta_{i}=\exp\!\left(\tfrac{1}{|\mathcal{R}_{i}|}\textstyle\sum_{j\in\mathcal{R}_{i}}\log w^{\prime}_{i,j}\right)=\left(\textstyle\prod_{j\in\mathcal{R}_{i}}w^{\prime}_{i,j}\right)^{1/|\mathcal{R}_{i}|}.
+
+Plugging back, we have
+
+\lambda_{i}=\frac{1}{1+|\mathcal{D}_{i}|\,\eta_{i}},\qquad 1-\lambda_{i}=\frac{|\mathcal{D}_{i}|\,\eta_{i}}{1+|\mathcal{D}_{i}|\,\eta_{i}}.
+
+Therefore, for all
+j\in\mathcal{R}_{i}
+, we have
+
+\log g_{i,j}=\log\lambda_{i}+\log w^{\prime}_{i,j}=\log w^{\prime}_{i,j}-\log\!\left(1+|\mathcal{D}_{i}|\,\eta_{i}\right),
+
+and for all
+j\in\mathcal{D}_{i}
+, we have
+
+\log g_{i,j}=\log\!\left(\tfrac{1-\lambda_{i}}{|\mathcal{D}_{i}|}\right)=\log\eta_{i}-\log\!\left(1+|\mathcal{D}_{i}|\,\eta_{i}\right).
+
+Denote
+
+A=\log\eta_{i}-\log\!\left(1+|\mathcal{D}_{i}|\,\eta_{i}\right),
+
+then
+\forall j\in\mathcal{D}_{i},~\log g_{i,j}-A=0=d_{i,j}
+, and
+
+\forall j\in\mathcal{R}_{i},~\log g_{i,j}-A=\log w^{\prime}_{i,j}-\log\eta_{i}.
+
+Recalling
+w^{\prime}_{i,j}=w_{i,c(j)}^{1/\sigma}/(B\,\bm{1}^{\top}\bm{w}_{i}^{1/\sigma})
+, the normalizer
+B\,\bm{1}^{\top}\bm{w}_{i}^{1/\sigma}
+does not depend on
+j
+and so cancels between
+\log w^{\prime}_{i,j}
+and
+\log\eta_{i}
+, giving
+
+\log g_{i,j}-A=\log w_{i,c(j)}^{1/\sigma}-\operatorname{mean}\{\log\bm{w}_{i}^{1/\sigma}\}=\frac{\log w_{i,c(j)}-\mu_{i}}{\sigma}=d_{i,j}.
+
+Therefore, by plugging the results above into Eq. (
+7
+), we can obtain that
+
+\displaystyle\bm{o}_{i}
+
+\displaystyle=\sum_{j\in\mathcal{R}_{i}\cup\mathcal{D}_{i}}\frac{g_{i,j}\exp(z_{i,j})\cdot\bm{v}_{j}}{\sum_{t\in\mathcal{R}_{i}\cup\mathcal{D}_{i}}g_{i,t}\exp(z_{i,t})}=\sum_{j\in\mathcal{R}_{i}\cup\mathcal{D}_{i}}\frac{\exp(z_{i,j}+\log g_{i,j}-A)\cdot\bm{v}_{j}}{\sum_{t\in\mathcal{R}_{i}\cup\mathcal{D}_{i}}\exp(z_{i,t}+\log g_{i,t}-A)}
+
+\displaystyle=\sum_{j\in\mathcal{R}_{i}\cup\mathcal{D}_{i}}\frac{\exp(z_{i,j}+d_{i,j})\cdot\bm{v}_{j}}{\sum_{t\in\mathcal{R}_{i}\cup\mathcal{D}_{i}}\exp(z_{i,t}+d_{i,t})}.
+
+∎
+
+Appendix E
+Non-Dispersion Property
+
+In this section, we focus on the dispersion property with respect to the Stage 1 design and the head aggregation strategy in hierarchical sparse attention. We begin by restating the definition of dispersion following
+[
+57
+]
+. Dispersion describes the phenomenon in which the entropy of attention probabilities grows at
+\sim\log n
+, introducing greater uncertainty as the sequence length increases and thereby making long-context modeling more challenging.
+
+Definition E.1
+
+(Dispersion)
+.
+
+Given a bounded sequence
+\bm{z}_{n}\in\mathbb{R}^{n}
+and a mapping
+f:\mathbb{R}^{n}\to\triangle_{n}
+, we call the mapping
+f
+a dispersive function if
+
+\lim_{n\to\infty}\frac{\mathcal{H}(f(\bm{z}_{n}))}{\log n}=1,
+
+where
+\mathcal{H}
+is the Shannon’s entropy. If there exists a constant
+0\leq c<1
+,
+
+\limsup_{n\to\infty}\frac{\mathcal{H}(f(\bm{z}_{n}))}{\log n}\leq c<1,
+
+then
+f
+is a non-dispersive function.
+
+Existing top-
+k
+based hierarchical sparse attention methods, such as NSA
+[
+66
+]
+and InfLLMv2
+[
+73
+]
+, are non-dispersive in Stage 2. In particular, applying softmax only over the top-
+k
+selected attention logits constitutes a non-dispersive operation.
+
+Theorem E.2
+
+(Top-
+k
+-Softmax is non-dispersive)
+.
+
+\operatorname{softmax}(\operatorname{top-}k(\cdot))
+is a non-dispersive function, i.e.,
+given a bounded sequence
+\bm{z}\in\mathbb{R}^{n}
+, there is always
+
+\lim_{n\to\infty}\frac{\mathcal{H}(\operatorname{softmax}(\operatorname{top-}k(\bm{z})))}{\log n}=0.
+
+Proof.
+
+\mathcal{H}(\operatorname{softmax}(\operatorname{top-}k(\bm{z})))\leq\log k
+, thus
+
+\lim_{n\to\infty}\frac{\mathcal{H}(\operatorname{softmax}(\operatorname{top-}k(\bm{z})))}{\log n}\leq\lim_{n\to\infty}\frac{\log k}{\log n}=0.
+
+∎
+
+This shows that top-
+k
+sparse attention mechanisms are non-dispersive and therefore can potentially perform well in long-context modeling.
+
+However, when applying sparse attention to GQA models, existing methods commonly require all query heads within the same group to share an identical sparse pattern. To achieve this, a softmax-based head aggregation is typically applied before top-
+k
+sparse attention, where the Stage 1 scores are merged on the probability simplex to prevent the aggregated scores from being overly dominated by a few strong heads. For DashAttention, entmax head-aggregation is applied to achieve similar effect.
+
+Next, we first formally define the head aggregation mechanism, followed by proving the dispersion property of softmax head aggregagation and non-dispersion property of entmax head disaggregation.
+
+Definition
+4.1
+(Head aggregation)
+.
+
+Given a mapping
+f:\mathbb{R}^{n}\to\triangle_{n}
+,
+H
+bounded sequence
+\{\bm{z}^{(h)}\}_{h=1}^{H}\subset\mathbb{R}^{n}
+, and the aggregation weights
+\theta=(\theta_{1},\cdots,\theta_{H})^{\top}\in\triangle_{H}
+, the aggregated probability is
+
+\operatorname{aggr}_{f}\left(\bm{z}^{(1)},\bm{z}^{(2)},\cdots,\bm{z}^{(H)};\bm{\theta}\right)=\sum_{h=1}^{H}\theta_{h}\cdot f\left(\bm{z}^{(h)}\right)\in\triangle_{n}.
+
+Theorem
+4.2
+(Dispersion in head aggregation)
+.
+
+Under any finite
+H
+and
+\theta\in\triangle_{H}
+, the following always hold:
+
+1. Softmax head aggregation is dispersive, i.e.
+
+\lim_{n\to\infty}\frac{\mathcal{H}\left(\operatorname{aggr}_{\operatorname{softmax}}\left(\bm{z}^{(1)},\bm{z}^{(2)},\cdots,\bm{z}^{(H)};\bm{\theta}\right)\right)}{\log n}=1,
+
+2. Denote
+\bm{p}^{(h)}=\alpha\operatorname{-entmax}(\bm{z}^{(h)})
+, if there are
+\|\bm{p}^{(h)}\|_{0}=\mathcal{O}\left(n^{\beta_{h}}\right),\beta_{h}\in(0,1)
+, then entmax head aggregation is not dispersive, and
+
+\limsup_{n\to\infty}\frac{\mathcal{H}\left(\operatorname{aggr}_{\alpha\operatorname{-entmax}}\left(\bm{z}^{(1)},\bm{z}^{(2)},\cdots,\bm{z}^{(H)};\bm{\theta}\right)\right)}{\log n}\leq\max_{h\in[H]}\beta_{h}<1.
+
+Proof.
+
+We first prove that softmax head aggregation is dispersive.
+
+Denote
+\bm{p}^{(h)}=\operatorname{softmax}\left(\bm{z}^{(h)}\right)
+.
+
+First, we find the lower bound of the numerator by using
+\mathcal{H}(\cdot)
+’s concavity.
+
+\displaystyle\mathcal{H}\left(\operatorname{aggr}_{\operatorname{softmax}}\left(\bm{z}^{(1)},\bm{z}^{(2)},\cdots,\bm{z}^{(H)};\bm{\theta}\right)\right)
+
+\displaystyle=\mathcal{H}(\theta_{1}\bm{p}^{(1)}+\cdots+\theta_{H}\bm{p}^{(H)})
+
+\displaystyle\geq\theta_{1}\mathcal{H}\left(\bm{p}^{(1)}\right)+\cdots+\theta_{H}\mathcal{H}\left(\bm{p}^{(H)}\right).
+
+Then, since
+\operatorname{softmax}
+is a dispersive function, we have
+
+\displaystyle\lim_{n\to\infty}\frac{\mathcal{H}\left(\operatorname{aggr}_{\operatorname{softmax}}\left(\bm{z}^{(1)},\cdots,\bm{z}^{(H)};\bm{\theta}\right)\right)}{\log n}
+
+\displaystyle\geq\theta_{1}\lim_{n\to\infty}\frac{\mathcal{H}\left(\bm{p}^{(1)}\right)}{\log_{n}}+\cdots+\theta_{H}\lim_{n\to\infty}\frac{\mathcal{H}\left(\bm{p}^{(H)}\right)}{\log_{n}}
+
+\displaystyle=\theta_{1}+\cdots+\theta_{H}=1.
+
+Then, since
+\forall\bm{p}\in\triangle_{n}
+,
+\mathcal{H}(\bm{p})\leq\log n
+, we also have
+\lim_{n\to\infty}\frac{\mathcal{H}(\bm{p})}{\log n}\leq 1
+. Therefore, we can obtain the following limitation:
+
+\lim_{n\to\infty}\frac{\mathcal{H}\left(\operatorname{softaggr}\left(\bm{z}^{(1)},\bm{z}^{(2)},\cdots,\bm{z}^{(H)};\bm{\theta}\right)\right)}{\log n}=1.
+
+Then, we prove that the entmax head aggregation under given assumption is not dispersive.
+
+Since
+\forall h\in\{1,2,\cdots,H\},\|\bm{p}^{(h)}\|_{0}=\mathcal{O}(n^{\beta_{h}})
+, then
+
+\|\bm{p}\|_{0}=\left\|\frac{1}{H}\sum_{h=1}^{H}\bm{p}^{(h)}\right\|_{0}=\left\|\sum_{h=1}^{H}\bm{p}^{(h)}\right\|_{0}\leq\sum_{h=1}^{H}\left\|\bm{p}^{(h)}\right\|_{0}=\sum_{h=1}^{H}\mathcal{O}\left(n^{\beta_{h}}\right)=\mathcal{O}\left(n^{\max_{h\in[H]}\beta_{h}}\right),
+
+therefore we can obtain that
+\|\bm{p}\|_{0}=\mathcal{O}\left(n^{\max_{h\in[H]}\beta_{h}}\right)
+.
+
+By using
+[
+57
+]
+’s Proposition 1, the theorem can be simply proved.
+
+∎
+
+Appendix F
+Additional Experimental Results
+
+F.1
+Full Benchmark Results of HELMET
+
+Table 6:
+HELMET
+scores (%) of DashAttention compared with all baselines for sparse adaptation (detailed).
+
+Task
+
+MiniCPM-4-1B
+
+MiniCPM-4-3B
+
+MiniCPM-4-8B
+
+FullAttn
+
+NSA
+
+InfLLMv2
+
+DashAttention
+
+FullAttn
+
+NSA
+
+InfLLMv2
+
+DashAttention
+
+FullAttn
+
+NSA
+
+InfLLMv2
+
+DashAttention
+
+Recall
+
+JKV
+
+48.0
+
+20.0
+
+21.0
+
+23.0
+
+55.0
+
+24.0
+
+45.0
+
+53.0
+
+96.0
+
+25.0
+
+91.0
+
+73.0
+
+MK2
+
+82.0
+
+16.0
+
+48.0
+
+61.0
+
+93.0
+
+20.0
+
+51.0
+
+77.0
+
+99.0
+
+28.0
+
+73.0
+
+98.0
+
+MK3
+
+43.0
+
+5.0
+
+19.0
+
+33.0
+
+70.0
+
+9.0
+
+38.0
+
+45.0
+
+99.0
+
+14.0
+
+62.0
+
+82.0
+
+MV
+
+93.5
+
+52.5
+
+86.8
+
+90.3
+
+96.3
+
+66.5
+
+98.0
+
+92.5
+
+99.0
+
+73.0
+
+99.5
+
+100.0
+
+Avg.
+
+66.6
+
+23.4
+
+43.7
+
+51.8
+
+78.6
+
+29.9
+
+58.0
+
+66.9
+
+98.3
+
+35.0
+
+81.4
+
+88.3
+
+ICL
+
+Ban
+
+47.0
+
+36.0
+
+54.0
+
+51.0
+
+41.0
+
+57.0
+
+51.0
+
+50.0
+
+72.0
+
+73.0
+
+75.0
+
+71.0
+
+Cli
+
+64.0
+
+36.0
+
+60.0
+
+64.0
+
+45.0
+
+46.0
+
+46.0
+
+63.0
+
+64.0
+
+79.0
+
+83.0
+
+73.0
+
+NLU
+
+63.0
+
+46.0
+
+62.0
+
+60.0
+
+61.0
+
+55.0
+
+48.0
+
+64.0
+
+77.0
+
+75.0
+
+76.0
+
+78.0
+
+TrC
+
+80.0
+
+78.0
+
+84.0
+
+88.0
+
+54.0
+
+44.0
+
+54.0
+
+53.0
+
+53.0
+
+52.0
+
+60.0
+
+77.0
+
+TrF
+
+41.0
+
+34.0
+
+36.0
+
+42.0
+
+23.0
+
+24.0
+
+22.0
+
+26.0
+
+14.0
+
+20.0
+
+24.0
+
+15.0
+
+Avg.
+
+59.0
+
+46.0
+
+59.2
+
+61.0
+
+44.8
+
+45.2
+
+44.2
+
+51.2
+
+56.0
+
+59.8
+
+63.6
+
+62.8
+
+Rerank
+
+Avg.
+
+13.9
+
+15.0
+
+15.5
+
+16.5
+
+25.3
+
+20.5
+
+24.8
+
+20.0
+
+37.8
+
+27.9
+
+36.8
+
+39.7
+
+RAG
+
+Hot
+
+20.0
+
+19.0
+
+17.0
+
+14.0
+
+28.0
+
+30.0
+
+35.0
+
+35.0
+
+33.0
+
+28.0
+
+36.0
+
+33.0
+
+NQ
+
+25.0
+
+32.0
+
+31.0
+
+35.0
+
+40.0
+
+42.0
+
+41.0
+
+41.0
+
+45.0
+
+43.0
+
+44.0
+
+46.0
+
+Pop
+
+32.0
+
+32.0
+
+38.0
+
+35.0
+
+46.0
+
+37.0
+
+43.0
+
+46.0
+
+45.0
+
+38.0
+
+48.0
+
+48.0
+
+Tri
+
+61.0
+
+57.0
+
+62.0
+
+70.0
+
+80.0
+
+73.0
+
+78.0
+
+69.0
+
+90.0
+
+84.0
+
+88.0
+
+89.0
+
+Avg.
+
+34.5
+
+35.0
+
+37.0
+
+38.5
+
+48.5
+
+45.5
+
+49.3
+
+47.8
+
+53.3
+
+48.3
+
+54.0
+
+54.0
+
+LongQA
+
+InC
+
+45.0
+
+38.0
+
+40.0
+
+34.0
+
+39.0
+
+42.0
+
+46.0
+
+38.0
+
+49.0
+
+46.0
+
+50.0
+
+50.0
+
+InQ
+
+14.3
+
+13.9
+
+15.2
+
+13.3
+
+20.5
+
+18.2
+
+22.1
+
+14.6
+
+27.2
+
+25.1
+
+26.5
+
+26.0
+
+Nar
+
+61.0
+
+52.0
+
+61.0
+
+62.0
+
+68.0
+
+59.0
+
+75.0
+
+55.0
+
+81.0
+
+82.0
+
+83.0
+
+81.0
+
+Avg.
+
+40.1
+
+34.6
+
+38.7
+
+36.4
+
+42.5
+
+39.7
+
+47.7
+
+35.9
+
+52.4
+
+51.0
+
+53.2
+
+52.3
+
+Cite
+
+ASQ
+
+17.4
+
+12.8
+
+14.7
+
+14.7
+
+23.2
+
+14.1
+
+10.8
+
+19.6
+
+36.0
+
+24.0
+
+32.3
+
+32.1
+
+Qam
+
+0.4
+
+0.1
+
+0.4
+
+0.1
+
+1.4
+
+0.5
+
+1.1
+
+1.1
+
+4.0
+
+3.3
+
+4.3
+
+2.8
+
+Avg.
+
+8.9
+
+6.4
+
+7.6
+
+7.4
+
+12.3
+
+7.3
+
+6.0
+
+10.3
+
+20.0
+
+13.7
+
+18.3
+
+17.4
+
+Summ.
+
+InS
+
+1.0
+
+0.8
+
+0.9
+
+0.3
+
+2.4
+
+1.0
+
+1.1
+
+1.0
+
+5.3
+
+3.7
+
+4.1
+
+3.8
+
+Mul
+
+7.4
+
+8.1
+
+8.9
+
+13.2
+
+16.9
+
+13.3
+
+18.5
+
+15.6
+
+27.6
+
+25.6
+
+23.3
+
+23.5
+
+Avg.
+
+4.2
+
+4.4
+
+4.9
+
+6.7
+
+9.7
+
+7.1
+
+9.8
+
+8.3
+
+16.5
+
+14.7
+
+13.7
+
+13.7
+
+Overall
+\uparrow
+(%)
+
+32.5
+
+23.6
+
+29.5
+
+31.2
+
+37.4
+
+27.9
+
+34.2
+
+34.3
+
+47.7
+
+35.8
+
+45.9
+
+46.9
+
+Sparsity
+\uparrow
+(%)
+
+0.0
+
+75.0
+
+75.0
+
+75.4
+
+0.0
+
+75.0
+
+75.0
+
+75.4
+
+0.0
+
+75.0
+
+75.0
+
+75.4
+
+Here, we list the detailed results of DashAttention compared with baselines on HELMET in Table
+6
+.
+
+F.2
+Ablations on Chunk Sizes
+
+Table 7:
+DashAttention’s performance under different chunk sizes (trained with 64).
+
+Chunk Size
+
+RULER-16K
+
+Avg.
+\uparrow
+
+(%)
+
+Sparsity.
+\uparrow
+
+(%)
+
+SG1
+
+SG2
+
+SG3
+
+MK1
+
+MK2
+
+MK3
+
+MV
+
+MQ
+
+VT
+
+CWE
+
+FWE
+
+QA1
+
+QA2
+
+16
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+98.0
+
+100.0
+
+100.0
+
+99.0
+
+57.2
+
+50.6
+
+76.0
+
+70.0
+
+50.0
+
+84.7
+
+77.0
+
+32
+
+100.0
+
+100.0
+
+100.0
+
+98.0
+
+96.0
+
+86.0
+
+100.0
+
+99.0
+
+60.0
+
+49.6
+
+72.0
+
+72.0
+
+54.0
+
+83.6
+
+75.7
+
+64
+
+100.0
+
+100.0
+
+96.0
+
+96.0
+
+92.0
+
+68.0
+
+96.0
+
+95.0
+
+54.0
+
+45.0
+
+66.7
+
+70.0
+
+54.0
+
+79.4
+
+75.1
+
+128
+
+100.0
+
+92.0
+
+98.0
+
+90.0
+
+80.0
+
+58.0
+
+83.5
+
+88.5
+
+50.0
+
+48.8
+
+59.3
+
+74.0
+
+46.0
+
+74.5
+
+75.0
+
+DashAttention trained with one chunk size can be used for inference with different chunk sizes. A smaller chunk size enables finer-grained Stage 1 selection, leading to better performance under the same sparsity constraint. To verify this, we evaluate our 8B model, trained with a chunk size of 64, on RULER using test-time chunk sizes of
+\{16,32,64,128\}
+. We adjust the entmax temperature to achieve
+\sim 75\%
+sparsity. As shown in Table
+7
+, smaller inference chunk sizes yield better task performance, demonstrating that the inference chunk size is not constrained by the chunk size used during training.
+
+F.3
+Full Results of DashAttention Inference in Full Attention
+
+Table 8:
+
+RULER performance of DashAttention models inference with softmax full attention (detailed).
+
+Method
+
+RULER
+
+SG1
+
+SG2
+
+SG3
+
+MK1
+
+MK2
+
+MK3
+
+MV
+
+MQ
+
+VT
+
+CWE
+
+FWE
+
+QA1
+
+QA2
+
+Avg.
+
+1B
+
+FullAttn
+
+100.0
+
+100.0
+
+100.0
+
+98.0
+
+78.0
+
+48.0
+
+87.0
+
+89.0
+
+17.6
+
+1.8
+
+66.7
+
+44.0
+
+36.0
+
+66.6
+
+DashAttention-full
+
+100.0
+
+100.0
+
+100.0
+
+92.0
+
+92.0
+
+46.0
+
+88.0
+
+88.5
+
+62.0
+
+0.8
+
+71.3
+
+38.0
+
+36.0
+
+70.4
+
+3B
+
+FullAttn
+
+100.0
+
+100.0
+
+98.0
+
+100.0
+
+94.0
+
+60.0
+
+96.0
+
+96.5
+
+20.4
+
+5.8
+
+19.3
+
+60.0
+
+50.0
+
+69.2
+
+DashAttention-full
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+96.0
+
+56.0
+
+89.0
+
+94.5
+
+21.6
+
+2.8
+
+82.7
+
+50.0
+
+42.0
+
+71.9
+
+8B
+
+FullAttn
+
+100.0
+
+100.0
+
+100.0
+
+98.0
+
+100.0
+
+96.0
+
+100.0
+
+99.5
+
+58.4
+
+49.2
+
+78.0
+
+78.0
+
+52.0
+
+85.3
+
+DashAttention-full
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+99.5
+
+99.0
+
+77.2
+
+56.2
+
+74.7
+
+70.0
+
+50.0
+
+86.7
+
+Table 9:
+
+HELMET performance of DashAttention models inference with softmax full attention (detailed).
+
+Method
+
+HELMET
+
+Recall
+
+ICL
+
+Rerank
+
+RAG
+
+LongQA
+
+Cite
+
+Summ.
+
+Overall
+
+1B
+
+FullAttn
+
+66.6
+
+59.0
+
+13.9
+
+34.5
+
+40.1
+
+8.9
+
+4.2
+
+32.5
+
+DashAttention-full
+
+66.2
+
+61.2
+
+17.5
+
+39.8
+
+37.5
+
+8.6
+
+5.7
+
+33.8
+
+3B
+
+FullAttn
+
+78.6
+
+44.8
+
+25.3
+
+48.5
+
+42.5
+
+12.3
+
+9.7
+
+37.4
+
+DashAttention-full
+
+80.3
+
+48.2
+
+23.1
+
+46.8
+
+40.2
+
+10.5
+
+9.7
+
+37.0
+
+8B
+
+FullAttn
+
+98.3
+
+56.0
+
+37.8
+
+53.3
+
+52.4
+
+20.0
+
+16.5
+
+47.7
+
+DashAttention-full
+
+99.8
+
+59.0
+
+40.5
+
+53.3
+
+53.7
+
+20.9
+
+13.6
+
+48.7
+
+Similar to InfLLMv2
+[
+73
+]
+, models trained with DashAttention can perform inference with vanilla softmax full attention without notable performance degradation. As shown in Table
+8
+and Table
+9
+, DashAttention-full outperforms FullAttn in most settings, demonstrating that models trained with sparse attention can even achieve better long-context performance than those trained with full attention when evaluated using full-attention inference.
+
+F.4
+Cost-Effectiveness Analysis
+
+0
+
+20
+
+40
+
+60
+
+80
+
+100
+
+Accuracy
+\to
+(%)
+Recall
+
+30
+
+40
+
+50
+
+60
+
+RAG
+
+10
+
+20
+
+30
+
+40
+
+Rerank
+
+30
+
+40
+
+50
+
+60
+
+70
+
+ICL
+50
+60
+70
+80
+90
+
+0
+
+10
+
+20
+
+Sparsity
+\to
+(%)
+Accuracy
+\to
+(%)
+Cite
+50
+60
+70
+80
+90
+
+25
+
+30
+
+35
+
+40
+
+Sparsity
+\to
+(%)
+LongQA
+50
+60
+70
+80
+90
+
+5
+
+10
+
+15
+
+Sparsity
+\to
+(%)
+Summ.
+50
+60
+70
+80
+90
+
+20
+
+30
+
+40
+
+50
+
+Sparsity
+\to
+(%)
+Average
+
+DashAttention
+
+InfLLMv2
+
+NSA
+
+FullAttn
+
+Figure 5
+:
+Accuracy–Sparsity Pareto frontiers on HELMET at 16K context length.
+
+We present detailed results for the cost-effectiveness analysis across the seven HELMET tasks in Fig.
+5
+.
+The results show that DashAttention is generally more robust under sparse settings than NSA and InfLLMv2, especially on tasks such as Recall, RAG, Rerank, and Cite.
+By using an
+\alpha
+-entmax-guided chunk routing strategy, DashAttention allocates the sparsity budget more effectively across layers and heads under high sparsity, thereby minimizing performance degradation even in extreme configurations.
+
+F.5
+Ablations on Local Attention and
+\sigma
+
+Table 10:
+Performance under different local attention and
+\sigma
+settings.
+
+Local Attn
+
+\sigma
+
+RULER-16K
+
+Avg.
+\uparrow
+
+(%)
+
+SG1
+
+SG2
+
+SG3
+
+MK1
+
+MK2
+
+MK3
+
+MV
+
+MQ
+
+VT
+
+CWE
+
+FWE
+
+QA1
+
+QA2
+
+✗
+
+10^{8}
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+96.0
+
+84.0
+
+100.0
+
+98.0
+
+59.6
+
+47.4
+
+71.3
+
+70.0
+
+56.0
+
+83.3
+
+✓
+
+10^{1}
+
+100.0
+
+100.0
+
+100.0
+
+98.0
+
+94.0
+
+82.0
+
+99.5
+
+90.0
+
+60.4
+
+46.4
+
+69.3
+
+72.0
+
+54.0
+
+82.0
+
+✓
+
+10^{4}
+
+100.0
+
+100.0
+
+100.0
+
+96.0
+
+96.0
+
+82.0
+
+99.5
+
+98.5
+
+60.0
+
+48.4
+
+71.3
+
+72.0
+
+56.0
+
+83.1
+
+✓
+
+10^{12}
+
+100.0
+
+100.0
+
+100.0
+
+100.0
+
+96.0
+
+84.0
+
+99.5
+
+99.0
+
+60.0
+
+45.6
+
+72.0
+
+70.0
+
+54.0
+
+83.1
+
+✓
+
+10^{8}
+
+100.0
+
+100.0
+
+100.0
+
+98.0
+
+96.0
+
+86.0
+
+100.0
+
+99.0
+
+60.0
+
+49.6
+
+72.0
+
+72.0
+
+54.0
+
+83.6
+
+Here, we study the effectiveness of local attention and the role of
+\sigma
+in controlling prior strength through ablations. To assess local attention, we replace it with mean pooling, following prior work
+[
+73
+,
+41
+]
+. We also evaluate different prior scaling factors,
+\sigma\in\{10^{1},10^{4},10^{8},10^{12}\}
+, where larger
+\sigma
+weakens the entmax priors. As
+\sigma
+increases, the priors gradually diminish; in the limit
+\sigma\to+\infty
+, they degenerate into non-differentiable binary masks, making the summarization query head
+\bar{\bm{q}}
+untrainable and reducing local attention to mean pooling. We benchmark all settings on our 8B model using RULER at a 16K context length.
+
+Table
+10
+shows that removing local attention degrades performance. A small
+\sigma
+makes the prior overly strong and leads to suboptimal results, while
+\sigma
+becomes relatively stable once sufficiently large. We therefore set
+\sigma=10^{8}
+, which weakens the priors while preserving the differentiability.
+
+Appendix G
+Full Algorithms
+
+Algorithms
+1
+–
+3
+give the overall view for the three stages of DashAttention. We write
+\bm{X}_{i}^{\mathcal{G}_{r},j}
+for the slab of a tensor
+\bm{X}
+obtained by fixing token
+i
+, restricting the head axis to
+\mathcal{G}_{r}
+, and taking the
+j
+-th block along the chunk axis; e.g.
+\bm{Z}_{i}^{\mathcal{G}_{r},j}\in\mathbb{R}^{g_{q}\times 32}
+is the Stage 1 SRAM tile. The chunk-axis block width is fixed at
+32
+because the mask is bit-packed into
+\mathrm{int}32
+words.
+
+Algorithm 1
+
+Stage 0: Local Chunk Summarization
+
+0:
+
+Per-head summary queries
+\bar{\bm{q}}\in\mathbb{R}^{T_{c}\times h_{kv}\times d_{h}}
+(RoPE pre-applied), keys
+\bm{K}\in\mathbb{R}^{n\times h_{kv}\times d_{h}}
+, chunk size
+B
+, sequence length
+n
+.
+
+0:
+
+Chunk summaries
+\bar{\bm{K}}\in\mathbb{R}^{T_{c}\times h_{kv}\times d_{h}}
+.
+
+1:
+
+Divide
+\bm{K}
+along the sequence axis into
+T_{c}=\lfloor n/B\rfloor
+blocks
+\bm{K}_{1},\dots,\bm{K}_{T_{c}}
+, each of size
+B\times h_{kv}\times d_{h}
+.
+
+2:
+
+for
+
+c=1,\dots,T_{c}
+and
+r=1,\dots,h_{kv}
+in parallel
+do
+
+3:
+
+Load
+\bar{\bm{q}}_{c}^{(r)}\in\mathbb{R}^{d_{h}}
+and
+\bm{K}_{c}^{(r)}\in\mathbb{R}^{B\times d_{h}}
+from HBM to SRAM.
+
+4:
+
+On chip, compute
+\bm{s}_{c}^{(r)}=\bm{K}_{c}^{(r)}\bar{\bm{q}}_{c}^{(r)}/\sqrt{d_{h}}\in\mathbb{R}^{B}
+.
+
+5:
+
+On chip, compute
+\bar{\bm{k}}_{c}^{(r)}=\mathrm{softmax}(\bm{s}_{c}^{(r)})^{\top}\bm{K}_{c}^{(r)}\in\mathbb{R}^{d_{h}}
+.
+
+6:
+
+Write
+\bar{\bm{k}}_{c}^{(r)}
+to HBM.
+
+7:
+
+end
+
+for
+
+Algorithm 2
+
+Stage 1:
+\alpha\text{-entmax }
+Block Routing
+
+0:
+
+\bm{Q}\in\mathbb{R}^{n\times h_{q}\times d_{h}}
+,
+\bar{\bm{K}}\in\mathbb{R}^{T_{c}\times h_{kv}\times d_{h}}
+;
+\alpha>1
+, scaling
+\gamma
+, prior strength
+\sigma
+.
+
+0:
+
+Bit-packed mask
+\bm{\mathcal{M}}\in\{0,1\}^{n\times h_{kv}\times T_{c}}
+(stored as
+\mathrm{int}32
+words, one bit per chunk), routing bias
+\bm{d}\in\mathbb{R}^{n\times h_{kv}\times T_{c}}
+.
+
+1:
+
+Materialize
+\bar{\bm{Z}}\in\mathbb{R}^{n\times h_{q}\times T_{c}}
+in HBM with
+\bar{z}_{i,c}^{(h)}=\gamma(\alpha-1)\,\langle\bm{q}_{i}^{(h)},\bar{\bm{k}}_{c}^{(r(h))}\rangle/\sqrt{d_{h}}
+.
+
+2:
+
+Divide
+\bar{\bm{Z}}
+along the chunk axis into
+T_{tc}=\lceil T_{c}/32\rceil
+blocks of width
+32
+(one
+\mathrm{int}32
+mask word each), so that
+\bar{\bm{Z}}_{i}^{\mathcal{G}_{r},j}\in\mathbb{R}^{g_{q}\times 32}
+denotes the
+j
+-th chunk-block at row
+i
+, restricted to query-head group
+\mathcal{G}_{r}
+. Likewise define block slices
+\bm{\mathcal{M}}_{i}^{(r),j}\in\{0,1\}^{32}
+and
+\bm{d}_{i}^{(r),j}\in\mathbb{R}^{32}
+.
+
+3:
+
+for
+
+1\leq i\leq n
+and
+1\leq r\leq h_{kv}
+in parallel
+do
+
+4:
+
+Let
+J_{i}=\lceil c_{i}/32\rceil
+(causal blocks only).
+
+5:
+
+For each
+h\in\mathcal{G}_{r}
+, solve
+f(\tau)=\sum_{c<c_{i}}\max(0,\bar{z}_{i,c}^{(h)}-\tau)^{\nicefrac{{1}}{{\alpha-1}}}-1=0
+for
+\tau_{i}^{(h)}
+via AdaSplash-2’s algorithm
+[
+21
+]
+.
+
+6:
+
+Initialize
+S_{i}^{(r)}\leftarrow 0,\ N_{i}^{(r)}\leftarrow 0
+on SRAM.
+
+7:
+
+for
+
+j=1
+to
+J_{i}
+
+do
+
+8:
+
+Load
+\bar{\bm{Z}}_{i}^{\mathcal{G}_{r},j}\in\mathbb{R}^{g_{q}\times 32}
+from HBM to SRAM.
+
+9:
+
+On chip, compute
+\bm{w}_{i}^{(r),j}=\tfrac{1}{g_{q}}\sum_{h\in\mathcal{G}_{r}}\max(0,\bar{\bm{z}}_{i}^{(h),j}-\tau_{i}^{(h)})^{\nicefrac{{1}}{{\alpha-1}}}\in\mathbb{R}^{32}
+.
+
+10:
+
+On chip,
+\bm{\mathcal{M}}_{i}^{(r),j}\leftarrow\mathds{1}[\bm{w}_{i}^{(r),j}>0]
+.
+
+11:
+
+S_{i}^{(r)}\mathrel{+}=\sum_{c:{w}_{i,c}^{(r),j}>0}\log{w}_{i,c}^{(r),j}
+,
+N_{i}^{(r)}\mathrel{+}=\|\bm{\mathcal{M}}_{i}^{(r),j}\|_{1}
+.
+
+12:
+
+Bit-pack
+\bm{\mathcal{M}}_{i}^{(r),j}
+into one
+\mathrm{int}32
+word and write to HBM.
+
+13:
+
+end
+
+for
+
+14:
+
+\mu_{i}^{(r)}\leftarrow S_{i}^{(r)}/N_{i}^{(r)}
+.
+
+15:
+
+for
+
+j=1
+to
+J_{i}
+
+do
+
+16:
+
+Reload
+\bar{\bm{Z}}_{i}^{\mathcal{G}_{r},j}
+and recompute
+\bm{w}_{i}^{(r),j}
+on chip.
+
+17:
+
+On chip,
+\bm{d}_{i}^{(r),j}\leftarrow(\log{\bm{w}}_{i}^{(r),j}-\mu_{i}^{(r)})/\sigma
+on active entries, else
+0
+.
+
+18:
+
+Write
+\bm{d}_{i}^{(r),j}
+to HBM.
+
+19:
+
+end
+
+for
+
+20:
+
+Set
+\mathcal{M}_{i,c_{i}}^{(r)}\leftarrow 1,\ d_{i,c_{i}}^{(r)}\leftarrow 0
+(diagonal chunk).
+
+21:
+
+end
+
+for
+
+Algorithm 3
+
+Stage 2: Prior-Induced Sparse Softmax Attention
+
+0:
+
+\bm{Q}\in\mathbb{R}^{n\times h_{q}\times d_{h}}
+,
+\bm{K},\bm{V}\in\mathbb{R}^{n\times h_{kv}\times d_{h}}
+, per-token mask
+\bm{\mathcal{M}}\in\{0,1\}^{n\times h_{kv}\times T_{c}}
+and routing bias
+\bm{d}\in\mathbb{R}^{n\times h_{kv}\times T_{c}}
+from Stage 1, chunk size
+B
+, GQA group size
+g_{q}
+.
+
+0:
+
+\bm{O}\in\mathbb{R}^{n\times h_{q}\times d_{h}}
+.
+
+1:
+
+Divide
+\bm{K}
+and
+\bm{V}
+along the sequence axis into
+T_{c}=\lceil n/B\rceil
+blocks
+\bm{K}_{1},\dots,\bm{K}_{T_{c}}
+,
+\bm{V}_{1},\dots,\bm{V}_{T_{c}}
+, each of size
+B\times h_{kv}\times d_{h}
+.
+
+2:
+
+for
+
+i=1,\dots,n
+and
+r=1,\dots,h_{kv}
+in parallel
+do
+
+3:
+
+Load
+\bm{Q}_{i}^{\mathcal{G}_{r}}\in\mathbb{R}^{g_{q}\times d_{h}}
+from HBM to SRAM.
+
+4:
+
+Initialize
+\bm{O}_{i}^{\mathcal{G}_{r}}\leftarrow\bm{0}_{g_{q}\times d_{h}}
+,
+\bm{\ell}_{i}\leftarrow\bm{0}_{g_{q}}
+,
+\bm{m}_{i}\leftarrow-\infty\,\bm{1}_{g_{q}}
+on SRAM.
+
+5:
+
+for
+
+j
+such that
+\mathcal{M}_{i,j}^{(r)}=1
+
+do
+
+6:
+
+Load
+\bm{K}_{j}^{(r)},\bm{V}_{j}^{(r)}\in\mathbb{R}^{B\times d_{h}}
+and
+d_{i,j}^{(r)}\in\mathbb{R}
+from HBM to SRAM.
+
+7:
+
+On chip, compute
+\bm{S}_{i}^{\mathcal{G}_{r},j}=\bm{Q}_{i}^{\mathcal{G}_{r}}\bm{K}_{j}^{(r)\top}/\sqrt{d_{h}}+d_{i,j}^{(r)}\,\bm{1}_{g_{q}\times B}\in\mathbb{R}^{g_{q}\times B}
+.
+
+8:
+
+If
+j=c_{i}
+: apply causal mask to
+\bm{S}_{i}^{\mathcal{G}_{r},j}
+.
+
+9:
+
+\bm{m}_{i}^{\prime}\leftarrow\max(\bm{m}_{i},\mathrm{rowmax}(\bm{S}_{i}^{\mathcal{G}_{r},j}))
+,
+\bm{P}_{i}^{\mathcal{G}_{r},j}\leftarrow\exp(\bm{S}_{i}^{\mathcal{G}_{r},j}-\bm{m}_{i}^{\prime}\bm{1}^{\top})
+.
+
+10:
+
+\bm{\ell}_{i}\leftarrow e^{\bm{m}_{i}-\bm{m}_{i}^{\prime}}\odot\bm{\ell}_{i}+\mathrm{rowsum}(\bm{P}_{i}^{\mathcal{G}_{r},j})
+.
+
+11:
+
+\bm{O}_{i}^{\mathcal{G}_{r}}\leftarrow\mathrm{diag}(e^{\bm{m}_{i}-\bm{m}_{i}^{\prime}})\,\bm{O}_{i}^{\mathcal{G}_{r}}+\bm{P}_{i}^{\mathcal{G}_{r},j}\bm{V}_{j}^{(r)}
+.
+
+12:
+
+\bm{m}_{i}\leftarrow\bm{m}_{i}^{\prime}
+.
+
+13:
+
+end
+
+for
+
+14:
+
+\bm{O}_{i}^{\mathcal{G}_{r}}\leftarrow\mathrm{diag}(\bm{\ell}_{i})^{-1}\bm{O}_{i}^{\mathcal{G}_{r}}
+; write
+\bm{O}_{i}^{\mathcal{G}_{r}}
+to HBM.
+
+15:
+
+end
+
+for
+

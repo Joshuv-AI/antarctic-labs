@@ -1,0 +1,1821 @@
+Unifying Sparse Attention with Hierarchical Memory for Scalable Long-Context LLM Serving
+Zihan Zhao, Baotong Lu, Shengjie Lin, Yizou Chen, Jing Liu, Yanqi Zhang, Ziming Miao, Ming-Chang Yang, Haiying Shen, Qi Chen, Fan Yang
+
+Abstract
+. Long-context LLM serving is bottlenecked by the cost of attending over ever-growing KV caches. Dynamic sparse attention promises relief by accessing only a small, query-dependent subset of the KV state per decoding step and extending the KV storage to CPU memory. In practice, however, these algorithmic savings rarely translate into end-to-end system-level gains because sparse methods typically operate at different granularities and thus rely on ad hoc, per-algorithm implementations. At the same time, hierarchical KV storage introduces a new systems bottleneck: retrieving fine-grained, irregular KV subsets across the GPU–CPU boundary can easily erase the benefits of sparsity. We present Spin , a sparse-attention-aware inference framework that co-designs the execution pipeline with hierarchical KV storage through three techniques: (1) a unified partition abstraction that maps different sparsity granularities onto a shared page-based KV substrate; (2) a locality-aware KV cache manager that dynamically sizes per-request HBM budgets and uses a GPU-friendly bucketed LRU policy to cut PCIe round-trips; and (3) a two-level hierarchical metadata layout sized to the active working set rather than the worst-case address space. Built on vLLM with three representative sparse attention algorithms, Spin delivers 1.66 1.66 – 5.66 × 5.66\times higher end-to-end throughput and 7 7 – 9 × 9\times lower TTFT than vLLM, and reduces TPOT by up to 58 % 58\% over the original sparse-attention implementations.
+
+
+
+1.
+Introduction
+
+To support increasingly sophisticated workloads such as long-context reasoning
+(
+61
+;
+6
+;
+57
+)
+, document understanding
+(
+24
+;
+60
+;
+39
+)
+, and code generation
+(
+8
+;
+51
+;
+73
+)
+, modern LLMs have expanded their context windows to hundreds of thousands or even millions of tokens
+(
+43
+;
+5
+;
+20
+;
+42
+)
+.
+This trend makes long-context serving fundamentally costly because the key-value (KV) cache
+(
+45
+)
+, intermediate states in
+attention
+, grows linearly with the sequence length, and decoding repeatedly reads all historical KV states for every generated token.
+Consequently, serving is jointly constrained by
+the memory bandwidth to sustain linear KV accesses and
+GPU memory capacity to hold expanding KV caches.
+
+Dynamic sparse attention offers a promising algorithmic response. Prior work shows that, for a given query, only a small subset of historical tokens typically dominates the next-token prediction
+(
+15
+;
+16
+;
+18
+)
+. Recent sparse methods therefore preserve the full KV cache but select only the critical subset at each decoding step
+(
+56
+;
+34
+;
+14
+;
+71
+)
+, reducing the amount of KV data that attention must process per step.
+
+The selective access pattern of sparse attention breaks the full-KV dependency assumed by prior dense-serving systems
+(
+26
+;
+77
+)
+and makes hierarchical KV storage attractive.
+The system can keep the full KV cache in high-capacity CPU memory and fetch only critical KV states to the GPU on demand at fine granularity
+(
+13
+;
+55
+)
+, thereby alleviating GPU memory pressure.
+For example, a single 128K-token request for Qwen3-8B requires roughly 19GB of KV cache, whereas a sparse method with 95% sparsity needs to process less than 1GB of KV data per decoding step, enabling higher concurrency and better hardware utilization.
+
+Yet, these algorithmic gains do not automatically translate into system-level efficiency, for two major challenges.
+
+Figure 1
+.
+
+Gap Between Theoretical and Realized Performance.
+
+The ideal envelope represents an oracle system with optimal GPU–CPU KV caching and retrieval.
+On 32K-context workloads on an A100 GPU (80GB), existing sparse attention implementations
+(
+55
+)
+remain far below this bound and also fail to scale to large batch sizes due to inefficient memory management, whereas the
+Spin
+-powered system approaches the envelope.
+
+Lack of Unified Abstractions for Sparsity.
+
+Sparse algorithms are diverse, rapidly evolving, and operate at different granularities (e.g., blocks
+(
+55
+)
+and clusters
+(
+13
+)
+). Existing inference frameworks
+(
+25
+;
+77
+)
+do not provide a common interface that accommodates these variants, so existing sparse-attention support has evolved into algorithm-specific prototypes that cannot readily share optimized kernels, memory management, or online scheduling support.
+Realizing the system-level benefits of sparsity therefore requires a unified abstraction that preserves algorithm-specific flexibility while enabling the system to optimize the common substrate.
+
+Irregular KV Retrieval Erodes Sparsity Benefits.
+
+Once the full KV cache is placed in CPU memory, sparse serving becomes constrained by GPU–CPU data movement. Unlike dense attention, whose KV accesses are largely contiguous and predictable
+(
+47
+)
+, sparse attention retrieves small, scattered KV subsets that vary across decoding steps, layers, and heads. These irregular transfers underutilize PCIe bandwidth and add latency to the critical path. Prior work
+(
+63
+;
+66
+)
+shows that autoregressive decoding also exhibits temporal locality: critical tokens often overlap across consecutive steps. Realizing the benefits of sparsity therefore fundamentally requires a locality-aware memory manager that both caches useful KV states and retrieves misses efficiently.
+
+To better quantify the gap between the theoretical and realized performance of sparse attention algorithms, we define an
+ideal sparse-serving envelope
+: an oracle system that serves most selected KV tokens from GPU memory while incurring the
+theoretically minimum retrieval overhead under an optimal caching policy
+(
+9
+)
+. As shown in Figure
+1
+, existing sparse attention implementations remain far below this bound due to the aforementioned reasons.
+
+To narrow the gap between sparse attention’s theoretical promise and practical system efficiency, we present
+Spin
+, a
+sp
+arse-attention-aware
+in
+ference framework.
+
+Spin
+abstracts diverse sparse attention algorithms into a common five-operation pipeline with three algorithm-specific compute operations (
+Index
+,
+Select
+, and
+Attention
+) and two shared data-management operations (
+Offload
+and
+Retrieve
+). The key observation is that these algorithms share a common execution pattern and differ mainly in sparsity granularity.
+Spin
+therefore introduces
+partition
+as a common logical unit that maps different granularities onto the same pipeline. This design exposes clean interfaces for algorithm-specific customization while reusing optimized implementations of
+Offload
+and
+Retrieve
+,
+allowing diverse sparse methods to share efficient KV management.
+
+Based on this pipeline,
+Spin
+builds a KV-cache management system for sparse serving across the GPU–CPU hierarchy with three design decisions:
+
+1. Partition Abstraction.
+
+Spin
+treats partition as the
+key abstraction connecting sparse algorithms with page-based
+KV cache management. This separates algorithm-defined
+sparsity units from hardware-efficient units, allowing the runtime to preserve algorithmic flexibility while
+allocating and transferring KV data at page granularity.
+
+2. Dynamic, Locality-aware KV Management.
+
+To maximize GPU residency under dynamic serving workloads,
+Spin
+
+extends beyond conventional append-only paged KV caches with
+a lightweight, locality-aware KV manager. Its dynamic KV
+buffer supports per-request resizing and in-place updates as
+requests arrive, advance, and complete, while maintaining
+GPU-friendly metadata that enables efficient locality-aware
+replacement policies.
+
+3. Hierarchical Metadata.
+
+Metadata overhead such as page tables increases with
+context length: even dense attention incurs nontrivial
+bookkeeping, and attention head-wise sparsity pattern introduces additional indexing metadata.
+Spin
+therefore adopts
+OS-style multi-level indexing so that metadata scales with
+the physical working set rather than the worst-case logical
+space, while splitting metadata across GPU and CPU to reduce on-GPU overhead.
+
+We implement
+Spin
+on top of vLLM and integrate three representative sparse attention algorithms
+(
+55
+;
+13
+;
+19
+)
+, demonstrating the generality of the framework.
+We evaluate
+Spin
+on three widely used models
+(
+58
+;
+41
+)
+spanning different scales, two long-context benchmarks
+(
+7
+;
+36
+)
+, and both A100 and B200 GPUs.
+Across models, hardware platforms, and workloads,
+Spin
+delivers
+1.66
+–
+5.66\times
+higher end-to-end throughput,
+7
+–
+9\times
+lower TTFT than vLLM, with larger gains at higher request rates.
+
+Spin
+also improves throughput by up to
+2.39\times
+over the original implementations of sparse attention, demonstrating the effectiveness of system-level optimizations.
+
+2.
+Background
+
+2.1.
+Long-Context LLM Serving
+
+Challenges of Long-Context Serving.
+
+The context window of state-of-the-art LLMs and emerging workloads continues to grow, stressing inference systems along two dimensions
+(
+61
+;
+24
+;
+8
+)
+.
+First,
+since KV cache grows linearly with sequence length,
+it creates severe GPU memory-capacity pressure, reducing the number of requests that can remain resident on the device.
+Scaling to more GPUs can expand effective capacity, but at a higher provisioning cost.
+Many systems therefore offload KV states to larger CPU memory and keep only an active subset on the GPU
+(
+13
+;
+55
+;
+27
+;
+52
+)
+.
+
+Second, decoding becomes memory-bandwidth-bound because each step must access all historical KV states. Even when the full cache fits in HBM, the decoding speed is limited by GPU memory bandwidth
+(
+11
+;
+50
+)
+. Once the KV cache is partially offloaded, PCIe transfers also enter the critical path and can dominate latency.
+
+2.2.
+Dynamic Sparse Attention
+
+A key opportunity is that attention is inherently sparse in practice.
+Sparse attention
+(
+75
+;
+56
+;
+55
+;
+12
+)
+exploits this property by computing attention over only important tokens instead of the full context while preserving model accuracy.
+Leveraging sparsity reduces GPU computation, lowers KV accesses, and alleviates bandwidth pressure for long-context inference. It also makes hierarchical KV storage more attractive: the full cache can remain in high-capacity CPU memory while the system fetches only critical tokens to the GPU.
+The challenge, however, is that token importance dynamically changes across decoding steps, model layers, and attention heads, so the sparse attention mechanism must identify critical tokens accurately and efficiently.
+
+Variety of Sparse Attention Algorithms.
+
+Given the growing interest in sparse attention, many variants have been proposed
+(
+15
+;
+16
+;
+18
+;
+56
+;
+34
+;
+14
+;
+13
+;
+71
+;
+33
+)
+. To preserve accuracy, modern algorithms typically maintain the full KV cache and dynamically select a subset of tokens across decoding steps. Their main difference is how they organize the KVs and identify critical ones, with different trade-offs.
+For example,
+ShadowKV
+(
+55
+)
+partition the KV cache into fixed-size blocks and
+compute a summary (i.e., average key) for each block such that
+the query can compute with summaries to select promising blocks
+(
+56
+;
+55
+)
+;
+RetroInfer
+(
+13
+)
+instead groups similar key vectors into clusters for more accurate selection.
+
+Common Design Pattern.
+
+Across different algorithms, the common pattern is to partition the context into a coarser logical unit and use an auxiliary sketch (e.g., summaries) to select which parts of the KV cache should participate in attention. The design space therefore centers on the partition granularity and on how efficiently the system can build, query, and retrieve from this structure at decoding.
+
+Need for Runtime Support.
+
+Instead of sequentially and repeatedly reading a uniform KV cache, sparse attention must execute a selection-and-retrieval pipeline whose accesses are scattered and vary a lot. Dense-serving runtimes
+(
+26
+)
+are a poor fit for this pattern because their KV managers, kernels, and schedulers are designed for full-cache access.
+As a result, existing sparse attention implementations are typically algorithm-specific, ad-hoc prototypes
+(
+55
+;
+13
+)
+: each method re-implements its own KV-cache management and inference pipeline, often without mature runtime components such as scheduling, which raises porting effort and limits reuse of optimized system support.
+
+3.
+Towards Ideal Sparsity Serving
+
+Dynamic sparse attention reduces the amount of KV accesses, but it does not reduce the total KV cache footprint. As a result, practical sparse-serving systems typically rely on a hierarchical KV store, with the full cache placed in CPU memory and only a working set kept on the GPU.
+Under this setting, the benefit of sparsity is no longer determined by attention sparsity alone, but by how effectively the runtime orchestrates data movement across the GPU–CPU boundary to match the dynamic access patterns induced by sparsity.
+
+This observation shifts the core question of sparse serving from sparse computation to sparse data management. To realize the algorithmic promise of sparsity, the serving system must jointly optimize two factors: GPU KV-cache residency and GPU-CPU data movement efficiency.
+If either is poorly handled, sparse attention can deliver little practical gain and may even underperform highly optimized dense-serving systems, far from its theoretical potential under optimal KV caching and PCIe utilization.
+
+3.1.
+The Promise vs. Reality of Sparse Serving
+
+To quantify the theoretical upper bound, we construct an
+ideal sparse-serving envelope
+—a hypothetical system that simultaneously achieves optimal KV caching and perfect data movement.
+Let
+B
+denote the batch size,
+L
+the number of layers,
+H
+the number of KV heads,
+d
+the head dimension,
+e
+bytes per element, and
+N
+the context length. A sparse attention algorithm is characterized by two ratios:
+\alpha
+, the size of the compressed summary vectors (used for fast importance scoring) relative to the full KV cache; and
+\beta
+, the fraction of the full KV cache selected for attention computation. At the system level,
+\rho
+denotes the GPU cache miss ratio—the fraction of selected KV data that is not resident on the GPU and must be fetched from CPU memory. The HBM data volumes for scoring and sparse attention are thus modeled as follows.
+
+(1)
+
+QK_{\text{score}}=B\cdot L\cdot H\cdot d\cdot e\cdot\alpha N
+
+(2)
+
+KV_{\text{topk}}=2\cdot B\cdot L\cdot H\cdot d\cdot e\cdot\beta N
+
+Among the
+KV_{\text{topk}}
+bytes needed for attention, a fraction
+\rho
+must be fetched from CPU memory over PCIe; the remainder is served from HBM. Let
+\mathcal{B}_{HBM}
+and
+\mathcal{B}_{PCIe}
+denote the effective HBM and PCIe bandwidth, and
+T_{\text{MLP}}
+the MLP latency per step. The time per output token (TPOT) is defined by
+
+(3)
+
+\text{TPOT}=\frac{QK_{\text{score}}+KV_{\text{topk}}}{\mathcal{B}_{HBM}}+\frac{\rho\cdot KV_{\text{topk}}}{\mathcal{B}_{PCIe}}+T_{\text{MLP}}
+
+The ideal curve is obtained by setting each term in Equation
+3
+to its theoretical minimum: (1) Belady-optimal eviction
+(
+9
+)
+to minimize
+\rho
+given the available GPU cache capacity; (2) peak
+\mathcal{B}_{PCIe}
+utilization for retrieving cache misses; and (3) peak
+\mathcal{B}_{HBM}
+utilization for all GPU-resident accesses.
+
+However, such a system does not exist in practice. First, optimal caching is unattainable because it requires perfect foresight of future token accesses, which cannot be predicted exactly from the model’s evolving attention patterns. Second, achieving full PCIe utilization is fundamentally difficult because the KV tokens retrieved from CPU memory are often sparse, strided, and non-contiguous, as dictated by the sparse algorithms. As a result, the gap between this idealized optimum and practical systems is inevitable, and is precisely where the systems challenge of sparse serving lies.
+
+Figure 2
+.
+Per-token Decode Latency Breakdown of Different Systems.
+
+Existing sparse attention implementation
+(
+55
+)
+incurs much higher decode latency than the ideal sparse-serving envelope, and significantly underperforms a dense-serving system (vLLM
+(
+25
+)
+) at low load.
+
+To illustrate this gap, we compare the per-token decode latency of an existing sparse attention implementation (ShadowKV
+(
+55
+)
+) against the ideal sparse-serving simulator and a dense-serving system (vLLM
+(
+25
+)
+) across different batch sizes
+1
+1
+
+1
+
+Evaluated on Qwen3-14B with 32K-context workloads on a A100 GPU.
+.
+The results, shown in Figure
+2
+, reveal a significant gap between ShadowKV and the ideal curve, with ShadowKV incurring much higher latency than the ideal system. At low batch sizes, the ideal curve underperforms vLLM because attention is not yet a bottleneck while the introduced scoring and retrieval overhead are not negligible, but ShadowKV still incurs 2
+\times
+retrieval overhead than the ideal curve. As batch size increases, the gap to the ideal curve further widens due to higher data movement overhead over PCIe.
+
+3.2.
+From Promise to Reality: The System Challenges
+
+Narraowing the gap between the promise and reality of sparse serving requires addressing three system challenges:
+
+General System Abstraction for Sparse Attention.
+
+Sparse attention algorithms span a wide spectrum of granularities,
+such as blocks or clusters with varying sizes.
+A general sparse-serving system must therefore provide a common inference-pipeline abstraction that makes different algorithms easy to integrate while hiding granularity differences behind a unified interface. Moreover, this abstraction must preserve common optimizations across algorithms.
+
+Efficient GPU–CPU KV Cache Management.
+
+To minimize GPU–CPU data movement, the system must maximize the GPU residency of critical KV vectors. This requires a locality-aware buffer manager that retains reusable partitions using efficient cache replacement, while maintaining high performance under dynamic serving workloads. When cache misses are unavoidable, it must also retrieve fine-grained, non-contiguous KV pages efficiently over PCIe.
+
+Scalable Metadata Management.
+
+Head-wise sparsity requires per-head page tables to track KV residency across GPU and CPU and to drive cache replacement.
+At long context lengths, these metadata can become substantial, potentially reaching tens or hundreds of gigabytes.
+The root cause is that existing serving systems such as vLLM typically pre-allocate metadata arrays for a worst-case logical configuration; under head-wise sparse serving, structures such as page tables therefore scale with the maximum context length and the number of heads rather than the active working set.
+Metadata management must therefore keep this bookkeeping compact, especially on the GPU, so that metadata does not crowd out effective KV-cache capacity.
+
+4.
+Spin
+Interfaces
+
+Figure 3
+.
+The abstracted inference pipeline for sparse attention in
+Spin
+, illustrating the decoupling of computation and data movement. Select and Retrieve are only invoked during the decode.
+
+Table 1
+.
+Operation mappings across various sparse attention algorithms.
+SeerAttention-R uses head-wise linear projection for pooled query and key, i.e.,
+‘bshi,hio->bsho’
+, denoted by
+exp
+. The Attention operator is omitted as it largely follows standard FlashAttention
+(
+17
+)
+. The copy kernel used in Offload and Retrieve moves data from source region (1st parameter) to destination region (2nd parameter).
+
+Index
+
+Select
+
+Offload
+
+Retrieve
+
+ShadowKV
+
+mean(paged_key, dim=dim_page)
+
+score(roped_q, k_sums)
+\rightarrow
+topk
+
+copy(gpu_kv,
+
+copy(
+cpu_kv,
+
+copy(
+map)
+
+copy(cpu_kv,
+
+copy(
+gpu_kv,
+
+copy(
+indices)
+
+RetroInfer
+
+segment_k_means(main_key)
+
+SeerAttention-R
+
+einsum(exp, pooled_key, W_kg)
+
+einsum(exp, pooled_q, W_qg)
+\rightarrow
+gated_q
+
+score(gated_q, k_sums)
+\rightarrow
+topk
+
+We introduce
+Spin
+, a sparse-attention-aware inference engine that manages the KV cache across the GPU–CPU memory hierarchy.
+It is designed to support a range of sparse attention algorithms by transparently translating algorithmic sparsity into system-level efficiency.
+This section presents
+Spin
+’s abstract interfaces for algorithm integration.
+
+4.1.
+Sparse Attention Abstraction
+
+To unify sparse attention algorithms with different sparsity granularities,
+Spin
+uses
+partition
+as a common logical unit.
+A partition is a contiguous group of tokens that serves as the unit of selection and retrieval; it may represent a block, a cluster, or a single token.
+Moreover,
+despite differences in how algorithms identify critical partitions, they share the same execution pattern: each decoding step attends to only a subset of the full KV cache.
+
+Spin
+therefore abstracts this common structure as the five-stage pipeline in Figure
+3
+, mapping diverse algorithms onto a unified execution flow.
+
+These operations fall into two categories:
+algorithm-defined compute
+and
+Spin
+-managed data movement
+.
+
+Index
+,
+Select
+, and
+Attention
+implement the algorithm-specific logic for constructing partitions, selecting critical partitions, and computing attention.
+
+Offload
+and
+Retrieve
+, in contrast, manage KV placement and movement across the GPU–CPU memory hierarchy.
+This split decouples algorithmic logic from system-level data management, allowing diverse sparse methods to share a common runtime.
+Table
+1
+summarizes the mapping of representative sparse attention algorithms to these operations.
+Specifically, these operations are defined as follows:
+
+\bullet
+
+Index
+.
+Index runs in both prefill and decode to organize KV tokens into partitions.
+During prefill, it consumes the prompt KV cache and produces a
+partition specification
+, per-partition summaries, and other algorithm-specific metadata.
+The partition specification defines how tokens are grouped and is passed to Offload to materialize the physical layout.
+As shown in Table
+1
+, the internal logic of Index varies across algorithms.
+During decode, Index is invoked periodically to incorporate newly generated tokens.
+
+\bullet
+
+Offload
+.
+Given the partition specification and summaries from Index, Offload manages KV placement across GPU and CPU memory.
+It keeps summaries in GPU memory for fast selection, materializes the partitioned KV cache asynchronously, places partitions in the appropriate memory tier, and updates
+Spin
+metadata to track their locations.
+
+\bullet
+
+Select
+.
+Select is decode-specific.
+According to the current query and the summaries of all partitions, it identifies most critical partitions for the current decoding step.
+
+\bullet
+
+Retrieve
+.
+Given the indices of critical partitions, Retrieve checks their current residence and brings any missing partitions from CPU memory back to GPU memory.
+
+\bullet
+
+Attention
+.
+Attention computes the output using the selected KV tokens.
+For most algorithms, this stage reuses a standard FlashAttention kernel.
+Some algorithms, however, require customized attention kernels; for example, RetroInfer
+(
+13
+)
+incorporates additional estimation logic beyond standard attention.
+
+Spin
+supports this by allowing algorithms to register custom attention operators.
+
+In summary,
+Spin
+exposes Index, Select, and Attention as the customization points for algorithm developers, while reusing optimized system support for Offload and Retrieve.
+By managing the KV cache via partitions throughout the pipeline,
+Spin
+hides low-level memory management and enables efficient execution across sparse attention methods.
+
+1
+@register_to_pipeline
+(
+’rope’
+,
+’after’
+)
+
+2
+class
+
+ShadowKV
+(SparseAttention):
+
+3
+
+def
+
+index
+(q, k, v, meta):
+
+4
+paged_k = k.reshape(...)
+
+5
+summaries = paged_k.mean(dim=-
+2
+)
+
+6
+sim_scores = cos_sim(summaries, paged_k)
+
+7
+
+# get topk outlier page IDs from sim_scores
+
+8
+
+# get recent window page IDs
+
+9
+
+# get offloaded page IDs by filtering out the above
+
+10
+meta.summaries.append(summaries[offloaded_ids])
+
+11
+
+return
+PartitionSpec(outlier_ids, window_ids,
+
+12
+offloaded_ids, uniform=
+True
+)
+
+13
+
+14
+
+def
+
+select
+(q, k, v, meta):
+
+15
+scores = gemm_softmax(q, meta.summaries)
+
+16
+selected_ids = topk(scores, k=meta.k)
+
+17
+
+return
+Indices(selected_ids, meta.k)
+
+Figure 4
+.
+Pseudocode illustrations demonstrating the integration of ShadowKV
+(
+55
+)
+into
+Spin
+. Highlighted lines (4–9 and 15–16) denote the core algorithmic logic, directly copied from the original implementation.
+
+4.2.
+Integrating Sparse Attention Algorithms
+
+Integrating a sparse attention algorithm into
+Spin
+requires implementing only its algorithm-specific logic.
+Spin
+exposes an abstract Python class,
+SparseAttention
+, through which developers define
+index
+and
+select
+, and optionally a custom attention operator, then register them at the appropriate stages of the inference pipeline. For example, ShadowKV and RetroInfer register after RoPE, and SeerAttention-R before RoPE because it operates on pre-RoPE queries and keys.
+
+Figure
+4
+illustrates integration using ShadowKV as an example, with highlights marking the algorithm-specific code that must be ported. In ShadowKV, Index performs mean pooling on the page dimension to generate landmarks as summaries, determines outliers from cosine similarities, filters out the recent window, and assigns the remaining to offloading. The computed page IDs are then used to construct the partition map, where outliers and the recent window are kept in GPU memory and always participate in attention, while the rest are offloaded to CPU memory. Because ShadowKV uses uniform partitioning — every partition owns exactly one page — page IDs are sufficient for partition organization. To support non-uniform partitioning like RetroInfer
+(
+13
+)
+, algorithm-computed partition-to-token mappings are used to construct the partition specification. On the other hand, ShadowKV’s Select simply implements top-
+k
+scoring.
+
+5.
+Memory Management
+
+5.1.
+Overview
+
+Figure 5
+.
+Overview of
+Spin
+’s memory management system.
+Steps 1–4 describe the process of “Retrieve” for critical partitions.
+
+As discussed in §
+3
+, the practical performance of sparse attention ultimately hinges on a serving engine that can efficiently manage the KV-cache across the GPU–CPU memory hierarchy, thereby minimizing costly PCIe transfers during the Offload and Retrieval operations. In particular, the memory manager must address three foundamental challenges: reconciling the mismatch between algorithmic access granularities and hardware-efficient block accesses, maximizing GPU KV cache residency under dynamic workloads, and minimizing metadata overhead at long context lengths.
+Spin
+addresses these challenges with three corresponding techniques:
+
+•
+
+Partition Abstraction
+:
+
+Spin
+elevates
+partition
+to the core abstraction between sparse algorithms and page-based KV-cache management. This decouples algorithm-defined sparsity units from hardware-efficient page granularity, allowing
+Spin
+to preserve both flexibility and I/O efficiency.
+
+•
+
+Dynamic, Locality-aware KV Management
+:
+To maximize GPU residency under dynamic serving workloads,
+Spin
+goes beyond conventional append-only paged KV caches and introduces a lightweight, locality-aware KV manager. Its dynamic KV buffer supports per-request resizing and in-place updates as requests arrive, progress, and depart, while maintaining GPU-friendly metadata for efficient locality-aware replacement policies.
+
+•
+
+Hierarchical Metadata
+:
+Metadata scales linearly with context length. As context length increases, dense attention already incurs nontrivial bookkeeping overhead, and sparse attention adds further indexing metadata. To contain this cost,
+Spin
+borrows OS-style multi-level indexing so that metadata scales with the physical working set rather than the worst-case logical space, and splits metadata across GPU and CPU to minimize on-GPU overhead.
+
+Combining all three techniques, Figure
+5
+presents the overall architecture of
+Spin
+’s memory manager. The partition abstraction is implemented through four metadata tables that are multi-level indexed and split across GPU and CPU memory. In particular,
+Spin
+adopts a page-centric organization on the GPU, maintaining page-to-partition mappings to support efficient KV-cache replacement. This design enables a custom LRU kernel that fully exploits GPU parallelism to select victim on-GPU KV-cache entries and to perform bulk updates when the KV caches of many requests change under dynamic serving workloads.
+Next, we describe each of the techniques in more details.
+
+5.2.
+Partition Abstraction
+
+Spin
+uses fixed-size pages as the unit of memory allocation and data transfer to simplify memory management, reduce fragmentation, and preserve high I/O efficiency.
+Above this physical layer,
+partitions
+define the logical granularity. A partition may span one or more pages, and we employ the partition-to-page mapping to translate each logical partition ID to the physical page IDs in GPU memory
+or CPU memory.
+
+Head-wise Physical Pages.
+
+Spin
+adopts head-wise physical pages because different heads often attend to different critical tokens
+(
+55
+;
+13
+)
+.
+Unlike dense serving layouts that typically colocate KV vectors of all heads in one page, this design avoids fetching unused data over PCIe during retrieval.
+
+Tier-Split Mapping Table.
+
+Supporting variable-length partitions requires a compact representation of page lists for efficient GPU access, while the mapping metadata must be placed carefully to balance access latency against memory overhead.
+Spin
+addresses both requirements with a tier-split mapping that keeps latency-critical metadata on the GPU and places capacity-dominating metadata in CPU memory.
+
+The mapping uses four tables. On the GPU, the Meta-partition table stores each partition’s token count and residency state, while the GPU page table tracks cached partitions’ GPU-resident page IDs and stores the recency timestamps used for cache replacement. On the CPU, the Partition Offset table maps each partition ID to the starting offset of its page list, and the CPU page table stores the corresponding physical CPU page IDs in a flat contiguous array for efficient GPU access. Together, these CPU-side tables provide a forward mapping from partition IDs to CPU pages. To reduce GPU memory overhead without sacrificing GPU-controlled retrieval,
+Spin
+places them in pinned memory for direct access by GPU kernels.
+
+As shown in Figure
+5
+, this lookup path implements the
+Retrieve
+operation.
+1
+Given the indices of critical partitions, the buffer manager first queries the Meta-partition table to check their residency state and derive each partition’s page count from its token count.
+2
+It then consults the GPU page table to locate GPU-resident pages and perform cache replacement to make room for missed partitions, as detailed in §
+5.3
+.
+3
+For missed partitions, the kernel reads each partition’s starting offset from the Partition Offset table and fetches the corresponding contiguous slice of the CPU page table to obtain the physical CPU page IDs.
+4
+It then issues PCIe transfers to bring the these pages into GPU memory.
+
+5.3.
+Dynamic, Locality-aware KV Management
+
+Spin
+’s GPU buffering relies on two complementary techniques:
+buffer elasticity
+, which dynamically resizes each request’s GPU buffer based on the system load of online serving, and
+per-head cache replacement
+, which applies a GPU-friendly bucketed LRU policy. The scheduler drives the former at each decoding step, while the latter runs within the step for every KV head.
+
+Buffer Elasticity.
+
+Such elasticity aims to maximize overall serving throughput by balancing per-request throughput and system-wide concurrency. Over-allocating GPU buffer space to a request improves cache hits but reduces the number of concurrently serving requests; under-allocation has the opposite effect, increasing concurrency at the cost of lower per-request throughput. The scheduler must determine the buffer size that balances these competing effects.
+
+Spin
+makes this tradeoff explicit by splitting a request’s GPU allocation into
+mandatory pages
+and
+buffering pages
+. Mandatory pages hold the critical partitions required for the current decoding step, whereas buffering pages retain previously retrieved partitions to exploit temporal locality.
+We observe a stable sweet spot in buffer size: increasing the buffer up to this point materially improves cache hit ratios, while additional pages yield diminishing returns.
+This observation is supported by prior works
+(
+13
+)
+and an empirical study across sparse algorithms and tasks (§
+6.4
+).
+
+Spin
+therefore empirically sets the minimum buffer allocation to 5
+\times
+of the mandatory pages.
+
+This tradeoff determines the scheduler’s GPU memory allocation policy. A new request is admitted into the batch only if the system can guarantee both its mandatory pages and the minimum buffer allocation; otherwise, the request remains queued. When a new admission or increasing demand requires additional pages, the scheduler reclaims buffer pages from active requests, with each request contributing in proportion to its sequence length. We reclaim pages from the tail of the GPU page table to keep the table compact, and also fits the bucketed LRU policy described next.
+
+Bucketed LRU Replacement.
+
+Within each request’s GPU buffer,
+Spin
+performs cache replacement to decide which partitions to retain and which to evict. Because this logic runs for every layer and KV head, it must be lightweight to avoid the replacement overhead erasing the benefit of cache hits.
+Spin
+therefore keeps the control logic on the GPU and uses a GPU-friendly replacement policy tailored to sparse access patterns.
+
+Unlike traditional policies such as LRU,
+Spin
+relaxes the ordering and approximates LRU with bounded recency timestamps, avoiding expensive global sorting and ordering.
+Specifically, each GPU-resident page carries a timestamp drawn from a small fixed range, such as 64 values.
+This design matches sparse attention’s bulk-access pattern: each step selects a batch of critical partitions, and the system needs not maintain a strict recency order among pages within the same batch.
+Therefore, using decoding step as the time unit,
+a 64-value timestamp space can distinguish partitions accessed over the last 64 decoding steps, which empirically captures the locality window for most sparse algorithms and workloads.
+We name it
+bucketed LRU
+, where each timestamp value defines a bucket of pages with similar recency.
+
+The replacement proceeds in four steps.
+
+1
+
+Hit/Miss Classification
+: the buffer manager queries the Meta-partition Table to identify resident partitions (hits), non-resident partitions (misses), and the total number of GPU pages required by the misses, which we call the
+page demand
+.
+
+2
+
+Timestamp Update
+: each GPU-resident page stores a timestamp in the GPU page table with range
+[0,n-1]
+, where larger values denote more recent access. The system promotes pages of hit partitions to
+\min(\mathit{decoding\_step},n-1)
+. Once the decoding step exceeds
+n-1
+, promoted pages remain at
+n-1
+and all other pages are demoted by one.
+
+3
+
+Eviction
+: while updating timestamps, the system scans the GPU page table once to build a shared-memory histogram of page counts per timestamp bucket. It then searches the buckets from oldest to newest to find the smallest threshold
+x
+whose cumulative count satisfies the page demand, and evicts pages with timestamps at or below
+x
+. Eviction clears the corresponding GPU page table entries and marks the affected partitions as non-resident in the Meta-partition Table.
+
+4
+
+Admission
+: the system marks the missed partitions resident and remaps the freed GPU pages to them by updating partition IDs and timestamps in the GPU page table. This step changes only metadata; the actual CPU-to-GPU KV copies are issued later after locating the source CPU pages.
+
+In summary, bucketed LRU avoids global ordering, relying instead on simple scans and histogram updates that parallelize well on the GPU. During the step of admission, the system also records the target GPU page IDs for both hits and misses; these IDs are later used both to copy missed KV pages and to run attention on all selected partitions.
+
+5.4.
+Hierarchical Metadata
+
+Spin
+’s fine-grained, per-head KV management improves retrieval efficiency, but it also amplifies metadata overhead. Existing serving systems such as vLLM typically pre-allocate metadata arrays for a worst-case configuration. Applied to
+Spin
+, this strategy would make the GPU page table alone scale as
+\mathit{max\_batch\_size}\times\frac{\mathit{max\_context\_length}}{\mathit{page\_size}}\times\mathit{num\_layers}\times\mathit{num\_heads}
+. Relative to conventional serving systems, the footprint grows along three axes: per-head management adds a
+\mathit{num\_heads}\times\mathit{num\_layers}
+factor, extending KV capacity into CPU memory raises the maximum supported batch size, and longer context windows increase the number of logical pages per request. Other structures, such as the Meta-partition Table and Partition Offset Table, add further overhead. In aggregate, these metadata structures can consume tens or even hundreds of gigabytes of GPU memory, reducing space for cached KVs and limiting scalability.
+
+Figure 6
+.
+Two-level page table design.
+
+Tier-split mapping removes part of this pressure, but it does not eliminate worst-case overprovisioning.
+Spin
+therefore follows a principle that
+metadata should scale with the active physical working set rather than the worst-case logical address space
+. Inspired by multi-level paging in operating systems,
+Spin
+organizes all four metadata tables with two-level indexing. As shown in Figure
+6
+, using the GPU page table as an example, the system keeps a small, statically allocated top-level directory on the GPU whose entries point to second-level segments. These segments are allocated
+on demand
+, only when physical pages are assigned to a request, so metadata grows with the number of mapped physical pages rather than the worst-case logical capacity. To keep allocation inexpensive,
+Spin
+pre-allocates a GPU-resident segment pool shared across requests and heads and manages it with a lightweight bitmap allocator. The pool is bounded by GPU memory capacity rather than the logical address space. Combined with tier-split placement, this organization reduces metadata overhead by more than an order of magnitude, as we show in §
+6.4
+.
+
+5.5.
+Implementation
+
+We implement the core execution engine of
+Spin
+in 7k lines of C++ and CUDA. To reuse mature functionality from existing serving systems, we integrate
+Spin
+into vLLM
+(
+25
+)
+with 3k lines of Python, modifying its scheduler and memory allocator to orchestrate the sparse attention pipeline. To sustain high performance, we also implement a set of optimized CUDA kernels for the key operations in the pipeline.
+
+To efficiently transfer non-contiguous, head-wise KV pages across the GPU–CPU memory hierarchy,
+Spin
+implements a warp-based copy kernel. Each warp independently copies one page using vectorized memory transactions, allowing the kernel as a whole to saturate PCIe bandwidth. We further optimize it with a persistent-kernel design that distributes pages across all warps regardless of their owning head or request, improving load balance.
+
+6.
+Evaluation
+
+We evaluate
+Spin
+against state-of-the-art LLM serving engines
+(
+26
+;
+69
+)
+and the original implementations of three representative sparse attention algorithms
+(
+55
+;
+13
+;
+19
+)
+.
+Key findings include:
+
+•
+
+Spin
+achieves
+1.66
+–
+5.66\times
+higher end-to-end throughput than vLLM across models, GPUs, and workloads, with higher gains at higher request rates.
+
+•
+
+Spin
+’s performance advantage stems from sustaining larger decoding batch sizes through reduced per-request HBM demand, while keeping prefill latency close to that of vLLM.
+
+•
+
+Spin
+reduces per-token decode latency by
+8.4
+–
+58\%
+compared to the original implementations of the representative sparse attention algorithms, translating up to
+2.39\times
+throughput improvement and thus demonstrating the effectiveness of
+Spin
+’s system-level optimizations.
+
+•
+
+The hierachical metadata organization of
+Spin
+reduces metadata HBM consumption by
+49
+–
+78\times
+, and locality-aware buffer management improves decode throughput by
+2.18\times
+.
+
+6.1.
+Experimental Setup
+
+We evaluate
+Spin
+across two server platforms, three model sizes, and two long-context benchmarks.
+
+Testbed.
+
+We conduct experiments on two servers with
+different GPU architectures.
+The first server has four NVIDIA A100 GPUs (80 GB HBM each), an AMD EPYC 7V12 CPU with 850 GB DRAM, and PCIe Gen4 links at 32 GB/s per GPU.
+The second server has four NVIDIA B200 GPUs (180 GB HBM each), an Intel Xeon Platinum 8570 CPU with 1.5 TB DRAM, and PCIe Gen5 links at 64 GB/s per GPU.
+
+Models.
+
+We use Qwen3-14B
+(
+48
+)
+, Qwen3-32B
+(
+49
+)
+, and Llama-3.1-70B
+(
+41
+)
+to cover different model sizes and architectures.
+Unless otherwise specified,
+experiments on 1, 2, and 4 GPUs (TP=1/2/4) use Qwen3-14B, Qwen3-32B, and Llama-3.1-70B, respectively.
+
+Workloads.
+
+We draw requests from two state-of-the-art long-context benchmarks.
+LongBench-v2
+(
+7
+)
+features long inputs and short outputs
+while LongGenBench
+(
+36
+)
+has shorter inputs but longer outputs driven by reasoning-intensive tasks,
+as shown in Table
+2
+.
+Together they cover various tasks such as question answering and text summarization, spanning a wide range of input/output length ratios.
+For online serving, we generate request arrivals with a Poisson process at varying rates, following prior work
+(
+1
+;
+26
+)
+.
+
+Table 2
+.
+Workload characteristics.
+LongBench-v2 has long inputs and short outputs, whereas LongGenBench exhibits shorter inputs but longer outputs. Lengths are measured in tokens.
+
+Input Length
+
+Output Length
+
+Min
+
+Max
+
+Avg
+
+Min
+
+Max
+
+Avg
+
+LongBench-v2
+
+(
+7
+)
+
+32K
+
+120K
+
+55K
+
+500
+
+15K
+
+5K
+
+LongGenBench
+
+(
+36
+)
+
+16K
+
+19K
+
+18K
+
+7K
+
+32K
+
+12K
+
+Baselines.
+
+Spin
+is built on vLLM
+(
+26
+)
+to reuse its optimized GPU kernels and model execution infrastructure.
+To demonstrate generality, we integrate three representative sparse attention methods—ShadowKV
+(
+55
+)
+, RetroInfer
+(
+13
+)
+, and SeerAttention-R
+(
+19
+)
+—yielding
+Spin
+-ShadowKV,
+Spin
+-RetroInfer, and
+Spin
+-SeerAttention, respectively.
+Configurations of
+Spin
+-powered systems are listed in Table
+3
+, following the default settings in their original implementations.
+
+Table 3
+.
+Configurations of
+Spin
+-powered systems, aligned with the defaults used in their original implementations.
+ShadowKV and RetroInfer use a fixed ratio of context length as retrieval budget, while SeerAttention-R retrieves a fixed number of tokens regardless of context length. Partition granularity and physical page size are measured in tokens.
+
+Retrieval Budget
+
+Partition Granularity
+
+Physical Page Size
+
+ShadowKV
+
+(
+55
+)
+
+1.56\%
+
+8
+
+8
+
+RetroInfer
+
+(
+13
+)
+
+1.8\%
+
+variable
+
+8
+
+SeerAttention-R
+
+(
+19
+)
+
+2K
+
+32
+
+32
+
+We compare against three baselines: (1) vLLM with full attention; (2) vLLM-Offload, which extends vLLM with KV-cache offloading to CPU memory under HBM pressure;
+(3) LServe
+(
+69
+)
+, a GPU-only serving system that exploits attention sparsity.
+LServe is excluded from online serving experiments because its scheduler does not support online request arrivals. The original implementations of the sparse algorithms also do not support online serving due to the lack of a request scheduler and the capability of efficiently handling variable-length requests.
+Therefore, we only compare with the original implementations of sparse algorithms in §
+6.3
+to understand the performance gain of
+Spin
+’s system optimizations.
+By default, we use Qwen3-14B on an A100 for offline performance analysis and microbenchmarks as LServe and some original sparse attention implementations only support single-GPU execution and does not have Blackwell architecture support.
+
+6.2.
+End-to-end Performance for Online Serving
+
+We evaluate online serving using AIPerf
+(
+3
+)
+to quantify the end-to-end efficiency of
+Spin
+and baselines.
+
+Spin
+-SeerAttention is evaluated only on Qwen3-14B because SeerAttention-R is training-based and currently unavailable for larger models.
+
+Figure 7
+.
+End-to-end Throughput vs. Request Rate on LongBench-v2.
+
+Online serving throughput on LongBench-v2 as request rate increases, comparing \sysname-powered systems with vLLM and vLLM-Offload across different GPU counts.
+
+Figure 8
+.
+End-to-end Throughput vs. Request Rate on LongGenBench.
+Online serving throughput on LongGenBench as request rate increases, comparing \sysname-powered systems with vLLM and vLLM-Offload across different GPU counts.
+
+Figure 9
+.
+Average Batch Size.
+Average number of batched requests when serving Qwen3-14B on an A100 for the LongBench-v2 and LongGenBench workloads (both at 1.5 req/s).
+
+Figure 10
+.
+Average Latency.
+Average TTFT and TPOT when serving Qwen3-14B on an A100 for the LongBench-v2 workloads under varying request rates.
+
+Throughput.
+
+Figures
+7
+and
+8
+report end-to-end output-token throughput, defined as the total number of output tokens divided by the system serving time, under varying request rates.
+Across all workloads and GPU platforms,
+Spin
+-powered systems consistently translate attention sparsity into substantial throughput gains.
+On LongBench-v2 (Figure
+7
+),
+Spin
+-powered systems continue to scale with request rate, while vLLM and vLLM-Offload quickly plateau and even decline under high load due to memory thrashing.
+By reducing per-request HBM demand through effective GPU–CPU memory management,
+Spin
+sustains larger running batches and thus better utilize GPU resources, achieving
+2.34
+–
+3.80\times
+higher throughput than vLLM on A100 at 1.5 req/s and
+2.27
+–
+4.03\times
+on B200 at 4 req/s.
+Figure
+9
+confirms that
+Spin
+-powered systems support
+2.5
+–
+3.3\times
+larger average batch sizes than vLLM and vLLM-Offload during online serving.
+Among the three sparse variants,
+Spin
+-SeerAttention delivers relatively lower throughput because its larger per-step retrieval budget required by algorithm incurs higher PCIe transfer overhead.
+
+Figure
+8
+for LongGenBench shows a similar trend, with
+Spin
+-powered systems achieving
+2.62
+–
+5.66\times
+higher throughput than vLLM on A100 at 1.5 req/s, and
+1.66
+–
+3.72\times
+higher throughput on B200 at 4 req/s.
+These results demonstrate that
+Spin
+provides robust end-to-end throughput gains across workloads with different input/output length profiles.
+
+Latency.
+
+Figure
+10
+reports average time-to-first-token (TTFT) and time-per-output-token (TPOT) for Qwen3-14B on A100 under varying request rates; for clarity, we compare only
+Spin
+-ShadowKV with vLLM.
+At low load (
+\leq 0.001
+req/s), both systems exhibit comparable TTFT because their prefill times are similar and request queueing is rare.
+As request rate grows,
+Spin
+-ShadowKV achieves
+9\times
+lower TTFT than vLLM at 0.5 req/s, because
+Spin
+sustains larger batch sizes and higher throughput and thereby reduces queueing delay for newly arrived requests.
+
+Spin
+incurs higher TPOT than vLLM due to larger per-step decode batches and GPU–CPU data transfer for retrieval.
+This gap, however, remains stable across request rates, as it is governed by the minimum buffer size per request.
+Other
+Spin
+variants exhibit the same trend:
+Spin
+-SeerAttention and
+Spin
+-RetroInfer add
+107\%
+and
+14.7\%
+TPOT over
+Spin
+-ShadowKV, respectively,
+due to algorithmic differences in retrieval budget.
+
+6.3.
+Offline Performance
+
+Figure 11
+.
+Prefill Latency vs. Context Length on an A100.
+
+Prefill latency on A100 and B200 GPUs across different context lengths for batch size one, comparing \sysname-powered systems with baseline systems.
+
+Figure 12
+.
+Offline Decode Throughput vs. Batch Size on different Context Lengths and GPUs.
+
+Dashed horizontal lines extend each baseline’s throughput at its maximum supported batch size for ease of comparison.
+
+Decode throughput of offline serving on A100 and B200 GPUs across multiple context lengths and batch sizes, comparing \sysname-powered sparse-attention systems with vLLM and vLLM-Offload.\bt{Remove the results on 16K context length}
+
+We evaluate offline inference with Qwen3-14B, measuring prefill and decode separately across context lengths to enable stage-level analysis.
+This controlled setting also permits direct comparison with LServe and the original sparse implementations, which do not support online scheduling.
+
+Prefill.
+
+Figure
+11
+shows prefill latency across context lengths.
+At 16K, 32K, and 64K contexts,
+Spin
+-powered systems add at most 0.59, 0.92, and 1.32 s over vLLM, respectively, because
+Spin
+’s indexing and KV offloading execute largely asynchronously with GPU prefill computation.
+In some configurations
+Spin
+even matches or undercuts vLLM’s prefill latency, owing to its GPU-side memory allocator that avoids the host-side allocation overhead at long contexts.
+LServe achieves
+2.5
+–
+29\%
+lower prefill latency than
+Spin
+by applying sparse prefill to reduce attention computation; this algorithmic optimization is orthogonal to
+Spin
+and can be integrated into our system for further improvement.
+
+Decode.
+
+Figure
+12
+evaluates offline decode throughput as batch sizes increases under different context lengths.
+
+Spin
+-powered systems support
+4
+–
+8\times
+larger maximum batch sizes than baselines, translating into
+1.34
+–
+3.49\times
+higher throughput.
+LServe improves over vLLM by exploiting decode-stage sparsity on GPU, but its GPU-only design caps its maximum batch size.
+Among
+Spin
+variants,
+Spin
+-SeerAttention delivers the highest decode throughput at 120K context because its fixed retrieval budget is independent of context length, whereas
+Spin
+-ShadowKV and
+Spin
+-RetroInfer require retrieving proportionally more tokens as context grows.
+On B200 shown in Figure
+12
+(d–f),
+Spin
+’s
+decode throughput at small batch sizes falls below vLLM, because B200’s higher compute and HBM bandwidth relatively alleviates the full-attention bottleneck.
+Nevertheless,
+Spin
+maintains its advantage at larger batch sizes by leveraging hierarchical GPU–CPU memory to sustain higher concurrency.
+
+Comparison with Original Sparse Implementations.
+
+We compare
+Spin
+variants against the original implementations of their respective sparse attention algorithms to analyze the gains from
+Spin
+’s system-level optimizations.
+As shown in Figure
+13
+,
+Spin
+-ShadowKV,
+Spin
+-RetroInfer, and
+Spin
+-SeerAttention reduce per-token decode latency by
+21\%
+,
+22\%
+, and
+47\%
+over their original counterparts at batch size 1, and by
+35\%
+,
+8.4\%
+, and
+58\%
+at their respective peak batch sizes.
+The latency breakdown reveals that the dominant source of improvement differs across algorithms.
+For ShadowKV and RetroInfer,
+Spin
+’s locality-aware buffer manager significantly reduces PCIe retrieval time by exploiting the temporal locality of token accesses.
+For SeerAttention-R, whose original implementation runs entirely on GPU and thus incurs no retrieval overhead, the gains instead come from
+Spin
+’s optimized GPU kernels that replace the under-optimized operators in the original codebase. Overall, the latency improvement translates up to
+2.39\times
+throughput gains compared to the original implementations.
+
+Figure 13
+.
+Per-token Decode Latency Breakdown of
+Spin
+and Original Sparse Implementations.
+
+Spin
+consistently reduces per-token decode latency across all three sparse attention algorithms,
+where gains primarily come from lower PCIe retrieval overhead for ShadowKV and RetroInfer and from more efficient GPU kernels for SeerAttention-R.
+
+6.4.
+Ablation Studies
+
+We quantify the impact of individual design decisions of
+Spin
+including the effect of GPU buffer management, multi-level indexing, and cache hit ratios under different buffer sizes.
+Unless otherwise noted, ablations use
+Spin
+-ShadowKV with Qwen3-14B at 32K context on A100.
+
+Effect of GPU Buffer Management.
+
+Figure
+15
+compares three incremental configurations to quantify the benefit of
+Spin
+’s GPU buffer management.
+Without GPU caching (“Base”), decode throughput plateaus at low batch sizes because every retrieval must traverse PCIe, saturating link bandwidth.
+Retaining pages from the last decode step on GPU (“+ Mandatory”) reduces transfer volume and improves throughput, but captures only single-step reuse and misses locality that spans multiple steps.
+Adding bucketed LRU fully exploits cross-step temporal locality, raising decode throughput by
+49\%
+by keeping frequently accessed pages resident and eliminating redundant transfers.
+
+Impact of Cache Sizes.
+
+We study how cache size affects hit ratio across LongBench-v2 and LongGenBench tasks and sparse attention algorithms.
+As shown in Figure
+16
+, enlarging the cache significantly improves hit ratio, confirming strong temporal locality in the critical tokens accessed during decoding.
+This gain saturates once the Buffering-to-Mandatory ratio reaches
+4\times
+.
+Beyond this point, additional cache capacity yields only marginal hit-ratio improvement while consuming more GPU memory, which could in turn reduce the maximum executable batch size and therefore limit throughput scalability.
+We observe the same trend across workloads, sparse attention algorithms, and models.
+These results guide the scheduler’s cache-size setting: a moderate cache size strikes the best balance between hit ratio and GPU memory consumption, allowing the system to admit more requests without incurring excessive retrieval overhead.
+
+Multi-level Indexing.
+
+We next quantify the HBM savings provided by
+Spin
+’s multi-level indexing and tier-plit design across different models.
+As shown in Figure
+15
+, a naive design that maintains a flat page table and related metadata for the full working set (128K context and batch size 32) consumes up to 100 GB of HBM for Llama-3.1-70B.
+Replacing this flat layout with a two-level index that partitions the page table and related metadata into segments reduces metadata HBM consumption by
+13.9
+–
+17.4\times
+.
+Offloading selected tables, including CPU partition offset tables and page tables, to CPU memory further reduces GPU memory usage by
+3.5
+–
+4.5\times
+, freeing HBM for KV cache storage and thereby enabling larger batch sizes and higher throughput.
+
+Figure 14
+.
+Effect of Design Choices in Buffer Management.
+
+“Base” offloads all KV to CPU without GPU caching.
+“+ Mandatory” reuses visited pages only from the last decode step.
+“+ Mandatory + Buffering” fully exploits cross-step temporal locality via bucketed LRU.
+
+Figure 15
+.
+HBM Consumption of Metadata for Buffer Management.
+
+“Base” maintains the flat page tables and all related metadata (e.g., partition table) in GPU memory.
+Multilevel indexing and CPU offloading reduce orders of magnitude HBM consumption.
+
+Figure 16
+.
+Cache Hit Ratio vs. Cache Size.
+Increasing cache size significantly improves hit ratio; however, further increases beyond a certain point yield only marginal improvement.
+
+7.
+Related Work
+
+LLM Serving Optimizations.
+
+A rich body of work has improved LLM serving throughput through better batching
+(
+70
+;
+2
+)
+, memory management
+(
+25
+;
+72
+;
+46
+)
+, scheduling
+(
+77
+;
+40
+;
+78
+;
+44
+;
+54
+)
+and parallelism
+(
+62
+;
+35
+;
+22
+)
+. To efficiently handle long-context workloads, several lines of optimization have emerged.
+Speculative decoding
+(
+10
+;
+30
+;
+29
+)
+reduces latency by predicting tokens via a lightweight draft model with verification. Offloading-based systems
+(
+47
+;
+37
+;
+52
+;
+31
+)
+move KV cache or model weights across a multi-tier memory hierarchy to fit larger contexts.
+These studies do not address sparse attention, thereby omitting the fundamental abstractions and kernels necessary for efficient serving.
+
+KV Cache Pruning and Quantization.
+
+KV pruning methods
+(
+75
+;
+65
+;
+28
+;
+59
+)
+permanently remove less critical tokens from the KV cache, whereas KV quantization techniques
+(
+21
+;
+38
+;
+74
+)
+compress the existing entries into lower-precision formats. Both approaches assume inherent redundancy within the KV cache and are thus not
+Spin
+’s target algorithms.
+
+Sparse Attention.
+
+Rather than permanently evicting tokens, sparse attention methods
+(
+55
+;
+12
+;
+13
+;
+34
+;
+14
+;
+64
+;
+19
+;
+71
+;
+33
+)
+retain the complete KV cache in memory but dynamically select a critical subset of tokens for attention computation during each decoding step. These methods observe token importance varies as generation progresses and thus exploit it for better accuracy. Other works
+(
+23
+;
+69
+;
+67
+)
+exploit sparsity during the prefill phase, complementary to decode-phase sparsity.
+
+Spin
+can support both lines of work with minimal adaptation.
+While LServe
+(
+69
+)
+also supports both prefill and decode sparsity, it is limited to the specific sparse attention algorithms. In contrast,
+Spin
+is designed as a general serving engine that executes a wide range of sparse attention algorithms with different granularities at maximal efficiency.
+
+Model Quantization and Sparsity.
+
+Weight sparsity
+(
+32
+;
+76
+;
+4
+)
+compresses model parameters to reduce model size and FFN computation. Other systems
+(
+53
+;
+68
+)
+exploit activation sparsity to offload cold FFN weights to CPU memory.
+These are also promising lines of work to mitigate HBM contention and IO bottlenecks, which are orthogonal to
+Spin
+’s design.
+
+8.
+Conclusion
+
+This paper introduces
+Spin
+, a sparse attention-native framework for efficient inference in long-context LLM serving. Through a unified pipeline abstraction,
+Spin
+allows diverse sparse attention algorithms to be integrated with minimal developer effort — requiring only the algorithm-defined Index and Select logic while the rest is automatically handled by the system. Built on top of this abstraction,
+Spin
+’s locality-aware buffer management and scalable metadata organization translate algorithmic sparsity into system-level throughput gains. Our evaluation demonstrates that
+Spin
+achieves
+1.66
+to
+5.66\times
+higher throughput and
+7
+to
+9\times
+lower TTFT than vLLM across a variety of algorithms, models, workloads and GPU generations.
+

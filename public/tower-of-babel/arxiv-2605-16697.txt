@@ -1,0 +1,4810 @@
+Ordered Front-to-back Any-Hit Traversal in RTX
+Ingo Wald
+
+Abstract
+. We look at the problem of Ordered Front-To-Back Any-Hit Traversal (FTB); i.e., a traversal that iterates through successive hits along a ray in a guaranteed front to back-sorted order, and without skipping any intersections even if they occur at the same distance. We describe multiple different ways of solving this problem within the constraints of the existing ray tracing pipeline, and evaluate the different realizations.
+
+
+
+\arxivText
+
+my arxivtxt
+
+1.
+Introduction
+
+Hardware-accelerated ray tracing has significantly changed ray
+tracing. However, using this technology requires developers to
+express their ray tracer within what we today call the
+(RTX) ray
+tracing pipeline
+, in which programs are expressed as a combination of
+user-programmable ray-gen, any-hit (AH) and closest-hit (CH) programs,
+and which forms the common abstraction behind each one of the three
+main hardware ray tracing APIs (i.e., OptiX
+NVIDIA
+Corporation 2026
+,
+Vulkan
+Khronos Group 2021
+, and DirectX
+Microsoft 2021
+).
+
+For most applications, re-formulating them through AH and CH programs
+is straightforward: the next closest surface can
+be found with CH, and iterating over all hits along a ray
+can be done with an AH
+program that simply processes but then rejects each hit. However,
+some applications require
+iterating over multiple intersections—or
+hits
+—along a given ray
+in a way that
+visits them in a guaranteed front-to-back order, while also guaranteeing
+that it will visit every hit if some happen at
+the same distance. In graphics, typical examples of that are scenes
+with lots of semi-transparent surfaces, decals, or applications
+such as ray tracing
+of Gaussian Splats
+Moenne-Loccoz
+et al. 2024
+. Outside of graphics the same
+problem often arises in simulations where rays have to penetrate
+through what are logically solid objects, but which are each
+represented through their boundary surfaces (which
+become co-planar where such solids abut). Throughout this paper, we
+refer to this problem as the “Front-To-Back Any-Hit” problem (or
+FTB, for short): like AH programs we want to be able to iterate over
+possibly all hits along the ray (without missing any), but unlike AH
+programs we need hits to be reported in a strictly front-to-back
+order.
+
+At first glance, this operation looks like a straightforward
+combination of AH and CH, but it isn’t: AH programs can be trivially
+used to find all hits, but not in order; and CH programs can trivially
+be used to find the respectively next closest intersection, but cannot
+find more than one hit at any given distance. In this paper, we
+describe different ways of realizing this kernel within
+the hardware ray tracing pipeline; i.e., through
+combinations of any-hit and closest-hit programs. We describe,
+classify some algorithmic properties of, and evaluate the performance
+of those kernels, allowing the reader to choose which is best for a
+given situation.
+
+2.
+Background and Related Work
+
+The key problem we want to solve is to trace rays such that are
+guaranteed to find all intersections along that ray—even if they are
+co-planar—while also reporting those in ascending order. To
+understand why this is tricky—as well as how exactly our proposed
+techniques will eventually work—we need to briefly review some of
+the more lower-level properties of the RTX Pipeline. We assume basic
+familiar with the RTX Pipeline, but some of the techniques and issues
+we discuss require a fair amount of detail knowledge that we do not
+want to assume.
+
+2.1.
+Floating-Point Numbers
+
+Any hardware implementing the RTX pipeline may or may not internally
+use different levels of precision, but all values that go into or come
+out of that pipeline—like
+ray.tMin/tMax
+, hit distances,
+etc—will be represented in IEEE float32 precision. Floats are often
+viewed as the computer equivalent of the space of real numbers
+
+\mathbf{R}
+; but for many of the techniques in this paper it is
+important to remember that
+float
+s are not continuous, and can
+only represent a finite, discrete subset of
+\mathbf{R}
+. For any
+“regular” float
+f
+(i.e., any float that is not +/-
+INF
+,
++/-
+FLT_MAX
+,
+NAN
+, or a denorm) there are well defined
+next larger respectively next lower values that in this paper we will
+refer to as
+justAbove(f)
+and
+justBelow(f)
+. In
+C/C++/CUDA, these can be computed using
+nextafter(f,t)
+. No
+computation can ever return a value that lies
+between
+
+f
+and
+
+justAbove(f)
+, or
+f
+and
+justBelow(f)
+,
+respectively.
+
+2.2.
+Floats, Rounding, and Reproducibility
+
+Floating point numbers are fully deterministic in that the
+same computations performed in the same order with the same inputs
+will always produce the same exact same output—but they are
+not
+
+invariant with respect to mathematically equivalent reformulations.
+E.g.,
+a+(b+c)
+and
+(a+b)+c
+are mathematically
+equivalent, but in floating point can compute
+different results.
+Consequently, throughout this paper we only consider kernels that modify
+
+ray.tMin/tMax
+, but
+never
+modify the actual ray origin,
+direction, etc.
+
+2.3.
+The Ray tMin/tMax Interval
+
+In the RTX pipeline, rays carry
+ray.tMin
+and
+ray.tMax
+
+values that allow for specifying a
+valid ray interval
+that any
+intersection has to be in. For the rest of this paper, understanding
+how this interval works—and interacts with AH and CH papers—is
+crucially important. We emphasize three details: first, this interval
+is
+ex
+clusive, so
+tMin
+and
+tMax
+are explicitly
+
+not
+valid hit distances—to be considered valid any hit at
+distance
+tHit
+has to fulfill
+ray.tMin < tHit < ray.tMax
+.
+Second, these tests happen automatically and
+before
+any
+user-provided AH program can see the respective hit. And third, the
+
+ray.tMax
+value will
+not
+always remain the same value
+specified when launching the ray, but can shrink during traversal:
+every time the pipeline “accepts” a hit
+(see
+2.5
+) at distance
+tHit
+this
+
+tHit
+will become the new
+ray.tMax
+.
+
+Together, these two facts explain why CH programs struggle with hits
+at same distance: once the first gets found and accepted at
+
+tFound
+, the ray interval gets shortened to that distance, and
+all others at the same distance will get automatically rejected; and
+any follow-up ray will either find exactly that same intersection (if
+it was launched with
+tMin<tFound
+), or will miss all these
+intersection altogether (if launched with
+tMin>=tFound
+). On the
+other hand, together with some of the float related properties we
+discussed above we can sometimes use these rules to our advantage: if
+we trace a follow-up ray with
+tMin=justBelow(tFound)
+we know
+that hits at
+tFound
+will be valid, yet no other, closer hits
+can possibly be valid. Conversely, any ray traced with
+
+tMin=tFound
+will
+not
+ever report any hits at that
+distance, yet no other hit beyond
+tFound
+can ever possibly get
+rejected by that
+tMin
+value, either.
+
+2.4.
+Cost of Any-Hit Programs
+
+Using AH programs is expensive. This is obviously true if the program itself
+is costly, but it is also true even if that program is
+trivially simple. This is because if there were no AH programs at all
+the hardware ray tracing cores can simply update the
+ray.tMax
+
+value in hardware, and can keep on going until the entire traversal is
+done. If there is a AH program, however—no matter how cheap—then
+the hardware traversal has to be interrupted after every found
+intersection, control has to pass back to a CUDA core to execute the
+AH program, then hardware traversal has to be resumed after the AH
+program returns, etc; this is expensive even if the AH program does little
+actual work. The pipeline does allow to disable AH programs on a
+per-ray basis (by passing a
+OPTIX_DISABLE_ANYHIT
+flag to the
+
+optixTrace()
+call), but as discussed before, only AH programs
+can ever see more than one hit at a given distance.
+
+2.5.
+Accepting vs Ignoring Hits
+
+AH programs can influence traversal in two ways. One
+is that they can terminate traversal by calling
+
+optixTerminateRay()
+. The ray may still execute the respective
+CH program on whatever was already accepted, but calling this function
+will immediately stop any further traversal steps, ray-triangle
+intersections, or AH calls.
+
+The second
+is for the AH program to ask the
+pipeline to
+ignore
+a given intersection
+(
+optixIgnoreIntersection()
+). The pipeline’s default
+behavior—-if there is no AH program to be executed, or the user
+explicitly disabled AH programs for this ray—is to “accept” each
+hit, and shorten
+ray.tMax
+to that distance. For some of our
+methods we need to tell the pipeline to not do that, typically because
+doing so would automatically discard any further intersections at that
+distance. This, however, means that some of our kernels will
+explicitly (have to) tell the RTX pipeline to
+reject
+a hit even
+though the program’s own logic will actually accept that same hit for
+its own purposes, and vice versa. These situations of
+“OptiX-rejecting while actually accepting” (and vice versa) can look
+like implementation erros—but are actually intentional. Where
+appropriate we will use the terms
+OptiX-accept/-reject
+to
+indicate that this refers only to the program tells the pipeline.
+
+We also point out that (OptiX-)ignoring hits will always come at a
+cost: shortening the ray can avoid some future traversal steps,
+intersections, and AH call; and not accepting hits will preclude these
+savings—so our kernels will always try to accept any hit they
+possibly can. In most cases the ideal situation would be that we can
+accept a hit, but shorten
+ray.tMax
+only to
+
+justAbove(tHit)
+—but OptiX does not currently allow for this
+in AH programs.
+
+2.6.
+Related Work and Multi-Hit
+
+The particular problem we are addressing in this paper—front-to-back
+any-hit—has not yet received much attention in the academic
+literature, but a very similar problem (namely, the so-called
+
+multi-hit
+problem) has (e.g.,
+Gribble
+et al. 2014
+;
+Amstutz
+et al. 2015
+;
+Gribble 2016
+;
+Gribble
+et al. 2016
+;
+Zellmann
+et al. 2017
+), often
+in the context of penetration simulations similar to
+Butler et al’s
+Bullet Ray Vision
+
+Butler and
+Stephens 2007
+. The task of
+a multi-hit traversal is to find, for a given
+N
+, the first
+N
+hits
+along a ray, in sorted order, including hits at same
+distance. Clearly, if we have a solution to FTB we have automatically
+solved multi-hit (by just calling FTB
+N
+times). Similarly, we can
+largely (but not entirely) reduce FTB to multi-hit: once we have
+N
+
+hits from multi-hit we can get the first
+N
+FTB results from that
+list of multi-hit results.
+
+However, things get interesting if we ever need the
+next
+
+N
+
+hits beyond what was already found, because then we run into the same
+problem with hits at same distance as we do for FTB. For completeness
+we also discuss how our techniques can be used to extend multi-hit to
+find the respectively next
+N
+hits, but this is not the focus
+of this paper.
+
+In
+Wald
+et al. 2018
+, Wald et al. proposed a method that allowed
+for iterating through individual hits by replacing the usual depth
+first BVH traversal with a new traversal that maintains depth-sorted
+queues of yet to be traversed nodes and yet to be reported hits,
+reporting the already found hits to the user only when it can be
+guaranteed that no closer one could ever be found. This method is
+correct and does not require multi-hit; but it does requires modifying
+the underlying ray tracer’s BVH traversal, which wouldn’t be possible
+in a hardware accelerated pipeline.
+
+In rendering it is often possible to use approximate solutions. For
+example, Knoll et al
+Knoll
+et al. 2021
+described a method that can
+report hits in order while also using RTX for acceleration; but at the
+risk of possibly dropping some hits. A similar technique is also used
+in Gaussian Ray Tracing
+Moenne-Loccoz
+et al. 2024
+. Where applicable these
+techniques will probably be faster; in this paper we only consider
+methods that are guaranteed to be correct. All our implementations
+will be based on OptiX
+NVIDIA
+Corporation 2026
+, used through the OptiX
+Wrapper Library (OWL)
+NVIDIA Corp 2026
+; but implementations without OWL,
+or using Vulkan or DirectX, should be straightforward.
+
+Simple
+(N dot D)* primID
+style shading of our test models, on first/closest hit along the ray
+
+pseudo-color shading of number of surfaces encountered when iterating through all intersections
+
+truck
+
+bmw
+
+powerplant
+
+CAD model
+
+PBRT landscape
+
+splatting
+
+Figure 1.
+Reference images for our test scenes; with
+pseudo-color visualization of total number of triangles visited
+along each ray (properly including even multiple hits at same distance).
+From left to right:
+truck
+(426K triangles), PBRT
+bmw
+(385K triangles),
+
+powerplant
+(12M triangles), a complete CAD
+car
+model (ca 28M triangles),
+the PBRT
+landscape
+(30K instances, 4.3B triangles total),
+and a set of triangles captured from a Gaussian Splatting
+ray tracer (in this case, using all screen-aligned quads, ca 1.8M triangles).
+
+3.
+Front-to-Back Any-Hit
+
+The goal of this paper is to realize
+front to
+back Any-Hit
+(FTB): iterating through hits along a ray in guaranteed
+front-to-back order, without missing hits even if there are
+multiple hits at same distance. In this section, we will discuss
+different ways of realizing this.
+
+These will obviously differ in performance (we will look at that in
+Section
+4
+), however, they can also differ in other
+properties that an application may care about. In particular, we
+classify the different methods on the following properties:
+
+Iiteration vs callback.
+Some of our methods will allow the user
+to manage his or her own iteration over the results by explicitly
+asking, in each iteration, for the respectively next hit; with the
+user being able to do arbitrary other work in between two such
+calls. Other methods will only allow for a callback style operation
+where the user provides some
+userCode()
+callback function, but
+it is the FTB kernel (not the user) that controls when this function
+is being called. In this case we assume the
+userCode
+can return
+a value that indicates whether it does or does not want more
+iterations to occur. To make our methods more comparable we will
+formulate even the explicit iteration kernels over an explicit
+
+userCode()
+function, but this formulation is not a requirement.
+
+Access to RTX pipeline state
+determines whether the
+
+userCode()
+can access OptiX functions like
+
+optixTransformRay/Point/...()
+,
+optixGetPrimitiveIndex()
+,
+etc. This is assumed as given in traditional AH and CH programs, but
+for our kernels is not: for example, for any kernel that does the
+
+ignore-but-accept
+discussed in
+Section
+2.5
+the actually computed next hit
+will
+not
+be visible to the CH program, so any
+userCode()
+
+would not have access to this data even if it were to be called in the
+CH program.
+
+For methods with access to RTX state the
+userCode()
+can
+simply call OptiX-getter functions as desired; for those that do not
+the user has to modify the psuedo-code to store whatever
+data he or she might need when the hit gets stored.
+
+Stability wrt tree rebuild.
+For some of our methods, the order
+in which we encounter hits determines the order in which an AH program
+encounters the respective triangles. This in turn may depend on the
+order in which different triangles are stored in the respective BVH,
+and depending on whether the BVH builder used to build this BVH is
+temporally stable or not (ie, whether it always builds exactly the
+same BVH or not) this may result in different order. This may or may
+not matter to the application, but we do point out which methods are
+vs are not stable with respect to BVHes built at different times.
+
+A summary of our different methods with respect to
+these properties is given in Table
+1
+.
+
+3.1.
+Method 1 (correct): Stable Order Next-Hit (
+stable-next
+)
+
+The root cause of why we cannot simply iterate through all hits
+with repeated CH traces is that in the RTX pipeline the only way
+to specify that any hits should be “behind” what one already had is
+to specify
+ray.tMin
+—but this only tests for distance,
+and thus cannot differentiate different hits with
+same
+distance.
+
+To fix this we first need to define a way of comparaing any two hits
+in a way that, in math terms, forms a
+strict total
+order
+.
+Once we have that, we can argue about which
+hit A should be reported “before” another hit B even if A and B both
+have the same distance. To do this, we can look at the triple of
+primitive index (
+optixGetPrimitiveIndex()
+), SBT index
+(
+optixGetSBTOffset()
+), and instance index
+(
+optixGetInstanceIndex()
+). These three values can
+describe any possible intersection, so can be used to disambiguate any
+two hits with same distance:
+
+⬇
+
+1
+
+//
+
+helper
+
+tuple
+
+that
+
+uniquely
+
+describes
+
+any
+
+hit
+
+2
+
+struct
+
+HitDesc
+
+{
+
+3
+
+float
+
+t
+;
+
+int
+
+prim
+,
+
+geom
+,
+
+inst
+;
+
+4
+
+}
+
+5
+
+6
+
+//
+
+comparator
+
+that
+
+allow
+
+for
+
+non-ambigous
+
+7
+
+//
+
+ordering
+
+of
+
+hits
+
+8
+
+bool
+
+operator
+<(
+HitDesc
+
+a
+,
+
+HitDesc
+
+b
+)
+
+{
+
+9
+
+if
+
+(
+a
+.
+t
+
+!=
+
+b
+.
+t
+)
+
+return
+
+a
+.
+t
+
+<
+
+b
+.
+t
+;
+
+10
+
+if
+
+(
+a
+.
+inst
+
+!=
+
+b
+.
+inst
+)
+
+return
+
+a
+.
+inst
+
+<
+
+b
+.
+inst
+;
+
+11
+
+if
+
+(
+a
+.
+geom
+
+!=
+
+b
+.
+geom
+)
+
+return
+
+a
+.
+geom
+
+<
+
+b
+.
+geom
+;
+
+12
+
+if
+
+(
+a
+.
+prim
+
+!=
+
+b
+.
+prim
+)
+
+return
+
+a
+.
+prim
+
+<
+
+b
+.
+prim
+;
+
+13
+
+return
+
+false
+
+14
+
+}
+
+Using this comparator we have a well defined way of describing what
+the “next” hit is supposed to be: it has to be larger than the last
+iteration’s hit, and smaller than any other. We now craft an AH program
+that checks all reported intersections for this property, and keeps
+track of the hit that fulfills that condition. To evaluate this
+condition the AH program also needs to know the hit reported by the
+last iteration, and some storage to track its currently closest
+result; both of these we simply store in some helper PRD (per ray
+data) struct that we pass with the ray.
+
+The core idea of this method should be fairly straightforward;
+however, two caveats have to be considered. One is that the
+pipeline already compares whether
+ray.tMin < tHit
+, so if the
+last iteration’s hit was at
+tPrev
+we can
+not
+use that
+as the next
+ray.tMin
+, and have to instead use
+
+nextBefore(tPrev)
+, or other hits at that distance wouldn’t even
+show up in our AH program. The second caveat is that even if the AH
+program does find a hit closer than what it has found so far—and
+“accepts” that in its own PRD—it
+still
+has to tell the
+pipeline to
+reject
+that hit if it is at the same distance as the
+closest one we have found so far. Conversely, any hit with a distance
+strictly greater than what we have stored so far
+should
+get
+(OptiX-)accepted so as to shorten the ray traversal;
+even though we will obviouly not accept that hit itself. This means we
+OptiX-accept some rays that we internally reject, and OptiX-reject
+others we actually store; this is confusing, but correct.
+
+In pseudo-code, this method looks like this:
+
+⬇
+
+1
+
+//
+
+stable
+
+next-hit
+
+2
+
+struct
+
+StableNextHitPRD
+
+{
+
+3
+
+//
+
+any
+
+hit
+
+has
+
+to
+
+be
+
+strictly
+
+’>’
+
+hitMin
+
+4
+
+HitDesc
+
+hitMin
+;
+
+5
+
+//
+
+tracks
+
+currently
+
+closest
+
+found
+
+hit.
+
+6
+
+//
+
+any
+
+hit
+
+<
+
+this
+
+that
+
+we
+
+encounter
+
+during
+
+7
+
+//
+
+traversal
+
+will
+
+overwrite
+
+this
+
+8
+
+HitDesc
+
+hitMax
+;
+
+9
+
+};
+
+10
+
+11
+
+//
+
+AH
+
+prog
+
+that
+
+finds
+
+actual
+
+next
+
+hit
+
+according
+
+12
+
+//
+
+to
+
+previously
+
+described
+
+’<’
+
+operator
+
+13
+
+void
+
+__AH
+()
+
+{
+
+14
+
+HitDesc
+
+curr
+
+=
+
+15
+
+{
+
+optixTMax
+(),
+
+optixGetPrimitiveIndex
+(),...
+
+};
+
+16
+
+auto
+
+&
+prd
+
+=
+
+getPRD
+<
+StableNextHitPRD
+>();
+
+17
+
+if
+
+(
+prd
+.
+hitMin
+
+<
+
+curr
+
+&&
+
+curr
+
+<
+
+prd
+.
+hitMax
+)
+
+18
+
+prd
+.
+hitMax
+
+=
+
+curr
+;
+
+19
+
+//
+
+caveat
+
+2
+
+(see
+
+text):
+
+do
+
+_not_
+
+accept
+
+hits
+
+20
+
+//
+
+at
+
+closest
+
+t,
+
+or
+
+rtx
+
+pipeline
+
+will
+
+21
+
+//
+
+automatically
+
+cull
+
+any
+
+others
+
+at
+
+this
+
+t
+
+22
+
+if
+
+(
+curr
+.
+t
+
+==
+
+prd
+.
+hitMax
+.
+t
+)
+
+23
+
+optixIgnoreIntersection
+();
+
+24
+
+}
+
+25
+
+void
+
+front_to_back
+(
+Ray
+
+ray
+,
+
+UserPRD
+
+&
+userPRD
+)
+
+{
+
+26
+
+float
+
+user_tMax
+
+=
+
+ray
+.
+tMax
+;
+
+27
+
+StableNextHitPRD
+
+prd
+;
+
+28
+
+prd
+.
+hitMin
+
+=
+
+{
+
+ray
+.
+tMin
+,
+
+-1,
+
+-1,
+
+-1
+
+};
+
+29
+
+while
+(
+true
+)
+
+{
+
+30
+
+prd
+.
+hitMax
+
+=
+
+{
+
+user_tMax
+,
+
+-1,
+
+-1,
+
+-1
+
+};
+
+31
+
+optixTrace
+(
+ray
+,
+
+prd
+=&
+prd
+,
+
+DISABLE_CH
+);
+
+32
+
+if
+
+(
+prd
+.
+tMax
+.
+primID
+
+<
+
+0)
+
+33
+
+break
+;
+
+//
+
+no
+
+hit
+
+found
+
+34
+
+//
+
+user
+
+code
+
+has
+
+to
+
+be
+
+called
+
+explicitly,
+
+35
+
+//
+
+becauseAH
+
+prog
+
+(had
+
+to)
+
+optix-reject
+
+36
+
+userCode
+(
+prd
+.
+hitMax
+,
+userPRD
+);
+
+37
+
+if
+
+(
+user
+
+code
+
+wants
+
+to
+
+exit
+)
+
+38
+
+return
+
+39
+
+//
+
+...
+
+and
+
+iterate
+
+40
+
+prd
+.
+hitMin
+
+=
+
+prd
+.
+hitMax
+;
+
+41
+
+ray
+.
+tMin
+
+=
+
+justBelow
+(
+prd
+.
+hitMin
+.
+t
+)
+
+42
+
+ray
+.
+tMax
+
+=
+
+user_tMax
+
+43
+
+}
+
+44
+
+}
+
+This method is temporally stable in that the order in which the AH
+program visits triangles does not matter. It will also allow for an
+iterative approach, and is not limited to callbacks. However, since
+we have to OptiX-reject hits that we actually accept the finally found
+next hit will not be reported in a CH program, and will thus not have
+access to the RTX state. Any state data the user needs will thus have to
+be saved whenever the AH program (internally) accepts a new hit.
+
+3.2.
+Method 2: Reject-Repeats
+
+Method 1 worked by using a
+operator<
+to disambiguate hits at
+same distance. An alternative way of doing so is to use the (temporal)
+order in which they get reported by the RTX pipeline: Ie, assuming we
+have already reported
+N
+hits at a given distance
+tPrev
+we can
+simply tell an AH program to simply skip the first
+N
+hits at this
+distance, and re-trace the previous ray, thus getting either the
+N-plus-first hit at that distance, or one at a greater distance.
+
+This is, in fact, the first method we used, but making it correct is
+more tricky than it at first appears: The problem is that once we find
+a hit at a given distance
+tPrev
+we want to make sure that the
+next time we trace a ray we will use a
+ray.tMin
+of
+
+nextBefore(tPrev)
+—but changing a ray’s tMin value can—in
+admittedly rare but still possible cases—change the order in which
+the traversal visits leaves, and thus triangles. Thus, the first hit
+visited by the ray with modified
+tMin
+value may
+not
+be
+the same triangle that the predecessor found at that distance so
+simply counting hits would be wrong.
+
+This can be fixed by having the PRD store not only the reject counter,
+but also store the last found hit; and the AH program to first test
+for wether the current hit is the same as the last, and only use the
+reject counter for all other hits at that distance. This sounds—and
+is—tricky, but once done, is correct. Pseudo-code for this looks
+like this:
+
+⬇
+
+1
+
+//
+
+reject-repeats
+
+2
+
+struct
+
+HelperPRD
+
+{
+
+3
+
+HitDesc
+
+skipHit
+;
+
+4
+
+int
+
+skipCount
+;
+
+5
+
+HitDesc
+
+thisHit
+;
+
+6
+
+};
+
+7
+
+8
+
+void
+
+__AH
+()
+
+{
+
+9
+
+auto
+
+&
+prd
+
+=
+
+getPRD
+<
+HelperPRD
+>();
+
+10
+
+HitDesc
+
+thisHit
+
+=
+
+getCurrentHit
+();
+
+11
+
+if
+
+(
+thisHit
+.
+dist
+
+>
+
+prd
+.
+skipDist
+)
+
+12
+
+{
+
+/*
+
+accept
+
+this
+
+*/
+
+return
+;
+
+}
+
+13
+
+//
+
+we
+
+know
+
+it
+
+cannot
+
+be
+
+smaller,
+
+so
+
+we’re
+
+14
+
+//
+
+now
+
+at
+
+skipDist
+
+15
+
+if
+
+(
+thisHit
+
+==
+
+prd
+.
+skipHit
+)
+
+{
+
+16
+
+//
+
+if
+
+same
+
+as
+
+first
+
+at
+
+skip
+
+dist
+
+we
+
+17
+
+//
+
+always
+
+ignore
+
+18
+
+{
+
+optixIgnoreIntersection
+();
+
+return
+;
+
+}
+
+19
+
+if
+
+(
+prd
+.
+skipInfo
+.
+numLeftToSkip
+
+==
+
+0)
+
+20
+
+{
+
+/*
+
+no
+
+more
+
+skipping
+
+-
+
+accept!
+
+*/
+
+return
+;
+
+}
+
+21
+
+//
+
+skip
+
+this
+
+one
+
+22
+
+--
+
+prd
+.
+skipInfo
+.
+numLeftToSkip
+;
+
+23
+
+optixIgnoreIntersection
+();
+
+24
+
+}
+
+25
+
+26
+
+void
+
+__CH
+()
+
+{
+
+27
+
+//
+
+this
+
+method
+
+does
+
+let
+
+userCode()
+
+28
+
+//
+
+have
+
+access
+
+to
+
+PRD
+
+29
+
+auto
+
+ret
+
+=
+
+userCode
+();
+
+30
+
+if
+
+(
+ret
+
+==
+
+keep_going
+)
+
+{
+
+31
+
+//
+
+save
+
+thisHit
+
+for
+
+main
+
+loop
+
+logic
+
+32
+
+prd
+.
+thisHit
+
+=
+
+getCurrentHit
+();
+
+33
+
+}
+
+34
+
+}
+
+35
+
+36
+
+void
+
+frontToBack
+(
+Ray
+
+ray
+)
+
+{
+
+37
+
+float
+
+saved_tmax
+
+=
+
+ray
+.
+tmax
+;
+
+38
+
+HelperPRD
+
+prd
+;
+
+39
+
+prd
+.
+skipHit
+.
+dist
+
+=
+
+-
+inf
+;
+
+40
+
+float
+
+next_tmin
+
+=
+
+ray
+.
+tmin
+;
+
+41
+
+int
+
+next_skipCount
+
+=
+
+0;
+
+42
+
+while
+
+(
+true
+)
+
+{
+
+43
+
+ray
+.
+tmin
+
+=
+
+next_tmin
+;
+
+44
+
+ray
+.
+tmax
+
+=
+
+saved_tmax
+;
+
+45
+
+prd
+.
+thisHit
+.
+primID
+
+=
+
+-1;
+
+//
+
+mark
+
+ray
+
+as
+
+’no
+
+hit’
+
+46
+
+prd
+.
+skipCount
+
+=
+
+next_skipCount
+;
+
+47
+
+traceRay
+(
+ray
+,
+
+PRD
+
+=
+
+&
+prd
+);
+
+48
+
+if
+
+(
+ray
+.
+thisHit
+.
+primID
+
+<
+
+0)
+
+49
+
+//
+
+no
+
+hit
+
+found,
+
+or
+
+usercode
+
+wants
+
+to
+
+exit
+
+50
+
+break
+;
+
+51
+
+if
+
+(
+ray
+.
+thisHit
+.
+dist
+
+>
+
+prd
+.
+skipHit
+.
+dist
+)
+
+{
+
+52
+
+//
+
+we
+
+found
+
+a
+
+new
+
+distance,
+
+(re-)init
+
+skipping
+
+53
+
+next_tmin
+
+=
+
+justBelow
+(
+ray
+.
+thisHit
+.
+dist
+)
+
+54
+
+//
+
+0
+
+_in
+
+addition
+
+to_
+
+’skipHit’!
+
+55
+
+next_skipCount
+
+=
+
+0;
+
+56
+
+prd
+.
+skipHit
+
+=
+
+prd
+.
+thisHit
+;
+
+57
+
+}
+
+else
+
+{
+
+58
+
+//
+
+skip
+
+one
+
+more
+
+in
+
+next
+
+iteration
+
+59
+
+++
+nextSkipCount
+;
+
+60
+
+}
+
+61
+
+}
+
+62
+
+}
+
+This method is not stable with respect to tree rebuilds because it
+relies on the order in which the AH program visits hits. It does,
+however, allow to be used in an iterative fashion, though because it
+has to OptiX-reject the true hit it will also not allow for the
+
+userCode()
+to access the RTX state data.
+
+3.3.
+Method 3 (correct):
+while-while
+
+The core idea of this kernel is that we can split our problem in two:
+iterating over increasing unique hit
+distances
+first, and then,
+for each such distance, iterating over all hits that have that
+distance.
+
+For the first task, we loop over closest hit rays
+that always trace the next ray with a
+tMin
+set to whatever the
+last found distance was. These rays are traced with AH disabled, and
+with a CH program that does nothing other than returning the hit
+distance through its per-ray data. We call these rays
+distance
+feelers
+, because all they do is find the next distance
+where
+
+something will happen.
+
+Once we have a given distance
+tNext
+, we can then create a
+second ray—that we call the “executor” ray—whose
+tMin
+we
+set to
+tMin=nextBefore(tHit)
+, and its
+tMax
+to
+
+tMax=justAbove(tHit)
+. We also equip this ray with an AH program
+that executes the user’s
+userCode()
+(hence the name), and then
+OptiX-rejects the found found hit. Since there is only a single
+possible float value inside an executor ray’s
+tMin/tMax
+
+interval (namely,
+tHit
+) that ray is guaranteed to have its AH
+program called only for intersections at
+tHit
+, and since it
+always OptiX-rejects all rays it is also guaranteed to get called for
+all hits at that distance. Executor do not need a CH program, so we
+can actually use the same SBT entry for both types of rays: the SBT
+entry holds both CH program (for feeler rays) and AH program (for
+executors), and the trace call selects which one to use by
+disabling the other.
+
+Since this method effectively realizes two nested while loops—one
+explicit one over feeler rays, then an implicit one over all AH
+executions—we call this the
+while-closest-while-any
+method (or
+
+while-while
+, for short). In pseudo-code, it looks like this:
+
+⬇
+
+1
+
+//
+
+while-closest-while-any
+
+2
+
+3
+
+//
+
+helper
+
+CH
+
+prog
+
+that
+
+only
+
+returns
+
+hit
+
+dist
+
+4
+
+void
+
+__outerRay_CH
+()
+
+{
+
+5
+
+float
+
+&
+prd
+
+=
+
+getPRD
+<
+float
+>();
+
+6
+
+prd
+
+=
+
+optixTMax
+()
+
+7
+
+}
+
+8
+
+9
+
+//
+
+AH
+
+prog
+
+for
+
+actual
+
+user
+
+code
+
+10
+
+void
+
+__innerRay_AH
+()
+
+{
+
+11
+
+userCode
+();
+
+12
+
+if
+
+(
+user
+
+code
+
+wants
+
+to
+
+terminate
+)
+
+13
+
+optixTerminateRay
+();
+
+14
+
+else
+
+15
+
+optixIgnoreIntersection
+();
+
+16
+
+}
+
+17
+
+18
+
+void
+
+front_to_back
+(
+Ray
+
+ray
+,
+
+UserPRD
+
+&
+userPRD
+)
+
+{
+
+19
+
+//
+
+save
+
+original
+
+ray.tMax:
+
+20
+
+float
+
+user_tMax
+
+=
+
+ray
+.
+tMax
+
+21
+
+while
+(
+true
+)
+
+{
+
+22
+
+float
+
+tNext
+
+=
+
+-1.
+f
+;
+
+//
+
+sentinel
+
+value
+
+23
+
+optixTrace
+(
+ray
+,
+
+PRD
+=&
+tNext
+,
+
+DISABLE_AH
+)
+
+24
+
+if
+
+(
+tNext
+
+==
+
+-1.
+f
+)
+
+25
+
+//
+
+no
+
+next
+
+hit
+
+distance
+
+was
+
+found
+
+-
+
+done
+
+26
+
+return
+;
+
+27
+
+28
+
+//
+
+restrict
+
+ray
+
+interval
+
+to
+
+ONLY
+
+tNext
+
+29
+
+ray
+.
+tMin
+
+=
+
+justBelow
+(
+tNext
+)
+
+30
+
+ray
+.
+tMax
+
+=
+
+justAbove
+(
+tNext
+)
+
+31
+
+//
+
+trace
+
+ray
+
+with
+
+only
+
+AH
+
+program:
+
+32
+
+optixTrace
+(
+ray
+,
+
+PRD
+=&
+userPRD
+,
+
+DISABLE_CH
+)
+
+33
+
+34
+
+//
+
+set
+
+next
+
+outer
+
+ray’s
+
+interval
+
+to
+
+35
+
+//
+
+‘‘anything
+
+larger
+
+than
+
+tNext’’
+
+36
+
+ray
+.
+tMin
+
+=
+
+tNext
+
+37
+
+ray
+.
+tMax
+
+=
+
+user_tMax
+;
+
+38
+
+//
+
+...
+
+and
+
+iterate
+
+39
+
+}
+
+40
+
+}
+
+The downside of this method is that many intersections require
+
+two
+rays to be traced: one feeler ray for the distance, and
+then a second one to execute. This sounds horrible, but actually
+isn’t: feeler rays are cheap because they have no AH program at all,
+and a very cheap CH program—which makes them about as close to ideal
+for the hardware as they could be. Executor rays do of course need an
+AH program, and possibly multiple AH call; but with the extremely
+narrow ray interval they require very(!) little BVH traversal and
+triangle intersection, and execute the (costly!) AH programs only
+where actually required.
+
+Unlike
+stable-next
+this method can only be used in a
+AH-program like callback fashion; the user code can terminate the
+traversal, but cannot perform arbitrary operations between two
+successive operations. On the other hand, user code is called exactly
+when the pipeline found the respective hit, so the user code has full
+access to the entire RTX pipeline state.
+
+3.4.
+Method 4 (correct):
+while-merged
+
+One way of avoiding the
+while-while
+method’s duplicate trace calls is
+to merge the two kinds of rays—feelers and executors—into
+one: The
+while-while
+method uses only CH for one, and only AH
+for the other; these can be combined as long as
+the AH program gets called only on the same distance that the
+
+while-while
+method’s AH programs would have been called, too.
+
+To do this, we user a helper PRD that both specifies the last
+iteration’s found surface distance (
+tExec
+) as well as a slot
+for storing the respectively next distance. We then change the AH
+program to execute the user code at (only!) the intended distance, and
+to also OptiX-reject all hits at that distance. The CH program just
+stores the hit distance
+tFeeler
+, as before, which becomes the
+next iteration’s executor distance.
+
+During the iteration we set the
+tExec
+to the previous
+iteration’s
+tFeeler
+, and start the ray with
+
+ray.tMin=justBelow(tExec)
+. We call this the
+while-merged
+kernel:
+
+⬇
+
+1
+
+//
+
+while-while-merged
+
+2
+
+struct
+
+HelperPRD
+
+{
+
+3
+
+UserPRD
+
+*
+userPRD
+;
+
+4
+
+float
+
+tExec
+;
+
+5
+
+float
+
+tFeeler
+;
+
+6
+
+};
+
+7
+
+8
+
+//
+
+helper
+
+CH
+
+prog
+
+that
+
+only
+
+returns
+
+hit
+
+dist
+
+9
+
+void
+
+__CH
+()
+
+{
+
+10
+
+auto
+
+&
+prd
+
+=
+
+getPRD
+<
+HelperPRD
+>()
+
+11
+
+//
+
+’-1’
+
+means
+
+’user
+
+code
+
+wants
+
+to
+
+terminate
+
+12
+
+if
+
+(
+prd
+.
+tFeeler
+
+!=
+
+-2.
+f
+)
+
+13
+
+prd
+.
+tFeeler
+
+=
+
+optixTMax
+()
+
+14
+
+}
+
+15
+
+16
+
+//
+
+AH
+
+prog
+
+for
+
+actual
+
+user
+
+code
+
+17
+
+void
+
+__AH
+()
+
+{
+
+18
+
+bool
+
+atExecDistance
+
+19
+
+=
+
+(
+optixTMax
+()==
+prd
+.
+tExec
+);
+
+20
+
+if
+
+(!
+atExecDistance
+)
+
+21
+
+//
+
+not-first
+
+surf
+
+hits
+
+get
+
+accepted,
+
+but
+
+22
+
+//
+
+do
+
+not
+
+call
+
+AH
+
+23
+
+return
+;
+
+24
+
+//
+
+first-surf
+
+hits
+
+call
+
+user
+
+code
+
+25
+
+userCode
+();
+
+26
+
+if
+
+(
+user
+
+code
+
+wants
+
+to
+
+terminate
+)
+
+{
+
+27
+
+optixTerminateRay
+();
+
+28
+
+prd
+.
+tFeeler
+
+=
+
+-2;
+
+29
+
+}
+
+else
+
+30
+
+optixIgnoreIntersection
+();
+
+31
+
+}
+
+32
+
+33
+
+void
+
+front_to_back
+(
+Ray
+
+ray
+,
+
+UserPRD
+
+&
+userPRD
+)
+
+34
+
+{
+
+35
+
+float
+
+user_tMax
+
+=
+
+ray
+.
+tMax
+
+36
+
+HelperPRD
+
+prd
+
+{
+
+&
+userPRD
+,
+
+-1,
+
+-1
+
+};
+
+37
+
+while
+(
+true
+)
+
+{
+
+38
+
+float
+
+tNext
+
+=
+
+-1.
+f
+;
+
+//
+
+sentinel
+
+value
+
+39
+
+optixTrace
+(
+ray
+,
+
+PRD
+=&
+prd
+)
+
+40
+
+if
+
+(
+prd
+.
+tFeeler
+
+<
+
+0.
+f
+)
+
+41
+
+//
+
+no
+
+surface
+
+dist
+
+was
+
+found
+
+-
+
+done
+
+42
+
+return
+;
+
+43
+
+44
+
+//
+
+re-start
+
+right
+
+before
+
+next
+
+surface
+
+45
+
+ray
+.
+tMin
+
+=
+
+justBelow
+(
+prd
+.
+tExec
+)
+
+46
+
+ray
+.
+tMax
+
+=
+
+user_tMax
+;
+
+47
+
+//
+
+enable
+
+AH
+
+for
+
+(only)
+
+that
+
+distance
+
+48
+
+prd
+.
+tExec
+
+=
+
+prd
+.
+tFeeler
+;
+
+49
+
+prd
+.
+tFeeler
+
+=
+
+-1;
+
+50
+
+//
+
+...
+
+and
+
+iterate
+
+51
+
+}
+
+52
+
+}
+
+At first glance this should be a clear win over
+while-while
+, because
+it avoids that method’s overhead of needing two rays for most hits.
+However, the rays traced in this method have both AH and CH programs
+enabled, have a non-singular
+ray.tMin/tMax
+ranges, and will
+consequently call many more AH programs than the
+while-while
+variant. Even though these AH programs call the user code only where
+required, they nevertheless make these rays much more expensive,
+which—as our results will show—largely cancels out the savings
+from fewer rays. Like the
+while-while
+method this method
+does allow the user code to access the RTX pipeline properties.
+
+3.5.
+For Reference:
+AH-only
+and
+CH-only
+
+For reference, in the following evaluation of our methods we will also
+compare to the two obvious (but incorrect) reference methods:
+
+CH-only
+runs a simple loop over successive calls to
+
+optixTrace
+with each next ray’s
+tMin
+set to the last
+ray’s found hit distance; with user code executed in the CH program,
+and AH programs disabled.Similarly,
+AH-only
+traces a single ray with user code
+called in the AH program, but no CH program. This method will
+guarantee that no hits will get skipped, but might call the user code
+out of proper distance order.
+
+This methods will obviously not be correct; one will skip hits at
+similar distance, the other reports hits out of order. Even as
+performance baselines they have to be taken with a grain of
+salt—e.g., finding only some hits will obviously be faster than properly finding
+all—but we nevertheless decided to include these as well. We omit
+sample code for this in
+this paper; but reference code is available in the accompanying test
+rig.
+
+method
+
+correctness
+
+type of
+
+rtx state
+
+iteration
+(1)
+
+access
+(2)
+
+stable-next
+
+correct
+
+explicit (return value)
+
+no
+
+while-while
+
+correct
+
+callback (in AH prog)
+
+yes
+
+while-merged
+
+correct
+
+callback (in AH prog)
+
+yes
+
+reject-repeats
+
+correct
+
+explicit (return value or CH prog)
+
+yes
+
+stable multi-hit variants
+
+correct
+
+explicit (return value)
+
+no
+
+AH-only
+
+out of order
+
+callback (in AH prog)
+
+yes
+
+CH-only
+
+skip coplanar
+
+explicit (return value or in CH prog)
+
+yes
+
+Table 1.
+
+Summary of the different methods’ properties.
+
+(1)
+Type of iteration:
+explicit
+means the user’s code
+will explicitly ask for the next hit, and can do arbitrary other
+work between iterations;
+callback
+means the user can only
+provide a callback function to be called (similar to an AH program),
+but once the trace is started the method itself determines when it
+gets called.
+(2)
+Whether the user code has access to the full
+RTX state (hit IDs, transforms, etc) through OptiX query
+functions.
+
+method
+
+Butler Truck
+
+UNC PowerPlant
+
+PBRT BMW
+
+CAD model
+
+PBRT Landscape
+
+splatting
+
+maxDepth=1; always exist after first hit
+
+stable order
+
+0.13 (+1%)
+
+0.13 (+7%)
+
+0.18
+(
++23%)
+
+0.37
+(
++62%)
+
+1.01
+(
++61%)
+
+0.32
+(
++70%)
+
+while-while
+
+0.13
+(best)
+
+0.12
+(best)
+
+0.15 (+6%)
+
+0.25 (+10%)
+
+0.69 (+10%)
+
+0.20 (+4%)
+
+while-merged
+
+0.16
+(
++19%)
+
+0.16
+(
++33%)
+
+0.18
+(
++23%)
+
+0.38
+(
++68%)
+
+0.99
+(
++58%)
+
+0.30
+(
++61%)
+
+reject-repeats
+
+0.13 (+0%)
+
+0.12 (+1%)
+
+0.15
+(best)
+
+0.23
+(best)
+
+0.63
+(best)
+
+0.19
+(best)
+
+maxDepth=5; iterate through first 5 hits (or all if less)
+
+stable order
+
+0.52
+(
++47%)
+
+0.49
+(
++51%)
+
+0.72
+(
++34%)
+
+1.70
+(
++47%)
+
+6.13
+(
++68%)
+
+1.74
+(
++73%)
+
+while-while
+
+0.35
+(best)
+
+0.32
+(best)
+
+0.57 (+6%)
+
+1.32
+(
++14%)
+
+3.72 (+2%)
+
+1.00
+(best)
+
+while-merged
+
+0.36 (+4%)
+
+0.39
+(
++20%)
+
+0.57 (+6%)
+
+1.28
+(
++11%)
+
+4.12
+(
++13%)
+
+1.26
+(
++26%)
+
+reject-repeats
+
+0.35 (+1%)
+
+0.36
+(
++12%)
+
+0.54
+(best)
+
+1.16
+(best)
+
+3.64
+(best)
+
+1.14
+(
++14%)
+
+maxDepth=25; iterate through first 25 hits (or all if less)
+
+stable order
+
+1.62
+(
++85%)
+
+1.79
+(
++90%)
+
+1.02
+(
++32%)
+
+5.50
+(
++42%)
+
+24.3
+(
++64%)
+
+5.33
+(
++74%)
+
+while-while
+
+0.88
+(best)
+
+0.94
+(best)
+
+0.81 (+4%)
+
+4.45
+(
++15%)
+
+15.3 (+3%)
+
+3.06
+(best)
+
+while-merged
+
+0.91 (+3%)
+
+1.18
+(
++25%)
+
+0.78
+(best)
+
+3.88
+(best)
+
+14.9
+(best)
+
+3.56
+(
++17%)
+
+reject-repeats
+
+1.05
+(
++20%)
+
+1.13
+(
++20%)
+
+0.78 (+1%)
+
+3.89 (+0%)
+
+14.9 (+0%)
+
+3.53
+(
++15%)
+
+no max depth; iterate through all hits, no matter how many
+
+stable order
+
+2.18
+(
++106%)
+
+3.09
+(
++60%)
+
+1.03
+(
++32%)
+
+6.95
+(
++50%)
+
+59.4
+(
++65%)
+
+40.5
+(
++144%)
+
+while-while
+
+1.06
+(best)
+
+1.92
+(best)
+
+0.81 (+4%)
+
+5.23
+(
++13%)
+
+36.1
+(best)
+
+16.6
+(best)
+
+while-merged
+
+1.15 (+8%)
+
+2.09 (+9%)
+
+0.78
+(best)
+
+4.62
+(best)
+
+36.7 (+2%)
+
+23.5
+(
++42%)
+
+reject-repeats
+
+1.37
+(
++28%)
+
+2.11 (+10%)
+
+0.79 (+1%)
+
+4.70 (+2%)
+
+37.5 (+4%)
+
+23.6
+(
++42%)
+
+probabilistic depth; each iteration stops with 25% chance
+
+stable order
+
+0.59
+(
++72%)
+
+0.64
+(
++49%)
+
+0.58
+(
++28%)
+
+1.97
+(
++45%)
+
+6.94
+(
++70%)
+
+1.60
+(
++69%)
+
+while-while
+
+0.34
+(best)
+
+0.43
+(best)
+
+0.46 (+1%)
+
+1.42 (+4%)
+
+4.09
+(best)
+
+0.94
+(best)
+
+while-merged
+
+0.38 (+10%)
+
+0.49
+(
++12%)
+
+0.47 (+4%)
+
+1.42 (+4%)
+
+4.54
+(
++11%)
+
+1.16
+(
++23%)
+
+reject-repeats
+
+0.41
+(
++19%)
+
+0.49
+(
++14%)
+
+0.46
+(best)
+
+1.36
+(best)
+
+4.28 (+5%)
+
+1.10
+(
++17%)
+
+Table 2.
+Performance for the different kernels that iterate over hits individually, in a hit-by-hit fashion, for different scenes and different patterns of how many iterations the application will do. Performance numbers are in milliseconds per
+1600\times 1200
+frame, on a NVIDIA RTX 4090 GPU, for iterating through the specified number of iterations with intentionally simpler per-intersection
+userCode()
+.
+
+4.
+Evaluation
+
+Our kernels will not only differ in performance,
+but also in other properties such as iterator vs callback, whether or
+not it has access to the pipeline state, etc. A side by side
+comparison regarding these properties is given in
+Table
+1
+. Regarding performance, how the different
+methods perform depends not only on the actual scene, but also on how
+many iterations are to be performed.
+
+4.1.
+Comparison Methodology
+
+To evaluate all these options we have written a small test-rig that
+can load a model (with instances of triangle meshes), generate primary
+rays for what we consider a representative view of the respective
+model, and then in each pixel iterate through multiple hits along each
+rays. To compare the different method we use a framework where all
+kernels operate in a callback fashion where the actual user code to be
+executed is a function that operates on a user-defined PRD struct, and
+returns a bool that indicates whether it does or doesn’t want to
+terminate this ray. For each method we can then compile OptiX device
+code that calls this same user code in whatever fashion this kernel
+operates in.
+
+To compare how different kernels react to different iteration counts
+we use multiple different such user-defined callbacks: one counts how
+often it got called, and terminates traversal after a compile-time
+defined maximum depth
+N
+; the other generates a pseudo-random number
+generator for each ray, and uses that to probabilistically terminates
+rays with a certain probability of 1-in-N (i.e., for
+
+probDepth=4
+the userCode terminates a ray with a 25%
+chance). The latter of these kernels is particularly useful to
+simulate situations like rays going through foliage with partially
+transparent surfaces; which will act largely proabilistically. The
+kernel with a fixed maximum depth is useful in evaluating both
+extremes of actually stopping after the first hit (maxDepth=1) as well
+as going through all hits that exist (maxDepth=inf); as well as for
+some values in between.
+
+To ensure correctness our user code tracks how often it has been
+called, as well as the distance for which it was last
+invoked. Combining this with different
+probDepth
+and
+
+maxDepth
+variants allows for thorough validation:
+methods that miss or double-report hits would
+produce at least some different pixels for
+maxDepth=none
+, while
+methods that didn’t produce the proper order would produce different
+depth-shaded results when called with a fixed
+maxDepth
+. We
+use a pseudo-color generator to make sure that even very small
+differences in computed values will produce very different colors, so
+differences cannot get masked by image compression.
+
+We test on different test scenes (see
+Figure
+1
+). These are intentionally chosen to cover a
+wide range of different models, including with and without instances,
+man-made structures vs vegetation, etc. The
+Butler Truck
+was a typical
+test case for the
+Bullet Ray Vision
+
+Butler and
+Stephens 2007
+
+and similar multi-hit related projects, and
+splatting
+
+represents the sort of screen-space layered quads one can encounter in
+certain gaussian splatting based rendering. We also point out how
+different the otherwise similar-looking
+PBRT BMW
+and
+CAD
+Model
+are for this evaluation: one contains only externally visible
+cars (as could be expected for a typical rendering model), while the
+other contains all the interior geometry as well (as can be expected
+for a more engineering-related CAD model).
+
+method
+
+truck
+
+powerplant
+
+PBRT BMW
+
+CAD model
+
+landscape
+
+splatting
+
+maxDepth=1; always exist after first hit
+
+(best hit-by-hit)
+
+0.13
+
+0.12
+
+0.15
+
+0.23
+
+0.63
+
+0.19
+
+stable multiHit(4)
+
+0.19
+(+48%)
+
+0.25
+(+2.0x)
+
+0.28
+(+90%)
+
+0.62
+(+2.8x)
+
+2.19
+(+3.5x)
+
+0.58
+(+3.1x)
+
+stable multiHit(16)
+
+0.37
+(+2.9x)
+
+0.51
+(+4.1x)
+
+0.35
+(+2.4x)
+
+1.19
+(+5.3x)
+
+5.48
+(+8.7x)
+
+1.53
+(+8.2x)
+
+stable multiHit(64)
+
+0.57
+(+4.4x)
+
+1.26
+(+10.3x)
+
+0.36
+(+2.4x)
+
+2.12
+(+9.4x)
+
+13.3
+(+21.1x)
+
+5.91
+(+31.5x)
+
+maxDepth=5; iterate through first 5 hits (or all if less)
+
+(best hit-by-hit)
+
+0.35
+
+0.32
+
+0.54
+
+1.16
+
+3.64
+
+1.00
+
+stable multiHit(4)
+
+0.34
+(–2%)
+
+0.42
+(+31%)
+
+0.40
+(–25%)
+
+1.14
+(–2%)
+
+4.65
+(+28%)
+
+1.10
+(+9.8%)
+
+stable multiHit(16)
+
+0.38
+(+8.2%)
+
+0.53
+(+64%)
+
+0.35
+(–34%)
+
+1.20
+(+3.9%)
+
+5.48
+(+50%)
+
+1.54
+(+54%)
+
+stable multiHit(64)
+
+0.57
+(+64%)
+
+1.28
+(+4.0x)
+
+0.36
+(–33%)
+
+2.14
+(+84%)
+
+13.3
+(+3.6x)
+
+5.95
+(+5.9x)
+
+maxDepth=25; iterate through first 25 hits (or all if less)
+
+(best hit-by-hit)
+
+0.88
+
+0.94
+
+0.78
+
+3.88
+
+14.9
+
+3.06
+
+stable multiHit(4)
+
+0.73
+(–16%)
+
+1.07
+(+14%)
+
+0.47
+(–40%)
+
+2.41
+(–38%)
+
+12.4
+(–16%)
+
+2.39
+(–22%)
+
+stable multiHit(16)
+
+0.52
+(–40%)
+
+0.83
+(–12%)
+
+0.37
+(–52%)
+
+1.68
+(–57%)
+
+8.90
+(–40%)
+
+2.54
+(–17%)
+
+stable multiHit(64)
+
+0.58
+(–34%)
+
+1.28
+(+36%)
+
+0.37
+(–52%)
+
+2.15
+(–45%)
+
+13.2
+(–11%)
+
+6.00
+(+96%)
+
+no max depth; iterate through all hits, no matter how many
+
+(best hit-by-hit)
+
+1.06
+
+1.92
+
+0.78
+
+4.62
+
+36.1
+
+16.6
+
+stable multiHit(4)
+
+0.91
+(–14%)
+
+1.61
+(–16%)
+
+0.47
+(–40%)
+
+3.11
+(–33%)
+
+27.8
+(–23%)
+
+18.4
+(+11%)
+
+stable multiHit(16)
+
+0.61
+(–42%)
+
+1.19
+(–38%)
+
+0.36
+(–54%)
+
+2.04
+(–56%)
+
+18.8
+(–48%)
+
+15.9
+(–5%)
+
+stable multiHit(64)
+
+0.57
+(–46%)
+
+1.54
+(–20%)
+
+0.36
+(–54%)
+
+2.26
+(–51%)
+
+19.3
+(–47%)
+
+21.1
+(+27%)
+
+probabilistic depth; each iteration stops with 25% chance
+
+(best hit-by-hit)
+
+0.34
+
+0.43
+
+0.46
+
+1.36
+
+4.09
+
+0.94
+
+stable multiHit(4)
+
+0.35
+(+2.7%)
+
+0.48
+(+11%)
+
+0.36
+(–21%)
+
+1.12
+(–18%)
+
+4.04
+(–1%)
+
+0.97
+(+3.4%)
+
+stable multiHit(16)
+
+0.41
+(+19%)
+
+0.58
+(+34%)
+
+0.38
+(–17%)
+
+1.30
+(–5%)
+
+5.66
+(+38%)
+
+1.66
+(+76%)
+
+stable multiHit(64)
+
+0.61
+(+77%)
+
+1.31
+(+3.0x)
+
+0.39
+(–15%)
+
+2.22
+(+63%)
+
+13.2
+(+3.2x)
+
+6.05
+(+6.4x)
+
+Table 3.
+Time per frame (in ms,
+1600\times 1200
+pixels, on a NVIDIA RTX 4090 GPU) per frame for the different multi-hit methods relative to the respectively best hit-by-hit method, for various maximum number of iterations. Green is better, red is worse.
+
+4.2.
+Comparison of Individual Hit Methods
+
+As we will show below the multi-hit methods will have—depending on
+chosen iteration count—vastly different performance characteristics
+than those methods that iterate on a hit by hit basis.
+
+To avoid this from masking how the other methods perform we will first
+only compare those kernels that operate on an individual hit
+basis. Performance results for different test-rig configuration and
+scenes are given in Table
+2
+.
+This table shows that there is no clear winner that is best in all cases. However, a few observations can still be
+made. On is that
+stable-next
+is never good. It lacks access to the pipeline
+state, and always performs poorly: each iteration requires a new ray to be
+traced, each such ray has to use a non-trivial AH program, and those
+AH programs cannot even accept rays at the
+closest distance, causing many such calls. This method does
+allow for explicit iteration, but so does
+reject-repeats
+, which
+is almost always faster, while also allowing for access to the RTX
+pipeline state. Together, this
+leaves little reason to ever recommend this method—which is
+concerning in that this was—before this evaluation—our go-to
+method for this problem.
+
+Among the remaining three methods,
+while-while
+is consistently
+better than
+while-merged
+. This is because AH programs are
+expensive, so despite tracing more rays
+while-while
+
+still wins, because the it has fewer AH calls overall.
+While-while
+
+is also easier to implement, and with all other properties the same
+this leaves
+while-while
+a subtle but nevertheless clear winner
+over
+while-merged
+.
+
+This leaves
+while-while
+versus
+reject repeats
+. Which one
+of those is faster depends on the scene; however, we believe this to
+not be random, but instead, to depend on what fraction of the scene’s
+triangles will spatially overlap other triangles: The
+Butler
+Truck
+contains lots of co-planar surfaces, which obviously overlap;
+the
+powerplant
+contains less fully co-planar triangles, but in its
+interior it does contain lots of long diagonal triangles that a BVH
+with only axis-aligned boxes probably cannot separate. In either of
+these two cases, being able to iterate over multiple primitives in the
+same BVH node with an AH program should be faster than iterating with
+a new ray—but though we believe this to be plausible, we stress that
+this is merely a hypothesis. Either way, neither of the two methods is
+a clear winner over the other, and even where they differ they do so
+by typically less than 20%.
+
+Outside of performance
+while-while
+is arguably slightly easier
+to implement than
+reject repeats
+. Both have access to the RTX
+pipeline stack, but the former can only be realized inside an AH
+callback framework, while the latter can be used in both callback form
+as well as in a CH program.
+
+method
+
+truck
+
+powerplant
+
+PBRT BMW
+
+CAD model
+
+landscape
+
+splatting
+
+maxDepth=1; always exist after first hit
+
+(best hit-by-hit)
+
+0.13
+
+0.12
+
+0.15
+
+0.23
+
+0.63
+
+0.19
+
+reference AH only
+
+0.08
+(-37%)
+
+0.08
+(-34%)
+
+0.09
+(-39%)
+
+0.12
+(-46%)
+
+0.40
+(-37%)
+
+0.10
+(-48%)
+
+reference CH only
+
+0.11
+(-12%)
+
+0.11
+(-7%)
+
+0.11
+(-22%)
+
+0.18
+(-20%)
+
+0.58
+(-9%)
+
+0.13
+(-31%)
+
+maxDepth=5; iterate through first 5 hits (or all if less)
+
+(best hit-by-hit)
+
+0.35
+
+0.32
+
+0.54
+
+1.16
+
+3.64
+
+1.00
+
+reference AH only
+
+0.14
+(-60%)
+
+0.16
+(-52%)
+
+0.25
+(-55%)
+
+0.45
+(-62%)
+
+1.46
+(-60%)
+
+0.37
+(-63%)
+
+reference CH only
+
+0.24
+(-30%)
+
+0.26
+(-20%)
+
+0.34
+(-38%)
+
+0.89
+(-23%)
+
+2.88
+(-21%)
+
+0.53
+(-47%)
+
+maxDepth=25; iterate through first 25 hits (or all if less)
+
+(best hit-by-hit)
+
+0.88
+
+0.94
+
+0.78
+
+3.88
+
+14.9
+
+3.06
+
+reference AH only
+
+0.31
+(-64%)
+
+0.40
+(-57%)
+
+0.33
+(-58%)
+
+1.11
+(-71%)
+
+5.42
+(-64%)
+
+0.96
+(-69%)
+
+reference CH only
+
+0.55
+(-37%)
+
+0.74
+(-22%)
+
+0.45
+(-41%)
+
+2.82
+(-27%)
+
+12.2
+(-18%)
+
+1.62
+(-47%)
+
+no max depth; iterate through all hits, no matter how many
+
+(best hit-by-hit)
+
+1.06
+
+1.92
+
+0.78
+
+4.62
+
+36.1
+
+16.6
+
+reference AH only
+
+0.37
+(-65%)
+
+0.65
+(-66%)
+
+0.33
+(-58%)
+
+1.26
+(-73%)
+
+9.27
+(-74%)
+
+2.32
+(-86%)
+
+reference CH only
+
+0.63
+(-41%)
+
+1.28
+(-33%)
+
+0.46
+(-42%)
+
+3.23
+(-30%)
+
+25.5
+(-29%)
+
+8.43
+(-49%)
+
+probabilistic depth; each iteration stops with 25% chance
+
+(best hit-by-hit)
+
+0.34
+
+0.43
+
+0.46
+
+1.36
+
+4.09
+
+0.94
+
+reference AH only
+
+0.14
+(-59%)
+
+0.19
+(-56%)
+
+0.20
+(-55%)
+
+0.47
+(-65%)
+
+1.56
+(-62%)
+
+0.32
+(-66%)
+
+reference CH only
+
+0.25
+(-27%)
+
+0.36
+(-18%)
+
+0.29
+(-37%)
+
+0.95
+(-30%)
+
+3.12
+(-24%)
+
+0.52
+(-45%)
+
+Table 4.
+Baseline performance comparison to the two (incorrect) reference methods.
+
+4.3.
+Comparison to Multi-Hit Methods
+
+In Table
+3
+we also include multi-hit methods into
+this comparison. To make this easier
+we only compare those to the respectively best result from a
+hit-by-hit method. The outcome of this experiment
+(Table
+3
+) is clear: The best way to view the
+multi-hit methods is as some sort of prefetching scheme that uses a
+single (and much more expensive) trace to find multiple hits at once,
+and then amortizes the cost of that the next
+N
+iterations.
+
+Viewed this way, the outcome is obvious: For configuration that end up
+iterating very often the multi-hit methods are much faster than
+iterating hit by hit, and overall, the more hits we find in each
+multi-hit call the better for performance. Conversely, configuration
+that on average take fewer iterations will be much slower that for the
+hit-by-hit methods, and the larger the number of hits we gather in the
+multi-hit the worse it gets. For rather deep iteration counts these
+methods can pay off, other they can be significantly worse.
+
+There are also other considerations the prospective user
+may want to take into account: on one hand, multi-hit methods provide
+more information than hit-by-hit method, which may be useful if, for
+example, the simulation code has to sort multiple same-distance hits
+by other properties such as material type, or whether the ray this
+front or back face of the triangle. On the other hand, multi-hit
+methods cannot access the OptiX state, and require (much) more kernel
+memory to store all these hit points, which might be prohibitive.
+
+4.4.
+Comparison to Reference Baseline
+
+In Table
+4
+we also
+compare the respectively best correct hit-by-hit method to the
+
+AH-only
+and
+CH-only
+variants. This
+comparison has to be taken with a grain of salt, as the latter
+will almost always report only a subset of the correct hits.
+
+Not surprisingly these reference methods are always faster. For the
+two simplest models (PBRT BMW and Butler Truck) the CH method is up to
+almost 2x faster, but for the more interesting model these methods’
+runtime is only about a quarter or a third lower. This in turns means
+that our kernels are almost surprisingly close to what the hardware
+can actually deliver, which is encouraging (where applicable the
+multi-hit methods would even beat the CH reference methods).
+
+The AH method is obviously even faster; often by about 2x faster than
+our best method, and sometimes even close to 3x. If proper depth
+ordering of the results is not required this is obviously
+preferable. However, we do point out that our test images show that
+this method will, indeed, typically report hits out of order.
+
+5.
+Summary, Discussion, and Conclusion
+
+In this paper, we have described and evaluated different methods for
+solving what we call the
+front-to-back any-hit (FTB)
+problem—the
+problem of iterating through multiple hits along a ray, in
+front-to-back sorted order, without skipping any hits even if they
+occur at same distance. We presented five methods for
+doing so in an iterative hit-by-hit fashion, as well as a multi-hit
+variant that—unlike classical multi-hit methods—also allows for
+always finding the respectively
+next
+N hits. We have classified
+the different methods according to various properties, and evaluated
+their performance using a thorough test-rig that allows for simulating
+different kinds of applications that require different numbers of
+iterations and even probabilistic iteration depth.
+
+We implemented all our kernels in OptiX
+NVIDIA
+Corporation 2026
+, but realizations
+in Vulkan
+Khronos Group 2021
+, DirectX
+Microsoft 2021
+, Metal
+Apple 2026
+, or
+even Embree
+Wald
+et al. 2014
+or HipRT
+Meister et al. 2024
+should be
+straightforward. We believe our implementation to be reasonably
+efficient; however, our test-rig and the requirement to run all
+kernels in the same framework will almost certainly carry some
+overhead, so a dedicated optimization effort for a single kernel may
+well see some improvements. This is particularly true for the
+multi-hit method, which is currently based on the same idea as
+
+stable-next
+, which itself was generally slower than the
+
+reject-repeats
+or
+while-while
+. This suggests that basing
+multi-hit on those methods might even faster multi-hit kernels—but
+would probably not change the general findings of our evaluation.
+
+A big issue with our evaluation is that all our experiments used a
+very simple
+userCode()
+mock-up that only required very little
+hit data. Real applications would likely have to track much more
+information per hit—which may affect some kernels more than others,
+and in particular might lead to significant differences between those
+kernels that can access the RTX state and those that do not. Without
+actual end-user applications, this is very hard to evaluate.
+
+Ultimately what we would like to see is to have FTB added to the RTX
+pipeline; either as a special trace call, or through a special flag
+passed to the trace function. This could happen in the same was a
+trace can today be told to ignore AH or CH calls, or to stop at the
+first intersection, etc—except it would simply enforce AH calls to
+be delivered in order. Since our kernels already operate only on
+existing RTX infrastructure, doing so should be straightforward in the
+driver, but this has not yet happened. Adopting FTB into the RTX spec
+might also allow for additional optimizations inside the driver that
+are not currently possible when having to use only publicly exposed
+functionality, but how much that might gain is hard to tell.
+

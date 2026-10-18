@@ -1,0 +1,1477 @@
+GQLA: Group-Query Latent Attention for Hardware-Adaptive Large Language Model Decoding
+Fanxu Meng
+
+Abstract
+Multi-head Latent Attention (MLA), deployed in DeepSeek-V2/V3, jointly compresses keys and values into a low-rank latent and nearly saturates the H100 roofline. Its trained weights, however, expose only one decoding path—an absorbed MQA form—which couples efficient inference to H100-class compute-to-bandwidth ratios and forfeits head-axis tensor parallelism. We propose Group-Query Latent Attention (GQLA) , a minimal MLA variant whose trained weights expose two algebraically equivalent decoding paths: an MQA-absorb path identical to MLA’s, and a GQA path with a per-group expanded cache. The runtime selects the path that matches the target hardware—no retraining, no custom kernels—so a single set of weights pins the rooflines of both H100 (MQA-absorb) and H20 (GQA + MTP), while supporting 8 8 -way zero-redundancy tensor parallelism on the GQA path. To avoid pretraining from scratch we extend TransMLA into TransGQLA , converting both pretrained GQA and MLA checkpoints: on LLaMA-3-8B it compresses the KV cache to 28.125 % 28.125\% on the MQA-absorb path; on GLM-4.7 a calibration-only per-group activation PCA loses only ∼ 4.7 {\sim}4.7 Avg. points on commonsense reasoning with no gradient updates.
+
+
+
+Figure 1:
+MHA, GQA, MQA, MLA, and our GQLA. MLA’s joint low-rank latent yields the smallest KV cache but locks decoding into a single MQA-absorb path; GQLA keeps the latent compression and additionally exposes a GQA decoding path over the same weights, letting the runtime match the target hardware (§
+3.1
+).
+
+1
+Introduction
+
+Autoregressive LLM decoding is bottlenecked by Key–Value (KV) cache traffic: every generated token reads the entire cached history from off-chip memory
+(
+13
+;
+18
+)
+. Architectural reductions have evolved from MQA
+(
+14
+)
+and GQA
+(
+1
+)
+to Multi-head Latent Attention (MLA;
+9
+), which compresses K/V into a low-rank latent and powers DeepSeek-V2/V3
+(
+9
+;
+10
+)
+. MLA admits two equivalent execution paths—MHA-like expansion for prefill and MQA-absorb for decoding—and at the canonical
+(h_{q},d_{h},r_{kv},d_{h}^{R})\!=\!(128,128,512,64)
+the absorb path reaches
+\!\approx\!242
+FLOPs/byte, just below the H100 BF16 ridge (
+\!\approx\!295
+;
+16
+). This near-ideal H100 fit is, however, MLA’s
+only
+operating point. Locking into MQA-absorb makes MLA (i)
+hardware-coupled
+—the export-restricted H20 keeps HBM bandwidth but cuts compute
+\sim\!7\times
+, dropping its ridge to
+\sim\!37
+FLOPs/byte and rendering MLA compute-bound (§
+4.2
+); (ii)
+TP-unfriendly
+—the absorbed form funnels every head through one shared latent, forcing tensor parallelism to replicate that latent across ranks; and (iii)
+MTP-unfriendly
+—Multi-Token Prediction
+(
+6
+;
+10
+)
+doubles per-step intensity, pushing MLA past the H100 ridge and yielding zero gain on H20.
+
+We propose a minimal MLA variant, named Group-Query Latent Attention (GQLA; Figure
+1
+, right; Figure
+2
+), that keeps the joint latent but indexes the up-projections by
+g
+groups instead of replicating them across
+h_{q}
+heads. The trained weights then admit two equivalent decoding paths:
+MQA-absorb
+(as in MLA) caches the latent plus the shared RoPE key (
+r_{kv}\!+\!d_{h}^{R}
+elements/token);
+GQA
+caches per-group
+K_{C},V
+plus the shared RoPE key (
+2gd_{h}\!+\!d_{h}^{R}
+) and runs vanilla GQA. With
+h_{q}\!=\!128
+,
+g\!=\!8
+, and one MTP head, the same weights pin both rooflines: H100 + MQA-absorb at
+s_{q}\!=\!1
+inherits MLA’s sweet spot, while H20 + GQA at
+s_{q}\!=\!2
+lands the H20 ridge and retains near-full MTP speedup. The GQA path additionally enables
+8
+-way zero-redundancy tensor parallelism, and both paths reuse existing MLA/GQA kernels.
+
+To avoid pretraining from scratch we extend TransMLA
+(
+12
+)
+into
+TransGQLA
+, which converts
+both
+families of pretrained checkpoints: the GQA route applies a single targeted change to TransMLA’s head-merging step, and the MLA route recovers the per-group factorisation from a pretrained MLA latent via side-separated PCA on up-projection activations, with no gradient updates. GQLA also extends naturally to sparse attention:
+h_{q}/g\!=\!16
+matches the Tensor-Core MMA tile, so sparse GQLA preserves the GQA path on H20-class hardware, whereas sparse MLA
+(
+11
+)
+is locked to the absorb path. In summary, we
+
+(i)
+
+identify MLA’s three coupled drawbacks;
+
+(ii)
+
+introduce GQLA (§
+3.1
+), TransGQLA (§
+3.2
+), and a sparse extension (§
+3.3
+); and
+
+(iii)
+
+give a Roofline analysis (§
+4
+) showing that the same weights pin both rooflines, validated on LLaMA-3-8B and GLM-4.7 (§
+5
+).
+
+2
+Related Work
+
+KV-cache reduction via attention design.
+
+MQA
+(
+14
+)
+collapses to a single KV head, GQA
+(
+1
+)
+shares one KV head per group, and MLA
+(
+9
+)
+compresses keys and values into a low-rank latent with a decoupled-RoPE pathway. Systems-level techniques such as FlashAttention
+(
+2
+)
+and paged/quantised KV caches are complementary. GQLA stays within this architectural family: it inherits MLA’s latent compression while restoring the GQA path that MLA gives up.
+
+Roofline-driven attention design.
+
+18
+give a hardware-aware roofline study of latent attention on H100;
+13
+and
+4
+argue that LLM inference is increasingly bandwidth-limited as compute scales faster than HBM. We follow this methodology (§
+4
+) and extend it to H20 to motivate hardware-adaptive path selection.
+
+Converting pretrained MHA/GQA models.
+
+TransMLA
+(
+12
+)
+converts a GQA model into MLA via exact head-merging followed by RoRoPE/FreqFold/balanced low-rank compression; MHA2MLA
+(
+8
+)
+pursues a similar goal under a different parameterisation. TransGQLA (§
+3.2
+) reuses the TransMLA pipeline almost verbatim, modifying only the head-merging step so the GQA path and tensor parallelism survive.
+
+(a)
+GQA path of GQLA.
+
+(b)
+MQA-absorb path of GQLA.
+
+Figure 2:
+GQLA’s two algebraically equivalent decoding paths over a single set of trained weights.
+Left:
+the GQA path materialises
+g
+K/V groups from the latent and runs standard GQA (H20 working point).
+Right:
+the MQA-absorb path folds
+W^{UK},W^{UV}
+into
+Q/O
+so all
+h_{q}
+heads attend to the latent directly (H100 working point). The two paths produce numerically identical outputs (§
+4.2
+).
+
+3
+Methods
+
+3.1
+Group-Query Latent Attention
+
+Architecture.
+
+For token embedding
+\mathbf{x}_{t}\in\mathbb{R}^{D}
+,
+W^{DKV}\in\mathbb{R}^{r_{kv}\times D}
+compresses to a latent
+\mathbf{c}_{t}^{KV}
+that
+W^{UK},W^{UV}\in\mathbb{R}^{gd_{h}\times r_{kv}}
+expand into
+g
+K/V groups of per-head dim
+d_{h}
+, matching a
+g
+-group GQA cache; queries decompose analogously via
+W^{DQ},W^{UQ}
+into
+h_{q}
+heads. Positions follow MLA’s decoupled-RoPE: per-head query path
+\mathbf{q}_{t,i}^{R}\in\mathbb{R}^{d_{h}^{R}}
+from
+W^{QR}
+and shared key path
+\mathbf{k}_{t}^{R}\in\mathbb{R}^{d_{h}^{R}}
+from
+W^{KR}
+:
+
+\displaystyle\mathbf{c}_{t}^{Q}
+
+\displaystyle=W^{DQ}\mathbf{x}_{t},\;\;\mathbf{c}_{t}^{KV}=W^{DKV}\mathbf{x}_{t},
+
+\displaystyle\mathbf{q}_{t}^{C}
+
+\displaystyle=W^{UQ}\mathbf{c}_{t}^{Q},\;\;\mathbf{k}_{t}^{C}=W^{UK}\mathbf{c}_{t}^{KV},
+
+\displaystyle\mathbf{q}_{t}^{R}
+
+\displaystyle=\text{RoPE}_{t}(W^{QR}\mathbf{c}_{t}^{Q}),
+
+\displaystyle\mathbf{k}_{t}^{R}
+
+\displaystyle=\text{RoPE}_{t}(W^{KR}\mathbf{x}_{t}),
+
+\displaystyle\mathbf{q}_{t,i}
+
+\displaystyle=[\mathbf{q}_{t,i}^{C};\mathbf{q}_{t,i}^{R}],\;\;\mathbf{k}_{t,i}=[\mathbf{k}_{t,i}^{C};\mathbf{k}_{t}^{R}].
+
+(1)
+
+Two equivalent decoding paths.
+
+The same weights expose two algebraically equivalent paths, differing only in how
+\mathbf{c}_{t}^{KV}
+is consumed. The GQA path (Eq. (
+2
+)) materialises
+g
+K/V groups and runs standard GQA against a
+2gd_{h}+d_{h}^{R}
+per-group cache; the MQA-absorb path (Eq. (
+3
+)) folds
+W^{UK},W^{UV}
+into
+Q/O
+so the latent itself serves as a shared K/V against a compact
+r_{kv}+d_{h}^{R}
+cache. Switching between them is a one-shot cache compress/expand performed at deployment.
+
+GQA path.
+
+\displaystyle\mathbf{v}_{t}^{C}=W^{UV}\mathbf{c}_{t}^{KV},
+
+\displaystyle[\mathbf{k}_{t,i};\mathbf{v}_{t,i}]=\mathrm{repeat}([\mathbf{k}_{t,i};\mathbf{v}_{t,i}],h_{q}/g),
+
+\displaystyle\mathbf{o}_{t,i}=\sum_{s=1}^{t}\softmax_{s}\!\left(\tfrac{\mathbf{q}_{t,i}^{\top}\mathbf{k}_{s,i}}{\sqrt{d_{h}+d_{h}^{R}}}\right)\mathbf{v}_{s,i}^{C},
+
+\displaystyle\mathbf{y}_{t}=W^{O}[\mathbf{o}_{t,1};\dots;\mathbf{o}_{t,h_{q}}].
+
+(2)
+
+MQA-absorb path.
+
+\displaystyle[\hat{W}^{UK};\hat{W}^{UV}]=\mathrm{repeat}([W^{UK};W^{UV}],h_{q}/g),
+
+\displaystyle\mathbf{\hat{q}}_{t,i}=[(\hat{W}^{UK}_{i})^{\!\top}\mathbf{q}_{t,i}^{C};\mathbf{q}_{t,i}^{R}],
+
+\displaystyle\mathbf{\hat{k}}_{t}=[\mathbf{c}_{t}^{KV};\mathbf{k}_{t}^{R}],
+
+\displaystyle\mathbf{\hat{v}}_{t}=\mathbf{c}_{t}^{KV},
+
+\displaystyle\mathbf{\hat{o}}_{t,i}=\sum_{s=1}^{t}\softmax_{s}\!\left(\tfrac{\mathbf{\hat{q}}_{t,i}^{\top}\mathbf{\hat{k}}_{s}}{\sqrt{d_{h}+d_{h}^{R}}}\right)\mathbf{\hat{v}}_{s},
+
+\displaystyle\mathbf{o}_{t,i}=\hat{W}^{UV}_{i}\mathbf{\hat{o}}_{t,i},
+
+\displaystyle\mathbf{y}_{t}=W^{O}[\mathbf{o}_{t,1};\dots;\mathbf{o}_{t,h_{q}}],
+
+(3)
+
+with
+\hat{W}^{UK}_{i},\hat{W}^{UV}_{i}\in\mathbb{R}^{d_{h}\times r_{kv}}
+the
+i
+-th query-head slices after group-wise replication.
+
+3.2
+TransGQLA
+
+Both GQA checkpoints (e.g., LLaMA-3
+(
+7
+)
+) and MLA checkpoints (DeepSeek-V2/V3
+(
+9
+;
+10
+)
+, GLM-4.7
+(
+5
+)
+) can be converted to GQLA without pretraining from scratch. We refer to both routes collectively as
+TransGQLA
+: §
+3.2.1
+extends TransMLA
+(
+12
+)
+with a targeted head-merging change that keeps the up-projections group-indexed, while §
+3.2.2
+recovers the same factorisation from a pretrained MLA latent via group-wise PCA on up-projection activations. Both produce weights that expose the two paths of §
+3.1
+.
+
+3.2.1
+From GQA to GQLA
+
+This route reuses the entire TransMLA pipeline (head merging, RoRoPE, FreqFold, KV-norm balancing) with one change at head merging.
+
+Merging grouped heads to a latent head.
+
+TransMLA folds GQA’s
+g
+KV heads into a latent and
+replicates
+
+W^{UK},W^{UV}
+across all
+h_{q}
+query heads, so the merged module behaves as MHA. TransGQLA drops the replication:
+W^{UK},W^{UV}
+remain indexed by
+j\in[1,g]
+, so the merged module is standard GQA identical to the GQA path of §
+3.1
+, with MQA-absorb still reachable exactly as in MLA. Group-axis TP is therefore preserved, whereas MLA loses it once the up-projections are absorbed into
+Q/O
+.
+
+The merged GQA attention is re-expressed as
+
+\displaystyle\mathbf{q}_{t}=W^{Q}\mathbf{x}_{t},\;\;\mathbf{c}_{t}^{KV}=[\mathbf{c}_{t}^{K};\mathbf{c}_{t}^{V}]=W^{DKV}\mathbf{x}_{t},
+
+\displaystyle\mathbf{\hat{q}}_{t,i}^{R}=\overline{\text{RoPE}}_{t}\!\left((W^{UK}_{j(i)})^{\!\top}\mathbf{q}_{t,i}\right),
+
+\displaystyle\mathbf{\hat{k}}_{t}^{R}=\overline{\text{RoPE}}_{t}(\mathbf{c}_{t}^{K}),\;\;\mathbf{\hat{v}}_{t}=\mathbf{c}_{t}^{V},
+
+\displaystyle\mathbf{\hat{o}}_{t,i}=\sum_{s=1}^{t}\softmax_{s}\!\left(\tfrac{\mathbf{\hat{q}}^{R^{\top}}_{t,i}\mathbf{\hat{k}}_{s}^{R}}{\sqrt{d_{h}}}\right)\mathbf{\hat{v}}_{s},
+
+\displaystyle\mathbf{y}_{t}=W^{O}[W^{UV}_{j(1)}\mathbf{\hat{o}}_{t,1};\dots;W^{UV}_{j(h_{q})}\mathbf{\hat{o}}_{t,h_{q}}],
+
+(4)
+
+where
+j(i)=\lceil i/(h_{q}/g)\rceil
+routes head
+i
+to its group,
+W^{UK}_{j}=W^{UV}_{j}\in\mathbb{R}^{d_{h}\times gd_{h}}
+is initialised as a sparse identity selecting group
+j
+(mirroring GQA’s
+repeat_kv
+), and
+\overline{\text{RoPE}}
+folds the
+g
+identical per-head rotations into one repeating every
+d_{h}
+dimensions. The cache stays at
+2gd_{h}
+until the subsequent pipeline compresses it.
+
+RoRoPE: aligning per-head RoPE bases.
+
+After the GQA-preserving merge each of the
+g
+KV heads still carries its own RoPE basis, blocking a single shared decoupled key. RoRoPE applies a per-head orthogonal rotation
+R_{j}\in\mathbb{R}^{d_{h}\times d_{h}}
+to
+\mathbf{k}_{t,j}
+and absorbs
+R_{j}^{\top}
+into the matching
+W^{UQ}_{i}
+slices; attention scores are exactly preserved, while every group’s RoPE basis is aligned to a common one. The result is the single
+\overline{\text{RoPE}}
+in Eq. (
+4
+), which repeats every
+d_{h}
+dimensions of the latent in place of
+g
+per-head rotations.
+
+FreqFold: frequency-aware PCA.
+
+A naive PCA on the merged
+gd_{h}
+-dim K/V matrix would mix rotated and non-rotated coordinates and destroy the RoPE pair structure. FreqFold partitions dimensions by RoPE frequency band and applies PCA
+within
+each band, so the resulting low-rank basis cleanly factorises into a NoPE part (compressed into the latent
+\mathbf{c}^{KV}_{t}\in\mathbb{R}^{r_{kv}}
+) and a small RoPE-only part (the decoupled
+\mathbf{k}^{R}_{t}\in\mathbb{R}^{d_{h}^{R}}
+). This factorisation is what makes MLA’s joint latent reachable from a GQA checkpoint without retraining the positional encoding.
+
+K_{\text{nope}}/V
+norm balancing and joint compression.
+
+The NoPE part of
+K
+and the value tensor
+V
+have very different activation norms, so a joint PCA over
+[K_{\text{nope}};V]
+wastes rank on whichever side has larger variance and starves the other. We rescale each side to comparable Frobenius norm and absorb the inverse scale back into
+W^{UK},W^{UV}
+(forward pass unchanged); a single joint PCA then compresses both sides to
+r_{kv}
+while retaining nearly all reconstruction energy on each.
+
+All three stages operate purely on the merged
+gd_{h}
+-dim latent and never touch the query-group indexing introduced by our head merge. They therefore apply to GQLA’s GQA path unchanged and recover the canonical MLA latent on the MQA-absorb path
+(
+12
+)
+.
+
+3.2.2
+From MLA to GQLA
+
+A pretrained MLA model shares the joint latent with GQLA but exposes only the MQA-absorb path, because its
+W^{UK},W^{UV}
+are indexed by head rather than by group. We recover the GQLA factorisation via per-group, side-separated PCA on up-projection activations, and then absorb the resulting square rotations into
+W^{UQ},W^{O}
+at the original MLA shapes; the only shape change is
+W^{UKV}
+shrinking from
+h_{q}(d_{h}+d_{h}^{V})
+to
+g(d_{h}+d_{h}^{V})
+rows.
+
+Per-group, per-side activation PCA.
+
+The GQA path caches per-group K-NoPE and V independently, so we factor each side
+\star\in\{K,V\}
+separately. Partition the rows of
+W^{U\star}\in\mathbb{R}^{h_{q}d_{h}^{\star}\times r_{kv}}
+into
+g
+contiguous query-head groups of size
+h_{q}/g
+, yielding blocks
+W^{\star}_{j}\in\mathbb{R}^{D^{\star}_{g}\times r_{kv}}
+with
+D^{\star}_{g}=(h_{q}/g)\,d_{h}^{\star}
+. Forward
+N
+calibration tokens, eigendecompose the per-group covariance
+\Sigma^{\star}_{j}=R^{\star}_{j}\Lambda^{\star}_{j}R^{\star}_{j}{}^{\!\top}
+, and retain the top
+r^{\star}\leq D^{\star}_{g}
+components:
+
+\displaystyle\widetilde{W}^{\star}_{j}
+
+\displaystyle=U^{\star}_{j}V^{\star}_{j},
+
+(5)
+
+\displaystyle U^{\star}_{j}
+
+\displaystyle=R^{\star}_{j}[:,:r^{\star}],
+
+\displaystyle V^{\star}_{j}
+
+\displaystyle=U^{\star}_{j}{}^{\!\top}W^{\star}_{j},
+
+optimal in the
+\Sigma^{\star}_{j}
+-weighted Frobenius norm.
+
+Canonical rank and weight absorption.
+
+We set
+r^{K}\!=\!d_{h},r^{V}\!=\!d_{h}^{V}
+(one head per side per group, matching GQLA’s canonical config). Each
+U^{\star}_{j,i}
+—the
+i
+-th of
+h_{q}/g
+stacked
+d_{h}^{\star}\!\times\!d_{h}^{\star}
+blocks of
+U^{\star}_{j}
+—is square and
+absorbs
+into the per-head
+W^{UQ},W^{O}
+slices with no shape change. With
+j(i)=\lceil i/(h_{q}/g)\rceil
+,
+
+\displaystyle\widetilde{W}^{UKV}\in\mathbb{R}^{g(d_{h}+d_{h}^{V})\times r_{kv}}
+
+\displaystyle\qquad\text{has per-}j\text{ rows }V^{K}_{j},V^{V}_{j},
+
+\displaystyle\widetilde{W}^{UQ}_{i,\,\mathrm{NoPE}}=U^{K}_{j(i),\,i}{}^{\!\top}\,W^{UQ}_{i,\,\mathrm{NoPE}},
+
+\displaystyle\widetilde{W}^{O}_{:,\,i}=W^{O}_{:,\,i}\,U^{V}_{j(i),\,i}.
+
+(6)
+
+Substituting Eqs. (
+5
+)–(
+6
+) into MLA’s forward pass recovers GQLA’s GQA path up to per-group PCA truncation:
+V^{\star}_{j}
+acts as a per-group sub-down-projection
+\mathbf{c}_{t,j}^{KV}=V^{\star}_{j}\mathbf{c}_{t}^{KV}
+, and the absorbed
+\widetilde{W}^{UQ},\widetilde{W}^{O}
+let head
+i
+act directly against group
+j(i)
+’s compressed K-NoPE/V.
+
+Deployment and the dual-path view.
+
+The converted checkpoint runs the standard GQA kernel with no custom code:
+W^{UQ},W^{O}
+retain their MLA shapes, and
+\widetilde{W}^{UKV}
+slots into the existing field with first dimension divided by
+h_{q}/g
+. Absorbing
+U^{\star}_{j,i}
+commits to the GQA path; leaving it unfused preserves the dual-path view (the MLA cache and absorbed kernel remain valid, and the per-group latents stay cacheable for vanilla GQA). Both forms are parameter-equivalent and retain group-axis TP. A per-layer sanity check on GLM-4.7-Flash (
+h_{q}\!=\!20,d_{h}\!=\!192,d_{h}^{V}\!=\!256,r_{kv}\!=\!512
+;
+g\!=\!5
+) with
+\sim\!32
+calibration batches gives an absorbed-vs-PCA BF16 gap of
+\sim\!10^{-3}
+, confirming that absorption adds no error beyond PCA truncation. The full GLM-4.7 conversion is reported in §
+5
+.
+
+3.3
+Sparse GQLA
+
+Following DSA
+(
+11
+)
+, fine-grained sparse attention attends only over
+\mathcal{S}_{t}=\mathrm{top}\text{-}k(I_{t,:})
+, with per-head output
+\mathbf{u}_{t,j}=\sum_{s\in\mathcal{S}_{t}}\softmax(\mathbf{q}_{t,j}^{\top}\mathbf{k}_{s,\,g(j)}/\sqrt{d_{h}})\,\mathbf{v}_{s,\,g(j)}
+, where
+g(j)=\lceil j/(h_{q}/g)\rceil
+routes head
+j
+to its KV group.
+
+Sparse MLA is locked into MQA-absorb.
+
+Because
+\mathcal{S}_{t}
+varies per query, each token’s attention must be issued as a single GEMM. Tensor Cores require MMA tiles with
+m\!\geq\!16
+(e.g.
+m16n16k16
+), i.e. at least
+16
+query heads sharing one KV head. MLA in MHA mode has only one query head per KV head (
+m\!=\!1
+), so the GEMM degenerates to a GEMV and falls off Tensor Cores entirely. Sparse MLA is therefore forced into MQA-absorb on every device, inheriting dense MLA’s H20 compute overhead and TP loss.
+
+Sparse GQLA preserves the GQA path.
+
+GQLA’s canonical
+h_{q}/g\!=\!16
+matches the
+m\!=\!16
+tile exactly, so Eq. (
+3.3
+) runs on Tensor Cores at full efficiency along the GQA path. The dense rule still applies: memory-bound hardware switches to sparse MQA-absorb, compute-bound hardware stays in sparse GQA—no custom kernels are needed either way.
+
+Composing with HISA.
+
+The
+O(L)
+indexer that produces
+\{I_{t,s}\}
+dominates runtime at
+L\!\geq\!64
+K. HISA
+(
+17
+)
+is a training-free hierarchical replacement that matches the original top-
+k
+set at IoU
+>99\%
+; it accelerates the “before top-
+k
+” indexer, while GQLA keeps the “after top-
+k
+” attention filling the MMA tile.
+
+4
+Roofline Analysis
+
+4.1
+The Roofline model and the H100/H20 ridges
+
+The Roofline model
+(
+16
+)
+bounds kernel throughput by
+\min(I\cdot\mathrm{BW},\,\mathrm{FLOPs}_{\max})
+, where
+I
+is arithmetic intensity (FLOPs per byte of off-chip traffic). The
+ridge
+
+I^{\star}=\mathrm{FLOPs}_{\max}/\mathrm{BW}
+separates memory- and compute-bound regimes; efficient decoding pushes
+I
+toward
+I^{\star}
+.
+
+MHA decoding has
+I\!\approx\!1
+
+(
+18
+)
+, nearly three orders of magnitude below the H100 ridge (
+I^{\star}\!\approx\!295
+); closing this gap requires new attention designs, not just kernels
+(
+2
+;
+13
+)
+. The export-restricted H20 (Table
+1
+) keeps H100’s HBM bandwidth but cuts compute
+\sim\!7\times
+, lowering the ridge to
+\sim\!37
+. FLOPs have historically outpaced bandwidth
+(
+4
+)
+; H100
+\to
+H20 reverses this, so an H100-tuned intensity becomes compute-bound on H20 and leaves HBM idle.
+
+GPU
+
+BF16 (TFLOPs)
+
+HBM (TB/s)
+
+Ridge
+I^{\star}
+
+H100
+
+989
+
+3.35
+
+\approx 295
+
+H20
+
+148
+
+4.0
+
+\approx 37
+
+Table 1:
+BF16 Roofline parameters (dense, no 2:4). H20 delivers
+\sim\!1/7
+of H100’s peak compute but slightly higher HBM bandwidth, so its ridge sits
+\sim\!8\times
+lower.
+
+Figure 3:
+BF16 decoding Roofline on H100 (left) and H20 (right). Solid:
+\min(I\!\cdot\!\mathrm{BW},\mathrm{peak})
+; dashed: ridge
+I^{\star}
+. On H100, MLA and GQLA share MQA-absorb:
+s_{q}\!=\!1
+lands just below,
+s_{q}\!=\!2
+overshoots. On H20, MLA’s MQA-absorb is compute-bound, while GQLA’s GQA path at
+(g,s_{q})\!\in\!\{(8,2),(4,1)\}
+pins the ridge.
+
+4.2
+GQLA on the Roofline
+
+We apply Roofline analysis to GQLA’s two paths and show it stays near peak on both H100 and H20, whereas MLA cannot. The design space is two paths
+\times
+the per-step query count
+s_{q}
+(
+s_{q}\!=\!1
+for ordinary decoding,
+s_{q}\!\geq\!2
+for MTP/speculative). We default to the DeepSeek-V2/V3 canonical
+(h_{q},g,d_{h},d_{h}^{R},r_{kv})\!=\!(128,8,128,64,512)
+. Recent open models
+(
+15
+;
+5
+)
+use
+h_{q}\!=\!64
+, which halves all
+I
+values but leaves conclusions unchanged.
+
+4.2.1
+MQA-absorb path: compact latent cache
+
+MQA-absorb caches only the latent
+\mathbf{c}_{s}^{KV}\!\in\!\mathbb{R}^{r_{kv}}
+and the head-shared RoPE key
+\mathbf{k}_{s}^{R}\!\in\!\mathbb{R}^{d_{h}^{R}}
+:
+
+\displaystyle N_{\mathrm{MQA}}^{\mathrm{tok}}
+
+\displaystyle=r_{kv}+d_{h}^{R},
+
+(7)
+
+\displaystyle B_{\mathrm{MQA}}^{\mathrm{tok}}
+
+\displaystyle=2(r_{kv}+d_{h}^{R})
+
+(
+1152
+bytes/token at the canonical config). Each step reads all
+L
+tokens once and reuses them across the
+s_{q}
+queries (FlashAttention-style), so
+B_{\mathrm{MQA}}\!=\!2L(r_{kv}+d_{h}^{R})
+is independent of
+s_{q}
+. After absorption (Eq. (
+3
+)), each (head, query, cache-position) triplet costs
+2(2r_{kv}+d_{h}^{R})
+FLOPs:
+
+\displaystyle F_{\mathrm{MQA}}
+
+\displaystyle=2L\,h_{q}s_{q}\,(2r_{kv}+d_{h}^{R}),
+
+(8)
+
+\displaystyle I_{\mathrm{MQA}}
+
+\displaystyle=\frac{h_{q}s_{q}(2r_{kv}+d_{h}^{R})}{r_{kv}+d_{h}^{R}}.
+
+(9)
+
+I_{\mathrm{MQA}}
+scales linearly with
+s_{q}
+
+(
+3
+)
+:
+s_{q}\!=\!1
+gives
+I\!\approx\!242
+(just below the H100 ridge),
+s_{q}\!=\!2
+gives
+484
+(overshoots). DeepSeek-V3 defaults to MTP (
+s_{q}\!=\!2
+), so H100 per-step time grows from
+2.82
+to
+4.61\,\mu\text{s}
+and the MTP speedup shrinks from
+2\times
+to
+\sim\!1.22\times
+.
+
+4.2.2
+GQA path: per-group expanded cache
+
+The GQA path caches per-group expanded
+K_{C},V
+(
+gd_{h}
+each) plus the shared RoPE key:
+
+\displaystyle N_{\mathrm{GQA}}^{\mathrm{tok}}
+
+\displaystyle=2gd_{h}+d_{h}^{R},
+
+(10)
+
+\displaystyle B_{\mathrm{GQA}}^{\mathrm{tok}}
+
+\displaystyle=2(2gd_{h}+d_{h}^{R})
+
+(
+4224
+bytes/token at
+g\!=\!8
+). The cache mirrors LLaMA-3 GQA’s
+2gd_{h}\!=\!2048
+plus
+d_{h}^{R}
+extra elements, but
+K,V
+are constrained to the rank-
+r_{kv}
+subspace of GQLA’s up-projections, so expressivity differs from a free same-
+d_{h}
+GQA. Per-triplet FLOPs are
+2(2d_{h}+d_{h}^{R})
+:
+
+\displaystyle F_{\mathrm{GQA}}
+
+\displaystyle=2L\,h_{q}s_{q}\,(2d_{h}+d_{h}^{R}),
+
+(11)
+
+\displaystyle I_{\mathrm{GQA}}
+
+\displaystyle=\frac{h_{q}s_{q}(2d_{h}+d_{h}^{R})}{2gd_{h}+d_{h}^{R}}.
+
+(12)
+
+I_{\mathrm{GQA}}
+scales linearly with
+s_{q}
+and roughly inversely with
+g
+. Two configurations pin the H20 ridge:
+(g,s_{q})\!=\!(8,2)
+at
+I_{\mathrm{GQA}}\!\approx\!38.8
+, and
+(g,s_{q})\!=\!(4,1)
+at
+I_{\mathrm{GQA}}\!\approx\!37.6
+.
+
+4.2.3
+Operating points across hardware
+
+GPU
+
+Path
+
+g
+
+s_{q}
+
+cache (B/tok)
+
+I
+
+mem (
+\mu
+s)
+
+cmp (
+\mu
+s)
+
+step (
+\mu
+s)
+
+tok/s
+
+H100
+
+MQA-absorb
+
+1
+
+1
+
+1152
+
+\mathbf{242}
+
+2.82
+
+2.31
+
+\mathbf{2.82}
+
+\mathbf{354\rm K}
+
+MQA-absorb
+
+1
+
+2
+
+1152
+
+484
+
+2.82
+
+4.61
+
+4.61
+
+434\rm K
+
+H20
+
+MQA-absorb
+
+1
+
+1
+
+1152
+
+242
+
+2.36
+
+15.42
+
+15.42
+
+65\rm K
+
+MQA-absorb
+
+1
+
+2
+
+1152
+
+484
+
+2.36
+
+30.84
+
+30.84
+
+65\rm K
+
+GQA
+
+8
+
+1
+
+4224
+
+19
+
+8.65
+
+4.53
+
+8.65
+
+116\rm K
+
+GQA
+
+8
+
+2
+
+4224
+
+\mathbf{39}
+
+8.65
+
+9.06
+
+\mathbf{9.06}
+
+\mathbf{221\rm K}
+
+GQA
+
+4
+
+1
+
+2176
+
+\mathbf{38}
+
+4.45
+
+4.53
+
+\mathbf{4.53}
+
+\mathbf{221\rm K}
+
+GQA
+
+4
+
+2
+
+2176
+
+75
+
+4.45
+
+9.06
+
+9.06
+
+221\rm K
+
+Table 2:
+Per-step Roofline operating points (
+L\!=\!8192
+, BF16, canonical config). Time
+=\max(F/\mathrm{FLOPs}_{\max},B/\mathrm{BW})
+; throughput
+=s_{q}/\text{step}
+. Recommended
+(h_{q},g,s_{q})\!=\!(128,8,2)
+pairs H100 MQA-absorb (
+354
+K tok/s) with H20 GQA (
+221
+K tok/s);
+(g,s_{q})\!=\!(4,1)
+is an equally ridge-optimal H20 alternative. MLA on H20 stays compute-bound (
+65
+K tok/s, no MTP gain).
+
+Table
+2
+tabulates step time across hardware
+\times
+path
+\times s_{q}
+. Three takeaways: (1) on H100, MQA-absorb at
+s_{q}\!=\!1
+is fastest (
+2.82\,\mu\text{s}/
+step); MTP makes it compute-bound and shrinks the speedup to
+1.22\times
+; (2) MLA on H20 is always compute-bound, so MTP yields nothing; (3) GQLA’s GQA path at
+(g,s_{q})\!\in\!\{(8,2),(4,1)\}
+pins the H20 ridge at
+221
+K tok/s—
+3.4\times
+over MLA on the same device—with no retraining or custom kernels.
+
+4.2.4
+Choosing
+(g,s_{q})
+
+The two ridge-optimal points trade cache for expressivity, TP cap, and MTP cost. We recommend
+(g,s_{q})\!=\!(8,2)
+: largest latent (
+gd_{h}\!=\!1024>r_{kv}\!=\!512
+,
+2\times
+PCA redundancy),
+8
+-way TP cap, and the exact
+h_{q}/g\!=\!16
+MMA tile required by sparse GQLA.
+(g,s_{q})\!=\!(4,1)
+is a lighter H20-only alternative: half the cache (
+2176
+bytes/token), no MTP head, but square
+W^{UK}\!\in\!\mathbb{R}^{512\times 512}
+(
+1\times
+redundancy) and only
+4
+-way TP. Both remain deployable on H100 at
+2.82\,\mu\text{s}
+/step since
+I_{\mathrm{MQA}}
+is
+g
+-independent. Combining
+g\!=\!4
+with
+s_{q}\!=\!2
+MTP would require
+r_{kv}\!\leq\!256
+and is left to future work.
+
+5
+Experiments
+
+We evaluate TransGQLA on two pretrained backbones that exercise both conversion routes of §
+3.2
+: LLaMA-3-8B
+(
+7
+)
+via GQA
+\to
+GQLA and GLM-4.7
+(
+5
+)
+via MLA
+\to
+GQLA. Both routes are calibration-only, so we ask (i) how much capability is lost in the
+0
+-token reorganisation and (ii) what continued-pretraining budget should close the residual gap, using TransMLA’s published recovery trajectory as the closest precedent.
+
+Setup.
+
+LLaMA-3-8B (GQA
+\to
+GQLA)
+(
+h_{q}\!=\!32
+,
+g\!=\!8
+,
+d_{h}\!=\!128
+; original cache
+2gd_{h}\!=\!2048
+BF16 elts/tok). We apply §
+3.2.1
+: a GQA-preserving head merge retains both paths, followed by TransMLA-style RoRoPE, FreqFold, and activation-balanced low-rank compression
+(
+12
+)
+into the canonical latent (
+r_{kv}\!=\!512
+,
+d_{h}^{R}\!=\!64
+;
+576
+cached elts/tok,
+28.125\%
+of the GQA baseline). The GQA-path cache is
+2gd_{h}+d_{h}^{R}
+, comparable to the original.
+
+GLM-4.7 (MLA
+\to
+GQLA).
+We apply the per-group, side-separated activation PCA of §
+3.2.2
+at canonical rank
+r^{K}\!=\!d_{h}
+,
+r^{V}\!=\!d_{h}^{V}
+; the per-group factors absorb back into
+W^{UQ},W^{O}
+without shape changes, and
+W^{UKV}
+shrinks from
+h_{q}(d_{h}+d_{h}^{V})
+to
+g(d_{h}+d_{h}^{V})
+rows. The MQA-absorb path inherits MLA’s original latent cache unchanged; the GQA path uses the expanded cache of §
+4.2.2
+. Because the two paths are algebraically equivalent (§
+3.1
+), we report one accuracy per row.
+
+Benchmarks.
+
+We report zero-shot accuracy on six commonsense-reasoning benchmarks—MMLU, ARC (easy/challenge avg.), PIQA, HellaSwag, OpenBookQA, Winogrande—and their unweighted average.
+
+Table 3:
+Commonsense-reasoning accuracy after the calibration-only
+0
+-token architectural conversion on both routes of §
+3.2
+: MLA
+\to
+GQLA from GLM-4.7
+(
+5
+)
+and GQA
+\to
+GQLA from LLaMA-3-8B
+(
+7
+)
+. Neither route uses gradient updates. MLA
+\to
+GQLA loses only
+\sim\!4.7
+Avg. points (and improves on HS/OBQA), indicating that pretrained MLA already lies in an approximately GQLA-structured subspace. GQA
+\to
+GQLA loses
+\sim\!9.7
+pts under the aggressive
+\sim\!7\times
+TransMLA compression; since its
+0
+-token state is numerically identical to TransMLA’s, we expect a comparably short continued-pretraining phase to close the gap (TransMLA itself recovers to within
+0.5
+pts of LLaMA-3-8B after
+30
+B tokens).
+
+Model
+
+Tokens
+
+Avg.
+
+MMLU
+
+ARC
+
+PIQA
+
+HS
+
+OBQA
+
+WG
+
+GLM-4.7
+
+20T
+
+69.14
+
+73.82
+
+69.00
+
+88.00
+
+70.00
+
+38.00
+
+76.00
+
+MLA
+\to
+GQLA
+
+0
+
+64.45
+
+60.82
+
+63.86
+
+78.18
+
+73.04
+
+41.60
+
+69.22
+
+LLaMA-3-8B
+
+15T
+
+63.84
+
+46.20
+
+65.75
+
+80.47
+
+76.20
+
+45.60
+
+68.82
+
+GQA
+\to
+GQLA
+
+0
+
+54.13
+
+36.38
+
+52.84
+
+73.83
+
+64.34
+
+37.00
+
+60.38
+
+Cost of zero-token conversion.
+
+Table
+3
+reports the
+0
+-token results—the pure architectural transformation, before any continued pretraining.
+MLA
+\to
+GQLA
+on GLM-4.7 loses only
+\sim\!4.7
+Avg. pts relative to the
+20
+T-token source, with a strikingly heterogeneous per-task split:
+-13.0
+on MMLU and
+-9.8
+on PIQA but
++3.0
+on HellaSwag and
++3.6
+on OpenBookQA. This is consistent with the per-group PCA acting as a low-rank denoiser within the source latent subspace—broadly used commonsense features lie in the leading directions retained, while long-tail knowledge is encoded in low-variance directions truncated by the canonical rank.
+GQA
+\to
+GQLA
+on LLaMA-3-8B loses
+\sim\!9.7
+Avg. pts under the aggressive
+\sim\!7\times
+compression (
+2048\!\to\!576
+elts/tok), with per-task drops in a narrow
+-6.6
+to
+-12.9
+range; the uniformity points to the joint
+K,V
+subspace compression—a property inherited from TransMLA—rather than the group-indexed up-projections as the dominant loss source.
+
+Robustness and projected recovery.
+
+A per-layer sanity check of the MLA
+\to
+GQLA absorption on GLM-4.7-Flash gives a BF16 absorbed-vs-PCA gap of
+\sim\!10^{-3}
+at
+\sim\!32
+calibration batches, below the noise floor of subsequent layer norms, and Table
+3
+confirms this slack does not compound across the
+\sim\!60
+layers: the conversion is a one-shot deployment step rather than a fragile tuning procedure. We do not run continued pretraining; we extrapolate from TransMLA. For GQA
+\to
+GQLA, the GQA-preserving merge leaves the joint
+K,V
+subspace untouched, so the
+0
+-token state coincides numerically with TransMLA’s, which recovers to within
+0.5
+Avg. pts of LLaMA-3-8B after
+30
+B tokens at the same
+-71.875\%
+compression (
+\sim\!500\times
+less than the
+15
+T-token pretraining budget). For MLA
+\to
+GQLA the
+0
+-token gap is already small and the source latent is preserved on the MQA-absorb path, so the required budget should be shorter still; direct validation is the obvious next step.
+
+6
+Conclusion
+
+We identified three coupled hardware drawbacks of MLA’s MQA-absorb-only design—hardware coupling to H100-class ratios, loss of head-axis tensor parallelism, and zero MTP gain on commodity GPUs—and proposed GQLA as a minimal architectural fix: indexing the up-projections by group rather than by query head yields trained weights that admit two algebraically equivalent decoding paths (a compact-latent MQA-absorb path identical to MLA’s, and a per-group expanded GQA path). With
+(h_{q},g)\!=\!(128,8)
+and one MTP head, the same weights pin both H100 and H20 rooflines simultaneously, enable
+8
+-way zero-redundancy tensor parallelism on the GQA path, and—via the
+h_{q}/g\!=\!16
+Tensor-Core MMA match—carry the dual-path benefit into sparse attention, which sparse MLA cannot.
+
+TransGQLA makes the design accessible from pretrained checkpoints with no gradient updates on either route: MLA
+\to
+GQLA loses only
+\sim\!4.7
+Avg. pts on GLM-4.7 at zero tokens, and GQA
+\to
+GQLA on LLaMA-3-8B reaches a
+0
+-token state numerically identical to TransMLA’s, inheriting its reported
+30
+B-token recovery (within
+0.5
+pts of the source) as the baseline cost to close any residual gap. More broadly, exposing multiple algebraically equivalent decoding paths over a single set of trained weights is a practical design principle for hardware-adaptive attention.
+

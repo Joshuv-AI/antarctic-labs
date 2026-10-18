@@ -1,0 +1,1396 @@
+Ascend-RaBitQ: Heterogeneous NPU-CPU Acceleration of Billion-Scale Similarity Search with 1-bit Quantization
+Fujun He † , Chuyue Ye † , Huaxiang Cai † , Zetao Lv † , Baolong Cui † , Wenru Yan § , Chao Zhan § , Zigang Zhang § , Hao Yi † , Jie Xiang † , Xiabing Li † , Yuhang Gai † , Ziyang Zhang † , Pengfei Zheng † , Yunfei Du †
+
+Abstract
+. Vector similarity search is a critical component of modern AI systems, but traditional CPU-based implementations face fundamental scalability bottlenecks for billion-scale corpora due to prohibitive computational overhead and memory bandwidth limitations. While Neural Processing Units (NPUs) offer orders-of-magnitude higher compute density, existing CPU/GPU-optimized 1-bit RaBitQ quantization implementations cannot be directly ported to NPU architectures due to fundamental hardware mismatches, and homogeneous design paradigms struggle to simultaneously balance accuracy, memory footprint, and performance. This paper presents Ascend-RaBitQ, the first heterogeneous NPU-CPU optimized IVF-RaBitQ system for billion-scale vector search, built on the core insight that decoupling coarse ranking (NPU) from fine ranking (CPU) allows each stage to leverage its optimal hardware, breaking the long-standing accuracy-memory-performance trade-off. We propose a three-stage heterogeneous pipeline comprising AI Core-accelerated coarse ranking on 1-bit quantized vectors, on-device AI CPU Top- k k processing, and host CPU fine re-ranking on full-precision vectors. We introduce four NPU architecture-native optimizations: fused AIC-AIV operators for parallel distance computation, computation flow restructuring to exploit rotation orthogonality, fine-grained index block-level load balancing that breaks query boundaries, and intra-NPU pipeline parallelism between AI Core and AI CPU to mask Top- k k latency. Evaluation on standard datasets shows that Ascend-RaBitQ achieves 3.0 × \times to 62.8 × \times faster index construction than the CPU baseline, up to 4.6 × \times throughput improvement over the fastest CPU IVF-RaBitQ implementation, and over 100 × \times over the mathematically equivalent CPU baseline, while demonstrating encouraging scalability on distributed multi-NPU systems.
+
+
+
+﻿
+
+1.
+Introduction
+
+Vector similarity search has become a critical infrastructure component in modern AI applications, powering retrieval-augmented
+generation (RAG)
+(
+22
+;
+36
+;
+34
+;
+25
+)
+, search
+and recommendation systems
+(
+35
+;
+5
+;
+29
+;
+24
+)
+, and
+computer verison
+(
+9
+;
+10
+;
+41
+;
+26
+)
+.
+As large language models (LLMs) and agentic AI systems continue to evolve, the demand for efficient, high-throughput vector
+retrieval has grown exponentially, with industry reports indicating vector databases must now handle billion-scale corpora
+while maintaining millisecond-level latency and cost-effectiveness
+(
+23
+;
+38
+;
+1
+)
+.
+Traditional vector search systems predominantly run on CPU clusters, employing indexing structures such as inverted file systems (IVF)
+and product quantization (PQ) to reduce search space
+(
+20
+;
+13
+;
+4
+)
+,
+but face fundamental scalability challenges: (1)
+computational bottlenecks
+—CPU-based distance computations become
+prohibitively expensive as corpus size grows
+(
+23
+)
+; (2)
+memory bandwidth limitations
+—fetching
+high-dimensional vectors from main memory dominates latency, forming a well-documented "memory wall" for vector retrieval
+workloads
+(
+23
+)
+.
+
+Neural Processing Units (NPUs) have emerged as transformative accelerators for deep learning workloads, delivering
+orders-of-magnitude improvements in throughput compared to CPUs
+(
+30
+)
+.
+This exceptional compute density has driven its widespread adoption in data centers
+(
+16
+;
+45
+;
+7
+)
+,
+while making it highly suitable for data-intensive workloads such as vector similarity search.
+However, realizing this potential for vector retrieval introduces two fundamental challenges.
+First, NPUs feature limited on-device memory capacity (typically 32-64 GB HBM) compared to CPU clusters with terabyte-scale
+DRAM pools, making it infeasible to store billion-scale high-dimensional vector indices entirely on-device.
+Scaling capacity by adopting multiple NPUs is prohibitively expensive, while simply offloading computation to NPUs
+incurs costly host-device data transfers that erase acceleration gains. Second, while aggressive quantization can reduce
+index size to fit NPU memory, existing schemes such as PQ incur severe accuracy degradation at extreme
+compression ratios, forcing a trade-off between memory footprint and retrieval quality.
+
+Recent advances in quantization theory offer a promising solution: Randomized Bit Quantization (RaBitQ)
+(
+12
+)
+is a
+1-bit quantization scheme with two core characteristics—formal theoretical error guarantees proven to be asymptotically
+optimal, and
+32\times
+memory compression compared to FP32 vectors. At the same compression ratio,
+RaBitQ achieves substantially higher accuracy than PQ. This extreme compression provides a technically viable
+path to address the NPU memory constraint, reducing billion-scale vector indices from terabytes to tens of gigabytes so they fit
+entirely within a typical Ascend NPU’s 64 GB HBM, eliminating costly host-device data transfers. Existing RaBitQ implementations
+have been well optimized for both CPU and GPU platforms, with CPU-based designs leveraging specific instructions for fast
+bitwise operations
+(
+12
+)
+and GPU implementations leveraging CUDA warp-level primitives to achieve
+2.7\times
+
+higher throughput than IVF-PQ
+(
+12
+;
+37
+)
+. However, these CPU/GPU RaBitQ implementations cannot be
+directly adapted to NPU platforms for two critical reasons.
+
+First, both CPU and GPU RaBitQ implementations rely on architectural features that differ fundamentally from Ascend NPU.
+CPU-based RaBitQ depends on SIMD extensions for population count and bitwise operations. GPU-based RaBitQ leverages
+CUDA’s unified memory model, warp-level primitives, and thousands of CUDA cores. Ascend NPU’s Da Vinci architecture adopts a
+fundamentally different design philosophy optimized for AI workloads: it features a heterogeneous compute fabric comprising AI
+Cores (each containing either a Cube Unit for matrix operations or a Vector Unit for element-wise operations) alongside dedicated AI CPUs for general-purpose scalar computation and task scheduling
+(
+30
+)
+.
+Unlike GPU’s hardware-managed L1/L2 cache hierarchy, Ascend employs a software-managed Unified Buffer (UB) and L1 Buffer for
+explicit memory orchestration
+(
+17
+)
+, and its static dataflow execution model requires careful algorithm redesign for
+non-standard operations like bitwise quantization. These architectural differences mean that existing CPU/GPU RaBitQ implementations
+cannot be directly ported—instead, we must embrace NPU’s heterogeneous design through algorithm-hardware co-optimization to
+unlock its performance potential for vector search.
+
+Second, and more fundamentally, homogeneous architectures—whether CPU-only, GPU-only, or NPU-only—fail to balance accuracy,
+memory footprint, and performance simultaneously. Pure CPU implementations struggle to meet throughput requirements for
+billion-scale datasets. Pure GPU implementations face a critical trade-off: 1-bit RaBitQ suffers from lower recall, while
+higher-bit RaBitQ variants
+(
+37
+;
+11
+)
+quickly exceed limited GPU memory capacity. Similarly, a pure NPU implementation, despite RaBitQ’s
+32\times
+
+compression fitting the quantized index in HBM, faces an inherent accuracy-performance conflict: 1-bit coarse ranking alone cannot
+deliver production-grade recall without refinement, but performing full-precision refinement on the NPU would require gathering
+raw vectors from CPU DRAM and transferring them across the host-device boundary—a data movement overhead that erases the NPU’s
+acceleration gains. No homogeneous architecture can simultaneously deliver high accuracy, high throughput, and manageable cost
+under practical deployment constraints.
+
+This leads to our core insight:
+a heterogeneous co-designed approach
+—combining NPU acceleration for fast coarse ranking,
+CPU processing for high-accuracy fine ranking, and joint algorithm-hardware optimization—can break through the long-standing
+accuracy-memory-performance trade-off faced by homogeneous designs. This insight drives the design of
+Ascend-RaBitQ
+,
+the first NPU-accelerated RaBitQ library purpose-built for commercial datacenter NPU platforms.
+
+This paper presents the design, implementation, and evaluation of Ascend-RaBitQ. Our key contributions are:
+
+Heterogeneous Three-Stage NPU-CPU Collaborative Pipeline
+
+We propose the first heterogeneous IVF-RaBitQ pipeline that
+decomposes query processing across three hardware stages: AI Core for high-throughput 1-bit coarse distance computation, on-device AI CPU for
+low-latency Top-
+k
+selection, and host CPU for high-accuracy fine re-ranking on full-precision vectors. This design breaks the
+accuracy-memory-performance trilemma by mapping each stage to its optimal hardware. We implement pipeline parallelism
+between AI Core and AI CPU to mask Top-
+k
+latency within the NPU, and offload re-ranking to host CPU, where the raw vectors are
+already resident, eliminating cross-device data movement overhead. Controlled ablation experiments show that the complete pipeline
+delivers a 23.1
+\times
+cumulative speedup over the naive baseline. Furthermore, the system achieves up to 4.6
+\times
+higher throughput
+than the fastest CPU IVF-RaBitQ implementation, over 100
+\times
+over the mathematically equivalent CPU 1-bit baseline,
+and up to 62.8
+\times
+faster index construction.
+
+NPU Architecture-Native RaBitQ Optimizations
+
+We present the first RaBitQ implementation fully optimized for the
+Da Vinci heterogeneous compute architecture. Three key optimizations exploit its unique hardware characteristics: (1) a fused
+AIC-AIV operator that parallelizes matrix multiplication and vector norm calculation across the Cube and Vector units; (2) computation
+flow restructuring that exploits rotation orthogonality to overlap rotation with norm precomputation; (3) adaptation of 1-bit
+distance computation to the CANN native
+gather
+operator for FastScan-based computation, which achieves a 15.2
+\times
+cumulative speedup
+over the baseline
+select
+approach. These
+optimizations collectively unlock the NPU’s heterogeneous compute potential for RaBitQ-based vector search.
+
+Efficient Scheduling and Resource Orchestration
+
+We introduce two scheduling techniques tailored for the NPU’s
+software-managed memory hierarchy: (1) fine-grained index block-level load balancing that breaks query boundaries,
+achieving a 6.3
+\times
+speedup; (2) IVF-aware Top-
+k
+pruning that prioritizes closer clusters,
+which combined with intra-NPU AI Core-AI CPU pipeline parallelism masks nearly all Top-
+k
+selection latency. Together, they eliminate both computation and memory access bottlenecks in the retrieval
+pipeline.
+
+Production Deployment and Distributed Scaling
+
+We validate Ascend-RaBitQ in real production systems.
+We design native distributed scaling for multi-NPU clusters, demonstrating up to 3
+\times
+end-to-end throughput
+speedup on 8 NPUs with encouraging distance computation scalability. Ascend-RaBitQ is open-sourced as part of the
+Ascend IndexSDK
+(
+6
+)
+.
+
+The remainder of this paper is organized as follows: Section
+2
+provides preliminaries on vector search and
+RaBitQ quantization. Section
+3
+details the NPU IVF-RaBitQ design and implementation.
+Section
+4
+presents our experimental evaluation. Section
+5
+discusses related work.
+Finally, Section
+6
+concludes the paper.
+
+2.
+Preliminary
+
+This section provides foundational preliminaries on approximate nearest neighbor search, IVF indexing, the RaBitQ quantization algorithm, and Ascend NPU architecture, establishing the necessary context for our work.
+
+2.1.
+Approximate Nearest Neighbor Search and IVF Index
+
+High-dimensional vector similarity search is a core primitive for modern AI systems
+including Agentic AI with industrial deployments now routinely supporting billion- to
+trillion-scale vector corpora
+(
+23
+;
+27
+)
+.
+
+2.1.1.
+ANN Problem Definition
+
+Given a vector corpus
+\mathcal{X}=\{\mathbf{x}_{1},\mathbf{x}_{2},\ldots,\mathbf{x}_{N}\}
+where each
+\mathbf{x}_{i}\in\mathbb{R}^{D}
+, and a query vector
+\mathbf{q}\in\mathbb{R}^{D}
+, the exact nearest neighbor search problem aims to find the vector
+\mathbf{x}^{*}\in\mathcal{X}
+that minimizes a distance metric
+d(\mathbf{q},\mathbf{x}^{*})
+(typically Euclidean distance or inner product).
+Exact search has
+\mathcal{O}(ND)
+complexity per query, which is prohibitively expensive for billion-scale workloads.
+Approximate Nearest Neighbor (ANN) search trades minor accuracy loss for orders-of-magnitude performance improvements, and is the standard approach in production deployments.
+
+2.1.2.
+IVF Index Structure
+
+The Inverted File (IVF) index
+(
+20
+)
+is the de facto standard for billion-scale ANN production deployments.
+It reduces the search space via vector clustering and consists of two phases:
+
+Index Construction.
+
+Run
+K
+-Means clustering on a training subset of the corpus to generate
+nList
+cluster centroids,
+each defining an inverted list.
+For each base vector
+\mathbf{x}_{i}\in\mathcal{X}
+, assign it to the inverted list of its nearest centroid.
+
+Query Processing.
+
+For an input query
+\mathbf{q}
+, compute its distance to all
+nList
+centroids, select the top
+nProbe
+nearest clusters as the search scope, and evaluate only the vectors in these selected inverted lists.
+The search space is reduced by 2–3 orders of magnitude compared to a full corpus scan (
+nProbe\ll nList
+).
+
+IVF is widely adopted in open-source ANN systems including FAISS
+(
+8
+)
+and ScaNN
+(
+15
+)
+due to its excellent scalability, low memory overhead, and flexible recall-performance trade-off.
+
+2.1.3.
+IVF Variants
+
+Based on the storage format of vectors in inverted lists, three main IVF variants exist:
+
+IVF-Flat
+stores full-precision raw vectors directly in inverted lists.
+It achieves the highest possible recall but requires
+N\times D\times 4
+bytes for FP32 vectors, limiting its applicability to small- to medium-scale datasets (up to
+\sim
+100 million vectors).
+
+IVF-PQ
+combines IVF indexing with PQ
+(
+20
+)
+, compressing high-dimensional vectors into compact PQ codes (typically 8–32 bytes per vector) and storing the codes in inverted lists.
+It reduces memory footprint by 16–32
+\times
+compared to IVF-Flat, enabling billion-scale indices to fit in memory,
+but suffers from non-negligible accuracy loss
+due to quantization errors.
+
+IVF-RaBitQ.
+
+The IVF-RaBitQ algorithm adopted in this work retains the memory efficiency advantage of IVF-PQ while significantly reducing
+quantization accuracy loss to address the fundamental trade-off limitation of prior IVF variants.
+The RaBitQ quantization method and its integration into the IVF pipeline are detailed in Section
+2.2
+.
+
+2.1.4.
+Alternative Index Structures
+
+For completeness, we note two alternative index structures:
+
+Graph-based indexes
+(e.g., HNSW
+(
+32
+)
+) deliver superior recall-latency trade-offs for moderate-scale datasets, but suffer from 2–3
+\times
+higher memory overhead and poor scalability for billion-scale corpora.
+
+Disk-based indexes
+(e.g., DiskANN
+(
+19
+)
+) support trillion-scale datasets by offloading indices to SSD, but incur 10–100
+\times
+higher latency than in-memory IVF solutions.
+
+2.2.
+IVF-RaBitQ Algorithm and Pipeline
+
+IVF-RaBitQ combines IVF indexing with RaBitQ 1-bit quantization to enable high-throughput, low-memory vector search.
+RaBitQ
+(
+12
+)
+compresses each high-dimensional vector into a compact binary code with formal error guarantees.
+We describe the core quantization method, distance approximation scheme, and end-to-end retrieval pipeline.
+
+2.2.1.
+RaBitQ Quantization
+
+Given a vector
+\mathbf{x}\in\mathbb{R}^{D}
+, RaBitQ first applies a random orthogonal rotation
+\mathbf{P}\in\mathbb{R}^{D\times D}
+to distribute information evenly across dimensions, yielding
+\hat{\mathbf{x}}=\mathbf{P}\mathbf{x}
+.
+It then computes the residual between the rotated vector and a reference point
+\mathbf{c}
+(typically the cluster centroid to which
+\mathbf{x}
+is assigned), and extracts the sign of each dimension to produce a
+D
+-bit binary code:
+
+(1)
+
+\mathcal{Q}(\mathbf{x})_{i}=\operatorname{sign}(\hat{\mathbf{x}}_{i}-\mathbf{c}_{i})\in\{-1,+1\},\quad i=1,\ldots,D.
+
+The quantized vector is stored as
+\mathcal{Q}(\mathbf{x})
+using 1 bit per dimension (
+32\times
+compression over FP32).
+Two precomputed constants derived from the residual are stored alongside the binary code to enable distance reconstruction during query processing:
+
+•
+
+C_{\mathbf{x}}=\|\hat{\mathbf{x}}\|_{2}^{2}-\mathbf{c}\cdot\hat{\mathbf{x}}
+, which depends only on the base vector
+\mathbf{x}
+and its assigned centroid
+\mathbf{c}
+;
+
+•
+
+The L1 norm of the residual
+\|\hat{\mathbf{x}}-\mathbf{c}\|_{1}
+, which is used together with the query-side L1 norm to reconstruct the full distance during the fine ranking step.
+
+2.2.2.
+Distance Approximation
+
+During query processing, the query vector
+\mathbf{q}
+is similarly rotated to
+\hat{\mathbf{q}}=\mathbf{P}\mathbf{q}
+and quantized relative to the centroid
+\mathbf{c}
+of each probed cluster, yielding
+\mathcal{Q}(\mathbf{q})
+.
+The asymmetric approximate distance between the full-precision query and a quantized base vector
+\mathbf{x}
+is computed as a scaled Hamming distance plus the precomputed constant
+C_{\mathbf{x}}
+:
+
+(2)
+
+d_{\text{approx}}(\mathbf{q},\mathbf{x})=\frac{\|\hat{\mathbf{q}}-\mathbf{c}\|_{1}}{D}\cdot\sum_{i=1}^{D}\mathbf{1}\bigl[\mathcal{Q}(\mathbf{q})_{i}\neq\mathcal{Q}(\mathbf{x})_{i}\bigr]\;+\;C_{\mathbf{x}}.
+
+The scale factor
+\|\hat{\mathbf{q}}-\mathbf{c}\|_{1}
+can be computed once per query-cluster pair and reused across all vectors within that cluster.
+Query-dependent terms that are common to all candidates (e.g.,
+\mathbf{c}\cdot\hat{\mathbf{q}}
+and
+\|\hat{\mathbf{q}}\|_{2}^{2}
+) are omitted from Eq. (
+2
+) because they do not affect the relative ranking of candidates.
+
+Crucially, since both codes use
+\pm 1
+representation, the Hamming distance can be converted to an inner product:
+
+(3)
+
+\sum_{i=1}^{D}\mathbf{1}\bigl[\mathcal{Q}(\mathbf{q})_{i}\neq\mathcal{Q}(\mathbf{x})_{i}\bigr]=\frac{D-\mathcal{Q}(\mathbf{q})\cdot\mathcal{Q}(\mathbf{x})^{\top}}{2}.
+
+Substituting Eq. (
+3
+) into Eq. (
+2
+) expresses the distance computation as a linear
+combination of a matrix multiplication and per-vector constants.
+This transformation is the foundation of our NPU acceleration: by batching multiple quantized base vectors into a
+matrix
+\mathbf{X}
+, the distances from a batch of queries to all candidates can be computed via a single matrix
+multiplication
+\mathcal{Q}(\mathbf{q})\cdot\mathcal{Q}(\mathbf{X})^{\top}
+, which maps directly onto the
+Cube Unit’s high-throughput matrix multiply (Section
+2.3.1
+details the Da Vinci
+architecture’s Cube Unit design).
+
+2.2.3.
+Online Query Retrieval Pipeline
+
+IVF-RaBitQ query processing proceeds in three stages:
+
+(1)
+
+Cluster Probing:
+The query vector is compared against all
+nList
+IVF cluster centroids, and the top
+nProbe
+nearest clusters are selected as the search scope.
+
+(2)
+
+Coarse Ranking:
+Within the selected inverted lists, approximate distances are computed using Eqs. (
+2
+)–(
+3
+), and the top
+M
+candidates are retained.
+
+(3)
+
+Fine Ranking:
+The full-precision vectors of the
+M
+candidates are fetched, exact distances are computed against the original query, and the final top
+K
+results are returned.
+
+The coarse ranking stage dominates computational cost for billion-scale corpora and is the primary target of our
+NPU acceleration.
+
+2.3.
+Ascend NPU Architecture
+
+The Ascend NPU family adopts the Da Vinci heterogeneous architecture, designed for high-throughput AI training and inference
+workloads
+(
+30
+;
+17
+)
+.
+Unlike CPUs and GPUs that employ hardware-managed cache hierarchies and uniform compute arrays, the Da Vinci architecture has three defining characteristics that directly shape our system design. An architectural overview is shown in Figure
+1
+.
+
+Figure 1.
+NPU Hardware Architecture
+(
+17
+)
+.
+
+2.3.1.
+Heterogeneous Compute Units at Two Levels
+
+The NPU organizes compute resources into two tiers of heterogeneity.
+At the device level, the throughput-oriented AI Core array
+is complemented by on-device AI CPUs—general-purpose scalar processors optimized for latency-sensitive,
+control-heavy tasks such as sorting and scheduling.
+Within each AI Core, two physically distinct execution units operate concurrently: the Cube Unit (AIC) for dense matrix
+multiplication and the Vector Unit (AIV) for element-wise operations.
+This two-level heterogeneity directly motivates our AIC-AIV fusion operator (Section
+3
+.2.1),
+our computation flow restructuring (Section
+3
+.2.2),
+and our decision to offload Top-
+k
+selection to the AI CPU with intra-NPU pipeline parallelism (Section
+3
+.3.3).
+
+2.3.2.
+Explicitly Managed On-Chip Buffers
+
+Unlike GPUs where L1 data caches are hardware-managed, the Ascend NPU’s per-core Unified Buffer (UB) and L1 Buffer are entirely software-managed. Every byte of data reaching the compute units must be explicitly loaded by the developer via Memory Transfer Engine (MTE) instructions; there is no automatic caching or prefetching at this level. Total on-chip buffer capacity per AI Core is approximately 1 MB. The L2 Cache, by contrast, is hardware-managed and transparent to the programmer, operating analogously to GPU L2 caches. This hybrid memory model is the primary reason existing CPU/GPU RaBitQ implementations cannot be directly ported—they rely on hardware-managed L1 caches to absorb irregular index access patterns—yet it also enables our index block-level load balancing and explicit on-chip staging of quantized vectors (Section
+3
+.3.1), as well as our 1-bit vector computation adaptation (Section
+3
+.3.2), which together eliminate HBM bandwidth from the inner loop.
+
+2.3.3.
+Dedicated Asynchronous Data Movement Engines
+
+The MTE handles all data movement between HBM and on-chip buffers, operating fully asynchronously with respect to the AI Cores and AI CPUs. Combined with the Huawei Cache Coherence System (HCCS)—a shared-memory interconnect between NPU HBM and host CPU memory—this enables overlapped pipelines spanning both intra-NPU and NPU-CPU boundaries. We exploit this asynchrony to build the intra-NPU pipeline between AI Core and AI CPU (Section
+3
+.3.3) and the cross-device pipeline between NPU and host CPU for fine re-ranking (Section
+3
+.3.4).
+
+In summary, the Da Vinci architecture replaces the uniform compute and automatic caching paradigm of CPUs/GPUs with deliberate heterogeneity and explicit data orchestration. Section
+3
+describes how we translate each of these architectural properties into concrete system optimizations.
+
+3.
+Ascend-RaBitQ System Design
+
+Figure
+2
+illustrates the system architecture of Ascend-RaBitQ, which implements large-scale,
+efficient IVF-RaBitQ index construction and search based on a heterogeneous CPU-NPU collaborative system.
+Considering the billion-scale vector dataset size and limited HBM capacity, Ascend-RaBitQ adopts a 1-bit quantization design
+instead of multi-bit solutions similar to
+(
+37
+)
+. Overall, raw vector data is stored in the high-capacity
+CPU memory system to support billion-scale datasets. The CPU is responsible for global orchestration and re-ranking
+computations on raw vectors to minimize cross-chip data movement. The NPU’s HBM stores 1-bit quantized indexes and
+precomputed constants, and accelerates computation-intensive vector operations. Ascend-RaBitQ is fully optimized for the
+Ascend NPU hardware architecture, improving index construction and search efficiency through
+three key designs: fused AI Cube (AIC) and AI Vector (AIV) collaborative computing, multi-core load balancing scheduling,
+and pipeline latency masking between AI Core and AI CPU. Additionally, Ascend-RaBitQ implements an efficient NPU-CPU
+collaboration and pipeline parallelism framework to boost end-to-end performance.
+
+Figure 2.
+Overview of the Ascend-RaBitQ heterogeneous system architecture and IVF-RaBitQ execution pipeline. The left part shows the CPU-NPU heterogeneous hardware platform, while the right part illustrates how the IVF-RaBitQ algorithm is mapped onto this hardware: CPU handles cluster probing and final fine ranking, and NPU accelerates the computation-intensive coarse ranking step.
+
+3.1.
+Overall Design of Ascend-RaBitQ
+
+3.1.1.
+Index Construction
+
+The index construction pipeline consists of three phases: the first two phases iteratively train IVF cluster centers using K-Means, and the third phase performs core RaBitQ quantization. Details are as follows:
+
+•
+
+Phase 1
+: The CPU randomly generates
+nList
+initial cluster centers, and iteratively updates these centers based on the bucketing results returned from Phase 2.
+
+•
+
+Phase 2
+: The vector dataset is partitioned into multiple batches according to HBM capacity, sequentially offloaded to the NPU for bucketing computation using the latest cluster centers, and results are transferred back to the CPU. Phases 1 and 2 iterate repeatedly until the K-Means termination condition (convergence or maximum iteration limit) is met. The core computation during bucketing is batch calculation of L2 distances between dataset vectors and cluster center vectors. We design an AIC-AIV fusion operator to improve computational efficiency, which is discussed in detail in Section 3.2.1.
+
+•
+
+Phase 3
+: After bucketing information is finalized, RaBitQ quantization and constant precomputation are performed on all dataset vectors, including random orthogonal rotation, L1 distance calculation, and L2 norm calculation. To fully exploit the parallelism between AI Cube and AI Vector, we reorganize the traditional sequential computation flow, which is discussed in detail in Section 3.2.2.
+
+3.1.2.
+Search Pipeline
+
+Ascend-RaBitQ processes queries at batch granularity. The first four phases perform coarse search on the NPU based on quantized indexes, and the final phase performs re-ranking on the CPU using raw vectors. Details are as follows:
+
+•
+
+Phase 1
+: Batch computation obtains
+nProbe
+nearest cluster centers for each query vector. This process reuses the bucketing computation flow from index construction Phase 2, fully utilizing both AIC and AIV computing power.
+
+•
+
+Phase 2
+: After the CPU obtains the cluster centers for each query, it performs load balancing scheduling according to batch size, number of
+nProbe
+, and number of AIV cores to maximize AIV utilization, which is discussed in detail in Section 3.3.1.
+
+•
+
+Phase 3
+: Distance calculation is performed, with the core computation being the dot product between query vectors and 1-bit quantized indexes. Based on the INT8 format, we adopt the high-order
+select
+operator capability provided by the CANN software stack to achieve efficient 1-bit computing, with details discussed in Section 3.3.2.
+
+•
+
+Phase 4
+: Top-
+k
+selection, where we leverage AI CPU computing power for this scalar-dominant computation. Two optimizations are adopted: first, IVF-aware pruning is performed to accelerate sorting; second, pipeline parallelism between AI Core and AI CPU (i.e., Phase 3 and Phase 4) is implemented within the batch to mask Top-
+k
+latency, which is discussed in detail in Section 3.3.3.
+
+•
+
+Phase 5
+: The CPU performs re-ranking based on raw vectors to select the final Top-
+k
+results. We discuss different re-ranking schemes and our optimized NPU-CPU pipeline latency masking implementation in Section 3.3.4.
+
+3.2.
+Index Construction Acceleration
+
+3.2.1.
+AIC and AIV Fusion Operator
+
+When calculating L2 distances between a batch of dataset vectors (or query vectors) and a batch of cluster center vectors, we decompose the computation into two parallel parts: dot product between dataset vectors and cluster centers, and norm calculation of each individual vector. The vector dot product is converted into matrix multiplication, where the left and right matrices are dataset vectors and cluster centers respectively, and we invoke CANN’s optimized
+matmul
+operator to run on AIC. The norm of each vector is calculated on AIV in parallel, and final L2 distance results are aggregated on AIV. We have developed a fused AIC-AIV operator that eliminates synchronization overhead between the two computing units, achieving parallel execution of dot product and norm calculation.
+
+3.2.2.
+Computation Flow Restructuring
+
+In the standard RaBitQ pipeline, all vectors are first rotated by a random orthogonal matrix, then difference between dataset vectors and cluster center vectors (for sign extraction to obtain 1-bit quantized values), L1 distance, and L2 distance (precomputed constants) are calculated based on rotated vectors. Traditional implementations execute these computations sequentially since they share the same computing unit. Ascend-RaBitQ leverages the NPU’s heterogeneous computing capability to offload rotation computation to AIC, while decomposing subsequent computations to run in parallel with rotation. Normally, subsequent computations require rotated vectors as input, but we exploit the key property of orthogonal matrices that rotation does not change vector norms. We therefore advance the norm calculation in L2 distance computation to run in parallel with rotation as the first stage computation. In the subsequent second stage, similar to Section 3.2.1, dot product computation and remaining computations are executed in parallel on AIC and AIV respectively. This restructured flow fully unleashes the parallel computing potential of both AIC and AIV.
+
+3.3.
+Retrieval Acceleration
+
+3.3.1.
+Load Balancing
+
+Similar to industry IVF solutions such as FAISS
+(
+23
+)
+, Ascend-RaBitQ divides each inverted list into
+segNum
+index blocks. Each index block is stored in contiguous physical addresses internally to improve memory access efficiency, while no contiguity requirement exists between blocks to improve memory utilization. When processing a batch of query vectors, a total of
+b\times nProbe\times segNum
+index blocks need to be processed for distance calculation, where
+b
+is the query batch size. Existing solutions generally launch distance calculation kernels at query vector granularity: they allocate
+nProbe\times segNum
+computation tasks to
+coreNum
+AIV cores for parallel execution, and launch
+\lceil\frac{nProbe\times segNum}{coreNum}\rceil
+kernels sequentially for each query. When
+nProbe\times segNum
+is not an integer multiple of
+coreNum
+, AIV cores will be idle during the last kernel launch for each query, wasting computing power, as illustrated in Figure
+3
+(a).
+
+Ascend-RaBitQ breaks the query vector boundary and performs load balancing scheduling at index block granularity. Each kernel launch schedules
+coreNum
+index blocks and evenly allocates them to AIV cores for computation, as shown in Figure
+3
+(b). In this design, AIV computing power waste may only occur during the very last kernel launch for the entire batch, which greatly improves NPU utilization, reduces the total number of kernel launches, and further shortens end-to-end latency.
+
+(a)
+Original query-level kernel scheduling
+
+(b)
+Optimized index block-level kernel scheduling
+
+Figure 3.
+Load balancing scheduling optimization comparison. The original query-level scheduling causes frequent idle cores across kernel launches for each query, while the optimized index block-level scheduling minimizes idle resources by scheduling tasks at finer granularity across the entire batch.
+
+We considered an alternative optimization that schedules index blocks from different queries that access the same inverted list into the same kernel launch, reducing index block transfer between the unified buffer and HBM. However, this approach completely disrupts query order, making it impossible to implement pipeline parallelism with subsequent modules as designed in Section 3.3.3 and 3.3.4, ultimately leading to reduced end-to-end performance. Therefore, Ascend-RaBitQ maintains query order when scheduling index blocks.
+
+3.3.2.
+1-bit Vector Computation Adaptation
+
+There are two main categories of distance calculation schemes for RaBitQ: 1) utilizing hardware native 1-bit operation
+capabilities (such as the POPCNT instruction on CPUs) to directly calculate the dot product between query vectors
+and 1-bit index vectors (CPU implementations require additional scalar quantization of query vectors into multiple 1-bit vectors);
+2) the FastScan scheme, which precomputes Look-Up Tables (LUTs) and obtains dot product results through table
+lookup
+(
+2
+;
+3
+)
+. On the Ascend NPU platform, CANN provides both the
+select
+operator and the
+gather
+operator, corresponding to these two approaches respectively.
+select
+takes two sets of vectors as input and uses each dimension of the first vector as a binary mask to select elements from the second vector, realizing the 1-bit direct operation approach. The
+gather
+operator implements the FastScan scheme: it first precomputes LUTs and then uses the quantized codes as indices to look up and gather the corresponding distance values from the LUTs.
+
+Although
+select
+natively supports INT8 format while
+gather
+requires INT8-to-FP32 conversion, our empirical evaluation shows that
+gather
+-based FastScan achieves approximately 2
+\times
+higher throughput than
+select
+(Figure
+9
+). This is because FastScan offloads most computation to the LUT precomputation phase, which is executed once per query and reused across all index blocks. Therefore, Ascend-RaBitQ adopts the
+gather
+-based FastScan scheme. We leave a native INT8
+gather
+operator as a future work.
+
+3.3.3.
+Top-
+k
+Optimization
+
+The Ascend NPU integrates a dedicated AI CPU, which is more suitable for processing scalar-dominant computations compared to the AI Core optimized for parallel vector operations. To fully utilize all NPU computing resources, Ascend-RaBitQ offloads Top-
+k
+selection to AI CPU and introduces two targeted optimization techniques. First, when traversing all distance calculation results for sorting, we maintain an upper bound in real time, which is the maximum distance in the current Top-
+k
+candidate set. Remaining distances larger than this upper bound are pruned and excluded from further sorting. We exploit the key IVF property that vectors in inverted lists of cluster centers closer to the query vector are significantly more likely to enter the final Top-
+k
+set. Therefore, we traverse inverted lists in the order of the distance between the query vector and their corresponding cluster centers, prioritizing lists of closer clusters to maximize pruning efficiency.
+
+The second optimization is inter-unit pipeline parallelism between AI Core and AI CPU,
+as illustrated in Figure
+5
+(a) and (b).
+Specifically, within a batch, when a query vector completes distance calculation on AI Core, a dedicated flag in HBM is atomically set. The AI CPU continuously scans these flags and immediately starts Top-
+k
+computation for a query as soon as its corresponding flag is set. Our evaluation shows that this pipeline parallelism effectively masks nearly all Top-
+k
+latency, shortening end-to-end retrieval latency significantly.
+
+3.3.4.
+NPU-CPU Pipeline Parallelism
+
+Ascend-RaBitQ adopts extreme 1-bit quantization to fully utilize limited HBM capacity, requiring a final re-ranking step on raw vectors to achieve acceptable recall rate. One candidate re-ranking approach is to send required raw vectors from CPU to NPU, and perform re-ranking on NPU to leverage its high vector computing throughput. The alternative is to perform re-ranking on CPU directly, avoiding cross-device data transfer. Figure
+4
+compares the end-to-end latency of these two re-ranking strategies across different scale factors of Top-
+k
+. It shows that CPU re-ranking maintains stable latency as the scale factor increases, while NPU re-ranking latency grows sharply and far exceeds the CPU approach. The primary bottleneck lies in the CPU data preparation step: to send the data, the CPU first needs to gather raw vectors from discontinuous memory space into contiguous buffers according to the returned Top-
+k
+coarse results, which becomes a significant performance bottleneck, especially when the Top-
+k
+value increases, as shown in Figure
+4
+. Therefore, Ascend-RaBitQ performs re-ranking on CPU to eliminate unnecessary data movement.
+
+Figure 4.
+Comparison of NPU refine vs. CPU refine end-to-end latency across different scale factors on SIFT1B
+(
+23
+)
+dataset. CPU refine latency remains stable as scale factor increases, while NPU refine latency grows significantly due to CPU data gathering overhead from discontinuous memory.
+
+Although the computation amount of re-ranking is reduced by several orders of magnitude compared to coarse ranking,
+considering the limited computing power of CPU and the possibility that CPU may simultaneously process other
+vector database control tasks, CPU re-ranking may still become an end-to-end bottleneck under high load.
+Currently, Ascend-RaBitQ adopts a sequential execution model: the CPU waits for the NPU to complete all coarse
+ranking and Top-
+k
+selection before starting re-ranking. However, we plan to introduce cross-device pipeline
+parallelism between NPU and CPU to mask re-ranking latency. In this design, the CPU monitors completion flags
+stored in HBM, and immediately starts re-ranking for a query as soon as its coarse results are available.
+This capability requires shared memory between NPU and CPU, which is natively supported in Ascend and Kunpeng
+servers via the Huawei Cache Coherence System (HCCS) interconnect.
+
+(a)
+No pipeline parallelism across heterogeneous hardware
+
+(b)
+Pipeline parallelism only within NPU between AI Core and AI CPU
+
+(c)
+Proposed three-stage pipeline parallelism across AI Core, AI CPU and host CPU
+
+Figure 5.
+Pipeline parallelism optimization comparison across different hardware levels. (a) Baseline design with no pipeline parallelism, each stage executes sequentially leading to significant latency overhead. (b) Optimized design with pipeline parallelism between NPU internal AI Core and AI CPU, masking Top-
+k
+selection latency. (c) Proposed three-stage pipeline parallelism design, overlapping distance calculation on AI Core, Top-
+k
+selection on AI CPU, and re-ranking on host CPU to maximize end-to-end throughput.
+
+As shown in Figure
+5
+(c), the proposed three-stage pipeline parallelism would overlap distance calculation on AI Core, Top-
+k
+selection on AI CPU, and final re-ranking on host CPU within each query batch. We estimate this optimization will improve end-to-end throughput significantly under high load.
+
+3.4.
+Distributed Scaling
+
+As vector dataset sizes continue to grow or throughput requirements increase further, single NPU devices will
+eventually encounter bottlenecks in memory capacity or computing resources.
+To address this challenge, Ascend-RaBitQ is designed with native distributed scaling capability.
+We adopt a cluster-aware load balancing strategy to evenly partition quantized vector datasets across
+multiple NPU devices, ensuring that the number of vectors in each inverted list is balanced across all nodes.
+During the index construction phase, each NPU independently performs quantization operations on its responsible vector
+shard in parallel, achieving near-linear speedup with increasing number of devices. During retrieval,
+multiple NPU devices simultaneously process the same query batch, independently performing their local coarse
+search computation tasks. Finally, the CPU aggregates results from all NPU nodes and performs global re-ranking to output
+the final accurate Top-
+k
+retrieval results.
+
+4.
+Evaluation
+
+We conduct extensive experiments to evaluate the performance of our proposed Ascend-RaBitQ system on a variety of standard
+vector search datasets, comparing against state-of-the-art CPU IVF quantization implementations and the native NPU
+full-precision baseline. All experiments are performed on a server equipped with 8 Ascend NPUs and a host CPU. Each NPU features 48 AIV cores and 24 AIC cores clocked at 1.85 GHz, with 64 GB HBM. The host CPU has 192 cores at 2.6 GHz and 1.5 TB DDR4 memory. Unless otherwise specified, experiments use a single NPU together with the host CPU.
+
+4.1.
+Experimental Setup
+
+Datasets. We use four widely adopted public datasets covering different application domains (image, text) and data
+scales ranging from 1 million to 1 billion vectors:
+
+•
+
+SIFT1M
+(
+20
+)
+: 1 million 128-dimensional SIFT descriptors for image retrieval (small-scale image workload);
+
+•
+
+Cohere 10M
+(
+18
+)
+: 10 million 768-dimensional text embeddings (large-scale text semantic search workload);
+
+•
+
+SIFT100M
+(
+20
+)
+: 100 million 128-dimensional SIFT descriptors (medium-scale hundred-million-level candidate image workload);
+
+•
+
+SIFT1B
+(
+23
+)
+: 1 billion 128-dimensional SIFT descriptors (large-scale billion-level production workload).
+
+Baselines. We compare against two categories of state-of-the-art baselines for fair evaluation:
+
+(1)
+
+Same NPU platform baseline: Ascend IndexSDK IVF-Flat implementation, the native full-precision vector search solution
+on Ascend NPU;
+
+(2)
+
+CPU platform baselines: Three standard IVF-RaBitQ implementations from FAISS library (v1.14.1)
+(
+8
+)
+with different quantization configurations, each optimized with architecture-specific instructions for the target CPU platform:
+
+•
+
+CPU 1-bit
+: Adopts 1-bit RaBitQ quantization for database vectors only, keeping query vectors in full precision. This variant is
+mathematically equivalent
+to our Ascend-RaBitQ, making it the fairest baseline for evaluating the raw compute advantage of NPU acceleration over CPU.
+
+•
+
+CPU 1-bit+SQ
+: Applies 4-bit scalar quantization (SQ) to query vectors while keeping database vectors at 1-bit RaBitQ quantization. The query-side SQ enables the CPU to efficiently compute inner products between two low-precision vectors using SIMD instructions, significantly accelerating distance computation.
+
+•
+
+CPU 4-bit
+: Quantizes database vectors to 4-bit using RaBitQ. This configuration achieves higher precision than the 1-bit variants at the cost of increased memory access and computation, serving as a reference for balanced quantization-performance tradeoffs.
+
+All methods adopt identical IVF configurations for fair comparison, with
+nList=\sqrt{N}
+and
+nProbe=5\%\cdot nList
+,
+where
+N
+denotes the total number of vectors in the dataset.
+We adopt recall@10, recall@100, recall@300, queries per second (QPS), index construction time, and memory footprint as the primary evaluation metrics.
+To facilitate intuitive cross-method comparison within each figure, all QPS values are locally normalized: the minimum QPS value within each figure is set to 1, and all other values are reported as relative results against this baseline.
+
+4.2.
+NPU Platform Native Comparison: Ascend-RaBitQ vs. IVF-Flat
+
+We conduct a comprehensive performance comparison between Ascend-RaBitQ and the native Ascend IndexSDK IVF-Flat implementation
+on the Ascend NPU platform. An important practical consideration motivates our experimental design here:
+the full-precision IVF-Flat index requires storing the entire dataset in NPU memory, which imposes significant
+memory constraints. For a single Ascend NPU with 64 GB HBM, only the SIFT1M dataset (512 MB full-precision index)
+can be accommodated. Larger datasets such as SIFT100M (51 GB) and SIFT1B (512 GB) exceed single-NPU memory capacity, making single-NPU IVF-Flat comparisons infeasible. Therefore, we first compare Ascend-RaBitQ against
+IVF-Flat on a single NPU using the SIFT1M dataset, then extend the comparison to four NPUs using the SIFT100M dataset.
+
+Figure
+6
+presents the single-NPU (1
+\times
+Ascend) performance comparison on the SIFT1M dataset.
+Ascend-RaBitQ demonstrates consistent performance improvements across all three Top-
+k
+settings at the same recall.
+Ascend-RaBitQ achieves a 17.6
+\times
+QPS speedup over IVF-Flat at recall = 0.95 under both top-10 and top-100 settings,
+and 12.7
+\times
+under top-300. This performance advantage originates from two key architectural factors.
+First, our 1-bit quantization reduces memory access volume by 32
+\times
+compared to full-precision IVF-Flat, effectively
+eliminating the HBM bandwidth bottleneck even when retrieving significantly more candidates for higher Top-
+k
+targets.
+Second, while both methods leverage the Cube unit for matrix multiplication-based distance computation, Ascend-RaBitQ’s
+1-bit quantized vectors enable substantially lower computational complexity than IVF-Flat’s full-precision
+vector distance calculation.
+
+For real-time query latency on a single NPU, Ascend-RaBitQ achieves an average latency of 0.34 ms with a small batch size of 64,
+representing a order-of-magnitude reduction compared to IVF-Flat’s 5.98 ms latency. This enables the system to meet strict low-latency
+online serving requirements.
+In terms of storage and memory requirements, Ascend-RaBitQ achieves a 16
+\times
+theoretical compression ratio compared to
+full-precision IVF-Flat, with actual storage savings of 93.75%.
+For the SIFT1M dataset, the IVF-Flat index occupies 512 MB of disk storage and requires all data to be resident in
+memory during query processing, while the Ascend-RaBitQ index only requires 32 MB including IVF cluster metadata and
+quantization codebook.
+
+Figure 6.
+Single-NPU performance comparison on SIFT1M dataset (1
+\times
+Ascend).
+
+To evaluate performance on larger datasets, we extend our comparison to a four-NPU configuration using the SIFT100M dataset.
+With four Ascend NPUs providing an aggregated 256 GB HBM capacity, the 51 GB SIFT100M full-precision index can be
+fully accommodated through data parallel partitioning across devices. Figure
+7
+presents the
+four-NPU performance comparison results.
+At recall = 0.95, Ascend-RaBitQ achieves a 16.8
+\times
+QPS speedup over IVF-Flat for both top-10 and top-100,
+and 15.8
+\times
+for top-300. The slightly higher speedup on SIFT100M compared to
+SIFT1M can be attributed to improved computational efficiency at larger scales, where the quantization benefits become
+more pronounced as memory bandwidth constraints intensify. Furthermore, the memory compression advantage of Ascend-RaBitQ
+becomes even more critical for billion-scale datasets: while SIFT1B would require 512 GB of memory for IVF-Flat,
+exceeding even the 256 GB aggregated capacity of four NPUs, Ascend-RaBitQ requires only 32 GB, comfortably fitting within
+a single NPU and eliminating expensive inter-device communication overhead.
+
+Figure 7.
+Four-NPU performance comparison on SIFT100M dataset (4
+\times
+Ascend).
+
+4.3.
+Cross-platform Comparison: Ascend-RaBitQ vs. CPU IVF-RaBitQ Implementations
+
+To demonstrate the cross-platform performance advantages of our NPU-accelerated approach, we compare Ascend-RaBitQ against three standard CPU IVF-RaBitQ implementations from the FAISS library with different quantization configurations: 1-bit, 1-bit + query SQ, and 4-bit. All CPU implementations are optimized with architecture-specific instructions to ensure fair comparison.
+
+Figure
+8
+presents the QPS comparison across three datasets and three recall
+conditions (Recall@10, Recall@100, Recall@300). The three rows correspond to the three datasets,
+while the three columns correspond to the three recall conditions. Each line chart shows the QPS-recall
+tradeoff for all available methods under a given recall condition, with lines connecting the data points to
+illustrate the performance trend as recall varies. Ascend-RaBitQ demonstrates consistent performance advantages
+across all CPU configurations and datasets, with the speedup over the fastest CPU implementation growing with
+dataset scale. On the small-scale SIFT1M dataset, Ascend-RaBitQ achieves a 1.2
+\times
+speedup over the best
+CPU implementation (CPU 1-bit+SQ) at Recall@10, though the gap narrows at higher Top-
+k
+settings: at Top-300,
+CPU 1-bit+SQ nearly matches Ascend-RaBitQ, indicating that query-side scalar quantization can partially
+compensate when retrieving a very large number of candidates. On the larger SIFT100M dataset, the advantage becomes
+more pronounced, with Ascend-RaBitQ delivering a 4.6
+\times
+speedup over CPU 1-bit+SQ. This trend confirms that the
+Ascend NPU’s computation unit provides greater relative efficiency for vector search as memory bandwidth
+pressure intensifies with larger datasets. On the high-dimensional Cohere 10M dataset (768-dimensional text embeddings),
+Ascend-RaBitQ maintains a stable 1.8
+\times
+speedup over CPU 1-bit+SQ across all Top-
+k
+settings, demonstrating
+robust performance on text-based semantic search workloads.
+
+Across all configurations, the CPU 1-bit variant without query-side quantization trails by one to two orders of magnitude:
+Ascend-RaBitQ outperforms it by 13.9
+\times
+on SIFT1M and by over 100
+\times
+on SIFT100M. Critically, this
+performance gap does not stem from memory bandwidth limitations but from the absence of query SQ, which prevents
+CPU from efficiently computing inner products between two 1-bit quantized vectors using SIMD instructions.
+It is worth emphasizing that our Ascend-RaBitQ also does not apply query-side SQ and therefore remains mathematically
+equivalent to the CPU 1-bit variant, offering higher precision than methods that incorporate query SQ.
+The stark performance advantage over the mathematically equivalent CPU 1-bit implementation thus reflects the fundamentally
+superior compute throughput of the NPU’s computation units.
+Extending query-side SQ optimization to the NPU pipeline represents a promising direction for future work to further improve
+end-to-end throughput.
+
+Beyond query performance, we further compare the end-to-end index construction time across all datasets,
+as shown in Table
+1
+. Ascend-RaBitQ achieves a speedup of 3.0
+\times
+to 62.8
+\times
+over the
+CPU 1-bit IVF-RaBitQ implementation. This significant improvement is achieved by offloading both the K-means
+clustering step for IVF partition and the 1-bit quantization encoding step to the Ascend’s computation units,
+effectively eliminating the memory bandwidth bottleneck that plagues CPU-based vector processing.
+
+Dataset
+
+CPU 1-bit IVF-RaBitQ
+
+Ascend-RaBitQ
+
+Speedup
+
+SIFT1M
+
+1.65 min
+
+6.87 s
+
+14.42
+\times
+
+Cohere 10M
+
+1.55 h
+
+1.48 min
+
+62.84
+\times
+
+SIFT100M
+
+4.64 h
+
+1.53 h
+
+3.03
+\times
+
+SIFT1B
+
+98.63 h
+
+4.20 h
+
+23.49
+\times
+
+Table 1.
+Index construction time comparison across all datasets.
+
+Figure 8.
+Cross-platform performance comparison across different recall thresholds. Each column corresponds to a recall condition (Recall@10, Recall@100, Recall@300), and each row corresponds to a dataset. Curves show QPS versus recall for each method under different recall conditions.
+
+4.4.
+Ablation Study
+
+We validate the effectiveness of each retrieval acceleration technique (detailed in Section 3.3) through controlled ablation experiments on the SIFT1B dataset, as shown in Figure
+9
+. The baseline adopts the naive IVF-RaBitQ implementation with the CANN
+select
+operator for distance computation, without inter-core load balancing, without pipeline parallelism between distance calculation and Top-
+k
+selection, and with re-ranking performed on the NPU. We measure the performance impact by incrementally adding each optimization on top of this baseline. First, adding our index block-level cross-query load balancing scheduling (Section 3.3.1) achieves a 6.3
+\times
+speedup over baseline. The optimized scheduling eliminates idle AIV cores caused by uneven task allocation in the original query-level kernel launch mechanism. Second, replacing the
+select
+operator with the gather-based FastScan scheme for 1-bit vector distance calculation (Section 3.3.2) further achieves a 15.2
+\times
+cumulative speedup. The FastScan approach achieves higher computational efficiency by leveraging precomputed look-up tables for 1-bit vector distance calculation. Third, adding AI CPU offloaded Top-
+k
+pruning and intra-NPU AI Core-AI CPU pipeline parallelism (Section 3.3.3) further achieves a 16.5
+\times
+cumulative speedup. The pipeline design effectively masks nearly all Top-
+k
+selection latency, which previously accounted for a significant portion of total end-to-end runtime. Finally, moving re-ranking from NPU to host CPU (Section 3.3.4) further achieves a 23.1
+\times
+cumulative speedup over baseline. This eliminates the CPU data gathering bottleneck from discontinuous memory, as the re-ranking vectors are already resident in CPU memory.
+
+All four retrieval acceleration techniques combined contribute to the overall 23.1
+\times
+speedup over the ablation baseline, demonstrating that each optimization proposed in Section 3.3 is critical to achieving the final performance.
+
+Figure 9.
+Ablation study results on SIFT1B dataset, showing speedup of different optimization combinations vs. the naive baseline.
+
+4.5.
+Multi-NPU Large-scale Scalability Test
+
+Finally, we evaluate the scalability of Ascend-RaBitQ on the billion-scale SIFT1B dataset using up to 8 Ascend NPUs to demonstrate its suitability for large-scale industrial deployment. Figure
+10
+presents the speedup of end-to-end throughput and raw distance computation throughput as the number of NPUs increases. As shown in the figure, the end-to-end throughput achieves only approximately 3
+\times
+speedup on 8 NPUs compared to a single NPU, falling short of linear scaling. This is because NPU acceleration primarily benefits the coarse ranking stage, while the overall throughput remains constrained by CPU re-ranking. As more NPUs are added, the system bottleneck progressively shifts from NPU computation to CPU post-processing. This finding suggests that introducing CPU pipeline parallelism to overlap re-ranking with NPU computation could further improve end-to-end throughput. In contrast, the distance computation stage scales more linearly, achieving approximately 4
+\times
+speedup on 8 NPUs. However, this still reaches only about half of the theoretical optimal value of 8
+\times
+.
+
+Our in-depth analysis of the experimental data reveals two primary causes for the sub-linear scaling of distance computation. First, we manage vectors at the granularity of index blocks, where the total number of blocks determines the number of kernel launches. Even when inverted lists are distributed across different NPUs, the total number of blocks may not decrease linearly, leading to sub-optimal kernel launch efficiency at scale. Second, the vector counts across inverted lists are inherently uneven due to the data distribution. Although we employ block-level load balancing, when blocks from different lists are computed concurrently, inter-core load imbalance can still occur, further reducing linearity.
+
+Two potential directions can address these issues. First, introducing list-level load balancing during clustering training could ensure a more balanced vector distribution across lists. Second, using a smaller block size would improve the granularity of block-level load balancing. However, smaller blocks lead to more fragmented memory storage, degrading memory access efficiency, and the increased number of blocks adds management complexity. Determining the optimal block size for different workload scenarios is an interesting research problem and remains as our future work.
+
+Figure 10.
+Scalability of Ascend-RaBitQ with increasing number of Ascend NPUs on SIFT1B dataset. The left axis shows end-to-end throughput speedup, while the right axis shows raw distance computation throughput speedup. The near-linear scaling of distance computation and the converging end-to-end scaling indicate a bottleneck shift to CPU post-processing stages.
+
+5.
+Related Work
+
+We review related work in two categories: large-scale ANNS systems and hardware acceleration for ANNS.
+
+5.1.
+Large-scale ANNS Systems
+
+Billion-scale ANNS systems have evolved along three directions: SSD-based approaches to overcome memory constraints,
+heterogeneous architectures to accelerate computation, and distributed deployment to scale storage and throughput.
+
+SSD-based systems.
+DiskANN
+(
+19
+)
+stores graph indexes on SSDs, serving billion-scale queries
+with low latency on a single workstation. FlashANNS
+(
+43
+)
+proposes a GPU-driven asynchronous I/O framework
+that overlaps SSD reads with GPU computation, significantly improving throughput over DiskANN.
+Its insight—pipelining I/O and computation through dependency relaxation—is orthogonal to our work: we maximize on-chip
+compute utilization once data resides in HBM.
+
+Heterogeneous systems.
+FusionANNS
+(
+40
+)
+proposes CPU/GPU collaborative filtering and
+re-ranking using SSDs and a single entry-level GPU, achieving substantial throughput gains over SSD-based baselines.
+GustANN
+(
+21
+)
+adopts a GPU-centric, CPU-assisted architecture with memory-efficient kernels,
+outperforming prior SSD-based systems.
+
+Distributed systems.
+SOGAIC
+(
+38
+)
+introduces overload-aware partitioning and
+load-balanced distributed sub-graph construction, substantially reducing index build time for 10-billion-scale corpora.
+DISTRIBUTEDANN
+(
+1
+)
+scales a DiskANN graph across thousands of machines to store and search tens of
+billions of vectors with low latency at high throughput, now powering Bing.
+
+These systems share a philosophy with Ascend-RaBitQ: no single hardware platform optimally serves all pipeline stages.
+However, they target CPU-GPU-SSD hierarchies and do not address NPU-specific characteristics—heterogeneous compute units,
+software-managed on-chip buffers, and asynchronous data movement engines.
+Ascend-RaBitQ is the first to exploit these features for billion-scale vector search, achieving high hardware utilization
+through algorithm-hardware co-optimization.
+
+5.2.
+Hardware Acceleration for ANNS
+
+Substantial effort has optimized individual hardware platforms for ANNS—from CPUs and GPUs to the emerging NPUs targeted
+by our work.
+
+CPU acceleration.
+FAISS
+(
+8
+)
+has been widely deployed on CPUs. KBest
+(
+31
+)
+tailors
+vector search for the ARM-based Kunpeng 920, incorporating SIMD acceleration, data prefetch, and early termination to
+achieve significant throughput gains over x86-optimized libraries. At the algorithm level, RaBitQ supports flexible compression
+rates
+(
+11
+)
+with asymptotic optimality guarantees.
+However, even highly tuned CPU implementations remain constrained by memory bandwidth and compute throughput at billion scale.
+
+GPU acceleration.
+Johnson et al.
+(
+23
+)
+established the foundational GPU-accelerated framework.
+IVF-RaBitQ (GPU)
+(
+37
+)
+integrates RaBitQ into a GPU-native IVF pipeline with fused search kernels,
+outperforming graph-based GPU methods at equivalent recall. Tagore
+(
+28
+)
+accelerates graph index construction
+via GNN-Descent and an asynchronous GPU-CPU-disk framework, achieving substantial speedup over CPU construction.
+
+CPU-GPU cooperation.
+PilotANN
+(
+14
+)
+decomposes graph search into GPU subgraph traversal and CPU
+refinement, handling datasets far larger than GPU memory. SVFusion
+(
+33
+)
+employs a GPU-CPU-disk framework
+with hierarchical indexing, achieving high throughput with online updates. RUMMY
+(
+44
+)
+pipelines data
+transmission and GPU computation via query-aware reordering, significantly outperforming IVF-GPU.
+
+NPU acceleration.
+ANNS on NPUs remains largely underexplored. GaussDB-Vector
+(
+39
+)
+demonstrates a
+large-scale vector database for LLM applications, but does not specifically optimize for NPU architectures.
+No prior work has realized RaBitQ on commercial NPUs or exploited NPU-specific hardware characteristics for billion-scale
+vector search.
+
+Our work fills this gap. Ascend-RaBitQ is the first to implement and optimize RaBitQ on commercial NPUs, leveraging
+Cube-unit matrix acceleration, fused AIC-AIV operators, computation flow restructuring, and cross-device three-stage
+pipeline parallelism to achieve high hardware utilization and throughput.
+
+6.
+Conclusion
+
+This paper presents Ascend-RaBitQ, the first NPU-accelerated IVF-RaBitQ system designed for heterogeneous NPU-CPU architectures. By decomposing vector search into a three-stage collaborative pipeline—AI Core coarse ranking, AI CPU Top-
+k
+selection, and host CPU fine re-ranking—our approach maps each stage to its optimal hardware, resolving the accuracy-memory-performance trilemma. Extensive experiments demonstrate that Ascend-RaBitQ achieves 3.0
+\times
+to 62.8
+\times
+faster index construction, up to 4.6
+\times
+throughput improvement over the fastest CPU implementation, and over 100
+\times
+over the mathematically equivalent CPU baseline. Controlled ablation studies confirm a cumulative 23.1
+\times
+speedup, and multi-NPU tests demonstrate scalable throughput on distributed configurations.
+
+We are actively extending Ascend-RaBitQ to trillion-scale cross-NPU-node deployments, deepening integration with production vector databases such as Milvus
+(
+42
+)
+and Faiss
+(
+8
+)
+, and optimizing for low-latency single-query scenarios.
+

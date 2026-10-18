@@ -1,0 +1,1650 @@
+A GPU Accelerated Temporal Window-Based Random Walk Sampler
+Md Ashfaq Salehin, George Parisis, Luc Berthouze
+
+Abstract
+. Temporal random walks, which sample causality-preserving paths, are widely used to analyze time-stamped interactions in domains such as microservices, finance, and online platforms. Generating such walks at scale is challenging because real-world graphs evolve as high-volume streams, making continuous ingestion, efficient memory usage, and strict temporal ordering essential for practical deployment. We present Tempest (TEMPoral nEtwork Streaming Traversals), a GPU-accelerated engine for streaming temporal random walks. Tempest combines a GPU-native dual-index organization over a shared edge store with a hierarchical cooperative scheduler that dispatches walks at thread, warp, or block granularity based on per-step node convergence, enabling efficient start-edge selection, hop-by-hop causality enforcement, and window-based eviction without synchronization. It further provides closed-form constant-time samplers for common temporal bias functions. Our evaluation demonstrates sustained real-time processing of billion-edge streams under sliding windows, outperforming prior systems in ingestion and walk generation throughput while preserving causal correctness.
+
+
+
+1.
+Introduction
+
+Temporal networks are graphs in which interactions (edges) between nodes are time-dependent and occur at specific moments
+(
+9
+)
+. Unlike static networks where edges are assumed to persist, temporal networks explicitly encode the timing and order of interactions, capturing the dynamic nature of evolving systems. These networks can be either
+directed
+, where interactions have a defined source and target (e.g.,
+u\rightarrow v
+), such as in email exchanges, phone calls, transportation routes, financial transactions, and microservice calls; or
+undirected
+, where interactions are mutual and symmetric, as in face-to-face social encounters or co-location events
+(
+9
+)
+.
+
+Because temporal networks encode fine-grained time order, paths must preserve temporal causality. Reasoning over all such causality-preserving paths quickly becomes infeasible: even counting them is NP-complete, making exact enumeration impractical for large graphs
+(
+4
+;
+40
+)
+. This intractability motivates the use of
+temporal random walks
+, which provide a scalable alternative by sampling representative time-respecting paths without requiring full enumeration. Sampling not only keeps computation feasible by restricting to a fixed number of walks, but also provides diversity in exploration, ensuring that different regions and temporal patterns of the network are covered. These walks can be generated either in an
+unbiased
+manner, where all valid temporal edges are chosen uniformly, or with
+temporal biases
+that favor more recent interactions. Common examples include
+linear
+and
+exponential
+weighting
+(
+23
+)
+, while extensions such as
+temporal node2vec
+incorporate additional structural return and in-out parameters
+(
+13
+)
+.
+
+Temporal random walks are not only of theoretical interest but also form the basis of several temporal node embedding methods such as CTDNE and others
+(
+23
+;
+20
+;
+1
+;
+38
+;
+15
+)
+. These embeddings enable a variety of downstream tasks across different domains. For example, in microservice systems they support incident detection, root-cause localization, and workload forecasting
+(
+18
+;
+19
+;
+3
+;
+30
+)
+, while in finance they have been applied to stock price forecasting
+(
+42
+)
+. As a result, the efficiency of temporal walk sampling is critical not only for embedding methods themselves but also for the scalability of these downstream applications.
+
+Temporal random walks are also expensive to generate. Walk sampling can dominate training pipelines in large-scale graph learning systems, accounting for up to 96.2% of end-to-end runtime
+(
+36
+;
+5
+)
+and up to 98.8% of execution time in distributed implementations
+(
+44
+;
+26
+)
+. A recent system reported that random walk computation alone required 3.5 hours, representing 35% of overall processing time on graphs with hundreds of millions of nodes and billions of edges
+(
+21
+)
+. The severity of this bottleneck has driven some temporal GNNs to bypass explicit walk sampling in favor of edge streaming or message passing
+(
+28
+;
+7
+;
+41
+)
+.
+
+Related work:
+
+Several systems accelerate random walk generation but target different problem settings. Static walk engines such as KnightKing
+(
+44
+)
+, GraphWalker
+(
+37
+)
+, FlashMob
+(
+43
+)
+, and ThunderRW
+(
+32
+)
+, and GPU-based systems including CSAW
+(
+26
+)
+, Skywalker
+(
+35
+)
+, and gSampler
+(
+5
+)
+, achieve high throughput on static graphs but do not account for temporality. Dynamic graph engines such as FlowWalker
+(
+21
+)
+and Bingo
+(
+36
+)
+support evolving structures but do not take timestamps as input and cannot generate causality-preserving walks. The only published systems supporting causality-preserving temporal random walks at large scale are TEA
+(
+11
+)
+and TEA+
+(
+10
+)
+, which share the same engine; both are CPU-based and require loading the full dataset into memory.
+
+To enable high-throughput walk generation, most existing walk engines rely on execution models in which the graph is first reorganized into a CSR-style representation to facilitate fast graph traversals during sampling, as is common in systems such as GraphWalker
+(
+37
+)
+, ThunderRW
+(
+32
+)
+, FlashMob
+(
+43
+)
+, Skywalker
+(
+35
+)
+, gSampler
+(
+5
+)
+, and FlowWalker
+(
+21
+)
+. This preprocessing step allows efficient random access during execution but introduces a global reorganization cost performed ahead of time and typically excluded from reported metrics. As a result, these systems are primarily evaluated in batch settings and are not designed for streaming or real-time scenarios, where edges arrive continuously and walk generation must proceed without costly preprocessing.
+
+In addition, the scale of real-world temporal graphs poses significant challenges for existing methods. Alibaba’s 2022 microservice logs record 81 billion interactions over 14 days, representing only 0.5% of total interactions during that period
+(
+18
+)
+. Similarly, Visa’s payment infrastructure processed 234 billion transactions in 2024, averaging 639 million timestamped interactions per day across a continuously evolving network of credentials and merchant endpoints
+(
+34
+)
+. Bulk-oriented methods that require loading the entire dataset into memory are not viable at this scale, making streaming ingestion with bounded memory and data eviction necessary.
+
+These limitations motivate a practical temporal random walk system. First, it must strictly preserve temporal causality so that every sampled walk respects time order, unlike static walk engines that ignore temporal ordering. Second, it must sustain streaming-scale execution under bounded memory by efficiently ingesting new edges and evicting outdated ones; this setting is widely studied as
+sliding window processing
+
+(
+6
+;
+16
+;
+2
+)
+. Finally, leveraging GPU-native designs is desirable for achieving high throughput at large scale, which in turn requires data structures and algorithms specifically tailored for GPUs to ensure that temporal ordering can be handled efficiently without degrading performance
+(
+24
+)
+.
+
+In this paper, we present Tempest (TEMPoral nEtwork Streaming Traversals), a GPU-accelerated system for temporal random walk sampling. Our contributions include:
+
+•
+
+A GPU-native temporal random walk engine
+built on a dual-index edge store with two views over a shared edge array.
+
+•
+
+Hierarchical cooperative scheduling
+, an execution model that groups walks at the same node and step into a unit of work and dispatches that unit at thread, warp, or block granularity.
+
+•
+
+A bounded-memory streaming architecture
+that integrates batch ingestion, window eviction, and walk generation under sliding-window semantics, materializing GPU-efficient index layouts at each window update without fine-grained mutation or coordination overhead.
+
+•
+
+Comprehensive experimental validation
+demonstrating scalability to datasets with up to 81 billion temporal edges, more than sixty times larger than those used in prior work, together with detailed ablation study and sensitivity analyses that explain performance trade-offs.
+
+•
+
+Open-source implementation
+released as a Python library with a high-performance C++ core and comprehensive APIs.
+
+2.
+Tempest: System Architecture
+
+This section presents the system architecture of Tempest. We first formalize the execution constraints imposed by causality-preserving temporal random walks on GPUs, then describe the dual-index data structure over which walks operate. We then present the walk scheduler, which dispatches walks across cooperative GPU execution tiers based on per-step node convergence. The remainder of the section covers temporal bias sampling, streaming ingestion under sliding-window semantics, and a complexity analysis of walk execution, index construction, and memory usage.
+
+2.1.
+Design Constraints of Temporal Walk Execution
+
+We consider a temporal graph
+
+G=(V,E_{T}),\qquad E_{T}\subseteq V\times V\times\mathbb{R}^{+},
+
+where each temporal edge
+e=(u,v,t)
+represents an interaction from node
+u
+to node
+v
+occurring at time
+t
+.
+
+For a temporal random walk that arrives at node
+v
+at time
+t
+, causality requires that transitions respect temporal order. The causality-preserving neighborhood in the forward direction is
+
+\Gamma_{t}(v)=\{(v,w,t^{\prime})\in E_{T}\mid t^{\prime}>t\},
+
+with the backward case defined analogously. Each hop selects its next edge from this node-conditioned and time-filtered neighborhood; ties on timestamps are broken by uniform random sampling.
+
+The set
+\Gamma_{t}(v)
+is hop-dependent: its membership depends on both the current node and the timestamp reached at the previous step. It cannot be precomputed, cached, or reused across hops without violating temporal correctness. On GPUs, enforcing hop-dependent temporal constraints by enumerating valid neighbors or synchronizing threads does not scale. These approaches produce irregular memory access and coordination overhead, which limit throughput on massively parallel hardware
+(
+24
+)
+.
+
+2.2.
+System Overview
+
+Tempest ingests a temporal edge stream
+(u,v,t)
+and processes it in GPU-resident batches. Each batch undergoes three stages: GPU-parallel ingestion with sliding-window eviction (Section
+2.6
+), reconstruction of a dual-index representation over the active edge set (Section
+2.3
+), and generation of temporal random walks under a hierarchical cooperative scheduler (Section
+2.4
+). The dual index provides both global temporal access (for start-edge selection and window eviction) and node-conditioned temporal access (for walk progression). Once built, the index is reused across many walk sampling operations, amortizing construction (Section
+2.7
+).
+
+This design favors bulk reconstruction over fine-grained mutation. Tempest rebuilds its index at batch boundaries, in contrast to dynamic graph systems that incrementally update adjacency structures. Construction and window maintenance run entirely through GPU data-parallel primitives, avoiding synchronization and sequential updates. The resulting layout is compact, predictable, and aligned with sliding-window eviction.
+
+2.3.
+Dual-Index Organization
+
+Figure 1
+.
+Dual-index organization. Two logical views over a shared edge store, distinguished by their offset arrays.
+
+Tempest organizes active edges as a shared edge store with two logical views, illustrated in Figure
+1
+: a
+timestamp-grouped view
+and a
+node–timestamp-grouped view
+. Both are offset structures over a single edge array; neither replicates edge data.
+
+Timestamp-grouped view.
+
+The timestamp-grouped view orders edges globally by timestamp, with an offset array marking each timestamp group’s boundary. Start-edge sampling under a temporal bias and bulk window eviction both proceed by binary search over the offset array: the bias selects a timestamp group, and the offset locates the corresponding edge slice in constant time. Window eviction then reduces to discarding the prefix of the edge array up to the temporal cutoff.
+
+Node-and-timestamp-grouped view.
+
+The node-and-timestamp-grouped view is a two-level offset structure. Edges are grouped by source node, then ordered by timestamp within each node’s region. Figure
+2
+shows the layout. A node-group offset array locates each node’s edge region; a node–timestamp-group offset array locates each timestamp sub-group within that region. Both offset arrays are built once per batch and reused across all walks.
+
+Figure 2
+.
+Node-and-timestamp-grouped view.
+
+A walk thread evaluates
+\Gamma_{t}(v)
+in two steps. The node-group offset array gives the edge range
+[a,b)
+for node
+v
+in constant time. A binary search over the node–timestamp-group offset array within
+[a,b)
+then locates the first timestamp strictly greater than
+t
+, returning
+[c,b)\subseteq[a,b)
+as
+\Gamma_{t}(v)
+. The cost is
+\mathcal{O}(\log G)
+where
+G
+is the number of distinct timestamp groups at
+v
+. Selecting an edge from
+\Gamma_{t}(v)
+is then constant-time pointer arithmetic. This two-stage lookup eliminates per-hop neighborhood scanning.
+
+2.4.
+Hierarchical Cooperative Scheduling
+
+Causality-preserving temporal walks expose a tension when executed on a GPU. At each hop, a thread must locate
+\Gamma_{t}(v)
+inside the node’s edge range, sample under the active bias, and write the result. The work is short, dependent on the previous hop’s timestamp, and concentrated on a single node’s metadata. When tens of thousands of walks advance in parallel, threads in the same warp diverge across nodes, accesses to per-node metadata scatter across global memory, and control flow branches on walk lifetime. Coalesced access, shared-memory reuse, and uniform branching, all of which a GPU rewards
+(
+24
+;
+8
+)
+, are absent. We introduce
+hierarchical cooperative scheduling
+, an execution model that recovers them by treating walks at the same node and step as a unit of cooperative work and dispatching that unit at thread, warp, or block granularity based on how many walks have converged.
+
+Figure 3
+.
+Full-walk execution where each thread advances one walk independently.
+
+2.4.1.
+The Full-Walk Baseline
+
+The naive GPU baseline is to assign one thread to each walk. We call this the full-walk baseline. At each step, the thread fetches its current node’s edge range from global memory, locates the temporal cutoff
+\Gamma_{t}(v)
+by binary search, draws an edge, and advances to the next hop. The kernel scales by launching more threads. Figure
+3
+illustrates one step.
+
+Walks that converge on the same node share the index range and the binary-search target, but full-walk threads fetch and search independently. On hub-skewed temporal graphs
+(
+9
+;
+18
+)
+, this redundancy dominates per-step global-memory traffic. Walks also terminate at different steps when
+\Gamma_{t}(v)
+becomes empty, leaving lanes masked within an otherwise active warp.
+
+2.4.2.
+Cooperation and Its Challenges
+
+Walks that converge on the same node at the same step share work: the temporal binary search, the timestamp-group offsets it consults, and the edge-range arithmetic are identical across the group, while only the random draw and the picked edge differ per walk. NextDoor
+(
+14
+)
+exploits this on static graphs by caching the transit’s adjacency list in shared memory across co-located walks. The temporal regime introduces five challenges that a static design does not face.
+
+•
+
+Variable walk length.
+Temporal walks terminate early whenever no future valid edge exists at the current node, producing high per-walk variance in walk length. Under one-thread-per-walk dispatch, terminated lanes sit masked while their warpmates continue, so warp efficiency degrades step by step.
+
+•
+
+Runtime grouping.
+The walk-population count
+W
+at each node changes every step as walks migrate. It can only be obtained by inspecting walk state at the current step, so the grouping must be recomputed on every hop.
+
+•
+
+Granularity selection.
+The execution unit that does the computation depends on
+W
+. A node with tens of walks underutilizes a block but suits a warp; a node with hundreds of walks overflows a warp’s lanes. Suboptimal resource allocation reduces efficiency.
+
+•
+
+Bounded shared memory.
+The per-node metadata that makes cooperation profitable is the timestamp-group offset array, whose size
+G
+varies across nodes and across windows. Only some fit in a warp’s slice of shared memory, fewer fit in a block’s, and the rest must be served from global memory.
+
+•
+
+Mega-hubs.
+A single node can hold thousands of walks. A one-block-per-task dispatch would monopolize an SM with one task while other SMs sit idle, requiring work to be split across blocks.
+
+2.4.3.
+Cooperative Dispatch
+
+Tempest dispatches each per-node group of co-located walks to one of three execution units, sized to the GPU thread hierarchy: a single thread, a warp, or a thread block. The cooperative tiers (warp and block) preload the node’s adjacency metadata into shared memory (smem) once per task; every thread of the unit reads from smem instead of global memory. With the metadata resident, the temporal binary search and the edge-range arithmetic become smem reads, and the heavy global-memory access is done once per node rather than once per walk.
+
+Figure 4
+.
+Three cooperative execution units. Solo dispatches one walk to one thread. Warp-coop assigns one node’s walks to one warp, all 32 threads sharing the node’s adjacency metadata in smem. Block-coop assigns one hub’s walks to one block, with a larger smem allocation holding the metadata.
+
+Figure
+4
+shows the three units. Solo handles nodes carrying a handful of walks; the cooperation overhead is unjustified there, so each walk runs as in the full-walk baseline but launched within a step-bounded kernel. Warp-coop and block-coop differ in scale: a warp’s smem allocation holds less metadata than a block’s, so the warp tier serves moderate
+W
+and the block tier serves the long tail.
+
+2.4.4.
+The Dispatch Plane
+
+The choice between solo, warp-coop, and block-coop is governed by the walk-population count
+W
+. The choice between an in-smem metadata copy and a global-memory fallback within each cooperative tier is governed by the node’s timestamp-group count
+G
+. The two together define a dispatch plane shown in Figure
+5
+, partitioned into the five terminal kernels.
+
+Figure 5
+.
+Dispatch plane. The
+W
+axis selects the execution unit; the
+G
+axis selects whether the node’s adjacency metadata is preloaded into smem or read from global memory. W thresholds are obtained empirically (Section
+3.5
+).
+
+The
+W
+thresholds set tier boundaries. The warp/block boundary is
+W=\mathit{block\_dim}
+: a node carrying more walks than a block can hold must use a block-tier kernel. The solo/warp boundary is a tunable hyperparameter that trades cooperation overhead against amortization gain at low
+W
+, where co-located walks are few. Both are tuned empirically (Section
+3.5
+).
+
+The
+G
+thresholds set memory-tier boundaries. In the warp tier, the metadata sits in a warp’s slice of the block’s shared-memory allocation. In the block tier, it occupies the full block’s allocation. Each is sized to the maximum that fits, giving the per-tier
+G
+caps shown in Figure
+5
+: above each cap, the metadata does not fit and the kernel reads from global memory instead. The block tier’s larger budget tolerates roughly
+8\times
+the
+G
+that the warp tier does, reflecting the block hosting 8 warps that share the smem allocation.
+
+Mega-hubs occupy the rightmost column. A node with
+W>8192
+walks would, under one-block-per-task dispatch, monopolize one streaming multiprocessor while others sit idle. Tempest splits such tasks into
+\lceil W/8192\rceil
+disjoint sub-tasks, each dispatched to its own block. The walks at the node are partitioned into contiguous slices of up to 8192, with each block assigned a slice and performing sampling on it independently. The metadata is loaded once per sub-task because the underlying node is the same.
+
+Algorithm 1
+
+Per-step walk scheduling.
+
+0:
+
+walk array, step
+i
+, timestamp-group counts
+G[\cdot]
+
+0:
+
+task lists for the solo, warp-smem, warp-global, block-smem, block-global tiers
+
+1:
+
+flag walks alive at step
+i
+
+2:
+
+compact alive walks via
+PartitionFlagged
+
+3:
+
+gather each alive walk’s current node
+
+4:
+
+SortPairs
+(current node, walk index) by node
+
+5:
+
+RunLengthEncode
+on sorted nodes;
+ExScan
+on run lengths
+
+6:
+
+partition runs by
+W
+into solo, warp, block tiers {Fig.
+5
+}
+
+7:
+
+partition warp tier by
+G
+into warp-smem, warp-global
+
+8:
+
+partition block tier by
+G
+into block-smem, block-global
+
+9:
+
+expand block-tier tasks with
+W>W_{\max}
+into disjoint sub-tasks
+
+2.4.5.
+Per-Step Pipeline
+
+The scheduler produces the five terminal task lists with a sequence of GPU data-parallel passes, summarized in Algorithm
+1
+. Most stages are CUB primitives
+(
+25
+)
+; the remaining are custom kernels (alive flagging, current-node gather, the partitions, and the mega-hub expansion). Two host syncs are required per step: one to read the alive count after compaction, and one to read the per-tier task counts before launching the terminal kernels.
+
+2.4.6.
+Comparison to Prior Dispatch Schemes
+
+Multi-granularity dispatch on GPUs is itself not new. Skywalker
+(
+35
+)
+and FlowWalker
+(
+21
+)
+assign work at warp or block granularity, but the dispatch input is the static structural degree of the current vertex and does not depend on the state of the walk population. Tempest’s
+W
+is a runtime, per-step quantity that requires inspecting walk state at the current step. The same node receives different dispatch granularities at different steps as walks migrate.
+
+NextDoor
+(
+14
+)
+performs the closest analog of Tempest’s per-step regrouping: it inverts the sample-to-transit map and dispatches each transit vertex to a warp, block, or grid of blocks based on the number of samples sharing that transit. Once a kernel choice is made, NextDoor caches the transit’s adjacency slice unconditionally within that choice. Tempest extends the regrouping idea to the temporal regime: the data preloaded is the per-node timestamp-group offset array under sliding-window expiration, the decision to preload at all is governed by
+G
+, and Tempest filters walk state per step to drop completed walks before kernel launches.
+
+FlexiWalker
+(
+27
+)
+is recent work that adapts at runtime per node. The signal and the decision space differ. FlexiWalker selects between rejection and reservoir sampling per node using a runtime cost model, targeting dynamic random walks on static graphs. Tempest selects an execution unit and a memory tier per task based on
+W
+and
+G
+, on streaming temporal graphs under sliding windows.
+
+2.5.
+Temporal Bias Sampling
+
+Each hop selects the next edge under a temporal bias evaluated within the index range exposed by the dual-index. Tempest’s default sampler is
+weight-based
+: it applies inverse transform sampling on the cumulative weight array of
+\Gamma_{t}(v)
+. Edges are assigned weights
+w(e_{i})=\exp(t_{i}-t_{\min})
+where
+t_{\min}=\min_{e\in\Gamma_{t}(v)}t(e)
+; the cumulative array
+W[k]=\sum_{j=0}^{k}w(e_{j})
+is built once per neighborhood, and a draw
+u\sim\mathcal{U}(0,1)
+selects the smallest index
+k
+with
+W[k]\geq r
+for
+r=u\cdot W[n-1]
+via binary search, at
+\mathcal{O}(\log n)
+per hop.
+
+When timestamp gaps within a neighborhood are uniform, only ordinal position matters, and the
+index-based
+sampler admits closed-form inverse CDFs over the index
+i\in[0,n)
+:
+
+(1)
+
+\textbf{Uniform:}\quad i=\lfloor u\cdot n\rfloor.
+
+(2)
+
+\textbf{Linear:}\quad i=\left\lfloor\tfrac{-1+\sqrt{1+4un(n+1)}}{2}\right\rfloor.
+
+(3)
+
+\textbf{Exponential:}\quad i\approx\lfloor n+\ln(u)-1\rfloor.
+
+These collapse the per-hop cost to
+\mathcal{O}(1)
+on a single random draw. Derivations and the numerically stable forms are deferred to the supplementary material.
+
+Tempest supports Temporal Node2Vec
+(
+13
+)
+, which adds a second-order bias
+\beta(u,w)
+depending on the previous node. We apply
+\beta
+via rejection sampling on the static exponential proposal: each hop accepts with probability
+\beta(u,w)/\beta_{\max}
+, where
+\beta_{\max}=\max(1/p,\,1,\,1/q)
+, keeping the inner CDF prev-independent so Node2Vec runs through the same cooperative dispatch path as other pickers.
+
+2.6.
+Streaming Ingestion and Window Management
+
+Tempest maintains an active temporal window of fixed duration
+\Delta
+. At time
+t
+, the active edge set is
+
+W(t)=\{e\in E_{T}\mid t-\Delta\leq t_{e}\leq t\},
+
+where
+t_{e}
+is the timestamp of edge
+e
+. Only edges within
+W(t)
+participate in indexing and walk sampling, bounding memory usage by
+|W(t)|
+regardless of total stream length.
+
+Incoming batches advance the window forward in time. Each batch is sorted by timestamp before merge; edges older than
+t-\Delta
+at merge time are dropped. The system assumes monotonic batch boundaries: edges arriving in a later batch with timestamps before the current window are treated as too late and dropped without retraction. This is consistent with the streaming-graph processing model used in prior work on sliding-window analytics
+(
+6
+;
+16
+)
+.
+
+Each batch triggers a bulk reconstruction of the dual-index over the updated edge set rather than incremental mutation. Ingestion and rebuild costs depend on
+|W(t)|
+and do not accumulate across batches; if per-batch processing time stays below the arrival interval, the stream sustains stable throughput without backlog (Section
+3.3
+). The window duration
+\Delta
+trades temporal context against memory and rebuild cost; we measure this trade-off in Section
+3.9
+.
+
+2.7.
+Complexity Analysis
+
+Walk execution.
+
+Let
+L
+denote the walk length and let
+|\Gamma_{t}(v)|
+be the size of the causality-preserving neighborhood at a hop from node
+v
+. The per-hop cost depends on the sampler. The index-based picker performs a constant number of arithmetic operations and one random draw, yielding
+\mathcal{O}(1)
+per hop and
+\mathcal{O}(L)
+per walk. The weight-based picker performs a binary search over the cumulative weight array of
+\Gamma_{t}(v)
+, yielding
+\mathcal{O}(\log|\Gamma_{t}(v)|)
+per hop and
+\mathcal{O}(L\log|\Gamma_{t}(v)|)
+per walk. Cooperative dispatch (Section
+2.4
+) reduces wall-clock time by amortizing the per-node work across co-located walks but does not change per-walk asymptotic cost.
+
+Index construction and window management.
+
+Let
+m=|W(t)|
+denote the number of edges in the active window. Each batch boundary triggers eviction and reconstruction of the dual-index. The reconstruction performs two GPU radix sorts (one for each view) and a constant number of linear-time prefix-sum and offset-generation passes. CUB’s radix sort is linear in input size
+(
+25
+)
+, so each runs in
+\mathcal{O}(m)
+work, and the per-batch reconstruction cost is
+\mathcal{O}(m)
+. These costs are amortized across the
+K
+walks generated from the rebuilt indices, giving a per-walk amortized index cost of
+\mathcal{O}(m/K)
+.
+
+Memory usage.
+
+Memory is bounded by the active window. Each edge in
+W(t)
+is stored once in the shared edge store, with auxiliary index arrays of total size linear in
+m
+. No memory is retained for evicted edges, and usage does not grow with input stream length.
+
+3.
+Evaluation
+
+3.1.
+Experimental Setup
+
+Hardware and configuration.
+
+Experiments use compute nodes with 32 CPU cores, 196 GB of RAM, and an NVIDIA A40 GPU (46 GB VRAM, CUDA 12.6). GPU kernels use a block dimension of 256 (Section
+3.5
+). Walk length is 80, walks per node is 10, temporal bias is exponential, and start bias is uniform unless stated otherwise. The default sampler is weight-based (Section
+2.5
+). Streaming experiments process temporally ordered batches under a sliding window of one-third the dataset’s time span. Results average over five runs.
+
+Baselines.
+
+We compare against
+TEA+
+
+(
+10
+)
+and
+TEA
+
+(
+11
+)
+, CPU temporal-walk engines using hybrid alias sampling; for temporal walks the two systems are identical, as evidenced by TEA+ reporting the same tables as TEA (TEA: Table 4, TEA+: Table 2). Several random walk engines target static or dynamic-structure graphs, including GraphWalker
+(
+37
+)
+, KnightKing
+(
+44
+)
+, FlashMob
+(
+43
+)
+, ThunderRW
+(
+32
+)
+, FlowWalker
+(
+21
+)
+, and Bingo
+(
+36
+)
+; these systems do not ingest timestamps and cannot enforce temporal causality. We compare against two representatives in Section
+3.10
+.
+
+3.2.
+Datasets
+
+We report streaming-scale results on Alibaba, the largest publicly available temporal interaction dataset (81B edges over 14 days)
+(
+18
+)
+. Detailed ablation, profiling, and sensitivity studies use TGBL-Coin, TGBL-Flight
+(
+12
+)
+, and Konect-Delicious
+(
+17
+)
+, three of the largest temporal datasets in TGB and Konect. Profiling at Alibaba scale is impractical due to the cost of repeated full-stream replays. Table
+1
+lists the datasets used in the main paper.
+
+Table 1
+.
+Datasets used in evaluation.
+
+Dataset
+
+Nodes
+
+Edges
+
+TGBL-Review
+(
+12
+)
+
+352K
+
+4.8M
+
+TGBL-Coin
+(
+12
+)
+
+638.5K
+
+22.8M
+
+Konect-Growth
+(
+17
+)
+
+1.8M
+
+39M
+
+TGBL-Flight
+(
+12
+)
+
+18K
+
+67M
+
+Konect-Delicious
+(
+17
+)
+
+33.7M
+
+301M
+
+Alibaba Microservices
+(
+18
+)
+
+68K
+
+81B
+
+3.3.
+Streaming-Scale Evaluation
+
+(a)
+
+Cumulative edge ingestion time.
+
+(b)
+
+Cumulative walk sampling time.
+
+Figure 6
+.
+Cumulative streaming performance on the Alibaba dataset over 81B edges.
+
+We evaluate Tempest under sustained streaming on the Alibaba 2022 Microservice Logs
+(
+18
+)
+: 81 billion interactions among 68,000 microservices over 14 days, partitioned into 6,720 chronological 3-minute batches of
+\approx
+12M edges each. Tempest uses a 60-minute sliding window, holding
+\approx
+120M active edges in steady state. After each batch, the system generates 20 temporal random walks of length 100 from every active source node (
+\approx
+219K walks per batch). High-frequency interaction data of this kind concentrates many events into each millisecond timestamp, making timestamp gaps approximately uniform; we therefore use the index-based sampler with the closed-form
+\mathcal{O}(1)
+inverse-CDF (Section
+2.5
+), which is exact under uniform-gap conditions.
+
+Results.
+
+Figure
+6
+shows cumulative ingestion and walk-sampling time as the 14-day stream is replayed. Tempest sustains real-time processing throughout: per-batch ingest averages 596 ms and walk sampling averages 167 ms, against a 180-second batch arrival interval, leaving over
+235\times
+headroom and no backlog. The full 81 billion edges are processed end-to-end in 1.42 hours of wall time (1.11 hours ingestion, 0.31 hours sampling). The ingestion curve is essentially linear, confirming that batch-bounded reconstruction cost (Section
+2.6
+) does not accumulate as the stream advances.
+
+Table 2
+.
+Cooperative scheduler ablation. Steps/sec averaged over five runs (mean
+\pm
+std); kernel time and launch count are per walk-generation call.
+
+TGBL-Coin
+
+TGBL-Flight
+
+Konect-Delicious
+
+Variant
+
+M-steps/s
+
+ms/call
+
+launches
+
+M-steps/s
+
+ms/call
+
+launches
+
+M-steps/s
+
+ms/call
+
+launches
+
+Full-Walk
+
+59.4\pm 0.9
+
+1496\pm 3.9
+
+8
+
+106.9\pm 1.3
+
+107\pm 0.2
+
+8
+
+60.5\pm 0.8
+
+324\pm 1.2
+
+8
+
+Coop-Global
+
+60.6\pm 1.2
+
+1293\pm 1.5
+
+2,487
+
+108.1\pm 1.1
+
+96\pm 0.04
+
+2,487
+
+62.5\pm 0.8
+
+297\pm 0.04
+
+576
+
+Coop
+
+63.8\pm 1.2
+
+1273\pm 0.7
+
+2,646
+
+112.3\pm 1.5
+
+89\pm 0.04
+
+2,567
+
+66.7\pm 1.2
+
+276\pm 0.02
+
+575
+
+3.4.
+Scaling Behavior
+
+(a)
+
+Edge ingestion.
+
+(b)
+
+Walk sampling (10M walks).
+
+Figure 7
+.
+Scaling on Konect-Delicious (1K to 301M edges).
+
+We characterize how Tempest scales with active graph size on Konect-Delicious. To our knowledge, no random walk engine supports streaming ingestion as part of its pipeline; we therefore compare against Raphtory
+(
+31
+)
+, an industrial temporal graph engine supporting incremental edge insertion at this scale, and against a CPU backend of Tempest itself. The CPU backend mirrors the GPU data-parallel primitives, pickers, and samplers using OpenMP and TBB; the hierarchical cooperative scheduler is GPU-only. Both backends share the same data structures and source tree, so CPU-vs-GPU comparisons isolate the GPU’s parallelism advantage.
+
+Ingestion.
+
+Each point on Figure
+7
+a is a separate run that ingests the indicated number of edges from scratch and rebuilds the dual-index. At 301M edges, Tempest GPU completes ingestion in 0.9 s,
+76\times
+faster than Raphtory and
+84\times
+faster than the same algorithm on CPU. Tempest CPU and Raphtory are within 10% of each other across the range, which separates the GPU advantage from any algorithmic difference between Tempest and Raphtory.
+
+Walk sampling.
+
+Each point on Figure
+7
+b is a separate run that ingests the indicated number of edges and then generates 10M walks of length 100 with uniformly sampled start nodes. All three pickers stay essentially flat across edge counts: per-walk time varies by less than 5% from 1K to 301M edges. The rejection-sampling formulation of Temporal Node2Vec (Section
+2.5
+) lets the second-order picker run through the same cooperative dispatch path as the first-order pickers, with per-hop cost dominated by walk length rather than neighborhood size. The GPU backend accelerates all three pickers by 2.5–2.9
+\times
+over the CPU backend (CPU lines are omitted from the figure for brevity).
+
+3.5.
+Parameter Tuning
+
+The cooperative scheduler exposes two tunable parameters: the CUDA block dimension and the solo–warp boundary
+W_{\mathrm{warp}}
+.
+
+Block dimension.
+
+Figure
+8
+sweeps the block dimension on TGBL-Coin. Block dimension is determined by the kernel’s GPU resource footprint, so a single representative dataset suffices. Throughput rises sharply through 128 and then flattens; values from 128 to 512 lie within run-to-run standard deviation of each other. SM occupancy continues to rise past 128 and saturates at 256. Going beyond 256 also requires opting into the architecture’s higher dynamic shared-memory ceiling, which causes portability and occupancy issues. We default to 256, the largest block size that fits the static shared-memory envelope and captures both the throughput plateau and the occupancy saturation point.
+
+(a)
+
+Walk throughput.
+
+(b)
+
+SM occupancy.
+
+Figure 8
+.
+Block dimension sweep on TGBL-Coin.
+
+Solo–warp boundary.
+
+Figure
+9
+sweeps
+W_{\mathrm{warp}}\in\{1,2,4,8,16,32,64\}
+on TGBL-Coin, TGBL-Flight, and Konect-Delicious. Per-dataset throughput stays within 3% of its maximum on TGBL-Coin and TGBL-Flight across the full range. Konect-Delicious peaks at
+W_{\mathrm{warp}}=4
+and drops by 9% at
+W_{\mathrm{warp}}\geq 8
+. Its heavy-tailed degree distribution produces many medium-
+W
+nodes that benefit from warp-coop amortization. At higher thresholds these nodes fall into solo dispatch, forfeiting the amortization. The cross-dataset mean peaks at
+W_{\mathrm{warp}}=4
+, which we adopt as the default.
+
+Figure 9
+.
+W_{\mathrm{warp}}
+sweep across three datasets. Per-dataset throughput is normalized to its own maximum; the bold curve is the cross-dataset mean.
+
+3.6.
+Cooperative Scheduler Ablation
+
+We isolate the two mechanisms of the cooperative scheduler (Section
+2.4
+) by comparing three execution variants on TGBL-Coin, TGBL-Flight, and Konect-Delicious.
+
+Variants.
+
+Full-Walk
+is the one-thread-per-walk baseline of Section
+2.4.1
+: each thread carries one walk to completion with no shared state.
+Coop-Global
+enables the per-step regrouping and tier dispatch but disables the smem-resident metadata; cooperative tiers read the per-node timestamp-group offsets from global memory on every hop.
+Coop
+is the full scheduler: per-step regrouping plus tier dispatch plus the smem panel.
+
+Results.
+
+Table
+2
+shows that cooperative dispatch alone (Coop-Global vs. Full-Walk) lifts throughput by 2–3% across the three datasets, and adding smem-resident metadata (Coop vs. Coop-Global) lifts it by a further 4–7%. The two mechanisms compose additively for an end-to-end gain of 5–10%.
+
+The structural change is visible in the launch and per-call columns. Full-Walk performs each walk-generation call with eight monolithic kernel launches, running for hundreds of milliseconds (1.5 s on coin, 324 ms on delicious). Coop and Coop-Global decompose work into thousands of tier-specific micro-kernels:
+\sim
+2,500 launches on coin and flight (300
+\times
+more),
+\sim
+575 on delicious (70
+\times
+more). Per-kernel time drops to tens or hundreds of microseconds, and wall-clock per call drops by 10–15% despite the larger launch count. Smem-resident metadata accounts for the additional gain over Coop-Global by amortizing the per-node temporal-index access across co-located walks, reducing global-memory traffic in the warp- and block-tier kernels. Beyond the throughput gain, the scheduler bounds per-launch cost regardless of walk-population skew, which enables scaling to mega-hub workloads under sliding windows.
+
+Table 3
+.
+Per-tier launch distribution (%) on Coop.
+
+Tier
+
+Coin
+
+Flight
+
+Delicious
+
+solo
+
+14.2
+
+16.5
+
+20.2
+
+warp
+\times
+smem
+
+14.4
+
+16.7
+
+20.5
+
+warp
+\times
+global
+
+14.4
+
+16.7
+
+0.0
+
+block
+\times
+smem
+
+14.2
+
+16.5
+
+16.9
+
+block
+\times
+global
+
+14.2
+
+0.0
+
+0.0
+
+multi-block
+
+28.7
+
+33.5
+
+42.5
+
+Tier distribution.
+
+Table
+3
+shows that the dispatch plane is fully exercised. Mega-hub expansion accounts for 29–43% of launches across all three datasets, validating the W-axis. Coin and Flight exercise the global tier where
+G
+exceeds the smem cap, validating the G-axis; Delicious never reaches the global fallback because its
+G
+distribution fits within the smem caps at every step.
+
+3.7.
+Ingestion Time Breakdown
+
+We profile each batch with NVIDIA’s NVTX to measure four stages: the dual-index sort, cumulative-weight precomputation for the bias sampler, host-to-device transfer, and pipeline overhead. Pipeline overhead captures the per-batch framework costs (GPU memory allocation, kernel-launch queueing, CPU-GPU coordination) that recur every batch but do not accumulate.
+
+Table 4
+.
+Per-batch ingestion time breakdown (% of total).
+
+Stage
+
+Coin
+
+Flight
+
+Delicious
+
+sort
+
+6.3
+
+14.7
+
+8.9
+
+weight
+
+10.8
+
+0.6
+
+26.4
+
+H2D
+
+26.4
+
+19.5
+
+23.9
+
+pipeline overhead
+
+56.5
+
+65.2
+
+40.9
+
+total (ms)
+
+210
+
+219
+
+226
+
+Results.
+
+Table
+4
+shows the breakdown averaged over a full streaming run. Sort accounts for 6–15%, validating the linear-time CUB radix sort claimed in Section
+2.7
+. Weight precomputation scales with node count: Flight (18K nodes) sees 0.6%, Delicious (34M nodes) sees 26%. Host to device transfer (H2D) is roughly proportional to batch size. Pipeline overhead dominates because each batch accumulates many small framework costs (allocation, kernel launch overhead, CPU-GPU coordination) across the ingestion pipeline. Each component is bounded by the active window
+|W(t)|
+and does not accumulate as the stream advances.
+
+3.8.
+Comparison with TEA+/TEA
+
+Table 5
+.
+Performance comparison on shared datasets. Runtimes in seconds; best values in bold.
+
+Exponential
+
+Linear
+
+Temporal Node2Vec
+
+Dataset
+
+TEA+
+
+Tempest
+
+TEA+
+
+Tempest
+
+TEA+
+
+Tempest
+
+growth
+
+2.93
+
+0.50
+(
+5.8\times
+)
+
+0.56
+
+0.49
+
+3.52
+
+0.51
+(
+6.9\times
+)
+
+delicious
+
+38.84
+
+8.43
+(
+4.6\times
+)
+
+7.98
+
+8.36
+
+59.82
+
+9.64 (
+6.2\times
+)
+
+TEA+
+(
+10
+)
+and its predecessor TEA
+(
+11
+)
+are CPU-based engines for causality-preserving temporal random walks, the closest comparable baselines to Tempest. We compare architectural design and end-to-end performance on shared workloads.
+
+Architecture.
+
+TEA+ operates in bulk mode and requires the full temporal graph in memory before walk generation; it does not support sliding-window eviction. Its sampler relies on hierarchical alias tables and hash-indexed structures; per-vertex alias trunks consume substantial auxiliary memory and require updates across multiple distributed structures when edges are evicted. Tempest stores edges once and exposes two logical orderings (Section
+2.3
+), supporting global start-edge selection and window eviction over the same physical layout, with hop-by-hop progression served from a node-local timestamp ordering.
+
+Source code and reproducibility.
+
+TEA+’s source code is not publicly available and could not be obtained from the authors. Faithful reimplementation without access to internal design details would be unlikely to yield a fair comparison. Following the standard practice for evaluating closed-source systems
+(
+33
+;
+39
+;
+29
+)
+, we report TEA+’s performance numbers as published.
+
+Datasets.
+
+TEA+ reports four KONECT
+(
+17
+)
+datasets. We restrict our comparison to growth and delicious, whose edge counts and temporal attributes match the public KONECT release. The reported edge count for edit differs from the count listed on KONECT, and twitter is listed on KONECT without timestamps. We therefore exclude both from the comparison.
+
+Performance.
+
+Table
+5
+reports walk generation runtimes under the configuration TEA+ uses (1 walk per node, walk length 80). Tempest runs in bulk mode for parity, while its primary operating regime is streaming ingestion in smaller batches under bounded memory (Section
+3.3
+). Under exponential bias, the configuration TEA identifies as the most relevant for temporal walks
+(
+11
+)
+, Tempest is
+4.6
+–
+5.8\times
+faster. Under linear bias the two systems are comparable. For Temporal Node2Vec, Tempest is
+6
+–
+7\times
+faster on both datasets. Due to differing execution models and hardware, these results are indicative rather than definitive.
+
+3.9.
+Window Duration Sensitivity
+
+The temporal window duration
+\Delta
+trades historical context against per-batch cost. We sweep
+\Delta
+from 1 to 10 batches on TGBL-Coin, TGBL-Review, and TGBL-Flight, with batch duration fixed at
+T/100
+where
+T
+is each dataset’s time span. Walk length, walks per node, and bias are held constant.
+
+For downstream evaluation, we split each dataset chronologically into 70/15/15 train/validation/test partitions. Walks generated after each training batch update node embeddings via incremental skip-gram
+(
+22
+)
+training. Link prediction is supervised against negative edges constructed by replacing each positive edge’s target with a non-co-occurring node. We report mean and standard deviation of test AUC across five trials.
+
+(a)
+
+Walk sampling.
+
+(b)
+
+Link prediction
+\Delta
+AUC.
+
+Figure 10
+.
+Window sensitivity on TGB datasets. (b) reports
+\Delta
+AUC relative to the smallest window (1 batch); baseline AUCs are 0.861 (coin), 0.535 (review), 0.971 (flight). Asterisks mark per-dataset optima.
+
+Table 6
+.
+Comparison with non-temporal walk engines. Throughput is mean
+\pm
+std of 10 runs. Best values in bold.
+
+Avg.
+
+Throughput (M steps/s)
+
+Valid Hops (%)
+
+Valid Walks (%)
+
+Dataset
+
+Degree
+
+Tempest
+
+Flow.
+
+Thun.
+
+Tempest
+
+Flow.
+
+Thun.
+
+Tempest
+
+Flow.
+
+Thun.
+
+Growth
+
+21.4
+
+\mathbf{30.6\pm 0.6}
+
+28.8\pm 0.0
+
+7.3\pm 1.3
+
+\mathbf{100}
+
+0.0
+
+1.1
+
+\mathbf{100}
+
+0.0
+
+0.0
+
+Delicious
+
+8.9
+
+\mathbf{66.7\pm 1.2}
+
+1.3\pm 0.0
+
+11.0\pm 1.2
+
+\mathbf{100}
+
+0.0
+
+0.1
+
+\mathbf{100}
+
+0.0
+
+0.0
+
+TGBL-Coin
+
+35.7
+
+\mathbf{63.8\pm 1.2}
+
+10.0\pm 0.0
+
+13.9\pm 0.1
+
+\mathbf{100}
+
+0.0
+
+0.9
+
+\mathbf{100}
+
+0.0
+
+0.0
+
+TGBL-Flight
+
+3702.2
+
+\mathbf{112.3\pm 1.5}
+
+97.3\pm 0.1
+
+16.6\pm 0.3
+
+\mathbf{100}
+
+0.0
+
+1.2
+
+\mathbf{100}
+
+0.0
+
+0.0
+
+Results.
+
+Figure
+10
+shows walk-sampling latency rising monotonically with
+\Delta
+as the active edge set grows. Downstream link prediction peaks at
+\Delta=1
+–
+2
+batches; beyond that, AUC plateaus or declines. Larger windows resample stale interactions across batches, diluting the contribution of recent edges. Recent context alone is sufficient for accurate prediction when the underlying model is updated regularly; increasing
+\Delta
+beyond this regime spends GPU memory and sampling cost without improving prediction quality.
+
+3.10.
+Comparison with Non-Temporal Baselines
+
+GPU and CPU random walk systems for static graphs operate on time-agnostic abstractions and do not enforce temporal causality. For consistency with prior comparisons in this space
+(
+10
+;
+11
+)
+, we evaluate Tempest against two recent, high-performance static frameworks for which open-source artifacts are available: the GPU-based FlowWalker
+(
+21
+)
+and the CPU-based ThunderRW
+(
+32
+)
+. We ran FlowWalker on the same NVIDIA A40 used for Tempest and ThunderRW on a 20-core CPU server with 192 GB of RAM.
+
+Setup.
+
+We evaluate on four temporal datasets at varying scales. For FlowWalker and ThunderRW, timestamps were discarded to accommodate their static graph abstraction. With each system we generate 10 million walks of length 80. Temporal causality was independently validated by post-processing each walk using a greedy, earliest-feasible timestamp assignment rule. Walks violating strict timestamp monotonicity were marked as invalid.
+
+Results.
+
+Table
+6
+reports throughput alongside hop- and walk-level temporal validity. FlowWalker and ThunderRW produce 0% valid walks across every dataset: although a small fraction of individual hops happen to satisfy temporal monotonicity by chance (up to 1.2%), every walk contains at least one violation. This is structural, not a tuning issue: static engines have no notion of temporal causality and cannot preserve it. Once the validity gap is established, the throughput numbers quantify the cost of enforcing causality. Tempest is fastest on every dataset, with the largest margins on Delicious (
+51\times
+over FlowWalker) and TGBL-Coin (
+6.4\times
+). Throughput scales with the average static degree across datasets.
+
+3.11.
+Memory Usage Analysis
+
+We evaluate Tempest’s memory footprint under two regimes: bulk mode with varying edge count, and streaming mode with a sliding window where each ingested batch evicts the previous one.
+
+(a)
+
+(b)
+
+Figure 11
+.
+Memory usage. (a) Edge scaling in bulk mode (nodes = 10K, timestamps = 10K). (b) Streaming with a constant window over 100 batches of 10M edges each.
+
+Results.
+
+Figure
+11
+a shows linear memory growth with edge count, matching Tempest’s flat layout: 1 billion edges fit in approximately 35 GB, well within commodity datacenter GPUs like the NVIDIA A40 (46 GB VRAM). Figure
+11
+b shows memory remaining flat across 100 streaming batches, confirming the bounded-memory claim from Section
+2.7
+: memory does not grow with stream length, only with active-window size. Weight-based sampling consumes slightly more memory than index-based due to the cumulative-weight arrays, and trends hold for directed and undirected modes.
+
+4.
+Conclusion
+
+Tempest is a GPU-accelerated engine for streaming temporal random walks combining a dual-index edge store with a hierarchical cooperative scheduler that dispatches walks at thread, warp, or block granularity. Sustained processing of 81 billion edges over a 14-day stream demonstrates bounded-memory streaming temporal walks at industrial scale, with
+76\times
+ingestion speedup over the closest temporal graph engine and causal correctness against non-temporal engines that produce
+0\%
+valid walks. The cooperative scheduler delivers measurable end-to-end gains on hub-skewed temporal graphs by bounding per-launch work cost. Tempest opens a path to walk-native temporal embedding methods that consume causal walks directly, which we are pursuing in ongoing work. Source code and a Python package will be made publicly available upon acceptance.
+
