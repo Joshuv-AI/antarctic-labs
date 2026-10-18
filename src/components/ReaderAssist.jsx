@@ -870,6 +870,127 @@ function ContentsPanel({
 // ---------------------------------------------------------------------------
 const MAX_HL_CHARS = 20000; // cap so a huge selection can't bloat the URL
 
+// Global char offset of a (node, offset) selection point inside the reader.
+// Shared by the share panel and the highlight-capture pill.
+const pointGlobal = (node, off, chunkElsRef, chunkStarts) => {
+  const host = node.nodeType === 1 ? node : node.parentElement;
+  const chunkEl = host && host.closest(".tower-reader-chunk");
+  if (!chunkEl) return null;
+  const ci = chunkElsRef.current.indexOf(chunkEl);
+  if (ci < 0 || ci >= chunkStarts.length) return null;
+  try {
+    const r = document.createRange();
+    r.setStart(chunkEl, 0);
+    r.setEnd(node, off);
+    return chunkStarts[ci] + r.toString().length;
+  } catch {
+    return null;
+  }
+};
+
+// The user's current text selection as global {start, end}, or null when
+// there is no usable selection inside the reader text.
+const selectionOffsets = (chunkElsRef, chunkStarts, text) => {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+  const reader = document.querySelector(".tower-reader-text");
+  const range = sel.getRangeAt(0);
+  if (!reader || !reader.contains(range.commonAncestorContainer))
+    return null;
+  const a = pointGlobal(range.startContainer, range.startOffset, chunkElsRef, chunkStarts);
+  const b = pointGlobal(range.endContainer, range.endOffset, chunkElsRef, chunkStarts);
+  if (a === null || b === null || b <= a) return null;
+  const start = clamp(a, 0, text.length);
+  const end = Math.min(clamp(b, 0, text.length), start + MAX_HL_CHARS);
+  return { start, end };
+};
+
+// ---------------------------------------------------------------------------
+// Highlight-capture pill — minimal dark frosted pill (same language as the
+// find UI). Opens when the user taps "Highlight a passage" in the share
+// panel: the panel gets out of the way so text can be selected freely,
+// especially on mobile. The live selection is tracked via selectionchange
+// (robust on mobile, where tapping Done can collapse the selection); Done
+// saves the last captured passage and returns to the share panel.
+// ---------------------------------------------------------------------------
+function HighlightPill({
+  text,
+  chunkStarts,
+  chunkElsRef,
+  anchorStyle,
+  onDone,
+  onCancel,
+}) {
+  const [pending, setPending] = useState(null); // {start,end} | null
+  const [hint, setHint] = useState(false);
+  const hintTimer = useRef(0);
+
+  useEffect(() => {
+    const update = () => {
+      setPending(selectionOffsets(chunkElsRef, chunkStarts, text));
+    };
+    update();
+    document.addEventListener("selectionchange", update);
+    return () => document.removeEventListener("selectionchange", update);
+  }, [chunkElsRef, chunkStarts, text]);
+
+  useEffect(() => () => window.clearTimeout(hintTimer.current), []);
+
+  const chars = pending ? pending.end - pending.start : 0;
+
+  const done = () => {
+    if (pending) {
+      onDone(pending);
+      return;
+    }
+    setHint(true);
+    window.clearTimeout(hintTimer.current);
+    hintTimer.current = window.setTimeout(() => setHint(false), 2200);
+  };
+
+  return (
+    <div
+      className="ra-hlmode"
+      style={anchorStyle}
+      role="dialog"
+      aria-label="Highlight a passage"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onCancel();
+        }
+      }}
+    >
+      <span className="ra-hlmode-label" aria-live="polite">
+        {pending ? (
+          <>
+            <span className="ra-hlmode-check" aria-hidden="true">✓</span>
+            {chars.toLocaleString()} chars selected
+          </>
+        ) : (
+          "Select a passage"
+        )}
+      </span>
+      <button type="button" className="ra-hlmode-btn" onClick={onCancel}>
+        Cancel
+      </button>
+      <button
+        type="button"
+        className="ra-hlmode-btn ra-hlmode-done"
+        onClick={done}
+        disabled={!pending}
+      >
+        Done
+      </button>
+      {hint && (
+        <div className="ra-toast" role="status" aria-live="polite">
+          Select some text first, then tap Done.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SharePanel({
   text,
   title,
@@ -877,9 +998,11 @@ function SharePanel({
   shownChunks,
   chunkElsRef,
   anchorStyle,
+  savedHl,
+  onHighlightStart,
+  onClearHl,
   onClose,
 }) {
-  const [hlOn, setHlOn] = useState(false);
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(0);
   const panelRef = useRef(null);
@@ -945,41 +1068,6 @@ function SharePanel({
     Math.round((probeOffset() / Math.max(1, text.length)) * 100)
   );
 
-  // Global offset of a (node, offset) selection point inside the reader.
-  const pointGlobal = (node, off) => {
-    const host =
-      node.nodeType === 1 ? node : node.parentElement;
-    const chunkEl = host && host.closest(".tower-reader-chunk");
-    if (!chunkEl) return null;
-    const ci = chunkElsRef.current.indexOf(chunkEl);
-    if (ci < 0 || ci >= chunkStarts.length) return null;
-    try {
-      const r = document.createRange();
-      r.setStart(chunkEl, 0);
-      r.setEnd(node, off);
-      return chunkStarts[ci] + r.toString().length;
-    } catch {
-      return null;
-    }
-  };
-
-  // The sharer's live text selection as global {start, end}, or null when
-  // there is no usable selection inside the reader text.
-  const selectionOffsets = () => {
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
-    const reader = document.querySelector(".tower-reader-text");
-    const range = sel.getRangeAt(0);
-    if (!reader || !reader.contains(range.commonAncestorContainer))
-      return null;
-    const a = pointGlobal(range.startContainer, range.startOffset);
-    const b = pointGlobal(range.endContainer, range.endOffset);
-    if (a === null || b === null || b <= a) return null;
-    const start = clamp(a, 0, text.length);
-    const end = Math.min(clamp(b, 0, text.length), start + MAX_HL_CHARS);
-    return { start, end };
-  };
-
   const entryUrl = () =>
     window.location.origin + window.location.pathname;
 
@@ -1014,19 +1102,14 @@ function SharePanel({
 
   const shareFromCurrent = () => {
     const at = clamp(probeOffset(), 0, Math.max(0, text.length - 1));
-    let hlParam = "";
-    if (hlOn) {
-      const sel = selectionOffsets();
-      if (!sel) {
-        flash("Select text on the page first — then share.");
-        return;
-      }
-      hlParam = `&hl=${sel.start}-${sel.end}`;
-    }
+    // The highlight was captured beforehand via the highlight-capture pill
+    // (savedHl) — no live selection needed at share time.
+    const hlParam = savedHl ? `&hl=${savedHl.start}-${savedHl.end}` : "";
     doShare({
       url: `${entryUrl()}?at=${at}${hlParam}`,
       message: `"${title}" — jumping you right to where I was, in the Tower of Babel`,
     });
+    onClearHl();
   };
 
   return (
@@ -1078,25 +1161,45 @@ function SharePanel({
           </span>
         </span>
       </button>
-      <button
-        type="button"
-        className="ra-share-row ra-share-hl"
-        role="switch"
-        aria-checked={hlOn}
-        aria-label="Highlight a passage when sharing from your current place"
-        onClick={() => setHlOn((v) => !v)}
-      >
-        <span className="ra-share-row-icon" aria-hidden="true">
-          {HighlighterIcon}
-        </span>
-        <span className="ra-share-row-text">
-          <span className="ra-share-row-title">Highlight a passage</span>
-          <span className="ra-share-row-sub">
-            Optional — select text, then share
+      <div className="ra-share-row ra-share-hl">
+        <button
+          type="button"
+          className="ra-share-hl-main"
+          aria-label={
+            savedHl
+              ? "Change the highlighted passage"
+              : "Highlight a passage when sharing from your current place"
+          }
+          onClick={onHighlightStart}
+        >
+          <span className="ra-share-row-icon" aria-hidden="true">
+            {HighlighterIcon}
           </span>
-        </span>
-        <span className="ra-switch" data-on={hlOn} aria-hidden="true" />
-      </button>
+          <span className="ra-share-row-text">
+            <span className="ra-share-row-title">
+              {savedHl ? "Passage highlighted ✓" : "Highlight a passage"}
+            </span>
+            <span className="ra-share-row-sub">
+              {savedHl
+                ? "Tap to pick a different passage"
+                : "Optional — select text, then share"}
+            </span>
+          </span>
+        </button>
+        {savedHl && (
+          <button
+            type="button"
+            className="ra-share-hl-clear"
+            aria-label="Remove the highlighted passage"
+            onClick={onClearHl}
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+              <line x1="6" y1="6" x2="18" y2="18" />
+              <line x1="18" y1="6" x2="6" y2="18" />
+            </svg>
+          </button>
+        )}
+      </div>
       {toast && (
         <div className="ra-toast" role="status" aria-live="polite">
           {toast}
@@ -1128,7 +1231,19 @@ export default function ReaderAssist({
   const [idle, setIdle] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [panel, setPanel] = useState(null); // null | feature id
+  // Highlight-for-share: savedHl is the captured {start,end} passage (lives
+  // here so it survives the share panel unmounting during capture);
+  // hlMode shows the minimal capture pill instead of any panel.
+  const [savedHl, setSavedHl] = useState(null);
+  const [hlMode, setHlMode] = useState(false);
   const orbRef = useRef(null);
+
+  // New text (entry navigation): the saved passage and capture mode belong
+  // to the previous entry — reset cleanly.
+  useEffect(() => {
+    setSavedHl(null);
+    setHlMode(false);
+  }, [text]);
 
   // --- Motion internals: refs only. Nothing here re-renders. ---
   const vpRef = useRef(viewport); // cached viewport for clamp math (move path)
@@ -1259,14 +1374,14 @@ export default function ReaderAssist({
   }, []);
 
   useEffect(() => {
-    if (menuOpen || panel) {
+    if (menuOpen || panel || hlMode) {
       window.clearTimeout(idleTimer.current);
       setIdle(false);
     } else {
       poke();
     }
     return () => window.clearTimeout(idleTimer.current);
-  }, [menuOpen, panel, poke]);
+  }, [menuOpen, panel, hlMode, poke]);
 
   // --- Pointer gesture ------------------------------------------------------
   // Single rAF consumes the latest pointer position; at most one frame is ever
@@ -1373,7 +1488,10 @@ export default function ReaderAssist({
       runTween(Math.round(d.ox), Math.round(d.oy), () => {});
     } else {
       // Tap: the DOM transform is exactly what React rendered — untouched.
-      if (panel) {
+      if (hlMode) {
+        // Tapping the orb during highlight capture cancels capture mode.
+        setHlMode(false);
+      } else if (panel) {
         setPanel(null);
       } else {
         setMenuOpen((v) => !v);
@@ -1474,7 +1592,7 @@ export default function ReaderAssist({
     "ra-orb" +
     (dragging ? " is-dragging" : "") +
     (snapping ? " is-snapping" : "") +
-    (idle && !menuOpen && !panel ? " is-idle" : "");
+    (idle && !menuOpen && !panel && !hlMode ? " is-idle" : "");
 
   return createPortal(
     <div className="ra-root" aria-hidden={false}>
@@ -1495,7 +1613,8 @@ export default function ReaderAssist({
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            if (panel) setPanel(null);
+            if (hlMode) setHlMode(false);
+            else if (panel) setPanel(null);
             else setMenuOpen((v) => !v);
           }
         }}
@@ -1571,8 +1690,36 @@ export default function ReaderAssist({
           shownChunks={shownChunks}
           chunkElsRef={chunkElsRef}
           anchorStyle={panelStyle}
+          savedHl={savedHl}
+          onHighlightStart={() => {
+            setSavedHl(null);
+            setPanel(null);
+            setHlMode(true);
+            poke();
+          }}
+          onClearHl={() => setSavedHl(null)}
           onClose={() => {
             setPanel(null);
+            poke();
+            if (orbRef.current) orbRef.current.focus();
+          }}
+        />
+      )}
+
+      {hlMode && (
+        <HighlightPill
+          text={text}
+          chunkStarts={chunkStarts}
+          chunkElsRef={chunkElsRef}
+          anchorStyle={panelStyle}
+          onDone={(hl) => {
+            setSavedHl(hl);
+            setHlMode(false);
+            setPanel("share");
+            poke();
+          }}
+          onCancel={() => {
+            setHlMode(false);
             poke();
             if (orbRef.current) orbRef.current.focus();
           }}
