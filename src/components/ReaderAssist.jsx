@@ -62,6 +62,27 @@ const MARGIN = 12; // px edge margin
 const DRAG_TAP_PX = 8; // movement threshold separating tap from drag
 const IDLE_MS = 2500; // idle fade delay
 const DEBOUNCE_MS = 250;
+// Punctuation-forgiving search (2026-10-18): punctuation and symbols count
+// as word separators, so "to be or not to be" finds "to be, or not to be".
+// The haystack normalization is length-preserving (punct -> space), so every
+// match offset indexes the ORIGINAL text directly — no remapping needed.
+const PUNCT_RE = /[\p{P}\p{S}]/gu;
+function normalizeHaystack(s) {
+  return s.normalize("NFC").toLowerCase().replace(PUNCT_RE, " ");
+}
+// Query -> RegExp with flexible whitespace between words. Returns null when
+// the query has no word characters (punctuation-only queries match nothing).
+function queryToPattern(query) {
+  const words = query
+    .normalize("NFC")
+    .toLowerCase()
+    .replace(PUNCT_RE, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0) return null;
+  const esc = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(esc.join("\\s+"), "g");
+}
 const MAX_OFFSETS = 20000; // stored offsets cap; the true total is always counted
 const MAX_RANGES = 1000; // cap on highlight ranges
 const STORE_KEY = "tob-reader-orb-v1";
@@ -263,6 +284,7 @@ function FindPanel({
 }) {
   const [query, setQuery] = useState("");
   const [matches, setMatches] = useState(null); // null = nothing searched yet
+  const [matchLens, setMatchLens] = useState([]); // matchLens[k] = char length of matches[k] in the original text
   const [total, setTotal] = useState(0); // exact total across the whole open text
   const [capped, setCapped] = useState(false);
   const [active, setActive] = useState(-1);
@@ -280,6 +302,7 @@ function FindPanel({
   useEffect(() => {
     setQuery("");
     setMatches(null);
+    setMatchLens([]);
     setTotal(0);
     setActive(-1);
     setCapped(false);
@@ -290,29 +313,39 @@ function FindPanel({
   }, []);
 
   // Debounced search over the raw text string of the OPEN entry only.
-  // The true total is always counted exactly; only the stored offsets are
-  // capped (navigation covers the first MAX_OFFSETS).
+  // Punctuation-forgiving: the query's words may be separated by any
+  // punctuation/whitespace run in the text. The true total is always counted
+  // exactly; only the stored offsets are capped (navigation covers the first
+  // MAX_OFFSETS).
   useEffect(() => {
     if (!query) {
       setMatches(null);
+      setMatchLens([]);
       setTotal(0);
       setActive(-1);
       setCapped(false);
       return;
     }
     const t = window.setTimeout(() => {
-      const needle = query.normalize("NFC").toLowerCase();
-      const hay = text.normalize("NFC").toLowerCase();
+      const hay = normalizeHaystack(text);
+      const re = queryToPattern(query);
       const out = [];
+      const lens = [];
       let count = 0;
-      let i = hay.indexOf(needle);
-      while (i !== -1) {
-        if (out.length < MAX_OFFSETS) out.push(i);
-        count++;
-        i = hay.indexOf(needle, i + needle.length);
+      if (re) {
+        let m;
+        while ((m = re.exec(hay)) !== null) {
+          if (out.length < MAX_OFFSETS) {
+            out.push(m.index);
+            lens.push(m[0].length);
+          }
+          count++;
+          if (m.index === re.lastIndex) re.lastIndex++; // zero-length guard
+        }
       }
       setCapped(count > out.length);
       setMatches(out);
+      setMatchLens(lens);
       setTotal(count);
       setActive(-1);
     }, DEBOUNCE_MS);
@@ -346,7 +379,11 @@ function FindPanel({
         const off = matches[active];
         const ci = chunkIndexOf(off);
         const s = off - chunkStarts[ci];
-        onActiveMark({ chunkIndex: ci, start: s, end: s + qlen });
+        onActiveMark({
+          chunkIndex: ci,
+          start: s,
+          end: s + (matchLens[active] || qlen),
+        });
       } else {
         onActiveMark(null);
       }
@@ -372,7 +409,7 @@ function FindPanel({
       if (!tn || tn.nodeType !== 3) continue;
       try {
         const s = off - chunkStarts[ci];
-        const e = Math.min(s + qlen, tn.length);
+        const e = Math.min(s + (matchLens[k] || qlen), tn.length);
         if (e <= s) continue;
         const r = new Range();
         r.setStart(tn, s);
@@ -391,6 +428,7 @@ function FindPanel({
     };
   }, [
     matches,
+    matchLens,
     active,
     shownChunks,
     qlen,
@@ -419,7 +457,7 @@ function FindPanel({
           const s = off - chunkStarts[ci];
           const r = new Range();
           r.setStart(tn, s);
-          r.setEnd(tn, Math.min(s + qlen, tn.length));
+          r.setEnd(tn, Math.min(s + (matchLens[active] || qlen), tn.length));
           const rect = r.getBoundingClientRect();
           top = rect.top + window.scrollY - window.innerHeight * 0.42;
         } catch {
@@ -445,6 +483,7 @@ function FindPanel({
     chunkElsRef,
     ensureChunk,
     qlen,
+    matchLens,
     reduced,
   ]);
 
