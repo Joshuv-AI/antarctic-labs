@@ -1533,6 +1533,13 @@ export function LibraryArtifact({ go, params, onReady }) {
       cancelAnimationFrame(raf2);
     };
   }, [onReady, params.id, artifacts]);
+  // Text background mode: cycles transparent -> light -> dark (2026-10-18).
+  // Only affects the .tower-fulltext section below the divider.
+  // NOTE: Must be before any early returns (Rules of Hooks).
+  const [textMode, setTextMode] = useState("transparent");
+  const cycleTextMode = () => {
+    setTextMode((m) => (m === "transparent" ? "light" : m === "light" ? "dark" : "transparent"));
+  };
   if (catalogError) return <TowerCatalogError onRetry={retryArtifacts} />;
   if (!artifacts) return null;
   const index = artifacts.findIndex((a) => a.artifact_id === params.id);
@@ -1745,12 +1752,6 @@ function LibraryFullText({ artifact }) {
   const [text, setText] = useState(null);
   const [textError, setTextError] = useState(false);
   const [shownChunks, setShownChunks] = useState(1);
-  // Text background mode: cycles transparent -> light -> dark (2026-10-18).
-  // Only affects the .tower-fulltext section below the divider.
-  const [textMode, setTextMode] = useState("transparent");
-  const cycleTextMode = () => {
-    setTextMode((m) => (m === "transparent" ? "light" : m === "light" ? "dark" : "transparent"));
-  };
   // Shared-link landing (?at=<char offset>[&hl=<start>-<end>[,<start>-<end>...]]):
   // a "Share from Current Place" link jumps the reader to the sharer's scroll
   // position and, when present, highlights the shared passages in Apple Books
