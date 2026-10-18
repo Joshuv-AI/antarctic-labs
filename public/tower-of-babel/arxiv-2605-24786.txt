@@ -1,0 +1,1989 @@
+Conf-KV : Confidence-Aware KV Cache Eviction with Mixed-Precision Storage for Long-Horizon LLM Inference
+Yubo Li Yidi Miao
+
+Abstract
+Long-horizon LLM inference turns the key–value (KV) cache into the dominant GPU memory consumer and makes per-token attention increasingly expensive. Many common eviction policies use static recency windows or historical attention, leaving unused a signal computed on every decoding step: the model’s current uncertainty. We introduce Conf-KV , a KV-cache manager that converts the next-token distribution into a scalar confidence score and uses it to choose the per-step cache budget, retaining more context when the model is uncertain and pruning aggressively when it is confident. Within each budget, tokens are ranked by a composite of accumulated attention mass and recency, while a protected recent window preserves local coherence. We combine the policy with blockwise online-softmax attention, mixed FP16/INT8 storage, and a pyramidal per-layer budget variant. Across four model families and generated lengths up to 4K, Conf-KV+INT8 stays near the footprint of a fixed 512-token sliding window while remaining within 1.5–2.1 perplexity points of full KV. On Needle-in-a-Haystack up to 32K tokens, Conf-KV reaches 91.4% retrieval accuracy versus 53.8% for sliding windows and 80.6% for H2O ; on 75 VisualWebArena tasks it retains 95.3% of full-KV success at 2.8 × \times lower peak memory.
+
+
+
+†
+†
+footnotetext:
+Code will be released upon acceptance.
+
+1
+Introduction
+
+Long-horizon LLM applications such as web agents, long-document analysis, multi-turn assistants, and tool-using systems accumulate context over many interaction rounds. The KV cache grows linearly with sequence length and depth; in our full-KV Qwen-32B measurement for the 4K generated-token sweep, which retains the matched prefill/prefix state, the measured KV-memory allocator footprint reaches 15.8 GB. This cache can dominate both GPU memory and attention latency, so cache management has become a first-order systems problem rather than an implementation detail.
+
+Many cache policies answer the same question with signals from the past. Sliding-window attention keeps recent tokens;
+H2O
+keeps historical heavy hitters;
+Scissorhands
+uses persistence of importance;
+SnapKV
+decides from prompt-phase observations; and
+PyramidKV
+varies the budget by layer
+[
+23
+,
+26
+,
+14
+,
+13
+,
+4
+]
+. Recent adaptive methods improve the allocation of head, layer, or precision budgets, but they still leave open a complementary question: can the current output distribution tell the cache manager
+when
+a decoding step needs more retained context? The next-token distribution is already available before sampling, and its shape gives a direct measurement of how uncertain the model is at the current step. The resulting budget expansion is forward-looking: it cannot recover tokens already evicted, but it can prevent premature eviction while the model processes difficult spans, while the attention–recency ranker keeps older high-utility tokens alive.
+
+This paper asks whether that free signal can improve the memory–quality trade-off of KV-cache eviction. We answer with
+Conf-KV
+, a confidence-aware cache manager for autoregressive generation. At each step,
+Conf-KV
+maps entropy, log-probability margin, and top-token mass into a bounded confidence score. The score selects a tight or loose cache budget. Within the selected budget, the manager evicts low-ranked tokens according to a combination of exponential-moving-average attention mass and recency, subject to a hard protected window over the newest tokens. The design is deliberately simple: it does not require training, does not change model weights, and can be inserted into a standard generation loop.
+
+The key empirical result is that confidence controls
+when
+to evict more effectively than static policies. At matched memory,
+Conf-KV
+-L closes 74% of the perplexity gap between a 512-token sliding window and full KV on GPT-2;
+Conf-KV+INT8
+closes 60%. Unless otherwise stated,
+Conf-KV
+-L denotes the pyramidal layer-budget variant with the same FP16/INT8 storage used by
+Conf-KV+INT8
+. The same policy preserves long-range retrieval in Needle-in-a-Haystack, preserves web-agent success on VisualWebArena, and improves throughput in completed batch-size comparisons. A matched-rate isolation study shows that the improvement is not merely a consequence of evicting less often: random eviction with the same schedule degrades to 36.54 perplexity, while full
+Conf-KV
+is 30.92.
+
+Our contributions are:
+
+•
+
+a confidence-aware KV eviction policy that uses the current next-token distribution to choose a per-step cache budget;
+
+•
+
+a systems design that combines adaptive eviction with blockwise attention, cache compaction, mixed FP16/INT8 KV storage, and an optional pyramidal per-layer budget;
+
+•
+
+a mechanistic test showing that confidence anticorrelates with the KL shift induced by ablating recent context, supporting the policy’s central assumption;
+
+•
+
+a matched-memory evaluation against sliding windows,
+H2O
+,
+Scissorhands
+,
+SnapKV
+, and
+PyramidKV
+across language-model, long-context retrieval, web-agent, latency, and throughput workloads.
+
+2
+Related work
+
+KV-cache eviction.
+
+Sliding windows and attention sinks give robust streaming behavior with fixed memory, but they discard old tokens regardless of semantic utility
+[
+23
+,
+1
+]
+.
+H2O
+and
+Scissorhands
+rank cached tokens by accumulated or persistent attention importance
+[
+26
+,
+14
+]
+.
+SnapKV
+and
+FastGen
+infer useful cache structure during the prompt or by head-wise policy selection
+[
+13
+,
+8
+]
+.
+PyramidKV
+observes that deeper layers can often use smaller budgets
+[
+4
+]
+.
+Conf-KV
+is complementary to these lines: its distinctive signal is step-level uncertainty from the current output distribution, and its budget adapts over time rather than being fixed by a global cap or prompt-phase decision.
+
+Adaptive and uncertainty-aware KV compression.
+
+A growing line of work adapts the compression budget rather than using one global cap.
+Ada-KV
+derives a loss-guided view of eviction and allocates budgets across attention heads
+[
+7
+]
+;
+ZigZagKV
+uses layer uncertainty to allocate layer-specific budgets
+[
+27
+]
+; and
+UNComp
+uses matrix-entropy uncertainty to expose sparsity and long-range retrieval structure during compression
+[
+24
+]
+. Adaptive precision methods similarly choose bit-width from token-level features, including entropy-based uncertainty
+[
+2
+]
+. These works are closest in spirit because they make the cache policy data-dependent.
+Conf-KV
+differs in the control signal and axis of adaptation: it reads the target model’s current next-token distribution and uses that signal to choose a decoding-time token-retention budget, then validates the assumed confidence/context-demand relation with a KL-ablation test. This distinction is useful in practice because it composes with head-wise allocation, layer-wise allocation, and precision selection rather than replacing them.
+
+Efficient attention and serving memory.
+
+FlashAttention
+reduces activation memory using tiled online softmax, but it does not decide which KV entries should remain cached
+[
+5
+,
+6
+]
+.
+PagedAttention
+improves serving layout and batching by paging KV blocks
+[
+12
+]
+;
+Quest
+and
+SparQ
+sparsify attention reads
+[
+22
+,
+20
+]
+. Quantization systems such as
+KIVI
+and
+KVQuant
+reduce cache precision without changing token retention
+[
+15
+,
+9
+]
+.
+Conf-KV
+composes with these techniques because it addresses the orthogonal question of which tokens live in the cache.
+
+Confidence signals.
+
+Confidence has been used for early exit and speculative decoding, where it controls computation or acceptance decisions
+[
+21
+,
+17
+,
+3
+]
+.
+Conf-KV
+uses the same kind of signal to control memory state. Our novelty claim is therefore narrow: not that uncertainty has never been used for compression, but that next-token confidence can drive a per-step KV token-retention budget during autoregressive decoding.
+
+Table 1:
+KV-cache management methods differ in the signal used to decide token utility and in whether the budget adapts.
+Conf-KV
+is distinctive because the budget reacts to the current next-token distribution.
+
+Method
+
+Signal
+
+Budget axis
+
+Granularity
+
+Quant.
+
+Sliding window
+
+recency
+
+fixed
+
+token
+
+no
+
+H2O
+/
+Scissorhands
+
+historical attention
+
+fixed cap
+
+head/token
+
+no
+
+SnapKV
+/
+FastGen
+
+prompt/head obs.
+
+prompt/head
+
+head/token
+
+no
+
+PyramidKV
+/
+
+ZigZagKV
+
+attn/layer uncertainty
+
+layer
+
+layer/token
+
+no
+
+Ada-KV
+
+attention-output loss
+
+head
+
+head/token
+
+no
+
+KIVI
+/
+KVQuant
+
+none (precision only)
+
+none
+
+storage
+
+yes
+
+Adaptive precision
+
+token features, entropy
+
+bit-width
+
+token/storage
+
+yes
+
+Conf-KV
+(+INT8)
+
+next-token confidence
+
+decoding step
+
+token/layer
+
+optional
+
+3
+Method
+
+Figure 1:
+Conf-KV
+pipeline. The logits at each decoding step are converted into confidence
+c
+, which selects a tight or loose cache budget. The cache manager ranks candidates by attention mass and recency, protects the most recent tokens, compacts the survivors, and serves the next attention call from a mixed-precision cache.
+
+Cache manager.
+
+Each layer owns pre-allocated K/V tensors, a valid-length counter, and parallel metadata storing original position, generation step, and an exponential moving average (EMA) of attention mass. Appends are
+O(1)
+. When eviction is triggered, the manager gathers surviving entries into contiguous storage. This contiguous layout keeps the attention kernel simple and avoids adding an indirection table to every read.
+
+Confidence estimator.
+
+Let
+\ell
+be the logits and
+p=\mathrm{softmax}(\ell)
+the next-token distribution. We compute normalized entropy
+\hat{H}=H(p)/\log V
+, log-probability margin
+m=\log p_{(1)}-\log p_{(2)}
+, and top-token probability
+p_{(1)}
+;
+\sigma(\cdot)
+denotes the logistic sigmoid. The confidence score is
+
+c=w_{H}(1-\hat{H})+w_{m}\sigma(m)+w_{p}p_{(1)},\qquad(w_{H},w_{m},w_{p})=(0.4,0.3,0.3).
+
+(1)
+
+The weights were chosen by a small grid search on GPT-2 and were stable across the evaluated models. The score need not be calibrated as a probability; the policy only requires a monotone relation between confidence and context demand.
+
+Budget and ranker.
+
+Given threshold
+\tau
+,
+Conf-KV
+chooses
+
+N=\begin{cases}N_{\mathrm{high}},&c\geq\tau,\\
+N_{\mathrm{low}},&c<\tau,\end{cases}\qquad N_{\mathrm{high}}\leq N_{\mathrm{low}}.
+
+Here
+N_{\mathrm{high}}
+is the tighter budget used on confident steps, and
+N_{\mathrm{low}}
+is the larger budget used on uncertain steps. For a candidate token
+i
+, the ranker computes
+
+s_{i}=\alpha\hat{a}_{i}+(1-\alpha)\hat{r}_{i},
+
+where
+\hat{a}_{i}
+is normalized EMA attention mass and
+\hat{r}_{i}
+is normalized recency. For token
+i
+in layer
+\ell
+, attention mass is averaged over heads and then updated as
+a_{i}\leftarrow\lambda a_{i}+(1-\lambda)\bar{A}_{i}
+with
+\lambda=0.9
+. Both attention mass and recency are min–max normalized over the non-protected candidates in the current layer before interpolation; recency uses original generation step, so newer retained tokens receive larger
+\hat{r}_{i}
+. The manager evicts the lowest-scored entries until the cache length is at most
+N
+, while always retaining the most recent
+P
+tokens. The protected window prevents pathological deletion of tokens still in the local attention working set.
+
+Algorithm 1
+
+Conf-KV
+one-step generation
+
+0:
+
+cache
+\mathcal{C}
+; model
+f
+; input token
+x_{t}
+; threshold
+\tau
+; budgets
+N_{\mathrm{high}},N_{\mathrm{low}}
+; protected window
+P
+; ranker weight
+\alpha
+; FP16 window
+W
+
+1:
+
+\mathrm{logits},A\leftarrow f(x_{t},\mathcal{C})
+
+2:
+
+p\leftarrow\mathrm{softmax}(\mathrm{logits})
+
+3:
+
+c\leftarrow w_{H}(1-\hat{H}(p))+w_{m}\sigma(\log p_{(1)}-\log p_{(2)})+w_{p}p_{(1)}
+
+4:
+
+N\leftarrow N_{\mathrm{high}}
+if
+c\geq\tau
+else
+N_{\mathrm{low}}
+
+5:
+
+for
+each layer
+\ell
+
+do
+
+6:
+
+update EMA attention metadata using
+A^{(\ell)}
+
+7:
+
+if
+
+|\mathcal{C}_{\ell}|>N
+
+then
+
+8:
+
+rank non-protected tokens by
+s_{i}=\alpha\hat{a}_{i}+(1-\alpha)\hat{r}_{i}
+
+9:
+
+evict
+|\mathcal{C}_{\ell}|-N
+lowest-ranked tokens and compact survivors
+
+10:
+
+end
+
+if
+
+11:
+
+quantize retained positions outside the most recent
+W
+generated tokens to INT8
+
+12:
+
+end
+
+for
+
+13:
+
+append new K/V in FP16 and sample
+x_{t+1}
+from
+p
+
+Tiled attention and mixed precision.
+
+Attention reads the compacted cache in blocks and maintains the running max and normalizer needed for exact online softmax. The most recent
+W
+retained tokens by original generation step remain in FP16; older retained entries are symmetrically quantized to INT8 per head and channel with scale
+s=\max(|x|)/127
+. Dequantization is fused into the blockwise attention read. This mixed representation gives most of the memory benefit of lower precision while avoiding the larger perplexity loss observed with NF4 and INT4 in our ablations.
+
+Pyramidal layer budgets.
+
+Conf-KV
+-L allocates the selected budget non-uniformly across layers and uses the same FP16/INT8 storage path as
+Conf-KV+INT8
+:
+
+N^{(\ell)}_{\mathrm{high}}=\max(N_{\min},N^{(0)}_{\mathrm{high}}\beta^{\ell/L}),
+
+with an analogous expression for
+N_{\mathrm{low}}
+, where
+L
+is the number of layers. We use
+\beta=0.5
+and
+N_{\min}=96
+unless noted. This follows the observation that deeper layers often concentrate useful information into fewer tokens
+[
+4
+]
+. The mechanism adapts along depth, while the confidence rule adapts over time.
+
+4
+Experimental setup
+
+Models and workloads.
+
+We evaluate GPT-2 (124M), Qwen-14B, gpt-oss-20b, and Qwen-32B
+[
+19
+,
+25
+,
+18
+]
+. WikiText-2 continuation perplexity is measured at 512, 1024, 2048, and 4096 generated tokens with a matched prefill/prefix length retained in the KV cache for memory measurements
+[
+16
+]
+. Needle-in-a-Haystack (NIAH) uses haystack lengths from 1K to 32K and five needle depths
+[
+10
+]
+. VisualWebArena (VWA) uses gpt-oss-20b with no raw image tokens: our wrapper serializes each rendered page into visible text, OCR text, element identifiers, bounding boxes, and the previous action, then emits the standard VWA text action. We evaluate 75 tasks stratified across shopping, navigation, form, and information-seeking categories, up to 30 steps, and 256 tokens per step
+[
+11
+]
+. Throughput sweeps batch sizes from 1 to 32 at a 2048-token generation length.
+
+Baselines and configurations.
+
+Baselines are full KV, a fixed 512-token sliding window,
+H2O
+,
+Scissorhands
+,
+SnapKV
+, and
+PyramidKV
+. We tune baselines to match
+Conf-KV+INT8
+’s average peak KV memory when reporting head-to-head results and run them with the same tiled attention path to isolate the cache policy. Unless otherwise stated,
+\tau=0.7
+,
+N_{\mathrm{high}}=128
+for WikiText and 256 for NIAH/VWA,
+N_{\mathrm{low}}=256
+for WikiText and 512 for NIAH/VWA,
+P=32
+for WikiText and 64 for NIAH/VWA,
+\alpha=0.65
+, FP16 window
+W=128
+or 256, and block size
+B=128
+.
+
+Statistics and compute.
+
+WikiText-2 is deterministic under greedy decoding and is reported once. NIAH, VWA, and throughput are reported as mean
+\pm
+standard deviation over three seeds. Experiments run on NVIDIA H100 80 GB GPUs with CUDA 12.8, PyTorch 2.9, and Transformers 4.51; additional hardware and hyperparameter details appear in Appendix
+D
+.
+
+5
+Results
+
+Table 2:
+Matched-memory comparison on GPT-2 at 2048 generated tokens. PPL is WikiText-2 continuation; latency is per-step. Baselines are calibrated to match
+Conf-KV+INT8
+’s average peak KV memory (38.7 MB
+\pm
+2 MB).
+
+Method
+
+Mem. MB
+
+PPL
+
+p50 ms
+
+p95 ms
+
+Full KV
+
+151.0
+
+29.14
+
+4.65
+
+7.91
+
+Sliding-512
+
+38.6
+
+34.37
+
+2.08
+
+2.47
+
+H2O
+
+39.1
+
+31.78
+
+2.41
+
+3.52
+
+Scissorhands
+
+39.2
+
+31.94
+
+2.43
+
+3.58
+
+SnapKV
+
+42.4
+
+31.41
+
+2.28
+
+3.26
+
+PyramidKV
+
+37.8
+
+31.09
+
+2.46
+
+3.71
+
+Conf-KV
+
+52.8
+
+30.92
+
+2.51
+
+4.12
+
+Conf-KV+INT8
+
+38.7
+
+31.26
+
+2.64
+
+4.35
+
+Conf-KV
+-L
+
+34.2
+
+30.48
+
+2.57
+
+4.18
+
+Matched-memory quality.
+
+Table
+2
+gives the central comparison. At the same memory scale as the sliding window,
+Conf-KV+INT8
+improves perplexity by 3.11 points, while
+Conf-KV
+-L improves by 3.89 points and uses less memory than every baseline. Relative to the full-cache/sliding-window gap,
+Conf-KV
+-L closes 74% of lost quality. The best static or historical-attention baseline,
+PyramidKV
+, closes 63% of the gap. This difference matters most when only a few steps require extra context: a static cap must either over-provision all steps or under-provision the rare difficult ones.
+
+Figure 2:
+Memory–quality and scaling behavior. Left: GPT-2 memory–PPL Pareto at 2048 tokens. Right: peak KV memory across generated-token lengths for GPT-2 and Qwen-32B.
+
+Figure
+2
+shows that the
+Conf-KV
+variants lie on the Pareto frontier. Across all four evaluated models,
+Conf-KV+INT8
+keeps peak memory in the same range as a 512-token sliding window, from parity at the main 2048-token comparison to about 1.3
+\times
+the sliding footprint at the longest sweep, while retaining much more quality. On Qwen-32B at 4K generated tokens with matched prefill state, the absolute KV-memory reduction is 13.2 GB (15.8 GB to 2.6 GB), which changes feasible batch size on a single 80 GB H100.
+
+Does confidence itself matter?
+
+We isolate the confidence signal with matched-rate baselines: each variant uses the same per-step eviction probability and the same number of evicted tokens per event as
+Conf-KV
+, but changes which tokens are removed or how they are ranked. Random eviction at the same rate gives 36.54 PPL, worse than the fixed sliding window. Recency-only ranking gives 32.08, attention-only gives 31.47, and full
+Conf-KV
+gives 30.92. Thus the ranker and the confidence-gated schedule both contribute. We further test the policy’s premise by ablating the past 256 tokens in a 10K-step GPT-2 trace and measuring the KL shift in the next-token distribution. Confidence and KL shift have Pearson
+r=-0.77
+(
+p<10^{-30}
+), with a monotone decreasing binned mean. The effect repeats on Qwen-14B, gpt-oss-20b, and Qwen-32B (Appendix
+C
+).
+
+Figure 3:
+Signal validation. Left: matched-rate isolation shows that random eviction with the same schedule fails, while attention and recency each help. Right: high confidence anticorrelates with the KL shift caused by ablating recent context.
+
+Long-context retrieval.
+
+NIAH stresses whether an eviction policy can retain an old but decisive fact. Figure
+4
+reports depth as distance from the query/end of the prompt: 10% is near the retained recent window, while 90% is older context. The sliding window therefore fails structurally once the needle lies outside the last 512 tokens.
+H2O
+performs better but loses middle-depth needles in long haystacks because rare tokens may not accumulate attention until the query arrives.
+Conf-KV
+reaches 91.4% average accuracy across the grid versus 53.8% for sliding and 80.6% for
+H2O
+. The trace-level behavior matches the design: confidence drops during the retrieval query, which immediately expands the budget. The remaining failures occur when the model remains over-confident before rare-entity lookup; raising
+\tau
+from 0.7 to 0.8 recovers most of these cases at a 12% memory cost.
+
+Figure 4:
+Needle-in-a-Haystack retrieval accuracy on gpt-oss-20b. Columns are haystack lengths; rows use distance-from-query depth, so larger percentages place the needle farther from the retained recent window.
+Conf-KV
+degrades more gracefully than fixed-window and historical-attention baselines.
+
+VisualWebArena.
+
+On 75 VWA tasks,
+Conf-KV
+retains 95.3% of full-KV task success while reducing peak memory by 2.8
+\times
+. The full-KV success rate is 40.2%, and
+Conf-KV
+reaches 38.3%; the gap is within one standard deviation for each category. Sliding-window truncation loses 11.1 absolute points. The largest gains over
+H2O
+appear in information-seeking tasks, where page re-reading causes confidence dips that give
+Conf-KV
+extra budget exactly when the agent needs to recover older observations.
+
+Figure 5:
+Task quality and latency. Left: VWA success rate, mean
+\pm
+s.d. over three seeds. Right: p50 per-step latency at 2048 generated tokens across four models.
+
+Latency, profiling, and batching.
+
+At 2048 tokens,
+Conf-KV
+reduces p50 latency by 1.8
+\times
+on GPT-2 and 1.8
+\times
+on Qwen-32B relative to full KV, while
+Conf-KV+INT8
+is slightly slower than
+Conf-KV
+because of quant/dequant overhead. Profiling shows the trade-off explicitly: attention falls from 62% of full-KV step time to 47% under
+Conf-KV
+, while compaction adds 0.22 ms and metadata updates add 0.11 ms on GPT-2. Throughput benefits grow with batch size because memory is the bottleneck. In our prototype allocator, the full-KV throughput run did not complete at batch 16 despite GPT-2’s small theoretical KV footprint; we therefore rely on the completed batch-
+\leq
+8 comparisons for speedup claims. At batch 8,
+Conf-KV
+gives 2.06
+\times
+the full-KV throughput while matching the sliding-window baseline within 1%.
+
+Figure 6:
+Systems behavior. Left: per-step latency decomposition on GPT-2. Right: GPT-2 throughput versus batch size at 2048 generated tokens; full-KV points beyond batch 8 were unavailable in our prototype allocator run and are not used for speedup claims.
+
+6
+Ablations and sensitivity
+
+Threshold and budget.
+
+The confidence threshold
+\tau
+controls how often the policy takes the tight budget. Figure
+7
+shows that
+\tau=0.7
+is a stable operating point: lower thresholds make
+c\geq\tau
+easier to satisfy, increase eviction, and reduce memory at a quality cost; higher thresholds are more conservative and improve quality at a memory cost. The
+N_{\mathrm{high}}
+sweep shows a similar knee at 128 tokens for WikiText-2. Below this point, confident-step evictions are too aggressive; above it, memory rises faster than quality improves. These curves are useful operationally because they expose a direct quality–memory knob rather than hiding the trade-off inside a learned policy.
+
+Figure 7:
+Ablations. Left:
+\tau
+controls the eviction-rate/quality trade-off. Right: budget and FP16-window sweeps place the default
+N_{\mathrm{high}}=128
+and
+W=128
+near the knees of the curves.
+
+Precision and layer allocation.
+
+The FP16 window
+W
+controls how much of the recent cache avoids quantization.
+W=128
+is the best GPT-2 operating point in our sweep: smaller windows expose recently generated tokens to quantization error, while larger windows reduce memory savings. INT8 per-(head,channel) scaling gives 0.38% mean roundtrip error and adds only 0.34 PPL relative to FP16 cache storage; NF4 and INT4 add 0.91 and 1.65 PPL beyond INT8, respectively. Table
+2
+reports the pyramidal
+Conf-KV
+-L result; it improves GPT-2 PPL by 0.44 over uniform
+Conf-KV
+while reducing measured peak memory. Appendix
+B
+gives the full quantization and live-memory traces.
+
+Temporal behavior.
+
+Conf-KV
+does not maintain a constant cache size. Figure
+8
+shows a sawtooth trajectory: the cache grows during uncertain or below-threshold steps, then compacts when confidence rises and a tight budget is selected. The confidence histogram is bimodal enough that the policy receives a steady supply of high-confidence opportunities, but it still preserves a heavy tail of low-confidence steps. This trace-level behavior explains why fixed-memory comparisons alone understate the advantage of adaptivity: the average memory can match a static baseline while the per-step memory is spent where it matters.
+
+Figure 8:
+Trace-level behavior. Left: cache size over 500 generation steps. Right: confidence trace and empirical histogram. The policy’s sawtooth envelope follows confidence rather than a fixed window.
+
+7
+Implementation notes and failure modes
+
+Compaction cost and memory envelope.
+
+The cache manager uses contiguous compaction rather than a paged indirection table. This choice keeps the attention kernel identical to a dense tiled read, but it pays a gather cost on eviction events. In our GPT-2 profile, compaction is 0.22 ms per step at the observed eviction rate and metadata updates are 0.11 ms, together smaller than the attention savings from the reduced cache. The live-memory trace in Appendix
+B
+shows bounded post-compaction behavior; Appendix
+A
+reports measured allocator footprints, which also include prefix/prompt storage and temporary workspaces.
+
+Observed failure modes.
+
+The remaining NIAH failures occur when the model is confidently wrong before a rare-entity lookup, so the policy selects the tight budget when it should preserve context. Raising
+\tau
+recovers these examples at a measurable memory cost, which suggests that the trade-off is tunable rather than arbitrary. The VWA failures have the same structure: product names, form fields, or rare entities observed hundreds of tokens earlier can be evicted during a high-confidence stretch. In contrast, sliding-window failures are usually structural because the relevant token is outside the fixed window regardless of the model state.
+
+Compatibility with serving systems.
+
+Conf-KV
+decides which tokens remain live; it does not require a specific physical layout. A production implementation could replace contiguous compaction with a block table, but token-level eviction would create partially dead blocks in a
+PagedAttention
+-style layout unless eviction is coarsened or sparse masks are added. The method is also orthogonal to speculative decoding: a draft model can propose candidate tokens while the target model’s accepted-step logits continue to drive the cache budget.
+
+8
+Limitations and conclusion
+
+Conf-KV
+is a no-op on short contexts that never exceed the eviction threshold, and its speedups are smaller when MLP compute rather than attention or KV bandwidth dominates latency. The confidence signal also becomes less informative under high-temperature sampling, where entropy saturates and
+\tau
+may need retuning. Finally, the contiguous compaction strategy is simple and fast enough in our setting, but mapping token-level eviction to a paged serving layout is not free: fine-grained eviction creates partially dead blocks unless the implementation coarsens eviction or adds sparse masks.
+
+Lower KV-cache memory can reduce inference cost and energy use for long-context systems, but it can also lower the cost of undesirable long-horizon automation.
+Conf-KV
+does not add new model capabilities; deployments should inherit the safety controls used for the underlying agent or LLM. Overall, the results show that current uncertainty is useful systems metadata for improving the memory–quality Pareto while remaining compatible with paging, quantization, and speculative decoding.
+
+Appendix A
+Extended quantitative results
+
+Table 3:
+Measured peak KV-memory allocator footprint (MB) across all models and generated-token counts. The continuation sweep keeps a matched prefill/prefix state in the cache, and measurements include temporary cache-management workspaces, so values are not identical to the live post-compaction token count.
+
+Model
+
+Config
+
+Gen. 512
+
+Gen. 1024
+
+Gen. 2048
+
+Gen. 4096
+
+GPT-2
+
+Full KV
+
+37.7
+
+75.5
+
+151.0
+
+302.0
+
+Sliding-512
+
+37.7
+
+38.6
+
+38.6
+
+38.6
+
+Conf-KV+INT8
+
+19.8
+
+26.3
+
+38.7
+
+49.2
+
+Conf-KV
+-L
+
+18.3
+
+24.1
+
+34.2
+
+42.6
+
+Qwen-14B
+
+Full KV
+
+890
+
+1780
+
+3560
+
+7120
+
+Sliding-512
+
+890
+
+915
+
+915
+
+915
+
+Conf-KV+INT8
+
+469
+
+623
+
+917
+
+1167
+
+Conf-KV
+-L
+
+438
+
+572
+
+840
+
+1082
+
+gpt-oss-20b
+
+Full KV
+
+1240
+
+2480
+
+4960
+
+9920
+
+Sliding-512
+
+1240
+
+1275
+
+1275
+
+1275
+
+Conf-KV+INT8
+
+653
+
+868
+
+1277
+
+1625
+
+Conf-KV
+-L
+
+611
+
+798
+
+1173
+
+1512
+
+Qwen-32B
+
+Full KV
+
+1980
+
+3960
+
+7920
+
+15840
+
+Sliding-512
+
+1980
+
+2035
+
+2035
+
+2035
+
+Conf-KV+INT8
+
+1044
+
+1386
+
+2039
+
+2595
+
+Conf-KV
+-L
+
+978
+
+1276
+
+1871
+
+2408
+
+Appendix B
+Additional ablations and traces
+
+Figure 9:
+Quantization analysis. INT8 gives most of the cache-memory reduction with lower roundtrip error than NF4 or INT4.
+
+Figure 10:
+Live KV memory over 1200 generation steps; adaptive compaction yields bounded sawtooth behavior in the traced decode.
+
+Appendix C
+Confidence calibration across models
+
+Table 4:
+Pearson correlation between confidence score and KL shift from ablating the past 256 tokens.
+
+Model
+
+n
+
+Pearson
+r
+
+GPT-2
+
+1,200
+
+-0.77
+
+Qwen-14B
+
+1,200
+
+-0.38
+
+gpt-oss-20b
+
+1,200
+
+-0.41
+
+Qwen-32B
+
+1,200
+
+-0.36
+
+Appendix D
+Reproducibility details
+
+All experiments use a single NVIDIA H100 80 GB GPU unless otherwise noted. VWA evaluation uses the official VisualWebArena environment hosted on AWS EC2. The implementation wraps HuggingFace
+CausalLM
+models through a confidence-aware generator and keeps the cache manager, quantizer, and tiled attention backend as separable modules.
+
+Table 5:
+Hyperparameter settings.
+
+WikiText-2
+
+NIAH
+
+VWA
+
+\tau
+
+0.7
+
+0.7
+
+0.7
+
+N_{\mathrm{high}}
+
+128
+
+256
+
+256
+
+N_{\mathrm{low}}
+
+256
+
+512
+
+512
+
+P
+
+32
+
+64
+
+64
+
+\alpha
+
+0.65
+
+0.70
+
+0.65
+
+EMA decay
+\lambda
+
+0.90
+
+0.90
+
+0.90
+
+FP16 window
+W
+
+128
+
+256
+
+256
+
+Block size
+B
+
+128
+
+128
+
+128
+
+Conf-KV
+-L
+(\beta,N_{\min})
+
+(0.5, 96)
+
+(0.5, 96)
+
+(0.5, 96)
+
+Seeds
+
+1
+
+3
+
+3
+
+Table 6:
+Existing assets, versions, and license/terms status. We cite the original sources and do not redistribute model weights, datasets, benchmark environments, or baseline code.
+
+Asset
+
+Use
+
+License / terms
+
+GPT-2
+
+language-model baseline
+
+Modified MIT license on OpenAI GPT-2 release.
+
+Qwen-14B/32B
+
+scale-out language models
+
+Qwen model-card terms for the public checkpoints used in evaluation.
+
+gpt-oss-20b
+
+NIAH and VWA model
+
+Apache 2.0 license plus OpenAI gpt-oss usage policy.
+
+WikiText-2
+
+perplexity benchmark
+
+Creative Commons Attribution-ShareAlike/GFDL terms for WikiText.
+
+Needle-in-a-Haystack
+
+retrieval benchmark
+
+MIT license in the benchmark repository.
+
+VisualWebArena
+
+web-agent benchmark
+
+MIT license for the benchmark code and task environment.
+
+Baselines
+
+comparative methods
+
+Reimplemented from cited papers; no third-party baseline code is redistributed.
+
+Table 7:
+Approximate reproduction compute budget on a single H100 80 GB GPU. Wall-clock ranges depend on model checkpoint, sequence length, and serving environment; VWA additionally uses the official EC2-hosted sites.
+
+Experiment
+
+Runs/seeds
+
+Approx. wall-clock
+
+WikiText-2 perplexity sweeps
+
+1 seed, 4 lengths
+\times
+4 models
+
+2–4 GPU-hours
+
+Matched-memory baselines
+
+1 seed, GPT-2 2048 tokens
+
+1–2 GPU-hours
+
+Mechanistic KL ablation
+
+1,200 sampled steps/model
+
+2–3 GPU-hours
+
+NIAH grid
+
+3 seeds
+
+3–6 GPU-hours
+
+VisualWebArena
+
+75 tasks
+\times
+3 seeds
+
+8–12 GPU-hours plus EC2 environment time
+
+Latency/throughput profiling
+
+3 seeds
+
+1–2 GPU-hours
+
+NeurIPS Paper Checklist
+
+1.
+
+Claims
+
+Question: Do the main claims made in the abstract and introduction accurately reflect the paper’s contributions and scope?
+
+Answer:
+[Yes]
+.
+
+Justification: The abstract and Introduction state the method, scope, baselines, and empirical claims, and the Results section reports the corresponding measurements.
+
+Guidelines:
+
+•
+
+The answer
+[N/A]
+means that the abstract and introduction do not include the claims made in the paper.
+
+•
+
+The abstract and/or introduction should clearly state the claims made, including the contributions made in the paper and important assumptions and limitations. A
+[No]
+or
+[N/A]
+answer to this question will not be perceived well by the reviewers.
+
+•
+
+The claims made should match theoretical and experimental results, and reflect how much the results can be expected to generalize to other settings.
+
+•
+
+It is fine to include aspirational goals as motivation as long as it is clear that these goals are not attained by the paper.
+
+2.
+
+Limitations
+
+Question: Does the paper discuss the limitations of the work performed by the authors?
+
+Answer:
+[Yes]
+.
+
+Justification: Section
+8
+discusses short-context cases, high-temperature sampling, compute bottlenecks, and compaction overhead.
+
+Guidelines:
+
+•
+
+The answer
+[N/A]
+means that the paper has no limitation while the answer
+[No]
+means that the paper has limitations, but those are not discussed in the paper.
+
+•
+
+The authors are encouraged to create a separate “Limitations” section in their paper.
+
+•
+
+The paper should point out any strong assumptions and how robust the results are to violations of these assumptions (e.g., independence assumptions, noiseless settings, model well-specification, asymptotic approximations only holding locally). The authors should reflect on how these assumptions might be violated in practice and what the implications would be.
+
+•
+
+The authors should reflect on the scope of the claims made, e.g., if the approach was only tested on a few datasets or with a few runs. In general, empirical results often depend on implicit assumptions, which should be articulated.
+
+•
+
+The authors should reflect on the factors that influence the performance of the approach. For example, a facial recognition algorithm may perform poorly when image resolution is low or images are taken in low lighting. Or a speech-to-text system might not be used reliably to provide closed captions for online lectures because it fails to handle technical jargon.
+
+•
+
+The authors should discuss the computational efficiency of the proposed algorithms and how they scale with dataset size.
+
+•
+
+If applicable, the authors should discuss possible limitations of their approach to address problems of privacy and fairness.
+
+•
+
+While the authors might fear that complete honesty about limitations might be used by reviewers as grounds for rejection, a worse outcome might be that reviewers discover limitations that aren’t acknowledged in the paper. The authors should use their best judgment and recognize that individual actions in favor of transparency play an important role in developing norms that preserve the integrity of the community. Reviewers will be specifically instructed to not penalize honesty concerning limitations.
+
+3.
+
+Theory assumptions and proofs
+
+Question: For each theoretical result, does the paper provide the full set of assumptions and a complete (and correct) proof?
+
+Answer:
+[N/A]
+.
+
+Justification: The paper is an empirical systems paper and does not present theoretical theorems or proofs.
+
+Guidelines:
+
+•
+
+The answer
+[N/A]
+means that the paper does not include theoretical results.
+
+•
+
+All the theorems, formulas, and proofs in the paper should be numbered and cross-referenced.
+
+•
+
+All assumptions should be clearly stated or referenced in the statement of any theorems.
+
+•
+
+The proofs can either appear in the main paper or the supplemental material, but if they appear in the supplemental material, the authors are encouraged to provide a short proof sketch to provide intuition.
+
+•
+
+Inversely, any informal proof provided in the core of the paper should be complemented by formal proofs provided in appendix or supplemental material.
+
+•
+
+Theorems and Lemmas that the proof relies upon should be properly referenced.
+
+4.
+
+Experimental result reproducibility
+
+Question: Does the paper fully disclose all the information needed to reproduce the main experimental results of the paper to the extent that it affects the main claims and/or conclusions of the paper (regardless of whether the code and data are provided or not)?
+
+Answer:
+[Yes]
+.
+
+Justification: Sections
+3
+and
+4
+, plus Appendix
+D
+, specify the algorithm, baselines, datasets, hyperparameters, seeds, hardware, and software versions.
+
+Guidelines:
+
+•
+
+The answer
+[N/A]
+means that the paper does not include experiments.
+
+•
+
+If the paper includes experiments, a
+[No]
+answer to this question will not be perceived well by the reviewers: Making the paper reproducible is important, regardless of whether the code and data are provided or not.
+
+•
+
+If the contribution is a dataset and/or model, the authors should describe the steps taken to make their results reproducible or verifiable.
+
+•
+
+Depending on the contribution, reproducibility can be accomplished in various ways. For example, if the contribution is a novel architecture, describing the architecture fully might suffice, or if the contribution is a specific model and empirical evaluation, it may be necessary to either make it possible for others to replicate the model with the same dataset, or provide access to the model. In general. releasing code and data is often one good way to accomplish this, but reproducibility can also be provided via detailed instructions for how to replicate the results, access to a hosted model (e.g., in the case of a large language model), releasing of a model checkpoint, or other means that are appropriate to the research performed.
+
+•
+
+While NeurIPS does not require releasing code, the conference does require all submissions to provide some reasonable avenue for reproducibility, which may depend on the nature of the contribution. For example
+
+(a)
+
+If the contribution is primarily a new algorithm, the paper should make it clear how to reproduce that algorithm.
+
+(b)
+
+If the contribution is primarily a new model architecture, the paper should describe the architecture clearly and fully.
+
+(c)
+
+If the contribution is a new model (e.g., a large language model), then there should either be a way to access this model for reproducing the results or a way to reproduce the model (e.g., with an open-source dataset or instructions for how to construct the dataset).
+
+(d)
+
+We recognize that reproducibility may be tricky in some cases, in which case authors are welcome to describe the particular way they provide for reproducibility. In the case of closed-source models, it may be that access to the model is limited in some way (e.g., to registered users), but it should be possible for other researchers to have some path to reproducing or verifying the results.
+
+5.
+
+Open access to data and code
+
+Question: Does the paper provide open access to the data and code, with sufficient instructions to faithfully reproduce the main experimental results, as described in supplemental material?
+
+Answer:
+[No]
+.
+
+Justification: The submission does not include an anonymized runnable code or data release. The first-page footnote states that code will be released upon acceptance.
+
+Guidelines:
+
+•
+
+The answer
+[N/A]
+means that paper does not include experiments requiring code.
+
+•
+
+Please see the NeurIPS code and data submission guidelines (
+https://neurips.cc/public/guides/CodeSubmissionPolicy
+) for more details.
+
+•
+
+While we encourage the release of code and data, we understand that this might not be possible, so
+[No]
+is an acceptable answer. Papers cannot be rejected simply for not including code, unless this is central to the contribution (e.g., for a new open-source benchmark).
+
+•
+
+The instructions should contain the exact command and environment needed to run to reproduce the results. See the NeurIPS code and data submission guidelines (
+https://neurips.cc/public/guides/CodeSubmissionPolicy
+) for more details.
+
+•
+
+The authors should provide instructions on data access and preparation, including how to access the raw data, preprocessed data, intermediate data, and generated data, etc.
+
+•
+
+The authors should provide scripts to reproduce all experimental results for the new proposed method and baselines. If only a subset of experiments are reproducible, they should state which ones are omitted from the script and why.
+
+•
+
+At submission time, to preserve anonymity, the authors should release anonymized versions (if applicable).
+
+•
+
+Providing as much information as possible in supplemental material (appended to the paper) is recommended, but including URLs to data and code is permitted.
+
+6.
+
+Experimental setting/details
+
+Question: Does the paper specify all the training and test details (e.g., data splits, hyperparameters, how they were chosen, type of optimizer) necessary to understand the results?
+
+Answer:
+[Yes]
+.
+
+Justification: Section
+4
+and Appendix
+D
+specify models, benchmarks, baselines, decoding settings, hyperparameters, seeds, and hardware. No training optimizer is used because the method is training-free.
+
+Guidelines:
+
+•
+
+The answer
+[N/A]
+means that the paper does not include experiments.
+
+•
+
+The experimental setting should be presented in the core of the paper to a level of detail that is necessary to appreciate the results and make sense of them.
+
+•
+
+The full details can be provided either with the code, in appendix, or as supplemental material.
+
+7.
+
+Experiment statistical significance
+
+Question: Does the paper report error bars suitably and correctly defined or other appropriate information about the statistical significance of the experiments?
+
+Answer:
+[Yes]
+.
+
+Justification: Section
+4
+states that NIAH, VWA, and throughput are reported as mean
+\pm
+standard deviation over three seeds; the mechanistic validation reports a correlation and
+p
+-value.
+
+Guidelines:
+
+•
+
+The answer
+[N/A]
+means that the paper does not include experiments.
+
+•
+
+The authors should answer
+[Yes]
+if the results are accompanied by error bars, confidence intervals, or statistical significance tests, at least for the experiments that support the main claims of the paper.
+
+•
+
+The factors of variability that the error bars are capturing should be clearly stated (for example, train/test split, initialization, random drawing of some parameter, or overall run with given experimental conditions).
+
+•
+
+The method for calculating the error bars should be explained (closed form formula, call to a library function, bootstrap, etc.)
+
+•
+
+The assumptions made should be given (e.g., Normally distributed errors).
+
+•
+
+It should be clear whether the error bar is the standard deviation or the standard error of the mean.
+
+•
+
+It is OK to report 1-sigma error bars, but one should state it. The authors should preferably report a 2-sigma error bar than state that they have a 96% CI, if the hypothesis of Normality of errors is not verified.
+
+•
+
+For asymmetric distributions, the authors should be careful not to show in tables or figures symmetric error bars that would yield results that are out of range (e.g., negative error rates).
+
+•
+
+If error bars are reported in tables or plots, the authors should explain in the text how they were calculated and reference the corresponding figures or tables in the text.
+
+8.
+
+Experiments compute resources
+
+Question: For each experiment, does the paper provide sufficient information on the computer resources (type of compute workers, memory, time of execution) needed to reproduce the experiments?
+
+Answer:
+[Yes]
+.
+
+Justification: Appendix
+D
+reports the GPU type, memory, CUDA/PyTorch/Transformers versions, the VWA EC2 environment, and approximate wall-clock budgets for each experiment in Table
+7
+.
+
+Guidelines:
+
+•
+
+The answer
+[N/A]
+means that the paper does not include experiments.
+
+•
+
+The paper should indicate the type of compute workers CPU or GPU, internal cluster, or cloud provider, including relevant memory and storage.
+
+•
+
+The paper should provide the amount of compute required for each of the individual experimental runs as well as estimate the total compute.
+
+•
+
+The paper should disclose whether the full research project required more compute than the experiments reported in the paper (e.g., preliminary or failed experiments that didn’t make it into the paper).
+
+9.
+
+Code of ethics
+
+Question: Does the research conducted in the paper conform, in every respect, with the NeurIPS Code of Ethics
+https://neurips.cc/public/EthicsGuidelines
+?
+
+Answer:
+[Yes]
+.
+
+Justification: The work evaluates inference-efficiency methods on public benchmarks and does not involve human-subject experiments, private data, or new high-risk model releases.
+
+Guidelines:
+
+•
+
+The answer
+[N/A]
+means that the authors have not reviewed the NeurIPS Code of Ethics.
+
+•
+
+If the authors answer
+[No]
+, they should explain the special circumstances that require a deviation from the Code of Ethics.
+
+•
+
+The authors should make sure to preserve anonymity (e.g., if there is a special consideration due to laws or regulations in their jurisdiction).
+
+10.
+
+Broader impacts
+
+Question: Does the paper discuss both potential positive societal impacts and negative societal impacts of the work performed?
+
+Answer:
+[Yes]
+.
+
+Justification: Section
+8
+notes both the efficiency benefits of lower inference cost and the risk that cheaper long-context inference can lower barriers to misuse.
+
+Guidelines:
+
+•
+
+The answer
+[N/A]
+means that there is no societal impact of the work performed.
+
+•
+
+If the authors answer
+[N/A]
+or
+[No]
+, they should explain why their work has no societal impact or why the paper does not address societal impact.
+
+•
+
+Examples of negative societal impacts include potential malicious or unintended uses (e.g., disinformation, generating fake profiles, surveillance), fairness considerations (e.g., deployment of technologies that could make decisions that unfairly impact specific groups), privacy considerations, and security considerations.
+
+•
+
+The conference expects that many papers will be foundational research and not tied to particular applications, let alone deployments. However, if there is a direct path to any negative applications, the authors should point it out. For example, it is legitimate to point out that an improvement in the quality of generative models could be used to generate Deepfakes for disinformation. On the other hand, it is not needed to point out that a generic algorithm for optimizing neural networks could enable people to train models that generate Deepfakes faster.
+
+•
+
+The authors should consider possible harms that could arise when the technology is being used as intended and functioning correctly, harms that could arise when the technology is being used as intended but gives incorrect results, and harms following from (intentional or unintentional) misuse of the technology.
+
+•
+
+If there are negative societal impacts, the authors could also discuss possible mitigation strategies (e.g., gated release of models, providing defenses in addition to attacks, mechanisms for monitoring misuse, mechanisms to monitor how a system learns from feedback over time, improving the efficiency and accessibility of ML).
+
+11.
+
+Safeguards
+
+Question: Does the paper describe safeguards that have been put in place for responsible release of data or models that have a high risk for misuse (e.g., pre-trained language models, image generators, or scraped datasets)?
+
+Answer:
+[N/A]
+.
+
+Justification: The paper does not release a new dataset, model checkpoint, or high-risk generative model; it proposes an inference-time cache-management method.
+
+Guidelines:
+
+•
+
+The answer
+[N/A]
+means that the paper poses no such risks.
+
+•
+
+Released models that have a high risk for misuse or dual-use should be released with necessary safeguards to allow for controlled use of the model, for example by requiring that users adhere to usage guidelines or restrictions to access the model or implementing safety filters.
+
+•
+
+Datasets that have been scraped from the Internet could pose safety risks. The authors should describe how they avoided releasing unsafe images.
+
+•
+
+We recognize that providing effective safeguards is challenging, and many papers do not require this, but we encourage authors to take this into account and make a best faith effort.
+
+12.
+
+Licenses for existing assets
+
+Question: Are the creators or original owners of assets (e.g., code, data, models), used in the paper, properly credited and are the license and terms of use explicitly mentioned and properly respected?
+
+Answer:
+[Yes]
+.
+
+Justification: The paper cites all evaluated models, datasets, benchmarks, and baseline methods; Appendix
+D
+enumerates their license or terms status in Table
+6
+. We do not redistribute model weights, datasets, benchmark environments, or third-party baseline code.
+
+Guidelines:
+
+•
+
+The answer
+[N/A]
+means that the paper does not use existing assets.
+
+•
+
+The authors should cite the original paper that produced the code package or dataset.
+
+•
+
+The authors should state which version of the asset is used and, if possible, include a URL.
+
+•
+
+The name of the license (e.g., CC-BY 4.0) should be included for each asset.
+
+•
+
+For scraped data from a particular source (e.g., website), the copyright and terms of service of that source should be provided.
+
+•
+
+If assets are released, the license, copyright information, and terms of use in the package should be provided. For popular datasets,
+paperswithcode.com/datasets
+has curated licenses for some datasets. Their licensing guide can help determine the license of a dataset.
+
+•
+
+For existing datasets that are re-packaged, both the original license and the license of the derived asset (if it has changed) should be provided.
+
+•
+
+If this information is not available online, the authors are encouraged to reach out to the asset’s creators.
+
+13.
+
+New assets
+
+Question: Are new assets introduced in the paper well documented and is the documentation provided alongside the assets?
+
+Answer:
+[N/A]
+.
+
+Justification: The paper does not introduce a new dataset or model asset. An anonymized code package, if submitted, should include separate documentation.
+
+Guidelines:
+
+•
+
+The answer
+[N/A]
+means that the paper does not release new assets.
+
+•
+
+Researchers should communicate the details of the dataset/code/model as part of their submissions via structured templates. This includes details about training, license, limitations, etc.
+
+•
+
+The paper should discuss whether and how consent was obtained from people whose asset is used.
+
+•
+
+At submission time, remember to anonymize your assets (if applicable). You can either create an anonymized URL or include an anonymized zip file.
+
+14.
+
+Crowdsourcing and research with human subjects
+
+Question: For crowdsourcing experiments and research with human subjects, does the paper include the full text of instructions given to participants and screenshots, if applicable, as well as details about compensation (if any)?
+
+Answer:
+[N/A]
+.
+
+Justification: The work does not involve crowdsourcing or human-subject experiments.
+
+Guidelines:
+
+•
+
+The answer
+[N/A]
+means that the paper does not involve crowdsourcing nor research with human subjects.
+
+•
+
+Including this information in the supplemental material is fine, but if the main contribution of the paper involves human subjects, then as much detail as possible should be included in the main paper.
+
+•
+
+According to the NeurIPS Code of Ethics, workers involved in data collection, curation, or other labor should be paid at least the minimum wage in the country of the data collector.
+
+15.
+
+Institutional review board (IRB) approvals or equivalent for research with human subjects
+
+Question: Does the paper describe potential risks incurred by study participants, whether such risks were disclosed to the subjects, and whether Institutional Review Board (IRB) approvals (or an equivalent approval/review based on the requirements of your country or institution) were obtained?
+
+Answer:
+[N/A]
+.
+
+Justification: The work does not involve human subjects, so IRB approval is not applicable.
+
+Guidelines:
+
+•
+
+The answer
+[N/A]
+means that the paper does not involve crowdsourcing nor research with human subjects.
+
+•
+
+Depending on the country in which research is conducted, IRB approval (or equivalent) may be required for any human subjects research. If you obtained IRB approval, you should clearly state this in the paper.
+
+•
+
+We recognize that the procedures for this may vary significantly between institutions and locations, and we expect authors to adhere to the NeurIPS Code of Ethics and the guidelines for their institution.
+
+•
+
+For initial submissions, do not include any information that would break anonymity (if applicable), such as the institution conducting the review.
+
+16.
+
+Declaration of LLM usage
+
+Question: Does the paper describe the usage of LLMs if it is an important, original, or non-standard component of the core methods in this research? Note that if the LLM is used only for writing, editing, or formatting purposes and does
+not
+impact the core methodology, scientific rigor, or originality of the research, declaration is not required.
+
+Answer:
+[N/A]
+.
+
+Justification: The research studies LLM inference and evaluates LLM checkpoints, which are documented in Sections
+3
+and
+4
+. No LLM was used as a non-standard research tool for method development, data generation, or automated evaluation beyond the evaluated models themselves.
+
+Guidelines:
+
+•
+
+The answer
+[N/A]
+means that the core method development in this research does not involve LLMs as any important, original, or non-standard components.
+
+•
+
+Please refer to our LLM policy in the NeurIPS handbook for what should or should not be described.
+

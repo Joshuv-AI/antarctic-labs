@@ -1,0 +1,2339 @@
+EntmaxKV: Support-Aware Decoding for Entmax Attention
+Gonçalo Duarte, Miguel Couceiro, Marcos V. Treviso
+
+Abstract
+Long-context decoding is increasingly limited by KV-cache memory traffic since each generated token attends over a cache whose size grows linearly with context length. Existing sparse decoding methods reduce this cost by selecting subsets of tokens or pages, but are designed for softmax attention, whose dense tails make any truncation discard nonzero probability mass. In contrast, α \alpha -entmax produces exact zeros, turning sparse decoding from dense-tail approximation into support recovery: if the selected candidates contain the entmax support, sparse decoding remains exact. While recent entmax kernels enable efficient training, they do not address the autoregressive decoding bottleneck, where dense inference still streams the full KV cache before sparsity is known. In this work, we introduce EntmaxKV, an entmax-native sparse decoding framework that exploits sparsity before KV pages are loaded. EntmaxKV combines query-aware page scoring, support-aware candidate selection, and sparse entmax attention. We analyze truncation error through the dropped probability mass δ \delta , showing that output error is controlled by δ \delta and vanishes when the entmax support is recovered. We further introduce a Gaussian-aware entmax selector that estimates the entmax threshold from lightweight page statistics, adapting the selected budget to the score distribution. Empirically, EntmaxKV drops less probability mass, retains more support tokens, and achieves lower output error than softmax-based sparse decoding at matched KV budgets. On long-context and language modeling benchmarks, it closely matches full-cache entmax while using a small fraction of the KV cache, achieving up to 3.36 × 3.36\times (softmax) and 5.43 × 5.43\times (entmax) speedup over full attention baselines at 1M context length. 1 1 1 Code available at: https://github.com/deep-spin/entmaxkv .
+
+
+
+1
+Introduction
+
+Recent large language models (LLMs) support increasingly long context windows, with some systems extending to hundreds of thousands or even millions of tokens
+[
+13
+,
+20
+]
+. This capability enables applications that require reasoning over long documents, code repositories, conversation histories, and retrieval-augmented inputs. However, long contexts come at substantial computational cost, especially during autoregressive decoding: at each generation step, the model must attend over the key-value (KV) cache containing all previous tokens. As a result, long-context decoding is often memory-bound, and KV-cache reads can account for over half of the per-token latency
+[
+19
+]
+.
+
+A natural way to reduce this cost is to avoid reading the entire cache. Existing sparse decoding methods select only a subset of tokens, blocks, or pages for attention. Some approaches permanently discard tokens from the KV cache using positional, learned, or attention-based heuristics
+[
+23
+,
+22
+,
+15
+,
+10
+]
+. Others keep the full cache available but select a query-dependent subset at each decoding step, using page-level bounds, clustering, or adaptive thresholds to identify the tokens that matter for the current query
+[
+19
+,
+11
+,
+18
+,
+14
+,
+24
+]
+. These methods exploit the empirical observation that attention is often concentrated on a small subset of the context. However, most sparse decoding methods are designed around softmax attention. Since softmax assigns strictly positive probability to every token, any truncation of the KV cache necessarily discards nonzero probability mass. Thus, sparse decoding under softmax attention is inherently a dense-tail approximation problem.
+
+In this work, we revisit sparse decoding through the lens of
+\alpha
+-entmax attention
+[
+16
+,
+1
+]
+. Unlike softmax,
+\alpha
+-entmax produces input-dependent sparse probability distributions with exact zeros. This changes the goal of sparse decoding: rather than approximating a dense distribution with a truncated one, an entmax decoder only needs to recover the nonzero support. As shown in Figure
+1
+, if the selected KV pages contain all tokens in the entmax support, sparse decoding is exactly equal to full-cache entmax attention while avoiding the memory traffic associated with irrelevant pages.
+
+Softmax weights
+k
+Dropped (
+\delta^{\text{sm}}>0
+)
+Sorted tokens
+\alpha
+-entmax weights
+k
+Dropped (
+\delta^{\text{ent}}=0
+)
+Support
+\mathcal{S}
+Sorted tokens
+
+Figure 1:
+Softmax assigns non-zero probability mass to all tokens, so truncation always discards some mass (
+\delta^{\text{sm}}>0
+). In contrast,
+\alpha
+-entmax concentrates probability on a sparse support
+\mathcal{S}
+; when
+\mathcal{S}
+falls within the budget,
+\delta^{\text{ent}}=0
+. As budget increases, the
+\alpha
+-entmax error drops to zero once
+k\geq|\mathcal{S}|
+, while the softmax error remains positive for any
+k
+.
+
+Recent work has shown that entmax is both useful for long-context modeling and practical to train at scale
+[
+21
+,
+7
+,
+6
+]
+. However, these advances do not address the autoregressive decoding bottleneck: full entmax decoding still reads the full KV cache before discovering which tokens receive zero attention weight. We introduce EntmaxKV, an entmax-native sparse decoding framework that exploits sparsity before KV pages are loaded. Concretely, EntmaxKV is a paged selective decoding method for
+\alpha
+-entmax attention: it scores KV pages using lightweight metadata, selects candidate pages, and computes entmax attention only over the selected KV entries. Overall, our main contributions are:
+
+•
+
+We formulate entmax-native sparse decoding as support recovery: unlike softmax truncation, which always drops nonzero mass, entmax sparse decoding is exact whenever the selected candidates contain the true support.
+
+•
+
+We analyze sparse decoding error through the dropped probability mass
+\delta
+, showing that the output error is bounded by
+2B\delta
+and vanishes once the entmax support is recovered.
+
+•
+
+We introduce EntmaxKV, a paged sparse decoding method that uses query-aware metadata to avoid loading KV pages unlikely to contain entmax support tokens.
+
+•
+
+We propose a Gaussian-aware entmax selector that estimates the entmax threshold from lightweight page statistics and adapts the candidate budget to the score distribution.
+
+•
+
+We show empirically that EntmaxKV retains more support tokens, drops less probability mass, and achieves lower output error than softmax-based sparse decoding, while speeding up full-cache softmax and full-cache entmax decoding baselines on long sequences.
+
+2
+Background
+
+2.1
+Softmax Attention
+
+Let
+\bm{q}\in\mathbb{R}^{d}
+be the query vector, and let
+\{\bm{k}_{j},\bm{v}_{j}\}_{j=1}^{n}
+denote the keys and values stored in the KV cache for the
+n
+previous tokens. The single-head attention output is computed as follows:
+
+\displaystyle s_{j}(\bm{q})=\frac{\bm{q}^{\top}\bm{k}_{j}}{\sqrt{d}},\qquad\bm{p}=\pi(\bm{s}(\bm{q})),\qquad\bm{o}=\sum_{j=1}^{n}p_{j}\bm{v}_{j},
+
+(1)
+
+where
+\pi:\mathbb{R}^{n}\to\triangle_{n}
+is a probability transformation, such as softmax.
+During autoregressive decoding, each new token attends to all previously generated tokens. For a context of length
+n
+, computing full attention therefore requires loading
+O(n)
+keys and values from GPU high-bandwidth memory into on-chip SRAM at every decoding step. This memory movement becomes a dominant cost for long contexts, even when the attention computation itself is highly optimized.
+
+A defining property of softmax is that it is dense. That is, for any finite score vector
+\bm{s}
+, every output component satisfies
+p_{j}>0
+. Thus, no matter how irrelevant a token is, softmax assigns it some probability mass. Empirically, however, only a small fraction of tokens often receives significant attention mass
+[
+23
+,
+10
+]
+. This mismatch between dense probability assignments and sparse effective usage motivates decoding schemes that read and process only a subset of tokens for each query.
+
+2.2
+The
+\alpha
+-entmax Transformation
+
+\alpha
+-entmax
+[
+16
+,
+1
+]
+is a differentiable transformation that generalizes softmax while allowing exactly sparse probability distributions. For an input score vector
+\bm{s}\in\mathbb{R}^{n}
+and
+\alpha>1
+,
+\alpha
+-entmax has the form
+
+\displaystyle\alpha\text{-entmax}(\bm{s})_{i}
+
+\displaystyle=\left[(\alpha-1)s_{i}-\tau\right]_{+}^{1/(\alpha-1)},
+
+(2)
+
+where
+[x]_{+}=\max\{x,0\}
+and
+\tau\in\mathbb{R}
+is chosen so that the output sums to one. The support of the resulting distribution is
+
+\displaystyle\mathcal{S}
+
+\displaystyle=\mathrm{supp}(\alpha\text{-entmax}(\bm{s}))=\left\{i:(\alpha-1)s_{i}>\tau\right\}.
+
+(3)
+
+Thus, tokens with scores below the learned threshold receive exactly zero probability. Special cases include the limit
+\alpha\to 1
+, which recovers softmax, and
+\alpha=2
+, which recovers sparsemax
+[
+12
+]
+. We provide additional details on
+\alpha
+-entmax in Appendix
+A
+.
+
+The exact sparsity of
+\alpha
+-entmax has two consequences for sparse decoding. First, tokens outside the support contribute exactly zero to the attention output and can be dropped without changing the result. Second, as shown in Section
+3
+, if an approximate method selects a candidate set that contains
+\mathcal{S}
+, then sparse
+\alpha
+-entmax attention is identical to full-cache
+\alpha
+-entmax attention, even though only a subset of keys and values is loaded. In Section
+4
+, we instantiate this support-recovery view in EntmaxKV, a query-aware paged decoding pipeline for entmax attention.
+
+3
+Theoretical Analysis
+
+We analyze sparse decoding independently of implementation details such as paging, tiling, or kernel design. Our goal is to identify what controls the approximation error when attention is computed over only a subset of tokens, and why
+\alpha
+-entmax differs fundamentally from softmax in this regime. Throughout this section, let
+\bm{p}\in\triangle_{n}
+denote the full attention distribution over
+n
+tokens, let
+\bm{v}_{1},\ldots,\bm{v}_{n}\in\mathbb{R}^{d_{v}}
+denote value vectors, and assume
+\|\bm{v}_{i}\|_{2}\leq B
+for all
+i
+.
+
+3.1
+Approximation Error Under Truncation
+
+Consider a selection strategy that keeps a subset
+\mathcal{I}_{\text{keep}}\subseteq[n]
+and drops its complement
+\mathcal{I}_{\text{drop}}=[n]\setminus\mathcal{I}_{\text{keep}}
+. Let
+
+\displaystyle\delta
+
+\displaystyle=\sum_{i\in\mathcal{I}_{\text{drop}}}p_{i}
+
+(4)
+
+denote the dropped probability mass. The truncated and renormalized attention distribution is
+
+\displaystyle\tilde{p}_{i}
+
+\displaystyle=\begin{cases}p_{i}/(1-\delta),&i\in\mathcal{I}_{\text{keep}},\\
+0,&i\in\mathcal{I}_{\text{drop}}.\end{cases}
+
+(5)
+
+The full and approximate attention outputs are
+
+\displaystyle\bm{o}=\sum_{i=1}^{n}p_{i}\bm{v}_{i},\quad\text{and}\quad\tilde{\bm{o}}=\sum_{i=1}^{n}\tilde{p}_{i}\bm{v}_{i}.
+
+(6)
+
+Proposition 3.1
+
+(Approximation error under truncation)
+.
+
+Let
+\delta>0
+. If
+\|\bm{v}_{i}\|_{2}\leq B
+for all
+i
+, then
+
+\displaystyle\|\bm{o}-\tilde{\bm{o}}\|_{2}
+
+\displaystyle\leq 2B\delta.
+
+(7)
+
+Moreover, the constant is tight: equality can be attained with two tokens whose value vectors have norm
+B
+and point in opposite directions.
+
+The proof is given in Appendix
+C
+. Proposition
+3.1
+shows that truncated attention error is controlled by the mass assigned to discarded tokens. The identity of the dropped tokens matters only through their total probability mass. Thus, a sparse decoding method should select candidate tokens that make
+\delta
+small.
+
+3.2
+Exact Sparse Attention with entmax
+
+For softmax,
+\delta>0
+whenever any token is dropped, because every token receives strictly positive probability. Therefore, exact sparse decoding under softmax is only possible when
+\mathcal{I}_{\text{keep}}=[n]
+.
+In contrast,
+\alpha
+-entmax produces exact zeros, which can lead to full support recovery under truncation.
+
+Proposition 3.2
+
+(Exact sparse entmax attention)
+.
+
+Let
+\bm{p}=\alpha\text{-entmax}(\bm{s})
+with support
+\mathcal{S}
+. If the kept set satisfies
+\mathcal{S}\subseteq\mathcal{I}_{\text{keep}}
+, then
+\delta=0
+and
+\tilde{\bm{o}}=\bm{o}
+exactly.
+
+The proof is given in Appendix
+C.2
+. This proposition is the key difference between softmax and entmax sparse decoding. For softmax, sparse decoding is always a dense-tail approximation. For entmax, sparse decoding becomes a support-recovery problem. In other words, once the selected candidates contain the support, the sparse output becomes exact.
+
+Partial support capture.
+
+In practice, a candidate set may not capture the entire entmax support. To separate support recovery from probability-mass recovery, we report the support retention ratio
+
+\displaystyle\rho
+
+\displaystyle=\frac{|\mathcal{S}\cap\mathcal{I}_{\text{keep}}|}{|\mathcal{S}|}.
+
+(8)
+
+The ratio
+\rho
+measures how many support tokens are kept, whereas
+\delta
+measures how much probability mass is dropped. We note that Proposition
+3.1
+depends on
+\delta
+, not directly on
+\rho
+. Thus, a method can miss some low-mass support tokens and still have small output error.
+
+Furthermore, the advantage of entmax over softmax under the same kept set can be expressed through the dropped mass. Let
+\bm{p}^{\mathrm{sm}}=\text{softmax}(\bm{s})
+and
+\bm{p}^{\mathrm{ent}}=\alpha\text{-entmax}(\bm{s})
+, and let
+\mathcal{S}=\mathrm{supp}(\bm{p}^{\mathrm{ent}})
+be the entmax support.
+For the same dropped set
+\mathcal{I}_{\text{drop}}
+, the difference in dropped mass is
+
+\displaystyle\delta^{\mathrm{sm}}-\delta^{\mathrm{ent}}
+
+\displaystyle=\underbrace{\sum_{i\in\mathcal{I}_{\text{drop}}\cap\mathcal{S}}\left(p_{i}^{\mathrm{sm}}-p_{i}^{\mathrm{ent}}\right)}_{\text{support-miss term}}+\underbrace{\sum_{i\in\mathcal{I}_{\text{drop}}\setminus\mathcal{S}}p_{i}^{\mathrm{sm}}}_{\text{softmax tail term}}.
+
+(9)
+
+The second term is always nonnegative and captures probability mass that softmax assigns to tokens outside the entmax support. The first term, however, has no fixed sign and depends on the input score distribution.
+Thus, entmax’s advantage is largest when the candidate set captures the entmax support, in which case the support-miss term vanishes and the dropped entmax mass becomes zero.
+
+4
+EntmaxKV
+
+The theory above suggests a simple design principle: sparse decoding with
+\alpha
+-entmax should recover the entmax support while avoiding unnecessary KV-cache reads. EntmaxKV implements this principle with a paged decoding pipeline. It scores pages using lightweight metadata, selects candidate pages, and computes
+\alpha
+-entmax attention only over the selected KV entries.
+
+4.1
+Pipeline Overview
+
+At each decoding step and for each attention head, EntmaxKV receives a query
+\bm{q}\in\mathbb{R}^{d}
+and a KV cache containing
+n
+previous tokens. We partition the cache into pages of size
+P
+, yielding
+M=\lceil n/P\rceil
+pages. Let
+\mathcal{P}_{p}\subseteq[n]
+denote the token indices in page
+p
+. The scaled attention score for token
+j
+is
+
+\displaystyle s_{j}(\bm{q})
+
+\displaystyle=\frac{\bm{q}^{\top}\bm{k}_{j}}{\sqrt{d}}.
+
+(10)
+
+The selector chooses a set of pages
+\mathcal{C}_{\mathrm{page}}(\bm{q})\subseteq\{1,\ldots,M\}
+with corresponding token set
+\mathcal{C}_{\mathrm{tok}}(\bm{q})=\bigcup_{p\in\mathcal{C}_{\mathrm{page}}(\bm{q})}\mathcal{P}_{p}
+.
+Entmax attention is then computed over
+\mathcal{C}_{\mathrm{tok}}(\bm{q})
+:
+
+\displaystyle\tilde{\bm{p}}
+
+\displaystyle=\alpha\text{-entmax}\left(\{s_{j}(\bm{q}):j\in\mathcal{C}_{\mathrm{tok}}(\bm{q})\}\right),
+
+(11)
+
+\displaystyle\tilde{\bm{o}}
+
+\displaystyle=\sum_{j\in\mathcal{C}_{\mathrm{tok}}(\bm{q})}\tilde{p}_{j}\bm{v}_{j}.
+
+(12)
+
+We set
+\tilde{p}_{j}=0
+for
+j\notin\mathcal{C}_{\mathrm{tok}}(\bm{q})
+. If
+\mathcal{C}_{\mathrm{tok}}(\bm{q})
+contains the full-cache entmax support, then Proposition
+3.2
+implies that
+\tilde{\bm{o}}
+is exactly equal to the full-cache entmax output.
+
+In terms of efficiency, the dominant cost is loading selected KV pages from memory. In EntmaxKV, we obtain
+O\left(|\mathcal{C}_{\mathrm{page}}|Pd\right)=O\left(|\mathcal{C}_{\mathrm{tok}}|d\right)
+
+instead of
+O(nd)
+for dense decoding. Page metadata scoring costs
+O(Md)=O((n/P)d)
+and does not load values. Thus, when
+|\mathcal{C}_{\mathrm{tok}}|\ll n
+, EntmaxKV drastically reduces the dominant KV-cache memory traffic during autoregressive inference.
+
+4.2
+Query-Aware Page Scoring
+
+We use a paged KV-cache abstraction, following the block-based memory layout popularized by PagedAttention and vLLM
+[
+9
+]
+. On top of this layout, we use query-aware page scoring in the spirit of Quest
+[
+19
+]
+. Each page stores lightweight metadata that can be evaluated before loading the full keys and values.
+Concretely, for each page
+p
+, we store coordinate-wise minimum and maximum key vectors,
+
+\displaystyle\bm{k}_{\min}^{(p)}=\min_{j\in\mathcal{P}_{p}}\bm{k}_{j},\qquad\bm{k}_{\max}^{(p)}=\max_{j\in\mathcal{P}_{p}}\bm{k}_{j},
+
+(13)
+
+where the min and max are taken element-wise. Given a query
+\bm{q}
+, the maximum possible score of any token in page
+p
+is upper-bounded by
+
+\displaystyle\bar{s}_{\mathrm{box}}^{(p)}(\bm{q})
+
+\displaystyle=\frac{1}{\sqrt{d}}\sum_{i=1}^{d}\max\left(q_{i}k_{\min,i}^{(p)},q_{i}k_{\max,i}^{(p)}\right).
+
+(14)
+
+For the Gaussian-aware entmax selector (presented next), we additionally store first and second coordinate-wise moments, along with their associated standard deviation:
+
+\displaystyle\bm{k}_{\mathrm{avg}}^{(p)}=\frac{1}{|\mathcal{P}_{p}|}\sum_{j\in\mathcal{P}_{p}}\bm{k}_{j},\qquad\bm{m}_{2}^{(p)}=\frac{1}{|\mathcal{P}_{p}|}\sum_{j\in\mathcal{P}_{p}}\bm{k}_{j}\odot\bm{k}_{j},\qquad\bm{k}_{\mathrm{std}}^{(p)}=\sqrt{\bm{m}_{2}^{(p)}-\bm{k}_{\mathrm{avg}}^{(p)}\odot\bm{k}_{\mathrm{avg}}^{(p)}}.
+
+(15)
+
+These statistics help us approximate the query-dependent score mean and variance within each page without loading individual keys.
+
+4.3
+Candidate Selection Policies
+
+Given the page scores
+\{\bar{s}_{\mathrm{box}}^{(p)}(\bm{q})\}_{p=1}^{M}
+, EntmaxKV selects a subset of pages
+
+\mathcal{C}_{\mathrm{page}}(\bm{q})\subseteq\{1,\ldots,M\}
+. We propose two different policies for page selection.
+
+Top-
+k
+page selection.
+
+The fixed-budget policy selects the
+k
+pages with largest page scores:
+
+\displaystyle\mathcal{C}_{\mathrm{page}}^{\mathrm{top}\text{-}k}(\bm{q})
+
+\displaystyle=\operatorname{TopK}_{k}\left(\left\{\bar{s}_{\mathrm{box}}^{(p)}(\bm{q})\right\}_{p=1}^{M}\right).
+
+(16)
+
+Here
+\operatorname{TopK}_{k}
+returns the indices of the
+k
+largest entries in its input. The token budget is at most
+kP
+.
+
+Gaussian-aware entmax selection.
+
+Top-
+k
+and top-
+p
+are generic page-selection rules. Entmax gives a more specific target: select pages likely to contain tokens above the entmax threshold. For page
+p
+, we approximate the distribution of token scores inside the page by a scalar Gaussian random variable
+
+S^{(p)}\sim\mathcal{N}(\mu_{p}(\bm{q}),\sigma_{p}^{2}(\bm{q}))
+, where
+
+\displaystyle\mu_{p}(\bm{q})
+
+\displaystyle=\frac{\bm{q}^{\top}\bm{k}_{\mathrm{avg}}^{(p)}}{\sqrt{d}},\qquad\sigma_{p}^{2}(\bm{q})=\frac{1}{d}\sum_{i=1}^{d}q_{i}^{2}\left(k_{\mathrm{std},i}^{(p)}\right)^{2}.
+
+(17)
+
+Here
+S^{(p)}
+should be interpreted as the score of a randomly chosen token from page
+p
+. This diagonal approximation ignores cross-coordinate covariance, but it can be computed using only page metadata.
+Recall that entmax probabilities have the form
+
+\displaystyle g_{\alpha}(s;\tau)
+
+\displaystyle=\left[(\alpha-1)s-\tau\right]_{+}^{1/(\alpha-1)},
+
+(18)
+
+where the exact threshold
+\tau
+is chosen so that
+\sum_{i}g_{\alpha}(s_{i};\tau)=1
+.
+Computing this sum exactly would require visiting every token score. Instead, we replace the empirical score distribution within each page by its Gaussian approximation. Under this model, the expected contribution of one token in page
+p
+at threshold
+\tau
+is
+
+\mathbb{E}_{S^{(p)}}[g_{\alpha}(S^{(p)};\tau)]
+. Summing over the expected contribution of whole pages gives the approximate normalization equation
+
+\displaystyle\sum_{p=1}^{M}|\mathcal{P}_{p}|\,\mathbb{E}_{S^{(p)}}\left[g_{\alpha}(S^{(p)};\hat{\tau})\right]
+
+\displaystyle=1.
+
+(19)
+
+Solving Eq. (
+19
+) gives an estimate
+\hat{\tau}
+of the full entmax threshold using only page-level moments. For
+\alpha\in\{4/3,\,3/2,\,2\}
+, the expectation has a closed form in terms of truncated Gaussian moments, as shown in Appendix
+D
+.
+2
+2
+
+2
+
+For these values,
+\beta=1/(\alpha-1)
+is an integer:
+\beta=1
+for
+\alpha=2
+,
+\beta=2
+for
+\alpha=3/2
+, and
+\beta=3
+for
+\alpha=4/3
+. The expectation then reduces to truncated Gaussian moments of first, second, and third order, respectively.
+Each root-finding iteration costs constant time per page, since each page contributes only through
+\mu_{p}
+and
+\sigma_{p}
+.
+Given
+\hat{\tau}
+, we next estimate whether a page may contain at least one token above the threshold. Under the Gaussian model, the probability that all scores in page
+p
+are below a value
+b
+is approximately
+
+\displaystyle\Pr\left[\max_{j\in\mathcal{P}_{p}}s_{j}\leq b\right]
+
+\displaystyle\approx\Phi\left(\frac{b-\mu_{p}}{\sigma_{p}}\right)^{|\mathcal{P}_{p}|}.
+
+(20)
+
+Therefore, the value
+
+\displaystyle\bar{s}_{\mathrm{Gauss}}^{(p)}
+
+\displaystyle=\mu_{p}+\sigma_{p}\Phi^{-1}\left(q_{\mathrm{page}}^{1/|\mathcal{P}_{p}|}\right)
+
+(21)
+
+is a
+q_{\mathrm{page}}
+-confidence estimate of the maximum score in page
+p
+.
+The exponent
+1/|\mathcal{P}_{p}|
+appears because the confidence is for the maximum over the entire page, not for a single token.
+Finally, we select pages whose estimated maximum is above the estimated entmax threshold:
+
+\displaystyle\mathcal{C}_{\mathrm{page}}^{\mathrm{Gauss}}(\bm{q})
+
+\displaystyle=\left\{p:(\alpha-1)\bar{s}_{\mathrm{Gauss}}^{(p)}>\hat{\tau}-\Delta\right\}.
+
+(22)
+
+Here
+\Delta\geq 0
+is a safety margin: larger
+\Delta
+selects more pages and reduces false negatives. We note that unlike the deterministic box bound in Eq. (
+14
+),
+\bar{s}_{\mathrm{Gauss}}^{(p)}
+is not a worst-case upper bound; instead, it is a model-based estimate that aligns page selection with the entmax support condition
+(\alpha-1)s_{i}>\tau
+.
+
+4.4
+Triton Kernel
+
+We implement EntmaxKV with custom Triton kernels that operate directly on a paged KV cache. The implementation has two variants, corresponding to the two selection policies described above.
+
+Entmax top-
+k
+.
+
+Following Quest
+[
+19
+]
+, the top-
+k
+variant first launches a criticality-estimation kernel that computes page scores from lightweight page metadata. We then select the top-
+k
+pages and pass their indices to the sparse decoding kernel. The kernel computes
+\alpha
+-entmax over the selected tokens only. It estimates the entmax threshold
+\tau
+using a histogram-based initialization followed by Halley iterations, which provide fast refinement for the normalization constraint. Since the computation is restricted to the selected pages, the dominant memory traffic scales with the sparse token budget rather than the full context length.
+
+Gaussian-aware selector.
+
+The Gaussian-aware implementation adds a distributional selection stage before sparse decoding. It computes page-level score means and variances independently for each batch element and attention head, solves the approximate normalization equation for
+\hat{\tau}
+in parallel, and then evaluates the Gaussian page-maximum criterion in Eq. (
+22
+). These operations use only page statistics and therefore avoid loading the full KV cache. The selected page indices and estimated threshold are then passed to the decode kernel. Inside the kernel, we perform one additional Halley refinement using the actual selected scores, improving the threshold estimate while adding little overhead. As in the top-
+k
+variant, the kernel consumes a sparse page-index list and directly reads the corresponding KV pages from the paged cache.
+
+5
+Experiments
+
+We evaluate EntmaxKV along three axes. First, we measure approximation quality through support retention, dropped probability mass, and relative output error. Second, we evaluate downstream long-context behavior on passkey retrieval, RULER
+[
+8
+]
+, and language-modeling perplexity. Third, we report decode-only efficiency using wall-time measurements and speedups over full-cache attention baselines. For model-based benchmarks, we use the 1B-parameter softmax and entmax NAPE models from AdaSplash-2
+[
+6
+]
+.
+Unless otherwise stated, sparse methods are compared at matched KV budgets. We focus primarily on top-
+k
+selection rather than top-
+p
+
+[
+11
+]
+. Entmax already induces compact support, so a fixed candidate budget often captures most of the relevant probability mass without introducing an additional probability threshold. This allows us to isolate the effect of entmax sparsity while avoiding the extra overhead and tuning associated with adaptive top-
+p
+selection.
+Further details on the experimental setup can be found in Appendix
+E.1
+.
+
+5.1
+Approximation Error Analysis
+
+Figure 2:
+Attention approximation quality in terms of the dropped probability mass
+\delta
+(left), support retention
+\rho
+(middle),
+and relative output error
+\|\bm{o}-\tilde{\bm{o}}\|_{2}/\|\bm{o}\|_{2}
+(right).
+Coverage ratio denotes the fraction of the KV cache used in the attention computation.
+
+Figure
+2
+compares sparse softmax and sparse entmax at matched coverage ratios. Entmax-native selection consistently drops less probability mass and retains more support tokens, with the largest gains appearing in the most aggressive budget regimes. This behavior is reflected in the output error: sparse entmax produces substantially smaller relative error than sparse softmax at the same coverage. These results agree with Proposition
+3.1
+, which shows that truncation error is controlled by the dropped mass
+\delta
+. They also support the support-recovery interpretation of sparse entmax decoding: once the selected pages contain the entmax support, the approximation error disappears.
+
+5.2
+Passkey Retrieval
+
+Figure 3:
+Passkey retrieval accuracy across KV-cache lengths and token budgets. The left panel shows softmax top-
+k
+sparse decoding; the right part shows entmax top-
+k
+and Gaussian-aware variants.
+
+Figure
+3
+shows a clear separation between softmax and entmax under small sparse budgets. Softmax sparse attention degrades rapidly as the sequence length grows, even when the selected token budget is increased. In contrast, entmax-based sparse decoding maintains perfect retrieval across substantially longer contexts, in some cases using less than
+0.1\%
+of the KV cache. These results support the central hypothesis of the paper: because entmax attention has finite support, sparse decoding can remain exact or near-exact when the selected pages cover that support.
+
+5.3
+Language Modeling Perplexity
+
+Figure 4:
+Perplexity numbers on PG19. In contrast to softmax sparse decoding, entmax sparse decoding is close to full entmax across budgets.
+
+We evaluate language-modeling perplexity on PG19
+[
+17
+]
+using two 1B-parameter models with 32k context windows: one trained with softmax attention and one trained with entmax attention. We compare full-cache decoding against sparse decoding with token budgets of 1024, 2048, 4096, and 8192.
+Figure
+4
+shows that entmax sparse decoding remains close to full-cache entmax even at aggressive budgets. By contrast, softmax sparse decoding incurs a larger relative degradation. Notably, entmax with a 1024-token budget achieves lower absolute perplexity than softmax with substantially larger budgets. This suggests that entmax sparsity not only improves approximation quality at the attention level, but also translates into stronger language-modeling behavior under sparse decoding.
+
+5.4
+RULER Benchmarks
+
+Table 1:
+RULER benchmark results for softmax and entmax models across multiple context lengths (
+n
+). Sparse variants use a 1K-token budget with either top-
+k
+or Gaussian-aware entmax selection. Bold and underline indicate best and second-best average score within each context length.
+
+n
+
+Method
+
+mk1
+
+mk2
+
+mk3
+
+mq
+
+mv
+
+niah1
+
+niah2
+
+niah3
+
+cwe
+
+fwe
+
+vt
+
+qa1
+
+qa2
+
+avg
+
+4k
+
+Softmax
+
+84.4
+
+39.8
+
+10.0
+
+20.4
+
+16.3
+
+100.0
+
+100.0
+
+100.0
+
+28.0
+
+30.3
+
+14.3
+
+22.6
+
+37.3
+
+46.4
+
+4k
+
+Softmax (topk)
+
+79.6
+
+37.8
+
+5.2
+
+35.2
+
+22.0
+
+100.0
+
+100.0
+
+99.8
+
+10.8
+
+24.6
+
+9.5
+
+22.4
+
+38.8
+
+45.1
+
+4k
+
+Entmax
+
+81.8
+
+13.0
+
+29.6
+
+56.3
+
+60.6
+
+100.0
+
+100.0
+
+76.4
+
+48.5
+
+58.1
+
+37.7
+
+29.8
+
+37.4
+
+56.1
+
+4k
+
+Entmax (topk)
+
+81.4
+
+21.4
+
+22.6
+
+60.1
+
+63.4
+
+100.0
+
+100.0
+
+75.6
+
+40.4
+
+57.9
+
+36.8
+
+28.4
+
+36.4
+
+55.7
+
+4k
+
+Entmax (Gaus.)
+
+82.2
+
+12.8
+
+28.6
+
+56.1
+
+62.4
+
+100.0
+
+99.8
+
+75.4
+
+40.4
+
+56.3
+
+37.1
+
+29.8
+
+36.6
+
+55.2
+
+8k
+
+Softmax
+
+76.0
+
+35.0
+
+11.2
+
+27.0
+
+26.2
+
+100.0
+
+100.0
+
+98.8
+
+16.4
+
+23.2
+
+10.4
+
+20.8
+
+20.7
+
+43.5
+
+8k
+
+Softmax (topk)
+
+70.2
+
+33.0
+
+1.4
+
+29.3
+
+25.0
+
+100.0
+
+93.6
+
+86.4
+
+5.5
+
+23.9
+
+7.0
+
+19.6
+
+15.3
+
+39.3
+
+8k
+
+Entmax
+
+73.6
+
+6.2
+
+19.2
+
+63.5
+
+32.8
+
+100.0
+
+100.0
+
+82.0
+
+34.3
+
+47.1
+
+39.2
+
+28.6
+
+25.8
+
+50.2
+
+8k
+
+Entmax (topk)
+
+72.2
+
+18.2
+
+5.8
+
+61.5
+
+39.7
+
+100.0
+
+100.0
+
+83.2
+
+15.0
+
+40.5
+
+38.5
+
+27.0
+
+25.0
+
+48.2
+
+8K
+
+Entmax (Gaus.)
+
+73.0
+
+4.0
+
+15.6
+
+60.7
+
+32.4
+
+100.0
+
+100.0
+
+82.0
+
+32.1
+
+47.1
+
+27.0
+
+26.7
+
+39.5
+
+49.3
+
+16k
+
+Softmax
+
+82.6
+
+28.8
+
+10.4
+
+22.6
+
+25.8
+
+100.0
+
+100.0
+
+98.8
+
+15.0
+
+23.9
+
+9.7
+
+19.4
+
+20.8
+
+42.9
+
+16k
+
+Softmax (topk)
+
+54.4
+
+4.0
+
+0.0
+
+4.3
+
+11.2
+
+99.0
+
+88.2
+
+48.6
+
+2.5
+
+9.2
+
+2.1
+
+19.0
+
+16.2
+
+27.6
+
+16k
+
+Entmax
+
+77.8
+
+1.2
+
+9.4
+
+37.8
+
+22.4
+
+100.0
+
+100.0
+
+71.4
+
+23.0
+
+49.3
+
+35.0
+
+27.6
+
+27.7
+
+44.8
+
+16k
+
+Entmax (topk)
+
+73.4
+
+8.4
+
+1.2
+
+33.0
+
+20.6
+
+100.0
+
+98.8
+
+71.2
+
+4.4
+
+42.4
+
+33.4
+
+23.6
+
+25.6
+
+41.2
+
+16k
+
+Entmax (Gaus.)
+
+75.4
+
+2.6
+
+6.2
+
+37.9
+
+21.7
+
+100.0
+
+99.8
+
+72.8
+
+23.5
+
+48.0
+
+34.32
+
+26.8
+
+27.0
+
+44.3
+
+Table
+1
+shows that entmax outperforms softmax across context lengths, and that the gap is especially pronounced under sparse decoding. At 16k, softmax with a 1024-token budget suffers a large drop relative to full-cache softmax. Entmax with the same budget remains substantially closer to full-cache entmax. This indicates that the support-recovery behavior observed in the approximation metrics carries over to downstream long-context tasks. Both Entmax variants closely match the baseline performance, moreover, the Gaussian variant is able to avoid the CWE/FWE degradation inherent to Top-
+k
+approaches shown in MagicPIG
+[
+2
+]
+.
+
+5.5
+Efficiency Benchmarks
+
+Following Quest’s kernel-level efficiency evaluation
+[
+19
+]
+, we measure decoding-time efficiency with synthetic single-token decode benchmarks. For each KV-cache length, we generate query, key, and value tensors from a standard normal distribution and measure the latency of one autoregressive decoding step. This isolates the bottleneck targeted by EntmaxKV: reading and processing the KV cache for a new query. Our benchmark directly times the attention and selection path, making differences attributable to page scoring, candidate selection, KV access, and entmax computation.
+As full-cache baselines, we compare against softmax FlashDecoding and full-cache entmax decoding.
+3
+3
+
+3
+
+Softmax attention benefits from highly optimized decoding kernels such as FlashDecoding
+[
+4
+]
+, but no comparable decoding kernel currently exists for entmax attention. For the full-cache entmax reference, we therefore materialize the full score matrix and apply entmax row-wise using the efficient Triton implementation from AdaSplash-2
+[
+6
+]
+.
+
+When reporting sparse softmax baselines, we use Quest’s top-
+k
+page-selection implementation in Triton, so that softmax and entmax sparse variants use the same paged metadata and selection infrastructure.
+For EntmaxKV, we experiment with the top-
+k
+page and Gaussian-aware selection variants.
+
+Figure
+5
+reports end-to-end wall-clock decoding time normalized by full-cache softmax implemented in FlashDecoding
+[
+4
+]
+.
+Full entmax becomes increasingly expensive with context length, reaching
+1.6\times
+the softmax time at 1M tokens. Entmax top-
+k
+reduces this overhead by avoiding full-cache KV reads, but its latency still grows with context length, mainly due to page scoring and sparse paged attention.
+The Gaussian-aware entmax selector scales best among the entmax variants at long contexts.
+Specifically, while its distributional selection stage adds overhead at shorter lengths, it avoids the explicit top-
+k
+bottleneck and grows more slowly with sequence length. At 1M tokens, it runs in
+3.06
+ms, achieving a
+3.36\times
+speedup over full-cache softmax FlashDecoding and a
+5.43\times
+speedup over the full entmax reference. Overall, EntmaxKV shifts decoding cost from full-cache memory traffic to lightweight page selection and sparse paged entmax computation.
+
+Figure 5:
+Wall-clock time speedup relative to Softmax (FlashDecoding) at different KV-cache lengths.
+We also report the actual wall-clock time (in ms) on top of each bar for each method.
+
+6
+Related Work
+
+KV-cache compression and sparse decoding.
+
+For autoregressive generation, several methods reduce KV-cache cost by evicting or compressing tokens deemed unimportant. H2O evicts tokens based on cumulative attention scores
+[
+23
+]
+; StreamingLLM preserves attention sinks and a sliding window
+[
+22
+]
+; TOVA removes tokens according to current-query attention behavior
+[
+15
+]
+; and SnapKV compresses prompts by selecting important KV states
+[
+10
+]
+. These methods reduce memory footprint, but risk losing information needed by future queries.
+A complementary line of work keeps the full cache available and selects a query-dependent subset at decoding time. Quest uses page-level min/max key bounds to identify critical pages without scanning the full cache
+[
+19
+]
+.
+Twilight extends query-aware selection by first forming a top-
+k
+candidate pool and then applying top-
+p
+filtering within that pool
+[
+11
+]
+. Other methods use clustering, dynamic sparse patterns, or compression-based approximations to reduce attention computation during inference
+[
+18
+,
+2
+,
+14
+,
+24
+,
+5
+]
+. Our work belongs to this query-aware family, but differs in that the selection objective is tailored to
+\alpha
+-entmax support recovery rather than softmax tail approximation.
+
+Sparse probability mappings and entmax attention.
+
+Sparsemax and
+\alpha
+-entmax are alternatives to softmax that can assign exactly zero probability to low-scoring entries
+[
+12
+,
+16
+,
+1
+]
+. Adaptively sparse transformers learn or tune the sparsity parameter across heads, allowing attention distributions to interpolate between dense and sparse regimes
+[
+3
+]
+. ASentmax introduces input-dependent learnable temperatures and argues that sparse attention improves length generalization by mitigating attention dispersion, representational collapse, and over-squashing
+[
+21
+]
+.
+
+Efficient entmax kernels.
+
+AdaSplash introduced GPU kernels for
+\alpha
+-entmax attention
+[
+7
+]
+. AdaSplash-2 further accelerates entmax training through a histogram-based initialization and efficient block skipping, showing strong long-context results on benchmarks such as RULER and HELMET
+[
+6
+]
+. Our work is orthogonal. While AdaSplash kernels make sparse attention practical during training, decoding still reads the full KV cache before sparsity is known.
+Instead, EntmaxKV exploits entmax sparsity during autoregressive decoding by selecting KV pages before they are loaded, reducing KV-cache memory movement while preserving exactness whenever the support is captured.
+
+7
+Conclusion
+
+We introduced EntmaxKV, an entmax-native sparse decoding framework for long-context inference.
+The key observation is that
+\alpha
+-entmax turns sparse decoding from dense-tail approximation into support recovery: if the selected KV pages contain the entmax support, sparse decoding is exact.
+EntmaxKV realizes this idea by combining query-aware page scoring, support-aware candidate selection, and sparse entmax attention for autoregressive decoding.
+We showed that truncation error is controlled by the dropped probability mass
+\delta
+, and that this error vanishes when the entmax support is recovered. We also introduced a Gaussian-aware entmax selector that estimates the entmax threshold from page-level statistics, allowing the candidate budget to adapt to the score distribution.
+Empirically, EntmaxKV retains more support tokens, drops less probability mass, and achieves lower output error than softmax-based sparse decoding at matched KV budgets, while improving decoding efficiency over full entmax and dense attention baselines.
+
+Figure 6:
+Visualization of softmax and
+\alpha
+-entmax for different values of
+\alpha
+, alongside top-
+k
+variants with
+k=2
+.
+Each panel shows how
+p_{0}
+varies for the input
+\bm{z}=[0,z_{1},z_{2}]
+.
+
+Appendix A
+The
+\alpha
+-entmax Transformation
+
+For
+\alpha>1
+, the
+\alpha
+-entmax transformation
+[
+16
+]
+maps scores
+\bm{s}\in\mathbb{R}^{n}
+to a probability distribution
+\bm{p}\in\triangle_{n}
+of the form
+
+\displaystyle p_{i}
+
+\displaystyle=\left[(\alpha-1)s_{i}-\tau\right]_{+}^{1/(\alpha-1)},
+
+(23)
+
+where
+\tau\in\mathbb{R}
+is chosen so that
+
+\displaystyle\sum_{i=1}^{n}p_{i}
+
+\displaystyle=1.
+
+(24)
+
+The notation
+[x]_{+}=\max\{x,0\}
+is applied element-wise.
+The support of
+\bm{p}
+is
+
+\displaystyle\mathcal{S}
+
+\displaystyle=\mathrm{supp}(\bm{p})=\left\{i:p_{i}>0\right\}
+
+(25)
+
+\displaystyle=\left\{i:(\alpha-1)s_{i}>\tau\right\}.
+
+This threshold characterization is central to our method since a token contributes to entmax attention if and only if its scaled score is above the threshold.
+Special cases include sparsemax at
+\alpha=2
+
+[
+12
+]
+and softmax in the limit
+\alpha\to 1
+
+[
+16
+,
+1
+]
+. For
+\alpha>1
+, the transformation can produce exact zeros, unlike softmax.
+\alpha
+controls the propensity to sparsity, with larger values of
+\alpha
+generally encouraging sparser distributions.
+Figure
+6
+illustrates
+\alpha
+-entmax for
+\alpha\in\{1.0,1.5,2.0\}
+and top-
+k
+variants (
+k=2
+) for a 3D input.
+
+Appendix B
+Additional Details for EntmaxKV
+
+This appendix provides additional details for the page scoring and Gaussian selection rules used in Section
+4
+.
+
+B.1
+Deterministic Page Score Bound
+
+Recall that page
+p
+stores coordinate-wise key minima and maxima:
+
+\displaystyle k_{\min,i}^{(p)}=\min_{j\in\mathcal{P}_{p}}k_{j,i},\qquad k_{\max,i}^{(p)}=\max_{j\in\mathcal{P}_{p}}k_{j,i}.
+
+(26)
+
+For any token
+j\in\mathcal{P}_{p}
+,
+
+\displaystyle k_{j,i}
+
+\displaystyle\in\left[k_{\min,i}^{(p)},k_{\max,i}^{(p)}\right].
+
+(27)
+
+Proposition B.1
+
+(Page score upper bound)
+.
+
+For any query
+\bm{q}
+and token
+j\in\mathcal{P}_{p}
+,
+
+\displaystyle s_{j}(\bm{q})
+
+\displaystyle=\frac{\bm{q}^{\top}\bm{k}_{j}}{\sqrt{d}}\leq\bar{s}_{\mathrm{box}}^{(p)}(\bm{q}),
+
+(28)
+
+where
+
+\displaystyle\bar{s}_{\mathrm{box}}^{(p)}(\bm{q})
+
+\displaystyle=\frac{1}{\sqrt{d}}\sum_{i=1}^{d}\max\left(q_{i}k_{\min,i}^{(p)},q_{i}k_{\max,i}^{(p)}\right).
+
+(29)
+
+Proof.
+
+For each coordinate
+i
+, the scalar
+k_{j,i}
+lies between the coordinate-wise minimum and maximum of the page. Therefore,
+
+\displaystyle q_{i}k_{j,i}
+
+\displaystyle\leq\max\left(q_{i}k_{\min,i}^{(p)},q_{i}k_{\max,i}^{(p)}\right).
+
+(30)
+
+If
+q_{i}\geq 0
+, the maximum is attained at
+k_{\max,i}^{(p)}
+; if
+q_{i}<0
+, it is attained at
+k_{\min,i}^{(p)}
+. Summing over coordinates gives
+
+\displaystyle\bm{q}^{\top}\bm{k}_{j}
+
+\displaystyle=\sum_{i=1}^{d}q_{i}k_{j,i}
+
+(31)
+
+\displaystyle\leq\sum_{i=1}^{d}\max\left(q_{i}k_{\min,i}^{(p)},q_{i}k_{\max,i}^{(p)}\right).
+
+Dividing by
+\sqrt{d}
+proves the result.
+∎
+
+Importantly, this bound is conservative because it maximizes each coordinate independently over an axis-aligned box. While the maximizing vector may not correspond to an actual key, the bound is cheap and safe to compute.
+
+B.2
+Support-Superset Selection from Page Bounds
+
+Proposition B.2
+
+(No false negatives from deterministic page bounds)
+.
+
+Let
+\bm{p}=\alpha\text{-entmax}(\bm{s})
+with threshold
+\tau
+, and suppose
+\hat{\tau}\leq\tau
+. Define
+
+\displaystyle\mathcal{C}_{\mathrm{page}}
+
+\displaystyle=\left\{p:(\alpha-1)\bar{s}_{\mathrm{box}}^{(p)}>\hat{\tau}\right\}.
+
+(32)
+
+Then every page containing an entmax support token is selected:
+
+\displaystyle\mathrm{supp}(\bm{p})
+
+\displaystyle\subseteq\bigcup_{p\in\mathcal{C}_{\mathrm{page}}}\mathcal{P}_{p}.
+
+(33)
+
+Proof.
+
+Let
+i\in\mathrm{supp}(\bm{p})
+, and let
+p(i)
+be the page containing token
+i
+. Since
+i
+is in the entmax support,
+
+\displaystyle(\alpha-1)s_{i}
+
+\displaystyle>\tau.
+
+(34)
+
+Because
+\hat{\tau}\leq\tau
+,
+
+\displaystyle(\alpha-1)s_{i}
+
+\displaystyle>\hat{\tau}.
+
+(35)
+
+By Proposition
+B.1
+,
+
+\displaystyle s_{i}
+
+\displaystyle\leq\bar{s}_{\mathrm{box}}^{(p(i))}.
+
+(36)
+
+Therefore,
+
+\displaystyle(\alpha-1)\bar{s}_{\mathrm{box}}^{(p(i))}
+
+\displaystyle\geq(\alpha-1)s_{i}
+
+(37)
+
+\displaystyle>\hat{\tau}.
+
+Thus page
+p(i)
+is selected. Since this holds for every support token, all support tokens lie in selected pages.
+∎
+
+This proposition gives an ideal deterministic picture: if page maxima are upper-bounded and the threshold estimate is conservative, page selection cannot miss support tokens. The Gaussian selector trades this worst-case guarantee for adaptivity.
+
+Appendix C
+Approximation Error Under Truncation
+
+This appendix proves the truncation results used in Section
+3
+.
+
+C.1
+Proof of Proposition
+3.1
+
+Proof.
+
+Let
+\delta>0
+, and recall that
+\delta=\sum_{i\in\mathcal{I}_{\text{drop}}}p_{i}
+and
+
+\displaystyle\tilde{p}_{i}
+
+\displaystyle=\begin{cases}p_{i}/(1-\delta),&i\in\mathcal{I}_{\text{keep}},\\
+0,&i\in\mathcal{I}_{\text{drop}}.\end{cases}
+
+(38)
+
+We first compute the
+L^{1}
+distance between
+\bm{p}
+and
+\tilde{\bm{p}}
+. On dropped indices,
+
+\displaystyle\sum_{i\in\mathcal{I}_{\text{drop}}}|p_{i}-\tilde{p}_{i}|=\sum_{i\in\mathcal{I}_{\text{drop}}}p_{i}=\delta.
+
+(39)
+
+On kept indices,
+
+\displaystyle\sum_{i\in\mathcal{I}_{\text{keep}}}|\tilde{p}_{i}-p_{i}|
+
+\displaystyle=\sum_{i\in\mathcal{I}_{\text{keep}}}\left(\frac{p_{i}}{1-\delta}-p_{i}\right)
+
+(40)
+
+\displaystyle=\left(\frac{1}{1-\delta}-1\right)\sum_{i\in\mathcal{I}_{\text{keep}}}p_{i}
+
+\displaystyle=\frac{\delta}{1-\delta}(1-\delta)
+
+\displaystyle=\delta.
+
+Therefore,
+
+\displaystyle\|\bm{p}-\tilde{\bm{p}}\|_{1}
+
+\displaystyle=2\delta.
+
+(41)
+
+Now,
+
+\displaystyle\|\bm{o}-\tilde{\bm{o}}\|_{2}
+
+\displaystyle=\left\|\sum_{i=1}^{n}(p_{i}-\tilde{p}_{i})\bm{v}_{i}\right\|_{2}
+
+(42)
+
+\displaystyle\leq\sum_{i=1}^{n}|p_{i}-\tilde{p}_{i}|\|\bm{v}_{i}\|_{2}
+
+\displaystyle\leq B\|\bm{p}-\tilde{\bm{p}}\|_{1}
+
+\displaystyle=2B\delta.
+
+To see tightness, consider two tokens with probabilities
+p_{1}=1-\delta
+and
+p_{2}=\delta
+, and keep only token the first token.
+Let
+\bm{v}_{1}=B\bm{u}
+and
+\bm{v}_{2}=-B\bm{u}
+for a unit vector
+\bm{u}
+. Then
+
+\displaystyle\bm{o}=(1-\delta)B\bm{u}-\delta B\bm{u}=(1-2\delta)B\bm{u},\qquad\tilde{\bm{o}}=B\bm{u}.
+
+(43)
+
+Thus
+
+\displaystyle\|\bm{o}-\tilde{\bm{o}}\|_{2}
+
+\displaystyle=2B\delta.
+
+(44)
+
+∎
+
+C.2
+Proof of Proposition
+3.2
+
+Proof.
+
+If
+\mathcal{S}\subseteq\mathcal{I}_{\text{keep}}
+, then every dropped index has zero entmax probability:
+
+\displaystyle i\in\mathcal{I}_{\text{drop}}
+
+\displaystyle\implies i\notin\mathcal{S}
+
+(45)
+
+\displaystyle\implies p_{i}=0.
+
+Therefore,
+
+\displaystyle\delta
+
+\displaystyle=\sum_{i\in\mathcal{I}_{\text{drop}}}p_{i}=0.
+
+(46)
+
+Since
+\delta=0
+, the renormalized distribution satisfies
+\tilde{\bm{p}}=\bm{p}
+. Hence
+
+\displaystyle\tilde{\bm{o}}
+
+\displaystyle=\sum_{i=1}^{n}\tilde{p}_{i}\bm{v}_{i}=\sum_{i=1}^{n}p_{i}\bm{v}_{i}=\bm{o}.
+
+(47)
+
+∎
+
+Appendix D
+Closed-Form Distributional Entmax Thresholds for Special
+\alpha
+
+Recall from Section
+4.3
+that the Gaussian-aware entmax selector estimates the entmax threshold by replacing the empirical sum over token scores with a page-wise Gaussian approximation. The exact entmax normalization condition is
+
+\displaystyle\sum_{i=1}^{n}\left[(\alpha-1)s_{i}-\tau\right]_{+}^{\beta}=1,\quad\text{with}\quad\beta=\frac{1}{\alpha-1}.
+
+(48)
+
+For each page
+p
+, we model token scores by a scalar random variable
+
+\displaystyle S^{(p)}
+
+\displaystyle\sim\mathcal{N}\left(\mu_{p},\sigma_{p}^{2}\right).
+
+(49)
+
+Under this model, the normalization condition is approximated by
+
+\displaystyle\sum_{p=1}^{M}|\mathcal{P}_{p}|\,\mathbb{E}_{S^{(p)}}\left[g_{\alpha}(S^{(p)};\tau)\right]
+
+\displaystyle=1,
+
+(50)
+
+where
+
+\displaystyle g_{\alpha}(s;\tau)
+
+\displaystyle=\left[(\alpha-1)s-\tau\right]_{+}^{\beta}.
+
+(51)
+
+Thus, each page contributes its expected unnormalized entmax mass, multiplied by the number of tokens in the page.
+Let
+a=\alpha-1
+. For a generic Gaussian score
+S\sim\mathcal{N}(\mu,\sigma^{2})
+, define
+
+\displaystyle Y
+
+\displaystyle=aS-\tau.
+
+(52)
+
+Then
+
+\displaystyle Y\sim\mathcal{N}\left(\mu_{Y},\sigma_{Y}^{2}\right),\quad\mu_{Y}=a\mu-\tau,\quad\sigma_{Y}=a\sigma.
+
+(53)
+
+Since
+
+\displaystyle g_{\alpha}(S;\tau)
+
+\displaystyle=(Y)_{+}^{\beta},
+
+(54)
+
+we need the truncated Gaussian moment
+
+\displaystyle\mathbb{E}\left[g_{\alpha}(S;\tau)\right]
+
+\displaystyle=\mathbb{E}\left[(Y)_{+}^{\beta}\right]=\mathbb{E}\left[Y^{\beta}\mathbf{1}\{Y>0\}\right].
+
+(55)
+
+Let
+
+\displaystyle t
+
+\displaystyle=\frac{\mu_{Y}}{\sigma_{Y}},
+
+(56)
+
+and let
+\phi
+and
+\Phi
+denote the standard normal pdf and cdf. When
+\beta\in\mathbb{N}
+, this expectation is a truncated Gaussian moment with a closed form. We use the cases
+\beta=1,2,3
+, corresponding to
+\alpha=2,3/2,4/3
+.
+4
+4
+
+4
+
+These values are convenient because
+\beta=1/(\alpha-1)
+is an integer. For non-integer
+\beta
+, the same distributional threshold equation remains valid, but the expectation generally requires numerical evaluation.
+
+Case
+\alpha=2
+(
+\beta=1
+).
+
+Here
+a=1
+and
+
+\displaystyle g_{2}(s;\tau)
+
+\displaystyle=(s-\tau)_{+}.
+
+(57)
+
+The first truncated Gaussian moment is
+
+\displaystyle\mathbb{E}\left[Y\mathbf{1}\{Y>0\}\right]
+
+\displaystyle=\mu_{Y}\Phi(t)+\sigma_{Y}\phi(t).
+
+(58)
+
+Therefore,
+
+\displaystyle\mathbb{E}\left[g_{2}(S;\tau)\right]
+
+\displaystyle=(\mu-\tau)\Phi\left(\frac{\mu-\tau}{\sigma}\right)+\sigma\phi\left(\frac{\mu-\tau}{\sigma}\right).
+
+(59)
+
+Case
+\alpha=3/2
+(
+\beta=2
+).
+
+Here
+a=1/2
+and
+
+\displaystyle g_{3/2}(s;\tau)
+
+\displaystyle=\left(\frac{1}{2}s-\tau\right)_{+}^{2}.
+
+(60)
+
+The second truncated Gaussian moment is
+
+\displaystyle\mathbb{E}\left[Y^{2}\mathbf{1}\{Y>0\}\right]
+
+\displaystyle=\left(\mu_{Y}^{2}+\sigma_{Y}^{2}\right)\Phi(t)+\mu_{Y}\sigma_{Y}\phi(t).
+
+(61)
+
+Thus,
+
+\displaystyle\mathbb{E}\left[g_{3/2}(S;\tau)\right]
+
+\displaystyle=\left(\mu_{Y}^{2}+\sigma_{Y}^{2}\right)\Phi\left(\frac{\mu_{Y}}{\sigma_{Y}}\right)+\mu_{Y}\sigma_{Y}\phi\left(\frac{\mu_{Y}}{\sigma_{Y}}\right),
+
+(62)
+
+\displaystyle\text{with }\mu_{Y}
+
+\displaystyle=\frac{1}{2}\mu-\tau,\text{ and }\sigma_{Y}=\frac{1}{2}\sigma.
+
+(63)
+
+Case
+\alpha=4/3
+(
+\beta=3
+).
+
+Here
+a=1/3
+and
+
+\displaystyle g_{4/3}(s;\tau)
+
+\displaystyle=\left(\frac{1}{3}s-\tau\right)_{+}^{3}.
+
+(64)
+
+The third truncated Gaussian moment is
+
+\displaystyle\mathbb{E}\left[Y^{3}\mathbf{1}\{Y>0\}\right]
+
+\displaystyle=\left(\mu_{Y}^{3}+3\mu_{Y}\sigma_{Y}^{2}\right)\Phi(t)+\left(\mu_{Y}^{2}\sigma_{Y}+2\sigma_{Y}^{3}\right)\phi(t).
+
+(65)
+
+Therefore,
+
+\displaystyle\mathbb{E}\left[g_{4/3}(S;\tau)\right]
+
+\displaystyle=\left(\mu_{Y}^{3}+3\mu_{Y}\sigma_{Y}^{2}\right)\Phi\left(\frac{\mu_{Y}}{\sigma_{Y}}\right)+\left(\mu_{Y}^{2}\sigma_{Y}+2\sigma_{Y}^{3}\right)\phi\left(\frac{\mu_{Y}}{\sigma_{Y}}\right),
+
+(66)
+
+\displaystyle\text{with }\mu_{Y}
+
+\displaystyle=\frac{1}{3}\mu-\tau,\text{ and }\sigma_{Y}=\frac{1}{3}\sigma.
+
+(67)
+
+Solving for the distributional threshold.
+
+For each page
+p
+, we evaluate the appropriate closed form using
+\mu=\mu_{p}
+and
+\sigma=\sigma_{p}
+, then substitute the result into Eq. (
+50
+). The estimated threshold
+\hat{\tau}
+is the solution of the scalar equation
+
+\displaystyle\sum_{p=1}^{M}|\mathcal{P}_{p}|\,\mathbb{E}_{S^{(p)}}\left[g_{\alpha}(S^{(p)};\hat{\tau})\right]
+
+\displaystyle=1.
+
+(68)
+
+We solve this equation with a small fixed number of Newton or Halley iterations over
+\tau
+. Each iteration has constant cost per page because each page contributes only through
+\mu_{p}
+,
+\sigma_{p}
+, and evaluations of
+\phi
+and
+\Phi
+. Importantly, this step does not require loading the full KV cache.
+For generic
+\alpha>1
+with non-integer
+\beta
+, the same distributional equation can still be used, but the expectation
+\mathbb{E}[g_{\alpha}(S;\tau)]
+no longer reduces to a low-order polynomial truncated Gaussian moment. In that case, the expectation can be evaluated numerically.
+
+Appendix E
+Experiments
+
+E.1
+Setup
+
+We ran all experiments on single nodes equipped with NVIDIA RTX A6000 GPUs. For the attention approximation quality, relative error, and efficiency experiments, synthetic inputs were sampled from a standard normal distribution using
+torch.randn
+. These synthetic benchmarks isolate the behavior of the attention transformation, page-selection mechanism, and decoding kernels independently of data-loading or full-model generation overhead. Unless otherwise stated, we use batch size
+8
+, page size
+16
+, and report results averaged over multiple random trials or timed iterations. For model-based benchmarks, we use the 1B-parameter softmax and entmax NAPE models from AdaSplash-2
+[
+6
+]
+.
+
+Decode-only efficiency benchmark.
+
+Our efficiency benchmark focuses on autoregressive decoding, not prefill. Following the kernel-level decode evaluation style of Quest
+[
+19
+]
+, we measure the latency of a single-token decode step while varying the KV-cache length. For each configuration, we generate synthetic query, key, and value tensors from a standard normal distribution and time only the attention/selection path for one new query. This directly targets the bottleneck addressed by EntmaxKV: reading and processing the KV cache during decoding. It also makes differences between methods attributable to page scoring, candidate selection, KV access, and entmax computation, rather than to unrelated full-model components.
+
+We compare five full and sparse decoding variants: full-cache softmax FlashDecoding, top-
+k
+softmax, a full-cache entmax reference, EntmaxKV with top-
+k
+page selection, and EntmaxKV with the Gaussian-aware entmax selector.
+For top-
+k
+softmax, we use Quest’s top-
+k
+page-selection implementation in Triton so that softmax and entmax variants share the same paged metadata and selection infrastructure.
+The EntmaxKV top-
+k
+variant uses the same Quest-style page scores, but computes
+\alpha
+-entmax over the selected pages. The Gaussian-aware entmax variant instead uses per-page score moments to estimate the entmax threshold and select pages before invoking the sparse paged decoding kernel.
+For the full-cache baselines, softmax is implemented with FlashDecoding
+[
+4
+]
+. Since no comparable optimized dense decoding kernel currently exists for entmax attention, the full-cache entmax reference materializes the full score matrix and applies entmax row-wise using the efficient Triton implementation from AdaSplash-2
+[
+6
+]
+, namely, via the
+triton_entmax_v2
+kernel.
+
+Latency measurement protocol.
+
+All latency measurements follow a warm-up and timed-iteration protocol to ensure stable GPU readings. Each benchmark configuration first executes warm-up iterations to account for JIT compilation, CUDA kernel caching, and memory allocation overhead. Timing is then collected over repeated synchronized iterations. Each timed iteration is bracketed by
+torch.cuda.synchronize()
+calls so that the measured interval includes completed GPU work rather than only kernel-launch latency. We report wall-clock latency in milliseconds. Latency is computed as the median over timed iterations, reducing sensitivity to occasional system-level outliers.
+
+Why use Ampere GPUs for benchmarking.
+
+We benchmark on NVIDIA Ampere GPUs, following the benchmarking setup used in AdaSplash-2
+[
+6
+]
+. On Ampere, FlashDecoding is the relevant optimized softmax attention reference. While recent version of FlashAttention (and thus for FlashDecoding) have introduced hardware-specific optimizations for NVIDIA Hopper GPUs, including TMA, WGMMA instructions, and warp specialization, they preserve the same high-level attention algorithm: online softmax.
+Since our goal is to measure the algorithmic effect of avoiding full-cache KV reads during decoding, rather than the effect of Hopper-specific kernel engineering, Ampere provides a cleaner comparison point.
+We note that the low-level optimizations introduced by recent FlashDecoding versions are largely orthogonal to EntmaxKV and could be incorporated in future hardware-specific implementations.
+
+Approximation error analysis.
+
+Unless otherwise specified, we compare sparse decoding variants under matched KV budgets. The softmax baselines use softmax attention with query-aware top-
+k
+selection. The entmax variants use
+\alpha
+-entmax attention and compute sparse entmax over the selected KV entries. We report support retention
+\rho
+, dropped probability mass
+\delta
+, and relative output error
+R=\|\bm{o}-\tilde{\bm{o}}\|_{2}/\|\bm{o}\|_{2}
+. Coverage ratio denotes the fraction of the KV cache used in sparse attention for top-
+k
+variants.
+For the top-
+k
+approximation experiments, both softmax and entmax receive randomly generated query, key, and value tensors. This isolates the effect of the probability transformation and sparse selection rule on the attention output. For the Gaussian-aware entmax selector, we additionally evaluate page-statistic behavior using query, key, and value projections sampled from trained entmax models, including early, middle, and late layers, to capture different sparsity regimes.
+
+Passkey retrieval.
+
+We run the passkey retrieval task in a setup similar to Quest
+[
+19
+]
+. For each sequence length, we repeat the experiment across multiple passkey positions, expressed as depth ratios within the input sequence, and include an additional randomized depth setting. Accuracy is reported as the percentage of correct answers for each model, selector, and token budget.
+
+RULER.
+
+We evaluate downstream long-context performance on RULER
+[
+8
+]
+using the 1B-parameter softmax and entmax NAPE models from AdaSplash-2
+[
+6
+]
+. The models were trained up to 32k context length and use NAPE with ALiBi bias. RULER tasks test retrieval and reasoning over long sequences, making them suitable for evaluating whether sparse decoding preserves long-context behavior.
+
+Language-modeling perplexity.
+
+We evaluate perplexity on the PG19 test set
+[
+17
+]
+. Models are prompted with sequences of up to 32k tokens from PG19, and perplexity is computed under full-cache and sparse decoding variants. This experiment tests whether sparse decoding preserves the model’s next-token distribution on natural long-form text, complementing the synthetic approximation metrics and retrieval-style benchmarks.
+
+E.2
+Additional Results for Gaussian Entmax
+
+We show in Table
+2
+results in terms dropped probability mass, support retention, and relative output error.
+
+Table 2:
+Gaussian approximation in terms of the dropped probability mass, support retention
+\rho
+(middle),
+and relative output error
+R=\|\bm{o}-\tilde{\bm{o}}\|_{2}/\|\bm{o}\|_{2}
+, and coverage ratio
+
+KV size
+
+\delta
+
+\rho
+
+R
+
+Cov.
+
+4k
+
+0.000000
+
+1.0000
+
+0.000365
+
+0.9949
+
+8k
+
+0.000000
+
+1.0000
+
+0.000253
+
+0.9703
+
+16k
+
+0.000855
+
+0.9977
+
+0.002499
+
+0.9091
+
+32k
+
+0.009254
+
+0.9771
+
+0.035376
+
+0.7759
+
+64k
+
+0.037229
+
+0.9343
+
+0.131196
+
+0.6066
+

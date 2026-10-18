@@ -1,0 +1,2212 @@
+torchtune: PyTorch native post-training library
+Mark Obozov, Maxime Griot, Joseph Cummings, Evan Smothers, Felipe Mello, Rafi Ayub, Philip John Bontrager, Salman Mohammadi, Ariel Kwiatkowski, Nathan Azrak, Mircea Mironenco
+
+Abstract
+Modern Large Language Models (LLMs) typically require multistage training pipelines to achieve strong downstream performance, with post-training serving as the main interface for adapting open-weight models. We introduce torchtune , a PyTorch-native library designed to streamline the post-training lifecycle of LLMs , enabling efficient fine-tuning, experimentation, and deployment-oriented workflows. Unlike many existing fine-tuning frameworks, which often optimize for ease of use, specialized recipes, or hardware efficiency at the cost of transparency and extensibility, torchtune emphasizes modularity, hackability, and direct access to the underlying PyTorch components. In this paper, we present the design principles behind torchtune , describe how they are reflected in its model builders, training recipes, and distributed training stack, and evaluate the library across representative post-training settings. We compare against popular fine-tuning frameworks, including Axolotl and Unsloth, and show that torchtune provides strong performance and memory efficiency across many settings while remaining flexible enough for rapid research iteration. These results position torchtune as a practical foundation for reproducible LLM post-training research.
+
+
+
+torchtune: PyTorch native post-training library
+
+tune run
+recipe
+--config
+model/workflow
+key=value
+choose a recipe skeleton, then override individual config fields
+YAML config component graph
+model builder
+full / LoRA / QLoRA / …
+tokenizer
+Llama / Qwen / …
+dataset
+Alpaca / preference / …
+checkpointer
+full / adapter
+objective
+SFT CE / LCE / DPO / KD
+optimizer + scheduler
+AdamW / 8-bit / warmup
+observability
+logger / profiler / metrics
+recipe setup
+config.instantiate(...)
+wires components and applies runtime policies
+recipe loop stays local and readable
+batch
+\to
+forward
+\to
+loss
+\to
+backward
+\to
+step
+\to
+log
+runtime policies (applied at setup; wrap the loop)
+parallel
+FSDP2 / TP / CP / EP
+memory
+AC / offload
+compile
+model / loss / optim
+step fusion
+Optim-in-bwd
+RL orchestration
+sync / async GRPO
+
+Swap one component or policy; keep the recipe shape.
+
+The same source scales from 1 GPU to multi-gpu benchmarks.
+
+Figure 1:
+Visual abstract.
+
+torchtune
+recipes instantiate model, data, objective, optimizer, logging, and runtime components from YAML, then run them through a shared PyTorch training loop. Experiments are expressed by swapping component paths or runtime policies while preserving the recipe structure.
+
+1
+Introduction
+
+Post-training, including supervised fine-tuning, preference optimization, distillation, and RL-based alignment, is now the dominant phase of effort for adapting open-weight
+LLMs
+to downstream tasks
+(
+Lai et al. 2025
+)
+. The frameworks that support this phase, however, have grown into complex stacks that make it hard to balance extensibility, performance, and rapid experimentation within a single tool.
+
+Existing frameworks for
+LLM
+post-training include Axolotl
+(
+Axolotl maintainers and contributors 2023
+)
+, the Hugging Face
+trl
+/
+transformers
+/
+peft
+stack
+(
+von Werra et al. 2020
+;
+Mangrulkar et al. 2022
+)
+, and Unsloth
+(
+Daniel Han and team 2023
+)
+. These systems occupy different points in the design space: Axolotl emphasizes configuration-driven fine-tuning, the Hugging Face ecosystem emphasizes broad integration and model coverage, and Unsloth emphasizes efficient LoRA
+(
+Hu et al. 2022
+)
+and QLoRA
+(
+Dettmers et al. 2023
+)
+fine-tuning. Across these systems, several recurring tradeoffs motivate
+torchtune
+:
+
+1.
+
+Large dependency stacks.
+Frameworks built around
+transformers
+and adjacent libraries inherit broad transitive dependencies, which can complicate deployment, debugging, and reproducibility for focused post-training experiments.
+
+2.
+
+Tightly coupled training decisions.
+Model construction, trainer logic, distributed policy, and adapter insertion are often spread across factory layers or trainer abstractions, making fine-grained modifications harder than changing the underlying PyTorch modules directly.
+
+3.
+
+Uneven access to modern PyTorch performance paths.
+Generic implementations can leave memory and throughput on the table relative to FSDP2
+PyTorch Community 2023
+, DTensor
+(
+PyTorch Community 2026
+)
+, loss parallelism, and
+torch.compile
+; kernel-specialized systems improve some paths but can make the training loop less transparent.
+
+4.
+
+Fragmented multi-recipe support.
+
+Supervised Fine-Tuning (SFT)
+,
+Direct Preference Optimization (DPO)
+,
+Proximal Policy Optimization (PPO)
+/
+Group Relative Policy Optimization (GRPO)
+, knowledge distillation, and quantization-aware training often live in separate libraries, recipe families, or adapter systems, which makes controlled comparison difficult.
+
+5.
+
+Distributed-training composability.
+Multi-node training, tensor parallelism, and context parallelism are supported unevenly across frameworks, often requiring different backends or different abstractions at different scales.
+
+We introduce
+torchtune
+, a PyTorch
+(
+Paszke et al. 2019
+)
+-native post-training library designed around composable building blocks rather than monolithic trainers.
+torchtune
+provides hackable model builders, YAML-driven recipes inspired by Hydra
+(
+Yadan 2019
+)
+, and a small set of orthogonal optimization switches whose effect on memory and throughput can be measured independently and combined freely. The same components scale from a single H100 to multi-node FSDP2 clusters without rewriting the training loop.
+
+The contributions of this paper are:
+
+1.
+
+A
+modular component model
+(§
+3
+) that makes model variants, LoRA, quantization, and architecture changes local to explicit PyTorch builders.
+
+2.
+
+An
+in-backward optimizer fusion
+for LLM training (§
+4.1
+) that reduces gradient-buffer lifetime and improves memory feasibility for large-model fine-tuning.
+
+3.
+
+A
+composable parallelism stack
+(§
+5
+) built on PyTorch DTensor: FSDP2, tensor and sequence parallel, expert parallel for MoE, loss parallel, and context parallel
+(
+PyTorch Community 2026
+)
+.
+
+4.
+
+An
+asynchronous GRPO
+recipe (§
+7
+) that decouples rollout generation from policy updates through a Ray-coordinated queue and replay buffer, supporting both on-policy synchronization and bounded off-policy lag.
+
+5.
+
+An
+empirical study
+(§
+5.1
+) comparing
+torchtune
+against Axolotl and Unsloth across single- and multi-GPU post-training settings.
+
+Our empirical sections quantify the optimization choices used throughout the evaluation. Across single-GPU and multi-GPU sweeps Llama 3.3 70B training, we isolate the effects of compilation, activation checkpointing
+(
+Chen et al. 2016
+)
+, Linear Cross-Entropy, sequence packing, low-bit optimizer state, and in-backward optimizer fusion. The results show that these optimizations are complementary: compilation is a strong throughput lever on small and mid-sized models, and memory-oriented techniques determine feasibility at larger scales.
+
+The code of the presented framework is available in the public
+torchtune
+repository.
+1
+1
+
+1
+
+https://github.com/pytorch/torchtune
+
+2
+Related Work
+
+General-purpose training frameworks.
+
+PyTorch Lightning
+(
+Falcon and The PyTorch Lightning team 2019
+)
+and DeepSpeed
+(
+Rasley et al. 2020
+)
+are among the most widely adopted systems for large-scale training. Lightning abstracts the training loop into a high-level Trainer API, enabling modularity and rapid prototyping across a variety of tasks. DeepSpeed focuses on scaling efficiency through the ZeRO family of optimizers
+(
+Rajbhandari et al. 2020
+)
+, supporting trillion-parameter models via optimizer and activation partitioning. Both frameworks are general in scope and not tailored to the specific challenges of LLM post-training.
+
+Hugging Face ecosystem.
+
+The Hugging Face stack provides specialized libraries for adapting pretrained models. The
+trl
+library implements
+SFT
+,
+DPO
+
+(
+Rafailov et al. 2023
+)
+,
+PPO
+, and reinforcement learning pipelines such as
+GRPO
+
+(
+von Werra et al. 2020
+)
+, built atop the
+transformers
+
+(
+Wolf et al. 2020
+)
+and
+accelerate
+libraries. Complementary to this, the
+peft
+library
+(
+Mangrulkar et al. 2022
+)
+introduces parameter-efficient fine-tuning methods such as LoRA and QLoRA
+(
+Dettmers et al. 2023
+)
+. These frameworks emphasize ease of use and integration within the Hugging Face model hub, but rely heavily on the
+transformers
+training abstractions.
+
+Community-driven frameworks.
+
+Axolotl
+
+(
+Axolotl maintainers and contributors 2023
+)
+has emerged as a community-oriented alternative for fine-tuning LLMs, exposing YAML-based configurations and extensive integration with Hugging Face libraries, PEFT adapters, and distributed runtimes such as DeepSpeed and DDP. Axolotl lowers the barrier for users by providing numerous preconfigured templates, but inherits the complexity of the underlying stack.
+Unsloth
+
+(
+Daniel Han and team 2023
+)
+represents another line of work, targeting maximal efficiency for consumer-grade hardware through custom CUDA/Triton kernels
+(
+Tillet et al. 2019
+)
+that accelerate LoRA and QLoRA fine-tuning by up to
+5\times
+while reducing memory usage. While effective, Unsloth prioritizes throughput and memory optimization over training loop transparency.
+
+Position of
+torchtune
+.
+
+In contrast,
+torchtune
+is explicitly designed for the post-training lifecycle of LLMs. Rather than introducing new training abstractions, it provides transparent PyTorch-native recipes for
+SFT
+
+(
+Ouyang et al. 2022
+)
+,
+Knowledge Distillation (KD)
+
+(
+Hinton et al. 2015
+)
+,
+Reinforcement Learning (RL)
+variants (
+DPO
+,
+PPO
+
+(
+Schulman et al. 2017
+)
+,
+GRPO
+), and quantization-aware training. Scaling is achieved through native PyTorch FSDP, with memory-saving techniques integrated into reference configurations. Moreover,
+torchtune
+interoperates with Hugging Face Hub, LM Evaluation Harness
+(
+Gao et al. 2024
+)
+, and TorchAO
+(
+Or et al. 2025
+)
+, while maintaining hackability through lightweight, modifiable scripts. This places it between high-level automated trainers and low-level performance-specialized kernels.
+
+3
+Design
+
+The
+torchtune
+library is designed around a modular architecture that promotes code reuse and experimentation.
+Figure
+
+1
+summarizes how the pieces compose. The library provides low-level Transformer building blocks, model builders that assemble those blocks into complete architectures, and training recipes that orchestrate optimization, data loading, checkpointing, and distributed execution. The goal is not to hide PyTorch behind a new trainer abstraction, but to keep the research surface close to the code that is actually executed.
+
+3.1
+Modular components and builders
+
+At the model level,
+torchtune
+keeps module assembly explicit: core Transformer blocks accept pre-constructed submodules, while builders choose the concrete attention, feed-forward, normalization, embedding, and projection implementations for each architecture. This makes architecture variants local to construction time: LoRA adapters, quantized projections, alternative attention kernels, or architecture-specific blocks can be swapped without rewriting the shared decoder logic or training recipe.
+
+Builders also define the boundary for controlled experimentation. The same recipe can compare full fine-tuning, LoRA, QLoRA, quantization-aware training, or custom module replacements while keeping data, optimizer, logging, and distributed policy fixed.
+Appendix
+
+C
+provides abbreviated code examples for the decoder, attention module, builder loop, and LoRA substitution.
+
+3.2
+Out-of-the-box support
+
+By removing the dependency on the
+transformers
+framework,
+torchtune
+ships pure-PyTorch reference implementations of modern open-source LLMs that are numerically equivalent with their original
+transformers
+counterparts but substantially simpler to read and modify. The list of supported model families is given in
+Table
+
+5
+; adding a new architecture amounts to writing a builder function in the style of
+Section
+
+3
+.
+torchtune
+also ships built-in dataset adapters for common post-training schemas such as chat, instruct, multimodal chat, preference (DPO), and text completion, listed in
+Table
+
+6
+, so user-curated datasets can be plugged in by selecting the matching adapter rather than writing custom collation code.
+
+Other supported workflows.
+
+Beyond the
+SFT
+,
+DPO
+, and
+GRPO
+recipes that this paper benchmarks, the same component model is also used to support
+multimodal
+fine-tuning (early- and deep-fusion vision-language models such as Llama 3.2-Vision),
+knowledge distillation
+with dedicated KD losses, and
+quantization-aware training
+via TorchAO
+(
+Or et al. 2025
+)
+.
+
+3.3
+Training Recipes
+
+The recipe system is inspired by the Hydra configuration framework
+(
+Yadan 2019
+)
+: each recipe implements a training procedure (e.g. SFT, DPO, GRPO) and is parameterized by a YAML configuration. A representative default configuration for full single-device fine-tuning of Llama 3.1 8B is shown in
+Appendix
+
+D
+.
+
+Each block (model, dataset, optimizer, loss, logging) is independently swappable; an ablation that replaces
+LinearCrossEntropyLoss
+with the standard CE, or
+PagedAdamW8bit
+with
+torch.optim.AdamW
+, requires editing one line and changes nothing else in the recipe. Command-line overrides (e.g.
+compile=True
+) compose with the YAML for sweep-style experimentation.
+
+4
+Implementation
+
+4.1
+In-backward optimizer fusion
+
+Motivation.
+
+Conventional optimizers for LLM training follow a two-phase procedure: gradients are first accumulated and stored for all parameters, and then consumed in a separate optimizer step. This requires a full gradient buffer
+G_{t}=\{\nabla_{\theta_{i}}\mathcal{L}\}
+to remain in memory until the optimizer update is completed, adding significant memory overhead in addition to activations and optimizer states.
+
+Design.
+
+torchtune
+introduces
+in-backward optimizer fusion
+, in which the optimizer update is performed
+as part of the backward pass
+. When the gradient for a parameter
+\theta_{i}
+becomes available, it is immediately consumed by the optimizer (e.g., AdamW) to update both its state
+(m_{i},v_{i})
+and the parameter value. The gradient can then be released without being retained for a global step. This design reduces the lifetime of gradient tensors from an entire backward pass to a single update site.
+
+Implementation.
+
+Concretely,
+torchtune
+’s
+OptimizerInBackward
+wrapper instantiates one optimizer object per parameter and registers a
+register_post_accumulate_grad_hook
+on each parameter that calls
+step()
+and
+zero_grad()
+as soon as the gradient is finalized. Per-parameter optimizer state is preserved separately and reassembled in the wrapper’s
+state_dict
+for checkpointing. Under one optimizer update per backward pass (
+K{=}1
+), the resulting parameter trajectory is bitwise identical to standard AdamW: the per-parameter updates commute because each
+\theta_{i}
+has its own state
+(m_{i},v_{i})
+with no cross-parameter dependency in AdamW’s update rule. Building the optimizer step into the backward pass is itself not new at the PyTorch primitive level; our contribution is integrating it into an LLM post-training recipe and characterizing its memory and throughput effects across single-GPU and multi-GPU 70B regimes (§
+5.1
+).
+
+Benefits.
+
+The fused strategy provides two main advantages:
+
+•
+
+Memory efficiency:
+peak gradient memory is reduced because gradients are consumed and discarded immediately. In our experiments this is the difference between OOM and a feasible run for Llama 3.3 70B on 8 H100s.
+
+•
+
+Computation overlap:
+part of the optimizer workload is overlapped with backpropagation, which can yield modest throughput gains.
+
+Limitations.
+
+•
+
+Gradient accumulation:
+the method assumes one optimizer update per backward pass. When gradients must be accumulated over
+K>1
+micro-batches, partial updates would be applied prematurely; benchmarks therefore compensate by raising the per-step batch size.
+
+•
+
+Distributed training:
+the wrapper composes naturally with FSDP2 because each rank holds the relevant per-parameter shard, but it requires care to combine with optimizer-state-sharded ZeRO-style
+(
+Rasley et al. 2020
+)
+schemes that themselves assume a global step.
+
+4.2
+Linear Cross-Entropy loss
+
+Motivation and design.
+
+The final cross-entropy step in LLM training is a frequent peak-memory hotspot: materializing logits of shape
+[B,S,V]
+can dominate memory for large vocabularies. Following the motivation of Cut Cross-Entropy
+(
+Wijmans et al. 2025
+)
+,
+torchtune
+’s
+LinearCrossEntropyLoss
+fuses the final output projection with the cross-entropy computation, masks ignored tokens before projection, and processes hidden states in chunks so that the dense
+[B,S,V]
+tensor is never materialized.
+
+Composition and effect.
+
+Under tensor parallelism, the loss composes with PyTorch’s loss-parallel context by sharding the output projection over the vocabulary dimension (§
+5
+). In our sweeps, LCE is not usually the dominant throughput lever, but it reliably reduces peak memory during loss computation and helps larger configurations compose with compilation and
+Optim Bwd
+(§
+5.1
+).
+
+5
+Parallelism
+
+torchtune
+leverages PyTorch’s newer DTensor API for distributed training, allowing seamless integration of multiple parallelism setups.
+
+Data parallelism
+uses the
+FSDPv2
+APIs
+(
+Zhao et al. 2023
+)
+. The data parallelism involves a 2D mesh, supporting data parallel replicates in addition to sharding, for maximizing use of high-bandwidth intra-node communication while reducing inter-node communication.
+
+For
+tensor parallelism
+,
+torchtune
+specifies tensor and sequence parallel plans for key model architectures, as well as a custom
+expert parallel
+plan for mixture of expert models. This allows efficient parallelisation of models too large to train only with data parallelism.
+
+To reduce the peak memory usage most commonly found in the logit and softmax tensors during cross-entropy loss calculation,
+torchtune
+utilises PyTorch’s loss parallel context manager, sharding the output features over the vocab dimension across the tensor parallelism mesh. This helps to avoid materializing full logits and helps to shard both memory and computation over the vocabulary dim. In addition to the custom linear cross entropy implementation, this allows training of models with very large vocabularies on inputs with long contexts.
+
+Beyond the classical parallelism types,
+torchtune
+includes context parallelism via Ring Attention
+(
+Liu et al. 2023
+)
+. Context parallelism in
+torchtune
+is analyzed in Appendix A.
+
+5.1
+Performance Benchmarks
+
+Qwen3 32B
+
+Llama 3.3 70B
+
+Memory
+
+Tok/s
+
+Memory
+
+Tok/s
+
+torchtune
+
+67.78
+
+465.79
+
+OOM
+
+OOM
+
++ AC
+
+42.93
+
+405.95
+
+74.75
+
+122.55
+
++ LCE
+
+38.43
+
+398.56
+
+OOM
+
+OOM
+
++ Compile
+a
+
+44.17
+
+433.12
+
+75.22
+
+128.57
+
++ Optim Bwd
+
+60.41
+
+581.63
+
+74.89
+
+352.11
+
+Axolotl
+
+40.9
+
+218
+
+OOM
+
+OOM
+
+a
+
+For Llama 3.3 we do not compile the optimizer step.
+
+Table 1:
+Single-node memory (GB/GPU) and throughput (tokens/s/GPU) for Qwen3 32B and Llama 3.3 70B on
+1{\times}8
+H100s, FSDP2 with tensor, data, and loss parallelism enabled by default; Alpaca, sequence length 2048, micro-batch size 2 (16 with
+Optim Bwd
+).
+
+In terms of performance, we compared
+torchtune
+with Axolotl and Unsloth. We perform multiple runs enabling sequentially the optimizations introduced by
+torchtune
+. To evaluate the diverse training settings we perform two types of training:
+
+1.
+
+Single Device
+: Small models are trained on a single H100 GPU to test the ideal training conditions without risking bottlenecks introduced by interconnection. For this run we evaluate both full weight training and Low Rank Adaptation (LoRA).
+
+2.
+
+Multi Device
+: Larger models up to 70b parameters are trained using FSDP on 8 H100 GPUs on a single node. This allows us to evaluate the impact of interconnection and algorithmic efficiency of tensor parallel implementations.
+
+For all training jobs except the preference optimization jobs we use the Alpaca dataset, a sequence length of 2048, micro batch size of 2, gradient accumulation of 8, and use the default AdamW torch optimizer. In case of the DPO post-training we use helpful subset of the Anthropic’s helpful/harmless RLHF data. The only exceptions are runs which require optimizer in backward. In this case we set gradient accumulation to 1, compensating it with the batch size of 16. For LoRA runs we use
+\alpha=16
+and
+r=16
+.
+
+Single device runs are executed on a server with 8 NVIDIA H100 GPUs, for fairness we always use device 0. To demonstrate the impact of each optimization introduced in
+torchtune
+, we enable sequentially each one of them and observe the compounded effect as shown in
+Table
+
+2
+. For LoRA the
+torchtune
+run already has all the optimizations enabled, we also use the AdamW 8bits optimizer from bitsandbytes with Axolotl.
+
+Table 2:
+Single-GPU (1
+\times
+H100) full-weight and LoRA ablations on Qwen3
+(
+Qwen Team 2025
+)
+0.6B–8B; Alpaca, sequence length 2048, micro-batch size 2 (16 with
+Optim Bwd
+); LoRA
+r{=}16
+,
+\alpha{=}16
+. Memory in GB; throughput in tokens/s/GPU.
+
+Qwen3 0.6B
+
+Qwen3 1.7B
+
+Qwen3 4B
+
+Qwen3 8B
+
+Full weight
+
+Memory
+
+Tok/s
+
+Memory
+
+Tok/s
+
+Memory
+
+Tok/s
+
+Memory
+
+Tok/s
+
+torchtune
+
+8.60
+
+5213
+
+18.48
+
+8071
+
+31.52
+
+2801
+
+OOM
+
+OOM
+
++ LCE
+
+8.41
+
+5454
+
+19.49
+
+7806
+
+31
+
+3099
+
+OOM
+
+OOM
+
++ Compile
+
+6.96
+
+7872
+
+15.2
+
+9621
+
+31
+
+3755
+
+OOM
+
+OOM
+
++ AC
+
+5.47
+
+4836
+
+13.95
+
+7568
+
+30
+
+2983
+
+64.04
+
+3037
+
++ Optim Bwd
+
+6.1
+
+20384
+
+11.65
+
+6743
+
+24.37
+
+2523
+
+51.79
+
+3773
+
++ AdamW8Bit
+
+3.67
+
+15369
+
+4.92
+
+3873
+
+9.50
+
+1366
+
+31.07
+
+3066
+
+Axolotl
+
+8.63
+
+3300
+
+18.4
+
+3295
+
+41.1
+
+2691
+
+76.6
+
+1903
+
+LoRA
+
+Memory
+
+Tok/s
+
+Memory
+
+Tok/s
+
+Memory
+
+Tok/s
+
+Memory
+
+Tok/s
+
+torchtune
+
+2.6
+
+3292
+
+4.6
+
+3610
+
+9.3
+
+2616
+
+17.2
+
+2745
+
+Axolotl
+
+6.2
+
+1973
+
+9.4
+
+2233
+
+17.7
+
+1605
+
+27.9
+
+1609
+
+Unsloth
+
+2.3
+
+2502
+
+4.4
+
+3284
+
+8.9
+
+1826
+
+16.8
+
+1836
+
+Qwen3 0.6B
+
+Qwen3 1.7B
+
+Qwen3 4B
+
+Qwen3 8B
+
+Full weight
+
+Memory
+
+Tok/s
+
+Memory
+
+Tok/s
+
+Memory
+
+Tok/s
+
+Memory
+
+Tok/s
+
+torchtune
+
+5.47
+
+4,836
+
+13.95
+
+7,568
+
+30
+
+2,983
+
+64.04
+
+3,037
+
++ Packed 2048
+
+11.79
+
+57,031
+
+15.88
+
+29,466
+
+33.92
+
+13,538
+
+76.41
+
+8094
+
++ Packed 4096
+
+18.37
+
+85,924
+
+17.81
+
+34,343
+
+36.15
+
+15,272
+
+OOM
+
+OOM
+
+Table 3:
+Separate analysis of sequence packing on Qwen3 (single GPU). Memory in GB; throughput in tokens/s/GPU.
+
+Qwen3 8B
+
+Llama 3.1 8B
+
+Full weight
+
+Memory
+
+Tok/s
+
+Memory
+
+Tok/s
+
+DPO (torchtune)
+
+91.02
+
+782.2
+
+81.82
+
+745.0
+
+DPO (axolotl)
+
+OOM
+
+-
+
+OOM
+
+-
+
+DPO (axolotl + 8-bit)
+
+69.66
+
+185.6
+
+67.64
+
+249.2
+
+Table 4:
+Comparison of training speed and memory usage between
+Axolotl
+and
+torchtune
+on DPO. Experiments were conducted on single GH200 with 96GB HBM3 vRAM.
+torchtune
+was able to fit the training in memory with the standard AdamW optimizer. Still, due to out-of-memory errors with
+Axolotl
+, we also report runs with the 8-bit optimizer from bitsandbytes
+(
+Dettmers et al. 2022
+)
+.
+
+6
+Analysis of applied optimizations
+
+torchtune
+exposes a set of composable training-time optimizations that primarily target (i) peak activation memory, (ii) optimizer-state memory, and (iii) kernel/graph efficiency. We evaluate these flags in a controlled single-GPU setting across Qwen3 model sizes (
+Table
+
+2
+) and for larger-scale configurations under parallelism (
+Table
+
+1
+). Overall, the results illustrate a consistent trade-off surface: techniques that reduce memory pressure often introduce recomputation or lower arithmetic intensity, while compiler- and kernel-level optimizations primarily improve throughput and can sometimes reduce memory indirectly by fusing operations and eliminating intermediates.
+
+Across Qwen3-0.6B/1.7B/4B, enabling
+compile
+
+(
+Ansel et al. 2024
+)
+yields the most reliable throughput improvements, and in several cases also reduces peak memory relative to the baseline (
+Table
+
+2
+). For example, Qwen3-0.6B improves from 5.2k
+\rightarrow
+7.9k tok/s while reducing peak memory from 8.6
+\rightarrow
+7.0 GB, and Qwen3-1.7B reaches its highest throughput under
+compile
+(9.6k tok/s). In contrast,
+LCE
+(chunked loss computation) provides comparatively modest and model-dependent gains: it can slightly improve throughput or stability for some settings, but it is not a dominant driver compared to compilation or activation rematerialization, while it can be useful for smoothing peak memory during the loss calculation step. Activation checkpointing (
+AC
+) is a dependable memory lever: it reduces peak memory across the board (notably enabling Qwen3-8B to run where the baseline configuration OOMs), at the expected cost of lower throughput.
+
+For larger models where optimizer and gradient-state memory become prominent, two additional strategies materially expand feasibility (
+Table
+
+1
+). First, performing the optimizer step during the backward pass (
+Optim Bwd
+) can significantly improve throughput in memory-constrained regimes by reducing the lifetime of gradient buffers (while also imposing constraints such as limited compatibility with gradient accumulation and lack of improvement in cases when the gradients might be small: FSDP runs or models with few parameters). Second, low-bit optimizer state (
+AdamW8Bit
+) yields the largest absolute memory reductions in the Qwen3 sweep (e.g., Qwen3-1.7B: 11.7
+\rightarrow
+4.9 GB) but may reduce throughput depending on the configuration. Notably, for Llama 3.3 70B the baseline configuration OOMs, while combinations that include
+AC
+enable training and
+Optim Bwd
+further increases throughput (
+Table
+
+1
+).
+
+Finally, we report sequence packing as a separate axis of analysis (
+Table
+
+3
+), since it changes effective token utilization and interacts with the memory/throughput balance.
+
+7
+Asynchronous GRPO
+
+GRPO
+
+(
+Shao et al. 2024
+)
+optimizes a policy using scalar rewards computed over groups of sampled generations.
+torchtune
+provides two distributed full fine-tuning recipes:
+grpo_full_finetune_distributed
+(synchronous, closely following the original algorithm) and
+async_grpo_full_finetune_distributed
+, which overlaps generation and optimization to increase end-to-end accelerator utilization.
+
+Motivation.
+
+In synchronous
+GRPO
+, decoding and optimization are serialized on the same set of devices, which can lead to under-utilization whenever one phase is significantly more expensive than the other (typically decoding for long rollouts). Asynchronous
+GRPO
+mitigates this by decoupling rollout generation from policy updates and executing both phases concurrently.
+
+Scheduling regimes.
+
+Figure
+2
+summarizes three scheduling regimes supported by our implementation: (i) a synchronous baseline, (ii) an on-policy asynchronous pipeline with periodic synchronization, and (iii) a controlled off-policy variant that permits bounded policy lag in exchange for higher utilization.
+
+time
+generate
+shard
+train
+shard
+generate
+shard
+train
+
+(a)
+Synchronous alternation of generation and training.
+
+time
+generator
+trainer
+generate
+generate
+generate
+train
+sync
+train
+sync
+
+(b)
+On-policy asynchronous overlap between decoding and optimization.
+
+time
+generator
+trainer
+generate
+generate
+generate
+train
+sync
+train
+sync
+train
+sync
+
+(c)
+Controlled off-policy rollouts, trading policy lag for smoother training throughput.
+
+Figure 2:
+Timeline schematics for
+GRPO
+execution. “sync” denotes a parameter refresh from trainer to generator; “shard” denotes sharded-state transitions associated with distributed training.
+
+System architecture and design choices.
+
+The asynchronous recipe is implemented as a set of Ray-coordinated workers
+(
+Moritz et al. 2018
+)
+, with a deliberate separation between (i) the GRPO algorithmic computation and (ii) orchestration and systems concerns.
+
+Orchestration as a recipe.
+
+We implement the distributed system as an orchestration recipe (
+OrchestrationRecipeInterface
+) whose responsibility is to instantiate and wire reusable worker roles (generation, post-processing, training, logging). This keeps GRPO math encapsulated inside existing
+torchtune
+workers and makes it straightforward to change execution models (synchronous vs.
+async) without rewriting the learning algorithm.
+
+Decoupling via a queue + replay buffer.
+
+Rollouts are moved through two explicit data structures: a bounded Ray
+Queue
+used for low-latency handoff and backpressure control between rollout workers and post-processing workers, and a
+torchrl
+
+RayReplayBuffer
+
+(
+Bou et al. 2024
+)
+used to store processed trajectories for training. The queue controls burstiness; the replay buffer provides a uniform sampling API that naturally supports controlled policy lag.
+
+Worker roles.
+
+•
+
+Inference (rollout workers):
+vLLM-backed collectors (
+SyncLLMCollector
+) sample grouped responses and token-level log-probabilities and push raw rollouts into the shared queue.
+
+•
+
+Post-processing (reference workers):
+
+PostProcessingWorker
+actors pop rollouts, compute GRPO-specific training fields (e.g., rewards, masks, and per-trajectory metadata), and write processed trajectories to the replay buffer.
+
+•
+
+Training (actor workers):
+distributed
+TrainingWorker
+actors consume mini-batches from the replay buffer and apply policy updates.
+
+Weight synchronization.
+
+Training runs under PyTorch distributed (FSDP), while generation runs in vLLM
+(
+Kwon et al. 2023
+)
+with optional tensor parallelism. We connect these worlds through a dedicated vLLM parameter server that the training workers can publish to, and which the rollout workers poll via lightweight weight-update receivers. This design refreshes decoding weights online without restarting collectors.
+
+Observability and concurrency knobs.
+
+To make asynchronous behavior debuggable, we inject a single
+MetricLoggerWorker
+across all roles for consistent reporting of rollout latency, queue/backpressure behavior, replay-buffer throughput, and reward statistics; and we expose key concurrency/resource choices (e.g., queue max size, replay-buffer capacity, and Ray
+max_concurrency
+) in configuration.
+
+End-to-end flow.
+
+At runtime, (i) the generator produces grouped rollouts (prompt, sampled responses, and associated log-probabilities), (ii) the trainer augments trajectories with reward and optimization-specific fields (reference log-probabilities, advantages, and masks), and (iii) the trainer updates the policy and triggers parameter synchronization at a configurable cadence.
+
+Scope of evaluation.
+
+We present asynchronous GRPO as a
+system-design contribution
+: the recipe separates GRPO computation from orchestration concerns (queueing, replay, weight synchronization) while exposing both on-policy and bounded-lag execution in configuration. We leave head-to-head reward and throughput comparisons to future work, since they are sensitive to reward design, sampling stochasticity, and policy-lag tuning. The recipe (
+async_grpo_full_finetune_distributed
+) is included in the released code.
+
+8
+Conclusion
+
+We presented
+torchtune
+, a PyTorch-native library for the post-training lifecycle of
+LLMs
+that prioritizes modularity, transparency, and hardware efficiency. By organizing post-training around composable model builders, data pipelines, recipes, and optimization choices,
+torchtune
+enables rapid experimentation without forcing users into rigid abstractions. Across the supported model and dataset interfaces (
+Tables
+
+5
+and
+6
+), the library provides practical defaults while remaining extensible for custom architectures and data formats.
+
+Our evaluation shows that
+torchtune
+can achieve competitive or superior efficiency compared with widely used post-training frameworks while maintaining an implementation that is easy to inspect and adapt. The experiments also show that the optimization choices are complementary: compilation improves throughput in many small and mid-sized settings, memory-oriented techniques often determine whether larger configurations are feasible, and linear cross-entropy reduces peak memory during loss computation. Together, these results position
+torchtune
+as a practical foundation for reproducible post-training studies that balance clarity, extensibility, and performance.
+
+Appendix A
+Context parallel
+
+torchtune
+’s context-parallel mechanism makes it possible to run post-training on datasets that require context windows of more than 1 million tokens. To evaluate our context-parallel integration, we created a synthetic dataset by concatenating Alpaca samples, with most examples reaching approximately 1M tokens. The dataset-generation code is provided in the supplementary material. In this setup, the
+Llama 3.2
+model was post-trained on the synthetic dataset with a batch size of 1 on an 8
+\times
+H100 cluster. Peak memory allocation occurred during loss computation, reaching 79.2 GB of VRAM per GPU. The average throughput was 6,720 tokens/s. During the experiment, the following memory trace was logged, showing that the peak memory is represented by the largest of these communication-phase allocations, which remains stable across ring iterations and does not grow with sequence length beyond the local chunk size.
+
+Figure 3:
+Context Parallel memory trace
+
+Appendix B
+Supported Models & Datasets
+
+Table 5:
+Supported foundation model families and available parameter scales (B = billions of parameters; E = experts for MoE models).
+
+Model
+
+Sizes
+
+Llama 4
+
+Scout (17B
+\times
+16E)
+
+Llama 3.3
+
+70B
+
+Llama 3.2-Vision
+
+11B, 90B
+
+Llama 3.2
+
+1B, 3B
+
+Llama 3.1
+
+8B, 70B, 405B
+
+Mistral
+
+7B
+
+Gemma 2
+
+2B, 9B, 27B
+
+Microsoft Phi-4
+
+14B
+
+Microsoft Phi-3
+
+Mini
+
+Qwen 3
+
+0.6B, 1.7B, 4B, 8B, 14B, 30B-A3B, 32B, 235B-A22B
+
+Qwen 2.5
+
+0.5B, 1.5B, 3B, 7B, 14B, 32B, 72B
+
+Qwen 2
+
+0.5B, 1.5B, 7B
+
+Table 6:
+Supported dataset types and built-in preset dataset builders in torchtune.
+
+Type
+
+Entry point
+
+Schema + built-in presets
+
+Chat
+
+chat_dataset
+
+Conversation (
+conversations/messages
+):
+slimorca_dataset
+.
+
+Instruct
+
+instruct_dataset
+
+Input/output pairs:
+alpaca_dataset
+,
+grammar_dataset
+,
+samsum_dataset
+.
+
+Multimodal
+
+multimodal_chat_dataset
+
+Chat + image-path:
+the_cauldron_dataset
+,
+llava_instruct_dataset
+.
+
+Preference (DPO)
+
+preference_dataset
+
+Chosen/rejected:
+hh_rlhf_helpful_dataset
+,
+stack_exchange_paired_dataset
+.
+
+Text completion
+
+text_completion_dataset
+
+Single text column:
+cnn_dailymail_articles_dataset
+.
+
+Appendix C
+Component and builder examples
+
+The excerpts below illustrate the component and builder pattern discussed in
+Section
+
+3.1
+. The decoder receives already constructed modules, the attention block receives externally supplied projections, and builders assemble the concrete module tree for a model family.
+
+⬇
+
+class
+
+TransformerDecoder
+(
+nn
+.
+Module
+):
+
+def
+
+__init__
+(
+
+self
+,
+
+*,
+
+tok_embeddings
+,
+
+layers
+,
+
+max_seq_len
+,
+
+…
+
+)
+
+->
+
+None
+:
+
+⬇
+
+class
+
+MultiHeadAttention
+(
+nn
+.
+Module
+):
+
+def
+
+__init__
+(
+
+self
+,
+
+*,
+
+embed_dim
+:
+
+int
+,
+
+num_heads
+:
+
+int
+,
+
+num_kv_heads
+:
+
+int
+,
+
+head_dim
+:
+
+int
+,
+
+q_proj
+:
+
+nn
+.
+Module
+,
+
+k_proj
+:
+
+nn
+.
+Module
+,
+
+v_proj
+:
+
+nn
+.
+Module
+,
+
+output_proj
+:
+
+nn
+.
+Module
+,
+
+…
+
+)
+
+->
+
+None
+:
+
+A builder exposes the architectural hyperparameters and assembles the layer graph explicitly.
+
+⬇
+
+def
+
+llama3
+(
+
+vocab_size
+:
+
+int
+,
+
+num_layers
+:
+
+int
+,
+
+num_heads
+:
+
+int
+,
+
+num_kv_heads
+:
+
+int
+,
+
+embed_dim
+:
+
+int
+,
+
+max_seq_len
+:
+
+int
+,
+
+attn_dropout
+:
+
+float
+
+=
+
+0.0,
+
+rope_base
+:
+
+int
+
+=
+
+500
+_000
+,
+
+intermediate_dim
+:
+
+Optional
+[
+int
+]
+
+=
+
+None
+,
+
+norm_eps
+:
+
+float
+
+=
+
+1
+e
+-5,
+
+)
+
+->
+
+TransformerDecoder
+:
+
+⬇
+
+layers
+
+=
+
+nn
+.
+ModuleList
+()
+
+for
+
+_
+
+in
+
+range
+(
+num_layers
+):
+
+self_attn
+
+=
+
+MultiHeadAttention
+(
+
+embed_dim
+=
+embed_dim
+,
+
+num_heads
+=
+num_heads
+,
+
+num_kv_heads
+=
+num_kv_heads
+,
+
+head_dim
+=
+head_dim
+,
+
+q_proj
+=
+nn
+.
+Linear
+(…),
+
+k_proj
+=
+nn
+.
+Linear
+(…),
+
+v_proj
+=
+nn
+.
+Linear
+(…),
+
+output_proj
+=
+nn
+.
+Linear
+(…),
+
+pos_embeddings
+=
+rope
+,
+
+max_seq_len
+=
+max_seq_len
+,
+
+attn_dropout
+=
+attn_dropout
+,
+
+)
+
+mlp
+
+=
+
+llama3_mlp
+(
+dim
+=
+embed_dim
+,
+
+hidden_dim
+=
+hidden_dim
+)
+
+layer
+
+=
+
+TransformerSelfAttentionLayer
+(
+
+attn
+=
+self_attn
+,
+
+mlp
+=
+mlp
+,
+
+sa_norm
+=
+RMSNorm
+(…),
+
+mlp_norm
+=
+RMSNorm
+(…),
+
+)
+
+layers
+.
+append
+(
+layer
+)
+
+⬇
+
+return
+
+TransformerDecoder
+(
+
+tok_embeddings
+=
+tok_embeddings
+,
+
+layers
+=
+layers
+,
+
+max_seq_len
+=
+max_seq_len
+,
+
+num_heads
+=
+num_heads
+,
+
+head_dim
+=
+head_dim
+,
+
+norm
+=
+RMSNorm
+(
+embed_dim
+,
+
+eps
+=
+norm_eps
+),
+
+output
+=
+output_proj
+,
+
+)
+
+The same pattern supports parameter-efficient fine-tuning. For LoRA
+(
+Hu et al. 2022
+)
+, the builder substitutes low-rank projection modules while leaving the shared attention implementation unchanged.
+
+⬇
+
+self_attn
+
+=
+
+MultiHeadAttention
+(
+
+embed_dim
+=
+embed_dim
+,
+
+num_heads
+=
+num_heads
+,
+
+num_kv_heads
+=
+num_kv_heads
+,
+
+head_dim
+=
+head_dim
+,
+
+q_proj
+=
+LoRALinear
+(
+embed_dim
+,
+
+…),
+
+k_proj
+=
+LoRALinear
+(
+embed_dim
+,
+
+…),
+
+v_proj
+=
+LoRALinear
+(
+embed_dim
+,
+
+…),
+
+output_proj
+=
+nn
+.
+Linear
+(
+embed_dim
+,
+
+…),
+
+…
+
+)
+
+Appendix D
+Example config
+
+The excerpt below shows the structure of a typical
+torchtune
+recipe configuration. Each top-level block names either a component to instantiate or a runtime policy to apply, and the same fields can be replaced in YAML or overridden from the command line for ablations and sweeps.
+
+⬇
+
+model
+:
+
+_component_
+:
+
+…
+
+checkpointer
+:
+
+…
+
+resume_from_checkpoint
+:
+
+False
+
+tokenizer
+:
+
+_component_
+:
+
+…
+
+path
+:
+
+…
+
+max_seq_len
+:
+
+null
+
+dataset
+:
+
+_component_
+:
+
+…
+
+packed
+:
+
+False
+
+split
+:
+
+train
+[:95%]
+
+seed
+:
+
+null
+
+shuffle
+:
+
+True
+
+run_val_every_n_steps
+:
+
+null
+
+dataset_val
+:
+
+_component_
+:
+
+…
+
+split
+:
+
+train
+[95%:]
+
+batch_size_val
+:
+
+$
+{
+batch_size
+}
+
+batch_size
+:
+
+2
+
+epochs
+:
+
+1
+
+optimizer
+:
+
+_component_
+:
+
+torch
+.
+optim
+.
+AdamW
+
+fused
+:
+
+True
+
+lr
+:
+
+2
+e
+-5
+
+loss
+:
+
+_component_
+:
+
+…
+
+max_steps_per_epoch
+:
+
+null
+
+gradient_accumulation_steps
+:
+
+1
+
+clip_grad_norm
+:
+
+null
+
+compile
+:
+
+False
+
+optimizer_in_bwd
+:
+
+False
+
+device
+:
+
+cuda
+
+enable_activation_checkpointing
+:
+
+True
+
+enable_activation_offloading
+:
+
+False
+
+dtype
+:
+
+bf16
+
+metric_logger
+:
+
+_component_
+:
+
+…
+
+log_dir
+:
+
+$
+{
+output_dir
+}/
+logs
+
+log_every_n_steps
+:
+
+1
+
+log_peak_memory_stats
+:
+
+True
+
+log_level
+:
+
+INFO
+
+profiler
+:
+
+_component_
+:
+
+…
+
+enabled
+:
+
+False
+
+…
+

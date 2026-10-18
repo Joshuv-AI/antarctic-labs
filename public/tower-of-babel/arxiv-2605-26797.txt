@@ -1,0 +1,2006 @@
+Latent Recurrent Transformer: Architecture Exploration, Training Strategies, and Scaling Behavior
+Zeyi Huang, Xuehai He, LiLiang Ren, Yiping Wang, Baolin Peng, Hao Cheng, Shuohang Wang, Pengcheng He, Jianfeng Gao, Yong Jae Lee, Yelong Shen, Microsoft University of Wisconsin-Madison University of Washington
+
+Abstract
+We study Latent Recurrent Transformer (LRT), a lightweight augmentation of autoregressive transformers that reuses a high-level source-layer hidden state from the previous token as recurrent memory for the next token. Because this source state is already computed during ordinary decoding, LRT adds a cross-layer recurrent latent pathway across positions without inserting pause tokens or extra depth loops, and the standard attention mechanism and KV-cache interface are preserved. To pretrain this recurrence at scale without sequentially unrolling the transformer, we introduce interleaved parallel training : a single full-sequence initialization forward builds a shared buffer, then disjoint position subsets are refined in parallel and written back, so all tokens receive recurrent-memory-aware supervision at roughly 2 × 2\times baseline compute. Across nanochat-style backbones and a wide range of tokens-per-parameter budgets, LRT improves both language-modeling loss and in-context learning under matched effective compute while adding as little as 0.3 % 0.3\% parameters.
+
+
+
+1
+Introduction
+
+†
+†
+
+Work done during Zeyi’s internship at Microsoft. Correspondence to {zeyihuang,yongjaelee}@cs.wisc.edu and
+{xuehaihe,yeshe}@microsoft.com.
+
+Autoregressive transformers are the standard architecture for language modeling
+(
+40
+;
+32
+;
+3
+)
+, but each generated token is still produced by a fixed-depth feedforward computation. A natural way to increase computation is to introduce recurrence. Existing approaches often add recurrence either in depth, by repeatedly applying blocks to the same token
+(
+7
+;
+11
+)
+, or in time, by inserting pause or thinking tokens before emitting each real token
+(
+12
+)
+. While these methods can enable iterative refinement, they also increase inference cost through extra block applications or additional decoding steps.
+
+We observe that autoregressive decoding already computes high-level recurrent signals for free: the hidden states of the previous token. Upper-layer states are trained toward next-token prediction and can provide useful latent context for processing the next position. This motivates a simple question: can we reuse an already-computed high-level representation from the previous tokens as recurrent memory, without adding extra decoding steps?
+
+We study
+Latent Recurrent Transformer
+(LRT), a lightweight augmentation of standard autoregressive transformers. At token position
+t
+, LRT reuses a source-layer hidden state from the previous position as recurrent memory,
+\mathbf{m}_{t-1}=\mathbf{h}^{\ell_{\mathrm{src}}}_{t-1}
+, where
+\ell_{\mathrm{src}}
+is the source layer. It processes the usual token input with the standard KV cache, while injecting
+\mathbf{m}_{t-1}
+into transformer layers through lightweight mechanisms such as
+KV Projection
+and
+Residual Injection
+. LRT preserves the decoder-only backbone, attention mechanism, feedforward layers, and KV-cache interface; the memory acts as an auxiliary latent pathway across adjacent autoregressive steps.
+
+This latent pathway gives LRT a cross-layer route that standard causal attention lacks. In a KV-cached transformer, layer
+\ell
+at position
+t
+can attend to previous tokens only through cached states from the same layer
+\ell
+; early layers therefore cannot directly use higher-layer representations of previous tokens. By injecting the source-layer memory into the current token’s layers, LRT lets early computation at position
+t
+access higher-level information already computed for position
+t-1
+, while still using the standard KV cache and one normal forward pass per generated token.
+
+The main challenge is pretraining. At inference time, LRT naturally forms a token-level recurrent chain,
+\mathbf{m}_{1}\rightarrow\mathbf{m}_{2}\rightarrow\cdots\rightarrow\mathbf{m}_{T}
+. Exactly reproducing this chain during training would require sequentially unrolling the transformer over the full sequence, destroying the parallelism that makes transformer pretraining efficient. Chunked training preserves parallelism within chunks, similar to segment- or block-level recurrent computation
+(
+5
+;
+17
+;
+37
+)
+, but recurrent memory is only propagated across chunk boundaries.
+
+We therefore introduce
+interleaved parallel training
+. It first builds a full-sequence buffer with an initialization pass, then refines disjoint interleaved subsets of positions and writes their updated states back to the buffer. Later subsets can consume memory updated by earlier subsets, while every position receives a recurrent-memory-aware refinement step under a fixed training budget. Compared with chunked training, this gives a finer approximation to token-level recurrence while retaining parallel computation within each subset.
+
+Empirically, LRT shifts scaling curves toward lower bits per byte (BPB)
+(
+22
+)
+and higher CORE
+(
+22
+)
+under baseline-equivalent training compute across model sizes and tokens-per-parameter budgets. The default shared-projection variant adds only
+0.3\%
+parameters. Ablations show that KV Projection and Residual Injection are complementary, and that an upper-middle source layer can provide stronger recurrent memory than the final layer, suggesting that useful memory should be high-level but not overly specialized for logits.
+
+In summary, we make three contributions. First, we propose Latent Recurrent Transformer, a lightweight recurrent extension of autoregressive transformers that reuses a high-level source-layer hidden state from the previous token as memory for the next position, without adding extra decoding steps in its default form. Second, we introduce interleaved parallel training, a parallel approximation that refines disjoint token subsets to mimic token-level recurrence under a fixed training budget. Third, we show that LRT improves the compute–quality trade-off over matched-depth transformer baselines across model sizes and tokens-per-parameter budgets, with the default shared-projection variant adding only
+0.3\%
+parameters.
+
+Figure 1
+:
+
+Overview of Latent Recurrent Transformer (LRT).
+
+(a) Depth-recurrent methods
+increase computation by repeatedly applying model blocks to the same token before emitting an output.
+
+(b) Default LRT
+reuses a high-level source-layer hidden state from the previous token as recurrent memory for the next token, creating a cross-layer, cross-token latent recurrence without adding extra autoregressive decoding steps. Each generated token still uses one normal transformer forward pass.
+
+2
+Latent Recurrent Transformer Architecture
+
+Latent Recurrent Transformer (LRT) augments a standard autoregressive transformer with a lightweight recurrent memory across adjacent token positions. Let
+L
+be the number of transformer layers,
+d
+the hidden dimension, and
+\mathbf{h}^{\ell}_{t}\in\mathbb{R}^{d}
+the hidden state at position
+t
+after layer
+\ell
+. We choose a source layer
+\ell_{\mathrm{src}}
+and define the recurrent memory as
+\mathbf{m}_{t}=\mathbf{h}^{\ell_{\mathrm{src}}}_{t}
+. This memory is already computed during ordinary autoregressive decoding and can be reused when processing the next token without adding extra decoding steps.
+
+At position
+t
+, LRT processes the current token with the standard KV cache
+\mathcal{C}_{<t}
+while additionally injecting
+\mathbf{m}_{t-1}
+into the transformer:
+
+\mathbf{h}^{L}_{t},\mathbf{z}_{t},\mathbf{m}_{t},\mathcal{C}_{\leq t}=f_{\theta}\!\left(x_{t},\mathbf{m}_{t-1},\mathcal{C}_{<t}\right),
+
+(1)
+
+where
+\mathbf{z}_{t}
+are the next-token logits,
+\mathbf{m}_{t}=\mathbf{h}^{\ell_{\mathrm{src}}}_{t}
+is the updated recurrent memory, and
+\mathcal{C}_{\leq t}
+is the updated KV cache. At the first position,
+\mathbf{m}_{t-1}
+is initialized to zero.
+
+LRT adds a cross-token, cross-layer pathway that is not available in a standard KV-cached transformer. Standard causal attention lets layer
+\ell
+at position
+t
+attend to cached states from previous positions at the same layer; LRT lets target layers at position
+t
+access the source-layer memory from position
+t-1
+. Thus, even an intermediate source layer can provide high-level feedback to earlier layers of the next token. The standard attention mechanism and KV-cache interface are preserved: LRT adds no memory tokens and does not change the cache shape, but only changes how current-token layer inputs or key-value vectors are formed.
+
+Our default LRT combines two lightweight injection mechanisms:
+KV Projection
+, which injects memory through the attention key-value pathway, and
+Residual Injection
+, which adds memory to the residual stream. Architecture ablations in Section
+4.3
+show that the two pathways are complementary.
+
+2.1
+KV Projection
+
+KV Projection injects recurrent memory through the attention key-value pathway, giving the previous token’s source-layer representation a direct route into attention. For layer
+\ell
+, let
+\mathbf{x}^{(\ell)}_{t}\in\mathbb{R}^{d}
+be the layer input, and let
+\tilde{\mathbf{k}}^{(\ell)}_{\mathrm{local}}
+and
+\mathbf{v}^{(\ell)}_{\mathrm{local}}
+be the locally computed raw key and value before positional encoding. We project the recurrent memory into the layer’s key and value spaces:
+
+\tilde{\mathbf{k}}^{(\ell)}_{\mathrm{rec}}=W_{k,\mathrm{rec}}\mathbf{m}_{t-1},\quad\mathbf{v}^{(\ell)}_{\mathrm{rec}}=W_{v,\mathrm{rec}}\mathbf{m}_{t-1}.
+
+(2)
+
+Here
+n_{\mathrm{kv}}
+is the number of key-value heads and
+d_{\mathrm{head}}
+is the head dimension, so
+
+W_{k,\mathrm{rec}},W_{v,\mathrm{rec}}\in\mathbb{R}^{(n_{\mathrm{kv}}d_{\mathrm{head}})\times d}
+;
+the outputs are reshaped into
+n_{\mathrm{kv}}
+heads of dimension
+d_{\mathrm{head}}
+.
+
+We use input-dependent per-head gates to combine local and recurrent pathways:
+
+\mathbf{g}^{(\ell)}_{\mathrm{local},t},\mathbf{g}^{(\ell)}_{\mathrm{rec},t}=2\cdot\sigma\!\left(W^{(\ell)}_{g}\mathbf{x}^{(\ell)}_{t}\right),
+
+(3)
+
+where
+\sigma
+is sigmoid and
+W_{g}^{(\ell)}\in\mathbb{R}^{2n_{\mathrm{kv}}\times d}
+. The output is split into local and recurrent gates, broadcast over the head dimension, and initialized to the neutral value
+1
+by zero-initializing
+W_{g}^{(\ell)}
+.
+
+The local and recurrent keys and values are combined as
+
+\displaystyle\tilde{\mathbf{k}}^{(\ell)}_{t}
+
+\displaystyle=\mathbf{g}^{(\ell)}_{\mathrm{local},t}\odot\tilde{\mathbf{k}}^{(\ell)}_{\mathrm{local}}+\mathbf{g}^{(\ell)}_{\mathrm{rec},t}\odot\tilde{\mathbf{k}}^{(\ell)}_{\mathrm{rec}},\qquad\mathbf{v}^{(\ell)}_{t}=\mathbf{g}^{(\ell)}_{\mathrm{local},t}\odot\mathbf{v}^{(\ell)}_{\mathrm{local}}+\mathbf{g}^{(\ell)}_{\mathrm{rec},t}\odot\mathbf{v}^{(\ell)}_{\mathrm{rec}}.
+
+(4)
+
+The combined raw key follows the same QK normalization and RoPE pipeline as the standard key,
+
+\mathbf{k}^{(\ell)}_{t}=\mathrm{RoPE}_{t}(\mathrm{QKNorm}(\tilde{\mathbf{k}}^{(\ell)}_{t}))
+,
+so the recurrent key inherits the position-
+t
+encoding. The resulting keys and values have the same shape as standard attention KV tensors and use the usual KV-cache interface. We use additive composition; replacing local KV features with recurrent projections underperforms in Appendix
+C
+.
+
+2.2
+Residual Injection
+
+Residual Injection exposes each transformer block to recurrent memory through the residual stream. For block input
+\mathbf{x}^{(\ell)}_{t}
+, we form
+
+\bar{\mathbf{x}}^{(\ell)}_{t}=\alpha_{\ell}\mathbf{x}^{(\ell)}_{t}+\gamma_{\ell}\mathbf{m}_{t-1},
+
+(5)
+
+where
+\alpha_{\ell}
+is the same learnable residual scale used in the baseline block and is initialized to
+1.0
+, while
+\gamma_{\ell}
+is the LRT memory scale initialized to
+0.1
+. For the pre-norm backbone,
+\bar{\mathbf{x}}^{(\ell)}_{t}
+is used as the block input before RMSNorm, attention, and MLP computations.
+
+Residual Injection adds minimal overhead and gives every block direct access to the recurrent memory. Unlike KV Projection, it mixes memory into the general residual stream rather than giving it a dedicated attention pathway. We combine both mechanisms in the default LRT, which performs best in our architecture ablations.
+
+2.3
+Recurrent Inference and Overhead
+
+During autoregressive decoding, LRT stores the source-layer state
+
+\mathbf{m}_{t}=\mathbf{h}^{\ell_{\mathrm{src}}}_{t}
+after processing token
+t
+and reuses it for token
+t+1
+. Thus, LRT changes the recurrent state passed between decoding steps rather than adding pause tokens, recurrent-depth loops, or extra refinement forwards: each generated token still uses one normal transformer forward pass. The recurrent state adds one
+d
+-dimensional vector per sequence, and the default shared-projection variant adds about
+0.3\%
+parameters; the dominant computation remains the standard attention and MLP computation.
+
+Figure 2
+:
+
+Training approximations for LRT.
+
+(a) Interleaved parallel training
+first performs a full initialization pass to populate a sequence-level KV and recurrent-state buffer, then refines disjoint interleaved subsets of positions. Updated states are written back to the buffer, allowing later subsets to consume recurrent memory refined by earlier subsets.
+
+(b) Chunked Training
+processes contiguous chunks sequentially. Computation remains parallel within each chunk, but recurrent memory is propagated only across chunk boundaries, giving a coarser approximation to token-level recurrence. Blue boxes indicate recomputed positions, gray boxes indicate cached context, and orange arrows indicate recurrent memory or updated hidden states.
+
+3
+Training Latent Recurrent Transformer
+
+At inference time, LRT naturally forms a token-level recurrent chain: after processing token
+t
+, the model stores
+\mathbf{m}_{t}=\mathbf{h}^{\ell_{\mathrm{src}}}_{t}
+and reuses it for token
+t+1
+. Exact training would require sequentially unrolling this chain over the full sequence, since each token depends on the recurrent state produced by its predecessor. This resembles backpropagation through time
+(
+41
+)
+and would eliminate the parallelism that makes transformer pretraining efficient.
+
+We therefore seek a parallel approximation that gives each token a recurrent-memory-aware training signal. Figure
+2
+compares two strategies. Chunked training preserves parallelism within contiguous chunks but propagates memory only across chunk boundaries, giving a coarse approximation to token-level recurrence. We instead introduce
+interleaved parallel training
+, which builds a full-sequence buffer and refines disjoint token subsets so that later subsets can consume recurrent states updated by earlier ones.
+
+3.1
+Interleaved Parallel Training
+
+Interleaved parallel training uses one full-sequence initialization pass followed by sparse refinement over
+S
+disjoint subsets. We partition positions
+\{1,\dots,T\}
+into subsets
+\mathcal{I}_{1},\dots,\mathcal{I}_{S}
+. The initialization pass processes all positions in parallel and builds a buffer
+\mathcal{B}^{(0)}
+containing per-layer keys, values, and source-layer recurrent states. Then, for
+s=1,\dots,S
+, we recompute only positions in
+\mathcal{I}_{s}
+using the buffer
+\mathcal{B}^{(s-1)}
+, and write the refined states back to form
+\mathcal{B}^{(s)}
+.
+
+The write-back step lets later subsets read recurrent memory refined by earlier subsets, forming a sparse recurrent chain while keeping each subset forward parallel. Across all refinement steps, every position is recomputed once with recurrent memory from the shared buffer. Thus, in ideal token-compute terms, training costs approximately
+2\times
+a standard transformer update: one initialization pass plus one effective refinement pass.
+
+We use
+S=2
+by default with a strided partition, where subset
+\mathcal{I}_{s}
+contains positions
+s,s+S,s+2S,\ldots
+. The training objective averages the initialization loss and per-subset refinement losses:
+
+\mathcal{L}=\frac{1}{S+1}\left(\mathcal{L}_{\mathrm{init}}+\sum_{s=1}^{S}\mathcal{L}_{\mathcal{I}_{s}}\right),
+
+(6)
+
+where
+\mathcal{L}_{\mathrm{init}}
+is the full-sequence cross-entropy and
+\mathcal{L}_{\mathcal{I}_{s}}
+is the cross-entropy over positions in
+\mathcal{I}_{s}
+. The initialization loss preserves a standard training signal, while refinement losses train the model to use recurrent memory from the shared buffer. Pseudocode is provided in Appendix
+F
+.
+
+3.2
+Comparison to Chunked Training
+
+We also consider chunked training as a lower-token-compute approximation inspired by segment-level and blockwise recurrent models
+(
+5
+;
+17
+;
+37
+)
+. As shown in Figure
+2
+(b), the sequence is split into contiguous chunks that are processed sequentially, while computation remains parallel within each chunk.
+
+Chunked training is close to standard transformer training in ideal token compute because each token is processed once. However, it gives a coarse approximation to token-level recurrence: memory is propagated only across chunk boundaries, so tokens inside the same chunk do not receive recurrent memory from their immediate predecessors. In contrast, interleaved parallel training refines disjoint token subsets so that every token receives a recurrent-memory-aware refinement loss. Moreover, chunked training can be slower in wall-clock time than its ideal token-compute estimate suggests, since each sequence requires multiple sequential chunk forwards. Our experiments show that it remains weaker than interleaved parallel training.
+
+4
+Experiments
+
+We build on nanochat
+1
+1
+
+1
+
+https://github.com/karpathy/nanochat
+
+(
+20
+)
+, a reproducible modern GPT-style pretraining stack. To isolate the effect of LRT, we keep the baseline implementation, data pipeline, tokenizer, optimizer, batching scheme, and evaluation protocol aligned with nanochat. LRT modifies only the transformer through its recurrent memory pathway and interleaved parallel training.
+
+Implementation details.
+
+We use the nanochat-style GPT backbone, including parameter-free RMSNorm
+(
+44
+)
+, RoPE
+(
+35
+)
+, squared-ReLU MLPs, multi-head self-attention with sliding-window attention, value embeddings, and logit soft-capping. Unless otherwise specified, LRT uses combined KV Projection and Residual Injection, dual gating, zero memory initialization, and interleaved parallel training with
+S=2
+. We report two variants:
+LRT-shared
+, the default lightweight model with recurrent KV projections shared across layers, and
+LRT-layerwise
+, a higher-capacity model with separate recurrent projections per layer. LRT-shared adds
+0.3\%
+parameters; LRT-layerwise adds
+4.8\%
+for 20L and
+5.4\%
+for 24L. Full implementation details are in Appendix
+A
+.
+
+Training data and optimization.
+
+Following nanochat
+(
+20
+)
+, we pretrain on FineWeb-Edu 100BT
+(
+24
+)
+using the pre-shuffled nanochat release and nanochat BPE tokenizer. We train with MuonAdamW
+(
+19
+)
+, global batch
+2^{19}
+tokens, and sequence length
+2048
+, holding out the final shard for validation. Optimizer hyperparameters, precision, hardware, schedule, and FLOP accounting are in Appendix
+A
+.
+
+Metrics.
+
+We report bits per byte (BPB; lower is better), a tokenization-independent language-modeling metric used in modern data-scaling evaluations
+(
+22
+;
+20
+)
+. BPB normalizes total cross-entropy by target bytes,
+\mathrm{BPB}=\sum_{i}\ell_{i}/(\ln 2\cdot\sum_{i}b_{i})
+, where
+\ell_{i}
+is token-level cross-entropy and
+b_{i}
+is token byte length. Although BPB differences may appear small, BPB is already a log-loss quantity normalized per byte; we therefore report it directly and interpret improvements through consistent reductions and matched-compute comparisons. Appendix
+E
+further shows that generic architectural additions such as gated attention
+(
+31
+)
+and layer scaling
+(
+39
+)
+yield no gains on the same strong baseline.
+
+We also report CORE using the nanochat implementation of the DCLM evaluation suite
+(
+22
+;
+20
+)
+. CORE averages centered scores over 22 few-shot in-context learning tasks covering language understanding, world knowledge, commonsense reasoning, symbolic problem solving, and reading comprehension. Following DCLM, each task score is centered relative to its random baseline,
+\mathrm{centered}=(a-r)/(1-r)
+, where
+a
+is task accuracy and
+r
+is the random baseline. CORE is the mean centered score across tasks. The full task list is in Appendix
+G
+.
+
+4.1
+Setup
+
+We train two nanochat-style GPT backbones:
+20L
+with
+L=20
+,
+d=1280
+, and approximately
+1.3
+B parameters, and
+24L
+with
+L=24
+,
+d=1536
+, and approximately
+2.1
+B parameters. Baselines use the same backbone and training setup but remove the LRT recurrent memory modules.
+
+We vary the tokens-per-parameter budget
+R
+: a model with
+N
+trainable parameters trained at ratio
+R
+sees approximately
+R\!\times\!N
+training tokens.
+For example, a
+1.3
+B-parameter 20L model trained at
+R=10
+sees about
+13
+B tokens. Baselines are trained up to
+R=120
+, and LRT variants up to
+R=80
+. Since interleaved parallel training uses one initialization pass plus one effective refinement pass, an LRT trained at ratio
+R
+costs approximately the same as a baseline trained at ratio
+2R
+. We therefore plot baselines at baseline-equivalent compute
+R
+and LRT at
+2R
+. Because FineWeb-Edu 100BT
+(
+24
+)
+is larger than our training budgets, this comparison is conservative for LRT in unique-token exposure: at the same baseline-equivalent compute, a baseline trained at ratio
+2R
+sees roughly twice as many non-repeated tokens as an LRT trained at ratio
+R
+.
+
+4.2
+Scaling Results
+
+Figure
+3
+plots BPB and CORE against baseline-equivalent training compute. This visualization aligns methods by approximate training cost rather than raw tokens-per-parameter ratio: the baseline has cost
+1\times
+, while LRT variants have cost approximately
+2\times
+due to interleaved parallel training. Full numeric results are provided in Appendix
+B
+; here we focus on the scaling trends.
+
+(a)
+
+Language modeling.
+
+(b)
+
+In-context evaluation.
+
+Figure 3
+:
+
+Scaling behavior of Latent Recurrent Transformers under baseline-equivalent training compute.
+
+Left:
+BPB versus training compute, where lower is better.
+
+Right:
+CORE versus training compute, where higher is better.
+We plot methods by baseline-equivalent training compute:
+R
+denotes the tokens-per-parameter training budget. A standard transformer trained at ratio
+R
+is plotted at
+R
+, while an LRT trained with interleaved parallel training at ratio
+R
+is plotted at
+2R
+because it uses one initialization pass and one effective refinement pass.
+
+LRT-shared
+is our default lightweight variant with recurrent projections shared across layers, adding
+0.3\%
+parameters.
+
+LRT-layerwise
+uses separate recurrent projections per layer, adding
+4.8\%
+parameters for 20L and
+5.4\%
+for 24L.
+Across both depths, LRT shifts the scaling curves toward lower BPB and higher CORE, with the layerwise variant providing additional gains at higher parameter cost.
+
+Across both model depths, LRT shifts the scaling curve in the favorable direction: lower BPB and higher CORE at comparable baseline-equivalent compute. As discussed in the setup, this comparison is conservative for LRT in unique-token exposure, so the gains are unlikely to be explained by seeing more data. Instead, they suggest that the recurrent memory pathway helps use each training example and unit of compute more effectively.
+
+On BPB, both LRT-shared and LRT-layerwise consistently improve over the matched-depth baseline across the scaling range. The curves show that the gain is not confined to a single training budget: LRT maintains a lower BPB trajectory as compute increases, even as all methods enter the slower-improvement regime at larger budgets. For example, on the 24L backbone, LRT-shared at baseline-equivalent compute
+80
+reaches 0.695 BPB, improving over the 24L baseline at the same compute, which obtains 0.699. The layerwise variant improves further to 0.693.
+
+CORE shows a similar trend. LRT improves aggregate in-context evaluation across most effective compute budgets, indicating that the recurrent latent pathway benefits not only token-level language modeling but also downstream in-context evaluation. For example, on the 20L backbone at baseline-equivalent compute
+80
+, the baseline obtains 0.271 CORE, while LRT-shared and LRT-layerwise obtain 0.274 and 0.277, respectively.
+
+The comparison between LRT-shared and LRT-layerwise highlights the parameter–quality trade-off. LRT-shared is our default because it captures most of the benefit while adding only
+0.3\%
+parameters. LRT-layerwise gives additional improvements by using separate recurrent projections per layer, but increases parameter overhead to
+4.8\%
+for 20L and
+5.4\%
+for 24L. We therefore treat LRT-layerwise as a higher-capacity variant and use LRT-shared as the default lightweight model.
+
+4.3
+Ablation Studies
+
+We conduct ablations to understand four design choices in LRT:
+(1) which source layer should provide recurrent memory,
+(2) which temporal state should serve as memory,
+(3) how this memory should be injected into the transformer, and
+(4) how many interleaved subsets should be used during training.
+Unless otherwise specified, ablations are conducted on the 20L model at ratio 10.
+
+Source layer.
+
+We first ablate which hidden layer from the previous token should provide recurrent memory. Table
+1
+shows that an upper-middle layer, layer 12 in the 20L model, performs best. This suggests that useful recurrent memory should be high-level but not overly specialized for logits.
+
+Source layer
+\ell_{\mathrm{src}}
+
+BPB
+
+\downarrow
+
+Baseline / no recurrent memory
+
+0.767
+
+Layer 8
+
+0.757
+
+Layer 12
+
+0.754
+
+Layer 16
+
+0.756
+
+Layer 20 / final layer
+
+0.755
+
+Learned average of above 4 layers
+
+0.754
+
+Table 1:
+
+Ablation on the recurrent source layer for the 20L model at ratio
+R=10
+. Lower BPB is better. The final layer is not necessarily the best recurrent memory source; an upper-middle layer such as layer 12 performs best empirically. This suggests that useful recurrent memory should be high-level but not overly specialized for logits.
+
+This result also clarifies why an intermediate source layer is not redundant with standard causal attention. Standard attention gives layer
+\ell
+at position
+t
+access to previous positions’ cached states from the same layer, whereas LRT allows early target layers to receive a higher-level source representation
+\mathbf{h}^{\ell_{\mathrm{src}}}_{t-1}
+from the previous token. Thus, an intermediate layer can provide useful feedback to earlier layers at the next position. For the 24L model, we follow the same relative-depth choice and use layer 14 as source layer.
+
+Temporal memory source.
+
+We next fix the source layer to
+\ell_{\mathrm{src}}=12
+and ablate which temporal state should be used as recurrent memory. Our default choice uses the immediately preceding source-layer state,
+\mathbf{m}_{t-1}=\mathbf{h}^{\ell_{\mathrm{src}}}_{t-1}
+, which is already available during ordinary autoregressive decoding. Table
+2
+compares this choice with older past states, a learned average of recent source-layer states, and current-token recurrence.
+
+Memory source
+
+Inference forwards/token
+
+BPB
+
+\downarrow
+
+Baseline / no recurrent memory
+
+1
+
+0.767
+
+\mathbf{m}_{t-4}
+
+1
+
+0.760
+
+\mathbf{m}_{t-3}
+
+1
+
+0.760
+
+\mathbf{m}_{t-2}
+
+1
+
+0.757
+
+\mathbf{m}_{t-1}
+
+1
+
+0.754
+
+Learned average of past 4 states
+
+1
+
+0.754
+
+\mathbf{m}_{t}
+
+2
+
+0.754
+
+\mathbf{m}_{t}+\mathbf{m}_{t-1}
+
+2
+
+0.752
+
+Table 2:
+
+Ablation on the temporal recurrent memory source. Among memory sources that preserve one normal decoding forward per token, the immediately preceding source-layer state
+\mathbf{m}_{t-1}
+performs best as a single state and matches a learned average of recent past states. Current-token recurrence using
+\mathbf{m}_{t}
+requires two inference forwards per token in our implementation because
+\mathbf{m}_{t}
+is only available after an initial forward for token
+t
+. Although combining
+\mathbf{m}_{t}
+with
+\mathbf{m}_{t-1}
+gives the best BPB, we use
+\mathbf{m}_{t-1}
+as the default memory source to preserve one normal autoregressive forward per token.
+
+Among no-extra-decode memory sources,
+\mathbf{m}_{t-1}
+is the strongest single state. Older memories are weaker, suggesting that the immediately preceding source-layer representation is the most useful past recurrent signal. The learned average over recent states does not improve over
+\mathbf{m}_{t-1}
+alone, indicating that the model naturally favors the closest past state. We also evaluate current-token recurrence. Using
+\mathbf{m}_{t}
+as memory for position
+t
+creates a self-referential dependency:
+\mathbf{m}_{t}
+is itself produced by the forward pass at position
+t
+, so a single feedforward pass cannot condition on it. Our implementation therefore runs one initial forward to produce
+\mathbf{m}_{t}
+and a second refinement forward that injects it as memory, doubling decoding cost per token. This supports our default choice of
+\mathbf{m}_{t-1}
+: it is the strongest single memory source that preserves one normal transformer forward per generated token.
+
+Memory injection.
+
+We next ablate how recurrent memory enters the transformer. Residual Injection adds memory to the residual stream, while KV Projection maps it into the attention key-value pathway. Both improve over the baseline: KV Projection gives the previous token’s source representation a targeted attention route, while Residual Injection exposes it to the whole block computation. Their combination performs best, suggesting complementary attention-level and residual-stream pathways. Detailed KV variants are provided in Appendix
+C
+; shared versus layerwise projections are compared in the full scaling tables.
+
+Architecture
+
+BPB
+
+\downarrow
+
+Baseline / no recurrent memory
+
+0.767
+
+Residual Injection
+
+0.756
+
+KV Projection
+
+0.755
+
+KV Projection + Residual Injection
+
+0.754
+
+Table 3:
+
+Ablation of recurrent memory-injection mechanisms. Both Residual Injection and KV Projection improve over the baseline, and their combination performs best, suggesting that residual-stream and attention-level memory pathways are complementary.
+
+Number of interleaved subsets.
+
+We vary
+S
+, the number of disjoint position subsets refined per step. Since the
+S
+subsets together cover the sequence exactly once, ideal token compute is roughly
+2\times
+regardless of
+S
+; only the granularity of the sparse recurrent chain changes. Increasing
+S
+from
+2
+to
+4
+or
+8
+does not improve BPB: all three settings obtain 0.754 on the 20L model at ratio 10. Although larger
+S
+creates a longer sparse refinement chain, later subsets still read a buffer that is only partially refreshed from the initialization pass. We therefore use
+S=2
+by default, which is the simplest and most parallel option that matches the best observed BPB. Full results are provided in Appendix
+E.1
+.
+
+We also compare against chunked training in Appendix
+D.1
+. Chunked training has lower ideal token compute, but only propagates recurrent memory across chunk boundaries and yields much smaller gains than interleaved parallel training.
+
+5
+Related Work
+
+Depth recurrence and iterative computation.
+
+A common way to increase per-token computation is to add extra work before emitting each token. Depth-recurrent methods, such as Universal Transformers
+(
+7
+)
+, looped transformers
+(
+11
+)
+, and Huginn
+(
+10
+)
+, repeatedly apply layers or blocks to the same token. Another line inserts auxiliary tokens
+(
+28
+;
+16
+;
+43
+;
+15
+)
+. These methods enable iterative refinement but typically increase inference cost through extra depth loops or longer autoregressive decoding. LRT targets a different compute point: it reuses a representation already computed at the previous token, creating a latent recurrent pathway across positions while preserving one normal transformer forward per generated token.
+
+Memory and chunked recurrent transformers.
+
+Many transformer variants add recurrence or memory across time, segments, or blocks. Feedback Transformers
+(
+8
+)
+expose high-level past representations to future computation; Transformer-XL
+(
+5
+)
+and Compressive Transformers
+(
+33
+)
+reuse or compress segment-level states; and memory-augmented models introduce memory tokens, block-level states, external retrieval, landmark anchors, or compressive working memory
+(
+4
+;
+17
+;
+42
+;
+18
+;
+25
+;
+26
+)
+. Other recent approaches update test-time memory online
+(
+36
+;
+2
+)
+, while chunked or linear recurrent architectures balance recurrence and parallelism through blockwise computation
+(
+29
+;
+37
+)
+. These methods often target longer context, persistent state, or long-sequence efficiency. LRT instead uses the immediately preceding token’s source-layer hidden state,
+\mathbf{m}_{t-1}=\mathbf{h}^{\ell_{\mathrm{src}}}_{t-1}
+, as a lightweight token-level latent memory inside a standard KV-cached autoregressive transformer. Our chunked baseline propagates memory only across chunk boundaries, while interleaved parallel training refines disjoint token subsets and writes states back to a shared buffer, giving every token a recurrent-memory-aware refinement step while retaining substantial parallelism.
+
+Recurrent sequence models.
+
+Another line of work revisits recurrence as an alternative to attention. Linear Transformers
+(
+21
+)
+express attention as a linear recurrence, while state-space and convolutional models such as S4
+(
+14
+)
+, H3
+(
+9
+)
+, S5
+(
+34
+)
+, Mamba
+(
+13
+)
+, and Hyena
+(
+30
+)
+use long-range operators with efficient recurrent forms. Recent gated recurrent architectures, including RWKV
+(
+27
+)
+, Griffin/Hawk
+(
+6
+)
+, and xLSTM
+(
+1
+)
+, further improve recurrent language modeling, and hybrid models such as Jamba
+(
+23
+)
+interleave attention and recurrence. LRT is complementary: it keeps the standard transformer backbone and KV cache, but adds a small recurrent channel that passes high-level latent features from one token to the next.
+
+6
+Conclusion and Future Work
+
+We introduced Latent Recurrent Transformer (LRT), which reuses a high-level source-layer state
+\mathbf{m}_{t-1}=\mathbf{h}^{\ell_{\mathrm{src}}}_{t-1}
+as recurrent memory for the next token while preserving one normal forward pass per generated token.
+LRT shifts recurrent refinement from inference-time extra computation to more parallelizable pretraining. Future work could improve the training efficiency of interleaved parallel training, and broader downstream evaluation, especially on tasks that may benefit from cross-token recurrent computation, such as mathematical reasoning, code generation, and long-context question answering. Finally, LRT could be combined with complementary forms of additional computation, such as depth recurrence, and latent thought tokens.
+
+Appendix A
+Implementation Details
+
+Backbone.
+
+We follow the nanochat training stack
+[
+20
+]
+. The baseline is a pre-norm decoder-only Transformer
+[
+40
+,
+32
+,
+3
+]
+with untied input embeddings and LM head, parameter-free RMSNorm
+[
+44
+]
+, RoPE positional encodings with base
+10{,}000
+
+[
+35
+]
+, QK normalization, and standard multi-head self-attention. Attention uses a tiled sliding-window pattern with an “SSSL” schedule, where the final layer always uses full context. MLPs use two bias-free linear layers with hidden width
+4d
+and a squared-ReLU activation, and the model uses no biases or dropout. Logits are soft-capped as
+\mathbf{z}\leftarrow c\tanh(\mathbf{z}/c)
+with
+c=15
+, following recent large-model practice
+[
+38
+]
+. The vocabulary is padded to
+32{,}768
+tokens for efficient matrix multiplication.
+
+Residual stream and value embeddings.
+
+Each block applies learnable residual scaling and a skip connection to the initial embedding. Nanochat value embeddings are mixed into attention values on all layers, through an input-dependent gate. These baseline components are kept fixed across the baseline and LRT variants, so the comparison isolates the effect of the LRT recurrent memory pathway.
+
+Model scaling.
+
+We follow nanochat’s constant-aspect-ratio scaling rule, setting
+d=64L
+with head dimension
+128
+. We report results at 20L (
+L=20
+,
+d=1280
+, 10 heads) and 24L (
+L=24
+,
+d=1536
+, 12 heads).
+
+LRT variants.
+
+The default LRT variant, LRT-shared, shares recurrent KV projection matrices across layers and adds
+0.3\%
+parameters. LRT-layerwise uses separate recurrent projections per layer and adds
+4.8\%
+parameters for 20L and
+5.4\%
+for 24L. Unless otherwise specified, LRT uses combined KV Projection and Residual Injection, dual gating, zero memory initialization, source-layer recurrent memory selected by validation ablation, and interleaved parallel training with
+S=2
+.
+
+Data.
+
+We pretrain on FineWeb-Edu 100BT
+[
+24
+]
+using the pre-shuffled nanochat release
+[
+20
+]
+. The final shard is held out as validation and the remaining shards are used for training. Documents are tokenized on the fly with the nanochat BPE tokenizer with vocabulary size
+32{,}768
+. We train with MuonAdamW following nanochat defaults
+[
+19
+]
+, using a global batch of
+2^{19}
+tokens, sequence length
+2048
+, bfloat16 mixed precision, and 8 H100 GPUs. We use no warmup and linearly warm down over the final half of training.
+
+Optimization.
+
+We optimize all models with MuonAdamW, following the nanochat training recipe
+[
+20
+]
+and Muon optimizer setup
+[
+19
+]
+. Muon is applied to all two-dimensional weight matrices, including attention projections, MLP matrices, and LRT projection matrices when present. AdamW is used for token embeddings, the LM head, value embeddings, and scalar parameters such as residual and input-skip coefficients, layer scales, and LRT gating or scaling parameters.
+
+At the reference width
+d=768
+and reference batch size
+2^{19}
+tokens, we use matrix learning rate
+0.02
+for Muon, embedding and value-embedding learning rate
+0.3
+, LM-head learning rate
+0.004
+, and scalar learning rate
+0.5
+(with the residual coefficients further scaled down by
+0.01
+). Adam uses
+\beta=(0.8,0.95)
+, except the input-skip coefficients, which use
+\beta=(0.96,0.95)
+. The embedding, value-embedding, and LM-head learning rates are scaled by
+(d/768)^{-1/2}
+, and all learning rates are scaled by
+\sqrt{\mathrm{batch}/2^{19}}
+when the global batch size differs from the reference batch. We use no warmup and linearly warm down the learning rate to zero over the final half of training. Muon momentum is linearly increased from
+0.85
+to
+0.95
+over the first
+300
+steps, and weight decay is scaled by
+(12/L)^{2}
+and linearly annealed to zero over training.
+
+Evaluation.
+
+Validation BPB is computed on the held-out FineWeb-Edu shard
+[
+24
+]
+and normalized by UTF-8 byte count. CORE evaluation follows the DCLM evaluation suite
+[
+22
+]
+as implemented in nanochat. Full CORE task details are provided in Appendix
+G
+.
+
+Appendix B
+Compute Budget and Full Scaling Results
+
+We report full BPB and CORE scaling results in Tables
+4
+and
+5
+.
+The training budget is set by the tokens-per-parameter ratio
+R
+: a model with
+N
+trainable parameters is trained on approximately
+R\times N
+tokens.
+In the main figures, baseline points are plotted at baseline-equivalent compute
+R
+, while LRT points are plotted at
+2R
+because interleaved parallel training costs approximately two standard transformer updates.
+
+Model
+
+Training Cost
+
+\Delta
+Params
+
+Raw tokens-per-parameter ratio
+R
+
+R5
+
+R10
+
+R20
+
+R40
+
+R60
+
+R80
+
+R120
+
+20L Base
+
+1\times
+
+–
+
+0.789
+
+0.767
+
+0.751
+
+0.739
+
+0.734
+
+0.731
+
+0.726
+
+20L LRT-shared
+
+\sim 2\times
+
+0.3\%
+
+0.777
+
+0.754
+
+0.739
+
+0.727
+
+0.721
+
+0.717
+
+–
+
+20L LRT-layerwise
+
+\sim 2\times
+
+4.8\%
+
+0.775
+
+0.752
+
+0.735
+
+0.725
+
+0.719
+
+0.715
+
+–
+
+24L Base
+
+1\times
+
+–
+
+0.753
+
+0.733
+
+0.719
+
+0.709
+
+0.703
+
+0.699
+
+0.694
+
+24L LRT-shared
+
+\sim 2\times
+
+0.3\%
+
+0.742
+
+0.722
+
+0.706
+
+0.695
+
+0.689
+
+0.685
+
+–
+
+24L LRT-layerwise
+
+\sim 2\times
+
+5.4\%
+
+0.739
+
+0.720
+
+0.704
+
+0.693
+
+0.687
+
+0.683
+
+–
+
+Table 4
+:
+
+Full BPB scaling results. Lower is better.
+
+Training Cost
+denotes approximate compute relative to a standard transformer update.
+
+\Delta
+Params
+denotes additional trainable parameters relative to the corresponding baseline transformer.
+LRT-shared is the default lightweight variant with recurrent projections shared across layers, while LRT-layerwise uses separate recurrent projections per layer.
+Columns R5–R120 denote raw tokens-per-parameter training budgets.
+For baseline rows, baseline-equivalent compute equals
+R
+; for LRT rows, baseline-equivalent compute equals
+2R
+because interleaved parallel training costs approximately
+2\times
+.
+
+Model
+
+Training Cost
+
+\Delta
+Params
+
+Raw tokens-per-parameter ratio
+R
+
+R5
+
+R10
+
+R20
+
+R40
+
+R60
+
+R80
+
+R120
+
+20L Base
+
+1\times
+
+–
+
+0.217
+
+0.242
+
+0.252
+
+0.261
+
+0.267
+
+0.271
+
+0.276
+
+20L LRT-shared
+
+\sim 2\times
+
+0.3\%
+
+0.226
+
+0.251
+
+0.263
+
+0.274
+
+0.280
+
+0.285
+
+–
+
+20L LRT-layerwise
+
+\sim 2\times
+
+4.8\%
+
+0.228
+
+0.254
+
+0.266
+
+0.277
+
+0.284
+
+0.289
+
+–
+
+24L Base
+
+1\times
+
+–
+
+0.233
+
+0.276
+
+0.291
+
+0.304
+
+0.309
+
+0.312
+
+0.316
+
+24L LRT-shared
+
+\sim 2\times
+
+0.3\%
+
+0.251
+
+0.283
+
+0.301
+
+0.313
+
+0.317
+
+0.320
+
+–
+
+24L LRT-layerwise
+
+\sim 2\times
+
+5.4\%
+
+0.254
+
+0.285
+
+0.303
+
+0.315
+
+0.319
+
+0.322
+
+–
+
+Table 5
+:
+
+Full CORE scaling results. Higher is better.
+Training Cost
+denotes approximate compute relative to a standard transformer update.
+\Delta
+Params
+denotes additional trainable parameters relative to the corresponding baseline transformer. LRT-shared is the default lightweight variant with recurrent projections shared across layers, while LRT-layerwise uses separate recurrent projections per layer.
+R5–R120
+denote raw tokens-per-parameter training budgets; in the main figures, LRT points are plotted at
+2R
+effective compute because interleaved parallel training costs approximately
+2\times
+.
+
+Appendix C
+Additional Architecture Ablations
+
+We provide additional ablations of the recurrent memory-injection mechanism on the 20L model at ratio
+R=10
+. These experiments compare three design choices: whether memory is injected through keys, values, or both; whether recurrent KV features are added to or replace local KV features; and whether KV Projection is combined with Residual Injection.
+
+Architecture
+
+BPB
+
+\downarrow
+
+Baseline / no recurrent memory
+
+0.767
+
+Value only projection
+
+0.756
+
+Key only projection
+
+0.762
+
+KV Projection
+
+0.755
+
+KV Projection, replace local KV, early 1/3 layers
+
+0.760
+
+Residual Injection
+
+0.756
+
+KV Projection + Residual Injection
+
+0.754
+
+Table 6:
+
+Detailed architecture ablations on the 20L model at ratio
+R=10
+. BPB is lower better. Injecting recurrent memory into values is stronger than injecting it into keys alone, suggesting that recurrent memory is especially useful as attention content. Adding recurrent key-value features to local features outperforms replacing local KV features, indicating that recurrent memory is more useful as an auxiliary pathway than as a substitute for local token features. Combining KV Projection with Residual Injection performs best, suggesting that attention-level and residual-stream memory pathways are complementary.
+
+The results support three design choices. First, value-only projection is stronger than key-only projection, while full KV Projection performs best among KV-only variants; we therefore project recurrent memory into both keys and values. Second, additive KV Projection outperforms replacing local KV features, suggesting that recurrent memory should augment rather than substitute local token features. Third, combining KV Projection with Residual Injection gives the best BPB, indicating that attention-level and residual-stream pathways expose recurrent memory to complementary parts of the transformer computation.
+
+Appendix D
+Training Strategy Ablations
+
+D.1
+Chunked Training
+
+Chunked training is a low-token-compute approximation to recurrent training. It splits a sequence into contiguous chunks and processes chunks sequentially, carrying recurrent memory across chunk boundaries. Within each chunk, computation remains parallel. Thus, in ideal token-compute terms, each token is processed once and the cost is close to a standard transformer update.
+
+However, chunked training gives a coarse approximation to token-level recurrence. Recurrent memory is updated only across chunk boundaries rather than after every token, so tokens inside the same chunk do not receive recurrent memory from their immediate predecessors. Smaller chunks create more frequent recurrent updates, but require more sequential chunk forwards; larger chunks improve parallelism, but make the recurrent signal sparser.
+
+This trade-off is visible in Table
+7
+. With chunk size
+C=64
+, chunked training slightly improves over the baseline, but remains far behind interleaved parallel training. With
+C=256
+, the recurrent signal becomes too sparse and the result is nearly identical to the baseline. Moreover, small chunks are inefficient in wall-clock training: with sequence length
+2048
+,
+C=64
+requires 32 sequential chunk forwards per sequence, while
+C=256
+still requires 8. This makes chunked training difficult to scale efficiently without specialized systems support.
+
+Training strategy
+
+Ideal cost
+
+R10
+
+R20
+
+Baseline
+
+1\times
+
+0.767
+
+0.751
+
+Interleaved parallel training
+
+\sim 2\times
+
+0.754
+
+0.739
+
+Chunked Training (
+C=64
+)
+
+\sim 1\times
+
+0.765
+
+0.750
+
+Chunked Training (
+C=256
+)
+
+\sim 1\times
+
+0.767
+
+0.751
+
+Table 7:
+
+Chunked training ablation on the 20L model. BPB is lower better. Chunked training has low ideal token compute, but its recurrent signal is coarse because memory is propagated only across chunk boundaries. Smaller chunks provide more frequent recurrent updates but require many sequential chunk forwards, while larger chunks improve parallelism at the cost of sparser recurrence. Interleaved parallel training gives stronger gains by providing recurrent-memory-aware refinement for all positions.
+
+Appendix E
+Baseline Strength and Negative Ablations
+
+To contextualize the BPB improvements reported in the main paper, we evaluate several generic architectural additions on the same nanochat-style transformer backbone. These variants add extra flexibility, such as residual scaling, gated attention, input residual mixing, or value-side residual paths, but do not introduce the LRT recurrent memory pathway. The goal is to verify that the gains from LRT are not simply explained by adding small modules or gates to the baseline.
+
+Variant
+
+BPB
+
+\downarrow
+
+Vanilla baseline
+
+0.784
+
+Layer-scaled attention/MLP
+
+0.782
+
+Gated attention
+
+0.782
+
+Input residual mixing
+
+0.779
+
+Dense residual mixing
+
+0.783
+
+Value residual
+
+0.779
+
+Projected value residual
+
+0.780
+
+Value embedding
+
+0.770
+
+Value embedding + input residual mixing (final baseline)
+
+0.767
+
+Value embedding + input residual mixing + gated attention
+
+0.767
+
+Table 8:
+
+Baseline-strength and negative ablations on the 20L model. BPB is lower better. Generic additions such as gated attention, layer scaling, and residual mixing yield only marginal improvements, and adding gated attention on top of the final baseline does not further improve BPB. This suggests that the gains reported for LRT are not simply due to adding extra parameters, gates, or residual pathways, but instead come from the recurrent memory mechanism.
+
+The strongest non-recurrent baseline combines value embeddings with input residual mixing, reaching 0.767 BPB. Adding another generic gate on top of this baseline does not improve performance. We therefore use this strong nanochat-style configuration as the baseline in the main experiments, and compare LRT against it rather than against the weaker vanilla transformer.
+
+For reference, layer-scaled attention/MLP uses
+
+x\leftarrow x+\alpha\mathrm{Attn}(x)+\beta\mathrm{MLP}(x)
+;
+gated attention uses
+x\leftarrow x+\alpha\mathrm{Attn}(x)
+;
+input residual mixing uses
+x\leftarrow\alpha x+\beta x_{0}
+;
+and dense residual mixing additionally incorporates earlier residual states.
+
+E.1
+Number of Interleaved Subsets
+
+Interleaved Training refines
+S
+disjoint subsets of positions after one full-sequence initialization pass. Increasing
+S
+creates a longer sparse recurrent refinement chain: later subsets can consume recurrent states updated by more earlier subsets. However, because only one subset is refreshed at each refinement step, larger
+S
+also means later subsets rely on a buffer that is only partially updated from the initialization pass. Thus, increasing
+S
+may not necessarily improve the approximation to the full token-level recurrent chain.
+
+We evaluate
+S\in\{2,4,8\}
+on the 20L model at ratio
+R=10
+. Since the subsets together cover the sequence exactly once, the ideal token compute is approximately unchanged across
+S
+: one full initialization pass plus one effective refinement pass, or about
+2\times
+a standard transformer update. In practice, larger
+S
+can introduce more sequential refinement steps and may reduce hardware efficiency, even if the ideal token count is unchanged.
+
+Setting
+
+Training cost
+
+BPB
+
+\downarrow
+
+Baseline / no recurrent memory
+
+1\times
+
+0.767
+
+LRT,
+S=2
+
+\sim 2\times
+
+0.754
+
+LRT,
+S=4
+
+\sim 2\times
+
+0.754
+
+LRT,
+S=8
+
+\sim 2\times
+
+0.754
+
+Table 9:
+
+Ablation on the number of interleaved subsets
+S
+on the 20L model at ratio
+R=10
+. Lower BPB is better. Increasing
+S
+creates a longer sparse refinement chain, but does not improve BPB in this setting. We therefore use
+S=2
+by default, which is the simplest and most parallel option that matches the best observed BPB.
+
+The results show that increasing the number of interleaved subsets does not improve BPB: all LRT variants obtain 0.755. This suggests that, under our current approximation, the benefit mainly comes from giving each token one recurrent-memory-aware refinement step rather than from increasing the number of sparse write-back stages. We therefore use
+S=2
+as the default setting because it provides the same BPB as larger
+S
+while requiring fewer sequential refinement stages and preserving more parallelism.
+
+Appendix F
+Training Algorithm
+
+We show the full interleaved parallel training algorithm in Alg.
+F
+.
+
+Algorithm 1
+
+Interleaved Parallel Training Step
+
+1:
+
+Inputs: token sequence
+x_{1:T}
+, subset count
+S
+, partition
+
+\{\mathcal{I}_{s}\}_{s=1}^{S}
+
+2:
+
+\mathcal{B}^{(0)}\leftarrow\mathrm{Forward}_{\text{full}}(x_{1:T})
+
+// init forward: parallel over
+T
+
+3:
+
+compute
+\mathcal{L}_{\mathrm{init}}
+on
+\mathcal{B}^{(0)}
+
+4:
+
+for
+
+s=1
+to
+S
+
+do
+
+5:
+
+\mathcal{B}^{(s)}\leftarrow\mathrm{Refine}(\mathcal{I}_{s},\mathcal{B}^{(s-1)})
+
+// compute
+|\mathcal{I}_{s}|
+positions; write back
+
+6:
+
+compute
+\mathcal{L}_{\mathcal{I}_{s}}
+on refined positions
+
+7:
+
+end
+
+for
+
+8:
+
+\mathcal{L}\leftarrow\tfrac{1}{S+1}\!\big(\mathcal{L}_{\mathrm{init}}+\sum_{s}\mathcal{L}_{\mathcal{I}_{s}}\big)
+
+9:
+
+backpropagate
+\mathcal{L}
+through all
+S{+}1
+forwards
+
+Category
+
+Task
+
+Shots
+
+Type
+
+Language understanding
+
+hellaswag_zeroshot
+
+0
+
+multiple choice
+
+Language understanding
+
+hellaswag
+
+10
+
+multiple choice
+
+Language understanding
+
+lambada_openai
+
+0
+
+language modeling
+
+Language understanding
+
+winograd
+
+0
+
+schema
+
+Language understanding
+
+winogrande
+
+0
+
+schema
+
+Language understanding
+
+bigbench_language_identification
+
+10
+
+multiple choice
+
+World knowledge
+
+jeopardy
+
+10
+
+language modeling
+
+World knowledge
+
+bigbench_qa_wikidata
+
+10
+
+language modeling
+
+World knowledge
+
+arc_easy
+
+10
+
+multiple choice
+
+World knowledge
+
+arc_challenge
+
+10
+
+multiple choice
+
+Commonsense reasoning
+
+copa
+
+0
+
+multiple choice
+
+Commonsense reasoning
+
+commonsense_qa
+
+10
+
+multiple choice
+
+Commonsense reasoning
+
+piqa
+
+10
+
+multiple choice
+
+Commonsense reasoning
+
+openbook_qa
+
+0
+
+multiple choice
+
+Symbolic problem solving
+
+bigbench_dyck_languages
+
+10
+
+language modeling
+
+Symbolic problem solving
+
+agi_eval_lsat_ar
+
+3
+
+multiple choice
+
+Symbolic problem solving
+
+bigbench_cs_algorithms
+
+10
+
+language modeling
+
+Symbolic problem solving
+
+bigbench_operators
+
+10
+
+language modeling
+
+Symbolic problem solving
+
+bigbench_repeat_copy_logic
+
+10
+
+language modeling
+
+Reading comprehension
+
+squad
+
+10
+
+language modeling
+
+Reading comprehension
+
+coqa
+
+0
+
+language modeling
+
+Reading comprehension
+
+boolq
+
+10
+
+multiple choice
+
+Table 10:
+
+CORE task list. The benchmark contains 22 tasks: 12 multiple-choice tasks, 8 language-modeling tasks, and 2 schema tasks.
+
+Appendix G
+CORE Evaluation Details
+
+CORE is computed over 22 in-context learning tasks from the DCLM evaluation suite
+[
+22
+]
+. The tasks are grouped into five categories: language understanding, world knowledge, commonsense reasoning, symbolic problem solving, and reading comprehension. Each task contributes a centered score,
+\mathrm{centered}=(a-r)/(1-r)
+, where
+a
+is the task accuracy and
+r
+is the random baseline. The final CORE metric is the mean centered score across all tasks. In the implementation, random baselines stored as percentages are converted to probabilities before centering.
+

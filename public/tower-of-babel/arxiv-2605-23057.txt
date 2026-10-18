@@ -1,0 +1,671 @@
+ModeSwitch-LLM: A Lightweight Phase-Aware Controller for Cross-Mode LLM Inference on a Single GPU
+Aman Sunesh Department of Computer Engineering NYU Abu Dhabi Abu Dhabi, United Arab Emirates as18181@nyu.edu Ali Alshehhi Courant Institute of Mathematical Sciences New York University New York, United States aa8148@nyu.edu Hivansh Dhakne Department of Computer Engineering New York University New York, United States hd2296@nyu.edu
+
+Abstract
+ModeSwitch-LLM is a lightweight request-boundary controller for improving single-GPU large language model inference efficiency by routing each request to an appropriate fixed inference mode. Instead of relying on one static serving configuration, the system selects among FP16, quantized modes, speculative decoding, and hybrid modes such as GPTQ plus prefix caching and INT8 plus continuous batching using cheap workload-level features. We evaluate ModeSwitch-LLM on Meta-Llama-3.1-8B-Instruct served on a single NVIDIA A100 GPU. On deployment-style synthetic workloads, the online controller achieves a 2.10 × \times mean latency speedup over FP16 and a 0.48 × \times mean energy ratio, corresponding to 51.7% lower energy per token. On automatic benchmarks used as a quality gate, accuracy remains close to FP16 with a mean delta of +0.17 percentage points. We also evaluate lightweight learned routers, but find that they do not clearly outperform the rule-based controller because they add routing overhead and more often select modes that violate quality, energy, or memory constraints. These results show that simple request-aware routing can recover substantial efficiency from existing inference modes without retraining the model or changing its architecture.
+
+
+
+1
+Introduction
+
+Large language model inference is increasingly limited not only by model quality, but also by serving efficiency. On a single GPU, different request types stress the system in different ways: short interactive prompts are sensitive to latency, long-generation requests spend more time in decoding, repeated-prefix chat workloads can benefit from cache reuse, and long-context workloads place heavier pressure on memory and prefill computation. However, many serving setups are commonly evaluated or deployed with one fixed inference configuration across request types
+11
+;
+5
+;
+13
+, even though no single mode is optimal across all workload types.
+
+ModeSwitch-LLM addresses this problem by introducing a lightweight request-boundary controller that routes each incoming request to a suitable fixed inference mode. The system compares an FP16 baseline against optimized modes such as GPTQ 4-bit quantization, INT8 quantization, speculative decoding, prefix caching, continuous batching, and hybrid configurations. Instead of modifying the model architecture or retraining the LLM, the controller uses simple workload-level features, such as prompt length, expected output length, shared-prefix structure, batch pressure, and memory-pressure indicators, to select an efficient serving mode before generation begins.
+
+This paper makes three contributions. First, we benchmark a set of fixed LLM inference modes under a common single-GPU setup, measuring latency, throughput, energy per token, memory, and quality. Second, we propose a lightweight request-boundary controller that routes requests using cheap workload features and negligible CPU overhead. Third, we compare rule-based routing, constraint-aware oracle routing, and learned routing policies under latency, energy, memory, and quality constraints.
+
+The final results show that simple request-aware routing can recover substantial inference efficiency, especially on deployment-style synthetic workloads, while maintaining benchmark accuracy close to FP16. The learned-router experiments further show that supervised policies can imitate the constraint-aware oracle to some extent, but they do not clearly outperform the rule-based controller because they add routing overhead and make more constraint-violating choices. This suggests that lightweight rule-based routing is already a strong practical baseline, while learned routing remains a useful direction for future refinement.
+
+2
+Problem Description
+
+The central problem in this project is that LLM inference workloads are heterogeneous, but inference systems often use a single static serving mode. A configuration that is efficient for one workload can be inefficient for another. For example, speculative decoding can improve decode-heavy generation, prefix caching is useful when requests share repeated context, quantized modes can reduce latency and energy, and batching-oriented modes can improve throughput. However, selecting the wrong mode can increase latency, waste energy, or reduce output quality.
+
+The project therefore asks whether a lightweight controller can improve single-GPU LLM inference efficiency by selecting among fixed inference modes at request time. The controller must satisfy three goals. First, it should reduce latency and improve throughput compared with an FP16 baseline. Second, it should reduce energy per token while keeping GPU memory usage comparable to FP16. Third, it should preserve output quality, especially on automatic benchmark workloads where accuracy can be directly measured.
+
+To study this problem, we evaluate ModeSwitch-LLM on synthetic deployment-style workloads for efficiency and automatic benchmark workloads for quality preservation. The final objective is not to build a new LLM, but to show that practical request-aware routing can recover efficiency from existing inference modes with minimal runtime overhead.
+
+3
+Related Work
+
+Modern LLM serving systems improve throughput and memory efficiency through system-level optimizations such as continuous batching, paged KV-cache management, and prefix reuse. Orca introduced iteration-level continuous batching to improve GPU utilization across active requests
+11
+, while vLLM introduced PagedAttention to reduce KV-cache fragmentation and improve serving throughput
+5
+. SGLang further exploits repeated prefixes through RadixAttention
+13
+. These systems are highly effective, but they typically apply one serving configuration globally rather than selecting a serving mode per request.
+
+Other work targets specific axes of inference efficiency. Sarathi-Serve and DistServe show that prefill and decode phases have different bottlenecks and can benefit from phase-aware scheduling
+1
+;
+14
+. Quantization methods such as GPTQ and AWQ reduce memory bandwidth and latency by serving compressed models
+3
+;
+7
+. Speculative decoding accelerates generation by using a smaller draft model whose proposed tokens are verified by the target model
+6
+. ModeSwitch-LLM differs from these systems by treating these optimizations as selectable serving modes. Instead of committing to one global configuration, it uses cheap request-level features to route each request to an appropriate fixed mode on a single GPU. The controller does not switch modes inside a request; instead, it estimates the request’s dominant bottleneck before generation, such as prefill-heavy, decode-heavy, shared-prefix, batched, or memory-pressure behavior, and selects the fixed inference mode that performed best for that workload type.
+
+4
+Methodology
+
+This section describes the system setup, workload design, inference modes, metrics, and controller used to evaluate ModeSwitch-LLM.
+
+4.1
+System Setup
+
+All experiments were run on a single NVIDIA A100 40GB GPU on the NYU Burst cluster using Meta-Llama-3.1-8B-Instruct served through vLLM. FP16 is the baseline configuration, and every optimized mode is evaluated against the same FP16 setup. Before timed runs, we clear the CUDA cache and run a warmup pass to reduce residual-memory and startup effects. Results are aggregated across multiple requests per workload variant to reduce measurement noise.
+
+4.2
+Workload Design
+
+We evaluate inference modes on two categories of workloads: synthetic deployment-style workloads and automatic benchmark workloads.
+
+Synthetic workloads.
+
+The synthetic workloads use a 2
+\times
+2 grid that varies prompt length and expected output length independently: short-prompt/short-output (about 128 input tokens, 32 output tokens), short-prompt/long-output (128 input tokens, 128 output tokens), long-prompt/short-output (1024 input tokens, 32 output tokens), and long-prompt/long-output (1024 input tokens, 128 output tokens). These four cases represent latency-sensitive interactive requests, decode-heavy generation, prefill-heavy requests, and combined prefill/decode stress tests.
+
+We also include two additional deployment-style patterns. The shared-prefix chat workload contains repeated context, such as a common system prompt, to test prefix reuse. The memory-pressure long-context workload runs long-context requests while GPU memory is partially pre-allocated, simulating a less ideal production server.
+
+Automatic benchmark workloads.
+
+To measure quality more directly, we run MMLU-Pro
+10
+, GSM8K
+2
+, TruthfulQA
+8
+, GPQA
+9
+, and MLU
+4
+. These benchmarks provide ground-truth answers, so they are used primarily as a quality gate rather than only as efficiency workloads. We use a
+\pm
+1.5 percentage-point threshold relative to FP16 to decide whether a routed mode preserves benchmark quality.
+
+4.3
+Inference Modes
+
+We evaluate ten candidate single modes: FP16 baseline, INT8 quantization, GPTQ 4-bit
+3
+, AWQ 4-bit
+7
+, speculative decoding
+6
+, prefix caching, chunked prefill, continuous batching, CUDA graphs, and KV-cache compression
+12
+. These cover lower-precision execution, draft-model acceleration, repeated-prefix reuse, batching-oriented serving, prefill scheduling, and memory-pressure mitigation.
+
+We also test hybrid modes that combine complementary optimizations. The main hybrids are GPTQ plus prefix caching for shared-prefix workloads and INT8 plus continuous batching for multi-request serving. Other hybrids are included in screening but are not the focus of the final analysis.
+
+4.4
+Metric Collection
+
+For each mode-workload pair, we collect total latency, throughput, energy per token, peak GPU memory, and output quality. Total latency is measured from request submission to final token arrival. Throughput is output tokens divided by latency. Energy per token is estimated by polling GPU power with NVML every 50 ms, integrating power over time, and dividing by generated tokens. Peak memory is measured with
+torch.cuda.max_memory_allocated()
+.
+
+Quality is measured using benchmark accuracy or exact match for automatic benchmarks. For synthetic generation workloads, we use ROUGE-L against reference outputs and ROUGE-L similarity against FP16 outputs as lightweight quality proxies.
+
+4.5
+Evaluation Protocol
+
+All reported values are means aggregated across requests and workload variants. Latency speedup is FP16 latency divided by mode latency, so values above 1.0
+\times
+are better. Energy and memory ratios are mode values divided by FP16 values. Lower energy ratios are better, while memory ratios are mainly treated as a safety metric and should stay close to 1.0
+\times
+. Accuracy delta is measured in percentage points relative to FP16. FP16 is used as the reference baseline because it represents the standard full-precision serving configuration that a deployment would run by default. All efficiency claims in this paper are relative to this baseline.
+
+4.6
+Controller Design
+
+The online request-boundary controller selects one fixed inference mode per request before generation begins. It operates in three steps: feature extraction, classification, and routing.
+
+Feature extraction:
+
+The controller extracts six features before inference: prompt token count, expected output token count, shared-prefix status, memory-pressure status, batch-pressure level, and workload tag when the request belongs to a known benchmark family. All features are available at request time with negligible extraction cost.
+
+Classification:
+
+A lightweight rule-based classifier estimates whether a request is batched, shared-prefix, prefill-heavy, or decode-heavy. These categories are derived from prompt length, expected output length, shared-prefix structure, and batch pressure. We use this rule-based approach rather than a learned classifier because the resulting policy is interpretable and has negligible routing overhead. Moreover, Section
+5.7
+shows that this simple rule-based controller is competitive with trained routing policies.
+
+Routing policy:
+
+The router maps each request to one of five candidate modes: GPTQ 4-bit, speculative decoding, GPTQ plus prefix caching, INT8 plus continuous batching, and INT8 quantization, with FP16 retained as an emergency fallback. The policy follows a fixed priority order derived from the benchmark results:
+
+1.
+
+Batched requests are routed to INT8 plus continuous batching.
+
+2.
+
+Shared-prefix chat requests are routed to GPTQ plus prefix caching.
+
+3.
+
+Memory-pressure requests are routed to GPTQ 4-bit.
+
+4.
+
+Synthetic SS, LS, and LL requests are routed to GPTQ 4-bit, which was the strongest balanced mode for those workload shapes.
+
+5.
+
+Decode-heavy, long-output, and long mathematical generation requests are routed to speculative decoding.
+
+6.
+
+Multiple-choice and benchmark-style prefill-heavy requests are routed to INT8 quantization, which gave the best accuracy-efficiency tradeoff on scored evaluations.
+
+7.
+
+All remaining requests default to INT8 quantization, with FP16 retained as an emergency fallback.
+
+The measured CPU routing overhead is approximately 0.0096 ms per request, which is negligible relative to inference latency. The policy is deterministic and interpretable: each routing decision traces to a measured fixed-mode or hybrid-mode result.
+
+Learned controller baseline:
+
+We also train decision-tree, random-forest, and logistic-regression classifiers to imitate a constraint-aware oracle that selects the fastest mode satisfying quality, energy, and memory constraints. These learned controllers test whether supervised routing can outperform the rule-based policy.
+
+5
+Experimental Results
+
+This section reports the main empirical findings from ModeSwitch-LLM. All efficiency results are relative to FP16 unless otherwise stated. GPU memory is treated mainly as a safety metric because optimized modes did not meaningfully reduce memory in this setup.
+
+5.1
+Fixed-Mode Benchmarking
+
+We first benchmarked ten candidate inference modes across synthetic and benchmark workloads to identify which optimizations were useful in a single-GPU serving setup.
+
+Figure
+1
+summarizes the fixed-mode screening results using latency speedup and energy ratio relative to FP16 on the synthetic/stress-test workloads. Points farther right are faster than FP16, and points lower on the y-axis use less energy per token. Several modes improve both latency and energy, but the gains are workload-dependent. GPTQ 4-bit gives strong improvements on many synthetic workloads, prefix caching is useful mainly when repeated context is present, and modes such as chunked prefill, CUDA graphs, and KV-cache compression show weaker or less consistent gains.
+
+We tested batching-oriented modes separately using four simultaneous requests, since continuous batching is designed for multi-request serving rather than single-request latency. In that setting, continuous batching improved throughput and energy efficiency, but it is not directly comparable to the single-request points in Figure
+1
+.
+
+Figure 1
+:
+Fixed-mode screening across synthetic/stress-test workloads.
+
+After this broad screening, we focus on the modes with complete and directly comparable measurements. Table
+1
+reports the lowest-latency measured fixed mode for each workload family, along with that mode’s corresponding energy ratio. The key result is that no single inference mode is uniformly best across workload shapes. GPTQ 4-bit gives the strongest latency and energy improvements on many synthetic workloads, while INT8 quantization is competitive on several benchmark-style workloads. Prefix-based methods matter mainly when repeated context is present, and speculative decoding is most relevant for selected long-output or decode-heavy settings. These fixed-mode results show that different optimizations have different workload strengths, motivating request-level routing rather than one static serving mode. We evaluate output quality separately in Section
+5.3
+before using these modes in the final controller.
+
+Table 1
+:
+Lowest-latency measured fixed mode for each workload family. Latency speedup and energy ratio are relative to FP16 and correspond to the listed latency-selected mode.
+
+Workload
+
+Lowest-latency fixed mode
+
+Latency speedup
+
+Energy ratio
+
+Short prompt, short output
+
+GPTQ 4-bit
+
+2.56
+\times
+
+0.46
+\times
+
+Short prompt, long output
+
+GPTQ 4-bit
+
+2.76
+\times
+
+0.40
+\times
+
+Long prompt, short output
+
+GPTQ 4-bit
+
+2.10
+\times
+
+0.55
+\times
+
+Long prompt, long output
+
+GPTQ 4-bit
+
+2.57
+\times
+
+0.44
+\times
+
+Shared-prefix chat
+
+GPTQ 4-bit
+
+2.58
+\times
+
+0.46
+\times
+
+Memory-pressure long context
+
+GPTQ 4-bit
+
+2.39
+\times
+
+0.48
+\times
+
+MMLU-Pro
+
+INT8 quantization
+
+1.14
+\times
+
+0.82
+\times
+
+GSM8K
+
+GPTQ 4-bit
+
+2.87
+\times
+
+0.39
+\times
+
+TruthfulQA
+
+INT8 quantization
+
+1.01
+\times
+
+0.82
+\times
+
+GPQA
+
+INT8 quantization
+
+1.13
+\times
+
+0.79
+\times
+
+MLU
+
+INT8 quantization
+
+1.08
+\times
+
+0.75
+\times
+
+Although Table
+1
+shows that GPTQ 4-bit and INT8 quantization can handle many workload families well in terms of latency and energy, these metrics alone are not sufficient for routing. A mode that is fast and energy-efficient can still be unsuitable if it changes model behavior or reduces benchmark accuracy. Therefore, we treat this table as an efficiency screen rather than a final routing policy. The controller uses these latency and energy results together with the quality checks in Section
+5.3
+to decide which modes preserve quality for each workload type.
+
+5.2
+Hybrid-Mode Results
+
+We also evaluated hybrid configurations that combine complementary optimizations. The two clearest wins were GPTQ plus prefix caching and INT8 plus continuous batching. GPTQ plus prefix caching improves over plain prefix caching in the shared-prefix setting, reducing latency from 1903 ms to 942 ms, improving throughput from 67.3 to 135.8 tokens/s, and reducing energy from 3.26 J/token to 1.36 J/token. INT8 plus continuous batching improves over plain continuous batching in multi-request serving, reducing latency from 1840 ms to 1361 ms, improving throughput from 205.8 to 279.3 tokens/s, and reducing energy from 1.32 J/token to 0.83 J/token.
+
+5.3
+Quality Check on Automatic Benchmarks and Synthetic Proxies
+
+Before evaluating the controller, we checked whether optimized modes preserve output quality. Table
+2
+reports automatic benchmark accuracy or exact match.
+
+Table 2
+:
+Automatic benchmark accuracy by mode. Values are percentages.
+
+Mode
+
+MMLU-Pro
+
+GSM8K
+
+TruthfulQA
+
+GPQA
+
+MLU
+
+FP16 baseline
+
+37.0
+
+83.0
+
+56.0
+
+25.0
+
+47.0
+
+GPTQ 4-bit
+
+33.0
+
+79.0
+
+56.0
+
+32.0
+
+39.0
+
+INT8 quantization
+
+39.0
+
+87.0
+
+59.0
+
+21.0
+
+48.0
+
+Speculative decoding
+
+37.0
+
+82.0
+
+56.0
+
+25.0
+
+47.0
+
+Prefix caching
+
+37.0
+
+82.0
+
+56.0
+
+26.0
+
+47.0
+
+Overall, the automatic benchmark results show why latency and energy alone are not sufficient for routing. Although Table
+1
+shows that GPTQ 4-bit and INT8 quantization can handle many workload families efficiently, the quality results show that their accuracy and output-stability behavior differ across workloads. Speculative decoding and prefix caching remain close to FP16 across nearly all benchmarks. INT8 quantization also preserves or improves accuracy on most benchmarks while still providing latency and energy benefits. GPTQ 4-bit is more mixed: it provides strong latency and energy improvements, but accuracy drops on some benchmarks, including MMLU-Pro, GSM8K, and MLU.
+
+For synthetic generation workloads, we also inspect ROUGE-L against reference outputs and ROUGE-L similarity against FP16 outputs. These proxies show the same tradeoff. GPTQ 4-bit remains close to FP16 on short-prompt/short-output generation, where ROUGE-L changes only from 0.265 to 0.261 while giving a 2.57
+\times
+latency speedup. However, the quality proxy drops more clearly on long-prompt/short-output and memory-pressure long-context workloads, where GPTQ ROUGE-L falls from 0.237 to 0.151 and from 0.249 to 0.090, respectively, despite strong latency and energy gains.
+
+These results support the main motivation for ModeSwitch-LLM: optimized modes can improve inference efficiency without necessarily sacrificing output quality, provided that routing decisions consider both latency/energy gains and quality preservation. Therefore, the controller should not blindly choose the fastest mode from Table
+1
+; it should route requests toward modes that preserve benchmark accuracy or output similarity while improving latency and energy.
+
+5.4
+Online Request-Boundary Controller
+
+The main deployment-style experiment evaluates the online request-boundary controller. For each request, the controller extracts lightweight workload features and routes the request to one fixed inference mode before generation. The measured routing overhead is effectively negligible.
+
+On synthetic serving workloads, the controller achieves a 2.10
+\times
+mean latency speedup and a 0.48
+\times
+energy ratio relative to FP16, corresponding to 51.7% lower energy per token. On automatic benchmark workloads, which are used mainly as a quality gate, it still improves efficiency with a 1.30
+\times
+mean latency speedup and a 0.71
+\times
+energy ratio while keeping accuracy close to FP16. The mean benchmark accuracy delta is +0.17 percentage points, and all benchmark deltas remain within the
+\pm
+1.5 percentage-point quality threshold. GPU memory remains close to the FP16 baseline in both settings.
+
+Figure
+2
+shows the same trend at the workload-family level: the largest latency and energy gains appear on shared-prefix, GSM8K-style, and long-context workloads, while shorter automatic benchmarks show smaller but still generally positive gains.
+
+(a)
+
+Latency speedup vs. FP16.
+
+(b)
+
+Energy ratio vs. FP16.
+
+Figure 2
+:
+Online controller latency speedup and energy ratio across workload families.
+
+5.5
+Controller Routing Behavior
+
+The controller does not collapse all requests to one optimized mode. Instead, it selects different modes for different workload structures. This is important because the earlier fixed-mode results showed that no single optimization is best everywhere.
+
+The routing pattern follows the priority policy defined in Section
+4.6
+. Figure
+3
+confirms that the controller applies this policy consistently. Panel (a) shows the selected mode for each workload family in the balanced evaluation set; since each family contributes the same number of examples in this balanced workload-family evaluation, the bar heights are equal and the important information is the selected-mode color. Panel (b) collapses this mapping to one vote per workload family, summarizing how often each mode is used across workload types.
+
+(a)
+
+Selected mode by workload family.
+
+(b)
+
+One vote per workload family.
+
+Figure 3
+:
+Controller mode-selection behavior. Panel (a) shows which mode is selected for each workload family in the balanced evaluation set. Panel (b) collapses the same routing decisions to one vote per workload family, showing that the controller uses multiple modes rather than selecting a single default optimization for all requests.
+
+5.6
+Comparison to a Constraint-Aware Oracle
+
+We also compare the online controller to a constraint-aware oracle using the collapsed workload-family evaluation. This aggregation differs from the headline 2.10
+\times
+synthetic-workload result: instead of averaging over all routed synthetic examples, it gives each workload family one vote so that the controller and oracle can be compared at the workload-family level. The oracle chooses the fastest measured mode satisfying the same quality, energy, and memory constraints. Under this collapsed evaluation, the controller captures most of the oracle benefit: it reaches a 1.74
+\times
+mean latency speedup versus 1.97
+\times
+for the oracle, while reducing energy by 41.3% versus 41.7% for the oracle. Thus, the remaining gap is mainly latency, not energy efficiency. This suggests that the rule-based policy is already close to the best measured constrained policy on energy, while leaving some room for better latency-aware routing.
+
+5.7
+Learned Controller Results
+
+Finally, we evaluate whether a lightweight learned router can outperform the rule-based controller. We train decision-tree, random-forest, and logistic-regression classifiers to imitate the constraint-aware oracle. The dataset contains 605 workload rows and five oracle classes: GPTQ 4-bit, GPTQ plus prefix caching, speculative decoding, INT8 quantization, and FP16 baseline. The features extend those described in Section
+4.6
+with additional derived signals: output-to-prompt ratio, benchmark family, and evaluation mode.
+
+Table
+3
+summarizes the learned-controller results on the 605-row learned-routing dataset. Random forest has the highest oracle-mode classification accuracy at 60.0%, but this does not translate into the best deployment policy because it has much higher CPU routing overhead. Logistic regression and decision tree have lower oracle-mode match rates, but lower overhead and slightly better latency than random forest. The learned routers also make more constraint-violating choices, meaning they sometimes select modes that violate the quality, energy, or memory constraints used by the oracle. Overall, none of the learned policies clearly outperform the hand-written rule controller on the main latency metric.
+
+Table 3
+:
+Learned-controller policy summary.
+
+Policy
+
+Speedup
+
+Energy ratio
+
+Oracle match
+
+Overhead
+
+FP16 baseline
+
+1.00
+\times
+
+1.00
+\times
+
+0.2%
+
+0.0000 ms
+
+Constraint-aware oracle
+
+2.41
+\times
+
+0.45
+\times
+
+100.0%
+
+0.0000 ms
+
+Rule controller
+
+2.38
+\times
+
+0.47
+\times
+
+54.4%
+
+0.0096 ms
+
+Logistic regression
+
+2.26
+\times
+
+0.46
+\times
+
+51.1%
+
+4.5–4.7 ms
+
+Decision tree
+
+2.26
+\times
+
+0.46
+\times
+
+51.1%
+
+4.6–4.8 ms
+
+Random forest
+
+2.22–2.23
+\times
+
+0.44
+\times
+
+60.0%
+
+\sim
+50 ms
+
+The learned policies are still useful as a diagnostic: although they do not outperform the rule controller, their prediction behavior shows that cheap request-level features contain meaningful routing information, but not enough to cleanly separate all optimized modes.
+
+Figure
+4
+shows confusion matrices for the learned routers using the static feature set. The models learn some useful structure, especially for GPTQ plus prefix caching and GPTQ 4-bit, but they still confuse several optimized modes. This helps explain why higher oracle-mode classification accuracy does not necessarily produce the best deployment policy.
+
+(a)
+
+Decision tree.
+
+(b)
+
+Random forest.
+
+(c)
+
+Logistic regression.
+
+Figure 4
+:
+Learned-controller confusion matrices for the static feature set. The learned routers capture some oracle structure but still confuse several optimized modes.
+
+Figure
+5
+compares the learned controllers, rule controller, oracle, and FP16 baseline. The rule controller nearly matches the oracle’s latency speedup while adding almost no CPU overhead. Learned policies reduce energy slightly more than the rule controller in some cases, but they lose latency because of routing overhead and produce more quality- or constraint-violating choices.
+
+(a)
+
+Mean latency speedup.
+
+(b)
+
+Mean energy ratio.
+
+(c)
+
+Latency oracle capture.
+
+(d)
+
+CPU routing overhead.
+
+Figure 5
+:
+Learned-router comparison. The rule controller is a strong practical baseline because it captures most of the oracle latency benefit with negligible routing overhead.
+
+An important takeaway is that oracle-mode classification accuracy is not the right objective by itself. Random forest matches the oracle more often than the simpler learned models, but its higher CPU overhead reduces its end-to-end latency benefit. In deployment, the relevant objective is not simply predicting the same label as the oracle; it is reducing latency and energy while preserving quality and keeping routing overhead small. This is why the rule controller remains the strongest practical policy in our experiments despite having lower oracle-match accuracy than random forest.
+
+6
+Conclusion
+
+ModeSwitch-LLM shows that lightweight request-aware routing can improve single-GPU LLM inference efficiency without modifying the model architecture or retraining the LLM. Fixed-mode results show that different optimizations have complementary strengths: GPTQ 4-bit is strong for synthetic latency and energy, speculative decoding helps selected decode-heavy and long-output requests, INT8 is useful when benchmark accuracy must be preserved, prefix caching helps repeated-context traffic, and batching-oriented modes help multi-request serving.
+
+The online controller uses these differences to route requests to suitable fixed modes. On deployment-style synthetic workloads, it achieves a 2.10
+\times
+mean latency speedup and a 0.48
+\times
+mean energy ratio relative to FP16, while keeping GPU memory close to the FP16 baseline. On automatic benchmarks, it maintains accuracy close to FP16 with a mean delta of +0.17 percentage points. Learned routers can imitate the oracle, but do not outperform the rule controller because they add routing overhead and make more constraint-violating choices. Overall, simple phase-aware and workload-aware rules are already a strong practical baseline for efficient single-GPU LLM serving.
+
+The main limitation is that our evaluation focuses on one target deployment setup: Meta-Llama-3.1-8B-Instruct on a single A100 GPU. Future work should test the controller across more model families, GPU types, and production request traces, and should explore lower-overhead learned routers that use richer online system signals. Another useful direction is finer-grained phase-aware control, where the system can adapt separately to prefill and decode while preserving KV-cache compatibility.
+
+Code Availability.
+
+The project code, benchmarking scripts, controller implementation, and result-generation pipeline are available at:
+
+https://github.com/ModeSwitch-LLM/ModeSwitch-LLM
+.
+

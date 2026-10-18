@@ -1,0 +1,3346 @@
+CAFS: A Cache-Aware Frequency Sort for Low-Cardinality Integer Data on x86-64
+Vasiliy S. Shlyk
+
+Abstract
+Integer sorts in OLAP engines often run on columns whose cardinality K K is much smaller than the array length N N . After a group-by stage the intermediate key column has K K bounded by the number of distinct group keys, and even a column-store scan typically operates on dictionary-encoded categorical fields where K K never exceeds a few thousand. A comparison sort on such a column still pays Θ ⁡ ( N ​ log ⁡ N ) \Theta(N\log N) comparisons, and a radix sort still pays Θ ⁡ ( N ⋅ B / b ) \Theta(N\cdot B/b) byte passes, irrespective of K K . This paper describes CAFS, an integer sort that does exploit it on x86-64 with AVX2. The algorithm combines a SIMD bucket sized to one cache line, a Chao1 cardinality estimator over 1024 strided samples (kept in a heap-allocated 40 KB open-addressing table), and an adaptive dispatcher backed by a spill safety guard. The hot loop is branchless and uses AVX2 cmpeq together with movemask and tzcnt to locate the matching lane. We benchmarked CAFS on a full-factorial grid of 58 array sizes N N from 10 3 10^{3} to 3 ⋅ 10 7 3\cdot 10^{7} with dense K K schedules per N N , producing 592770 timed runs against pdqsort, IPS4o, vqsort, ska_sort, and std::sort. In the K ≪ N K\ll N band the throughput is 1.7 to 3.1 × \times that of pdqsort, 1.7 to 3.5 × \times IPS4o, and 1.2 to 2.3 × \times vqsort. The operational crossover against pdqsort is at K ≈ 1.3 ⋅ 10 5 K\approx 1.3\cdot 10^{5} ; against ska_sort, K ≈ 8.14 ⋅ 10 5 K\approx 8.14\cdot 10^{5} ; against vqsort, K ≈ 6.7 ⋅ 10 5 K\approx 6.7\cdot 10^{5} ; and against IPS4o the curves only converge near K = N K=N . Of the five baselines, only vqsort actually overtakes CAFS once the crossover is passed, which makes the vqsort threshold at K ≈ 6.7 ⋅ 10 5 K\approx 6.7\cdot 10^{5} the binding constraint on the operational range of CAFS.
+
+
+
+1  Introduction
+
+Sorting integer arrays serves as a core primitive in database management systems, OLAP engines, ETL pipelines, and column stores. Many of these workloads sort integer keys whose distinct-value count is small relative to the array length; common examples include status flags, event types, foreign keys into small dimension tables, and dictionary-encoded categorical attributes
+[
+3
+,
+20
+]
+. After a group-by stage, the intermediate key column has
+K\ll N
+by construction, and a downstream sort runs on data with a heavy concentration of repeats. Similar patterns recur outside the database setting, for instance whenever a categorical column has been quantized down to a small alphabet.
+
+Generic sorts ignore the property entirely. Comparison-based methods have an
+\Omega(N\log N)
+lower bound on comparisons regardless of the input distribution
+[
+13
+,
+6
+]
+, and distribution sorts pay
+\lceil B/b\rceil
+passes over key bytes (where
+B
+is the key width and
+b
+the radix digit width), so on 64-bit keys ska_sort
+[
+19
+]
+performs eight byte passes whether
+K
+is 8 or
+10^{6}
+. On a
+10^{7}
+-element array with
+K=200
+a comparison sort issues about
+2.3\cdot 10^{8}
+comparisons, while the count-and-emit cost would be near
+N+K\log K\approx 10^{7}
+
+[
+13
+]
+, more than
+20\times
+smaller. A single such sort completes in milliseconds, but at typical OLAP query rates of
+10^{3}
+–
+10^{4}
+queries per second per node, the cumulative time spent inside the sort primitive becomes a non-trivial fraction of total CPU consumption.
+
+Recent x86-64 cores make this gap exploitable in hardware. AVX2 gives 256-bit registers and instructions that compare four 64-bit keys in a single cycle, and BMI1 supplies tzcnt to extract the matching lane in two more cycles
+[
+12
+]
+. Writing the hot loop with broadcast, cmpeq, movemask, and tzcnt also removes the conditional branches that would otherwise stall the pipeline by more than a dozen cycles per misprediction
+[
+12
+,
+7
+]
+. The combined effect is a per-element cost of about one SIMD operation on a low-cardinality input, below the rate of any comparison or radix sort we are aware of.
+
+We present CAFS (Cache-Aware Frequency Sort). CAFS uses a SIMD bucket on one cache line, a Chao1 cardinality estimator
+[
+5
+]
+on a 1024-sample frequency set, and an adaptive dispatcher. The dispatcher routes to a tiny-count branchless path for
+\hat{K}\leq 8
+, a hash-count main path for
+8<\hat{K}<N/2
+, and a pdqsort
+[
+17
+]
+fallback when
+\hat{K}\cdot 2>N
+. A spill safety guard bounds the worst-case slowdown (Section
+4
+). We evaluate CAFS empirically on a full-factorial
+(N,K)
+grid against five baselines and report per-baseline crossover points
+K^{*}
+above which CAFS no longer dominates. Our contributions are:
+
+•
+
+A SIMD bucket layout fitting one cache line, with branchless update via AVX2 cmpeq, movemask, and tzcnt.
+
+•
+
+An adaptive dispatcher driven by a Chao1 cardinality estimator over 1024 strided samples, with a fixed-size FreqSet on the heap as the backing storage.
+
+•
+
+A three-branch hybrid (tiny-count for
+\hat{K}\leq 8
+, main hash-count, pdqsort fallback for
+\hat{K}\cdot 2>N
+) with a spill safety guard that caps the worst-case slowdown.
+
+•
+
+A header-only C++20 implementation for AVX2 on x86-64, with wrappers around pdqsort, IPS4o, vqsort, ska_sort, and std::sort under a unified benchmark driver.
+
+•
+
+A full-factorial empirical study on a grid of 58 array sizes from
+10^{3}
+to
+3\cdot 10^{7}
+with dense per-
+N
+
+K
+schedules, with explicit crossover points against each baseline.
+
+Section
+2
+surveys the comparison, distribution, and SIMD sorting families together with the relevant cardinality estimators, and Section
+3
+fixes the formal model. The algorithm itself appears in Section
+4
+, with pseudocode for the bucket update, the Chao1 estimator, the dispatcher, and the reconstruction step (the main hot loop is described in prose alongside its RLE behaviour). The implementation is described in Section
+5
+. Section
+6
+reports the per-baseline evaluation and the joint applicability map, Section
+7
+covers limitations and operating-point guidance, and Section
+8
+concludes.
+
+2  Background and Related Work
+
+2.1  Three families of integer sorts
+
+Integer sorts split naturally by their primitive decision step
+[
+13
+,
+6
+]
+. Comparison sorts build the order through
+x<y
+and trace paths in a decision tree, which forces
+\Omega(N\log N)
+comparisons in the worst and average cases for any input distribution. Distribution sorts read each key directly and place it in the output at an index computed from its value, at a typical cost of
+O(N\cdot B/b)
+, where
+B
+is the key bit width and
+b
+the radix digit width. Hash-count sorts reduce sorting to frequency counting followed by ordered emission of (key, count) pairs. Their total cost decomposes as
+T(N,K)=T_{\text{count}}(N)+T_{\text{sort}}(K)+T_{\text{emit}}(N)
+, which collapses to
+O(N)
+with a small constant whenever
+K\ll N
+
+[
+13
+]
+.
+
+Table
+1
+arranges the main competitors along three axes: asymptotic cost, dependence on
+K
+, and use of SIMD. Algorithms that ignore
+K
+pay their full asymptotic cost on every input. Algorithms that exploit
+K
+win at
+K\ll N
+, but the classical implementations do not vectorize the hot loop and lose to comparison and radix sorts on
+K\approx N
+because of the high constant in the count step. CAFS exploits
+K
+and also vectorizes the hot loop, with a deliberate fallback to a strong comparison sort on high-
+K
+inputs.
+
+Table 1:
+Integer sort families compared on three axes.
+
+Algorithm
+
+Cost
+
+Uses
+K
+?
+
+SIMD
+
+Extra memory
+
+std::sort (introsort)
+[
+15
+]
+
+O(N\log N)
+
+no
+
+no
+
+O(\log N)
+
+pdqsort
+[
+17
+]
+
+O(N\log N)
+
+no
+
+partial
+
+O(\log N)
+
+IPS4o (sequential)
+[
+2
+]
+
+O(N\log N)
+
+no
+
+no
+
+O(\log N)
+(in-place)
+
+ska_sort (LSD radix)
+[
+19
+]
+
+O(N\cdot B/b)
+
+no
+
+no
+
+O(N+2^{b})
+
+vqsort (Highway)
+[
+22
+]
+
+O(N\log N)
+
+no
+
+AVX2/AVX-512
+
+O(\log N)
+
+generic hash-count
+
+O(N+K\log K)
+
+yes
+
+no
+
+O(K)
+
+CAFS (this paper)
+
+O(N+K\log K)
+
+yes
+
+AVX2
+
+O(K)
+
+2.2  Comparison sorts
+
+The C++ standard library ships introsort
+[
+15
+]
+as
+std::sort
+, which combines quicksort with a heapsort safeguard at recursion depth
+2\log_{2}N
+and an insertion-sort cutoff under 16 elements. Pattern-defeating quicksort (pdqsort)
+[
+17
+]
+replaces the classical Lomuto partition with a branchless Hoare-style partition that eliminates the conditional store; pdqsort additionally detects already-sorted, reverse-sorted, and almost-sorted prefixes and falls back to a different algorithm on adversarial inputs. On random inputs the branchless partition removes the dominant cost (a mispredicted comparison stalls a modern x86 pipeline for more than a dozen cycles
+[
+12
+,
+7
+]
+) and yields a 1.5 to 3 times speedup over introsort. IPS4o
+[
+2
+]
+replaces the binary partition with an in-place
+k
+-way super-scalar samplesort whose classifier is a balanced binary tree built from a sampled splitter set; the predictable memory access pattern lets it outrun pdqsort by 1.2 to 1.5 times on random 64-bit integers in single-threaded mode. The branchless partitions in both pdqsort and IPS4o derive from BlockQuicksort
+[
+8
+]
+. None of the three algorithms exploits low
+K
+.
+
+2.3  Distribution sorts
+
+Counting sort needs
+O(N+R)
+memory and time, which is infeasible for
+R=2^{64}
+. Radix sorts decompose the key into
+b
+-bit digits and apply counting sort per digit
+[
+13
+]
+. The least-significant-digit (LSD) variant scans from low to high in
+\lceil B/b\rceil
+passes. The most-significant-digit (MSD) variant sorts the high digits first and recurses on the resulting buckets, which permits early exit on short buckets and admits an in-place implementation. The ska_sort implementation
+[
+19
+]
+uses an in-place American-flag MSD radix with type-specialized inner loops, signed-integer handling, and an insertion-sort cleanup on short buckets; on 64-bit keys this amounts to eight byte passes of bucket rearrangement that touch every element on each pass, with the per-pass move count of order
+N
+and the constant depending on the bucket distribution. Subsequent work in this family includes the AVX-friendly radix sorts of Satish et al.
+[
+18
+]
+for CPUs and GPUs with vectorized digit extraction, and the SIMD-plus-cache-friendly merge sort of Inoue and Taura
+[
+11
+]
+for column-store workloads. The cost of every algorithm in this family scales with the key width
+B
+and is independent of
+K
+.
+
+2.4  SIMD sorts
+
+SIMD-aware sorts push the hot loop onto vector lanes without adapting to
+K
+. Among earlier proposals, Bramas
+[
+4
+]
+built a hybrid quicksort on AVX-512 with sorting networks at the leaves, and Lemire et al.
+[
+14
+]
+showed that SIMD compression and decompression beat scalar baselines by an order of magnitude on integer streams, which already shows that vector lanes do useful work in sort-related kernels. The current strongest entry is vqsort
+[
+22
+]
+, which drives a recursive partition through AVX2 or AVX-512 sorting networks on YMM/ZMM registers and merges sorted halves with masked stores. Its hot loop runs near 0.5 to 1 cycle per element against 4 to 5 cycles for scalar pdqsort, and on 64-bit random inputs it outpaces prior comparison and radix sorts by roughly a factor of two.
+
+2.5  Cardinality estimation
+
+The Chao1 estimator
+[
+5
+]
+infers the unseen part of a population from singletons and doubletons in a sample. The original form is
+\hat{K}=u+f_{1}^{2}/(2f_{2})
+and the standard bias-corrected variant is
+\hat{K}=u+f_{1}(f_{1}-1)/(2(f_{2}+1))
+. Both are undefined or unstable when
+f_{2}=0
+, so the implementation in this paper uses the simpler smoothed variant
+
+\hat{K}_{\text{Chao1}}=u+\frac{f_{1}^{2}}{2\,(f_{2}+1)},
+
+where
+u
+is the count of distinct values seen in the sample,
+f_{1}
+is the count of values seen exactly once, and
+f_{2}
+is the count of values seen exactly twice. The
+f_{2}+1
+keeps the formula well-defined when
+f_{2}=0
+, and we use
+f_{1}^{2}
+in the numerator rather than the canonical
+f_{1}(f_{1}-1)
+for implementation simplicity. The two expressions differ by
+f_{1}/(2(f_{2}+1))
+, which can reach the order of
+f_{1}/2
+when
+f_{2}
+is small, but in that saturated regime the dispatcher already routes to the high-entropy fallback through the
+\hat{K}\cdot 2>N
+guard, so the choice does not affect dispatching behaviour. HyperLogLog
+[
+9
+]
+reaches relative standard error around
+1.04/\sqrt{m}
+with
+m
+registers, which is asymptotically tight but expensive at the fixed memory footprint we target (under 4 KB for the estimator). CAFS uses Chao1 because the algorithm needs only an order-of-magnitude estimate of
+K
+within microseconds, which a 1024-sample Chao1 on a 4096-slot table delivers.
+
+2.6  Cache and SIMD context
+
+Two earlier results inform the cache and SIMD analysis below. Frigo et al.
+[
+10
+]
+formalized cache-oblivious algorithms that match the optimal cache behaviour up to constants. Drepper
+[
+7
+]
+catalogued the relevant x86 memory-hierarchy effects, namely branch-misprediction cost and the L1, L2, L3, and DRAM access latencies that govern the constants in our hot-loop analysis. Cycle counts for individual AVX2 and BMI1 instructions used in the bucket update are taken from the Intel Optimization Reference Manual
+[
+12
+]
+.
+
+3  Problem Setting
+
+3.1  Inputs and goal
+
+Given an array
+X=(x_{1},\ldots,x_{N})
+of 64-bit unsigned integers from a value set
+V\subseteq\mathbb{Z}_{\geq 0}
+, the task is to compute a permutation
+\pi
+with
+x_{\pi(i)}\leq x_{\pi(i+1)}
+for
+1\leq i<N
+. Stability is not required: equal integer keys are indistinguishable. We write
+K=|\{x_{i}:1\leq i\leq N\}|
+for the cardinality,
+2\leq K\leq N
+, and restrict attention to the regime
+K\ll N
+that is typical of analytical workloads
+[
+3
+,
+20
+]
+.
+
+3.2  Information-theoretic gap
+
+The Shannon entropy per key under a uniform distribution over
+K
+values is
+H=\log_{2}K
+bits, so a 64-bit integer array with
+K
+unique values uses only
+H
+of its 64 bits per element. The gap
+\Delta=64-H
+is information capacity unused by the data but still loaded into registers and cache on every access. Neither comparison nor distribution sorts can recover this gap. A comparison sort issues
+\log_{2}N
+comparisons per element and a radix sort visits
+\lceil B/b\rceil
+digits per key whatever
+H
+may be. With a hash function of adequate spread and a table large enough to keep buckets sparse, a hash-count scheme drops the per-element cost to
+O(H)
+comparisons, scaling with the information content rather than with the key width or the array length.
+
+3.3  Cost model
+
+A hash-count sort decomposes into three components:
+
+T(N,K)=T_{\text{count}}(N)+T_{\text{sort}}(K)+T_{\text{emit}}(N).
+
+(1)
+
+For
+K\ll N
+the middle term
+T_{\text{sort}}(K)=O(K\log K)
+is negligible, and under a good count primitive the total cost approaches
+T(N,K)\approx 2N
+. For
+K\approx N
+the middle term rises to
+O(N\log N)
+, the count overhead remains, and the comparison family regains the asymptotic advantage. Equation (
+1
+) thus covers the dominance and fallback regimes of CAFS with a single expression.
+
+3.4  Entropy bin
+
+We aggregate measurements by entropy bin
+
+H_{\text{bin}}=\lfloor\log_{2}K\rfloor.
+
+(2)
+
+Bin 1 covers
+K\in[2,4)
+, bin 2 covers
+[4,8)
+, up to bin 24 for
+[2^{23},2^{24})
+. Bin index is the information density of the input in bits per key. Aggregation by
+H_{\text{bin}}
+turns the
+(N,K)
+scatter into a heatmap and absorbs the per-bin noise from the exact
+K
+value within the bin.
+
+3.5  Speedup, win rate, and crossover
+
+For a baseline
+X
+at point
+(N,K)
+, the speedup is
+
+\text{speedup}_{X}(N,K)=\frac{t_{X}(N,K)}{t_{\text{CAFS}}(N,K)}.
+
+(3)
+
+A value above 1 means CAFS wins. Inside an entropy bin we report the arithmetic mean (avg), minimum (min), maximum (max), and the win rate, defined as the fraction of points in the bin with
+\text{speedup}>1
+. The operational crossover against baseline
+X
+is the largest
+K
+(at
+N>10^{6}
+) for which CAFS wins on at least 50% of grid points in the corresponding entropy bin. We use the win rate rather than the bin mean to avoid sensitivity to outliers with extreme speedup. The Pearson correlation between
+\log N
+and speedup inside the dominance zone indicates whether the lead grows, shrinks, or stays flat with
+N
+.
+
+3.6  Methodology
+
+The grid covers 58 values of
+N
+from
+10^{3}
+to
+3\cdot 10^{7}
+, stepped in four piecewise-linear bands: 1000 to 50000 (step 2000), 50000 to 1 million (step 50000), 1 million to 10 million (step 1 million), and 10 million to 30 million (step 5 million). For each
+N
+the cardinality
+K
+is enumerated from 2 to
+N
+along a piecewise-coarsening schedule: step 1 below
+K=200
+, step 10 from 200 to 15000, step 500 from 15000 to
+10^{5}
+, and
+\max(5000,K/10)
+above that, which gives a dense sweep at small
+K
+and a roughly geometric sweep once
+K
+grows past the L1 working set. Every algorithm is run twice on a fresh copy of the input and we keep the minimum of the two runs to suppress scheduler noise. Correctness is checked against a reference array sorted by std::sort and any point with a mismatch is dropped from aggregation, although CAFS produced no such failure on the grid. Each
+(N,K)
+point is tested against five baselines plus CAFS, and together with the rerun rows for low-entropy bins and the per-bin book-keeping rows the resulting CSV holds 592770 measurement rows.
+
+4  The CAFS Algorithm
+
+4.1  Overview and pipeline
+
+The algorithmic skeleton is the count-emit pair: count the frequency of each unique value, then emit (key, count) pairs in increasing key order. The hot loop never compares two input values with
+<
+; the only equality check it performs is between an input value and a bucket slot. The count step always costs
+O(N)
+at one SIMD operation per element, so when
+K\ll N
+the whole algorithm runs near that rate, whereas at
+K\approx N
+the trailing pair sort dominates and a dedicated comparison engine wins.
+
+The pipeline runs in seven stages, drawn in Figure
+1
+. The monotonicity check returns early on already-sorted input through a fast scan that exits at the first inversion (on random input that happens at the second or third element). The sampler then reads 1024 strided samples and feeds a heap-allocated open-addressing frequency set FreqSet of 4096 slots (about 40 KB for 64-bit keys), from which the Chao1 estimator computes
+\hat{K}
+,
+u
+,
+f_{1}
+, and
+f_{2}
+. On those values the dispatcher selects a branch (Algorithm
+3
+), the selected branch iterates over the input and updates buckets through the SIMD primitive of Section
+4.2
+, reconstruction folds the buckets and the spill into a dense pair array, and a final emit step expands those pairs into the output via std::fill_n.
+
+Figure 1:
+CAFS pipeline.
+
+The monotonicity check pays
+O(N)
+comparisons with early exit. Sampling and Chao1 add
+O(s)
+at
+s=1024
+, under 100 microseconds on a modern x86 core, and the dispatcher itself is a single comparison. The tiny-count branch pays
+O(N)
+with eight branchless adds per element, while the main hot loop pays roughly one SIMD operation per element. Spill drain costs
+O(|\text{spill}|\log|\text{spill}|)
+when the spill is non-empty and nothing otherwise. The trailing pair sort runs std::sort if
+K^{\prime}<256
+and an 8-pass LSD byte radix otherwise.
+
+4.2  The SIMD bucket
+
+The bucket is a fixed-capacity record aligned to a 64-byte cache line. For
+uint64_t
+the bucket holds four 64-bit keys (32 B), four 32-bit counters (16 B), and 16 B of padding. For
+int32_t
+it holds eight keys and eight counters, exposing one AVX2 instruction across all eight lanes. Figure
+2
+shows the layout.
+
+Figure 2:
+Layout of
+Bucket<uint64_t>
+: 64 bytes aligned to a cache line.
+
+The
+update(val, inc)
+operation takes a value and an increment count. On a hit it adds
+inc
+to the matching counter, on a miss it claims the first empty slot (the one whose counter is zero), and on a fully occupied bucket it returns false so the value is sent to the spill. The 64-bit specialization compiles to five instructions:
+_mm256_load_si256
+pulls four keys into a YMM register,
+_mm256_set1_epi64x
+broadcasts the query value across the four lanes,
+_mm256_cmpeq_epi64
+compares them in parallel,
+_mm256_movemask_pd
+packs the result into a 4-bit mask, and
+std::countr_zero
+(BMI1 tzcnt) returns the index of the matched lane. The data flow is drawn in Figure
+3
+and the operation is stated in Algorithm
+1
+. With per-instruction latencies on Alder Lake
+[
+12
+]
+of 1 cycle for
+vmovdqa
+from L1, 1 for
+vpbroadcastq
+, 1 for
+vpcmpeqq
+, 2 for
+vmovmskpd
+, 3 for
+tzcnt
+, and 1 for the counter add, the critical-path dependency on a hit (
+vpcmpeqq
+→
+vmovmskpd
+→
+tzcnt
+→ counter add) sums to 7 cycles, which out-of-order overlap across successive iterations amortizes to roughly 4 to 5 cycles per element.
+
+Figure 3:
+Branchless bucket update through AVX2 instructions.
+
+Algorithm 1
+
+Branchless bucket update for
+uint64_t
+on AVX2.
+
+1:
+
+function
+
+Update
+(bucket, val, inc)
+
+2:
+
+\textit{keys}\leftarrow\texttt{\_mm256\_load\_si256}(\text{bucket.keys})
+
+3:
+
+\textit{q}\leftarrow\texttt{\_mm256\_set1\_epi64x}(\text{val})
+
+4:
+
+\textit{eq}\leftarrow\texttt{\_mm256\_cmpeq\_epi64}(\textit{keys},\textit{q})
+
+5:
+
+\textit{m}\leftarrow\texttt{\_mm256\_movemask\_pd}(\text{cast}(\textit{eq}))
+
+6:
+
+if
+
+\textit{m}\neq 0
+
+then
+
+7:
+
+j\leftarrow\texttt{tzcnt}(\textit{m})
+
+8:
+
+\text{bucket.counts}[j]\mathrel{+}=\textit{inc}
+
+\triangleright
+hit path: 4–5 cycles
+
+9:
+
+return
+
+true
+
+10:
+
+end
+
+if
+
+11:
+
+for
+
+j=0
+to
+\text{CAP}-1
+
+do
+
+\triangleright
+cold path: claim empty slot
+
+12:
+
+if
+
+\text{bucket.counts}[j]=0
+
+then
+
+13:
+
+\text{bucket.keys}[j]\leftarrow\text{val}
+
+14:
+
+\text{bucket.counts}[j]\leftarrow\textit{inc}
+
+15:
+
+return
+
+true
+
+16:
+
+end
+
+if
+
+17:
+
+end
+
+for
+
+18:
+
+return
+
+false
+
+\triangleright
+full bucket, value goes to spill
+
+19:
+
+end
+
+function
+
+The bucket does not resolve in-bucket collisions. When a bucket fills, the next miss spills to a side buffer. A Poisson model with capacity 4 and mean fill 0.5 puts the probability of overflow at
+P(X\geq 5)\approx 1.7\cdot 10^{-4}
+, so spills stay rare across the input distributions in our grid (Section
+6
+). The hash function is the multiplicative hash with the inverse golden ratio:
+
+h(x)=\left\lfloor\frac{(x\cdot\varphi^{-1})\bmod 2^{64}}{2^{64-\log_{2}M}}\right\rfloor,\quad\varphi^{-1}=\texttt{0x9E3779B97F4A7C15},
+
+(4)
+
+which compiles into one multiplication and one shift
+[
+13
+]
+. The choice of hash matters because low-cardinality columns in practice exhibit arithmetic structure (sequential foreign keys, codes from a contiguous range
+\{0,\ldots,K-1\}
+, or fixed-step quantized features), and the naive
+h(x)=x\bmod M
+collides catastrophically on such inputs because a linear progression maps to every
+M
+-th bucket. Multiplicative hashing distributes a linear progression across the index space pseudo-uniformly and cuts the collision rate by about three orders of magnitude at the same
+M
+.
+
+4.3  Cardinality estimation
+
+Before the main path runs, CAFS samples the input at stride
+\max(1,\lfloor N/s\rfloor)
+with
+s=1024
+, then drops the samples into a heap-allocated open-addressing table FreqSet of 4096 slots (40 KB for 64-bit keys: a 32 KB key array plus an 8 KB counter array). Three statistics fall out:
+u
+is the count of occupied slots,
+f_{1}
+is the count of slots with frequency 1, and
+f_{2}
+is the count of slots with frequency 2. Algorithm
+2
+states the estimator.
+
+Algorithm 2
+
+Chao1 cardinality estimator on a fixed-size FreqSet.
+
+1:
+
+function
+
+Chao1
+(
+X
+,
+N
+,
+s=1024
+)
+
+2:
+
+allocate FreqSet on the heap (4096 slots, all empty)
+
+3:
+
+\textit{stride}\leftarrow\max(1,\lfloor N/s\rfloor)
+
+4:
+
+for
+
+i=0,\textit{stride},2\textit{stride},\ldots
+until
+\min(N,s\cdot\textit{stride})
+
+do
+
+5:
+
+linear-probe insert
+X[i]
+into FreqSet, increment its counter
+
+6:
+
+end
+
+for
+
+7:
+
+u\leftarrow
+count of occupied slots
+
+8:
+
+f_{1}\leftarrow
+count of slots with counter
+=1
+
+9:
+
+f_{2}\leftarrow
+count of slots with counter
+=2
+
+10:
+
+if
+
+u=s
+
+then
+
+11:
+
+return
+
+(N,u,f_{1},f_{2})
+
+\triangleright
+saturated; high-entropy input
+
+12:
+
+end
+
+if
+
+13:
+
+return
+
+\bigl(u+f_{1}^{2}/(2(f_{2}+1)),\ u,\ f_{1},\ f_{2}\bigr)
+
+14:
+
+end
+
+function
+
+The Chao1 estimator
+[
+5
+]
+reads
+
+\hat{K}_{\text{Chao1}}=u+\frac{f_{1}^{2}}{2\,(f_{2}+1)}.
+
+(5)
+
+The correction term
+f_{1}^{2}/(2(f_{2}+1))
+infers the unseen part of the population from the spectrum of rare values in the sample. The Laplace smoothing
+f_{2}+1
+avoids division by zero when no doubletons appear; the asymptotic effect is negligible at
+f_{2}
+in the tens or higher. When
+u=s
+the estimator saturates to
+N
+, which routes the dispatcher to the high-entropy path. The full estimation costs 1024 hash computes, 1024 probes, and 4096 counter reads, under 100 microseconds on a modern x86 core. Figure
+4
+shows the data flow.
+
+Figure 4:
+The Chao1 estimator: sample, FreqSet, frequency spectrum,
+\hat{K}
+.
+
+4.4  Adaptive dispatcher and hot loop
+
+The dispatcher reads
+\hat{K}
+,
+u
+, and
+N
+and routes to one of three content branches plus a trivial bypass. Table
+2
+lists the conditions; Algorithm
+3
+encodes the same logic. Figure
+5
+draws the decision tree.
+
+Table 2:
+Dispatcher decisions and the selected branch.
+
+Condition
+
+Branch
+
+Rationale
+
+N<2048
+
+fallback (pdqsort)
+
+sampling does not amortize
+
+\hat{K}\leq 8\wedge u\leq 8
+
+tiny-count branchless
+
+8 stack counters beat the SIMD bucket
+
+\hat{K}\cdot 2>N
+
+fallback (pdqsort)
+
+high entropy, hash scheme not viable
+
+otherwise
+
+main CAFS
+
+8<\hat{K}<N/2
+
+Figure 5:
+Dispatcher decision tree.
+
+Algorithm 3
+
+Adaptive dispatcher.
+
+1:
+
+function
+
+Dispatch
+(
+X
+,
+N
+)
+
+2:
+
+if
+
+IsMonotone
+(
+X
+,
+N
+)
+then
+
+3:
+
+return
+early on already-sorted input
+\triangleright
+trivial bypass
+
+4:
+
+end
+
+if
+
+5:
+
+if
+
+N<2048
+
+then
+
+6:
+
+return
+pdqsort(
+X
+,
+N
+)
+\triangleright
+pre-pass too expensive at small
+N
+
+7:
+
+end
+
+if
+
+8:
+
+(\hat{K},u,f_{1},f_{2})\leftarrow
+
+Chao1
+(
+X
+,
+N
+)
+
+9:
+
+if
+
+\hat{K}\leq 8\wedge u\leq 8
+
+then
+
+10:
+
+return
+
+TinyCount
+(
+X
+,
+N
+, sample keys)
+
+11:
+
+end
+
+if
+
+12:
+
+if
+
+\hat{K}\cdot 2>N
+
+then
+
+13:
+
+return
+pdqsort(
+X
+,
+N
+)
+\triangleright
+high-entropy fallback
+
+14:
+
+end
+
+if
+
+15:
+
+return
+main hot loop (
+X
+,
+N
+,
+\hat{K}
+)
+\triangleright
+described in prose below
+
+16:
+
+end
+
+function
+
+The dispatcher itself is a single comparison after the sampler. The pre-pass pays at most
+3\cdot 10^{5}
+cycles in total. When the condition
+\hat{K}\leq 8\wedge u\leq 8
+fires, the algorithm extracts up to eight keys from the sample and runs eight independent counters with branchless updates. Each comparison
+(v==k_{j})
+compiles into a cmp/setcc pair without a conditional jump. The eight add instructions are register-independent and execute concurrently on the out-of-order back end, which yields about 1 to 2 cycles per element on random 64-bit input. After the pass, the branch checks
+\sum c_{j}=N
+. On success it emits the output via std::fill_n. On failure (Chao1 underestimated and the input has a value outside the eight sampled keys) control falls into the main path.
+
+The main path also runs a run-length-encoding (RLE) pass over consecutive equal elements: before each
+update
+call CAFS extends the run and replaces
+r
+separate calls with a single
+update(val, run_len)
+. The benefit depends on input shape. On fully random input with
+K\gg 1
+runs degenerate to length 1 and RLE adds one comparison per element without reducing the
+update
+count, whereas on sorted-by-group inputs the average run is
+N/K
+and the call count collapses from
+N
+to
+K
+(with already-sorted input as the degenerate end of the same curve). Figure
+6
+shows the loop state.
+
+Figure 6:
+Main hot loop state: pointer ptr, index
+i
+, run_len, active bucket.
+
+4.5  Reconstruction and complexity
+
+The hash table size adapts to the estimate:
+
+M=\text{bit\_ceil}(8\cdot\hat{K}/\text{cap}),
+
+(6)
+
+where cap is 4 for 64-bit keys and 8 for 32-bit keys. The target slot load factor is
+1/8
+, which gives an expected full-bucket rate near
+0.1\%
+under a Poisson allocation. The size is clamped between
+M\geq 8
+and
+M\leq\text{bit\_ceil}(N/\text{cap})
+. Figure
+7
+maps
+M
+to the cache hierarchy of the test platform.
+
+Figure 7:
+Hash table size as a function of
+\hat{K}
+, illustrative. The horizontal markers are drawn at generic x86 L1d / L2 / L3 sizes; the test platform (Table
+4
+) has a 48 KB L1d, which shifts the L1d marker relative to the figure. The exact bucket counts for our
+\hat{K}=200,4\cdot 10^{3},10^{4},10^{6}
+examples are given in the text below; figure values are sketched at illustrative resolution and may differ by a power of two from the formula in the text.
+
+At
+\hat{K}=200
+,
+M=512
+buckets give a 32 KB table that fits comfortably inside the 48 KB L1d of the test platform (Table
+4
+). At
+\hat{K}=4\cdot 10^{3}
+,
+M=8192
+gives a 512 KB table that fits in the 1.25 MB L2. At
+\hat{K}=10^{4}
+,
+M=32768
+gives a 2 MB table, which exceeds the L2 and lives in L3. At
+\hat{K}=10^{6}
+,
+M=2^{21}
+is 128 MB and goes to DRAM, but at that scale the dispatcher condition
+\hat{K}\cdot 2>N
+usually fires and CAFS routes to the fallback before the hash table is even allocated.
+
+Reconstruction after the hot loop has three steps. (a) If
+|\text{spill}|>N/2
+the result is dropped and CAFS restarts with the pdqsort fallback. This guard caps the worst case at roughly twice pdqsort time, and the absolute worst case observed in our grid was about 5 times. (b) Otherwise the spill is sorted with std::sort, equal neighbors are folded into (key, count) pairs, and the resulting pairs are appended to the dense bucket pairs. (c) The combined dense array of size
+K^{\prime}\leq\hat{K}+|\text{spill folded}|
+is then sorted by key. The procedure is stated in Algorithm
+4
+and the data path is drawn in Figure
+8
+.
+
+Algorithm 4
+
+Reconstruction with spill safety guard.
+
+1:
+
+function
+
+Reconstruct
+(buckets, spill,
+N
+, out)
+
+2:
+
+if
+
+|\text{spill}|>N/2
+
+then
+
+3:
+
+return
+pdqsort(
+X
+,
+N
+)
+\triangleright
+safety guard fires
+
+4:
+
+end
+
+if
+
+5:
+
+sort spill with std::sort
+
+6:
+
+fold equal neighbors of the spill into (key, count) pairs
+\to
+
+spill_pairs
+
+7:
+
+collect non-empty bucket slots into pairs
+\to
+
+dense_pairs
+
+8:
+
+dense_pairs
+
+\leftarrow
+
+dense_pairs
+
+\cup
+
+spill_pairs
+
+9:
+
+K^{\prime}\leftarrow|\texttt{dense\_pairs}|
+
+10:
+
+if
+
+K^{\prime}<256
+
+then
+
+11:
+
+sort
+dense_pairs
+by key with std::sort
+
+12:
+
+else
+
+13:
+
+sort
+dense_pairs
+by key with 8-pass LSD byte radix
+
+14:
+
+end
+
+if
+
+15:
+
+p\leftarrow\text{out}
+
+16:
+
+for
+each
+(k,c)
+in
+dense_pairs
+
+do
+
+17:
+
+std::fill_n
+(
+p
+,
+c
+,
+k
+);
+p\leftarrow p+c
+
+18:
+
+end
+
+for
+
+19:
+
+end
+
+function
+
+Figure 8:
+Reconstruction: buckets, spill, dense_res, radix tail.
+
+The pair sort runs std::sort with a key comparator when
+K^{\prime}<256
+and an 8-pass LSD byte radix when
+K^{\prime}\geq 256
+. The expansion uses std::fill_n(out, count, key) per pair, which compiles to rep stosq or a SIMD store burst with throughput close to L2/L3 bandwidth (30 to 50 GB/s).
+
+Figure 9:
+CAFS working set across the x86-64 cache hierarchy.
+
+The branch-wise time complexities are:
+
+\displaystyle T_{\text{tiny}}(N)
+
+\displaystyle=O(N),
+
+(7)
+
+\displaystyle T_{\text{main}}(N,K)
+
+\displaystyle=O(N)+O(K\log K),
+
+(8)
+
+\displaystyle T_{\text{main+radix}}(N,K)
+
+\displaystyle=O(N)+O(8K),
+
+(9)
+
+\displaystyle T_{\text{fallback}}(N)
+
+\displaystyle=O(s)+O(N\log N).
+
+(10)
+
+Total memory is dominated by the bucket table at
+64M
+bytes (one 64-byte cache line per bucket). The expected spill size on the input distributions in our grid is
+O(N\cdot 1.7\cdot 10^{-4})
+, with a hard cap of
+N/2
+enforced by the guard. The dense pair array dense_res holds at most
+K+|\text{spill folded}|
+entries, and the radix buffer consumes a further
+K^{\prime}\cdot\text{sizeof(Pair)}
+bytes.
+
+5  Implementation
+
+CAFS ships as a header-only C++20 library. It pulls only
+<algorithm>
+,
+<bit>
+,
+<cstdint>
+,
+<cstring>
+,
+<vector>
+,
+<utility>
+, and
+<immintrin.h>
+. The C++20 surface used is
+std::bit_ceil
+,
+std::bit_width
+, and
+std::countr_zero
+. The target ISA is x86-64 with AVX2; SIMD specializations exist for
+int32_t
+,
+int64_t
+, and
+uint64_t
+. Other integral types fall back to a scalar four-key linear scan with no loss of correctness. Builds were verified on g++ 13.2 (MinGW-w64) on Windows 11 with
+-O3 -mavx2 -mbmi -std=c++20 -DNDEBUG
+.
+
+All baselines enter the benchmark through thin wrappers in
+competitors.hpp
+. std::sort is taken from libstdc++. Both pdqsort
+[
+16
+]
+and ska_sort
+[
+19
+]
+are single-header libraries and are included directly. IPS4o
+[
+1
+]
+is also distributed header-only, but its internal scheduler instantiates TBB types even on the sequential entry point; the wrapper supplies a stub header with empty TBB-type declarations to satisfy the includes, after which only the sequential entry point is called. vqsort is part of Google Highway
+[
+21
+]
+and is built via
+add_subdirectory
+in CMake, linking statically against the
+hwy
+and
+hwy_contrib
+targets. The i5-12400F does not expose AVX-512, so the Highway runtime dispatch lands on the AVX2 implementation, which is the same ISA target as CAFS.
+
+Artifact availability.
+
+The implementation, the benchmark driver, the baseline wrappers, and the raw measurement CSVs are released under the MIT license at
+https://github.com/kexibq-official/cafs-lib
+. The repository also contains build scripts for libhwy and the vqsort object files, together with the Python notebooks used to produce the figures and tables. The source layout is summarized in Table
+3
+.
+
+Table 3:
+Source layout of the implementation.
+
+File
+
+Contents
+
+cafs.hpp
+
+primitives: Bucket<T> with SIMD specializations, fast_hash, prototype v1
+
+cafs2.hpp
+
+adaptive dispatcher, FreqSet, Chao1 estimator, tiny-count, radix tail
+
+competitors.hpp
+
+wrappers for pdqsort, ska_sort, IPS4o, vqsort
+
+datagen.hpp
+
+low-entropy input generator with controlled
+K
+
+main_bigdata.cpp
+
+benchmark driver:
+(N,K)
+grid, correctness check, CSV export
+
+6  Evaluation
+
+6.1  Goals, hypotheses, methodology
+
+The evaluation answers three questions. First, what is the bin-mean speedup of CAFS against each baseline at
+K\ll N
+, and is it large enough to be useful? Second, where, in terms of
+K
+, does each baseline overtake CAFS at
+N>10^{6}
+? Third, is the lead at fixed
+K
+stable across
+N
+, or does it grow or shrink as the array gets bigger?
+
+For each point
+(N,K)
+a palette of
+K
+values is built as the arithmetic progression
+a+b\cdot i
+for
+i=0,\ldots,K-1
+, where
+a
+and an odd step
+b
+are derived from the seed
+42+N+K
+through a SplitMix-style mixer, and the array of length
+N
+is then filled by uniform sampling from this palette, with each algorithm receiving its own fresh copy. Runs are timed with
+std::chrono::high_resolution_clock
+(reported as floating-point milliseconds), each algorithm is executed twice on every point regardless of
+N
+, and the minimum of the two replicates enters the result table. Correctness is verified by sorting a separate copy with std::sort and comparing element-wise, and CAFS produced no failures across the grid. The order of algorithms within a point is fixed at (CAFS, std::sort, pdqsort, ska_sort, IPS4o, vqsort) and we did not randomize it; the methodological consequences are discussed in Section
+6.2
+.
+
+We benchmark CAFS against five single-threaded baselines: pdqsort and IPS4o (comparison), vqsort (SIMD), ska_sort (radix), and std::sort (the C++ standard library default). Each
+(N,K)
+point produces one speedup value per baseline, and we aggregate by entropy bin
+H_{\text{bin}}=\lfloor\log_{2}K\rfloor
+.
+
+6.2  Bench platform
+
+The bench is single-threaded, background processes were minimized between runs, and the P-state lock was not enforced, so thermal throttling adds about
+\pm 5\%
+noise across long runs (Table
+4
+). The fixed algorithm order within each
+(N,K)
+point (Section
+6
+) introduces an additional systematic bias whose sign is the opposite of what one might assume: CAFS runs first on a cold cache and the baselines that follow benefit from a working set that is already paged in. The effect is at most a few percent of run time on the largest inputs and below measurement noise once the working set exceeds L3. We do not claim this bias cancels in the speedup ratio; it is a methodological limitation of the present study.
+
+Table 4:
+Bench platform and toolchain.
+
+Parameter
+
+Value
+
+CPU
+
+Intel Core i5-12400F, 6 P-cores, base 2.5 GHz, boost 4.4 GHz
+
+ISA extensions
+
+x86-64, AVX2, BMI1, BMI2
+
+L1d cache
+
+48 KB per core, 12-way associative
+
+L2 cache
+
+1.25 MB per core, 10-way associative
+
+L3 cache
+
+18 MB shared, 12-way associative
+
+RAM
+
+32 GB DDR4-3200
+
+OS
+
+Windows 11
+
+Compiler
+
+g++ 13.2 (MinGW-w64)
+
+Build flags
+
+-O3 -mavx2 -mbmi -std=c++20 -DNDEBUG
+
+6.3  CAFS vs. pdqsort
+
+Across bins 1 to 16 the bin-mean speedup is between 1.7 and 3.1, with the win rate between 67% and 96%. The win rate stays above 90% all the way through bin 11 (the safe zone) and only drops to 67% by bin 16, where the bin mean is still above 1.6. Bin 17 is the transition (mean 1.29, win rate 56%), and parity sets in from bin 18 onward. The minimum entries between 0.20 and 0.39 mark the points where the safety guard fired and CAFS finished at about half the speed of pdqsort because of the sampling overhead; no point exceeded a
+5\times
+slowdown. The last dominance point at
+N>10^{6}
+is at
+K\approx 1.72\cdot 10^{7}
+(
+H\approx 24
+bits), and the operational crossover (the largest
+K
+where the win rate still clears 50%) corresponds to
+H\approx 17
+bits (
+K\approx 1.3\cdot 10^{5}
+). Inside the dominance zone the Pearson correlation between
+\log N
+and speedup is
+r=0.232
+, so the lead trends mildly upward with
+N
+.
+
+Figure 10:
+Heatmap of CAFS speedup over pdqsort across the
+(N,K)
+grid.
+
+Table 5:
+Speedup of CAFS over pdqsort, by entropy bin.
+
+H_{\text{bin}}
+
+K
+range
+
+avg
+
+min
+
+max
+
+win-rate
+
+1
+
+2 to 4
+
+2.50
+
+0.20
+
+7.38
+
+94.8%
+
+2
+
+4 to 8
+
+3.10
+
+0.29
+
+6.49
+
+94.8%
+
+3
+
+8 to 16
+
+1.72
+
+0.14
+
+6.36
+
+88.4%
+
+4
+
+16 to 32
+
+1.86
+
+0.25
+
+3.72
+
+92.9%
+
+5
+
+32 to 64
+
+2.30
+
+0.26
+
+4.23
+
+94.6%
+
+6
+
+64 to 128
+
+2.63
+
+0.20
+
+4.92
+
+93.6%
+
+7
+
+128 to 256
+
+2.86
+
+0.25
+
+8.09
+
+94.9%
+
+8
+
+256 to 512
+
+3.00
+
+0.27
+
+5.16
+
+94.3%
+
+9
+
+512 to 1024
+
+3.07
+
+0.24
+
+6.84
+
+94.4%
+
+10
+
+1024 to 2048
+
+3.01
+
+0.24
+
+5.93
+
+95.6%
+
+11
+
+2048 to 4096
+
+2.78
+
+0.30
+
+7.31
+
+93.4%
+
+12
+
+4096 to 8192
+
+2.35
+
+0.21
+
+9.57
+
+87.2%
+
+13
+
+8192 to 16384
+
+2.12
+
+0.24
+
+6.30
+
+71.5%
+
+14
+
+16384 to 32768
+
+1.92
+
+0.34
+
+4.35
+
+67.1%
+
+15
+
+32768 to 65536
+
+1.87
+
+0.29
+
+4.23
+
+81.5%
+
+16
+
+65536 to 131072
+
+1.66
+
+0.33
+
+3.54
+
+77.4%
+
+17
+
+131072 to 262144
+
+1.29
+
+0.34
+
+3.14
+
+55.9%
+
+18
+
+262144 to 524288
+
+1.01
+
+0.39
+
+2.29
+
+41.7%
+
+\geq 19
+
+\geq
+524288
+
+\leq
+1.00
+
+0.36
+
+1.71
+
+\leq
+49.6%
+
+6.4  CAFS vs. IPS4o
+
+The bin-mean speedup in bins 1 to 11 (
+K
+from 2 to 4096) is between 1.97 and 3.52 at win rates above 97%, with a maximum of 3.52 in bin 9 (
+K=512
+to 1024). At that
+K
+the hash table fits in L1d, RLE injection stays inactive on random input, and the sampling cost is small relative to the count step. Through bins 12 to 16 (up to
+K=131072
+) the mean falls to between 1.7 and 2.5 with win rates between 79% and 96% as the table moves out of L1d through L2 and into L3 while IPS4o keeps its prefetch-friendly partition pattern. Bin 17 is the transition (mean 1.33, win rate 58%), and from bin 18 onward the bin means are near 1.00. Unlike the pdqsort and vqsort pairings, there is no sharp crossover against IPS4o; the lead decreases smoothly to parity, with the last dominance point at
+N>10^{6}
+corresponding to
+K\approx 1.72\cdot 10^{7}
+(
+H\approx 24
+bits), close to
+K=N
+. The Pearson correlation between
+\log N
+and speedup inside the dominance zone is
+r=-0.189
+, a slight tilt downward as
+N
+grows.
+
+Hypothesis H2 thus holds against a strong comparison engine, not only against introsort. The 1.97 to 3.52 range across the safe band exceeds the 2
+\times
+threshold of H1 in most of bins 1 to 11.
+
+Figure 11:
+Heatmap of CAFS speedup over IPS4o across the
+(N,K)
+grid.
+
+Table 6:
+Speedup of CAFS over IPS4o, by entropy bin.
+
+H_{\text{bin}}
+
+K
+range
+
+avg
+
+min
+
+max
+
+win-rate
+
+1
+
+2 to 4
+
+3.24
+
+0.65
+
+11.64
+
+99.1%
+
+2
+
+4 to 8
+
+3.50
+
+0.70
+
+17.50
+
+99.6%
+
+3
+
+8 to 16
+
+1.97
+
+0.24
+
+15.85
+
+97.0%
+
+4
+
+16 to 32
+
+2.09
+
+0.22
+
+13.36
+
+97.4%
+
+5
+
+32 to 64
+
+2.57
+
+0.19
+
+10.95
+
+98.2%
+
+6
+
+64 to 128
+
+2.90
+
+0.16
+
+17.43
+
+97.9%
+
+7
+
+128 to 256
+
+3.27
+
+0.21
+
+17.85
+
+98.4%
+
+8
+
+256 to 512
+
+3.40
+
+0.22
+
+19.74
+
+97.9%
+
+9
+
+512 to 1024
+
+3.52
+
+0.28
+
+19.12
+
+98.6%
+
+10
+
+1024 to 2048
+
+3.35
+
+0.26
+
+24.81
+
+98.5%
+
+11
+
+2048 to 4096
+
+3.03
+
+0.24
+
+29.66
+
+97.7%
+
+12
+
+4096 to 8192
+
+2.44
+
+0.10
+
+16.89
+
+95.7%
+
+13
+
+8192 to 16384
+
+2.18
+
+0.10
+
+15.15
+
+85.5%
+
+14
+
+16384 to 32768
+
+1.99
+
+0.32
+
+5.70
+
+82.4%
+
+15
+
+32768 to 65536
+
+1.98
+
+0.23
+
+9.51
+
+87.0%
+
+16
+
+65536 to 131072
+
+1.73
+
+0.30
+
+4.59
+
+79.3%
+
+17
+
+131072 to 262144
+
+1.33
+
+0.51
+
+3.31
+
+58.0%
+
+\geq 18
+
+\geq
+262144
+
+\approx
+1.00
+
+0.28
+
+2.39
+
+41 to 83%
+
+6.5  CAFS vs. vqsort
+
+Bins 5 to 15 give a lead with bin means between 1.27 and 2.34 and win rates between 57% and 93%. The maximum, 2.34, is in bin 9 (
+K=512
+to 1024) — the same point as in the IPS4o pairing — covering
+K
+between 32 and roughly 65000 (5 to 16 bits of entropy). CAFS wins here because the hash scheme runs at about one SIMD operation per element, while vqsort traverses
+\log_{2}N
+partition levels with a YMM sorting network at each level.
+
+Bins 1, 3, and 4 are an anomaly: the bin mean dips to between 0.84 and 0.99 and the win rate falls to 19% to 40%, even though we would expect a comfortable lead at small
+K
+. Our best explanation is grid composition: most points in these bins are at small
+N
+, where the 100-microsecond sampling pre-pass is a substantial fraction of total run time and vqsort wins because it has no pre-pass. Bin 2 (
+K=4
+to 8) does not dip in the same way, which is consistent with that reading, because most bin-2 points fall into the tiny-count branch and bypass the Chao1 estimator. The cause has not been pinned down in our measurements, and this remains the weakest part of our characterisation of CAFS against vqsort at very low
+K
+.
+
+From bin 16 the bin mean drops to 1.21, then to 1.01 at bin 17, and from bin 18 (
+K\geq 262144
+) it goes below 1, eventually reaching 0.58 to 0.63 in bins 21 to 24 with a zero win rate. At
+K\approx N
+vqsort beats CAFS by a factor of 1.6 to 1.7 because its hot loop runs at 0.5 to 1 cycle per element through a YMM sorting network independent of
+K
+
+[
+22
+]
+, leaving CAFS with no remaining advantage.
+
+The last dominance point at
+N>10^{6}
+corresponds to
+K\approx 6.7\cdot 10^{5}
+(
+H\approx 19.36
+bits), past which the safety guard fires on a fraction of cases and keeps the lag near 1.5 to 2 times. Within the lead band the speedup is essentially flat in
+N
+(Pearson
+r=0.072
+for
+\log N
+vs. speedup). vqsort is therefore the only one of the five baselines that strictly overtakes CAFS in the high-
+K
+regime: CAFS beats vqsort for
+K\leq 6.7\cdot 10^{5}
+, and above that point vqsort wins by a factor of 1.5 to 1.7.
+
+Figure 12:
+Heatmap of CAFS speedup over vqsort: transition through parity at
+H\approx 19.4
+bits.
+
+Table 7:
+Speedup of CAFS over vqsort, by entropy bin.
+
+H_{\text{bin}}
+
+K
+range
+
+avg
+
+min
+
+max
+
+win-rate
+
+1
+
+2 to 4
+
+0.89
+
+0.09
+
+6.54
+
+25.9%
+
+2
+
+4 to 8
+
+1.32
+
+0.14
+
+3.42
+
+79.7%
+
+3
+
+8 to 16
+
+0.84
+
+0.13
+
+3.08
+
+19.0%
+
+4
+
+16 to 32
+
+0.99
+
+0.15
+
+3.19
+
+40.2%
+
+5
+
+32 to 64
+
+1.27
+
+0.15
+
+3.94
+
+91.3%
+
+6
+
+64 to 128
+
+1.54
+
+0.11
+
+10.25
+
+91.3%
+
+7
+
+128 to 256
+
+1.78
+
+0.13
+
+9.22
+
+93.7%
+
+8
+
+256 to 512
+
+2.06
+
+0.12
+
+8.75
+
+93.4%
+
+9
+
+512 to 1024
+
+2.34
+
+0.14
+
+18.10
+
+93.1%
+
+10
+
+1024 to 2048
+
+2.18
+
+0.14
+
+10.53
+
+91.1%
+
+11
+
+2048 to 4096
+
+1.91
+
+0.18
+
+16.34
+
+83.0%
+
+12
+
+4096 to 8192
+
+1.64
+
+0.06
+
+14.77
+
+59.9%
+
+13
+
+8192 to 16384
+
+1.59
+
+0.05
+
+14.24
+
+57.6%
+
+14
+
+16384 to 32768
+
+1.45
+
+0.18
+
+9.42
+
+60.6%
+
+15
+
+32768 to 65536
+
+1.39
+
+0.12
+
+5.37
+
+65.4%
+
+16
+
+65536 to 131072
+
+1.21
+
+0.16
+
+4.18
+
+49.9%
+
+17
+
+131072 to 262144
+
+1.01
+
+0.26
+
+3.48
+
+39.1%
+
+18
+
+262144 to 524288
+
+0.77
+
+0.22
+
+2.06
+
+28.9%
+
+19
+
+524288 to 1048576
+
+0.73
+
+0.19
+
+1.85
+
+21.7%
+
+\geq 20
+
+\geq
+1048576
+
+0.58 to 0.68
+
+0.17
+
+1.42
+
+0 to 7.7%
+
+6.6  CAFS vs. ska_sort
+
+Against ska_sort the curve has a different shape. The speedup in bins 1 and 2 reaches 17 times at a 100% win rate, and in bins 3 to 11 the bin mean stays between 4.5 and 8 with win rates above 94%, because ska_sort runs eight byte passes over a 64-bit key whatever
+K
+may be, while CAFS at small
+K
+runs one SIMD compare per element. The runtime gap is the entropy gap of Section
+3
+written in microseconds.
+
+The lead then contracts as
+K
+grows: by bin 12 the bin mean is down to 3.2, by bin 16 to 1.7, and the last dominance point at
+N>10^{6}
+corresponds to
+K\approx 8.14\cdot 10^{5}
+(
+H\approx 19.63
+bits). Past that boundary ska_sort takes the lead, and in bins 22 to 24 (
+K\in[4\cdot 10^{6},3\cdot 10^{7}]
+) the bin mean is between 0.66 and 0.72 at a 0% win rate. The root cause at high
+K
+is memory pressure rather than instruction count: the CAFS hash table grows to tens of megabytes and loses L3 residency, so the hot loop becomes memory-bound, while ska_sort works only on the input array and a small histogram, keeping its working set compact even when
+K\approx N
+.
+
+Inside the dominance zone the lead is independent of
+N
+(
+r=0.127
+between
+\log N
+and speedup, near zero). The descent of the bin mean against ska_sort is monotonic from bin 1 through bin 18, in contrast to the non-monotonic dip near small
+K
+that appears against vqsort. The crossover at
+K\approx 8.14\cdot 10^{5}
+comes later than the vqsort crossover at
+K\approx 6.7\cdot 10^{5}
+, so any deployment that may push
+K
+beyond
+10^{6}
+should fall back to vqsort, not ska_sort, at the boundary.
+
+Figure 13:
+Heatmap of CAFS speedup over ska_sort across the
+(N,K)
+grid.
+
+Table 8:
+Speedup of CAFS over ska_sort, by entropy bin.
+
+H_{\text{bin}}
+
+K
+range
+
+avg
+
+min
+
+max
+
+win-rate
+
+1
+
+2 to 4
+
+17.65
+
+3.07
+
+26.26
+
+100.0%
+
+2
+
+4 to 8
+
+16.96
+
+2.38
+
+29.33
+
+100.0%
+
+3
+
+8 to 16
+
+7.87
+
+0.93
+
+26.27
+
+99.8%
+
+4
+
+16 to 32
+
+7.03
+
+0.39
+
+12.26
+
+99.4%
+
+5
+
+32 to 64
+
+7.60
+
+0.21
+
+13.13
+
+97.8%
+
+6
+
+64 to 128
+
+7.64
+
+0.10
+
+19.64
+
+95.1%
+
+7
+
+128 to 256
+
+7.43
+
+0.23
+
+27.86
+
+95.6%
+
+8
+
+256 to 512
+
+6.19
+
+0.24
+
+15.15
+
+95.2%
+
+9
+
+512 to 1024
+
+5.87
+
+0.17
+
+14.41
+
+95.2%
+
+10
+
+1024 to 2048
+
+5.38
+
+0.20
+
+18.39
+
+95.9%
+
+11
+
+2048 to 4096
+
+4.49
+
+0.27
+
+13.67
+
+94.0%
+
+12
+
+4096 to 8192
+
+3.17
+
+0.13
+
+12.79
+
+78.9%
+
+13
+
+8192 to 16384
+
+2.45
+
+0.18
+
+9.21
+
+74.6%
+
+14
+
+16384 to 32768
+
+2.19
+
+0.20
+
+7.33
+
+63.0%
+
+15
+
+32768 to 65536
+
+2.07
+
+0.21
+
+7.61
+
+56.1%
+
+16
+
+65536 to 131072
+
+1.69
+
+0.21
+
+6.87
+
+50.8%
+
+17
+
+131072 to 262144
+
+1.26
+
+0.27
+
+5.34
+
+41.2%
+
+18
+
+262144 to 524288
+
+0.89
+
+0.29
+
+2.22
+
+37.2%
+
+\geq 19
+
+\geq
+524288
+
+\leq
+0.87
+
+0.23
+
+2.09
+
+\leq
+35.7%
+
+6.7  CAFS vs. std::sort
+
+CAFS beats std::sort in every entropy bin, including the
+K\approx N
+regime. Across the band
+H_{\text{bin}}\in[1,16]
+the bin-mean speedup is between 7 and 17 at win rates above 97%. Even in the high-entropy zone (bins 22 to 24) the win rate is 100% with a 3.5 times speedup, driven by the CAFS fallback to pdqsort, since std::sort (introsort) loses to pdqsort across the whole grid and CAFS routes to pdqsort in the high-
+K
+branch. The last dominance point at
+N>10^{6}
+corresponds to
+K\approx 1.72\cdot 10^{7}
+(
+H\approx 24
+bits), and the lead grows with
+N
+(
+r=0.351
+between
+\log N
+and speedup in the dominance zone) because introsort runs data-dependent branches whose mispredictions accumulate with
+N
+while the CAFS hot loop has no comparable branch. There is no point on the grid at which CAFS loses to std::sort.
+
+Figure 14:
+Heatmap of CAFS speedup over std::sort across the
+(N,K)
+grid.
+
+Table 9:
+Speedup of CAFS over std::sort, by entropy bin.
+
+H_{\text{bin}}
+
+K
+range
+
+avg
+
+min
+
+max
+
+win-rate
+
+1
+
+2 to 4
+
+13.09
+
+0.48
+
+23.00
+
+97.4%
+
+2
+
+4 to 8
+
+17.10
+
+0.58
+
+58.96
+
+99.1%
+
+3
+
+8 to 16
+
+9.67
+
+0.91
+
+60.62
+
+99.8%
+
+4
+
+16 to 32
+
+10.02
+
+0.87
+
+47.67
+
+99.8%
+
+5
+
+32 to 64
+
+12.21
+
+0.98
+
+36.30
+
+99.9%
+
+6
+
+64 to 128
+
+13.52
+
+0.65
+
+67.39
+
+99.9%
+
+7
+
+128 to 256
+
+14.51
+
+0.56
+
+90.38
+
+99.9%
+
+8
+
+256 to 512
+
+14.76
+
+0.41
+
+44.22
+
+99.7%
+
+9
+
+512 to 1024
+
+14.74
+
+0.50
+
+60.89
+
+99.7%
+
+10
+
+1024 to 2048
+
+14.08
+
+0.61
+
+66.57
+
+99.6%
+
+11
+
+2048 to 4096
+
+12.74
+
+0.76
+
+60.93
+
+99.9%
+
+12
+
+4096 to 8192
+
+10.71
+
+0.24
+
+57.79
+
+99.9%
+
+13
+
+8192 to 16384
+
+9.46
+
+0.22
+
+44.23
+
+99.9%
+
+14
+
+16384 to 32768
+
+8.56
+
+0.74
+
+32.32
+
+99.6%
+
+15
+
+32768 to 65536
+
+8.34
+
+0.54
+
+23.88
+
+100.0%
+
+16
+
+65536 to 131072
+
+7.15
+
+0.85
+
+21.36
+
+99.9%
+
+17
+
+131072 to 262144
+
+5.30
+
+1.18
+
+20.20
+
+100.0%
+
+18
+
+262144 to 524288
+
+3.93
+
+1.12
+
+11.29
+
+100.0%
+
+19
+
+524288 to 1048576
+
+3.70
+
+0.95
+
+9.14
+
+99.2%
+
+\geq 20
+
+\geq
+1048576
+
+\geq
+3.20
+
+0.92
+
+6.69
+
+\geq
+94.8%
+
+6.8  Summary applicability map
+
+Aggregating across the five baselines yields the applicability map of CAFS in
+(N,K)
+coordinates.
+
+Figure 15:
+Applicability map of CAFS in
+(N,K)
+coordinates.
+
+Table 10:
+Applicability zones of CAFS.
+
+Zone
+
+Parameters
+
+CAFS behavior
+
+tiny-count
+
+K\leq 8
+,
+N\geq 2048
+
+beats all five baselines: 13 to 21 times vs std::sort, 2.5 to 5 times vs pdqsort, 17 to 19 times vs ska_sort, 3 to 4 times vs IPS4o, 1 to 2 times vs vqsort
+
+main CAFS
+
+8<K\leq 10^{5}
+
+beats all five baselines: 1.7 to 3 times vs pdqsort, 4 to 8 times vs ska_sort, 8 to 15 times vs std::sort, 1.7 to 3.5 times vs IPS4o, 1.2 to 2.3 times vs vqsort
+
+transitional
+
+10^{5}<K\leq N/2
+
+bin-mean speedup vs pdqsort, ska_sort, IPS4o, vqsort drops toward 1; vs std::sort stays above 3
+
+high-entropy
+
+K\approx N
+
+loses to vqsort (0.58 to 0.63 times) and ska_sort (about 0.66 times); parity with IPS4o and pdqsort; lead over std::sort
+
+pathological
+
+N<2048
+
+triggers fallback; total time equals pdqsort plus a 100-microsecond sampling overhead
+
+The boundaries are:
+K\approx 1.3\cdot 10^{5}
+(
+H\approx 17
+bits) against pdqsort and std::sort,
+K\approx 8.14\cdot 10^{5}
+(
+H\approx 19.63
+bits) against ska_sort,
+K\approx 6.7\cdot 10^{5}
+(
+H\approx 19.36
+bits) against vqsort, and only
+K\approx 1.72\cdot 10^{7}
+(parity at
+K=N
+) against IPS4o. Of the five baselines, only vqsort strictly overtakes CAFS once its crossover is passed: against pdqsort and std::sort the algorithm falls back to pdqsort and matches it, against ska_sort the lag is modest, and against IPS4o the curves only converge at
+K=N
+. The binding constraint on the operational range of CAFS is therefore the vqsort threshold at
+K\approx 6.7\cdot 10^{5}
+.
+
+Coming back to the three questions of Section
+6
+.1. The bin-mean speedup at
+K\leq 10^{3}
+is comfortably above 2
+\times
+against std::sort, pdqsort, ska_sort, and IPS4o, and between 1 and 2.3
+\times
+against vqsort (with a few low-
+K
+bins below 1 that we do not fully explain; see Section
+6
+.5). The per-baseline crossovers are the four numbers above. The lead at fixed
+K
+is roughly stable in
+N
+within the dominance zone: the Pearson correlations between
+\log N
+and speedup are all small in magnitude (
+|r|<0.4
+at
+\approx 24000
+measurements per pair) and the signs are consistent with the relative cost models, but with
+|r|
+this small they do not by themselves rule out a stationary lead. The spill safety guard (Section
+4
+) keeps the worst case observed in the grid under a 5
+\times
+slowdown.
+
+7  Discussion and Limitations
+
+7.1  Operating-point guidance
+
+CAFS is designed for a specific input class and degrades to pdqsort outside it. For deployment in OLAP engines the relevant operating point is the post-group-by sort, where the cardinality of the key column is bounded by the number of distinct group keys. That number is typically below
+10^{5}
+, which falls inside the main CAFS zone for every baseline considered. Beyond OLAP, the main CAFS zone also covers categorical column sorting and foreign-key sorting against a small dimension table.
+
+We recommend CAFS whenever an upper bound on
+K
+is available and falls below
+10^{5}
+, vqsort whenever
+K
+may exceed
+6.7\cdot 10^{5}
+, and the per-baseline crossover for cases between the two thresholds. The CAFS dispatcher implements a runtime version of the same rule through the
+\hat{K}\cdot 2>N
+guard, although a deployment that knows the schema can short-circuit the pre-pass entirely.
+
+7.2  Why CAFS wins on
+K\ll N
+
+Comparison and radix sorts pay a per-element cost independent of the input entropy (
+\log_{2}N
+comparisons for the former,
+\lceil B/b\rceil
+digit visits for the latter), whereas a hash-count sort pays one hash and one bucket compare per element when the bucket is sized correctly. With the bucket on one cache line and the compare folded into a single SIMD instruction, this drops to about 4 to 5 cycles per element, and in the main zone CAFS runs at that rate. The other stages (sampling, dispatcher, reconstruction) cost
+O(s)
+or
+O(K)
+and become negligible at large
+N
+.
+
+7.3  Why CAFS loses at
+K\approx N
+
+At
+K\approx N
+the algorithm has nothing left to exploit. The hash table grows linearly with
+\hat{K}
+and now occupies tens of megabytes, so it falls out of L3 into DRAM and the hot loop becomes memory-bound. The trailing pair sort, which is negligible at
+K\ll N
+, now runs on
+K\approx N
+items at a cost of
+O(N\log N)
+, equal to a full comparison sort but with extra setup. The dispatcher condition
+\hat{K}\cdot 2>N
+catches most such cases at the pre-pass and reroutes them to pdqsort directly, and the safety guard catches the rest after the hot loop runs. The net cost is pdqsort time plus the 100 microseconds of sampling overhead that we never recover.
+
+7.4  Limitations
+
+Several limitations apply to the current evaluation. All measurements come from one hardware platform, an Intel Core i5-12400F, so behaviour on parts with different cache geometry (Zen, Skylake-X, server-class Xeon, mobile Alder Lake E-cores) remains untested. The L1d cache on our test platform is 48 KB, and on parts with a 32 KB L1d the threshold at which the table leaves L1d shifts down by 0.5 bits in
+H
+, which would compress the main CAFS zone slightly. The AVX-512 path of vqsort is not in our measurements, even though on supporting CPUs it is roughly 1.5 times faster than the AVX2 path and would push the vqsort crossover toward smaller
+K
+.
+
+The benchmark is also restricted to single-threaded runs, so we do not compare against the parallel modes of pdqsort or IPS4o, and a parallel CAFS with per-thread hash tables and a final merge is plausible but not built. The grid uses a single input distribution, a uniform random palette of 64-bit values, while real workloads often have sorted-by-group, runs, or almost-sorted profiles where RLE injection would push CAFS further ahead. Because the multiplicative hash is deterministic and public, an adversary can construct inputs that drive collisions; no such inputs appear in our grid. Finally, the reported correlations between
+\log N
+and speedup all have
+|r|<0.4
+at sample sizes near 24000 per pairing, so
+N
+is not the dominant factor inside the dominance zone.
+
+7.5  Future directions
+
+The two short-term next steps are an AVX-512 bucket with eight 64-bit lanes (which should push the hot-loop throughput higher and move the vqsort crossover out) and a randomized hash seed (which closes the deterministic-collision attack noted above). The harder open items are a parallel CAFS with per-thread hash tables and a final merge, a floating-point variant via bit-cast, and a learned cardinality estimator that could replace Chao1 on workloads where the singletons-doubletons signal is weak. Two further items are integrating CAFS into a real query engine (DuckDB, ClickHouse, or MonetDB as the post-group-by sort) and extending the input grid past the uniform random palette to sorted-by-group, runs, and almost-sorted profiles. The grid extension is the most directly testable because RLE injection inside CAFS targets exactly those input shapes.
+
+A v2 of this paper is planned for autumn 2026. The platform moves to an AMD Ryzen 5 9600X with 32 GB DDR5-6000 on a bare Linux setup, wall-clock timing through
+std::chrono
+is replaced by
+perf stat
+, and the AVX2 hot loop is rewritten in AVX-512.
+
+IPS4o is dropped from the baseline set in v2 to keep every competitor single-header, and a plain hash-count sort over
+std::unordered_map
+is added. Informal runs already show CAFS beats it by orders of magnitude at every
+K
+we tried; v2 will report the full grid against it in Evaluation.
+
+Suggestions for additional baselines to include in v2, or proposals for collaborative research, are welcome at
+kexibq.official@gmail.com
+.
+
+8  Conclusion
+
+CAFS targets a specific corner of integer sorting: inputs where
+K
+is much smaller than
+N
+. The algorithm pays a 100-microsecond Chao1 pre-pass to detect that regime, dispatches accordingly, and when it lands inside the regime runs the count-emit loop at about one SIMD operation per element. Two costs follow from the
+K
+-dependent working set. A spill safety guard catches inputs where the dispatcher misestimated
+K
+. And on inputs with
+K
+close to
+N
+the hash table eventually exceeds L3 cache, which is what gives vqsort the crossover at
+K\approx 6.7\cdot 10^{5}
+on our platform.
+
+On the 58-by-dense-
+K
+grid and inside the
+K\ll N
+band, CAFS runs 1.7 to 3.1
+\times
+faster than pdqsort, 1.7 to 3.5
+\times
+faster than IPS4o, 4 to 17
+\times
+faster than ska_sort, 8 to 17
+\times
+faster than std::sort, and 1.2 to 2.3
+\times
+faster than vqsort, with the operational range upper-bounded by the vqsort crossover at
+K\approx 6.7\cdot 10^{5}
+. Two questions remain open: whether an AVX-512 bucket and a randomized hash seed can move that crossover above
+K=10^{7}
+, and how the picture changes on skewed inputs and on sorted-by-group profiles. The implementation and the raw measurements are available at
+https://github.com/kexibq-official/cafs-lib
+.
+

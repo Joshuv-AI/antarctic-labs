@@ -1,0 +1,4475 @@
+DART: Semantic Recoverability for Structured Tool Agents
+Ke Yang, Panpan Li, Zonghan Wu, Kejin Xu, Huaxi Huang, Xiaoshui Huang
+
+Abstract
+When a structured tool agent fails mid-execution, the runtime faces a dilemma: replaying the entire task is safe but wasteful, while restoring from a local checkpoint is efficient but can leave committed downstream work tied to an upstream history that no longer exists. This tension is acute in commitment-sensitive settings, where rollback targets a single failed instance yet downstream consumers have already acted on its output. Existing recovery approaches provide mechanical rollback but no criterion for whether a local restore remains semantically valid after downstream commitment. We formalize this gap as semantic recoverability and address it in DART , a modular runtime that localizes the failed instance, certifies semantically recoverable boundaries of that instance, aligns checkpoints to those boundaries, and selects an admissible restore point that preserves committed downstream work under dependency and effect constraints—or blocks otherwise. Across three LLM-driven domains and external validation on a LangGraph-based substrate, DART correctly recovers all evaluated commitment-sensitive cases where baseline local recovery fails, and a five-domain safety audit finds no unsafe admitted rollbacks. These results show that controller legality does not imply semantic validity, and that sound local recovery requires an explicit admissibility check.
+
+
+
+1
+Introduction
+
+Large language models are increasingly deployed as tool-using agents in production settings such as workflow assistants, scheduling and booking systems, and multi-stage orchestration pipelines.
+Failures during execution are inevitable, and the ability to recover without replaying an entire task from scratch is operationally critical.
+A broad class of such deployments can be characterized as structured tool agents: tool-using agents whose execution is organized by explicit control flow, observable action boundaries, and persisted traces.
+Their explicit structure makes partial-progress reuse feasible, yet existing recovery mechanisms do not check whether a local restore is semantically correct, particularly when downstream work has already been committed.
+
+Current recovery approaches for such systems fall into three broad patterns.
+The first assumes that the recoverable object is known in advance: classical workflow-exception and runtime-repair methods define exception scopes, compensation handlers, or service-level regions at design time, so what to recover is never a runtime question
+[
+6
+,
+7
+,
+11
+,
+12
+,
+8
+,
+10
+,
+9
+]
+.
+The second assumes that the rollback boundary is known in advance: distributed-snapshot and transaction-oriented protocols fix the scope at the process, transaction, or checkpoint level and enforce consistency within it, so how far to roll back is never a runtime question either
+
+[
+1
+,
+2
+,
+3
+,
+5
+,
+4
+,
+17
+]
+.
+The third provides the mechanism but not the criterion: modern agent runtimes such as LangGraph, resume and retry primitives that make local restore mechanically possible, yet they offer no way to determine whether a restored execution is still semantically valid once downstream work has already been committed
+[
+13
+,
+14
+,
+15
+,
+16
+,
+18
+]
+.
+
+Across all three lines, recovery faces a fundamental dilemma. Whole-task rerun is always safe but wasteful, because it replays an arbitrary amount of already-completed work. Local restore is efficient but can be semantically invalid when committed downstream consumers remain in place. The root cause is that controller legality, i.e., the runtime’s ability to mechanically restore a prior state, does not imply semantic validity: the restored execution may no longer correspond to any valid upstream history. This mismatch manifests in three concrete failure modes: (i) the runtime targets the wrong failed instance, (ii) local rollback invalidates committed downstream work, or (iii) rollback crosses an irreversible effect boundary.
+
+Consider a scheduling assistant with two subtasks: the first queries three participants’ calendars and proposes candidate meeting times, and the second picks one of those times and sends calendar invitations to all participants. Suppose the first subtask completes, the second sends the invitations, and then the first is found to have failed (e.g., a stale calendar cache produced an invalid candidate list). The runtime can roll back the first subtask and retry it. This rollback is controller-legal, but the invitations from the second subtask are already committed and now refer to a time slot that may not appear in any valid retry. Figure
+1
+illustrates this pattern.
+This example exposes a broader limitation: once rollback is localized to a failed semantic unit while committed downstream work remains in place, controller legality alone does not ensure correctness.
+
+Figure 1:
+Commitment-sensitive recovery regime. Whole-task rerun is correct but expensive because it replays an unrelated completed prefix. Checkpoint-aligned restore can remain controller-legal yet become semantically invalid when committed downstream consumers remain in place.
+
+We study this gap as a question of semantic recoverability: when a failed instance is rolled back locally, under what conditions is the restore point not only controller-legal but also semantically valid?
+Our key idea is to certify, before any local rollback is attempted, that the boundary of the failed instance is semantically closure, meaning that no committed downstream work depends on the specific output being rolled back.
+Building on this idea, we introduce
+DART
+(Deterministic Agent Runtime with Transition Guards), a modular recovery runtime organized around four decision steps: failed-instance localization, recoverable-boundary certification, instance-aligned checkpointing, and admissible rollback selection.
+When all four steps succeed,
+DART
+restores the latest admissible local checkpoint. When any step fails, it conservatively blocks the local rollback and falls back to whole-task rerun.
+Although we instantiate
+DART
+with explicit finite-state-machine (FSM) agents for observability, the underlying problem arises more broadly in any structured runtime where rollback is localized to a failed instance while committed downstream work is preserved.
+
+We evaluate
+DART
+across three LLM-driven domains. In the evaluated commitment-sensitive cases,
+DART
+recovers every scenario correctly, whereas entry-only restore fails and whole-task rerun incurs substantially larger replay. We reproduce the same contrast on a LangGraph-based runtime: its built-in checkpoint restore fails in the decisive commitment-sensitive case where
+DART
+succeeds. Outside commitment-sensitive settings,
+DART
+remains competitive with existing approaches, and a systematic safety audit across all evaluated domains confirms that it introduces no unsafe recoveries.
+
+Contributions.
+
+(1) We formalize semantic recoverability: when is a local rollback not only mechanically possible but also semantically valid? We show that, in commitment-sensitive settings, the two notions diverge and controller legality alone does not prevent invalid recoveries.
+(2) To close this gap, we define recoverable boundaries via four conditions (decidability, closure, separability, and controllability) that a rollback target must satisfy, and organize them into a four-step runtime procedure realized in
+DART
+.
+(3) We prove that the resulting blocking behavior is not merely a conservative design choice but a necessity: any runtime that admits all controller-legal local rollbacks will produce semantically invalid executions in commitment-sensitive settings. Empirical validation on LangGraph confirms this result.
+
+2
+Related Work
+
+Prior work relevant to structured tool-agent recovery typically fixes the recovery unit, fixes the rollback scope, or provides persistence without an explicit semantic admissibility criterion.
+
+Recovery Units Assumed in Advance.
+
+Existing work in this area typically assumes that the recoverable unit is already known. Classical workflow systems study exception handling and exception scopes in long-running processes
+[
+6
+,
+7
+]
+. Runtime-repair work adds guided, monitor-driven, and workaround-based recovery
+[
+11
+,
+12
+,
+8
+,
+10
+]
+, while self-healing process repair extends this line to adaptive workflow correction
+[
+9
+]
+. Across these lines, the recovery object is typically authored in advance as an activity, exception scope, or service-level region. Our setting differs in that the runtime must first identify a unique failed semantic instance before any local recovery decision can be made.
+
+Rollback Scope Assumed in Advance.
+
+Complementary work fixes the rollback boundary in advance and then reasons about consistency within that scope. Distributed snapshots and rollback-recovery protocols restore execution state under a predefined scope
+[
+1
+,
+2
+]
+. Transaction-oriented recovery and nested transactions formalize atomicity and scoped rollback
+[
+3
+,
+5
+]
+, while sagas and idempotent-effect patterns address long-running and externally visible actions
+[
+4
+,
+17
+]
+. These mechanisms are essential for consistency, but they usually assume that rollback scope has already been fixed at the process, transaction, or checkpoint level. By contrast, our question is whether a controller-legal local restore remains semantically admissible under the current dependency and effect context.
+
+Persistence Without Semantic Admissibility.
+
+More recent runtime systems expose persistence and retry primitives, but still stop short of defining when a local restore is semantically admissible. Modern graph runtimes such as LangGraph expose persistence, interrupts, and rollback-oriented execution primitives
+[
+13
+,
+14
+,
+15
+]
+, and Step Functions and Ray similarly provide retry and fault-tolerance mechanisms
+[
+16
+,
+18
+]
+. Explicit control structure also provides a more inspectable execution substrate for tool agents
+[
+24
+]
+, while adjacent work studies agent failure diagnosis and debugging
+[
+26
+,
+27
+,
+31
+]
+, self-correction under tool failures
+[
+28
+]
+, and resilient multi-agent execution
+[
+30
+,
+32
+]
+. SagaLLM adds transaction guarantees for multi-agent planning
+[
+29
+]
+, and diagnosability-oriented work sharpens fault detection and localization
+[
+34
+,
+35
+]
+. Together, these works make structured recovery increasingly practical, but they still largely treat correctness as implicit once execution can be retried or restored. DART isolates the missing semantic layer: when a controller-legal local restore is semantically admissible under downstream commitments and effect boundaries.
+
+Taken together, prior work leaves open how to identify the recoverable unit, when a controller-legal checkpoint is also a semantically valid recovery boundary, and whether persistence primitives suffice without dependency- and effect-aware admission.
+
+3
+Problem Setting and Scope
+
+We fix the execution model, observable failure signal, and subtask-instance recovery unit assumed throughout the paper, using explicit FSMs as a transparent canonical instantiation of the broader class of explicit-control runtimes.
+
+3.1
+Basic Execution Model
+
+Definition 1 (FSM-governed tool agent).
+
+An agent in our scope is a tuple
+
+\mathcal{G}=(S,A,\delta,M,H)
+
+(1)
+
+where
+S
+is a finite state set,
+A
+is an action set,
+\delta\subseteq S\times A\times S
+is an explicit legal transition relation,
+M
+is the runtime memory or context, and
+H=(e_{1},\ldots,e_{T})
+is a recorded step history. Each step
+
+e_{t}=(s_{t},a_{t},s_{t+1},\Delta m_{t})
+
+(2)
+
+exposes at least a current state, an executed action, a successor state, and a memory delta.
+
+Eq. (
+1
+) fixes the control substrate: agents with explicit, inspectable states and actions. In our experiments these are LLM-based tool agents with explicit FSM control
+[
+24
+]
+. The contribution lies in the recovery layer rather than the model architecture.
+
+3.2
+Observable Failure Events
+
+Definition 2 (Observable failure event).
+
+An observable failure event is a tuple
+
+f=(t,s,a,\sigma)
+
+(3)
+
+where
+t
+is the failed step id,
+s
+is the runtime state at failure,
+a
+is the failed action, and
+\sigma
+is a normalized failure signal exposed at an action boundary and consumable by the recovery runtime.
+
+In our setting,
+\sigma
+may correspond to tool exceptions, timeouts, governor denials, missing required inputs, execution-chain exceptions, or explicit contract violations. We therefore do not study silent failure detection, latent semantic error discovery, or general root-cause diagnosis.
+
+3.3
+Subtask Skeletons and Subtask Instances
+
+Definition 3 (Subtask skeleton).
+
+A subtask skeleton is a reusable semantic template
+
+K=(k,S_{K}^{\mathrm{int}},S_{K}^{\mathrm{ent}},P_{K}^{\mathrm{com}},P_{K}^{\mathrm{exit}},X_{K}^{\mathrm{in}},X_{K}^{\mathrm{out}},\pi_{K}^{\mathrm{eff}})
+
+(4)
+
+where
+k
+is the skeleton identifier,
+S_{K}^{\mathrm{int}}
+the internal states,
+S_{K}^{\mathrm{ent}}
+the entry states,
+P_{K}^{\mathrm{com}}
+and
+P_{K}^{\mathrm{exit}}
+the commit/exit predicates,
+X_{K}^{\mathrm{in}}
+and
+X_{K}^{\mathrm{out}}
+the input and output interface keys, and
+\pi_{K}^{\mathrm{eff}}
+the effect policy, i.e., the reviewed rollback policy for effects produced by this skeleton. In the current
+DART
+, these fields come from reviewed boundary configurations rather than automatic synthesis. Eq. (
+4
+) is the skeleton-level reviewed recovery contract: its identity and lifecycle fields support failed-instance localization and checkpoint binding, while its predicate, interface, and effect fields support boundary certification and rollback admissibility in Section 4.
+
+Definition 4 (Subtask instance).
+
+A concrete runtime occurrence of a skeleton is a subtask instance
+
+I=(k,\eta,o)
+
+(5)
+
+where
+k
+is the skeleton id,
+\eta
+the concrete entity id, and
+o
+the ordinal for repeated occurrences.
+
+The recoverable unit is the instance in Eq. (
+5
+), not the whole task or the skeleton template. Stage-level labels are insufficient once the same stage re-enters.
+
+3.4
+Scope Commitments and Non-Goals
+
+We study structured tool-agent runtimes in the explicit-control class, instantiated with explicit FSM control, observable action-boundary failures, and subtask-instance recovery; in the current realization, recoverable boundaries come from reviewed boundary configurations rather than automatic discovery. The system does not eliminate semantic review, but concentrates it onto audited boundary, interface, and effect objects. We do not address silent-failure detection, general fault prediction, universal boundary synthesis, or unrestricted rollback under arbitrary irreversible side effects.
+
+4
+Method
+
+4.1
+Method Overview: Four Recovery Questions
+
+Checkpoint-based recovery becomes incomplete for failed-instance-local recovery when it does not determine the failed instance, the recoverable boundaries of that instance, and the rollback targets admissible under dependency and effect constraints.
+DART
+makes these requirements explicit through four recovery questions: failed-instance localization, recoverable-boundary certification, instance-aligned checkpointing, and admissible rollback selection. Within the scoped setting studied here, these decisions are necessary for preventing semantically invalid recovery.
+
+Figure
+2
+summarizes this four-layer pipeline. Audits and proof sketches are deferred to Appendix
+A
+and Appendices
+G
+and
+H
+.
+
+Figure 2:
+Recovery method overview. After failure, the runtime identifies the failed instance, checks boundary and admissibility conditions, and restores the latest admissible checkpoint; otherwise it falls back to whole-task rerun.
+
+4.2
+Failed-Instance Localization: From Observable Failure to Failed Instance
+
+Building on Definitions 3 and 4, the first step localizes an observable failure to a concrete subtask instance. Given the reviewed skeleton/entity structure, the runtime either identifies a unique failed instance or conservatively abstains, because all later boundary, checkpoint, and rollback judgments are indexed by that instance. Operationally, the runtime resolves the active skeleton, bound entity, and occurrence ordinal from the FSM state, tool arguments, and sidecar registry; if the resulting
+(k,\eta,o)
+is not unique, it falls back to conservative whole-task rerun (Table
+23
+). Localization therefore establishes the instance index consumed by the next layer.
+
+4.3
+Recoverable-Boundary Certification: From Failed Instance to Certified Boundary
+
+Building on failed-instance localization, the second step certifies which reviewed lifecycle points of that instance are semantically recoverable rather than merely controller-legal. Each reviewed skeleton supplies a minimal recovery contract: an entity resolver, entry states, commit/exit predicates, conservative input/output interface keys, and an effect policy. This step filters reviewed candidates rather than searching over arbitrary legal states or transitions, and it occurs before checkpoint materialization. Informally, a recoverable boundary is a reviewed point from which the failed instance can resume without invalidating the surrounding execution.
+
+Definition 5 (Recoverable boundary).
+
+Let
+b
+be a reviewed commit- or exit-level state or transition associated with subtask instance
+I
+. We call
+b
+a recoverable boundary iff
+
+\displaystyle\mathrm{Recoverable}(b,I)\iff{}
+
+\displaystyle\mathrm{Decidable}(b,I)\land\mathrm{Closed}(b,I)
+
+(6)
+
+\displaystyle\land\mathrm{Separable}(b,I)\land\mathrm{Controllable}(b,I)
+
+Operationally, each conjunct is a concrete test.
+\mathrm{Decidable}
+passes iff the candidate still maps to one unique live instance identifier
+(k,\eta,o)
+.
+\mathrm{Closed}
+passes iff the reviewed commit- or exit-level predicate holds and the declared interface handoff is semantically complete.
+\mathrm{Separable}
+passes iff restoring from that point keeps replay confined to the failed instance rather than reopening an unrelated task prefix, enforced operationally by binding checkpoints to that instance and restricting restore search to its checkpoint set.
+\mathrm{Controllable}
+passes iff the effect policy allows rollback across that frontier. A candidate is certified only if all four tests pass.
+
+This definition separates controller legality from recoverability. A legal lifecycle point may still fail certification because the runtime can no longer tell which instance failed, the current step has not yet reached a semantically complete handoff, replay would reopen work outside that instance, or rollback is disallowed by the effect policy. Operationally, the runtime evaluates only reviewed commit- and exit-level candidates for the failed instance and certifies those that keep the instance identifiable, the handoff closed, replay local, and rollback allowed under the effect policy. For example, the transition from
+WAITING_POI_SELECTION
+to
+STOP_READY
+is legal but not a certified exit boundary because the current stop instance has not reached a reviewed closed handoff.
+
+4.4
+Instance-Aligned Checkpointing: From Certified Boundary to Stable Recovery Anchor
+
+Once Section 4.3 certifies recoverable boundaries for the failed instance, the next step is instance-aligned checkpointing. Its objective is to turn those certified boundaries, together with conservative entry anchors, into concrete restore objects indexed by that instance. Given the failed instance and these reviewed lifecycle points, the runtime constructs a recency-ordered checkpoint set attached to that instance. This step introduces no new semantic criterion: it materializes the recoverable structure certified in Section 4.3 rather than re-deciding recoverability.
+
+Operationally, the runtime indexes checkpoint records by instance identity. When an instance becomes active, it records an entry checkpoint; when the instance later satisfies a reviewed commit predicate, it appends a commit checkpoint; and it optionally records an exit checkpoint when a reviewed exit-boundary predicate holds.
+
+Stable checkpoint.
+
+A stable checkpoint is a concrete restore object attached to a subtask instance and a reviewed lifecycle type. We denote it by
+
+c=(I,\tau)
+
+(7)
+
+where
+I
+is the subtask instance and
+\tau\in\{\texttt{entry},\texttt{commit},\texttt{exit}\}
+is the lifecycle type. We write
+\mathcal{C}(I)
+for the recency-ordered checkpoint set attached to
+I
+.
+Eq. (
+7
+) binds each checkpoint to its instance.
+
+Instance-aligned checkpointing matters because later restore search is confined to
+\mathcal{C}(I_{f})
+for the failed instance
+I_{f}
+rather than collapsing back to an unrelated whole-task prefix. Entry checkpoints provide conservative restart anchors, commit checkpoints preserve stabilized partial progress within the same instance, and exit checkpoints record reviewed completion boundaries for policy-controlled recovery. By default, restore selection considers only entry and commit checkpoints; exit checkpoints are recorded but used only under an explicit policy.
+
+4.5
+Admissible Rollback Selection: From Stable Anchor to Admissible Local Rollback
+
+Building on the failed instance’s stable checkpoint set from Section 4.4, the final step is admissible rollback selection. Its objective is to determine which stable checkpoints of the failed instance remain safe to restore under dependency and effect constraints, and to select the latest such anchor when one exists. The input is the observable failure event together with the failed instance and its stable checkpoints; the output is either an admissible local rollback target or rejection. This step is necessary because restoring from a stable checkpoint may still invalidate committed downstream work or cross an irreversible effect boundary.
+
+Definition 6 (Admissible local recovery).
+
+Given an observable failure event
+f
+, a recovery is admissible local recovery iff there exist a subtask instance
+I
+and a stable checkpoint
+c
+such that
+
+\displaystyle\mathrm{AdmissibleRecover}(f,I,c)\iff{}
+
+\displaystyle\mathrm{Identified}(f,I)\land\mathrm{Stable}(c,I)
+
+(8)
+
+\displaystyle\land\mathrm{ScopeOK}(I,c)\land\mathrm{NoCommittedConflict}(I)
+
+\displaystyle\land\mathrm{EffectAllowed}(I,c)
+
+In brief,
+\mathrm{Identified}
+fixes the failed instance,
+\mathrm{Stable}
+requires a checkpoint attached to that instance,
+\mathrm{ScopeOK}
+keeps restoration within instance scope,
+\mathrm{NoCommittedConflict}
+preserves committed downstream consumers, and
+\mathrm{EffectAllowed}
+respects the reviewed effect policy.
+
+For the identified failed instance
+I_{f}
+and failure event
+f
+, let
+
+\mathcal{A}(f)=\{c\in\mathcal{C}(I_{f})\mid\mathrm{AdmissibleRecover}(f,I_{f},c)\}
+
+(9)
+
+denote the admissible checkpoint set for the failed instance. Eq. (
+9
+) makes explicit that admissibility is defined over the failed instance’s own stable checkpoints rather than the whole task.
+
+After the failed instance and its checkpoint set are fixed, the runtime realizes this gate through dependency- and effect-aware vetoes over
+\mathcal{C}(I_{f})
+.
+NoCommittedConflict
+is enforced by a conservative producer–consumer relation over instance-level read/write sets induced by the reviewed interface contract, rejecting rollback once a committed downstream instance has consumed the failed instance’s outputs.
+EffectAllowed
+gates candidates by the frozen effect policy
+\pi_{K}^{\mathrm{eff}}
+, blocking rollback across disallowed effect boundaries (Appendix
+I.1
+). The runtime restores the most recent checkpoint in
+\mathcal{C}(I_{f})
+that satisfies scope, committed-consumer, and effect-policy checks; if none exists,
+\mathcal{A}(f)=\emptyset
+and local rollback is rejected. Committed-consumer blocking is therefore necessary for sound local rollback once committed downstream consumers remain in place.
+
+c^{\star}(f)=\max\mathcal{A}(f)
+
+(10)
+
+where the maximum is taken with respect to checkpoint recency within instance
+I_{f}
+. Appendix
+H
+gives the remaining statements for this rule.
+
+5
+Experiments
+
+5.1
+Experimental Setup
+
+Domains and Protocol.
+
+We evaluate
+DART
+on three LLM-driven domains: navigation, schedule-form, and diagnosis. Two deterministic domains—ETL pipeline and travel planning
+[
+33
+]
+—are deferred to Appendix
+D
+. Across domains, failures are injected only at controlled observable action boundaries, and reviewed boundary, interface/effect, and audit specifications are frozen before evaluation.
+
+Baselines.
+
+We compare four recovery strategies under a matched runtime and failure protocol: whole-task rerun (
+Retry-Only
+); Coarse-State-Retry, which restores the latest pre-entry snapshot at a benchmark-defined coarse FSM anchor; Comp-EntryOnly, which restores the failed instance’s entry checkpoint; and
+Comp-Frozen
+, which restores the latest admissible reviewed checkpoint of the failed instance. These comparisons isolate recovery-policy differences on a shared execution substrate. We report both official headline cases and commitment-sensitive cases, where recovery must preserve committed progress and downstream dependencies.
+
+Metrics and Reporting.
+
+Primary metrics are success, recovery-observed rate, failure-to-milestone latency, replay actions, upstream replay, and preserved completed instances; the semantic audit additionally reports safe-equivalence and admission/blocking statistics. Main-text latency and replay are medians over successful runs; paired tests, no-failure overhead, and full audit details are deferred to Appendix
+E
+and Appendix
+G
+. We report commitment-sensitive cases first and headline cases second. Extended LangGraph details are in Appendix
+F
+.
+
+5.2
+In-Domain Recovery Results
+
+Commitment-Sensitive Recovery: Entry-Only Fails, Certified Checkpoints Succeed.
+
+We first examine commitment-sensitive failures, where checkpoint choice changes outcome beyond cost. Across commitment-sensitive cases in navigation, schedule-form, and diagnosis, entry-only recovery fails in two ways: in navigation it is observed yet fails the end-to-end task contract, whereas in schedule-form and diagnosis no local recovery is observed with entry-only. In schedule-form, Coarse-State-Retry is omitted because after durable submit point no fair coarse anchor remains beyond the entry-only family. The decisive result is not that
+DART
+improves recovery quality by degree, but that entry-only recovery fails in all evaluated commitment-sensitive core-domain cases, whereas reviewed admissible checkpoints succeed throughout. This indicates that without an admissibility criterion, failed-instance-local rollback leads to systematic failure not isolated errors.
+
+Table 1:
+Recovery outcomes in the three core LLM domains. Panel A shows the commitment-sensitive regime; for schedule-form, Coarse-State-Retry is omitted because after submission no fair coarse anchor remains beyond the entry-only family. Panel B shows official headline cases. Status distinguishes successful completion, contract failure after attempted recovery, no local recovery observed, and explicit blocking when no admissible checkpoint exists. Latency and replay are medians over successful runs.
+
+Panel A
+
+Domain
+
+Method
+
+Success
+
+Replay
+
+Up. replay
+
+Preserved inst.
+
+F
+\rightarrow
+M (ms)
+
+Recov. obs.
+
+Status
+
+Commit-sensitive
+
+Navigation
+
+Retry-Only
+
+1.00
+
+18.0
+
+14.0
+
+0.0
+
+25752.95
+
+0.00
+
+ok
+
+Commit-sensitive
+
+Navigation
+
+Coarse-State-Retry
+
+1.00
+
+4.0
+
+0.0
+
+2.0
+
+7013.64
+
+1.00
+
+ok
+
+Commit-sensitive
+
+Navigation
+
+Comp-EntryOnly
+
+0.00
+
+–
+
+–
+
+–
+
+–
+
+1.00
+
+contract
+
+Commit-sensitive
+
+Navigation
+
+Comp-Frozen
+
+1.00
+
+1.0
+
+0.0
+
+2.0
+
+2527.10
+
+1.00
+
+ok
+
+Commit-sensitive
+
+Schedule Form
+
+Retry-Only
+
+1.00
+
+29.0
+
+24.0
+
+0.0
+
+34690.47
+
+0.00
+
+ok
+
+Commit-sensitive
+
+Schedule Form
+
+Comp-EntryOnly
+
+0.00
+
+–
+
+–
+
+–
+
+–
+
+0.00
+
+no-recov
+
+Commit-sensitive
+
+Schedule Form
+
+Comp-Frozen
+
+1.00
+
+1.0
+
+0.0
+
+5.0
+
+1141.17
+
+1.00
+
+ok
+
+Commit-sensitive
+
+Diagnosis
+
+Retry-Only
+
+1.00
+
+16.5
+
+10.5
+
+0.0
+
+21174.59
+
+0.00
+
+ok
+
+Commit-sensitive
+
+Diagnosis
+
+Coarse-State-Retry
+
+1.00
+
+5.0
+
+0.0
+
+2.5
+
+5878.80
+
+1.00
+
+ok
+
+Commit-sensitive
+
+Diagnosis
+
+Comp-EntryOnly
+
+0.00
+
+–
+
+–
+
+–
+
+–
+
+0.00
+
+no-recov
+
+Commit-sensitive
+
+Diagnosis
+
+Comp-Frozen
+
+1.00
+
+2.0
+
+0.0
+
+2.5
+
+2113.80
+
+1.00
+
+ok
+
+Panel B
+
+Domain
+
+Method
+
+Success
+
+Replay
+
+Up. replay
+
+Preserved inst.
+
+F
+\rightarrow
+M (ms)
+
+Recov. obs.
+
+Status
+
+Official
+
+Navigation
+
+Retry-Only
+
+1.00
+
+10.0
+
+6.0
+
+0.0
+
+6920.20
+
+0.00
+
+ok
+
+Official
+
+Navigation
+
+Coarse-State-Retry
+
+1.00
+
+5.0
+
+0.0
+
+1.0
+
+4735.49
+
+1.00
+
+ok
+
+Official
+
+Navigation
+
+Comp-EntryOnly
+
+1.00
+
+5.0
+
+0.0
+
+1.0
+
+4640.04
+
+1.00
+
+ok
+
+Official
+
+Navigation
+
+Comp-Frozen
+
+1.00
+
+5.0
+
+0.0
+
+1.0
+
+4841.55
+
+1.00
+
+ok
+
+Official
+
+Schedule Form
+
+Retry-Only
+
+1.00
+
+21.0
+
+15.0
+
+0.0
+
+18530.74
+
+0.00
+
+ok
+
+Official
+
+Schedule Form
+
+Coarse-State-Retry
+
+1.00
+
+4.5
+
+0.0
+
+3.5
+
+4410.20
+
+1.00
+
+ok
+
+Official
+
+Schedule Form
+
+Comp-EntryOnly
+
+1.00
+
+4.5
+
+0.0
+
+3.5
+
+4176.20
+
+1.00
+
+ok
+
+Official
+
+Schedule Form
+
+Comp-Frozen
+
+1.00
+
+4.5
+
+0.0
+
+3.5
+
+4431.35
+
+1.00
+
+ok
+
+Official
+
+Diagnosis
+
+Retry-Only
+
+1.00
+
+11.0
+
+5.0
+
+0.0
+
+12577.31
+
+0.00
+
+ok
+
+Official
+
+Diagnosis
+
+Coarse-State-Retry
+
+1.00
+
+5.0
+
+0.0
+
+1.0
+
+6011.75
+
+1.00
+
+ok
+
+Official
+
+Diagnosis
+
+Comp-EntryOnly
+
+1.00
+
+5.0
+
+0.0
+
+1.0
+
+6157.04
+
+1.00
+
+ok
+
+Official
+
+Diagnosis
+
+Comp-Frozen
+
+1.00
+
+5.0
+
+0.0
+
+1.0
+
+5736.50
+
+1.00
+
+ok
+
+To ensure robustness, we repeat the decisive commitment-sensitive row across model families. The pattern persists: entry-only restore fails,
+Comp-Frozen
+succeeds with one-step replay, and retry-only requires full upstream replay. Because
+Replay
+and
+Up. replay
+are frontier-size metrics, they are driven by recovery structure not model family (Appendix Table
+6
+).
+
+Official Headline Recovery: Competitive Beyond Commitment-Sensitive Cases.
+
+Outside the commitment-sensitive regime, the result is narrower. Panel B of Table
+1
+shows that on headline cases
+Comp-Frozen
+remains competitive, preserves zero upstream replay relative to whole-task rerun, and is mostly at parity with stronger local baselines rather than uniformly dominant. Relative to
+Retry-Only
+, latency remains significantly lower in paired analysis (Appendix
+E
+).
+
+5.3
+Cross-Runtime External Validation
+
+We test if the same commitment-sensitive failure pattern reappears once persistence and resume are available in an external LangGraph-based runtime. Table
+2
+reports an aligned three-way comparison across
+Retry-Only
+, LangGraph-SemiReal, and
+DART
+on regime-specific intersections. The decisive schedule-form commitment-sensitive row is a counterexample:
+Retry-Only
+succeeds with large replay frontier, LangGraph-SemiReal drops to 0.00, and
+DART
+remains admissible, succeeds with one-step replay frontier. This shows that the failure is not a runtime artifact, but a general limitation of checkpoint-aligned recovery in commitment-sensitive local rollback settings.
+
+Table 2:
+Cross-runtime external validation on aligned regime-specific intersections. In the decisive schedule-form commitment-sensitive case, LangGraph-based checkpoint-aligned restore fails, whereas
+DART
+remains admissible and succeeds with a one-step replay frontier.
+
+Domain
+
+Regime
+
+Retry success
+
+LangGraph success
+
+DART success
+
+Retry replay
+
+LangGraph replay
+
+DART replay
+
+Retry F
+\rightarrow
+M
+
+LangGraph F
+\rightarrow
+M
+
+DART F
+\rightarrow
+M
+
+Navigation
+
+Entry-aligned
+
+1.00
+
+1.00
+
+1.00
+
+10.0
+
+1.5
+
+4.0
+
+6376.97
+
+588.89
+
+3328.69
+
+Navigation
+
+Commit-sensitive
+
+1.00
+
+1.00
+
+1.00
+
+12.0
+
+1.0
+
+1.0
+
+14596.55
+
+1938.46
+
+2433.90
+
+Schedule Form
+
+Entry-aligned
+
+1.00
+
+1.00
+
+1.00
+
+21.5
+
+4.0
+
+6.5
+
+19093.78
+
+4969.47
+
+6137.15
+
+Schedule Form
+
+Commit-sensitive
+
+1.00
+
+0.00
+
+1.00
+
+25.5
+
+0.0
+
+1.0
+
+32618.41
+
+–
+
+1109.80
+
+The navigation rows and the schedule-form entry-aligned row serve as controls, showing that the gap appears where recovery depends on semantic admissibility beyond checkpoint alignment. Appendix
+F
+further separates portability from necessity through a transplant-control study and blocking witness.
+
+5.4
+Semantic Audit and Blocking Calibration
+
+The final main-text question is whether admitted recoveries remain semantically acceptable and conservatively calibrated. Table
+3
+reports 54
+comparable rows
+and 47
+evaluated recovery events
+; full denominator details are deferred to Appendix
+G
+.
+
+Table 3:
+Semantic audit and blocking calibration. Panel A summarizes the five-domain audit for the three core LLM-driven domains shown here; full breakdowns appear in Appendix
+G
+. Panel B reports blocking calibration. “–” indicates not applicable for that audit slice.
+
+Panel
+
+Scope
+
+Rows / events
+
+Safe-equiv.
+
+Blocked / unsafe
+
+Semantic
+
+Prefix
+
+Effect
+
+Notes
+
+A
+
+Overall semantic audit
+
+54
+
+1.00
+
+–
+
+54
+
+54
+
+31
+
+21 rows also admit committed-prefix checks
+
+A
+
+Navigation
+
+12
+
+1.00
+
+–
+
+12
+
+12
+
+0
+
+safe-equivalent on all comparable rows
+
+A
+
+Schedule Form
+
+11
+
+1.00
+
+–
+
+11
+
+11
+
+0
+
+safe-equivalent on all comparable rows
+
+A
+
+Diagnosis
+
+10
+
+1.00
+
+–
+
+10
+
+10
+
+10
+
+repair outcomes remain semantically aligned
+
+B
+
+Overall calibration
+
+47
+
+–
+
+12 blocked / 0 unsafe
+
+–
+
+–
+
+–
+
+35 admitted; 0/12 false-blocked events
+
+B
+
+Reason family
+
+12 blocked
+
+–
+
+7 effect / 5 dependency
+
+–
+
+–
+
+–
+
+blocking is structured, not random
+
+B
+
+Unsafe admission audit
+
+35 admitted
+
+–
+
+0 unsafe / 0.0 rate
+
+–
+
+–
+
+–
+
+0/35 unsafe admissions
+
+All 54 comparable rows are safe-equivalent, and the 47-event calibration yields 35 admitted and 12 blocked events with 0/35 unsafe admissions and 0/12 audited false blocks.
+
+5.5
+Ablation Studies
+
+We conduct ablation studies aligned with our main claims: instance-aligned checkpointing, recoverable boundary certification, and committed-consumer blocking. Table
+4
+reveals that coarse retry remain overly broad without instance-aligned checkpoints (A), controller-legal points may still fail boundary certification (B), removing committed-consumer blocking permits downstream-invalidating rollbacks (C). Collectively, DART’s gains stem from semantic admissibility, not checkpointing alone.
+
+Table 4:
+Necessity ablations for semantic admissibility. Panel A tests instance-aligned checkpointing, Panel B tests recoverable-boundary certification, and Panel C tests committed-consumer blocking. Panel A uses representative cases; aggregates appear in Table
+1
+.
+
+Panel
+
+Domain / setting
+
+Comp-Frozen
+
+Coarse / Entry-only
+
+Retry-Only
+
+Conclusion
+
+Key signal
+
+Note
+
+A
+
+Navigation / entry-aligned
+
+replay 5, latency 3122
+
+replay 5, latency 3122
+
+replay 11, latency 6359
+
+reviewed commit not yet needed
+
+coarse = frozen
+
+same entry anchor
+
+A
+
+Navigation / commit-sensitive
+
+replay 1, latency 872
+
+replay 4, latency 3751
+
+replay 14, latency 9432
+
+commit checkpoint adds real gain
+
+frozen strictly smaller replay
+
+preserved inst. = 2
+
+A
+
+Schedule / commit-sensitive
+
+replay 1, latency 50
+
+entry-only blocked
+
+replay 26, latency 14247
+
+commit checkpoint remains necessary
+
+entry-only not admissible
+
+preserved inst. = 5
+
+A
+
+Diagnosis / commit-sensitive
+
+replay 2, latency 40
+
+replay 5 / entry-only fails
+
+replay 15, latency 6430
+
+commit checkpoint shrinks frontier
+
+coarse still wider than frozen
+
+preserved inst. = 2
+
+B
+
+Navigation wrong edge
+
+forced exit emitted
+
+frozen exit absent
+
+legal edge
+
+wrong boundary is unsafe
+
+unresolved branch marked EXITED
+
+WAITING_POI_SELECTION
+\rightarrow
+STOP_READY
+
+B
+
+Schedule wrong edge
+
+forced exit emitted
+
+frozen exit absent
+
+legal edge
+
+wrong boundary is unsafe
+
+unresolved slot marked EXITED
+
+WAITING_SLOT_SELECTION
+\rightarrow
+SLOT_READY
+
+C
+
+Navigation consumer blocking
+
+dropped 1 committed consumer
+
+allowed without guard
+
+blocked under guard
+
+blocking is necessary
+
+scope silently expands
+
+downstream stop invalidated
+
+C
+
+Schedule consumer blocking
+
+dropped 2 committed consumers
+
+allowed without guard
+
+blocked under guard
+
+blocking is necessary
+
+finalized schedule invalidated
+
+irreversible consumer present
+
+C
+
+Diagnosis consumer blocking
+
+dropped 1 committed consumer
+
+allowed without guard
+
+blocked under guard
+
+blocking is necessary
+
+finalized repair invalidated
+
+irreversible repair consumer
+
+6
+Discussion and Limitations
+
+Our empirical claims are scoped to observable-failure recovery in structured tool agents under reviewed boundary configurations and the current dependency abstraction. This scope is chosen for auditability and transparency, not because the question is unique to explicit-FSM controllers. Commitment-sensitive failures need not dominate all workloads, but they become structurally unavoidable whenever a persisted runtime combines instance-local rollback with independently committed downstream dependencies or effects. In that setting, separating controller legality from semantic recoverability is a correctness requirement. For deployed agent runtimes, the practical implication is that persistence primitives alone are insufficient in commitment-sensitive settings. Local recovery should be attempted only when semantic admissibility can be justified; otherwise, execution-legal rollback may still be globally inconsistent.
+DART
+shows that such checks can be layered on top of existing explicit-control runtimes while preserving local progress when safe.
+
+Broader Impacts.
+
+Explicit local recovery reduces unnecessary tool invocations, preserve completed progress, and improve long multi-stage workflows. Mis-specified boundaries or overly aggressive rollback could still conceal errors in high-stakes settings, so reviewed boundary, conservative blocking, and explicit effect policies remain safeguards rather than mere optimization choices.
+
+7
+Conclusion
+
+This paper addresses semantic recoverability in structured tool-agent runtimes under preserved downstream commitments.
+DART
+makes this problem explicit through failed-instance localization, recoverable-boundary certification, instance-aligned checkpointing, and admissible rollback selection. Empirically,
+DART
+improves recovery correctness on the decisive commitment-sensitive cases where baseline local recovery fails, reduces replay relative to whole-task rerun, and introduces no unsafe admitted rollbacks under external LangGraph validation and a five-domain safety audit. More broadly, the results suggest that persistence primitives are necessary but not sufficient for sound local recovery: structured runtimes that preserve downstream committed work need an explicit admissibility criterion.
+
+Appendix A
+Appendix Roadmap
+
+The appendix is organized as a compact support map rather than a second narrative. The main text now includes a dedicated Discussion and Limitations section that clarifies the scope of our claims, the main limitations of the current study, and the broader implications of the proposed recovery criterion. The appendix provides the remaining supporting evidence: Appendix
+B
+gives cross-model robustness on the decisive commitment-sensitive row; Appendix
+E
+strengthens the main recovery tables with paired statistics and overhead diagnostics; Appendix
+F
+provides
+external validation
+on LangGraph-based runtimes; and Appendix
+G
+supplies the main safety-and-mechanism backbone through the five-domain audit chain, localization audit, and boundary/property evidence. Appendix
+D
+, Appendix
+H
+, and Appendix
+I
+provide setup breadth, deferred proof support, and reproducibility details.
+
+Table 5:
+Appendix roadmap by reviewer concern.
+
+Reviewer concern
+
+Evidence type
+
+Where addressed
+
+What is the scope of the main claim, and what are the study’s limitations?
+
+scope commitments, limitations, and broader implications
+
+Section
+6
+
+Does the decisive-row result depend on a particular model family?
+
+cross-model decisive-row robustness table
+
+Appendix
+B
+
+Does the result generalize beyond the three core LLM-driven domains?
+
+five-domain universe; deterministic ETL and travel-planning results
+
+Appendix
+D
+
+Are the latency and replay gains statistically robust?
+
+paired tests, no-failure overhead, checkpoint-granularity diagnostic
+
+Appendix
+E
+
+Is this more than ordinary graph persistence or resume?
+
+LangGraph external validation, transplant-control transportability check, and blocking witness
+
+Appendix
+F
+
+Are local recoveries semantically safe?
+
+semantic audit, blocking calibration, boundary evidence, property-wise necessity
+
+Appendix
+G
+
+Is failed-instance localization actually reliable?
+
+repeat-level alignment, ambiguity benchmark, consequence probes
+
+Appendix
+G
+(localization audit)
+
+What assumptions support the proof-backed claims?
+
+scoped theorem statements and proof sketches
+
+Appendix
+H
+
+Appendix B
+Cross-Model Decisive-Row Evidence
+
+Appendix Table
+6
+reports the full cross-model results on the decisive schedule-form commitment-sensitive row used in the main text.
+
+Table 6:
+Cross-model results on the decisive schedule-form commitment-sensitive row
+(
+schedule_live_final_render_failure_after_submitted
+).
+Across all tested model families, entry-only restore fails, frozen local recovery succeeds with one-step replay and zero upstream replay, and retry-only succeeds only by replaying the full upstream prefix. Columns are ordered by priority from left to right: success, replay width, upstream replay, preserved progress, and failure-to-milestone latency.
+
+Model
+
+Method
+
+Success
+
+Replay
+
+Up. replay
+
+Preserved
+
+F
+\rightarrow
+M (ms)
+
+GLM
+
+Comp-EntryOnly
+
+0.00
+
+0
+
+0
+
+5 slots
+
+0.87
+
+GLM
+
+Retry-Only
+
+1.00
+
+26
+
+21
+
+0 slots
+
+31937.07
+
+GLM
+
+Comp-Frozen
+
+1.00
+
+1
+
+0
+
+5 slots
+
+926.92
+
+GPT
+
+Comp-EntryOnly
+
+0.00
+
+0
+
+0
+
+5 slots
+
+1.42
+
+GPT
+
+Retry-Only
+
+1.00
+
+26
+
+21
+
+0 slots
+
+121463.57
+
+GPT
+
+Comp-Frozen
+
+1.00
+
+1
+
+0
+
+5 slots
+
+4356.69
+
+Gemini
+
+Comp-EntryOnly
+
+0.00
+
+0
+
+0
+
+5 slots
+
+1.33
+
+Gemini
+
+Retry-Only
+
+1.00
+
+26
+
+21
+
+0 slots
+
+74006.58
+
+Gemini
+
+Comp-Frozen
+
+1.00
+
+1
+
+0
+
+5 slots
+
+2182.24
+
+DeepSeek
+
+Comp-EntryOnly
+
+0.00
+
+0
+
+0
+
+5 slots
+
+1.46
+
+DeepSeek
+
+Retry-Only
+
+1.00
+
+26
+
+21
+
+0 slots
+
+141557.97
+
+DeepSeek
+
+Comp-Frozen
+
+1.00
+
+1
+
+0
+
+5 slots
+
+5372.30
+
+Qwen
+
+Comp-EntryOnly
+
+0.00
+
+0
+
+0
+
+5 slots
+
+0.82
+
+Qwen
+
+Retry-Only
+
+1.00
+
+26
+
+21
+
+0 slots
+
+45189.98
+
+Qwen
+
+Comp-Frozen
+
+1.00
+
+1
+
+0
+
+5 slots
+
+1614.10
+
+Appendix C
+Cross-Model Generalization Results
+
+Appendix Table
+7
+reports the full cross-model generalization results beyond the decisive row, covering cross-domain, cross-runtime, and control-case settings.
+
+Table 7:
+Cross-model generalization results beyond the decisive row.
+We report representative results from three broader settings: a navigation commitment-sensitive row (cross-domain evidence), a LangGraph-based schedule row (cross-runtime evidence), and an official schedule-form control case (control-case evidence). Within each setting, we report a single representative recovery controller per model to keep cross-model comparisons aligned. Columns are ordered by priority from left to right: success, replay width, upstream replay, preserved progress, and failure-to-milestone latency.
+
+Setting
+
+Model
+
+Method
+
+Success
+
+Replay
+
+Up. replay
+
+Preserved
+
+F
+\rightarrow
+M (ms)
+
+Navigation row
+
+GLM
+
+Comp-Frozen
+
+1.00
+
+1
+
+0
+
+1 stop
+
+1733.45
+
+Navigation row
+
+GPT
+
+Comp-Frozen
+
+0.80
+
+1
+
+0
+
+1 stop
+
+7445.63
+
+Navigation row
+
+Gemini
+
+Comp-Frozen
+
+1.00
+
+1
+
+0
+
+1 stop
+
+3894.71
+
+Navigation row
+
+DeepSeek
+
+Comp-Frozen
+
+1.00
+
+1
+
+0
+
+1 stop
+
+12718.58
+
+Navigation row
+
+Qwen
+
+Comp-Frozen
+
+1.00
+
+1
+
+0
+
+1 stop
+
+5282.35
+
+LangGraph row
+
+GLM
+
+LangGraph-SemiReal
+
+1.00
+
+1
+
+0
+
+5 slots
+
+1038.74
+
+LangGraph row
+
+GPT
+
+LangGraph-SemiReal
+
+1.00
+
+1
+
+0
+
+5 slots
+
+4310.66
+
+LangGraph row
+
+Gemini
+
+LangGraph-SemiReal
+
+1.00
+
+1
+
+0
+
+5 slots
+
+2489.38
+
+LangGraph row
+
+DeepSeek
+
+LangGraph-SemiReal
+
+1.00
+
+1
+
+0
+
+5 slots
+
+4184.86
+
+LangGraph row
+
+Qwen
+
+LangGraph-SemiReal
+
+1.00
+
+1
+
+0
+
+5 slots
+
+1805.62
+
+Official control
+
+GLM
+
+Comp-Frozen
+
+1.00
+
+8
+
+0
+
+3 slots
+
+8093.18
+
+Official control
+
+GPT
+
+Comp-Frozen
+
+1.00
+
+8
+
+0
+
+3 slots
+
+10756.99
+
+Official control
+
+Gemini
+
+Comp-Frozen
+
+1.00
+
+8
+
+0
+
+3 slots
+
+11477.65
+
+Official control
+
+DeepSeek
+
+Comp-Frozen
+
+1.00
+
+8
+
+0
+
+3 slots
+
+10647.14
+
+Official control
+
+Qwen
+
+Comp-Frozen
+
+1.00
+
+8
+
+0
+
+3 slots
+
+10046.28
+
+Appendix D
+Benchmark Universe and Deterministic-Domain Generalization
+
+Appendix
+D
+broadens the empirical scope beyond the three main-text LLM-driven domains by documenting the full five-domain benchmark universe and the deterministic-domain generalization results. The travel-planning domain and its included cases are derived from the open-source TravelPlanner dataset
+[
+33
+]
+.
+
+D.1
+Five-Domain Benchmark Universe
+
+Table 8:
+Five-domain benchmark universe. The main text uses the three core LLM-driven domains; deterministic ETL and travel-planning results appear only in Appendix
+D
+. All live aggregates use repeat = 5.
+
+Domain
+
+Role
+
+Official cases
+
+Commit-sensitive cases
+
+Repeat
+
+LLM-driven
+
+Deterministic
+
+Navigation
+
+main text
+
+4
+
+8
+
+5
+
+yes
+
+no
+
+Schedule Form
+
+main text
+
+4
+
+7
+
+5
+
+yes
+
+no
+
+Diagnosis
+
+main text
+
+4
+
+6
+
+5
+
+yes
+
+no
+
+ETL Pipeline
+
+appendix
+
+7
+
+7
+
+5
+
+no
+
+yes
+
+Travel Planning
+
+appendix
+
+4
+
+3
+
+5
+
+no
+
+yes
+
+The five-domain universe is intentionally heterogeneous. Navigation, schedule-form, and diagnosis are externally grounded LLM-driven live-agent domains. ETL pipeline and travel planning are deterministic domains that stress the same recovery framework without live LLM uncertainty, so we keep them as appendix-only generalization evidence. Travel-planning cases instantiate TravelPlanner tasks as frozen planning skeletons with explicit commit/exit predicates and controlled observable-failure sites, while audit-safe-equivalence is still evaluated with frozen domain specifications.
+
+D.2
+Deterministic-Domain Generalization
+
+Table 9:
+Deterministic-domain generalization on ETL pipeline and travel planning. These rows use the same stronger-baseline protocol as the main text; travel-planning cases come from TravelPlanner
+[
+33
+]
+. Status uses the same semantics as Table
+1
+. For compactness, preserved completed instances is omitted here and the table focuses on task-level success and replay behavior in deterministic domains. Values are medians over successful runs.
+
+Regime
+
+Domain
+
+Method
+
+Success
+
+Replay
+
+Upstream replay
+
+Failure
+\rightarrow
+milestone (ms)
+
+Recov. obs.
+
+Status
+
+Official
+
+ETL Pipeline
+
+Retry-Only
+
+1.00
+
+10.0
+
+5.0
+
+0.89
+
+0.00
+
+ok
+
+Official
+
+ETL Pipeline
+
+Comp-EntryOnly
+
+1.00
+
+4.0
+
+0.0
+
+4.53
+
+1.00
+
+ok
+
+Official
+
+ETL Pipeline
+
+Comp-Frozen
+
+1.00
+
+4.0
+
+0.0
+
+4.50
+
+1.00
+
+ok
+
+Official
+
+Travel Planning
+
+Retry-Only
+
+1.00
+
+7.0
+
+0.0
+
+0.50
+
+0.00
+
+ok
+
+Official
+
+Travel Planning
+
+Comp-EntryOnly
+
+1.00
+
+1.0
+
+0.0
+
+0.47
+
+1.00
+
+ok
+
+Official
+
+Travel Planning
+
+Comp-Frozen
+
+1.00
+
+1.0
+
+0.0
+
+0.47
+
+1.00
+
+ok
+
+Commit-sensitive
+
+ETL Pipeline
+
+Retry-Only
+
+1.00
+
+22.0
+
+15.0
+
+1.71
+
+0.00
+
+ok
+
+Commit-sensitive
+
+ETL Pipeline
+
+Comp-EntryOnly
+
+0.00
+
+–
+
+–
+
+–
+
+0.00
+
+no-recov
+
+Commit-sensitive
+
+ETL Pipeline
+
+Comp-Frozen
+
+1.00
+
+1.0
+
+0.0
+
+18.58
+
+1.00
+
+ok
+
+Commit-sensitive
+
+Travel Planning
+
+Retry-Only
+
+1.00
+
+17.0
+
+0.0
+
+0.61
+
+0.00
+
+ok
+
+Commit-sensitive
+
+Travel Planning
+
+Comp-EntryOnly
+
+0.00
+
+–
+
+–
+
+–
+
+0.00
+
+blocked
+
+Commit-sensitive
+
+Travel Planning
+
+Comp-Frozen
+
+1.00
+
+1.0
+
+0.0
+
+0.63
+
+1.00
+
+ok
+
+The deterministic domains support a narrower generalization claim: in the official setting,
+Comp-Frozen
+continues to eliminate upstream replay, and in the deterministic commitment-sensitive settings entry-only recovery again fails whereas
+Comp-Frozen
+still succeeds with a one-step replay frontier.
+
+Appendix E
+Statistical Robustness and Efficiency
+
+Appendix
+E
+complements the main-text tables with paired significance tests, no-failure-path efficiency measurements, and a compact checkpoint-granularity diagnostic.
+
+E.1
+Paired Live Statistics
+
+Table 10:
+Paired latency robustness for
+Comp-Frozen
+versus
+Retry-Only
+. Rows use runtime-exported pair keys and report matched-run medians, paired median deltas with 95% bootstrap confidence intervals, and Holm-adjusted exact tests. Replay and upstream replay also uniformly favor
+Comp-Frozen
+.
+
+Regime
+
+Domain
+
+Paired
+\Delta
+[95% CI]
+
+Effect / Holm-
+p
+
+Retry-Only
+median (ms)
+
+Comp-Frozen
+median (ms)
+
+Pairs
+
+Official
+
+Navigation
+
+-3202.20 [-3744.90, -1939.54]
+
+d_{z}=-1.46
+,
+7.63\times 10^{-5}
+
+6920.20
+
+4841.55
+
+20
+
+Official
+
+Schedule Form
+
+-12962.77 [-14470.23, -11189.84]
+
+d_{z}=-1.88
+,
+7.63\times 10^{-6}
+
+18530.74
+
+4431.35
+
+20
+
+Official
+
+Diagnosis
+
+-6916.97 [-7173.38, -6343.63]
+
+d_{z}=-2.33
+,
+7.63\times 10^{-6}
+
+12577.31
+
+5736.50
+
+20
+
+Commit-sensitive
+
+Navigation
+
+-21825.54 [-25423.12, -17380.94]
+
+d_{z}=-1.68
+,
+5.00\times 10^{-5}
+
+25752.95
+
+2527.10
+
+40
+
+Commit-sensitive
+
+Schedule Form
+
+-33867.34 [-34671.56, -32231.64]
+
+d_{z}=-4.85
+,
+5.00\times 10^{-5}
+
+34690.47
+
+1141.17
+
+35
+
+Commit-sensitive
+
+Diagnosis
+
+-19142.11 [-20507.09, -16356.22]
+
+d_{z}=-2.77
+,
+5.00\times 10^{-5}
+
+21174.59
+
+2113.80
+
+30
+
+The paired statistics confirm the main text’s qualitative pattern. The biggest latency reductions appear in the commitment-sensitive rows, and the official headline setting remains significant in all three core LLM-driven domains when compared against
+Retry-Only
+. Against stronger local baselines on official rows, however,
+Comp-Frozen
+does not show uniform dominance: in navigation it is statistically indistinguishable from both Coarse-State-Retry and Comp-EntryOnly on failure-to-milestone latency (Holm-adjusted
+p=0.18352
+and
+1.00000
+), with replay, upstream replay, and preserved completed instances all at parity; in schedule-form it retains selective latency improvements over both Coarse-State-Retry and Comp-EntryOnly (Holm-adjusted
+p=0.00060
+and
+0.00616
+), while replay, upstream replay, and preserved completed instances remain at parity.
+
+E.2
+No-Failure-Path Overhead
+
+Table 11:
+No-failure-path overhead for the currently instrumented navigation and schedule-form domains. Values are medians over repeat = 5. The sidecar-hook and snapshot columns isolate recovery-readiness bookkeeping rather than total planner variance.
+
+Domain
+
+Method
+
+Sidecar hook (ms)
+
+Snapshot subset (ms)
+
+Peak snapshot bytes
+
+Total wall-clock (ms)
+
+Planner (ms)
+
+Navigation
+
+Retry-Only
+
+0.00
+
+0.00
+
+0
+
+8131.18
+
+4558.15
+
+Navigation
+
+Comp-Frozen
+
+19.47
+
+13.31
+
+15072
+
+9298.71
+
+4413.66
+
+Schedule Form
+
+Retry-Only
+
+0.00
+
+0.00
+
+0
+
+27014.20
+
+26997.02
+
+Schedule Form
+
+Comp-Frozen
+
+46.19
+
+34.37
+
+12353
+
+29918.02
+
+29853.67
+
+Even though total no-failure wall-clock still reflects live-path variance, the bookkeeping attributable to
+Comp-Frozen
+remains small in absolute terms: the sidecar hook stays on the order of tens of milliseconds, and peak serialized snapshots remain around 12–15 KB in the current setup.
+
+E.3
+Checkpoint Granularity Diagnostic
+
+Table 12:
+Synthetic checkpoint-granularity diagnostic in navigation. Once the admissible restore point lies beyond entry, reviewed commit checkpoints sharply reduce replay. End-to-end latency is a synthetic harness estimate.
+
+Method
+
+Avg replay steps
+
+Avg upstream replay
+
+Avg estimated end-to-end latency (ms)
+
+Retry-Only
+
+12.0
+
+8.0
+
+8209.75
+
+Comp-EntryOnly
+
+4.0
+
+0.0
+
+3751.00
+
+Comp-Frozen
+
+1.0
+
+0.0
+
+872.00
+
+Appendix F
+External Validation on LangGraph-Based Runtimes
+
+Appendix
+F
+provides
+external validation
+of the main recoverability claim on LangGraph-based runtimes. We instantiate two LangGraph-based recovery controllers and evaluate them through three complementary views: regime-aware comparison, transplant-control transportability, and a counterfactual blocking witness. The goal is not to benchmark generic framework speed, but to test whether the same
+commitment-sensitive rollback failure
+isolated by the admissibility analysis reappears once persistence and resume behavior are already available in an external graph runtime; this two-domain overlay is external evidence only and is not part of the five-domain audit denominator.
+
+F.1
+Runtime Families
+
+Table 13:
+Runtime families in the external validation study. LangGraph-Direct and LangGraph-SemiReal are implemented using LangGraph execution and persistence primitives under our controlled benchmark protocol.
+
+Runtime family
+
+Primary use
+
+Realization
+
+Scope
+
+Direct LangGraph-based
+
+sanity baseline
+
+LangGraph-Direct
+
+aligned 2-case/domain subset, repeat=5
+
+Semi-real LangGraph-based
+
+strong external baseline
+
+LangGraph-SemiReal
+
+official and regime-balanced 4-case/domain sets, repeat=5
+
+Proposed runtime
+
+recoverability controller
+
+DART
+
+matched recovery protocol across aligned comparisons
+
+F.2
+Regime-Aware Comparison
+
+Readers interested mainly in the decisive external result may start from Table
+15
+, where the schedule-form commitment-sensitive row isolates the boundary failure predicted by the main admissibility analysis. The aggregate rows here provide context: on the smaller aligned direct subset, LangGraph-Direct is faster on raw failure-to-milestone time in both headline domains (navigation: 1480.22 ms vs. 3248.19 ms; schedule-form: 1.77 ms vs. 2426.61 ms). The decisive difference therefore lies in the schedule-form commitment-sensitive regime, where rollback admissibility becomes outcome-critical.
+
+Table 14:
+Aggregate LangGraph-SemiReal vs. DART summaries on the official and regime-balanced aligned sets. Values are medians over successful runs.
+
+Track
+
+Domain
+
+LangGraph success
+
+DART success
+
+LangGraph replay
+
+DART replay
+
+LangGraph F
+\rightarrow
+M (ms)
+
+DART F
+\rightarrow
+M (ms)
+
+Official
+
+Navigation
+
+1.00
+
+1.00
+
+1.0
+
+5.5
+
+4.33
+
+9619.25
+
+Official
+
+Schedule Form
+
+1.00
+
+1.00
+
+1.5
+
+4.5
+
+3148.41
+
+5589.87
+
+Regime-balanced
+
+Navigation
+
+1.00
+
+1.00
+
+1.0
+
+2.0
+
+1283.99
+
+3137.55
+
+Regime-balanced
+
+Schedule Form
+
+1.00
+
+1.00
+
+1.5
+
+3.0
+
+3629.59
+
+7421.76
+
+The regime-aware three-way anchor is the clearest external-validation result because it keeps only the shared regime-specific case intersection across
+Retry-Only
+, LangGraph-SemiReal, and
+DART
+
+Comp-Frozen
+. On navigation, the semi-real LangGraph runtime remains competitive in both entry-aligned and commitment-sensitive settings. On schedule-form, however, the commitment-sensitive row is decisive:
+Retry-Only
+succeeds with a large replay frontier (32618.41 ms, 25.5 replayed actions), LangGraph-SemiReal drops to 0.00 success, and
+DART
+remains admissible and succeeds with a one-step replay frontier (1109.80 ms, 1.0 replayed action). This is the external confirmation that checkpoint-aligned restore alone is insufficient once rollback must respect downstream commitments.
+
+To separate policy effects from executor effects, we also run a matched G0/G1/G2/G3 transplant-control study on the same two-domain regime-balanced universe while holding the reviewed checkpoint substrate fixed between G2 and G3. In all four domain-regime cells, G2 and G3 both remain at 1.00 success with identical median replay and zero upstream replay; on the current universe every G3 decision is
+eligible
+with zero fallbacks, and relative to DART-native the transplanted controller matches replay exactly while keeping failure-to-milestone latency within
+0.76
+–
+0.84\times
+. These rows are therefore a transportability check rather than blocked-case evidence: they show that the admissibility layer ports without harming recovery on safe cases. Because every current G3 decision is
+eligible
+, the necessity of the gate comes instead from the counterfactual witness below and the five-domain calibration results in Appendix
+G
+, which show what breaks when the same dependency/effect veto is disabled or overridden.
+
+Table 15:
+Three-way anchor across
+Retry-Only
+, LangGraph-SemiReal, and DART
+Comp-Frozen
+on aligned regime-specific intersections. The schedule-form commitment-sensitive row is the key safety result.
+
+Domain
+
+Regime
+
+Retry success
+
+LangGraph success
+
+DART success
+
+Retry replay
+
+LangGraph replay
+
+DART replay
+
+Retry F
+\rightarrow
+M
+
+LangGraph F
+\rightarrow
+M
+
+DART F
+\rightarrow
+M
+
+Navigation
+
+Entry-aligned
+
+1.00
+
+1.00
+
+1.00
+
+10.0
+
+1.5
+
+4.0
+
+6376.97
+
+588.89
+
+3328.69
+
+Navigation
+
+Commit-sensitive
+
+1.00
+
+1.00
+
+1.00
+
+12.0
+
+1.0
+
+1.0
+
+14596.55
+
+1938.46
+
+2433.90
+
+Schedule Form
+
+Entry-aligned
+
+1.00
+
+1.00
+
+1.00
+
+21.5
+
+4.0
+
+6.5
+
+19093.78
+
+4969.47
+
+6137.15
+
+Schedule Form
+
+Commit-sensitive
+
+1.00
+
+0.00
+
+1.00
+
+25.5
+
+0.0
+
+1.0
+
+32618.41
+
+–
+
+1109.80
+
+F.3
+Semantic Equivalence
+
+The study is not relying only on latency. Under the current overlay contract, all comparable LangGraph-SemiReal versus
+DART
+pairs are safe-equivalent: 6/6 on the official track and 8/8 on the regime-balanced track.
+
+Table 16:
+LangGraph-SemiReal semantic overlays. The official overlay yields 6 comparable safe-equivalent rows, and the regime-balanced overlay yields 8.
+
+Track
+
+Safe-equivalent rows
+
+Comparable rows
+
+Navigation rows
+
+Schedule-form rows
+
+Official
+
+6
+
+6
+
+2
+
+4
+
+Regime-balanced
+
+8
+
+8
+
+4
+
+4
+
+F.4
+Mechanism Witness
+
+The blocking witness is counterfactual evidence that the gate is necessary, not just that
+DART
+differs from LangGraph. In the schedule-form witness, producer
+ResolveSlot::slot[0]::0
+has already been consumed by two committed downstream instances:
+ResolveSlot::slot[1]::0
+and
+FinalizeSchedule::final::0
+. With blocking on,
+DART
+rejects rollback with
+committed_consumers_present
+. With the same check disabled, the producer-commit restore becomes
+eligible
+but drops those two committed consumers. The reconstructed LangGraph-style restore invalidates the same pair. So checkpoint alignment alone is not enough once rollback must preserve downstream commitments.
+
+Table 17:
+Schedule-form blocking witness against LangGraph-SemiReal under an explicit producer rollback request. Without blocking, the same restore invalidates committed downstream consumers.
+
+Setting
+
+DART blocking on
+
+DART blocking off
+
+LangGraph-SemiReal restore
+
+Schedule producer rollback after finalized downstream consumers
+
+reject with
+committed_consumers_
+
+present
+
+rollback allowed;
+
+2 committed consumers dropped
+
+restore allowed;
+
+same 2 downstream consumers invalidated
+
+Appendix G
+Five-Domain Audit Chain and Mechanism Evidence
+
+Appendix
+G
+collects the five-domain audit chain and the mechanism-level sanity checks that underpin the main-text semantic audit and blocking calibration claims, including semantic audit, blocking calibration, failed-instance localization, and property-wise necessity evidence. Reviewers interested only in the main-text safety claims can read this appendix in the following order: denominator flow and protocol, five-domain semantic audit, five-domain blocking calibration, and then the localization and boundary/property evidence.
+
+G.1
+Five-Domain Semantic Audit and Blocking Calibration
+
+These tables establish the safety backbone behind Table
+3
+. Table
+18
+aligns the main counts across the five-domain audit chain, separating the comparable-row denominator used for safe-equivalence from the evaluated-event denominator used for blocking calibration. The reported labels are executable checks derived from frozen case specifications and reviewed domain specifications over normalized semantic, committed-prefix, and durable-effect projections. Human review enters when freezing boundary, effect, and audit specifications; we do not claim an independent multi-annotator audit for the current version.
+
+Table 18:
+Denominator flow for the five-domain audit chain.
+
+Denominator
+
+Count
+
+Source / scope
+
+Comparable semantic rows
+
+54
+
+Five-domain frozen audit universe
+
+Evaluated recovery events
+
+47
+
+Calibration profile over the same universe
+
+Admitted events
+
+35
+
+Subset of evaluated recovery events
+
+Blocked events
+
+12
+
+Subset of evaluated recovery events
+
+Blocked checkpoints
+
+16
+
+Audit-level blocked-checkpoint total
+
+Repeat-level localization rows
+
+270
+
+54 frozen cases
+\times
+5 repeats
+
+Ambiguity candidates
+
+291
+
+Offline weakened-key benchmark
+
+The 54-row semantic denominator counts cases where both methods yield audit-ready terminal outputs; for injected-failure runs, comparability additionally requires observed failure and recovery under
+Comp-Frozen
+. The 47-event calibration denominator is the subset that reaches the admissibility gate. Shared status labels are
+ok
+,
+contract
+,
+no-recov
+, and
+blocked
+, with the same meanings as in Table
+1
+. We use
+admitted event
+,
+blocked event
+, and
+blocked checkpoint
+for the three calibration units, and reserve
+preserved completed instances
+for the runtime metric versus
+committed-prefix preservation
+for the ETL/travel audit check. A comparable row is safe-equivalent iff all domain-applicable reviewed checks pass; rows failing the comparable-row inclusion rule are excluded from the safe-equivalence denominator.
+
+Table 19:
+Audit protocol and denominators for Table
+3
+.
+
+Quantity
+
+Current result
+
+Reported denominator
+
+Pass / failure rule
+
+Unit
+
+Semantic audit
+
+54/54 safe-equivalent
+
+54 comparable rows
+
+safe-equivalent iff all required frozen specifications pass
+
+comparable row
+
+False blocking (event level)
+
+0/12 false-blocked events
+
+12 audited blocked events
+
+false-blocked iff forced restore remains audit-safe
+
+blocked event
+
+False blocking (checkpoint level)
+
+0/16 false-blocked checkpoints
+
+16 audited blocked checkpoints
+
+false-blocked iff the blocked checkpoint itself is safe to force
+
+blocked checkpoint
+
+Unsafe admission
+
+0/35 unsafe admissions
+
+35 admitted events
+
+unsafe iff any required reviewed specification fails after admission
+
+admitted event
+
+Table 20:
+Domain-specific reviewed specifications for audit-safe-equivalence.
+
+Domain
+
+Safe-equivalent requirement
+
+Comparable-row requirement
+
+Navigation
+
+canonical final semantics + unaffected committed prefix
+
+both methods yield auditable terminal outputs;
+Comp-Frozen
+must observe the injected failure and recovery when expected
+
+Schedule Form
+
+canonical final semantics + unaffected committed prefix
+
+both methods yield auditable terminal outputs;
+Comp-Frozen
+must observe the injected failure and recovery when expected
+
+Diagnosis
+
+canonical final semantics + unaffected committed prefix + durable repair effect
+
+both methods complete the diagnosis probe outputs on the same case
+
+ETL Pipeline
+
+canonical final semantics + unaffected committed prefix + durable effect + committed-prefix preservation
+
+both methods complete the ETL probe outputs on the same case
+
+Travel Planning
+
+canonical final semantics + unaffected committed prefix + durable effect + committed-prefix preservation
+
+both methods complete the travel-planning probe outputs on the same case
+
+Table 21:
+Five-domain semantic audit underlying Table
+3
+. Rows are aggregated at the comparable-row level.
+
+Domain
+
+Safe-equivalent
+
+Comparable rows
+
+Semantic match
+
+Prefix exact
+
+Effect exact
+
+Committed-prefix exact
+
+Navigation
+
+12
+
+12
+
+12
+
+12
+
+0
+
+0
+
+Schedule Form
+
+11
+
+11
+
+11
+
+11
+
+0
+
+0
+
+Diagnosis
+
+10
+
+10
+
+10
+
+10
+
+10
+
+0
+
+ETL Pipeline
+
+14
+
+14
+
+14
+
+14
+
+14
+
+14
+
+Travel Planning
+
+7
+
+7
+
+7
+
+7
+
+7
+
+7
+
+Overall
+
+54
+
+54
+
+54
+
+54
+
+31
+
+21
+
+Table 22:
+Five-domain blocking calibration by domain. Rows use the same 47 evaluated recovery events as Table
+3
+; false-blocked and unsafe-admission columns report audited event-level counts.
+
+Scope
+
+Admitted
+
+Blocked
+
+False-blocked
+
+Unsafe admissions
+
+Dependency-blocked
+
+Effect-blocked
+
+Evaluated events
+
+Overall calibration
+
+35
+
+12
+
+0
+
+0
+
+5
+
+7
+
+47
+
+Navigation
+
+4
+
+1
+
+0
+
+0
+
+1
+
+0
+
+5
+
+Schedule Form
+
+4
+
+2
+
+0
+
+0
+
+1
+
+1
+
+6
+
+Diagnosis
+
+6
+
+2
+
+0
+
+0
+
+1
+
+1
+
+8
+
+ETL Pipeline
+
+14
+
+3
+
+0
+
+0
+
+1
+
+2
+
+17
+
+Travel Planning
+
+7
+
+4
+
+0
+
+0
+
+1
+
+3
+
+11
+
+G.2
+Failed-Instance Localization Audit
+
+This subsection audits failed-instance localization over the same five-domain frozen case universe defined in Table
+8
+(54 cases, 5 repeats each, 270 repeat-level rows). It addresses a narrower but reviewer-critical question than semantic equivalence alone: whether the runtime actually localizes recovery to the correct failed instance rather than merely to the correct skeleton family. We audit this in three layers. First, we align the observed
+Comp-Frozen
+recovery scope and checkpoint type with frozen case specifications over the repeat = 5 official and commitment-sensitive cases. Across the 270 repeat-level rows, the observed recovery-scope prefix matches the specification in all rows, and the observed checkpoint type also matches in all rows. Second, we run a systematic offline ambiguity benchmark over the same universe: the benchmark keeps the observed full recovery identifiers fixed, then weakens instance keys by dropping ordinal or structural fields to test when a conservative runtime should abstain. Third, we retain three executable consequence probes. Navigation and diagnosis each yield a unique weakened-alias candidate under the frozen protocol, whereas schedule-form exposes a genuine re-entry ambiguity witness: collapsing ordinal identity creates two candidates, and forcing the stale one would erase an already committed refined value. The probes therefore illustrate concrete ambiguity damage, while the broader ambiguity benchmark provides the systematic coverage.
+
+Table 23:
+Failed-instance localization audit. The table combines observed repeat-level alignment, a systematic offline ambiguity benchmark over the frozen case universe, and three executable consequence probes.
+
+Component
+
+Key result
+
+Interpretation
+
+Denominator
+
+Observed repeat-level alignment
+
+recovery-scope prefix: 270/270; checkpoint type: 270/270
+
+observed
+Comp-Frozen
+rows align with the frozen recovery specifications
+
+270 rows
+
+Systematic ambiguity benchmark
+
+full-key exact: 270/270 observed rows; drop-ordinal ambiguity: 20/291 candidate instances
+
+full instance identifiers remain unique, whereas weakened identifiers require abstention in re-entry patterns
+
+54 cases / 291 candidates
+
+Re-entry stress aliases
+
+same-entity multi-ordinal aliases appear in navigation and schedule-form
+
+ordinal identity becomes necessary once the same structural entity is reopened
+
+10 aliases
+
+Consequence probes
+
+navigation unique; schedule ambiguous with abstention; diagnosis unique
+
+the probes illustrate concrete ambiguity damage rather than defining the full benchmark
+
+3 probes
+
+Overall localization takeaway
+
+no false resolution observed under full keys in the current frozen universe
+
+locality claims are supported over the reviewed five-domain case universe rather than arbitrary online executions
+
+combined audit
+
+G.3
+Boundary Review Protocol and Boundary Evidence
+
+Table 24:
+Reviewed positive exit-boundary cases and paired negative controls in the two core workflow-shaped domains. Together with Table
+4
+, these rows show that controller legality is weaker than reviewed boundary validity.
+
+Domain
+
+Edge
+
+Reviewed exit boundary
+
+Planning/runtime realized
+
+Conclusion
+
+FSM legal
+
+Navigation
+
+WAITING_QUERY_REFINEMENT
+\rightarrow
+STOP_READY
+
+yes
+
+yes
+
+exit boundary
+
+yes
+
+Navigation
+
+WAITING_QUERY_REFINEMENT
+\rightarrow
+ROUTES_PLANNED
+
+yes
+
+yes
+
+exit boundary
+
+yes
+
+Navigation
+
+WAITING_QUERY_REFINEMENT
+\rightarrow
+DONE
+
+yes
+
+yes
+
+exit boundary
+
+yes
+
+Navigation
+
+WAITING_POI_SELECTION
+\rightarrow
+STOP_READY
+
+no
+
+no
+
+legal but non-recoverable
+
+yes
+
+Schedule Form
+
+WAITING_SLOT_REFINEMENT
+\rightarrow
+SLOT_READY
+
+yes
+
+yes
+
+exit boundary
+
+yes
+
+Schedule Form
+
+WAITING_SLOT_REFINEMENT
+\rightarrow
+REVIEW_READY
+
+yes
+
+yes
+
+exit boundary
+
+yes
+
+Schedule Form
+
+WAITING_SLOT_REFINEMENT
+\rightarrow
+DONE
+
+yes
+
+yes
+
+exit boundary
+
+yes
+
+Schedule Form
+
+WAITING_SLOT_SELECTION
+\rightarrow
+SLOT_READY
+
+no
+
+no
+
+legal but non-recoverable
+
+yes
+
+Table 25:
+Boundary review load across workflow-shaped reviewed-boundary domains. Counts report reviewed boundary objects rather than full FSM size; ETL pipeline and travel planning instead use deterministic output/effect specifications and are outside this reviewer-burden view.
+
+Domain
+
+#Skeletons
+
+#Commit
+
+#Exit
+
+#Pending
+
+#States
+
+#Legal edges
+
+Audit target
+
+Navigation
+
+3
+
+4
+
+6
+
+1
+
+14
+
+28
+
+candidate predicates + interface/effect audit
+
+Schedule Form
+
+3
+
+4
+
+6
+
+–
+
+12
+
+18
+
+candidate predicates + interface/effect audit
+
+Diagnosis
+
+3
+
+4
+
+6
+
+–
+
+13
+
+19
+
+candidate predicates + interface/effect audit
+
+Table 26:
+Protocolized boundary-review telemetry from logged real sessions in a representative workflow-shaped domain. Reviewer-minute quantities are reported only when a real timed session is present; exact match checks whether the reviewed output reproduces the frozen configuration after validation.
+
+Domain
+
+Reviewer role
+
+Frozen config (min)
+
+First config (min)
+
+Manual decisions
+
+Validation iters
+
+Exact match
+
+Sessions
+
+Schedule Form
+
+author (not original implementer)
+
+27.0
+
+18.5
+
+4
+
+2
+
+1.00
+
+1
+
+Table 27:
+Cross-domain structural boundary transfer audit from candidate export to frozen configuration. Stable indicates no missing or extra skeletons and no field diffs relative to the frozen reviewed configuration; Exact match refers to candidate-to-frozen alignment at the skeleton/field level.
+
+Domain
+
+Exact match
+
+Stable
+
+Field diffs
+
+Pending
+
+Candidate source
+
+Navigation
+
+yes
+
+yes
+
+0
+
+1
+
+FSM+router+manifest
+
+Schedule Form
+
+yes
+
+yes
+
+0
+
+0
+
+FSM+planner-map+manifest
+
+Diagnosis
+
+yes
+
+yes
+
+0
+
+0
+
+FSM+planner-map+manifest
+
+These tables make the scope explicit: reviewer-burden evidence is reported only for workflow-shaped reviewed-boundary domains, with timed telemetry available for Schedule Form. Within that scope, review is concentrated on a much smaller set of candidate predicates and semantic annotations than the raw FSM size might suggest.
+
+G.4
+Failure-Signal Normalization and Snapshot-Depth Efficiency
+
+This subsection checks two support claims: whether normalized failure signals preserve the same recovery decision at fixed sites, and whether the registry-only sidecar remains storage-efficient as checkpoint depth grows.
+
+Table 28:
+Failure-signal normalization adequacy matrix for the current fixed-site evaluation. At each fixed site, varying the raw observable signal leaves both the admissibility decision and the recovery signature unchanged.
+
+Fixed site
+
+Domain
+
+Decision stable
+
+Recovery stable
+
+Expected decision
+
+Checkpoint
+
+Raw rows
+
+Eval mode
+
+nav_finalize_route_admitted
+
+Navigation
+
+yes
+
+yes
+
+eligible
+
+commit
+
+4
+
+real_action_error_injection
+
+schedule_resolve_slot_admitted
+
+Schedule Form
+
+yes
+
+yes
+
+eligible
+
+entry
+
+3
+
+real_action_error_injection
+
+diagnosis_resolve_check_admitted
+
+Diagnosis
+
+yes
+
+yes
+
+eligible
+
+entry
+
+3
+
+real_action_error_injection
+
+nav_committed_consumer_blocked
+
+Navigation
+
+yes
+
+yes
+
+committed_consumers_present
+
+none
+
+3
+
+normalized_failure_projection
+
+irreversible_effect_blocked
+
+Synthetic effect site
+
+yes
+
+yes
+
+irreversible_effect_policy
+
+none
+
+3
+
+normalized_failure_projection
+
+Table 29:
+Snapshot-depth efficiency summary for the schedule-form depth benchmark. The registry-only sidecar grows much more slowly than the inline payload, while restore cost stays in the same order of magnitude.
+
+Metric
+
+Value
+
+Depth count
+
+5
+
+Maximum depth
+
+5
+
+Peak inline / registry payload ratio
+
+48.39
+\times
+
+Peak registry / inline restore ratio
+
+1.07
+\times
+
+Snapshot-manager growth
+
+23.00
+\times
+
+Registry-sidecar growth
+
+3.96
+\times
+
+Inline-payload growth
+
+20.88
+\times
+
+G.5
+Property-Wise Necessity Decomposition
+
+Table
+30
+maps each conjunct of Eq. (
+6
+) to the concrete counterexample or audit family that fails when it is removed.
+Read together, the dependency-blocking witnesses and effect-policy forced-override audits show why admissibility is needed both to preserve committed downstream semantics and to avoid replay across irreversible effect boundaries.
+
+Table 30:
+Property-wise necessity decomposition for Eq. (
+6
+). Each row points to a concrete evidence family showing what breaks if the corresponding conjunct is removed.
+
+Conjunct
+
+What fails without it
+
+Current concrete signal
+
+Evidence family
+
+Decidable
+
+failed-instance target becomes ambiguous
+
+270/270 observed rows align under full keys; the offline ambiguity benchmark identifies 10 same-entity multi-ordinal aliases, and weakened alias
+ResolveSlot::slot[0]
+still matches two candidates while the stale one erases the refined
+Friday
+value
+
+failed-instance localization audit + instance-decidability counterexample
+
+Closed
+
+unresolved branch is certified as an exit boundary
+
+legal edges
+WAITING_POI_SELECTION
+
+\rightarrow
+STOP_READY
+;
+
+WAITING_SLOT_SELECTION
+
+\rightarrow
+SLOT_READY
+emit unsafe
+
+exit checkpoints when forced
+
+wrong-boundary ablation
+
+Separable
+
+rollback silently invalidates committed downstream work
+
+disabling the guard drops committed consumers in navigation (1), schedule-form (2), and diagnosis (1)
+
+committed-consumer blocking ablation
+
+Controllable
+
+rollback crosses an irreversible effect boundary without a safe anchor
+
+all 7 effect-policy-blocked events are unsafe to force, and none are observed false blocks
+
+five-domain effect-policy blocking audits
+
+Appendix H
+Proof Sketches for the Semantic Soundness Theorems
+
+Lemma 1
+
+(Legal edges do not imply recoverable boundaries)
+.
+
+Let
+u=(s_{i},a,s_{j})
+be a controller-legal edge, i.e.,
+(s_{i},a,s_{j})\in\delta
+. If there exists a subtask instance
+I
+associated with
+u
+such that at least one of
+\mathrm{Decidable}(u,I)
+,
+\mathrm{Closed}(u,I)
+,
+\mathrm{Separable}(u,I)
+, or
+\mathrm{Controllable}(u,I)
+does not hold, then
+u
+is not a recoverable boundary for
+I
+under Eq. (
+6
+).
+
+Theorem 1
+
+(Necessity of committed-consumer blocking)
+.
+
+Let
+I_{p}
+be a producer instance and let
+I_{q}
+be a committed downstream consumer of
+I_{p}
+. Any local-recovery policy that rolls back
+I_{p}
+while leaving
+I_{q}
+committed, without compensation, invalidation, or joint rollback of
+I_{q}
+, cannot guarantee semantic equivalence of the recovered execution. Therefore, committed-consumer blocking is necessary for sound failed-instance-local rollback.
+
+Corollary 1
+
+(Soundness of dependency-aware admission under conservative dependency abstraction)
+.
+
+Assume A3–A4. If local rollback of a producer instance is admitted by the runtime, then there exists no committed downstream instance that would become semantically unsupported were that producer rolled back while the downstream instance remained committed.
+
+Theorem 2
+
+(Maximal admissible checkpoint selection)
+.
+
+Assume the stable checkpoints of
+I_{f}
+are totally ordered by recency under Assumption A2. If
+\mathcal{A}(f)\neq\emptyset
+, then Eq. (
+10
+) returns a unique checkpoint
+
+c^{\star}(f)=\max\mathcal{A}(f)
+
+Moreover: (i)
+c^{\star}(f)
+is admissible, i.e.,
+c^{\star}(f)\in\mathcal{A}(f)
+; and (ii) for any checkpoint
+c^{\prime}\in\mathcal{C}(I_{f})
+with
+c^{\star}(f)\prec^{(I_{f})}c^{\prime}
+, we have
+c^{\prime}\notin\mathcal{A}(f)
+.
+
+Proof Sketch of Lemma
+1
+.
+
+By Eq. (
+6
+),
+\mathrm{Recoverable}(u,I)
+is the conjunction of four obligations:
+
+\mathrm{Decidable}(u,I)
+,
+
+\mathrm{Closed}(u,I)
+,
+
+\mathrm{Separable}(u,I)
+, and
+
+\mathrm{Controllable}(u,I)
+.
+Therefore, if any one of these conjuncts fails for the legal edge
+u
+and instance
+I
+, then the conjunction itself fails, and hence
+\neg\mathrm{Recoverable}(u,I)
+.
+Controller legality certifies only controller-level reachability and does not reintroduce any missing conjunct. Thus legality is necessary for controller execution but not sufficient for recoverability.
+
+Proof Sketch of Theorem
+1
+.
+
+Assume
+I_{p}\rightsquigarrow I_{q}
+under Eq. (
+14
+), and that
+I_{q}
+is already committed. By Assumption A3, the committed state of
+I_{q}
+semantically depends on outputs produced by
+I_{p}
+. Suppose a local-recovery policy rolls back
+I_{p}
+while leaving
+I_{q}
+committed and without compensating, invalidating, or jointly rolling back
+I_{q}
+. Then the committed state of
+I_{q}
+becomes semantically unsupported after the producer rollback. This violates semantic equivalence of the recovered execution and is exactly the conflict ruled out by the
+NoCommittedConflict
+term in Eq. (
+8
+). Therefore any sound failed-instance-local recovery policy must block such rollback.
+
+Proof Sketch of Theorem
+2
+.
+
+By Assumption A2, the checkpoint set
+\mathcal{C}(I_{f})
+is totally ordered by recency under
+\preceq^{(I_{f})}
+. Since
+\mathcal{A}(f)\subseteq\mathcal{C}(I_{f})
+and
+\mathcal{A}(f)\neq\emptyset
+, the maximum element
+c^{\star}(f)=\max\mathcal{A}(f)
+exists and is unique. By construction,
+c^{\star}(f)\in\mathcal{A}(f)
+, so
+c^{\star}(f)
+is admissible. Now let
+c^{\prime}\in\mathcal{C}(I_{f})
+satisfy
+c^{\star}(f)\prec^{(I_{f})}c^{\prime}
+. If
+c^{\prime}
+were also admissible, then
+c^{\prime}\in\mathcal{A}(f)
+and
+c^{\star}(f)
+would fail to be the maximum element of
+\mathcal{A}(f)
+, a contradiction. Therefore every checkpoint strictly later than
+c^{\star}(f)
+is inadmissible. This proves that Eq. (
+10
+) returns the unique latest admissible checkpoint within the failed instance.
+
+Appendix I
+Reproducibility and Additional Experimental Details
+
+Runtime Realization Scope.
+
+The recovery method is realized in
+DART
+as an online runtime sidecar rather than an offline trace analyzer. The implementation centers on reviewed boundary configurations, step lifting, modular named checkpoints, producer-consumer dependency tracking, and rollback selection in the online recovery path. Appendix
+I.1
+gives the concrete realization details.
+
+I.1
+Runtime Realization Details
+
+We realize failed-instance identity, recoverable-boundary review, modular checkpoints, and admissibility checks in
+DART
+as a runtime sidecar attached to the normal agent loop rather than as an offline trace-analysis layer. This subsection records the concrete runtime realization of the four-layer recovery pipeline described in Section 4.
+
+Figure 3:
+Runtime sidecar overview. Reviewed boundaries define recovery contracts; the sidecar lifts steps, tracks dependencies, and restores the latest admissible checkpoint.
+
+Normalized signals use a small runtime failure vocabulary such as
+TIMEOUT
+,
+INVALID_OUTPUT
+, or
+MISSING_INPUT
+. Let
+\widehat{K}(k)
+denote the reviewed configuration loaded for skeleton id
+k
+. In the current
+DART
+realization,
+
+\widehat{K}(k)=\big(\widehat{S}_{k}^{\mathrm{int}},\widehat{S}_{k}^{\mathrm{ent}},\widehat{P}_{k}^{\mathrm{com}},\widehat{P}_{k}^{\mathrm{exit}},\widehat{X}_{k}^{\mathrm{in}},\widehat{X}_{k}^{\mathrm{out}},\widehat{\pi}_{k}^{\mathrm{eff}}\big)
+
+(11)
+
+The sidecar observer then lifts a base execution step
+e_{t}
+from Eq. (
+2
+) to an enriched recovery-aware record
+
+\Psi(e_{t})=(k_{t},I_{t},R_{t},W_{t},c_{t})
+
+(12)
+
+where
+k_{t}
+is the resolved skeleton id,
+I_{t}
+the resolved instance,
+R_{t}
+and
+W_{t}
+the step-level read and write sets, and
+c_{t}
+an optional named checkpoint produced at that step. In the current system,
+R_{t}
+and
+W_{t}
+are assembled conservatively from explicit state/action manifests, planner maps, and reviewed tool I/O or effect annotations associated with the active skeleton, rather than inferred from arbitrary black-box runtime semantics.
+
+At the instance level, the runtime aggregates conservative interfaces as
+
+R(I)=\bigcup_{t:I_{t}=I}R_{t},\qquad W(I)=\bigcup_{t:I_{t}=I}W_{t}
+
+(13)
+
+Eq. (
+13
+) is the runtime abstraction used to derive dependency edges between instances: writes summarize produced semantic objects, while reads summarize downstream consumption that may make producer rollback unsafe.
+These aggregates induce the conservative producer-consumer relation
+
+I_{p}\rightsquigarrow I_{q}\iff W(I_{p})\cap R(I_{q})\neq\varnothing
+
+(14)
+
+Eq. (
+14
+) realizes committed-consumer detection as a conservative over-approximation of must-block dependency. Because the loaded interfaces intentionally over-approximate possible reads and writes, the resulting dependency relation may block some otherwise admissible rollbacks; this conservatism is part of the safety envelope studied here.
+
+In the default Registry-Only Sidecar path, the sidecar stores the instance registry, reconstructs snapshot-manager bookkeeping at restore time, and resumes normal execution from the chosen named checkpoint and sidecar state. Figure
+3
+summarizes this path.
+
+Benchmark Settings.
+
+The main text reports three integrated result tables over the three core LLM-driven domains. Semi-real live benchmarks inject failures only at observable action boundaries of the form in Eq. (
+3
+), and the headline aggregates use repeat = 5 under the official and commitment-sensitive regimes. Appendix
+D
+documents the full five-domain case universe and deterministic ETL/travel generalization; Appendix
+E
+adds paired statistics, no-failure-path overhead, and checkpoint-granularity diagnostics; Appendix
+F
+provides two-domain external LangGraph evidence, including regime-aware comparison, transplant-control transportability, and the blocking witness; and Appendix
+G
+collects the broader audit chain.
+
+Representative Reproduction Path.
+
+An accompanying public artifact is available at
+https://github.com/KeoYang/DART
+. It includes the
+DART
+implementation used in the paper, together with the reviewed boundary configurations, benchmark harnesses, and scripts used to validate the frozen paper artifacts and rerun the official non-live pipelines. The artifact exposes fixed case sets, automated interaction choices, explicit failure injection points, and scripts for regenerating the aggregate JSON and markdown result files used for the paper tables. Rerunning the semi-real live protocol further requires the corresponding hosted-LLM and, for the navigation domain, map-service credentials. For the T8 depth benchmark, the two compared variants correspond in the artifact to the aliases
+registry_only_v1
+and
+inline_snapshot_manager_v1
+, respectively. In particular, the artifact allows readers to trace how reviewed boundary configurations instantiate Eq. (
+11
+), how execution steps are lifted according to Eq. (
+12
+), how committed-consumer relations are accumulated under Eq. (
+14
+), and how rollback targets are selected through Eq. (
+10
+).
+
+Compute Resources.
+
+The reported experiments were executed on a single local workstation with an Apple M3 CPU (8 cores) and 16 GB unified memory. The semi-real runs are lightweight in restoration cost; the dominant runtime cost comes from downstream re-execution and external service latency rather than from checkpoint restore itself.
+
+Assets and Services.
+
+The semi-real benchmarks use hosted LLM APIs and, in the navigation domain, a map-search API. These external services are accessed only through their normal provider interfaces and terms. The public artifact does not redistribute those services or their proprietary outputs; instead, it provides the benchmark harnesses, reviewed boundary configurations, and analysis scripts needed to reproduce the reported measurements for readers with appropriate access credentials.
+
+LLM Usage.
+
+The evaluated domains instantiate the proposed method with LLM-based tool agents under explicit FSM controllers. The contribution of the paper is not a new language model or prompting method. Instead, the proposed method operates at the runtime-recovery layer and requires only that the agent expose explicit state transitions, action boundaries, and step histories.
+

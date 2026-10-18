@@ -1,0 +1,1647 @@
+FlexDraft: Flexible Speculative Decoding via Attention Tuning and Bonus-Guided Calibration
+Yaojie Zhang Jianuo Huang Junlong Ke Yuhang Han, Yongji Long Tianchen Zhao Biqing Qi Linfeng Zhang
+
+Abstract
+Speculative decoding accelerates memory-bound LLM inference without quality degradation by using a fast drafter to propose multiple candidate tokens and the target model to verify them in parallel. However, conventional sequential speculative decoding suffers from mutual waiting between drafting and verification, and repeated exchange of intermediate states further increases memory access overhead. Parallel speculative decoding addresses this limitation by performing drafting and verification within a single target forward pass, allowing future drafts to be prepared while current candidates are being verified. Although effective at small batch sizes, existing parallel speculative decoding methods either require costly continual pretraining with quality degradation or suffer from low acceptance rates. More importantly, this paradigm inherently suffers from uncertainty in both the bonus token and the accepted length, leading to draft verification mismatch and causing throughput gains to collapse at large batch sizes. To address these limitations, we introduce FlexDraft, a lossless speculative decoding framework that flexibly adapts to varying batch sizes through three key designs. (1) Attention Tuning enables block diffusion drafting by tuning only the attention projectors of the final few layers on mask tokens, while keeping the autoregressive path frozen to exactly preserve the target distribution and produce high quality drafts with minimal trainable parameters. (2) Bonus-guided Calibration uses a lightweight MLP conditioned on the resolved bonus token to calibrate draft logits, mitigating the draft verification mismatch caused by bonus token uncertainty. (3) Flex Decoding dynamically switches between parallel draft and verify at small batch sizes and sequential draft then verify at large batch sizes, and further adjusts verification length based on draft confidence to eliminate redundant computation. Experiments on Qwen3-8B show that FlexDraft achieves an average 4.59 × 4.59\times speedup over autoregressive decoding without quality loss. Our code will be released on Github.
+
+
+
+1
+Introduction
+
+Autoregressive large language models (LLMs) have demonstrated remarkable capabilities across diverse natural language understanding and generation tasks
+(
+30
+;
+9
+;
+29
+)
+, but their token by token decoding paradigm makes inference highly memory bound and fundamentally limits generation speed.
+Speculative decoding addresses this bottleneck as a lossless acceleration paradigm by using a lightweight drafter to propose multiple candidate tokens and the target model to verify them in a single forward pass, thereby amortizing expensive target model computation over multiple accepted tokens
+(
+5
+;
+13
+)
+.
+Prior methods improve speculative decoding by enhancing draft quality
+(
+37
+;
+17
+)
+, reducing draft generation cost
+(
+1
+;
+6
+)
+, or organizing candidates more effectively for verification
+(
+24
+;
+15
+)
+, with representative examples such as EAGLE for feature-level draft prediction
+(
+16
+;
+17
+)
+and DFlash for target conditioned block diffusion drafting
+(
+6
+)
+.
+
+Despite these advances, most conventional speculative decoding methods still follow a sequential draft then verify schedule, where the next draft cannot begin until verification completes.
+This serialized execution induces mutual waiting between the drafter and the target model, and repeated exchange of intermediate states further increases memory access overhead, limiting end-to-end speedup
+(
+22
+;
+28
+)
+.
+
+Figure 1
+:
+Limitations of the parallel speculative decoding paradigm.
+
+(a) Given the prefix, the target model predicts the next token and prefers “Er”, the first token of “Ernest Hemingway”, which constrains the subsequent generation toward Hemingway. Without access to the bonus token, the draft model tends to favor alternative continuations.
+(b) Accept length uncertainty forces parallel speculative decoding to consider all potentially accepted prefixes of the last draft, requiring mask embeddings to traverse all target layers and causing the target forward token count to grow as
+O(N^{2})
+. The right figure analyzes the resulting overhead for different numbers of target forward tokens, which is moderate at small batch sizes but grows rapidly at larger batch sizes.
+
+To reduce this mutual waiting, recent methods prepare future candidates before verification is fully resolved, enabling parallel speculative decoding that overlaps drafting with verification within a single target forward pass
+(
+19
+;
+21
+;
+27
+)
+.
+However, existing parallel speculative decoding methods either require continual pretraining with substantial training and parameter overhead, potentially leading to quality degradation, or suffer from low acceptance rates.
+More importantly, this paradigm introduces two fundamental limitations.
+Since future drafts are generated before the verification outcome is known, the drafter faces uncertainty in both the bonus token and the accepted length.
+These two uncertainties affect parallel future drafting in different ways.
+Bonus token uncertainty weakens draft verification alignment, while acceptance length uncertainty forces the drafter to generate candidate branches for multiple possible accepted prefixes, introducing substantial redundant drafting overhead.
+We detail these two limitations below.
+
+1
+
+Bonus token uncertainty.
+
+In speculative decoding, when the first rejection occurs during verification, the target model samples a corrected token at the rejected position, which is commonly referred to as the
+bonus token
+.
+However, in parallel speculative decoding, this bonus token is not available when the draft tokens are generated
+(
+19
+;
+21
+)
+.
+As a result, the draft model must predict future tokens without knowing which corrected token will be produced by the target model, leading to a mismatch between drafting and verification.
+Figure
+1
+(a) illustrates this issue.
+Given the query “List some writers in the USA.”, the target model may produce
+Er
+as the bonus token, corresponding to the beginning of
+Ernest Hemingway
+.
+Conditioned on this token, the subsequent verified trajectory should remain coherent with
+Ernest Hemingway
+.
+In contrast, because the draft model cannot observe the bonus token during drafting, it may assign high probability to continuations associated with other writers, such as
+Mark Twain
+or
+S. King
+.
+Although these drafts may be locally plausible under the original prefix, they become inconsistent once the verifier selects
+Er
+as the bonus token.
+This mismatch reduces the probability that the drafted tokens can be accepted, thereby limiting the speedup of parallel speculative decoding.
+
+2
+
+Acceptance length uncertainty.
+
+In parallel draft and verify methods, future candidates are generated before the actual acceptance length is known
+(
+21
+;
+27
+;
+19
+)
+.
+Since the verifier determines the accepted length only after verification, the drafter cannot know which future branch will remain valid and must prepare candidates for multiple possible accepted prefixes, introducing substantial redundant computation.
+In existing parallel speculative decoding methods, the additional mask tokens used for future drafting are injected from the bottom layers and must pass through all target layers together with the verification tokens.
+Consequently, as the draft block length increases, covering all possible accepted prefixes requires a rapidly growing number of mask tokens, leading to an
+O(N^{2})
+increase in the effective number of target forward tokens.
+This creates an inherent trade-off.
+Methods with low acceptance rates usually adopt short draft blocks, because larger blocks bring limited accepted token gains but much higher mask token overhead.
+Methods such as TiDAR can obtain longer accepted continuations through continual pretraining, but their larger blocks further amplify the redundant target forward computation caused by acceptance length uncertainty.
+As shown in Figure
+1
+(b), the target side overhead exceeds
+11\times
+at batch size 16.
+Consequently, the latency savings from overlapping drafting and verification are ultimately offset or even outweighed by the extra target forward computation, causing speedup to collapse at large batch sizes.
+
+To address these challenges, we introduce FlexDraft, a speculative decoding framework that flexibly adapts to varying batch sizes without quality degradation, built on three key contributions.
+
+(1) Attention Tuning (Attn Tuning)
+tunes only the attention projectors of the final few layers for mask token prediction, while keeping the autoregressive verification path frozen.
+It adds trainable parameters equivalent to only about
+6%
+of the target model size, avoiding full model adaptation while preserving the target model’s original behavior.
+
+(2) Bonus-guided Calibration
+conditions on the bonus token embedding and the hidden states of mask tokens to produce a calibration bias over the draft logits.
+This mechanism guides the draft distribution to be consistent with the determined bonus token, improving alignment between drafting and verification.
+
+(3) Flex Decoding
+dynamically switches between parallel draft and verify at small batch sizes and sequential draft then verify at large batch sizes, while adaptively pruning the verification length based on draft confidence to eliminate redundant computation.
+
+2
+Related Work
+
+Speculative Decoding
+
+Speculative decoding accelerates LLM inference by decomposing generation into a fast draft phase and a lossless verification phase, where a lightweight drafter proposes multiple candidate tokens and the target model verifies them in parallel using the standard speculative sampling rule
+(
+5
+;
+13
+)
+.
+Existing methods improve speculative decoding mainly by enhancing draft quality, reducing draft generation cost, or organizing candidates more efficiently for verification
+(
+35
+)
+.
+To improve draft quality and acceptance rates, prior work has strengthened draft target alignment and draft prediction through distillation
+(
+37
+)
+, head-based speculation
+(
+4
+;
+2
+;
+36
+;
+18
+)
+.
+Representative methods include Medusa style approaches, which attach trainable decoding heads to the target model
+(
+4
+)
+, and the EAGLE series, which improves drafting with target hidden states, multi-layer feature fusion, and direct token prediction
+(
+16
+;
+17
+)
+.
+To reduce drafter cost or latency, retrieval-based methods
+(
+11
+;
+10
+;
+26
+)
+avoid a separately trained draft model by constructing lightweight draft sources from external datastores.
+Parallel drafting methods further reduce latency by replacing sequential autoregressive drafting with parallel proposal generation
+(
+8
+;
+14
+;
+6
+;
+20
+)
+.
+On the verification side, tree-structured speculation methods organize candidate continuations into token trees for parallel verification
+(
+24
+;
+15
+)
+.
+Despite these advances, most methods still follow the conventional draft then verify schedule, where the next draft cannot start until verification finishes, causing mutual waiting and limiting end-to-end speedup
+(
+22
+)
+.
+Recent methods attempt to alleviate this bottleneck by preparing future candidates before verification is fully resolved. BiTA
+(
+19
+)
+performs draft generation and verification in parallel within a single enhanced model, and MTP-based methods
+(
+27
+)
+speculate over multiple future positions.
+However, preparing future drafts before verification is resolved introduces acceptance length and bonus token uncertainty. The drafter does not know how many draft tokens will be accepted, nor which continuation token will be determined by the verifier.
+
+Diffusion Language Models
+
+Diffusion large language models (dLLMs) provide an alternative to autoregressive generation by denoising masked token sequences and predicting multiple positions in parallel.
+LLaDA
+(
+25
+)
+demonstrates that this paradigm can scale to billion parameters language models and achieve competitive performance with strong autoregressive baselines.
+However, fully parallel dLLMs often suffer from fixed length generation
+(
+34
+)
+, limited KV cache support
+(
+33
+;
+23
+;
+12
+)
+, and many denoising steps
+(
+33
+;
+31
+)
+, which restrict their practical inference speed.
+Block diffusion models
+(
+3
+)
+alleviate these limitations by generating text block by block.
+Following this direction, recent work adapts autoregressive LLMs into block diffusion language models to improve parallelism, but typically requires substantial continued training and may introduce quality trade-offs
+(
+32
+;
+7
+)
+.
+More recently, speculative decoding has also been incorporated into block diffusion to improve its performance in highly parallel generation settings.
+For example, hybrid diffusion and autoregressive methods such as TiDAR
+(
+21
+)
+combine diffusion style drafting with autoregressive sampling, but they lack the same target distribution guarantee as standard speculative decoding.
+
+3
+Preliminaries: Speculative Decoding
+
+Speculative decoding accelerates autoregressive generation by decomposing each decoding step into drafting and verification.
+Let
+q
+and
+p_{\theta}
+denote the drafter and target model distributions.
+The drafter first proposes
+k
+candidate tokens,
+
+\hat{\mathbf{y}}=(\hat{y}_{n+1},\ldots,\hat{y}_{n+k})
+, to approximate
+p_{\theta}
+.
+The target model then verifies them in a single forward pass using
+speculative sampling
+
+(
+5
+)
+, accepting draft tokens according to the ratio between
+p_{\theta}
+and
+q
+and sampling from the residual target distribution at the first rejected position.
+We call this newly sampled token the
+bonus token
+.
+If
+r^{\mathrm{acc}}
+draft tokens are accepted before the bonus token is produced, the committed length is
+L^{\mathrm{acc}}=r^{\mathrm{acc}}+1
+.
+
+Sequential speculative decoding.
+
+In the standard draft then verify schedule, a new draft begins only after verification completes.
+Given the accepted draft token count
+r^{\mathrm{acc}}
+and the bonus token
+b
+, the drafter conditions on the complete verified context to generate the next candidate block:
+
+\hat{\mathbf{y}}^{\mathrm{next}}\sim q\left(\cdot\mid\mathbf{x}_{1:n},\hat{\mathbf{y}}_{1:r^{\mathrm{acc}}},b\right).
+
+(1)
+
+Parallel speculative decoding.
+
+In contrast, parallel speculative decoding prepares future candidates before the current verification result is fully resolved.
+Since the accepted length
+L^{\mathrm{acc}}
+and the bonus token
+b
+are unknown at draft time, the drafter cannot condition on the final verified context.
+Instead, it must prepare candidate drafts for multiple possible numbers of accepted draft tokens.
+Let
+\mathcal{R}=\{0,1,\ldots,k\}
+denote the set of possible accepted draft token counts.
+An idealized formulation is to construct a candidate group indexed by
+r\in\mathcal{R}
+:
+
+\mathcal{G}=\left\{\hat{\mathbf{y}}_{r}^{\mathrm{next}}\sim q\!\left(\cdot\mid\mathbf{x}_{1:n},\hat{\mathbf{y}}_{1:r}\right)\right\}_{r\in\mathcal{R}}.
+
+(2)
+
+The case
+r=0
+corresponds to immediate rejection, where no draft token is accepted and
+\hat{\mathbf{y}}_{1:0}
+is defined as an empty prefix.
+Each branch
+\hat{\mathbf{y}}_{r}^{\mathrm{next}}
+is generated under the hypothesis that the first
+r
+draft tokens are accepted and form the verified prefix for the next draft.
+Once verification completes,
+r^{\mathrm{acc}}
+is determined and the corresponding branch
+\hat{\mathbf{y}}_{r^{\mathrm{acc}}}^{\mathrm{next}}
+is selected from
+\mathcal{G}
+.
+
+Figure 2
+:
+Attention masks in FlexDraft.
+
+(a) Training.
+The target performs causal forward to build the clean prefix KV cache. Mask tokens attend bidirectionally within each block and to the prefix, isolated from other blocks.
+
+(b) Decoding.
+Our method supports both parallel and sequential speculative decoding. In parallel mode, the latest draft is verified while candidates for all possible accepted lengths are prepared in the same forward pass. In sequential mode, drafting and verification are executed sequentially by selecting the verification row and its corresponding draft row from the parallel attention mask.
+
+4
+FlexDraft
+
+FlexDraft is a lossless speculative decoding framework that combines lightweight block diffusion drafting, bonus-aware calibration, and batch-adaptive execution.
+It targets both the mutual waiting and memory access overhead of sequential speculative decoding at small batch sizes and the redundant compute overhead of parallel speculative decoding at large batch sizes.
+Attn Tuning enables block diffusion drafting with only a small number of additional attention projector parameters while preserving the target model’s autoregressive distribution.
+Bonus-guided Calibration reduces the mismatch between bonus-free drafting and bonus-constrained verification, and Flex Decoding dynamically switches decoding modes and prunes verification length based on draft confidence to ensure robust acceleration across batch sizes.
+Together, these designs preserve the target distribution, improve draft quality, and prevent speedup collapse under large batch serving.
+
+Figure 3
+:
+Pipeline of FlexDraft.
+
+Shallow layers process the clean prefix identically to a standard autoregressive forward pass. In the deep layers, mask tokens are appended to the prefix and routed through trainable attention projectors, enabling parallel draft prediction. Bonus-guided Calibration injects the verified bonus token embedding into a lightweight MLP to adjust draft logits, which improves draft quality.
+
+4.1
+Attention Tuning
+
+Our goal is to enable block diffusion drafting that produces
+k
+draft tokens in a single forward pass while preserving the target model’s autoregressive behavior, ensuring that our method remains lossless.
+Prior work on multi token prediction suggests that pretrained autoregressive models already encode information about future tokens in their intermediate representations, implying that full model continual pretraining may be unnecessary
+(
+27
+)
+.
+Motivated by this observation, we hypothesize that adapting only the attention projectors is sufficient to elicit parallel masked prediction, while keeping the FFN layers frozen allows the drafter to directly inherit the pretrained knowledge of the target model.
+In our design, mask tokens attend bidirectionally within each block and to the clean prefix, while remaining isolated from other blocks and invisible to clean prefix tokens, thereby preventing draft positions from interfering with prefix computation.
+
+Dual attention projectors.
+
+Let
+\mathbf{x}_{1:n}
+denote the clean prefix, comprising the prompt and all previously verified response tokens.
+As illustrated in Figure
+3
+, FlexDraft processes the clean prefix identically to the original autoregressive model in the first
+L{-}N
+layers, with no mask tokens involved.
+Starting from layer
+L{-}N{+}1
+, mask tokens
+\mathbf{e}_{m}\in\mathbb{R}^{d}
+are appended to the hidden states of
+\mathbf{x}_{1:n}
+as draft query positions.
+To separate drafting from standard autoregressive computation, we keep the original attention projectors
+\mathbf{W}^{l}=(W_{Q}^{l},W_{K}^{l},W_{V}^{l},W_{O}^{l})
+frozen for all clean prefix tokens, and introduce trainable mask specific projectors
+\tilde{\mathbf{W}}^{l}
+only for mask tokens in the final
+N
+layers.
+All other parameters, including the FFN layers and the original autoregressive projectors, remain frozen throughout training.
+
+Training.
+
+To efficiently train multiple draft blocks in a single forward pass, we adopt a packed draft training strategy.
+We first process the clean sequence with the original target model under standard causal attention, obtaining reusable KV states for all clean positions.
+Each randomly sampled anchor position
+x_{n}
+defines the start of a draft block, and the subsequent
+k
+tokens
+\{x_{n+1},\ldots,x_{n+k}\}
+serve as prediction targets.
+As illustrated in Figure
+2
+, packed draft training is implemented by controlling visibility with attention masks and position IDs, rather than physically appending mask embeddings after each anchor.
+For each anchor
+x_{n}
+, its
+k
+mask tokens are assigned position IDs
+n{+}1
+through
+n{+}k
+, attend to the cached clean prefix up to
+x_{n}
+, and interact bidirectionally within the same block.
+Mask tokens from different draft blocks are mutually invisible, allowing multiple draft blocks to be packed into one forward pass without information leakage.
+These mask tokens are processed by the trainable mask specific attention projectors together with the frozen FFN layers inherited from the target model.
+This allows the drafter to reuse the target model’s pretrained knowledge while adapting only a small set of parameters.
+The resulting training process faithfully simulates block diffusion drafting at inference time and enables all
+k
+draft tokens to be predicted in parallel by the drafter
+q_{\phi}
+.
+Following DFlash, we apply exponentially decaying weights to the block level cross entropy, emphasizing earlier draft positions because an early mismatch invalidates all subsequent draft tokens during verification.
+For a draft block starting at anchor
+x_{n}
+, the training objective is:
+
+\mathcal{L}_{\mathrm{draft}}=-\frac{1}{\sum_{i=1}^{k}w_{i}}\sum_{i=1}^{k}w_{i}\log q_{\phi}\!\left(x_{n+i}\mid\mathbf{x}_{1:n}\right),\quad w_{i}=\exp\!\left(-\lambda(i-1)\right),
+
+(3)
+
+where
+\lambda
+is a decay hyperparameter, set to
+7
+unless otherwise specified.
+The final training loss is averaged over all sampled anchors in the packed batch.
+
+Inference.
+
+At each decoding step, FlexDraft executes drafting and verification concurrently.
+The previous draft
+\hat{\mathbf{y}}^{(t)}
+is fed into the model, and the first
+L-N
+layers process the clean prefix
+\mathbf{x}_{1:n}
+autoregressively using the frozen projectors
+\mathbf{W}^{l}
+, identical to a standard forward pass, producing a KV cache that can be reused across all decoding steps.
+Starting from layer
+L-N+1
+,
+k
+mask embeddings
+\mathbf{e}_{m}^{k}
+are injected and routed through the trainable mask specific projectors
+\tilde{\mathbf{W}}^{l}
+, while clean prefix tokens continue through the frozen projectors.
+Using the hybrid attention mask, mask tokens attend bidirectionally within their block and to the clean prefix, and multiple candidate drafts are generated in parallel for all possible hypothetical acceptance lengths
+\ell\in\mathcal{L}
+.
+Once the actual accepted length
+L^{\mathrm{acc}}
+is determined, the corresponding candidate
+\hat{\mathbf{y}}^{\mathrm{next}}_{L^{\mathrm{acc}}}
+is selected for the next step.
+
+4.2
+Bonus-guided Calibration
+
+In the parallel draft and verify paradigm, drafting proceeds without the bonus token, while verification is constrained by the resolved bonus token, which causes a draft verification mismatch.
+We introduce Bonus-guided Calibration, a lightweight module applied after the LM head, to bridge this mismatch by calibrating the draft logits with the bonus token.
+
+Let
+h_{i}\in\mathbb{R}^{d}
+denote the hidden state of mask position
+i
+at the final draft layer, and
+e_{b}\in\mathbb{R}^{d}
+the embedding of the determined bonus token
+b^{(t)}
+. The calibration bias is jointly determined by both the bonus token and the draft content at each position.
+Thus, Bonus-guided Calibration concatenates
+e_{b}
+with
+h_{i}
+and passes the result through a lightweight two layer MLP to produce an additive bias over the vocabulary logits:
+
+\tilde{\bm{\ell}}_{i}=\bm{\ell}_{i}+\mathrm{MLP}\!\left(\mathrm{Concat}(\mathbf{e}_{b},\mathbf{h}_{i})\right),
+
+(4)
+
+where
+\ell_{i}\in\mathbb{R}^{|\mathcal{V}|}
+are the original draft logits at position
+i
+produced by the language modeling head.
+The calibrated logits
+\tilde{\ell}_{i}
+are used to produce the final draft tokens, steering the draft distribution toward continuations consistent with
+b^{(t)}
+. During training, we use the ground truth token embedding as a proxy for
+e_{b}
+, and train the MLP jointly with Attn Tuning under an additional cross entropy loss, adding negligible parameter overhead.
+
+4.3
+Flex Decoding
+
+Flex Decoding adapts the execution mode to the dominant bottleneck at different batch sizes, enabling a single trained drafter to support both inference modes without retraining.
+At small batch sizes, decoding is largely memory bound, so parallel draft and verify is preferable for avoiding mutual waiting bubbles and intermediate state exchange overhead.
+At large batch sizes, the target forward pass becomes compute bound, and the redundant branches of parallel speculative decoding make sequential draft then verify more efficient.
+Unlike prior parallel methods that rely on full model drafting, our drafter is localized to the final few layers through mask specific attention projectors and is therefore detachable.
+It can be inserted into the target forward pass for parallel execution or decoupled as a lightweight sequential draft step that reuses the clean prefix KV cache from target verification.
+Accordingly, Flex Decoding uses a batch size threshold to switch between the two modes, adopting
+Selective Verification
+at small batch sizes to prune low confidence candidate lengths and switching to
+Decoupled Execution
+at large batch sizes to generate only the branch conditioned on the resolved accepted prefix.
+
+Selective verification (small batch).
+
+In the parallel mode, FlexDraft prepares candidate drafts for multiple possible accepted lengths.
+Although the accepted length is unknown before verification, draft confidence provides a useful proxy for estimating which candidate lengths are more likely to be selected.
+Intuitively, higher confidence draft tokens are more likely to be accepted, and under a simple independence approximation across positions, the probability that the accepted length reaches position
+i
+can be estimated by the cumulative confidence.
+Let
+p_{i}=q_{\phi}(\hat{y}_{i}\mid\mathbf{x}_{1:n})
+denote the draft probability of the
+i
+-th drafted token.
+We approximate this likelihood as
+
+P(L^{\mathrm{acc}}\geq i)\approx\prod_{r=1}^{i}p_{r}.
+
+(5)
+
+In this way, FlexDraft converts complete accepted length uncertainty into a coarse confidence-based estimate.
+Once the cumulative confidence falls below a threshold, we prune the remaining low probability accepted length candidates and verify only a subset of high confidence prefixes.
+This reduces the number of candidate prefixes verified by the target model without changing the draft block length, so each retained branch still preserves the same
+k
+token drafting capacity.
+
+Decoupled execution (large batch).
+
+At large batch sizes, the redundant branches of parallel speculative decoding dominate the cost.
+Thus, Flex Decoding switches to decoupled execution, as shown in the sequential speculative decoding mode of Figure
+2
+.
+Once verification resolves the accepted length
+L^{\mathrm{acc}}
+, the drafter generates only one block conditioned on the verified prefix.
+Because the clean prefix computation is identical to the target autoregressive computation, the KV cache produced during target verification can be reused for drafting.
+Thus, only one branch is computed, avoiding redundant accepted length branches and preventing large batch speedup collapse.
+
+5
+Experiments
+
+5.1
+Experimental Setup.
+
+We evaluate FlexDraft on Qwen3 series target models across code generation, mathematical reasoning, and general language understanding benchmarks, including HumanEval, MBPP, GSM8K, MATH, and MT-Bench. All experiments are conducted on NVIDIA A100 GPUs. We compare against representative speculative decoding baselines, including DFlash
+6
+, EAGLE-3
+17
+, DART
+20
+, BiTA
+19
+and Apple MTP
+27
+.
+We do not include TiDAR as a main baseline because it is a hybrid diffusion autoregressive method that does not generally provide the same lossless target distribution guarantee as standard speculative decoding, and its implementation has not been publicly released.
+Unless otherwise specified, all experiments are conducted with batch size 1, and all trainable methods are trained on the same 300K samples from
+mlabonne/open-perfectblend
+1
+1
+
+1
+
+https://huggingface.co/datasets/mlabonne/open-perfectblend
+.
+
+5.2
+Main Results
+
+Table 1
+:
+Decoding performance on Qwen3 models.
+\tau
+denotes average acceptance length. The highest speedup for each benchmark is highlighted in
+bold
+.
+
+Model
+
+Method
+
+GSM8K
+
+MATH
+
+HumanEval
+
+MBPP
+
+MT-Bench
+
+\tau
+
+Speedup
+
+\tau
+
+Speedup
+
+\tau
+
+Speedup
+
+\tau
+
+Speedup
+
+\tau
+
+Speedup
+
+Qwen3-8B
+
+BiTA
+
+1.68
+
+1.34
+\times
+
+1.63
+
+1.30
+\times
+
+1.49
+
+1.21
+\times
+
+1.47
+
+1.19
+\times
+
+1.47
+
+1.15
+\times
+
+Apple MTP
+
+3.30
+
+2.77
+\times
+
+3.14
+
+2.61
+\times
+
+2.49
+
+2.09
+\times
+
+2.44
+
+2.04
+\times
+
+2.11
+
+1.63
+\times
+
+EAGLE-3
+
+4.84
+
+3.40
+\times
+
+4.88
+
+3.34
+\times
+
+3.57
+
+2.47
+\times
+
+3.48
+
+2.45
+\times
+
+2.81
+
+1.75
+\times
+
+dFlash
+
+4.87
+
+3.47
+\times
+
+4.69
+
+3.27
+\times
+
+3.10
+
+2.28
+\times
+
+3.23
+
+2.33
+\times
+
+2.53
+
+1.64
+\times
+
+FlexDraft
+
+6.12
+
+4.57
+\times
+
+5.98
+
+4.40
+\times
+
+4.15
+
+3.25
+\times
+
+3.93
+
+3.04
+\times
+
+3.22
+
+2.13
+\times
+
+Qwen3-4B
+
+EAGLE-3
+
+4.19
+
+2.82
+\times
+
+4.03
+
+2.82
+\times
+
+3.01
+
+2.09
+\times
+
+2.98
+
+2.08
+\times
+
+2.45
+
+1.53
+\times
+
+dFlash
+
+5.18
+
+3.66
+\times
+
+4.93
+
+3.42
+\times
+
+3.41
+
+2.47
+\times
+
+3.45
+
+2.46
+\times
+
+2.78
+
+1.76
+\times
+
+FlexDraft
+
+5.28
+
+4.04
+\times
+
+5.35
+
+4.02
+\times
+
+3.73
+
+2.93
+\times
+
+3.56
+
+2.82
+\times
+
+3.01
+
+1.99
+\times
+
+Qwen3-1.7B
+
+EAGLE-3
+
+3.31
+
+2.12
+\times
+
+3.36
+
+2.14
+\times
+
+2.39
+
+1.49
+\times
+
+2.41
+
+1.51
+\times
+
+1.96
+
+1.31
+\times
+
+dFlash
+
+4.87
+
+3.25
+\times
+
+4.58
+
+3.01
+\times
+
+3.20
+
+2.20
+\times
+
+3.17
+
+2.16
+\times
+
+2.72
+
+1.68
+\times
+
+FlexDraft
+
+4.98
+
+3.67
+\times
+
+4.94
+
+3.61
+\times
+
+3.41
+
+2.61
+\times
+
+3.26
+
+2.48
+\times
+
+3.03
+
+1.99
+\times
+
+Comparison under the same data.
+
+For a fair comparison, all trainable methods are trained on the same data and evaluated under identical settings.
+We first compare with parallel speculative decoding methods, including BiTA and Apple MTP.
+Their performance is constrained by the inherent limitations of the parallel speculative decoding paradigm, as well as limited trainable capacity and low acceptance rates.
+By explicitly mitigating bonus token uncertainty and reducing redundant computation, FlexDraft substantially outperforms existing parallel speculative decoding methods.
+
+FlexDraft also consistently surpasses strong speculative decoding baselines, including EAGLE-3 and DFlash, across model scales and benchmarks.
+The key advantage is that FlexDraft reuses the target model’s frozen FFN parameters and only introduces lightweight mask specific attention projectors for draft tokens.
+As a result, increasing the draft depth incurs only small parameter overhead while producing longer accepted continuations.
+This enables FlexDraft to achieve higher acceptance lengths and speedups, while retaining the parallel drafting benefit that removes mutual waiting bubbles at small batch sizes.
+
+Comparison under scaled training.
+
+Table 2
+:
+Decoding performance on Qwen3-8B.
+\tau
+denotes average acceptance length. The highest speedup for each benchmark is highlighted in
+bold
+.
+
+Model
+
+Method
+
+GSM8K
+
+MATH
+
+HumanEval
+
+MBPP
+
+MT-Bench
+
+\tau
+
+Speedup
+
+\tau
+
+Speedup
+
+\tau
+
+Speedup
+
+\tau
+
+Speedup
+
+\tau
+
+Speedup
+
+Qwen3-8B
+
+Apple MTP
+
+3.30
+
+2.77
+\times
+
+3.14
+
+2.61
+\times
+
+2.49
+
+2.09
+\times
+
+2.44
+
+2.04
+\times
+
+2.11
+
+1.63
+\times
+
+DART
+
+2.71
+
+2.28
+\times
+
+2.70
+
+2.29
+\times
+
+2.95
+
+2.52
+\times
+
+2.98
+
+2.39
+\times
+
+3.03
+
+2.27
+\times
+
+EAGLE-3
+
+3.80
+
+2.57
+\times
+
+3.61
+
+2.44
+\times
+
+3.74
+
+2.52
+\times
+
+3.31
+
+2.24
+\times
+
+3.04
+
+1.89
+\times
+
+dFlash
+
+6.41
+
+4.55
+\times
+
+7.93
+
+5.50
+\times
+
+6.47
+
+4.68
+\times
+
+5.93
+
+4.16
+\times
+
+4.29
+
+2.53
+\times
+
+FlexDraft
+
+7.98
+
+5.88
+\times
+
+8.03
+
+5.79
+\times
+
+5.55
+
+4.26
+\times
+
+6.16
+
+4.46
+\times
+
+4.16
+
+2.58
+\times
+
+Table
+2
+further compares FlexDraft with released or publicly reported SOTA methods on Qwen3-8B under scaled training, evaluating its scaling potential in a more competitive setting.
+FlexDraft consistently outperforms DART and EAGLE-3 across most benchmarks.
+Compared with DFlash, FlexDraft achieves comparable or slightly better performance, despite not having access to the training data used by DFlash.
+These results demonstrate that FlexDraft scales effectively and remains competitive with strong publicly reported methods under a non-data-matched comparison.
+
+Figure 4
+:
+Speedup across batch sizes.
+
+Figure 5
+:
+Execution time of a single draft and verify step.
+
+Figure 6
+:
+Effect of the number of draft layers.
+
+Batch size study.
+
+Figure
+6
+evaluates the performance under different batch sizes.
+Seq. SD and Par. SD are two inference modes derived from the same trained FlexDraft model, rather than separately trained variants.
+At small batch sizes, parallel speculative decoding achieves higher speedup because drafting and verification can be overlapped, effectively reducing the mutual waiting bubbles between the two stages.
+However, as the batch size increases, the redundant computation introduced by parallel speculative decoding becomes more pronounced, making sequential speculative decoding more favorable by drafting only along the resolved accepted branch.
+Based on this observation, we use a batch size of 2 as the threshold for switching from parallel to sequential speculative decoding in FlexDraft.
+This adaptive strategy allows FlexDraft to benefit from parallel execution in small batch regimes while avoiding excessive overhead in large batch regimes.
+As a result, FlexDraft consistently achieves higher speedup than EAGLE-3 and dFlash across batch sizes, demonstrating both the effectiveness of our training design and the necessity of batch-aware inference selection.
+
+5.3
+Ablation
+
+Figure 7
+:
+Ablation analysis of speedup.
+
+Figure 8
+:
+Distribution of selective verification length.
+
+The selected verification length varies across tasks.
+
+Latency of a single draft and verify step.
+
+Figure
+6
+compares the latency of one draft and verify step.
+EAGLE and dFlash first generate draft tokens and then verify them with the target model, so their latency accumulates across the two stages.
+In contrast, FlexDraft avoids a separate autoregressive drafting pass.
+It generates a block of draft tokens in one pass while target verification is performed, thereby avoiding the sequential draft then verify pipeline and reducing per step latency.
+
+Effect of the number layer of draft model.
+
+Figure
+6
+studies the number of draft layers.
+A larger draft depth generally improves acceptance length by strengthening draft target alignment.
+While 13 layers yields slightly higher speedup in the parallel setting, it increases trainable parameters and draft computation, which becomes less favorable under decoupled execution.
+We therefore use 10 layers by default, as it provides a better trade-off between speedup and decoding overhead.
+
+Effectiveness of components.
+
+Figure
+8
+shows the contribution of each component.
+Starting from Attn Tuning, adding Bonus-guided Calibration improves the average speedup by better aligning drafts with the bonus-constrained verification.
+Selective Verification further improves speedup by pruning low confidence verification positions and reducing redundant target forward computation.
+These results show that the two components are effective.
+
+6
+Discussion
+
+Adaptive verification length across tasks.
+
+Figure
+8
+shows the distribution of selective verification length across tasks.
+The average is correlated with the average acceptance length, where tasks with longer accepted continuations receive more verification.
+This indicates that selective verification performs sample-wise dynamic verification instead of using a fixed verification length, which can exploit potential speedup while avoiding redundant target forward computation.
+
+Table 3
+:
+Effect of target knowledge reuse.
+
+Benchmark
+
+Setting
+
+\bm{\tau}
+
+Speedup
+
+GSM8K
+
+Full param
+
+3.78
+
+3.04
+
+Attn Tuning
+
+5.86
+
+4.23
+
+HumanEval
+
+Full param
+
+2.57
+
+2.10
+
+Attn Tuning
+
+3.99
+
+2.94
+
+MT-Bench
+
+Full param
+
+2.14
+
+1.60
+
+Attn Tuning
+
+3.06
+
+1.90
+
+Reusing target knowledge for drafting.
+
+Attn Tuning only finetunes the attention projectors while reusing the target model’s frozen FFN, allowing the drafter to inherit pretrained knowledge from target model.
+To analyze this effect, we compare Attn Tuning with a fully finetuned drafter under the same trainable parameter budget.
+The full parameter drafter relies only on its trained parameters at inference time, whereas Attn Tuning can additionally leverage the frozen FFN of the target model.
+As shown in Table
+3
+, this design consistently improves both acceptance length and speedup across benchmarks, demonstrating the benefit of reusing target knowledge for drafting.
+
+7
+Conclusion
+
+We introduced FlexDraft, a lossless speculative decoding framework that combines lightweight block diffusion drafting with adaptive execution. By tuning only attention projectors, calibrating drafts with the resolved bonus token, and dynamically switching speculative decoding strategies across batch sizes, FlexDraft reduces both mutual waiting bubbles and redundant overhead. Experiments on Qwen3 models demonstrate consistent speedups over strong baselines across reasoning, coding, and chat benchmarks, while preserving the target model distribution. FlexDraft therefore offers a practical path toward efficient LLM inference under diverse serving conditions.
+
+Appendix A
+Appendix
+
+A.1
+Robustness to sampling temperature.
+
+Table 4
+:
+Decoding performance on Qwen3-8B under different temperatures (
+T=0.3,0.6,1.0
+).
+\tau
+denotes average acceptance length. The highest speedup for each benchmark is highlighted in
+bold
+.
+
+Temp
+
+Method
+
+GSM8K
+
+MATH
+
+HumanEval
+
+MBPP
+
+MT-Bench
+
+\tau
+
+Speedup
+
+\tau
+
+Speedup
+
+\tau
+
+Speedup
+
+\tau
+
+Speedup
+
+\tau
+
+Speedup
+
+T=0.3
+
+dFlash
+
+4.83
+
+3.44
+\times
+
+4.64
+
+3.24
+\times
+
+3.09
+
+2.26
+\times
+
+3.21
+
+2.32
+\times
+
+2.51
+
+1.62
+\times
+
+EAGLE-3
+
+4.67
+
+3.27
+\times
+
+4.61
+
+3.21
+\times
+
+3.58
+
+2.42
+\times
+
+3.53
+
+2.41
+\times
+
+2.44
+
+1.74
+\times
+
+FlexDraft
+
+5.61
+
+4.20
+\times
+
+5.45
+
+3.99
+\times
+
+3.85
+
+2.99
+\times
+
+3.58
+
+2.75
+\times
+
+2.92
+
+1.92
+\times
+
+T=0.6
+
+dFlash
+
+4.63
+
+3.34
+\times
+
+4.48
+
+3.12
+\times
+
+3.01
+
+2.21
+\times
+
+3.14
+
+2.28
+\times
+
+2.50
+
+1.60
+\times
+
+EAGLE-3
+
+4.60
+
+3.21
+\times
+
+4.36
+
+3.11
+\times
+
+3.44
+
+2.36
+\times
+
+3.47
+
+2.36
+\times
+
+2.37
+
+1.70
+\times
+
+FlexDraft
+
+5.11
+
+3.83
+\times
+
+4.91
+
+3.56
+\times
+
+3.46
+
+2.70
+\times
+
+3.34
+
+2.60
+\times
+
+2.66
+
+1.81
+\times
+
+T=1.0
+
+dFlash
+
+4.46
+
+3.18
+\times
+
+4.23
+
+2.93
+\times
+
+2.92
+
+2.14
+\times
+
+3.06
+
+2.20
+\times
+
+2.36
+
+1.56
+\times
+
+EAGLE-3
+
+4.41
+
+3.12
+\times
+
+3.96
+
+2.88
+\times
+
+3.24
+
+2.26
+\times
+
+3.21
+
+2.27
+\times
+
+2.27
+
+1.67
+\times
+
+FlexDraft
+
+4.61
+
+3.43
+\times
+
+4.61
+
+3.44
+\times
+
+4.33
+
+3.09
+\times
+
+2.99
+
+2.29
+\times
+
+2.41
+
+1.65
+\times
+
+We further evaluate robustness under different sampling temperatures, i.e.,
+T=0.3,0.6,1.0
+.
+Table
+4
+shows that FlexDraft remains competitive across all settings and achieves the best speedup in most cases, indicating stable performance of our method.
+

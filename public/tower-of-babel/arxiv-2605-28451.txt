@@ -1,0 +1,932 @@
+Range, Not Precision: Block-Floating-Point Half-Precision FFT and SAR Imaging on Apple Silicon
+Mohamed Amine Bergach
+
+Abstract
+Half precision (FP16) promises to double FFT throughput on GPUs, but the prevailing view is that its 10-bit mantissa makes it unsuitable for radar-grade signal processing. We show this framing is wrong on Apple Silicon: the binding constraint for FFT and Synthetic Aperture Radar (SAR) is not mantissa precision but the 5-bit exponent’s dynamic range . We first measure that an FP16 FFT is mantissa-limited at 56–61 dB signal-to-quantization-noise ratio (SQNR)—comfortably radar-usable—yet a naïve FP16 SAR pipeline produces only NaN , because the conjugate–FFT–conjugate inverse transform grows magnitudes by a factor of N N , and the matched-filter product ( ∼ 5 × 10 6 \sim\!5\times 10^{6} at N = 4096 N\!=\!4096 ) overflows FP16’s 65,504 ceiling. We resolve this with a fixed-shift block-floating-point (BFP) schedule: a single 1 / N 1/N scale applied before each inverse transform bounds every intermediate below 4096. A cascade follows: range-compression output becomes O ⁡ ( 1 ) O(1) instead of O ⁡ ( N ) O(N) , which in turn keeps the downstream azimuth-FFT output FP16-loadable instead of overflowing at O ⁡ ( N 2 ) O(N^{2}) . The result is the first quality-preserving FP16 SAR pipeline: peak/integrated sidelobe ratios, target SNR, and resolution match the FP32 reference to within 0.1 0.1 dB at 42 42 dB end-to-end SQNR, while a radix-8 FP16 FFT reaches 306 GFLOPS— 2.2 × 2.2\times over the 139 GFLOPS FP32 baseline—on a fanless Apple M1. Finally, we measure that FP8 (E4M3/E5M2) collapses to 14–20 dB SQNR, making FP16 today’s precision floor for FFT-based radar—one that future precision-recovery methods may yet lower—and showing that the lever for low precision here is range management, not mantissa bits.
+
+
+
+I
+Introduction
+
+Reduced precision is the dominant lever for GPU throughput. Apple Silicon GPUs
+execute FP16 at twice the FP32 rate (512 vs. 256 FLOPs/cycle/core) with
+zero-cycle FP16
+\leftrightarrow
+FP32 conversion, so a half-precision Fast
+Fourier Transform (FFT) is an obvious target—FFT dominates the cost of
+Synthetic Aperture Radar (SAR) range and azimuth compression, where millions of
+transforms are applied per frame
+[
+1
+]
+.
+
+The obstacle, in the conventional account, is accuracy. FP16’s 10-bit mantissa
+yields roughly 42 dB of signal-to-quantization-noise ratio (SQNR), below the
+60–80 dB dynamic range radar systems require to separate near and far targets,
+and recent format studies report that FP16 “suffers from consistent overflow”
+in FFT-based spectral methods, recommending wider-exponent alternatives such as
+bfloat16, posit, or takum arithmetic
+[
+2
+]
+. Half-precision
+GPU FFT libraries (tcFFT
+[
+3
+]
+, mixed-precision
+frameworks
+[
+4
+]
+) target throughput on NVIDIA hardware and report
+
+\sim
+35 dB accuracy; none addresses radar image quality, and no published work
+measures SAR sidelobe or resolution degradation under reduced-precision FFT.
+
+This paper argues that the conventional framing conflates two distinct
+properties of FP16—mantissa
+precision
+and exponent
+range
+—and
+that for FFT/SAR the binding constraint is
+range
+. Our evidence and
+contributions are:
+
+1.
+
+Precision is adequate; range is the wall.
+We measure (not bound)
+that an FP16 FFT is mantissa-limited at 56–61 dB SQNR—radar-usable—while a
+naïve FP16 SAR pipeline produces pure
+NaN
+. We trace the failure to a
+deterministic
+O(N^{2})
+magnitude growth that overflows FP16’s 65,504 ceiling,
+not to precision loss (Section
+III
+).
+
+2.
+
+A fixed-shift block-floating-point FFT.
+A single
+1/N
+block
+shift applied before each inverse transform bounds every intermediate, with a
+cascade that keeps the entire SAR pipeline within FP16 range
+(Section
+IV
+). The change is two lines of kernel code.
+
+3.
+
+Quality-preserving FP16 SAR.
+The first FP16 SAR pipeline whose
+peak/integrated sidelobe ratio (PSLR/ISLR), target SNR, and resolution match the
+FP32 reference to within
+0.1
+dB, at 42 dB end-to-end SQNR
+(Section
+VI
+).
+
+4.
+
+2.2\times
+throughput.
+A radix-8 FP16 FFT reaches 306 GFLOPS at
+
+N\!=\!4096
+—
+2.2\times
+the 139 GFLOPS FP32 baseline—on an Apple M1,
+helped by FP16 halving the 32 KiB threadgroup footprint and lifting occupancy
+(Section
+V
+).
+
+5.
+
+The FP8 floor.
+We measure FP8 (E4M3/E5M2) FFT at 14–20 dB SQNR,
+confirming that below FP16 the limiter flips back to mantissa precision—which
+block floating point cannot fix—and establishing FP16 as the precision floor
+for radar FFT (Section
+VII
+).
+
+All kernels run on a fanless Apple M1 (MacBook Air) and are validated against
+vDSP and double-precision references. Source code and measurement harnesses are public.
+
+II
+Background and Related Work
+
+II-A
+
+Half-precision and mixed-precision GPU FFT
+
+tcFFT
+[
+3
+]
+reformulated FFT merge stages as matrix multiplies on
+NVIDIA Tensor Cores, achieving 1.29–3.24
+\times
+over cuFFT in FP16 at
+
+\sim
+1.76% relative error (
+\sim
+35 dB). The Tensor-Core mapping adds no error
+beyond FP16 itself; the dominant source is storage of intermediate results in
+half precision. MFFT
+[
+4
+]
+applies shared-exponent mixed precision
+to large-scale
+distributed
+FFT, optimizing communication rather than
+single-device range. Recent frameworks co-optimize precision and library
+selection via error modeling. None of these targets radar, and all inherit
+FP16’s
+\sim
+35–42 dB accuracy without examining whether that suffices for SAR
+image quality.
+
+II-B
+
+The FP16 overflow problem
+
+Hunhold and Gustafson
+[
+2
+]
+evaluate FFT round-trips and
+short-time transforms across OFP8, bfloat16, posit, and takum formats. They find
+OFP8 “unsuitable” and bfloat16 underperforming float16, and report FP16
+overflow on some inputs, motivating wider-exponent formats. Their study compares
+formats
+as given
+; it does not consider scaling the data to fit FP16’s
+range. Our work is precisely that fix: we keep FP16’s 10-bit mantissa (which
+bfloat16 sacrifices, dropping to
+\sim
+30 dB) and manage the range explicitly.
+
+II-C
+
+Block floating point
+
+Block floating point (BFP)—a shared exponent across a block of values—is a
+classical fixed-point DSP technique for FFT bit-growth management
+(TI SPRA948
+[
+5
+]
+), used in FPGA radar
+processors
+[
+6
+]
+and spaceborne SAR FFT
+engines
+[
+7
+]
+. The standard scheme scales conditionally,
+only at stages where overflow would occur, to retain precision. We adapt BFP to
+
+floating-point
+FP16 on a GPU with a deterministic fixed-shift schedule:
+because the inverse-FFT growth factor is known exactly (
+N
+), a static
+1/N
+
+shift before each inverse transform is sufficient and needs no per-stage
+magnitude reduction.
+
+II-D
+
+FFT and SAR on Apple Silicon
+
+VkFFT
+[
+8
+]
+is the only production GPU FFT with a Metal
+backend; it is FP32/FP64 and does not target radar. Companion work established a
+138 GFLOPS FP32 radix-8 Stockham FFT on Apple Silicon via a two-tier
+register/threadgroup memory model
+[
+9
+]
+, and a kernel-fused FP32
+SAR Range-Doppler pipeline
+[
+10
+]
+; a numerically robust FMA
+butterfly is given in
+[
+11
+]
+. The present paper is the
+half-precision successor: it reuses those FP32 kernels as baselines and shows
+what it takes to run them, and the SAR pipeline they compose, correctly in
+FP16. Published GPU SAR is otherwise FP32/FP64
+[
+1
+]
+.
+
+III
+Precision Is Adequate; Range Is the Wall
+
+III-A
+
+FP16 FFT is mantissa-limited at radar-usable SQNR
+
+We first establish what FP16 precision alone costs an FFT, independent of range.
+We run a radix-2 Stockham FFT entirely in IEEE half precision (Swift
+
+Float16
+, identical to Metal
+half
+) and measure SQNR against a
+double-precision reference over 200 random trials. To isolate precision from any
+twiddle-factorization artifact, we test the standard 10-operation butterfly and
+the 6-FMA dual-select butterfly of
+[
+11
+]
+; both land within
+1 dB (Table
+I
+).
+
+TABLE I:
+Measured FP16 FFT SQNR (radix-2 Stockham, vs. double reference)
+
+Butterfly (FP16)
+
+N\!=\!1024
+
+N\!=\!4096
+
+Standard (10-op direct multiply)
+
+60.3 dB
+
+59.4 dB
+
+Dual-select 6-FMA
+[
+11
+]
+
+61.4 dB
+
+60.5 dB
+
+FP32 reference
+
+138 dB
+
+137 dB
+
+FP16 FFT achieves
+56–61 dB
+SQNR. This sits above the
+\sim
+42 dB
+figure often quoted for “pure FP16” (which assumes FP16 twiddle tables built
+by recurrence) and within the regime usable for radar detection and for the
+sidelobe levels of unweighted and lightly weighted apertures.
+Mantissa
+precision is not the obstacle.
+
+III-B
+
+The overflow mechanism
+
+A radar matched-filter compression computes
+
+y=\tfrac{1}{N}\,\mathrm{IFFT}\!\left(\mathrm{FFT}(x)\cdot H\right)
+, with the
+inverse transform realized as
+
+\mathrm{IFFT}(z)=\overline{\mathrm{FFT}(\bar{z})}
+to reuse the forward
+butterfly
+[
+10
+]
+. Tracking magnitudes for input
+|x|\!\sim\!1
+:
+
+•
+
+Forward FFT: bins reach
+O(N)\!\approx\!4096
+(
+<65504
+, safe).
+
+•
+
+Matched-filter multiply by
+H
+: with
+|H|\!\leq\!1
+, still
+O(N)
+. For an
+unnormalized filter the product reaches
+\sim\!5\times 10^{6}
+.
+
+•
+
+Inverse (conj–FFT–conj): the unnormalized transform grows magnitudes by
+another factor of
+N
+, to
+O(N^{2})\!\approx\!1.7\times 10^{7}
+,
+before
+the
+final
+1/N
+scale.
+
+The
+O(N^{2})
+intermediate overflows FP16’s 65,504 maximum to
+\pm\infty
+, which
+propagates to
+NaN
+. In a SAR pipeline this compounds: the FP32 azimuth
+FFT of
+O(N)
+range-compressed data produces
+O(N^{2})
+spectra that overflow even
+the
+load
+into a half buffer. The failure is purely one of dynamic range;
+the values that fit are individually accurate (Fig.
+1
+traces
+the magnitude through the pipeline with and without the fix).
+
+IV
+Block-Floating-Point FP16 FFT
+
+x
+O(1)
+FFT
+\times H
+conj
+\times\tfrac{1}{N}
+IFFT
+O(1)
+azimuth
+FFT (FP32)
+\times H
+conj
+\times\tfrac{1}{N}
+IFFT
+focused
+O(1)
+O(N)
+O(N)
+O(1)
+O(N)
+O(N)
+O(N)
+O(1)
+O(N)
+Range compression (FP16 fused)
+Azimuth compression (FP16 fused)
+
+Without the block shift:
+the inverse transform grows to
+
+O(N^{2})\!\approx\!1.7\!\times\!10^{7}\gg 65504\Rightarrow
+
+NaN
+; and an
+O(N)
+
+range-compression output drives the FP32 azimuth FFT to
+O(N^{2})
+, overflowing the FP16 load.
+
+Fig. 1:
+Fixed-shift block floating point across the SAR pipeline. The orange boxes
+are the
+only
+change: a
+1/N
+block scale folded into the pre-IFFT conjugate
+step. For unit-scale input every magnitude stays
+\leq\!O(N)\!\approx\!4096\ll 65504
+,
+and the
+O(1)
+range-compression output cascades to keep the FP32 azimuth FFT
+FP16-loadable (an
+O(N)
+spectrum, not
+O(N^{2})
+).
+
+IV-A
+
+Fixed-shift schedule
+
+The inverse transform’s growth factor is data-independent: exactly
+N
+. We
+therefore apply a static
+block shift
+of
+1/N
+once, immediately before the
+inverse transform, rather than at its output. Because the conjugate step
+
+z\!\mapsto\!\bar{z}
+already touches every element before the inverse passes, we
+fold the shift into it (Fig.
+1
+, orange boxes):
+
+\bar{z}\;\longrightarrow\;\bar{z}\cdot\tfrac{1}{N}.
+
+(1)
+
+This is the simplest member of the block-floating-point family: a single shared
+exponent per transform, fixed at
+\log_{2}N
+, applied at one point. It is
+mathematically identical to the conventional output scaling—
+1/N
+is linear
+and commutes with the transform—so the result is unchanged, but every
+intermediate now satisfies
+|\cdot|\leq O(N)\leq 4096\ll 65504
+.
+
+IV-B
+
+The pipeline cascade
+
+The decisive benefit is not within one transform but
+across
+the SAR
+pipeline (Fig.
+1
+). With the shift, range compression emits
+
+O(1)
+data instead of
+O(N)
+.
+Consequently the FP32 azimuth FFT—which multiplies magnitudes by
+N
+—produces
+
+O(N)\!\approx\!4096
+spectra rather than
+O(N^{2})
+, so the subsequent FP16
+multiply-and-inverse step can
+load
+its input without overflow and apply
+its own
+1/N
+shift in turn. A two-line change to the two shared conjugate
+routines (one for the pure-FP16 path, one for the FP16-storage/FP32-compute
+path) thus makes the complete pipeline range-safe. Because each transform now
+carries a global
+1/N
+block exponent relative to the FP32 reference, we align
+amplitudes with the optimal real scale before computing residual error; the
+radar metrics of Section
+VI
+are scale-invariant and unaffected.
+
+IV-C
+
+Why not bfloat16?
+
+bfloat16 trades mantissa for range: an 8-bit exponent eliminates the overflow
+outright, but 7 mantissa bits cap FFT SQNR near 30 dB
+[
+2
+]
+,
+below radar usability. Block floating point lets us keep FP16’s 10-bit mantissa
+(56–61 dB)
+and
+obtain bfloat16-like range headroom, at the cost of one
+shift per transform. Range is the cheap problem to fix; mantissa bits, once
+gone, are not recoverable.
+
+V
+FP16 FFT Throughput
+
+We benchmark the radix-8 Stockham FFT of
+[
+9
+]
+—the
+138 GFLOPS FP32 Apple-Silicon flagship—against an FP16 (
+half2
+) port
+that mirrors it stage for stage, on an Apple M1 (7 GPU cores). GFLOPS are
+
+5N\log_{2}N\times\text{batch}/t
+from GPU timestamps, median of 30 runs; FP16
+SQNR is measured against the FP32 kernel (Table
+II
+).
+
+TABLE II:
+Radix-8 FFT,
+N\!=\!4096
+, Apple M1: FP32 vs. FP16
+
+Batch
+
+FP32
+
+FP16
+
+Speedup
+
+FP16 SQNR
+
+(GFLOPS)
+
+(GFLOPS)
+
+(dB)
+
+64
+
+128
+
+254
+
+1.98
+\times
+
+56
+
+256
+
+139
+
+306
+
+2.20
+\times
+
+56
+
+FP16 delivers the expected
+\sim\!2\times
+at batch 64 and
+2.2
+\times
+
+(306 GFLOPS)
+at batch 256. The super-linear gain at high batch is an occupancy
+effect: the FP32 kernel fills the entire 32 KiB threadgroup memory, capping it at
+one threadgroup per core, whereas the
+half2
+buffer is 16 KiB and admits
+two, hiding barrier and memory latency. The FP32 kernel reproduces the
+138 GFLOPS baseline and matches vDSP to 123 dB, confirming correctness.
+
+VI
+Quality-Preserving FP16 SAR
+
+We process a
+4096\!\times\!4096
+point-target SAR scene
+(X-band,
+B\!=\!100
+MHz,
+v\!=\!100
+m/s,
+R_{0}\!=\!20
+km, 20 dB additive
+noise) through the kernel-fused Range-Doppler pipeline of
+[
+10
+]
+
+in four precision modes: FP32, pure FP16, FP16-storage/FP32-compute, and
+FP16-multiply/FP32-accumulate. Range and azimuth compression run in the chosen
+precision; the azimuth FFT, range-cell-migration correction, and transposes
+remain FP32. Without the block shift, all FP16 modes yield
+NaN
+. With it,
+all three reproduce the FP32 image. Table
+III
+reports per-target
+PSLR and SNR for FP32 and pure FP16; the other FP16 modes are identical to
+within rounding.
+
+TABLE III:
+SAR point-target quality,
+4096^{2}
+scene: FP32 vs. pure FP16 (BFP)
+
+PSLR (dB)
+
+SNR (dB)
+
+Target
+
+FP32
+
+FP16
+
+FP32
+
+FP16
+
+T_{0}
+
+-2.9
+
+-2.9
+
+47.8
+
+47.8
+
+T_{1}
+
+-1.1
+
+-1.1
+
+45.8
+
+45.8
+
+T_{2}
+
+-6.5
+
+-6.5
+
+47.9
+
+47.9
+
+T_{3}
+
+-2.1
+
+-2.0
+
+46.8
+
+46.8
+
+T_{4}
+
+\phantom{-}3.5
+
+\phantom{-}3.5
+
+44.0
+
+43.9
+
+Every target’s PSLR, SNR, and 3 dB resolution (omitted for space; matched to
+
+<\!0.02
+bins) is preserved. The scale-aligned end-to-end SQNR of the FP16
+image versus FP32 is
+42–43 dB
+—consistent with the per-transform
+56–61 dB degraded by the pipeline’s four transforms, two matched filters, and
+the down-scaling that pushes small values toward the FP16 floor. Crucially,
+42 dB is below the FP16-FFT SQNR but
+above
+the level at which the
+radar-relevant metrics move: the compressed mainlobe and first sidelobes sit far
+enough above the FP16 noise floor that PSLR/SNR/resolution are unchanged.
+
+TABLE IV:
+End-to-end RDA pipeline time,
+4096^{2}
+, Apple M1
+
+Mode
+
+Time
+
+Speedup
+
+FP32
+
+0.30 s
+
+1.00
+\times
+
+FP16 multiply / FP32 accum.
+
+0.19 s
+
+1.57
+\times
+
+FP16 storage / FP32 compute
+
+0.19 s
+
+1.63
+\times
+
+Pure FP16
+
+0.17 s
+
+1.75
+\times
+
+End-to-end the FP16 pipeline runs 1.57–1.75
+\times
+faster
+(Table
+IV
+); the gain is below the kernel-level 2.2
+\times
+
+because the azimuth FFT, RCMC, and transposes stay FP32. The pipeline is the
+first, to our knowledge, to demonstrate FP16 SAR with measured FP32-equivalent
+image quality.
+
+VII
+The FP8 Floor
+
+If range is the FP16 problem, is FP8 the next step? We simulate FFT in the two
+OCP FP8 formats (E4M3, 3 mantissa bits; E5M2, 2 mantissa bits) in their most
+favorable configuration—FP8
+storage
+with double-precision compute and
+twiddles—and measure SQNR (Table
+V
+). An FP16 round-trip in the same
+harness returns 63 dB, validating it.
+
+TABLE V:
+FFT SQNR by format (best-case storage; double compute)
+
+Format
+
+Mantissa
+
+N\!=\!1024
+
+N\!=\!4096
+
+FP16 (validation)
+
+10
+
+63.1 dB
+
+62.4 dB
+
+FP8 E4M3
+
+3
+
+20.1 dB
+
+19.5 dB
+
+FP8 E5M2
+
+2
+
+14.1 dB
+
+13.5 dB
+
+FP8 collapses to 14–20 dB—far below the 42 dB marginal floor and radar’s
+60 dB, corroborating the “OFP8 unsuitable” verdict
+of
+[
+2
+]
+with an independent measurement. Two points
+matter. First, the limiter has
+flipped
+: with only 2–3 mantissa bits,
+precision is the wall, and block floating point—which manages the exponent,
+not the mantissa—cannot help. Second, Apple GPUs have no native FP8 datapath: the M1–M4 GPU cores compute in
+scalar FP16/FP32, and even the M5’s first-generation on-GPU “neural
+accelerators” provide hardware matrix multiply for FP16 and INT8, with no FP8
+path reported
+[
+12
+]
+. FP8 would therefore save storage but gain no
+compute over FP16, unlike FP16’s native
+2\times
+. FP16 is therefore the precision
+floor for FFT-based radar
+for now
+—until precision-recovery techniques
+beyond block floating point (error feedback, stochastic rounding, compensated
+summation, or learned/adaptive quantization) break it. The floor is a property
+of today’s methods, not a fundamental limit.
+
+VIII
+Discussion
+
+Range, not precision.
+The two halves of this paper are mirror images.
+FP16 fails on SAR for lack of
+range
+, fixed for free with a block shift;
+FP8 fails for lack of
+precision
+, which no scaling recovers. FP16 is the
+sweet spot precisely because it has enough mantissa (10 bits) once range is
+managed. This reframes the “FP16 is unsuitable” conclusion of prior format
+studies: the unsuitability is an artifact of evaluating the format without block
+floating point.
+
+Generality.
+The fixed-shift schedule applies to any
+forward–multiply–inverse pipeline with known transform growth—convolution,
+correlation, Fourier neural operators—not only matched filtering. The cascade
+argument generalizes to any multi-stage spectral pipeline: bounding one stage’s
+output magnitude bounds the next stage’s input.
+
+Limitations.
+Results are on an Apple M1; larger M-series parts (more
+cores, higher bandwidth) should widen the FP16 advantage for batched workloads
+but are untested here. Our block schedule is fixed (
+1/N
+); adaptive
+per-block exponents would add headroom for pathological inputs at the cost of a
+threadgroup reduction, unnecessary here because the growth factor is exactly
+known. The 42 dB end-to-end SQNR is adequate for unweighted and lightly weighted
+apertures; deeply weighted apertures targeting
+-40
+dB sidelobes would approach
+the FP16 floor and warrant the mixed-precision (FP32-accumulate) mode, which we
+include and which preserves quality identically here.
+
+IX
+Conclusion
+
+Half precision doubles FFT throughput on Apple Silicon, and the obstacle to using
+it for radar was never the mantissa—it was the exponent. A one-shift
+block-floating-point schedule removes the dynamic-range overflow that turns a
+naïve FP16 SAR pipeline into
+NaN
+, yielding the first FP16 SAR pipeline
+with FP32-equivalent image quality (PSLR/SNR/resolution within 0.1 dB, 42 dB
+SQNR) and a 306 GFLOPS radix-8 FP16 FFT,
+2.2\times
+over the FP32 baseline, on an
+fanless M1. FP8 measurements (
+\leq\!20
+dB) place FP16 as the precision floor for
+FFT-based radar
+for now
+—until precision-recovery techniques break it.
+The lever for low-precision DSP on this hardware is range management, not
+mantissa bits.
+
+Reproducibility.
+All Metal kernels, the SAR simulator, and the
+precision/throughput harnesses are available under the MIT license at
+
+https://github.com/aminems/AppleSiliconFFT
+.
+

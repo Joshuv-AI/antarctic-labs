@@ -1,0 +1,3416 @@
+Gated DeltaNet-2: Decoupling Erase and Write in Linear Attention
+Ali Hatamizadeh Yejin Choi Jan Kautz {ahatamizadeh, yejinc, jkautz}@nvidia.com
+
+Abstract
+Abstract: Linear attention replaces the unbounded cache of softmax attention with a fixed-size recurrent state, reducing sequence mixing to linear time and decoding to constant memory. The hard part is not just what to forget, but how to edit this compressed memory without scrambling existing associations. Delta-rule models subtract the current read before writing a new value, and Kimi Delta Attention (KDA) sharpens forgetting with channel-wise decay. But the active edit still uses a single scalar gate to control two different things, how much old content to erase on the key side and how much new content to commit on the value side. We introduce Gated DeltaNet-2, which generalizes both Gated DeltaNet and KDA by inheriting adaptive forgetting and channel-wise decay while addressing their shared limitation, the scalar tie between erasing and writing. Gated Delta Rule-2 separates these roles with a channel-wise erase gate 𝒃 t {\bm{b}}_{t} and a channel-wise write gate 𝐰 t \mathbf{w}_{t} , reducing to KDA when both gates collapse to the same scalar and to Gated DeltaNet when the decay also collapses. We derive a fast-weight update view, a chunkwise WY algorithm with channel-wise decay absorbed into asymmetric erase factors, and a gate-aware backward pass that preserves efficient parallel training. At 1.3B parameters trained on 100B FineWeb-Edu tokens, Gated DeltaNet-2 achieves the strongest overall results among Mamba-2, Gated DeltaNet, KDA, and Mamba-3 variants across language modeling, commonsense reasoning, and retrieval. Its advantage is most pronounced on long-context RULER needle-in-a-haystack benchmarks, where it improves the evaluated multi-key retrieval setting and remains strong in both recurrent and hybrid settings. Code: https://github.com/NVlabs/GatedDeltaNet-2
+
+
+
+1
+Introduction
+
+The Transformer architecture has become the dominant backbone for large language models because self-attention gives each token direct access to its history and maps naturally to parallel training on modern accelerators. Its cost, however, still grows quadratically with sequence length. This cost becomes a central obstacle for long-context training and high-throughput inference, where the model must repeatedly process histories that are much longer than the dimension of a single attention head.
+
+Linear recurrent attention takes a different path. It replaces the explicit attention matrix with a fixed-size recurrent state, turning sequence mixing into a linear-time recurrence whose memory does not grow with context length
+[
+1
+]
+. The appeal is clear, but so is the constraint. The state is a compressed key-value memory, and long contexts force many associations to share the same finite space, making exact retrieval difficult
+[
+2
+,
+3
+,
+4
+,
+5
+,
+6
+,
+7
+]
+. Recent work has improved this memory by giving the recurrence more control over what persists. Mamba-2 uses data-dependent decay to regulate the memory horizon
+[
+8
+]
+. DeltaNet replaces additive writes with the delta rule, enabling targeted overwrite of the association addressed by the current key
+[
+9
+,
+2
+,
+10
+]
+. Gated DeltaNet combines the delta rule with a learned decay gate, giving the state both global forgetting and targeted editing
+[
+11
+]
+. Kimi Delta Attention (KDA) refines the decay side with channel-wise forgetting over the key dimension
+[
+12
+]
+. In parallel, Mamba-3 advances the state-space route through exponential-trapezoidal discretization, complex-valued state transitions, and a multi-input, multi-output formulation for stronger and more efficient recurrence
+[
+13
+]
+. These advances have pushed recurrent linear models forward, while making the remaining bottleneck in delta-rule memory more visible. The active edit still uses one scalar gate to control both erasing old content and writing new content.
+
+We propose
+Gated DeltaNet-2
+, a recurrent attention layer that decouples erase and write in the delta rule. The scalar tie is a modeling restriction because erasing and writing act on different axes of the state. Erasing is a key-side operation that decides which coordinates of the old read should be removed, while writing is a value-side operation that decides which coordinates of the incoming value should be committed. Gated DeltaNet-2 preserves KDA’s channel-wise decay, but replaces the tied scalar delta gate with a channel-wise erase gate on the key axis and a channel-wise write gate on the value axis. The model can clear broad context through decay, remove selected stale associations through erase, and insert only the value channels that should persist through write. When the erase and write gates are tied to the same scalar, Gated DeltaNet-2 recovers KDA. If the decay is tied to a scalar as well, it recovers Gated DeltaNet.
+
+This change preserves the efficient training path. By absorbing cumulative channel-wise decay into the rank-one erase factors, the recurrence admits a compact WY form with the same high-level chunkwise structure used by efficient delta-rule kernels
+[
+14
+,
+15
+,
+16
+,
+17
+]
+. The main text gives the modeling equations and the chunkwise algorithm. Kernel-level details are deferred to the supplement.
+
+Empirically, Gated DeltaNet-2 improves the recurrent attention frontier, with the clearest gains on long-context retrieval. On the RULER needle-in-a-haystack tasks in Table
+3
+, it remains strong as context length grows and is especially effective on the evaluated multi-key case where a fixed-size state must separate competing associations. This advantage also appears in real-world recall, where Gated DeltaNet-2 gives the strongest overall retrieval profile in both recurrent and hybrid settings. Together with gains in language modeling, commonsense reasoning and in-context retrieval, these results suggest that decoupling the active memory edit directly targets the main pressure point of fixed-state recurrence, interference among many compressed associations.
+
+2
+Preliminary
+
+2.1
+Linear attention as a recurrent state
+
+We work with one attention head and omit layer indices. Let
+{\bm{q}}_{t},{\bm{k}}_{t}\in\mathbb{R}^{d_{k}}
+and
+{\bm{v}}_{t}\in\mathbb{R}^{d_{v}}
+denote the query, key, and value at position
+t
+. A recurrent linear attention layer stores a matrix state
+{\mathbf{S}}_{t}\in\mathbb{R}^{d_{k}\times d_{v}}
+and reads it with the query,
+
+\displaystyle{\mathbf{S}}_{t}
+
+\displaystyle={\mathbf{S}}_{t-1}+{\bm{k}}_{t}{\bm{v}}_{t}^{\top},
+
+\displaystyle{\bm{o}}_{t}
+
+\displaystyle={\mathbf{S}}_{t}^{\top}{\bm{q}}_{t}.
+
+(1)
+
+This is the recurrent form of linear attention
+[
+1
+]
+. Expanding the recurrence over a length
+L
+sequence gives the familiar causal matrix form
+
+\displaystyle{\mathbf{O}}=({\mathbf{Q}}{\mathbf{K}}^{\top}\odot{\mathbf{M}}){\mathbf{V}},
+
+(2)
+
+where
+{\mathbf{M}}
+is the causal mask. The state has fixed size in
+L
+, and the parallel form replaces tokenwise recurrence with matrix multiplication. The limitation is equally direct. Every outer product is added to the state and none is removed, so old associations remain until they are overwritten indirectly by later superposition.
+
+Chunkwise form
+
+Efficient linear recurrent layers use a chunkwise schedule during training
+[
+15
+,
+16
+,
+17
+]
+. Split the sequence into chunks of size
+C
+. For chunk
+n
+, let
+{\mathbf{Q}}_{[n]},{\mathbf{K}}_{[n]},{\mathbf{V}}_{[n]}
+be the query, key, and value blocks, and let
+{\mathbf{S}}_{[n]}
+be the state at the start of the chunk. Partial expansion gives
+
+\displaystyle{\mathbf{S}}_{[n+1]}
+
+\displaystyle={\mathbf{S}}_{[n]}+{\mathbf{K}}_{[n]}^{\top}{\mathbf{V}}_{[n]},
+
+\displaystyle{\mathbf{O}}_{[n]}
+
+\displaystyle={\mathbf{Q}}_{[n]}{\mathbf{S}}_{[n]}+({\mathbf{Q}}_{[n]}{\mathbf{K}}_{[n]}^{\top}\odot{\mathbf{M}}_{C}){\mathbf{V}}_{[n]}.
+
+(3)
+
+The recurrence remains only across chunks, while all token interactions inside a chunk are expressed as dense matrix products. With a fixed
+C
+, this keeps linear complexity in sequence length and maps well to tensor cores.
+
+2.2
+Forgetting and overwriting
+
+Mamba-2 adds a data-dependent scalar decay before each write
+[
+8
+]
+,
+
+\displaystyle{\mathbf{S}}_{t}=\alpha_{t}{\mathbf{S}}_{t-1}+{\bm{k}}_{t}{\bm{v}}_{t}^{\top},\qquad\alpha_{t}\in(0,1].
+
+(4)
+
+The decay gives the model a global forgetting operation. If
+\gamma_{t}=\prod_{i=1}^{t}\alpha_{i}
+, then each earlier write is read at time
+t
+with factor
+\gamma_{t}/\gamma_{i}
+. This yields a decay-aware attention mask and preserves the chunkwise structure of Eq.
+3
+.
+
+DeltaNet instead gives the state an active edit operation
+[
+9
+,
+2
+,
+10
+]
+. Before writing
+{\bm{v}}_{t}
+, the model reads the value currently associated with
+{\bm{k}}_{t}
+and subtracts it from the state. With a scalar step size
+\beta_{t}\in[0,1]
+, the update is
+
+\displaystyle{\mathbf{S}}_{t}
+
+\displaystyle={\mathbf{S}}_{t-1}+\beta_{t}{\bm{k}}_{t}({\bm{v}}_{t}-{\mathbf{S}}_{t-1}^{\top}{\bm{k}}_{t})^{\top}=({\mathbf{I}}-\beta_{t}{\bm{k}}_{t}{\bm{k}}_{t}^{\top}){\mathbf{S}}_{t-1}+\beta_{t}{\bm{k}}_{t}{\bm{v}}_{t}^{\top}.
+
+(5)
+
+When
+\|{\bm{k}}_{t}\|_{2}=1
+, the matrix
+{\bm{k}}_{t}{\bm{k}}_{t}^{\top}
+is a projector, so
+\beta_{t}=1
+overwrites the association at key
+{\bm{k}}_{t}
+and
+\beta_{t}=0
+leaves it unchanged. In the fast-weight view
+[
+18
+,
+19
+]
+, Eq.
+5
+is one online gradient step on the local regression loss
+\frac{1}{2}\|{\mathbf{S}}^{\top}{\bm{k}}_{t}-{\bm{v}}_{t}\|_{2}^{2}
+.
+
+Gated DeltaNet combines these two operations
+[
+11
+]
+,
+
+\displaystyle{\mathbf{S}}_{t}=\alpha_{t}({\mathbf{I}}-\beta_{t}{\bm{k}}_{t}{\bm{k}}_{t}^{\top}){\mathbf{S}}_{t-1}+\beta_{t}{\bm{k}}_{t}{\bm{v}}_{t}^{\top}.
+
+(6)
+
+The decay clears the state uniformly, while the delta rule edits a selected association. This is a useful division of labor, but both gates are scalar per head.
+
+KDA refines the decay side by replacing the scalar
+\alpha_{t}
+with a channel-wise vector
+{\bm{\alpha}}_{t}\in(0,1]^{d_{k}}
+
+[
+12
+]
+. With
+{\mathbf{D}}_{t}=\operatorname{Diag}({\bm{\alpha}}_{t})
+, its update can be written as
+
+\displaystyle{\mathbf{S}}_{t}=({\mathbf{I}}-\beta_{t}{\bm{k}}_{t}{\bm{k}}_{t}^{\top}){\mathbf{D}}_{t}{\mathbf{S}}_{t-1}+\beta_{t}{\bm{k}}_{t}{\bm{v}}_{t}^{\top}.
+
+(7)
+
+KDA lets each key channel decay at its own rate and retains the efficient WY-based chunkwise algorithm of DeltaNet
+[
+14
+,
+10
+]
+. Yet the active gate
+\beta_{t}
+is still a single scalar. It controls both how much old content is erased from the read direction and how much new value is written. Gated DeltaNet-2 starts from this remaining tie.
+
+3
+Gated DeltaNet-2
+
+3.1
+Decoupling erase and write
+
+KDA refines Gated DeltaNet by making the decay channel-wise, but the scalar
+\beta_{t}
+in Eq.
+7
+still carries two decisions that need not agree. One decision lives on the key side and determines which coordinates of the current read should be erased. The other lives on the value side and determines which coordinates of the candidate value should be written. Treating both decisions as one scalar is a restriction of the update, not a requirement of the delta rule.
+
+Gated DeltaNet-2 separates the two decisions through
+Gated Delta Rule-2
+. Let
+
+\displaystyle{\bm{e}}_{t}
+
+\displaystyle={\bm{b}}_{t}\odot{\bm{k}}_{t},
+
+\displaystyle{\bm{z}}_{t}
+
+\displaystyle=\mathbf{w}_{t}\odot{\bm{v}}_{t},
+
+(8)
+
+where
+{\bm{b}}_{t}\in[0,1]^{d_{k}}
+is the erase gate and
+\mathbf{w}_{t}\in[0,1]^{d_{v}}
+is the write gate. The erase gate weights the key coordinates used to read old content, while the write gate weights the value coordinates being inserted. Let
+{\mathbf{D}}_{t}=\operatorname{Diag}({\bm{\alpha}}_{t})
+. Applying decay before the active edit gives
+
+\displaystyle\bar{{\mathbf{S}}}_{t}
+
+\displaystyle={\mathbf{D}}_{t}{\mathbf{S}}_{t-1},
+
+\displaystyle{\bm{r}}_{t}
+
+\displaystyle=\bar{{\mathbf{S}}}_{t}^{\top}{\bm{e}}_{t},
+
+\displaystyle{\mathbf{S}}_{t}
+
+\displaystyle=\bar{{\mathbf{S}}}_{t}+{\bm{k}}_{t}({\bm{z}}_{t}-{\bm{r}}_{t})^{\top}.
+
+(9)
+
+Equivalently,
+
+\boxed{{\mathbf{S}}_{t}=\bigl({\mathbf{I}}-{\bm{k}}_{t}({\bm{b}}_{t}\odot{\bm{k}}_{t})^{\top}\bigr){\mathbf{D}}_{t}{\mathbf{S}}_{t-1}+{\bm{k}}_{t}(\mathbf{w}_{t}\odot{\bm{v}}_{t})^{\top}}
+
+(10)
+
+We refer to Eq.
+10
+as
+Gated Delta Rule-2
+. The output is
+{\bm{o}}_{t}={\mathbf{S}}_{t}^{\top}{\bm{q}}_{t}
+.
+The left factor of the erase matrix remains
+{\bm{k}}_{t}
+, which preserves the write direction of the delta rule. The right factor becomes
+{\bm{b}}_{t}\odot{\bm{k}}_{t}
+, which makes the read direction channel selective. The write term becomes
+{\bm{k}}_{t}{\bm{z}}_{t}^{\top}
+, which makes the value update channel selective.
+
+Gated Delta Rule-2 recovers KDA exactly when
+{\bm{b}}_{t}=\beta_{t}\mathbf{1}_{d_{k}}
+and
+\mathbf{w}_{t}=\beta_{t}\mathbf{1}_{d_{v}}
+. It recovers Gated DeltaNet by further setting
+{\bm{\alpha}}_{t}=\alpha_{t}\mathbf{1}_{d_{k}}
+. Thus the model preserves the known scalar-gated updates as tied subspaces, while learning outside those subspaces when erase and write require different channel structure.
+
+The layer produces the two gates with independent projections of the token representation,
+
+\displaystyle{\bm{b}}_{t}
+
+\displaystyle=\sigma(\mathbf{W}_{b}{\bm{x}}_{t}),
+
+\displaystyle\mathbf{w}_{t}
+
+\displaystyle=\sigma(\mathbf{W}_{w}{\bm{x}}_{t}).
+
+(11)
+
+The log-decay follows the Gated DeltaNet parameterization,
+
+\displaystyle\bm{g}_{t}=-\exp(\mathbf{a})\odot\operatorname{softplus}(\mathbf{W}_{f}{\bm{x}}_{t}+\bm{\delta}),\qquad{\bm{\alpha}}_{t}=\exp(\bm{g}_{t}).
+
+(12)
+
+In practice this decay activation is computed in fp32 before the kernel consumes it, which avoids precision loss in the cumulative log-decay. We also support the negative-eigenvalue variant of
+[
+20
+]
+by scaling only the erase gate to
+[0,2]^{d_{k}}
+. The write gate remains in
+[0,1]^{d_{v}}
+because the spectral effect concerns the state transition, not the value magnitude.
+
+3.2
+Fast-weight update perspective
+
+We can interpret Gated Delta Rule-2 as an online update of a fast-weight memory state
+[
+21
+]
+. The state
+{\mathbf{S}}_{t}
+stores transient key-value associations. At each token, the model first forms a decayed state
+\bar{{\mathbf{S}}}_{t}={\mathbf{D}}_{t}{\mathbf{S}}_{t-1}
+, reads the old content through the gated erase direction
+{\bm{e}}_{t}
+, and writes a correction toward the gated value target
+{\bm{z}}_{t}
+.
+
+More formally, Eq.
+9
+is the solution of the local online problem
+
+\displaystyle{\mathbf{S}}_{t}=\operatorname*{arg\,min}_{{\mathbf{S}}}\bm{L}_{t}({\mathbf{S}}),\qquad\bm{L}_{t}({\mathbf{S}})=\|{\mathbf{S}}-\bar{{\mathbf{S}}}_{t}\|_{F}^{2}-2\left\langle{\mathbf{S}}^{\top}{\bm{k}}_{t},{\bm{z}}_{t}-\bar{{\mathbf{S}}}_{t}^{\top}{\bm{e}}_{t}\right\rangle.
+
+(13)
+
+The first term keeps the new state close to the decayed memory. The second term applies an associative edit whose residual compares the gated write target
+{\bm{z}}_{t}
+against the content read from
+\bar{{\mathbf{S}}}_{t}
+along
+{\bm{e}}_{t}
+. Since
+
+\displaystyle\nabla_{{\mathbf{S}}}\bm{L}_{t}({\mathbf{S}})=2({\mathbf{S}}-\bar{{\mathbf{S}}}_{t})-2{\bm{k}}_{t}\left({\bm{z}}_{t}-\bar{{\mathbf{S}}}_{t}^{\top}{\bm{e}}_{t}\right)^{\top},
+
+(14)
+
+the minimizer is
+
+\displaystyle{\mathbf{S}}_{t}=\bar{{\mathbf{S}}}_{t}+{\bm{k}}_{t}\left({\bm{z}}_{t}-\bar{{\mathbf{S}}}_{t}^{\top}{\bm{e}}_{t}\right)^{\top},
+
+(15)
+
+which is exactly Eq.
+9
+.
+
+Table
+1
+compares this view with Mamba-2, Gated DeltaNet, KDA, and Mamba-3. We write all updates in the state orientation used in this paper, where
+{\bm{o}}_{t}={\mathbf{S}}_{t}^{\top}{\bm{q}}_{t}
+. Normalizer terms, kernel maps, output gates, and value projection gates are omitted for readability.
+
+For the Mamba-3 row, we use the SISO exponential-trapezoidal recurrence
+[
+13
+]
+. Let
+
+\displaystyle\widetilde{{\bm{k}}}_{s}
+
+\displaystyle={\mathbf{R}}_{1:s}^{\top}{\bm{k}}_{s},
+
+\displaystyle\eta_{t}
+
+\displaystyle=(1-\lambda_{t})\Delta_{t}\alpha_{t},
+
+\displaystyle\zeta_{t}
+
+\displaystyle=\lambda_{t}\Delta_{t}.
+
+(16)
+
+Here
+{\mathbf{R}}_{1:s}
+is the cumulative data-dependent rotation from the complex SSM view, and the previous-token term is omitted at the beginning of a sequence. The MIMO version replaces each rank-one write with a sum over the MIMO rank and leaves the same online form intact.
+
+Table 1
+:
+
+Fast-weight update view of DeltaNet, Mamba-2, Gated DeltaNet, KDA, Mamba-3, and Gated DeltaNet-2.
+All updates use the state orientation of this paper, where
+{\bm{o}}_{t}={\mathbf{S}}_{t}^{\top}{\bm{q}}_{t}
+.
+Mamba-2 and Mamba-3 add gated key-value correlation terms to a decayed state.
+DeltaNet, Gated DeltaNet, KDA, and Gated DeltaNet-2 instead write a delta residual, the target value minus the value currently read from memory.
+
+Method
+
+Local objective
+\bm{L}_{t}({\mathbf{S}})
+
+State update
+
+DeltaNet
+[
+10
+]
+
+\displaystyle\begin{aligned} &\|{\mathbf{S}}-{\mathbf{S}}_{t-1}\|_{F}^{2}\\
+&-2\left\langle{\mathbf{S}}^{\top}{\bm{k}}_{t},\beta_{t}\left({\bm{v}}_{t}-{\mathbf{S}}_{t-1}^{\top}{\bm{k}}_{t}\right)\right\rangle\end{aligned}
+
+\displaystyle\begin{aligned} {\mathbf{S}}_{t}&=({\mathbf{I}}-\beta_{t}{\bm{k}}_{t}{\bm{k}}_{t}^{\top}){\mathbf{S}}_{t-1}\\
+&\hskip 8.19447pt+\beta_{t}{\bm{k}}_{t}{\bm{v}}_{t}^{\top}\end{aligned}
+
+Mamba-2
+[
+8
+]
+
+\displaystyle\begin{aligned} &\|{\mathbf{S}}-\alpha_{t}{\mathbf{S}}_{t-1}\|_{F}^{2}\\
+&-2\left\langle{\mathbf{S}}^{\top}{\bm{k}}_{t},{\bm{v}}_{t}\right\rangle\end{aligned}
+
+\displaystyle\begin{aligned} {\mathbf{S}}_{t}&=\alpha_{t}{\mathbf{S}}_{t-1}+{\bm{k}}_{t}{\bm{v}}_{t}^{\top}\end{aligned}
+
+Gated DeltaNet
+[
+11
+]
+
+\displaystyle\begin{aligned} &\|{\mathbf{S}}-\alpha_{t}{\mathbf{S}}_{t-1}\|_{F}^{2}\\
+&-2\left\langle{\mathbf{S}}^{\top}{\bm{k}}_{t},\beta_{t}\left({\bm{v}}_{t}-(\alpha_{t}{\mathbf{S}}_{t-1})^{\top}{\bm{k}}_{t}\right)\right\rangle\end{aligned}
+
+\displaystyle\begin{aligned} {\mathbf{S}}_{t}&=\alpha_{t}({\mathbf{I}}-\beta_{t}{\bm{k}}_{t}{\bm{k}}_{t}^{\top}){\mathbf{S}}_{t-1}\\
+&\hskip 8.19447pt+\beta_{t}{\bm{k}}_{t}{\bm{v}}_{t}^{\top}\end{aligned}
+
+KDA
+[
+12
+]
+
+\displaystyle\begin{aligned} &\|{\mathbf{S}}-{\mathbf{D}}_{t}{\mathbf{S}}_{t-1}\|_{F}^{2}\\
+&-2\left\langle{\mathbf{S}}^{\top}{\bm{k}}_{t},\beta_{t}\left({\bm{v}}_{t}-({\mathbf{D}}_{t}{\mathbf{S}}_{t-1})^{\top}{\bm{k}}_{t}\right)\right\rangle\end{aligned}
+
+\displaystyle\begin{aligned} {\mathbf{S}}_{t}&=({\mathbf{I}}-\beta_{t}{\bm{k}}_{t}{\bm{k}}_{t}^{\top}){\mathbf{D}}_{t}{\mathbf{S}}_{t-1}\\
+&\hskip 8.19447pt+\beta_{t}{\bm{k}}_{t}{\bm{v}}_{t}^{\top}\end{aligned}
+
+Mamba-3
+[
+13
+]
+
+\displaystyle\begin{aligned} &\|{\mathbf{S}}-\alpha_{t}{\mathbf{S}}_{t-1}\|_{F}^{2}\\
+&-2\left\langle{\mathbf{S}}^{\top}\widetilde{{\bm{k}}}_{t-1},\eta_{t}{\bm{v}}_{t-1}\right\rangle\\
+&-2\left\langle{\mathbf{S}}^{\top}\widetilde{{\bm{k}}}_{t},\zeta_{t}{\bm{v}}_{t}\right\rangle\end{aligned}
+
+\displaystyle\begin{aligned} {\mathbf{S}}_{t}&=\alpha_{t}{\mathbf{S}}_{t-1}+\eta_{t}\widetilde{{\bm{k}}}_{t-1}{\bm{v}}_{t-1}^{\top}\\
+&\hskip 8.19447pt+\zeta_{t}\widetilde{{\bm{k}}}_{t}{\bm{v}}_{t}^{\top}\end{aligned}
+
+Gated DeltaNet-2
+
+\displaystyle\begin{aligned} &\|{\mathbf{S}}-{\mathbf{D}}_{t}{\mathbf{S}}_{t-1}\|_{F}^{2}\\
+&-2\left\langle{\mathbf{S}}^{\top}{\bm{k}}_{t},{\bm{z}}_{t}-({\mathbf{D}}_{t}{\mathbf{S}}_{t-1})^{\top}{\bm{e}}_{t}\right\rangle\end{aligned}
+
+\displaystyle\begin{aligned} {\mathbf{S}}_{t}&=({\mathbf{I}}-{\bm{k}}_{t}{\bm{e}}_{t}^{\top}){\mathbf{D}}_{t}{\mathbf{S}}_{t-1}\\
+&\hskip 8.19447pt+{\bm{k}}_{t}{\bm{z}}_{t}^{\top}\end{aligned}
+
+The comparison separates two families. Mamba-2 and Mamba-3 write correlations into a decayed state. Mamba-3 makes this write more expressive through the exponential-trapezoidal input rule and data-dependent rotations, but it does not subtract a current read from the state. Gated DeltaNet and KDA instead perform a residual delta edit. KDA changes the decay from scalar to channel-wise while keeping the scalar residual
+\beta_{t}({\bm{v}}_{t}-\bar{{\mathbf{S}}}_{t}^{\top}{\bm{k}}_{t})
+. Gated DeltaNet-2 changes the residual itself to
+
+\displaystyle{\bm{z}}_{t}-\bar{{\mathbf{S}}}_{t}^{\top}{\bm{e}}_{t}=\mathbf{w}_{t}\odot{\bm{v}}_{t}-({\mathbf{D}}_{t}{\mathbf{S}}_{t-1})^{\top}({\bm{b}}_{t}\odot{\bm{k}}_{t}),
+
+(17)
+
+which decouples the coordinates used to erase from the coordinates used to write.
+
+3.3
+Chunkwise parallel training
+
+We now show that Gated Delta Rule-2 keeps the same chunkwise structure as KDA. Consider one chunk and suppress the chunk index. Let
+
+\displaystyle\bm{G}_{r}=\sum_{i=1}^{r}\bm{g}_{i},\qquad\bm{\gamma}_{r}=\exp(\bm{G}_{r}),\qquad\bm{\gamma}_{0}=\mathbf{1}_{d_{k}}.
+
+(18)
+
+Define the decay-normalized state
+\widehat{{\mathbf{S}}}_{r}
+by
+{\mathbf{S}}_{r}=\operatorname{Diag}(\bm{\gamma}_{r})\widehat{{\mathbf{S}}}_{r}
+. With
+\widehat{{\mathbf{S}}}_{0}={\mathbf{S}}_{[n]}
+, Eq.
+10
+becomes a pure asymmetric delta recurrence,
+
+\displaystyle\widehat{{\mathbf{S}}}_{r}=\bigl({\mathbf{I}}-\bar{{\bm{k}}}_{r}\bar{{\bm{e}}}_{r}^{\top}\bigr)\widehat{{\mathbf{S}}}_{r-1}+\bar{{\bm{k}}}_{r}{\bm{z}}_{r}^{\top},\qquad\bar{{\bm{k}}}_{r}=\bm{\gamma}_{r}^{-1}\odot{\bm{k}}_{r},\qquad\bar{{\bm{e}}}_{r}=\bm{\gamma}_{r}\odot{\bm{e}}_{r}.
+
+(19)
+
+This normalization is the key to the efficient form. The channel-wise decay is absorbed into the two factors of each rank-one erase, while the update remains a product of matrices of the form
+{\mathbf{I}}-\bar{{\bm{k}}}_{r}\bar{{\bm{e}}}_{r}^{\top}
+.
+
+Let
+{\mathbf{B}}\in\mathbb{R}^{C\times d_{k}}
+and
+{\mathbf{W}}\in\mathbb{R}^{C\times d_{v}}
+contain rows
+{\bm{b}}_{r}^{\top}
+and
+\mathbf{w}_{r}^{\top}
+, respectively. For compact matrix notation, let
+\bm{\gamma}\in\mathbb{R}^{C\times d_{k}}
+contain rows
+\bm{\gamma}_{r}^{\top}
+. Let
+\bar{{\mathbf{K}}}\in\mathbb{R}^{C\times d_{k}}
+,
+\bar{{\mathbf{E}}}\in\mathbb{R}^{C\times d_{k}}
+, and
+{\mathbf{Z}}\in\mathbb{R}^{C\times d_{v}}
+contain rows
+\bar{{\bm{k}}}_{r}^{\top}
+,
+\bar{{\bm{e}}}_{r}^{\top}
+, and
+{\bm{z}}_{r}^{\top}
+. Equivalently,
+
+\displaystyle\bar{{\mathbf{E}}}=\bm{\gamma}\odot({\mathbf{B}}\odot{\mathbf{K}}),\qquad{\mathbf{Z}}={\mathbf{W}}\odot{\mathbf{V}}.
+
+(20)
+
+Define the strictly lower triangular matrix
+
+\displaystyle{\mathbf{T}}=\operatorname{tril}(\bar{{\mathbf{E}}}\bar{{\mathbf{K}}}^{\top},-1),\qquad{\mathbf{A}}=({\mathbf{I}}+{\mathbf{T}})^{-1}.
+
+(21)
+
+The WY auxiliaries are
+
+\displaystyle{\mathbf{Y}}={\mathbf{A}}\bar{{\mathbf{E}}},\qquad{\mathbf{U}}={\mathbf{A}}{\mathbf{Z}}.
+
+(22)
+
+Here
+{\mathbf{Y}}
+is the erase-side auxiliary and
+{\mathbf{U}}
+is the write-side auxiliary. Since
+{\mathbf{T}}
+is triangular with zero diagonal,
+{\mathbf{A}}
+is obtained by a small forward substitution inside each chunk.
+
+The end-of-chunk state is then
+
+\displaystyle{\mathbf{S}}_{[n+1]}=\operatorname{Diag}(\bm{\gamma}_{C}){\mathbf{S}}_{[n]}+{\mathbf{K}}_{\mathrm{tail}}^{\top}({\mathbf{U}}-{\mathbf{Y}}{\mathbf{S}}_{[n]}),
+
+(23)
+
+where row
+r
+of
+{\mathbf{K}}_{\mathrm{tail}}
+is
+(\bm{\gamma}_{C}/\bm{\gamma}_{r})\odot{\bm{k}}_{r}
+. The output block is
+
+\displaystyle{\mathbf{O}}_{[n]}={\mathbf{Q}}_{\gamma}{\mathbf{S}}_{[n]}+{\mathbf{A}}_{qk}({\mathbf{U}}-{\mathbf{Y}}{\mathbf{S}}_{[n]}),
+
+(24)
+
+where row
+r
+of
+{\mathbf{Q}}_{\gamma}
+is
+\bm{\gamma}_{r}\odot{\bm{q}}_{r}
+and
+
+\displaystyle({\mathbf{A}}_{qk})_{rs}=\mathbf{1}_{r\geq s}\,{\bm{q}}_{r}^{\top}\operatorname{Diag}(\bm{\gamma}_{r}/\bm{\gamma}_{s}){\bm{k}}_{s}.
+
+(25)
+
+Equations
+23
+and
+24
+have the same shape as the KDA chunk equations. The only difference is how
+{\mathbf{Y}}
+and
+{\mathbf{U}}
+are formed. The erase gate enters through row
+r
+of
+\bar{{\mathbf{E}}}
+as
+\bm{\gamma}_{r}\odot({\bm{b}}_{r}\odot{\bm{k}}_{r})
+. The write gate enters through row
+r
+of
+{\mathbf{Z}}
+as
+\mathbf{w}_{r}\odot{\bm{v}}_{r}
+. The rest of the computation is a triangular solve and dense matrix multiplication over fixed-size chunks. We use the UT transform
+[
+22
+]
+and implement these equations with fused Triton kernels
+[
+23
+]
+. Kernel schedules and precision choices are deferred to the supplement.
+
+3.4
+Gate-aware backward
+
+The backward pass follows the same decomposition as the forward. Gradients first flow through the output equation and the inter-chunk state recurrence, both of which operate only on
+{\mathbf{A}}_{qk}
+,
+{\mathbf{K}}_{\mathrm{tail}}
+,
+{\mathbf{Y}}
+, and
+{\mathbf{U}}
+. The only new accounting is the vector-Jacobian product through Eq.
+22
+and Eq.
+21
+.
+
+For scalar-gated delta rules, a factor
+\beta_{r}
+can be moved outside the dot products that accumulate the gradient of
+{\mathbf{A}}
+. That shortcut breaks for Gated Delta Rule-2. The write side contains a different diagonal gate over value channels, and the erase side contains a different diagonal gate over key channels. Therefore the gate factors must be present at the accumulation sites. Let
+{\mathbf{B}}
+and
+{\mathbf{W}}
+contain rows
+{\bm{b}}_{r}^{\top}
+and
+\mathbf{w}_{r}^{\top}
+, respectively, and let
+\bm{\gamma}
+denote the row-stacked cumulative-decay vectors. Then
+
+\displaystyle\mathrm{d}{\mathbf{A}}
+
+\displaystyle\mathrel{+}=\mathrm{d}{\mathbf{U}}\,{\mathbf{Z}}^{\top},
+
+\displaystyle{\mathbf{Z}}
+
+\displaystyle={\mathbf{W}}\odot{\mathbf{V}},
+
+(26)
+
+\displaystyle\mathrm{d}{\mathbf{A}}
+
+\displaystyle\mathrel{+}=\mathrm{d}{\mathbf{Y}}\,\bar{{\mathbf{E}}}^{\top},
+
+\displaystyle\bar{{\mathbf{E}}}
+
+\displaystyle=\bm{\gamma}\odot({\mathbf{B}}\odot{\mathbf{K}}).
+
+(27)
+
+The inverse itself has the standard triangular vector-Jacobian product
+
+\displaystyle\mathrm{d}{\mathbf{T}}=-\operatorname{tril}\bigl({\mathbf{A}}^{\top}\mathrm{d}{\mathbf{A}}{\mathbf{A}}^{\top},-1\bigr).
+
+(28)
+
+From there, gradients to
+{\mathbf{B}}
+,
+{\mathbf{W}}
+,
+{\mathbf{K}}
+,
+{\mathbf{V}}
+, and the cumulative decay follow by ordinary elementwise products and reverse cumulative sums. This gate-aware accumulation is the main mathematical change required for training Gated Delta Rule-2. The remaining backward kernels retain the same matrix shapes as KDA and can reuse the same state and output vector-Jacobian product structure.
+
+3.5
+Block design and hybrid models
+
+N\times
+Gated DeltaNet-2
+MLP
+SWA
+MLP
+Outputs
+Hybrid Gated DeltaNet-2
+Block Design
+Gated Delta Rule-2
+Inputs
+Linear
+Conv
+{\bm{v}}
+Linear
+Conv
+L2
+{\bm{k}}
+Linear
+Conv
+L2
+{\bm{q}}
+Lin.
+{\bm{\alpha}}
+Lin.
+{\bm{b}}
+Lin.
+\mathbf{w}
+Norm
+Linear
+Linear
+Outputs
+
+Figure 1
+:
+Visualization of the hybrid architecture and block design of
+Gated DeltaNet-2
+.
+The
+Hybrid Gated DeltaNet-2
+model repeats a Gated DeltaNet-2 token mixer, an MLP, sliding-window attention (SWA), and another MLP.
+In the block design, query and key paths use linear projection, short convolution, SiLU, and L2 normalization.
+The value path uses linear projection, short convolution, and SiLU.
+The central recurrent operator is
+Gated Delta Rule-2
+.
+The decay branch produces
+{\bm{\alpha}}
+from the log-decay projection.
+The channel-wise erase gate
+{\bm{b}}
+and channel-wise write gate
+\mathbf{w}
+each use linear projection followed by sigmoid.
+The recurrent output is normalized, multiplied by a SiLU output gate, and passed through the output projection.
+
+Gated DeltaNet-2 token mixer.
+
+Gated DeltaNet-2 is used as the recurrent token mixer in a standard Transformer-style block. Fig.
+1
+(right) shows its block design. For the Gated Delta Rule-2 in Eq.
+10
+,
+\{{\bm{q}}_{t},{\bm{k}}_{t},{\bm{v}}_{t}\}
+are produced by linear projection, short causal convolution, and SiLU, with L2 normalization applied to
+{\bm{q}}_{t}
+and
+{\bm{k}}_{t}
+for stability. Separate branches produce the channel-wise decay
+{\bm{\alpha}}_{t}
+, erase gate
+{\bm{b}}_{t}
+, and write gate
+\mathbf{w}_{t}
+. The recurrent output is RMS-normalized, multiplied by a separate SiLU output gate, and projected back to the model dimension. Throughout the paper,
+\bm{g}
+denotes the log-decay tensor in Eq.
+12
+, not the output gate. With grouped value heads,
+{\bm{q}}
+,
+{\bm{k}}
+, the log-decay tensor
+\bm{g}
+, and
+{\bm{b}}
+are repeated across value-head groups, while
+{\bm{v}}
+and
+\mathbf{w}
+remain on the value-head axis.
+
+Model families.
+
+We train both recurrent and hybrid models. The recurrent model stacks Gated DeltaNet-2 token mixers and MLPs under the standard residual block, isolating the fixed-state memory of Eq.
+10
+. The hybrid model inserts Sliding-Window Attention (SWA) after the recurrent mixer, as shown in Fig.
+1
+(left). A repeated cell contains Gated DeltaNet-2, an MLP, SWA, and another MLP. Gated DeltaNet-2 compresses long histories into constant-size memory, while SWA handles exact local interactions such as short shifts, comparisons, and local retrieval. With a fixed window, the hybrid retains linear sequence scaling and a bounded attention cache, following the recurrent attention hybrid design pattern
+[
+24
+,
+25
+]
+.
+
+4
+Experiments
+
+Setup
+
+We evaluate each recurrent family in two forms, a recurrent-only model and a hybrid model that pairs the same recurrent token mixer with sliding-window attention as described in Section
+3.5
+. For Mamba-3, we include both SISO and MIMO variants and use MIMO rank
+R=4
+following
+[
+13
+]
+. All models are trained with the same recipe. Unless stated otherwise, each model has 1.3B parameters and is trained on 100B tokens from FineWeb-Edu
+[
+26
+]
+. We use AdamW with peak learning rate
+4\times 10^{-4}
+, weight decay
+0.1
+, gradient clipping at
+1.0
+, cosine decay, a 1B-token warm-up, and a global batch size of 0.5M tokens. The training length is 4K tokens, and hybrid models use a 2K sliding-window attention size. Evaluation details are given in the appendix.
+
+Model
+
+Wiki.
+
+LMB.
+
+LMB.
+
+PIQA
+
+Hella.
+
+Wino.
+
+ARC-e
+
+ARC-c
+
+OBQA
+
+SIQA
+
+BoolQ
+
+Avg.
+
+ppl
+\downarrow
+
+ppl
+\downarrow
+
+acc
+\uparrow
+
+acc
+\uparrow
+
+acc_n
+\uparrow
+
+acc
+\uparrow
+
+acc
+\uparrow
+
+acc
+\uparrow
+
+acc
+\uparrow
+
+acc
+\uparrow
+
+acc
+\uparrow
+
+acc
+\uparrow
+
+Recurrent models
+
+Mamba-2
+
+16.79
+
+12.38
+
+45.24
+
+72.58
+
+55.51
+
+55.33
+
+70.68
+
+35.26
+
+31.00
+
+40.63
+
+60.19
+
+51.82
+
+Gated DeltaNet
+
+16.40
+
+11.89
+
+49.62
+
+72.31
+
+56.50
+
+56.75
+
+68.81
+
+35.15
+
+30.20
+
+40.53
+
+58.78
+
+52.07
+
+KDA
+
+16.81
+
+11.68
+
+48.13
+
+72.09
+
+55.75
+
+55.72
+
+70.83
+
+35.92
+
+30.40
+
+40.99
+
+60.67
+
+52.28
+
+Mamba-3 (SISO)
+
+16.30
+
+12.99
+
+45.06
+
+72.31
+
+55.58
+
+56.20
+
+70.45
+
+34.56
+
+31.00
+
+41.76
+
+55.90
+
+51.42
+
+Mamba-3 (MIMO)
+
+16.45
+
+11.66
+
+47.82
+
+72.36
+
+56.49
+
+55.78
+
+72.38
+
+38.07
+
+30.00
+
+40.89
+
+57.74
+
+52.39
+
+Gated DeltaNet-2
+
+15.90
+
+11.41
+
+48.09
+
+72.80
+
+56.84
+
+57.85
+
+72.43
+
+38.23
+
+31.60
+
+40.58
+
+59.54
+
+53.11
+
+Attention or hybrid models
+
+Transformer
+
+19.22
+
+13.72
+
+48.32
+
+70.21
+
+56.12
+
+55.85
+
+69.23
+
+33.84
+
+25.00
+
+39.74
+
+59.42
+
+50.86
+
+Mamba-2
+
+17.46
+
+11.29
+
+48.05
+
+71.47
+
+57.52
+
+56.17
+
+70.50
+
+34.73
+
+29.80
+
+40.35
+
+59.31
+
+51.99
+
+Gated DeltaNet
+
+16.00
+
+10.82
+
+48.71
+
+70.06
+
+57.50
+
+56.83
+
+70.41
+
+35.15
+
+30.60
+
+40.97
+
+60.00
+
+52.25
+
+KDA
+
+16.01
+
+10.66
+
+49.21
+
+71.06
+
+56.89
+
+57.77
+
+71.59
+
+35.07
+
+30.00
+
+40.53
+
+62.03
+
+52.68
+
+Mamba-3 (SISO)
+
+15.54
+
+10.65
+
+49.19
+
+71.01
+
+58.75
+
+57.30
+
+70.54
+
+36.35
+
+32.00
+
+41.20
+
+57.86
+
+52.69
+
+Mamba-3 (MIMO)
+
+15.81
+
+10.92
+
+49.82
+
+71.98
+
+58.19
+
+57.06
+
+70.54
+
+38.48
+
+29.40
+
+40.99
+
+57.98
+
+52.72
+
+Gated DeltaNet-2
+
+15.62
+
+10.43
+
+50.90
+
+72.20
+
+58.46
+
+58.56
+
+71.89
+
+36.69
+
+33.00
+
+41.50
+
+62.57
+
+53.97
+
+Table 2
+:
+
+Performance comparison on language modeling and zero-shot common-sense reasoning.
+All accuracy values are reported as percentages.
+Avg. is computed over LAMBADA accuracy and the listed reasoning accuracies.
+
+Model
+
+S-NIAH-1
+
+S-NIAH-2
+
+S-NIAH-3
+
+MK-NIAH-1
+
+1K
+
+2K
+
+4K
+
+8K
+
+1K
+
+2K
+
+4K
+
+8K
+
+1K
+
+2K
+
+4K
+
+1K
+
+2K
+
+4K
+
+Recurrent models
+
+Mamba-2
+
+100.0
+
+100.0
+
+97.0
+
+55.8
+
+99.6
+
+99.6
+
+62.6
+
+21.0
+
+59.2
+
+38.6
+
+14.4
+
+29.0
+
+21.2
+
+21.4
+
+Gated DeltaNet
+
+99.8
+
+100.0
+
+100.0
+
+97.6
+
+100.0
+
+100.0
+
+87.2
+
+32.0
+
+89.8
+
+54.2
+
+60.6
+
+58.0
+
+37.0
+
+27.8
+
+KDA
+
+100.0
+
+100.0
+
+99.2
+
+70.6
+
+100.0
+
+100.0
+
+89.0
+
+30.6
+
+77.4
+
+63.2
+
+26.2
+
+54.0
+
+44.2
+
+28.0
+
+Mamba-3 (SISO)
+
+100.0
+
+99.0
+
+63.4
+
+27.8
+
+99.8
+
+99.0
+
+59.4
+
+25.2
+
+60.2
+
+35.6
+
+12.2
+
+44.8
+
+27.4
+
+20.2
+
+Mamba-3 (MIMO)
+
+100.0
+
+99.8
+
+93.0
+
+35.6
+
+99.8
+
+98.8
+
+64.2
+
+27.2
+
+89.2
+
+72.4
+
+29.2
+
+49.4
+
+19.2
+
+18.0
+
+Gated DeltaNet-2
+
+100.0
+
+100.0
+
+100.0
+
+97.8
+
+100.0
+
+100.0
+
+93.0
+
+39.2
+
+92.0
+
+89.8
+
+31.8
+
+72.6
+
+51.4
+
+37.8
+
+Attention or hybrid models
+
+Transformer
+
+100.0
+
+100.0
+
+51.2
+
+0.0
+
+100.0
+
+100.0
+
+44.2
+
+0.0
+
+95.8
+
+94.8
+
+37.0
+
+75.6
+
+66.6
+
+38.2
+
+Mamba-2
+
+100.0
+
+100.0
+
+51.8
+
+25.4
+
+100.0
+
+99.6
+
+52.4
+
+25.8
+
+97.8
+
+86.8
+
+48.0
+
+82.0
+
+58.6
+
+39.0
+
+Gated DeltaNet
+
+100.0
+
+100.0
+
+47.2
+
+22.4
+
+100.0
+
+99.8
+
+57.3
+
+25.6
+
+94.8
+
+91.2
+
+47.2
+
+91.0
+
+78.4
+
+44.8
+
+KDA
+
+100.0
+
+100.0
+
+51.8
+
+26.2
+
+100.0
+
+100.0
+
+56.0
+
+23.0
+
+97.2
+
+93.4
+
+51.6
+
+91.4
+
+84.0
+
+40.4
+
+Mamba-3 (SISO)
+
+100.0
+
+100.0
+
+49.6
+
+26.0
+
+100.0
+
+100.0
+
+58.2
+
+27.8
+
+95.0
+
+90.4
+
+44.0
+
+78.8
+
+65.6
+
+33.6
+
+Mamba-3 (MIMO)
+
+100.0
+
+100.0
+
+49.0
+
+22.8
+
+100.0
+
+100.0
+
+53.0
+
+27.8
+
+99.4
+
+98.4
+
+54.2
+
+82.4
+
+79.0
+
+46.6
+
+Gated DeltaNet-2
+
+100.0
+
+100.0
+
+55.2
+
+27.4
+
+100.0
+
+100.0
+
+57.9
+
+29.2
+
+99.6
+
+99.0
+
+55.6
+
+93.0
+
+84.6
+
+48.0
+
+Table 3
+:
+
+Accuracy on Single Needle-In-A-Haystack (S-NIAH) and Multi-Key Needle-In-A-Haystack (MK-NIAH) tasks from RULER.
+Best values within each model family and context length are bolded; second-best values are underlined.
+
+Language modeling and common-sense reasoning
+
+Table
+2
+reports WikiText and LAMBADA perplexity
+[
+27
+,
+28
+]
+, zero-shot LAMBADA accuracy, and the common-sense suite from PIQA through BoolQ
+[
+29
+,
+30
+,
+31
+,
+32
+,
+33
+,
+34
+,
+35
+]
+. Gated DeltaNet-2 achieves the best average in both recurrent and hybrid settings. Since recurrent state size is matched, the gain points to a stronger update rule rather than a larger memory. The trend persists with SWA, and the model is more balanced than Mamba-3 across perplexity, accuracy, and transfer.
+
+In-context retrieval on synthetic data
+
+Table
+3
+reports S-NIAH and MK-NIAH from RULER
+[
+36
+]
+, which test retention, interference control, high-entropy value storage, and multi-key discrimination under fixed-state memory. Gated DeltaNet-2 is strongest where memory editing matters most. In the recurrent setting, it leads the interference-heavy S-NIAH-2 cases at 4K and 8K and all MK-NIAH-1 lengths. The hybrid model shows the same pattern, leading the long S-NIAH-1 cases, the 8K S-NIAH-2 case, all S-NIAH-3 lengths, and the longer MK-NIAH-1 settings. These gains match the design of Gated Delta Rule-2. The key-side erase gate
+{\bm{b}}_{t}
+selectively protects or revises key channels, while the value-side write gate
+\mathbf{w}_{t}
+controls which value channels enter the state. With SWA handling local evidence, this decoupled recurrent update preserves longer-range associations more effectively than a scalar delta gate.
+
+Models
+
+SWDE
+
+SQD
+
+FDA
+
+TQA
+
+NQ
+
+DROP
+
+Avg.
+
+Recurrent models
+
+Mamba-2
+
+17.24
+
+32.38
+
+14.53
+
+58.35
+
+18.91
+
+19.60
+
+26.84
+
+Gated DeltaNet
+
+17.90
+
+32.67
+
+18.52
+
+59.60
+
+20.16
+
+19.69
+
+28.09
+
+Mamba-3 (SISO)
+
+17.62
+
+35.07
+
+11.08
+
+58.89
+
+18.18
+
+21.32
+
+27.03
+
+KDA
+
+22.49
+
+35.10
+
+14.90
+
+58.12
+
+19.58
+
+21.80
+
+28.67
+
+Mamba-3 (MIMO)
+
+16.68
+
+36.65
+
+17.44
+
+59.06
+
+19.16
+
+21.08
+
+28.35
+
+Gated DeltaNet-2
+
+23.65
+
+36.75
+
+19.98
+
+61.37
+
+19.64
+
+17.87
+
+29.88
+
+Attention or hybrid models
+
+Transformer
+
+32.21
+
+38.67
+
+54.78
+
+58.09
+
+22.49
+
+22.18
+
+38.07
+
+Mamba-2
+
+34.67
+
+40.74
+
+52.31
+
+60.13
+
+25.91
+
+24.68
+
+39.74
+
+Gated DeltaNet
+
+33.18
+
+42.28
+
+50.86
+
+60.60
+
+25.78
+
+21.95
+
+39.11
+
+Mamba-3 (SISO)
+
+35.30
+
+46.42
+
+54.95
+
+59.54
+
+25.91
+
+23.96
+
+41.01
+
+KDA
+
+39.83
+
+40.10
+
+53.59
+
+59.89
+
+25.27
+
+22.18
+
+40.14
+
+Mamba-3 (MIMO)
+
+32.33
+
+44.70
+
+55.31
+
+59.00
+
+26.26
+
+23.08
+
+40.11
+
+Gated DeltaNet-2
+
+41.96
+
+44.70
+
+54.68
+
+62.38
+
+26.31
+
+23.67
+
+42.28
+
+Table 4
+:
+
+Accuracy on real-world retrieval tasks with input length truncated to 2K tokens.
+SQD denotes SQuAD. TQA denotes TriviaQA.
+
+In-context retrieval on real-world tasks
+
+Table
+4
+reports recall-heavy real-world tasks from
+[
+37
+]
+, spanning extraction, question answering, and distractor-rich evidence. These tasks are less controlled than synthetic NIAH but better reflect fixed-state memory under realistic context. Gated DeltaNet-2 achieves the best average in both recurrent and hybrid settings. Its recurrent gains are strongest on noisy association recovery, where selective erase and gated write are directly useful. The remaining NQ and DROP gaps point to formats that also need local evidence aggregation, which SWA supplies in the hybrid model.
+
+Variant
+
+Wiki.
+
+LMB.
+
+Common.
+
+S-NIAH-2
+
+S-NIAH-3
+
+MK-NIAH-1
+
+Recall
+
+ppl
+\downarrow
+
+ppl
+\downarrow
+
+avg
+\uparrow
+
+@4K
+\uparrow
+
+@2K
+\uparrow
+
+@4K
+\uparrow
+
+avg
+\uparrow
+
+Channel structure
+
+w-only, scalar
+{\bm{b}}_{t}
+, channel
+\mathbf{w}_{t}
+
+16.55
+
+11.62
+
+52.45
+
+90.6
+
+71.4
+
+30.6
+
+28.92
+
+b-only, channel
+{\bm{b}}_{t}
+, scalar
+\mathbf{w}_{t}
+
+16.12
+
+11.50
+
+52.79
+
+92.1
+
+84.6
+
+35.2
+
+29.51
+
+Erase range
+
+Gated DeltaNet-2,
+{\bm{b}}_{t}\in[0,1]^{d_{k}}
+
+15.90
+
+11.41
+
+53.11
+
+93.0
+
+89.8
+
+37.8
+
+29.88
+
+expanded
+{\bm{b}}_{t}\in[0,2]^{d_{k}}
+
+15.95
+
+11.44
+
+53.04
+
+93.1
+
+89.4
+
+37.6
+
+29.81
+
+Table 5
+:
+
+Gate structure and erase range ablations in the recurrent-only setting.
+
+Gate structure and erase range ablations.
+
+Table
+5
+evaluates two aspects of the Gated Delta Rule-2 update, the channel structure of the erase and write gates, and the range of the erase gate. For the channel-structure ablations, we average either gate over its channel axis and broadcast the scalar back at runtime, while keeping the original projections unchanged. Thus the parameter count stays fixed and only channel-wise gate variation is removed. Both scalarized variants trail full Gated DeltaNet-2, showing that both gates use their channel degrees of freedom. The asymmetry is clear. Keeping channel structure only in
+{\bm{b}}_{t}
+recovers most of the full model on language modeling and retrieval, whereas keeping it only in
+\mathbf{w}_{t}
+recovers less. This matches Eq.
+10
+, where
+{\bm{b}}_{t}
+changes the key-side erase factor
+{\bm{k}}_{t}({\bm{b}}_{t}\odot{\bm{k}}_{t})^{\top}
+, while
+\mathbf{w}_{t}
+reweights the written value. Finally, expanding the erase range from
+[0,1]^{d_{k}}
+to
+[0,2]^{d_{k}}
+gives no consistent gain at this scale.
+
+2K
+\times
+8
+4K
+\times
+4
+8K
+\times
+2
+16K
+\times
+1
+25
+30
+35
+40
+45
+Seq. length
+\times
+batch
+Thousands of Tokens Per Second (Kt/s)
+Transformer
+Mamba-2
+Mamba-3 SISO
+Mamba-3 MIMO
+Gated DeltaNet
+KDA
+Gated DeltaNet-2
+
+Figure 2
+:
+Training throughput on a H100 GPU.
+
+Throughput comparison.
+
+Fig.
+2
+reports single H100 training throughput for the hybrid 1.3B models under a fixed token budget. Gated DeltaNet-2 preserves the near-flat scaling profile of recurrent mixers as sequence length grows, dropping only mildly from 38.0 to 36.1 Kt/s, while the Transformer degrades sharply. Relative to KDA, the small gap reflects the added channel-wise erase and write gates. Thus Gated DeltaNet-2 retains practical training efficiency while paying a modest constant cost for finer memory control.
+
+5
+Related Work
+
+Efficient sequence models replace quadratic self-attention with recurrent or linear-time token mixers that maintain a fixed-size state. Early structured state-space and recurrent models used mostly data-independent transitions
+[
+38
+,
+39
+,
+40
+,
+16
+]
+, while Mamba and Mamba-2 introduced data-dependent selective dynamics and the SSD framework
+[
+41
+,
+8
+]
+. Gated linear attention and related linear RNNs further improve memory control with learned decay gates
+[
+17
+,
+42
+]
+. Delta-rule models take a complementary fast-weight view, where the recurrent state is updated by correcting the current read before writing the new value, improving associative memory over Hebbian-style accumulation
+[
+43
+,
+44
+,
+45
+,
+10
+]
+. Gated DeltaNet adds adaptive forgetting to this update
+[
+11
+]
+, and KDA strengthens it with channel-wise decay and an efficient chunkwise algorithm, but still uses a scalar
+\beta_{t}
+to control both erasing and writing
+[
+12
+]
+. Mamba-3 advances the SSM line instead, using exponential-trapezoidal discretization, complex-valued transitions implemented through data-dependent rotations, and a MIMO formulation for stronger modeling at efficient decoding latency
+[
+13
+]
+. Our work is complementary to these directions. Gated DeltaNet-2 keeps the delta-rule fast-weight structure of GDN and KDA, but replaces the tied scalar update strength with a channel-wise erase gate
+{\bm{b}}_{t}
+and a channel-wise write gate
+\mathbf{w}_{t}
+. This recovers KDA when both gates are tied to the same scalar, while allowing old content and new values to be controlled along different channel patterns.
+
+6
+Conclusion
+
+We introduced Gated DeltaNet-2, a delta-rule recurrent attention layer that decouples the active memory edit into channel-wise erase and write decisions. The erase gate
+{\bm{b}}_{t}
+selects which key-side coordinates of the decayed state are read and removed, while the write gate
+\mathbf{w}_{t}
+selects which value-side coordinates are committed. This removes the scalar
+\beta_{t}
+tie in Gated DeltaNet and KDA, recovers both as special cases, and preserves efficient chunkwise training through a WY form with gate-aware kernels. Under matched 1.3B training, Gated DeltaNet-2 improves the recurrent and hybrid frontier across language modeling, commonsense reasoning, synthetic retrieval, and real-world recall, while adding only a small constant throughput overhead. Ablations show that both gates contribute, with the erase gate accounting for most of the gain.
+
+Appendix A
+Chunkwise derivation for Gated DeltaNet-2
+
+This appendix gives the exact chunkwise form used in Section
+3.3
+. We work inside one chunk of length
+C
+and write
+{\mathbf{S}}_{0}
+for the state at the start of the chunk. All vectors are for a single head. In particular,
+{\bm{k}}_{r},{\bm{e}}_{r},{\bm{q}}_{r},{\bm{b}}_{r},{\bm{\alpha}}_{r},\bm{\gamma}_{r}\in\mathbb{R}^{d_{k}}
+,
+{\bm{v}}_{r},{\bm{z}}_{r},{\bm{o}}_{r},\mathbf{w}_{r}\in\mathbb{R}^{d_{v}}
+, and
+{\mathbf{S}}_{r}\in\mathbb{R}^{d_{k}\times d_{v}}
+. The chunk index is suppressed.
+
+The Gated DeltaNet-2 recurrence is
+
+\displaystyle{\mathbf{S}}_{r}=\bigl({\mathbf{I}}-{\bm{k}}_{r}{\bm{e}}_{r}^{\top}\bigr)\operatorname{Diag}({\bm{\alpha}}_{r}){\mathbf{S}}_{r-1}+{\bm{k}}_{r}{\bm{z}}_{r}^{\top},\qquad{\bm{e}}_{r}={\bm{b}}_{r}\odot{\bm{k}}_{r},\qquad{\bm{z}}_{r}=\mathbf{w}_{r}\odot{\bm{v}}_{r}.
+
+(29)
+
+Let
+
+\displaystyle\bm{G}_{r}=\sum_{i=1}^{r}\bm{g}_{i},\qquad\bm{\gamma}_{r}=\exp(\bm{G}_{r}),\qquad\bm{\gamma}_{0}=\mathbf{1}_{d_{k}},\qquad{\bm{\alpha}}_{r}=\exp(\bm{g}_{r}).
+
+(30)
+
+All exponentials, products, and ratios involving
+\bm{\gamma}
+are elementwise over the key channel axis.
+
+A.1
+Decay-normalized recurrence
+
+Define a normalized state
+\widehat{{\mathbf{S}}}_{r}
+by
+
+\displaystyle{\mathbf{S}}_{r}=\operatorname{Diag}(\bm{\gamma}_{r})\widehat{{\mathbf{S}}}_{r}.
+
+(31)
+
+Because
+\bm{\gamma}_{0}=\mathbf{1}_{d_{k}}
+, the normalized initial state is also
+\widehat{{\mathbf{S}}}_{0}={\mathbf{S}}_{0}
+. Substituting Eq.
+31
+into Eq.
+29
+and using
+\bm{\gamma}_{r}={\bm{\alpha}}_{r}\odot\bm{\gamma}_{r-1}
+gives
+
+\displaystyle\widehat{{\mathbf{S}}}_{r}=\bigl({\mathbf{I}}-\bar{{\bm{k}}}_{r}\bar{{\bm{e}}}_{r}^{\top}\bigr)\widehat{{\mathbf{S}}}_{r-1}+\bar{{\bm{k}}}_{r}{\bm{z}}_{r}^{\top},\qquad\bar{{\bm{k}}}_{r}=\bm{\gamma}_{r}^{-1}\odot{\bm{k}}_{r},\qquad\bar{{\bm{e}}}_{r}=\bm{\gamma}_{r}\odot{\bm{e}}_{r}.
+
+(32)
+
+The channel-wise decay has disappeared from the recurrence. It is now carried by the left and right factors of each rank-one edit.
+
+Let
+{\mathbf{K}}
+,
+{\mathbf{V}}
+,
+{\mathbf{B}}
+, and
+{\mathbf{W}}
+contain rows
+{\bm{k}}_{r}^{\top}
+,
+{\bm{v}}_{r}^{\top}
+,
+{\bm{b}}_{r}^{\top}
+, and
+\mathbf{w}_{r}^{\top}
+, respectively. For compact matrix notation, let
+\bm{\gamma}
+contain rows
+\bm{\gamma}_{r}^{\top}
+. Let
+\bar{{\mathbf{K}}}
+,
+\bar{{\mathbf{E}}}
+, and
+{\mathbf{Z}}
+contain rows
+\bar{{\bm{k}}}_{r}^{\top}
+,
+\bar{{\bm{e}}}_{r}^{\top}
+, and
+{\bm{z}}_{r}^{\top}
+. Equivalently,
+
+\displaystyle\bar{{\mathbf{K}}}=\bm{\gamma}^{-1}\odot{\mathbf{K}},\qquad\bar{{\mathbf{E}}}=\bm{\gamma}\odot({\mathbf{B}}\odot{\mathbf{K}}),\qquad{\mathbf{Z}}={\mathbf{W}}\odot{\mathbf{V}}.
+
+(33)
+
+Define
+
+\displaystyle{\mathbf{T}}=\operatorname{tril}(\bar{{\mathbf{E}}}\bar{{\mathbf{K}}}^{\top},-1),\qquad{\mathbf{A}}=({\mathbf{I}}+{\mathbf{T}})^{-1},\qquad{\mathbf{Y}}={\mathbf{A}}\bar{{\mathbf{E}}},\qquad{\mathbf{U}}={\mathbf{A}}{\mathbf{Z}}.
+
+(34)
+
+Since
+{\mathbf{T}}
+is strictly lower triangular,
+{\mathbf{A}}
+is lower triangular with unit diagonal and is obtained by forward substitution.
+
+A.2
+Compact state formula
+
+Define
+
+\displaystyle{\mathbf{R}}={\mathbf{U}}-{\mathbf{Y}}{\mathbf{S}}_{0}.
+
+(35)
+
+Let row
+r
+of
+{\mathbf{R}}
+be
+\bm{\rho}_{r}^{\top}
+, where
+\bm{\rho}_{r}\in\mathbb{R}^{d_{v}}
+. Then the normalized state after any prefix of the chunk is
+
+\displaystyle\widehat{{\mathbf{S}}}_{r}={\mathbf{S}}_{0}+\bar{{\mathbf{K}}}_{\leq r}^{\top}{\mathbf{R}}_{\leq r},
+
+(36)
+
+where
+\bar{{\mathbf{K}}}_{\leq r}
+and
+{\mathbf{R}}_{\leq r}
+denote the first
+r
+rows.
+
+To prove Eq.
+36
+, write the rank-one increment at step
+r
+as
+\bar{{\bm{k}}}_{r}\bm{\rho}_{r}^{\top}
+. From Eq.
+32
+, the residual row is
+
+\displaystyle\bm{\rho}_{r}^{\top}={\bm{z}}_{r}^{\top}-\bar{{\bm{e}}}_{r}^{\top}\widehat{{\mathbf{S}}}_{r-1}.
+
+(37)
+
+Equivalently, in column-vector form,
+\bm{\rho}_{r}={\bm{z}}_{r}-\widehat{{\mathbf{S}}}_{r-1}^{\top}\bar{{\bm{e}}}_{r}
+. Using the induction hypothesis
+\widehat{{\mathbf{S}}}_{r-1}={\mathbf{S}}_{0}+\sum_{s<r}\bar{{\bm{k}}}_{s}\bm{\rho}_{s}^{\top}
+gives
+
+\displaystyle\bm{\rho}_{r}^{\top}={\bm{z}}_{r}^{\top}-\bar{{\bm{e}}}_{r}^{\top}{\mathbf{S}}_{0}-\sum_{s<r}\bar{{\bm{e}}}_{r}^{\top}\bar{{\bm{k}}}_{s}\,\bm{\rho}_{s}^{\top}.
+
+(38)
+
+Since
+{\mathbf{T}}_{rs}=\bar{{\bm{e}}}_{r}^{\top}\bar{{\bm{k}}}_{s}
+for
+s<r
+and
+{\mathbf{T}}_{rs}=0
+otherwise, stacking these residual rows over the chunk yields
+
+\displaystyle({\mathbf{I}}+{\mathbf{T}}){\mathbf{R}}={\mathbf{Z}}-\bar{{\mathbf{E}}}{\mathbf{S}}_{0}.
+
+(39)
+
+Multiplying by
+{\mathbf{A}}
+gives
+{\mathbf{R}}={\mathbf{A}}{\mathbf{Z}}-{\mathbf{A}}\bar{{\mathbf{E}}}{\mathbf{S}}_{0}={\mathbf{U}}-{\mathbf{Y}}{\mathbf{S}}_{0}
+, which is Eq.
+35
+. Substituting the resulting increments into the normalized recurrence proves Eq.
+36
+.
+
+Multiplying Eq.
+36
+by
+\operatorname{Diag}(\bm{\gamma}_{C})
+gives the end-of-chunk state
+
+\displaystyle{\mathbf{S}}_{C}=\operatorname{Diag}(\bm{\gamma}_{C}){\mathbf{S}}_{0}+{\mathbf{K}}_{\mathrm{tail}}^{\top}\bigl({\mathbf{U}}-{\mathbf{Y}}{\mathbf{S}}_{0}\bigr),
+
+(40)
+
+where row
+r
+of
+{\mathbf{K}}_{\mathrm{tail}}
+is
+
+\displaystyle({\mathbf{K}}_{\mathrm{tail}})_{r,:}=\bigl((\bm{\gamma}_{C}/\bm{\gamma}_{r})\odot{\bm{k}}_{r}\bigr)^{\top}.
+
+(41)
+
+This is Eq.
+23
+in the main text.
+
+A.3
+Compact output formula
+
+The output at token
+r
+is the column vector
+{\bm{o}}_{r}={\mathbf{S}}_{r}^{\top}{\bm{q}}_{r}
+. It is convenient to write the corresponding row vector. Using Eq.
+36
+,
+
+\displaystyle{\bm{o}}_{r}^{\top}=(\bm{\gamma}_{r}\odot{\bm{q}}_{r})^{\top}{\mathbf{S}}_{0}+\sum_{s\leq r}\bigl[{\bm{q}}_{r}^{\top}\operatorname{Diag}(\bm{\gamma}_{r}/\bm{\gamma}_{s}){\bm{k}}_{s}\bigr]\bm{\rho}_{s}^{\top}.
+
+(42)
+
+Define
+{\mathbf{Q}}_{\gamma}
+by row
+({\mathbf{Q}}_{\gamma})_{r,:}=(\bm{\gamma}_{r}\odot{\bm{q}}_{r})^{\top}
+and define the causal score matrix
+
+\displaystyle({\mathbf{A}}_{qk})_{rs}=\mathbf{1}_{r\geq s}{\bm{q}}_{r}^{\top}\operatorname{Diag}(\bm{\gamma}_{r}/\bm{\gamma}_{s}){\bm{k}}_{s}.
+
+(43)
+
+Let
+{\mathbf{O}}
+contain rows
+{\bm{o}}_{r}^{\top}
+. Stacking Eq.
+42
+over the chunk gives
+
+\displaystyle{\mathbf{O}}={\mathbf{Q}}_{\gamma}{\mathbf{S}}_{0}+{\mathbf{A}}_{qk}\bigl({\mathbf{U}}-{\mathbf{Y}}{\mathbf{S}}_{0}\bigr),
+
+(44)
+
+which is Eq.
+24
+in the main text.
+
+A.4
+Row recurrences
+
+The matrices
+{\mathbf{Y}}
+and
+{\mathbf{U}}
+can also be written row by row. Let row
+r
+of
+{\mathbf{Y}}
+be
+{\bm{y}}_{r}^{\top}
+and row
+r
+of
+{\mathbf{U}}
+be
+\mathbf{u}_{r}^{\top}
+. Since
+({\mathbf{I}}+{\mathbf{T}}){\mathbf{Y}}=\bar{{\mathbf{E}}}
+and
+({\mathbf{I}}+{\mathbf{T}}){\mathbf{U}}={\mathbf{Z}}
+,
+
+\displaystyle{\bm{y}}_{r}^{\top}
+
+\displaystyle=\bar{{\bm{e}}}_{r}^{\top}-\sum_{s<r}\bar{{\bm{e}}}_{r}^{\top}\bar{{\bm{k}}}_{s}\,{\bm{y}}_{s}^{\top},
+
+(45)
+
+\displaystyle\mathbf{u}_{r}^{\top}
+
+\displaystyle={\bm{z}}_{r}^{\top}-\sum_{s<r}\bar{{\bm{e}}}_{r}^{\top}\bar{{\bm{k}}}_{s}\,\mathbf{u}_{s}^{\top}.
+
+(46)
+
+Both auxiliaries solve the same lower triangular system with different right-hand sides. This is why the same WY inverse can be shared by the erase-side and write-side computations.
+
+A.5
+Tied-gate reductions
+
+If
+{\bm{b}}_{r}=\beta_{r}\mathbf{1}_{d_{k}}
+and
+\mathbf{w}_{r}=\beta_{r}\mathbf{1}_{d_{v}}
+, then
+{\bm{e}}_{r}=\beta_{r}{\bm{k}}_{r}
+and
+{\bm{z}}_{r}=\beta_{r}{\bm{v}}_{r}
+. Equation
+29
+becomes the KDA update. If the decay is also tied as
+{\bm{\alpha}}_{r}=\alpha_{r}\mathbf{1}_{d_{k}}
+, the recurrence becomes Gated DeltaNet. Thus KDA and Gated DeltaNet are recovered by tying the channel gates rather than by changing the algorithm.
+
+The same reduction holds for the chunkwise form. Under the KDA tying, the definitions in Eq.
+33
+give
+
+\displaystyle\bar{{\bm{e}}}_{r}=\bm{\gamma}_{r}\odot(\beta_{r}{\bm{k}}_{r})=\beta_{r}(\bm{\gamma}_{r}\odot{\bm{k}}_{r})=\beta_{r}(\bm{\gamma}_{r}\odot\bm{\gamma}_{r})\odot\bar{{\bm{k}}}_{r},\qquad{\bm{z}}_{r}=\beta_{r}{\bm{v}}_{r}.
+
+(47)
+
+Thus
+{\mathbf{Z}}
+becomes a scalar row scaling of
+{\mathbf{V}}
+, while
+\bar{{\mathbf{E}}}
+becomes the KDA decay-normalized erase factor. In general,
+\bar{{\mathbf{E}}}
+is not a scalar row scaling of
+\bar{{\mathbf{K}}}
+when the decay is channel-wise, since each key channel carries its own factor from
+\bm{\gamma}_{r}
+. Equations
+34
+,
+40
+, and
+44
+therefore reduce to the KDA chunk equations after substituting the tied factors in Eq.
+47
+. If the decay is further tied as in Gated DeltaNet, then
+\bm{\gamma}_{r}=\gamma_{r}\mathbf{1}_{d_{k}}
+and the erase factor simplifies to
+\bar{{\bm{e}}}_{r}=\beta_{r}\gamma_{r}^{2}\bar{{\bm{k}}}_{r}
+, recovering the scalar-decay chunkwise form.
+
+At the gradient level, if a thin wrapper sets
+{\bm{b}}_{r}=\beta_{r}\mathbf{1}_{d_{k}}
+and
+\mathbf{w}_{r}=\beta_{r}\mathbf{1}_{d_{v}}
+, the scalar gradient is
+
+\displaystyle\frac{\partial\mathcal{L}}{\partial\beta_{r}}=\left\langle\frac{\partial\mathcal{L}}{\partial{\bm{b}}_{r}},\mathbf{1}_{d_{k}}\right\rangle+\left\langle\frac{\partial\mathcal{L}}{\partial\mathbf{w}_{r}},\mathbf{1}_{d_{v}}\right\rangle.
+
+(48)
+
+Appendix B
+Backward derivation
+
+We derive the vector-Jacobian products for one chunk using the notation of Appendix
+A
+. Let upstream gradients be
+\mathrm{d}{\mathbf{O}}
+for the chunk output and
+\mathrm{d}{\mathbf{S}}_{C}
+for the end-of-chunk state. The forward equations are
+
+\displaystyle{\mathbf{R}}
+
+\displaystyle={\mathbf{U}}-{\mathbf{Y}}{\mathbf{S}}_{0},
+
+(49)
+
+\displaystyle{\mathbf{O}}
+
+\displaystyle={\mathbf{Q}}_{\gamma}{\mathbf{S}}_{0}+{\mathbf{A}}_{qk}{\mathbf{R}},
+
+(50)
+
+\displaystyle{\mathbf{S}}_{C}
+
+\displaystyle=\operatorname{Diag}(\bm{\gamma}_{C}){\mathbf{S}}_{0}+{\mathbf{K}}_{\mathrm{tail}}^{\top}{\mathbf{R}},
+
+(51)
+
+\displaystyle{\mathbf{U}}
+
+\displaystyle={\mathbf{A}}{\mathbf{Z}},\qquad{\mathbf{Y}}={\mathbf{A}}\bar{{\mathbf{E}}},\qquad{\mathbf{A}}=({\mathbf{I}}+{\mathbf{T}})^{-1},\qquad{\mathbf{T}}=\operatorname{tril}(\bar{{\mathbf{E}}}\bar{{\mathbf{K}}}^{\top},-1).
+
+(52)
+
+B.1
+Output and state paths
+
+From Eq.
+50
+,
+
+\displaystyle\mathrm{d}{\mathbf{A}}_{qk}
+
+\displaystyle\mathrel{+}=\mathrm{d}{\mathbf{O}}\,{\mathbf{R}}^{\top},
+
+(53)
+
+\displaystyle\mathrm{d}{\mathbf{R}}
+
+\displaystyle\mathrel{+}={\mathbf{A}}_{qk}^{\top}\mathrm{d}{\mathbf{O}},
+
+(54)
+
+\displaystyle\mathrm{d}{\mathbf{Q}}_{\gamma}
+
+\displaystyle\mathrel{+}=\mathrm{d}{\mathbf{O}}\,{\mathbf{S}}_{0}^{\top},
+
+(55)
+
+\displaystyle\mathrm{d}{\mathbf{S}}_{0}
+
+\displaystyle\mathrel{+}={\mathbf{Q}}_{\gamma}^{\top}\mathrm{d}{\mathbf{O}}.
+
+(56)
+
+The causal mask is applied to
+\mathrm{d}{\mathbf{A}}_{qk}
+.
+
+From Eq.
+51
+,
+
+\displaystyle\mathrm{d}{\mathbf{R}}
+
+\displaystyle\mathrel{+}={\mathbf{K}}_{\mathrm{tail}}\mathrm{d}{\mathbf{S}}_{C},
+
+(57)
+
+\displaystyle\mathrm{d}{\mathbf{K}}_{\mathrm{tail}}
+
+\displaystyle\mathrel{+}={\mathbf{R}}\,\mathrm{d}{\mathbf{S}}_{C}^{\top},
+
+(58)
+
+\displaystyle\mathrm{d}{\mathbf{S}}_{0}
+
+\displaystyle\mathrel{+}=\operatorname{Diag}(\bm{\gamma}_{C})\mathrm{d}{\mathbf{S}}_{C},
+
+(59)
+
+\displaystyle\mathrm{d}\bm{\gamma}_{C}
+
+\displaystyle\mathrel{+}=\mathrm{rowsum}\bigl(\mathrm{d}{\mathbf{S}}_{C}\odot{\mathbf{S}}_{0}\bigr).
+
+(60)
+
+Here
+\mathrm{rowsum}
+sums over the value dimension and returns a
+d_{k}
+-dimensional vector.
+
+The residual relation in Eq.
+49
+gives
+
+\displaystyle\mathrm{d}{\mathbf{U}}
+
+\displaystyle\mathrel{+}=\mathrm{d}{\mathbf{R}},
+
+(61)
+
+\displaystyle\mathrm{d}{\mathbf{Y}}
+
+\displaystyle\mathrel{+}=-\mathrm{d}{\mathbf{R}}\,{\mathbf{S}}_{0}^{\top},
+
+(62)
+
+\displaystyle\mathrm{d}{\mathbf{S}}_{0}
+
+\displaystyle\mathrel{+}=-{\mathbf{Y}}^{\top}\mathrm{d}{\mathbf{R}}.
+
+(63)
+
+B.2
+Gate-aware WY inverse path
+
+The two auxiliary products yield
+
+\displaystyle\mathrm{d}{\mathbf{A}}
+
+\displaystyle\mathrel{+}=\mathrm{d}{\mathbf{U}}\,{\mathbf{Z}}^{\top},
+
+\displaystyle\mathrm{d}{\mathbf{Z}}
+
+\displaystyle\mathrel{+}={\mathbf{A}}^{\top}\mathrm{d}{\mathbf{U}},
+
+(64)
+
+\displaystyle\mathrm{d}{\mathbf{A}}
+
+\displaystyle\mathrel{+}=\mathrm{d}{\mathbf{Y}}\,\bar{{\mathbf{E}}}^{\top},
+
+\displaystyle\mathrm{d}\bar{{\mathbf{E}}}
+
+\displaystyle\mathrel{+}={\mathbf{A}}^{\top}\mathrm{d}{\mathbf{Y}}.
+
+(65)
+
+Equations
+64
+and
+65
+are the gate-aware accumulation emphasized in Section
+3.4
+. Since
+{\mathbf{Z}}={\mathbf{W}}\odot{\mathbf{V}}
+and
+\bar{{\mathbf{E}}}=\bm{\gamma}\odot({\mathbf{B}}\odot{\mathbf{K}})
+, the gates must appear inside the products that accumulate
+\mathrm{d}{\mathbf{A}}
+. A scalar post-scale is correct only in the tied-gate case.
+
+For the inverse,
+
+\displaystyle\mathrm{d}{\mathbf{T}}=-\operatorname{tril}\bigl({\mathbf{A}}^{\top}\mathrm{d}{\mathbf{A}}{\mathbf{A}}^{\top},-1\bigr).
+
+(66)
+
+The construction of
+{\mathbf{T}}
+gives
+
+\displaystyle\mathrm{d}\bar{{\mathbf{E}}}
+
+\displaystyle\mathrel{+}=\mathrm{d}{\mathbf{T}}\,\bar{{\mathbf{K}}},
+
+(67)
+
+\displaystyle\mathrm{d}\bar{{\mathbf{K}}}
+
+\displaystyle\mathrel{+}=\mathrm{d}{\mathbf{T}}^{\top}\bar{{\mathbf{E}}}.
+
+(68)
+
+Only the strictly lower triangular part of
+\mathrm{d}{\mathbf{T}}
+is used.
+
+B.3
+Scores and tail keys
+
+The score matrix satisfies
+{\mathbf{A}}_{qk}=\operatorname{tril}({\mathbf{Q}}_{\gamma}\bar{{\mathbf{K}}}^{\top})
+. Therefore
+
+\displaystyle\mathrm{d}{\mathbf{Q}}_{\gamma}
+
+\displaystyle\mathrel{+}=\mathrm{d}{\mathbf{A}}_{qk}\,\bar{{\mathbf{K}}},
+
+(69)
+
+\displaystyle\mathrm{d}\bar{{\mathbf{K}}}
+
+\displaystyle\mathrel{+}=\mathrm{d}{\mathbf{A}}_{qk}^{\top}{\mathbf{Q}}_{\gamma}.
+
+(70)
+
+The tail key matrix satisfies
+({\mathbf{K}}_{\mathrm{tail}})_{r}=\bm{\gamma}_{C}\odot\bar{{\bm{k}}}_{r}
+. Hence
+
+\displaystyle\mathrm{d}\bar{{\mathbf{K}}}
+
+\displaystyle\mathrel{+}=\mathrm{d}{\mathbf{K}}_{\mathrm{tail}}\odot\bm{\gamma}_{C},
+
+(71)
+
+\displaystyle\mathrm{d}\bm{\gamma}_{C}
+
+\displaystyle\mathrel{+}=\sum_{r=1}^{C}\mathrm{d}({\mathbf{K}}_{\mathrm{tail}})_{r}\odot\bar{{\bm{k}}}_{r}.
+
+(72)
+
+B.4
+Elementwise gates and cumulative decay
+
+The write-side relation
+{\mathbf{Z}}={\mathbf{W}}\odot{\mathbf{V}}
+gives
+
+\displaystyle\mathrm{d}{\mathbf{W}}
+
+\displaystyle\mathrel{+}=\mathrm{d}{\mathbf{Z}}\odot{\mathbf{V}},
+
+\displaystyle\mathrm{d}{\mathbf{V}}
+
+\displaystyle\mathrel{+}=\mathrm{d}{\mathbf{Z}}\odot{\mathbf{W}}.
+
+(73)
+
+The erase-side relation
+\bar{{\mathbf{E}}}=\bm{\gamma}\odot({\mathbf{B}}\odot{\mathbf{K}})
+gives
+
+\displaystyle\mathrm{d}{\mathbf{B}}
+
+\displaystyle\mathrel{+}=\mathrm{d}\bar{{\mathbf{E}}}\odot\bm{\gamma}\odot{\mathbf{K}},
+
+(74)
+
+\displaystyle\mathrm{d}{\mathbf{K}}
+
+\displaystyle\mathrel{+}=\mathrm{d}\bar{{\mathbf{E}}}\odot\bm{\gamma}\odot{\mathbf{B}},
+
+(75)
+
+\displaystyle\mathrm{d}\bm{\gamma}
+
+\displaystyle\mathrel{+}=\mathrm{d}\bar{{\mathbf{E}}}\odot{\mathbf{B}}\odot{\mathbf{K}}.
+
+(76)
+
+The normalized keys and queries are
+
+\displaystyle\bar{{\mathbf{K}}}=\bm{\gamma}^{-1}\odot{\mathbf{K}},\qquad{\mathbf{Q}}_{\gamma}=\bm{\gamma}\odot{\mathbf{Q}}.
+
+(77)
+
+Their vector-Jacobian products are
+
+\displaystyle\mathrm{d}{\mathbf{K}}
+
+\displaystyle\mathrel{+}=\mathrm{d}\bar{{\mathbf{K}}}\odot\bm{\gamma}^{-1},
+
+(78)
+
+\displaystyle\mathrm{d}\bm{\gamma}
+
+\displaystyle\mathrel{+}=-\mathrm{d}\bar{{\mathbf{K}}}\odot{\mathbf{K}}\odot\bm{\gamma}^{-2},
+
+(79)
+
+\displaystyle\mathrm{d}{\mathbf{Q}}
+
+\displaystyle\mathrel{+}=\mathrm{d}{\mathbf{Q}}_{\gamma}\odot\bm{\gamma},
+
+(80)
+
+\displaystyle\mathrm{d}\bm{\gamma}
+
+\displaystyle\mathrel{+}=\mathrm{d}{\mathbf{Q}}_{\gamma}\odot{\mathbf{Q}}.
+
+(81)
+
+Finally,
+\bm{\gamma}_{r}=\exp(\bm{G}_{r})
+and
+\bm{G}_{r}=\sum_{i\leq r}\bm{g}_{i}
+. Therefore
+
+\displaystyle\mathrm{d}\bm{G}_{r}=\mathrm{d}\bm{\gamma}_{r}\odot\bm{\gamma}_{r},\qquad\mathrm{d}\bm{g}_{i}=\sum_{r\geq i}\mathrm{d}\bm{G}_{r}.
+
+(82)
+
+In implementation this is a reverse cumulative sum over the chunk.
+
+B.5
+Why scalar post-scaling is invalid
+
+In KDA, a scalar
+\beta_{r}
+multiplies both the value right hand side and the erase right hand side. For one row, the contribution to
+\mathrm{d}{\mathbf{A}}
+from the write auxiliary can be factored as
+
+\displaystyle\mathrm{d}\mathbf{u}_{r}\,(\beta_{s}{\bm{v}}_{s})^{\top}=\beta_{s}\,\mathrm{d}\mathbf{u}_{r}{\bm{v}}_{s}^{\top}.
+
+(83)
+
+The scalar factor can be applied after the dot product. Gated DeltaNet-2 replaces
+\beta_{s}{\bm{v}}_{s}
+by
+\mathbf{w}_{s}\odot{\bm{v}}_{s}
+. Since
+\mathbf{w}_{s}
+is a different diagonal operator for every row, there is no row scalar or column scalar that can recover
+
+\displaystyle\mathrm{d}\mathbf{u}_{r}\,(\mathbf{w}_{s}\odot{\bm{v}}_{s})^{\top}
+
+(84)
+
+from
+\mathrm{d}\mathbf{u}_{r}{\bm{v}}_{s}^{\top}
+. The erase side has the same issue with
+{\bm{b}}_{s}\odot{\bm{k}}_{s}
+. The gates must be baked into the dot products in Eq.
+64
+and Eq.
+65
+.
+
+Appendix C
+Layer and kernel implementation
+
+This appendix records the implementation choices needed to reproduce Gated DeltaNet-2. The main text keeps the Triton details brief. Here we describe the computation at the level of kernels and tensor shapes.
+
+C.1
+Layer parameterization
+
+The layer computes short-convolutional projections for
+{\bm{q}}
+,
+{\bm{k}}
+, and
+{\bm{v}}
+, followed by head reshaping. The erase and write gates are produced by independent projections,
+
+\displaystyle{\bm{b}}=\sigma(\operatorname{Proj}_{b}({\bm{x}})),\qquad\mathbf{w}=\sigma(\operatorname{Proj}_{w}({\bm{x}})).
+
+(85)
+
+The erase projection has shape
+d_{\mathrm{model}}\to Hd_{k}
+. The write projection has shape
+d_{\mathrm{model}}\to H_{v}d_{v}
+. If grouped value attention is used with
+H_{v}>H
+, the key-side tensors
+{\bm{q}}
+,
+{\bm{k}}
+, the log-decay tensor
+\bm{g}
+, and
+{\bm{b}}
+are repeated across the value-head group, while
+{\bm{v}}
+and
+\mathbf{w}
+already live on the value-head axis.
+
+The log-decay is computed outside the kernel in fp32,
+
+\displaystyle\bm{g}_{t}=-\exp(\mathbf{a})\odot\operatorname{softplus}(\operatorname{Proj}_{f}({\bm{x}}_{t})+\bm{\delta}).
+
+(86)
+
+The vector
+\mathbf{a}
+is stored per key head and broadcast across the
+d_{k}
+channels of that head. The bias
+\bm{\delta}
+is stored per key channel. The kernel consumes
+\bm{g}_{t}
+directly and forms the local cumulative sums in Eq.
+30
+.
+
+If negative eigenvalues are enabled, only the erase gate is scaled by
+2
+. This changes
+{\bm{b}}_{t}\in[0,1]^{d_{k}}
+into
+{\bm{b}}_{t}\in[0,2]^{d_{k}}
+. The write gate remains in
+[0,1]^{d_{v}}
+.
+
+C.2
+Forward kernels
+
+The chunk size is fixed to
+C=64
+. Each chunk is processed by the following steps.
+
+Intra-chunk products
+
+The first kernel forms the causal score matrix
+{\mathbf{A}}_{qk}
+and the strictly lower matrix
+{\mathbf{T}}
+. The Gated DeltaNet-2 specific computation is the row factor of
+{\mathbf{T}}
+,
+
+\displaystyle T_{rs}=\bar{{\bm{e}}}_{r}^{\top}\bar{{\bm{k}}}_{s}=(\bm{\gamma}_{r}\odot{\bm{b}}_{r}\odot{\bm{k}}_{r})^{\top}(\bm{\gamma}_{s}^{-1}\odot{\bm{k}}_{s})\qquad s<r.
+
+(87)
+
+Thus the erase gate is multiplied into the key tile before the dot product. The score matrix
+{\mathbf{A}}_{qk}
+is unchanged apart from the same decay-normalized key factors.
+
+WY solve
+
+The second kernel solves
+{\mathbf{A}}=({\mathbf{I}}+{\mathbf{T}})^{-1}
+by forward substitution. It then exposes the same lower triangular inverse to both right hand sides. This is the compact WY step used in Eq.
+34
+.
+
+Auxiliary construction
+
+The third kernel builds
+
+\displaystyle{\mathbf{U}}={\mathbf{A}}({\mathbf{W}}\odot{\mathbf{V}}),\qquad{\mathbf{Y}}={\mathbf{A}}\bar{{\mathbf{E}}}.
+
+(88)
+
+The implementation stores
+{\mathbf{Y}}
+using the historical buffer name
+w
+because KDA used the same buffer for its erase-side auxiliary; this buffer is not the write-gate matrix
+{\mathbf{W}}
+. The mathematical role is
+{\mathbf{Y}}
+throughout this paper.
+
+State and output
+
+The inter-chunk state recurrence consumes
+{\mathbf{K}}_{\mathrm{tail}}
+,
+{\mathbf{Y}}
+, and
+{\mathbf{U}}
+, and applies Eq.
+40
+. The output kernel consumes
+{\mathbf{Q}}_{\gamma}
+,
+{\mathbf{A}}_{qk}
+, and
+{\mathbf{R}}={\mathbf{U}}-{\mathbf{Y}}{\mathbf{S}}_{0}
+, and applies Eq.
+44
+. These two kernels do not depend on how the gate factors were produced, so they share the same matrix shapes as KDA.
+
+C.3
+Backward kernels
+
+The backward pass mirrors Appendix
+B
+.
+
+Output vector-Jacobian product
+
+The first backward kernel computes
+\mathrm{d}{\mathbf{A}}_{qk}
+and the output-path contribution to
+\mathrm{d}{\mathbf{R}}
+from Eq.
+53
+and Eq.
+54
+. It is structure-equivalent to the KDA output vector-Jacobian product because it only sees
+{\mathbf{R}}
+.
+
+State vector-Jacobian product
+
+The second backward kernel propagates
+\mathrm{d}{\mathbf{S}}_{C}
+through Eq.
+51
+. It is also structure-equivalent to the KDA state vector-Jacobian product because it consumes
+{\mathbf{K}}_{\mathrm{tail}}
+,
+{\mathbf{Y}}
+, and
+{\mathbf{U}}
+as already formed tensors.
+
+Gate-aware WY vector-Jacobian product
+
+The third backward kernel implements Eq.
+64
+, Eq.
+65
+, and Eq.
+66
+. This is the main Gated DeltaNet-2 specific kernel. It accumulates
+\mathrm{d}{\mathbf{A}}
+with
+{\mathbf{Z}}^{\top}=({\mathbf{W}}\odot{\mathbf{V}})^{\top}
+and
+\bar{{\mathbf{E}}}^{\top}=(\bm{\gamma}\odot{\mathbf{B}}\odot{\mathbf{K}})^{\top}
+. It also emits the direct gradients
+
+\displaystyle\mathrm{d}{\mathbf{W}}=\mathrm{d}{\mathbf{Z}}\odot{\mathbf{V}},\qquad\mathrm{d}{\mathbf{V}}=\mathrm{d}{\mathbf{Z}}\odot{\mathbf{W}},\qquad\mathrm{d}{\mathbf{B}}\mathrel{+}=\mathrm{d}\bar{{\mathbf{E}}}\odot\bm{\gamma}\odot{\mathbf{K}}.
+
+(89)
+
+The erase-gate gradient has shape
+B\times T\times H\times d_{k}
+. The write-gate gradient has shape
+B\times T\times H_{v}\times d_{v}
+.
+
+Intra-chunk vector-Jacobian product
+
+The fourth backward kernel propagates through
+{\mathbf{A}}_{qk}
+and
+{\mathbf{T}}
+. It adds the remaining contributions to
+\mathrm{d}{\mathbf{Q}}
+,
+\mathrm{d}{\mathbf{K}}
+,
+\mathrm{d}{\mathbf{B}}
+, and
+\mathrm{d}\bm{g}
+. The dependence on the cumulative decay is reduced by a reverse cumulative sum, as in Eq.
+82
+.
+
+C.4
+Autotuning and hardware dispatch
+
+The fused WY backward kernel uses the same matrix shapes as the forward solve, but it has a denser set of live accumulators because it emits gradients for
+{\mathbf{B}}
+and
+{\mathbf{W}}
+. On Hopper GPUs we restrict the warp search for this kernel to two and four warps, since the eight-warp schedule can trigger a Triton WGMMA layout assertion for the
+64\times 64
+accumulator. On Ampere GPUs the full search space is retained. This restriction changes only the schedule, not the mathematical operation.
+
+C.5
+Recurrent decoding kernel
+
+A forward-only recurrent kernel is provided for autoregressive decoding at short sequence lengths. It applies Eq.
+29
+token by token. The kernel keeps the state in fp32, multiplies it by
+\exp(\bm{g}_{t})
+, reads the decayed state along
+{\bm{b}}_{t}\odot{\bm{k}}_{t}
+, writes
+\mathbf{w}_{t}\odot{\bm{v}}_{t}
+along
+{\bm{k}}_{t}
+, and returns
+{\mathbf{S}}_{t}^{\top}{\bm{q}}_{t}
+. Training uses the chunk kernel.
+
+C.6
+Variable-length sequences
+
+Packed variable-length batches are represented with cumulative sequence lengths. The chunk index construction resets the recurrent state at every sequence boundary. The same layout is used by the chunk forward, the chunk backward, and the recurrent decoding kernel. Padding is removed before the layer and restored after the output projection.
+
+Appendix D
+Numerical details and verification
+
+D.1
+Decay precision
+
+The decay gate in Eq.
+86
+is computed in explicit fp32 before entering the kernels. This is important because the local cumulative sum
+\bm{G}_{r}=\sum_{i\leq r}\bm{g}_{i}
+is a path-length-dependent quantity. A low precision mantissa can perturb long products of decays even when each tokenwise gate is small. The kernels therefore receive the log-decay tensor and only compute local cumulative sums and exponentials.
+
+D.2
+Query and key normalization
+
+Queries and keys are L2-normalized per head before the recurrent update. With normalized keys,
+{\bm{k}}_{t}{\bm{k}}_{t}^{\top}
+is a projector in the tied-gate limit. In Gated DeltaNet-2, the erase factor is asymmetric, but normalization still stabilizes the scale of both
+{\mathbf{A}}_{qk}
+and
+{\mathbf{T}}
+. The backward applies the standard L2-normalization vector-Jacobian product.
+
+D.3
+State and accumulator dtypes
+
+The recurrent state is stored in fp32 across chunks and during recurrent decoding. Matrix multiplication accumulators use fp32. The layer output is cast back to the model dtype at the kernel boundary. The WY auxiliaries may be stored in the model dtype after fp32 accumulation, since they are recomputed when the memory-saving training path is used.
+
+D.4
+WY solve precision
+
+The triangular solve for
+{\mathbf{A}}=({\mathbf{I}}+{\mathbf{T}})^{-1}
+is the most precision-sensitive part of the chunk computation. Errors in this solve are propagated through dependent forward-substitution steps. The implementation therefore exposes an explicit precision flag for the solve. The conservative IEEE fp32 path is used when required by the hardware check, while the remaining matrix products can use the faster tensor-core path.
+
+D.5
+Initialization and output gate
+
+All linear layers are initialized with Xavier uniform weights and gain
+2^{-2.5}
+. Biases are initialized to zero when present. After the attention computation, the output is passed through an RMSNorm and SiLU gate before the final output projection. These choices match the training recipe used for the Gated DeltaNet family and keep the early recurrent state magnitudes controlled.
+
+D.6
+Correctness checks
+
+We verified the chunkwise forward against a tokenwise recurrent reference for random configurations covering different sequence lengths, head counts, key dimensions, value dimensions, initial states, packed layouts, and dtypes. We verified the backward against autograd through the recurrent reference. In fp64 reference tests, gradients for
+{\mathbf{Q}}
+,
+{\mathbf{K}}
+,
+{\mathbf{V}}
+,
+{\mathbf{B}}
+,
+{\mathbf{W}}
+, the log-decay, and the initial state agree to machine precision. In production fp32, differences are at the expected tensor-core accumulation noise level. In bfloat16, the error follows the bfloat16 mantissa.
+
+Appendix E
+Experimental settings
+
+E.1
+Training
+
+We evaluate Gated DeltaNet-2 against a Transformer baseline and recent recurrent architectures, including Mamba-2
+[
+8
+]
+, Gated DeltaNet
+[
+11
+]
+, Kimi Delta Attention (KDA)
+[
+12
+]
+, and Mamba-3
+[
+13
+]
+. For each recurrent architecture, we train a recurrent-only model and a hybrid model. The hybrid model follows Section
+3.5
+, using the same recurrent token mixer together with sliding-window attention (SWA) under the same residual block structure. For Mamba-3, we evaluate both SISO and MIMO variants. The Mamba-3 MIMO model uses rank
+R=4
+.
+
+For fair recurrent comparisons, we match both parameter count and main recurrent state size. Gated DeltaNet, KDA, and Gated DeltaNet-2 use
+H=16
+heads with
+d_{k}=128
+and
+d_{v}=128
+, giving a per-layer recurrent state of
+
+\displaystyle Hd_{k}d_{v}=16\cdot 128\cdot 128=262{,}144
+
+(90)
+
+floats per batch element. Since
+d_{\mathrm{model}}=2048
+, this equals
+128d_{\mathrm{model}}
+. For Mamba-2 and Mamba-3, we use expansion factor
+2
+and head dimension
+64
+, and set
+d_{\mathrm{state}}=64
+. Their main recurrent state size is therefore
+
+\displaystyle(2d_{\mathrm{model}})d_{\mathrm{state}}=4096\cdot 64=262{,}144.
+
+(91)
+
+Mamba-3 MIMO keeps the same main recurrent state size as the SISO variant while adding the rank-
+R
+MIMO parameterization.
+
+Unless stated otherwise, all models have 1.3B parameters and are trained on 100B tokens sampled from FineWeb-Edu
+[
+26
+]
+. We use AdamW with peak learning rate
+4\times 10^{-4}
+, weight decay
+0.1
+, and gradient clipping at
+1.0
+. The learning rate follows cosine annealing with a 1B-token warm-up. The global batch size is 0.5M tokens. The training sequence length is 4K tokens. Hybrid models use a 2K SWA window.
+
+E.2
+Evaluation
+
+Language modeling and common-sense reasoning
+
+We use the evaluation suite commonly adopted for pretrained recurrent language models
+[
+41
+]
+. Language modeling quality is measured by perplexity on WikiText
+[
+27
+, Wiki.]
+and LAMBADA
+[
+28
+, LMB.]
+. For zero-shot transfer, we report LAMBADA accuracy together with PIQA
+[
+29
+]
+, HellaSwag
+[
+30
+, Hella.]
+, WinoGrande
+[
+31
+, Wino.]
+, ARC-Easy and ARC-Challenge
+[
+32
+, ARC-e and ARC-c]
+, OpenBookQA
+[
+33
+, OBQA]
+, Social IQa
+[
+34
+, SIQA]
+, and BoolQ
+[
+35
+]
+. This mix covers next-token prediction, physical and social reasoning, commonsense completion, and elementary science QA.
+
+In-context retrieval
+
+We evaluate retrieval in both controlled synthetic settings and real-data settings. For synthetic retrieval, we use Single Needle-In-A-Haystack (S-NIAH) and Multi-Key Needle-In-A-Haystack (MK-NIAH) tasks from RULER
+[
+36
+]
+. The S-NIAH suite contains three progressively harder cases. S-NIAH-1 is passkey retrieval, S-NIAH-2 asks for a numerical needle, and S-NIAH-3 asks for a word-based needle. We additionally evaluate MK-NIAH-1 where several distractor key-value pairs are present and the model must return the value associated with one requested key.
+
+For real-world retrieval, we follow
+[
+37
+]
+. The suite includes SWDE
+[
+46
+]
+for structured relation extraction from HTML, FDA
+[
+47
+]
+for key-value retrieval from PDFs, and question-answering datasets including SQuAD
+[
+48
+]
+, TriviaQA
+[
+49
+]
+, DROP
+[
+50
+]
+, and Natural Questions
+[
+51
+]
+.
+

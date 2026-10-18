@@ -1,0 +1,2157 @@
+Characterization-Guided GPU Fault Resilience in NVIDIA MPS
+Rixin Liu 1 , Xingqi Cui 1 , Kaijian Wang 1 , Xinheng Ding 2 , Zirui Liu 2 , Yuke Wang 1 , Jiarong Xing 1
+
+Abstract
+. NVIDIA Multi-Process Service (MPS) enables fine-grained GPU sharing by allowing multiple processes to execute concurrently on the same GPU, making it an important mechanism for improving GPU utilization. However, MPS has weak fault resilience: a fault in one process can terminate all co-running processes, limiting its adoption in resilience-critical settings such as multi-tenant GPU clusters. In this work, we design fault-resilient MPS to solve this problem. Our design is guided by insights from a systematic characterization of GPU faults and a deep analysis of their end-to-end processing pipeline. Based on these insights, we design two complementary mechanisms. A fault isolation mechanism for the dominant memory-related faults that can be fully isolated by software intervention in the open GPU driver kernel module. For other faults whose process is within proprietary software, we design a practical mechanism—fast recovery using virtual memory based GPU-resident state sharing. Our evaluation on different GPUs and workloads shows that these mechanisms can handle corresponding faults effectively with minimal overhead.
+
+
+
+1.
+Introduction
+
+NVIDIA Multi-Process Service (MPS)
+(
+nvidia_mps
+)
+enables concurrent GPU execution across processes with configurable Streaming Multiprocessor (SM) usage limits.
+Such fine-grained sharing is becoming increasingly important for many scenarios, such as small model serving
+(
+phi
+;
+mobilellm
+)
+and interactive ML notebook workloads
+(
+notebookos
+)
+, where rapidly growing GPU capacity makes full-device allocation inefficient and GPU utilization difficult to manage
+(
+msr_gpu_util
+;
+antman
+;
+weng2022mlaas
+)
+.
+
+However, MPS’s weak fault resilience limits its adoption in resilience-critical settings, such as multi-tenant GPU clusters.
+MPS collapses the usual CUDA context boundary by multiplexing all processes (MPS clients) into a single shared context, which contains GPU execution state, such as address spaces, kernels, memory allocations, and streams.
+As a result, a fatal fault from one client can destroy the shared context and terminate all co-running clients, regardless of which client caused the fault.
+In multi-GPU workloads, such as tensor-parallel inference
+(
+megatron
+)
+, the failure can further propagate across devices, bringing down execution on all participating GPUs.
+
+This all-or-nothing failure mode forces operators to choose between utilization and resilience.
+To obtain stronger resilience, deployments either replace MPS with isolation-oriented mechanisms such as exclusive GPU allocation or fixed-size partitioning via Multi-Instance GPU (MIG)
+(
+nvidia_mig
+)
+, or compensate for MPS failures with service-level redundancy such as redundant computation and backup replicas
+(
+bamboo
+;
+oobleck
+)
+.
+Both approaches sacrifice the benefits of fine-grained sharing: MIG can strand capacity due to rigid partition sizes, while standby replicas consume substantial GPU memory due to duplicated model weights and runtime state.
+This motivates a system that preserves MPS-like fine-grained sharing while providing strong fault resilience.
+
+Realizing this goal requires answering several fundamental questions:
+What GPU faults can occur under MPS?
+How are they processed across the GPU hardware and software stack?
+Can the stack be enhanced to confine faults to the faulting client through software intervention?
+And when isolation is infeasible, can recovery be made fast enough to minimize disruption?
+To the best of our knowledge, no prior work has explored these questions.
+
+Until recently, answering these questions was impossible because NVIDIA GPUs expose only narrow, high-level abstractions to applications, while fault handling spans hardware, firmware, and proprietary driver components.
+The open-sourcing of NVIDIA’s GPU kernel modules
+(
+open_gpu_kernel_modules
+)
+creates a new opportunity to investigate the fault-handling implementations.
+However, this still remains a challenging job because the relevant fault-handling logic remains largely undocumented and spans deep, recursive call chains across multiple software layers, requiring substantial efforts to analyze systematically and comprehensively.
+
+Table 1
+.
+GPU fault categories and resiliency solutions.
+
+Category
+
+Count
+
+Handler
+
+Solution
+
+MMU Faults
+
+14
+
+Open-source UVM
+
+Isolation (§
+5
+)
+
+SM Faults
+
+5
+
+Closed-source RM/GSP
+
+Fast Recovery (§
+6
+)
+
+Device Faults
+
+–
+
+Full GPU reset
+
+Out of scope
+
+In this work, we first present a systematic GPU fault characterization (§
+4
+).
+It classifies 19 GPU fault scenarios using two principles based on their fault raisers and properties.
+At the top level, these faults fall into three categories—Memory Management Unit (MMU) Faults, SM Faults, and Device Faults—as summarized in Table
+1
+.
+We further trace their end-to-end processing path, from detection to fatality determination and propagation.
+This analysis yields four design insights for fault-resilient MPS.
+The key insight is that MMU faults can be fully isolated by enhancing the open-source kernel modules, whereas SM faults are processed largely by closed-source firmware, making fast recovery the practical resilience strategy.
+
+Guided by this characterization, we first design a fault isolation mechanism for MMU faults.
+The challenge here is to intercept a fatal fault and terminate only the faulting client without leaving the GPU stack in an inconsistent state that disrupts co-running clients.
+Our insight is that NVIDIA’s Unified Virtual Memory (UVM) module
+(
+open_gpu_kernel_modules
+)
+, originally designed to support GPU page faults for memory oversubscription,
+provides the visibility and control needed for such interception.
+Leveraging UVM, we redirect fatal accesses to dummy pages before propagation, making the fault appear resolved from the hardware’s perspective and leaving no inconsistent GPU state.
+Together with client-granularity termination, this confines the fault to the faulting client while allowing co-running clients to continue execution.
+This mechanism isolates all MMU faults, which are the most frequent class of GPU faults, accounting for 94% in a recent resilience study of over 2.1 millions of H100 GPU hours
+(
+story-two-gpus
+)
+.
+
+We next design a fast recovery mechanism for SM faults.
+The key goal is to restore execution as quickly as possible to minimize service disruption.
+We use Large Language Model (LLM) serving as a representative case because it is a demanding GPU sharing workload and particularly challenging for fast recovery: it maintains large persistent GPU state (e.g., model weights and KV caches) under tight latency requirements.
+Naïvely reloading model weights and reconstructing KV caches can incur tens to hundreds of seconds of downtime.
+To solve this, we use NVIDIA’s Virtual Memory Management (VMM) API
+(
+cuda_vmm
+)
+to enable cross-process state reuse by mapping the same physical GPU memory into both active and standby processes.
+However, VMM preserves only GPU-resident state; by itself, it does not give the standby the runtime metadata needed to interpret that state, such as request progress and KV cache mappings.
+We therefore synchronize this lightweight metadata between the active and standby processes, allowing the standby to resume from the existing KV cache instead of reconstructing it from scratch.
+Together, this achieves millisecond-level recovery.
+
+We implement fault isolation by modifying the open-source UVM kernel module, and implement fast recovery using a build-time
+libcuda.so.1
+interceptor together with vLLM
+(
+vllm
+)
+integration patches.
+To trigger GPU faults efficiently and deterministically for testing, we also develop a fault-injection module (§
+A
+).
+Our evaluation on NVIDIA L40 and H100 GPUs shows that isolation contains all propagating MMU fault combinations with zero throughput overhead.
+For SM faults, fast recovery achieves millisecond-level failover for models from 0.5B to 14B, reducing recovery time from 73.4–1359.1 ms to 31.1–80.6 ms (2.4
+\times
+–16.9
+\times
+speedup) compared to the state of the art,
+while imposing less than 1% throughput overhead during fault-free execution.
+Additional experiments with diffusion
+(
+diffusion
+)
+and ResNet
+(
+resnet
+)
+workloads show that the benefits extend beyond LLM serving.
+
+2.
+Background
+
+Figure 1
+.
+Illustration of the GPU execution model.
+
+2.1.
+GPU Execution Model
+
+Figure
+1
+illustrates NVIDIA GPUs’ execution model.
+
+User space (①).
+
+A GPU application interacts with the hardware through the CUDA runtime, which manages GPU execution.
+The key abstraction is the
+CUDA context
+: it encapsulates the process’s GPU state and serves as the unit of user-level GPU resource management.
+Within a context, applications issue work through
+streams
+, First-In, First-Out (FIFO) command queues whose operations execute in submission order; operations in different streams may run concurrently.
+
+Channels and TSGs (②).
+
+Each stream maps to a
+channel
+, whose pushbuffer stages commands to the GPU.
+Channels are grouped into a
+Time Slice Group
+(TSG), and the GPU hardware scheduler round-robins time slices across TSGs.
+During a TSG’s time slice, the scheduler scans its channels for pending commands and may dispatch work from multiple channels concurrently for spatial parallelism.
+
+MPS (③).
+
+Under conventional multi-process execution, each process owns an isolated CUDA context with its own TSG (Figure
+1
+, left), so different processes’ kernels can only alternate through time-slice rotation and never truly execute concurrently.
+MPS
+(
+nvidia_mps
+)
+overlays this model through a server-client architecture managed by a background
+MPS daemon
+, which launches a persistent
+MPS server
+and exposes a control interfaces for client management.
+The MPS server multiplexes all clients’ channels into a shared CUDA context and a single TSG (Figure
+1
+, right).
+This places channels from different processes in the same TSG, allowing their kernels to be dispatched concurrently within one time slice.
+In effect, MPS turns cross-process time-division multiplexing into intra-context spatial sharing.
+
+Driver modules (④).
+
+The scheduling structures above, including channels and TSGs, are created and managed by the GPU driver.
+Two components are particularly relevant.
+The
+UVM module
+(
+nvidia-uvm
+) is an open-source kernel module responsible for GPU memory management, e.g., page-fault handling and page migration.
+The
+Resource Manager
+(RM) implements hardware resource management, e.g., the creation, destruction, and scheduling configuration of channels and TSGs; much of this logic runs as closed-source proprietary firmware on the on-chip
+GPU System Processor
+(GSP).
+
+Hardware engines (⑤).
+
+Once the driver configures these structures, the hardware executes work as follows:
+the
+Push Buffer DMA
+(PBDMA) unit serves as the host interface, reading commands from the selected channel’s pushbuffer, parsing them, and dispatching them to the appropriate GPU engine for execution:
+the Compute/Graphics Engine, composed of an array of
+Streaming Multiprocessors
+(SMs), executes computation kernels, while the
+Copy Engine
+(CE) handles data movement between GPU memory, CPU memory, and peer devices.
+All engines access GPU memory through the
+Memory Management Unit
+(MMU), which translates virtual addresses to physical addresses.
+
+2.2.
+GPU Memory Model
+
+cudaMalloc
+and VMM APIs.
+
+cudaMalloc
+is the traditional and most common GPU memory allocation interface for device-resident memory.
+It combines physical allocation and virtual mapping in one operation, leaving applications with no control over the underlying mapping.
+The VMM API
+(
+cuda_vmm
+)
+separates these steps:
+cuMemCreate
+creates a physical allocation, while
+cuMemMap
+maps it into a virtual address range.
+This decoupling enables zero-copy cross-process sharing, since the same physical allocation can be mapped into multiple processes’ address spaces and remains valid while any mapping or handle still references it.
+
+Unified Virtual Memory (UVM).
+
+UVM managed memory, allocated through
+cudaMallocManaged
+, provides a unified address space accessible by both the CPU and GPU.
+Unlike
+cudaMalloc
+, it initially reserves only a virtual address range; physical pages are allocated and mapped lazily on first access.
+When the GPU touches an unmapped address, the MMU raises a page fault, and the UVM driver allocates and maps a physical page before resuming execution.
+If the page is resident in CPU memory, UVM first migrates it to GPU memory via DMA.
+Regardless of allocation method, UVM tracks all memory regions as
+VA ranges
+and classifies them by the level of fault handling they receive.
+Memory allocated through
+cudaMalloc
+or the VMM API is registered as
+external ranges
+, for which UVM does not service page faults.
+Only
+cudaMallocManaged
+memory is registered as
+managed ranges
+, which receives full page fault handling support.
+
+3.
+Motivation
+
+3.1.
+The Need of Fine-Grained GPU Sharing
+
+Low GPU utilization remains a persistent challenge in modern AI infrastructure, driven by two structural trends.
+First, GPU capacity is scaling rapidly, from 80 GB of HBM and multi-PFLOP compute in H100 GPUs
+(
+nvidia-h100-whitepaper
+)
+to hundreds of GB of HBM and tens of PFLOPS in next-generation GPUs
+(
+nvidia-blackwell-brief
+)
+.
+Second, AI workloads are becoming more diverse and heterogeneous, small language models are widely deployed
+(
+phi
+;
+mobilellm
+)
+, inference traffic is bursty and unpredictable
+(
+qoserve
+)
+, and long-tail RL workloads often exhibit irregular execution and low effective parallelism
+(
+gmi
+;
+reason
+)
+.
+Together, these trends make it difficult for many workloads to fully utilize modern GPUs.
+As a result, this demand has motivated many GPU-sharing systems built on NVIDIA’s native MPS
+(
+nvidia_mps
+)
+and MIG
+(
+nvidia_mig
+)
+, as described in §
+9
+.
+
+3.2.
+The Sharing-Isolation Dilemma
+
+However, today’s GPU sharing faces a fundamental tradeoff between utilization and fault isolation.
+
+High Utilization, No Isolation:
+
+MPS
+(
+nvidia_mps
+)
+enables fine-grained SM sharing by allowing multiple client processes to share GPU execution resources, improving utilization through tighter workload packing.
+However, MPS multiplexes clients within a shared CUDA context.
+When a fatal fault occurs, this shared context can be destroyed, terminating all co-running clients regardless of which client caused the fault.
+Achieving resilient GPU sharing under MPS therefore requires external redundancy, such as backup services, which can double GPU resource usage and undermine the goal of GPU sharing.
+
+Full Isolation, Low Utilization.
+
+MIG
+(
+nvidia_mig
+)
+partitions a GPU into hardware-isolated instances, providing strong fault isolation.
+However, MIG offers limited partition flexibility: a GPU supports at most seven instances, with only a small set of fixed instance sizes.
+Workloads whose resource demands do not match these predefined sizes can leave substantial GPU capacity stranded.
+Moreover, MIG partitions cannot be reconfigured without draining running workloads, making it poorly suited to environments with fluctuating demand.
+
+To break this dilemma, this paper asks whether MPS can support fine-grained GPU sharing with fault resilience: fault isolation where possible with fast recovery where necessary.
+To the best of our knowledge, no prior work has explored this question.
+The closest attempt is MuxFlow
+(
+muxflow
+)
+, which identifies faults caused by incorrect client termination under MPS.
+However, it does not address faults that arise during GPU execution, such as illegal memory accesses.
+
+3.3.
+Our Work: Fault-Resilient MPS
+
+We break this sharing–isolation dilemma by making MPS fault-resilient, preserving fine-grained GPU sharing while adding strong fault resiliency.
+This broadens MPS-based GPU sharing to resiliency-critical deployments, enabling operators to improve utilization without sacrificing fault resiliency.
+
+This work includes three components.
+First, we systematically characterize GPU faults under MPS, classifying 19 fault scenarios and tracing their end-to-end processing paths from detection to fatality determination and propagation (§
+4
+).
+This provides insights for our fault isolation and fast recovery design.
+Second, we design a UVM-based fault isolation mechanism for MMU faults, intercepting them in the open GPU kernel module and confining their impact to the faulting client (§
+5
+).
+Third, for SM faults that are handled inside proprietary components and therefore difficult to intercept directly, we design a VMM-based active-standby recovery mechanism that reuses GPU-resident state to restore execution in milliseconds (§
+6
+).
+
+4.
+GPU Fault Characterization
+
+Table 2
+.
+GPU Fault Taxonomy. Unreachable combinations (gray cells) cannot be triggered from user-space CUDA programs.
+
+Category
+
+#
+
+Replayability.
+
+Fatality Stage
+
+Serviceability
+
+Fault Scenario
+
+Faulting
+
+Engine
+
+Reachability
+
+Propagates
+
+Solution
+
+MMU Faults
+
+Replayable
+
+Parse-time
+
+Non-serviceable
+
+HW error conditions
+
+SM
+
+unreachable
+
+n/a
+
+N/A
+
+1
+
+Deferred to servicing
+
+Non-serviceable
+
+Out-of-bounds access (OOB)
+
+SM
+
+Yes
+
+Yes
+
+M1 (§
+5
+)
+
+2
+
+Access mismatch (CPU-resident)
+
+SM
+
+Yes
+
+Yes
+
+M2 (§
+5
+)
+
+3
+
+Access mismatch (GPU-resident)
+
+SM
+
+Yes
+
+Yes
+
+M2 (§
+5
+)
+
+4
+
+Access mismatch (VMM memory)
+
+SM
+
+Yes
+
+Yes
+
+M3 (§
+5
+)
+
+5
+
+Zombie range access
+
+SM
+
+ioctl
+
+Yes
+
+M2 (§
+5
+)
+
+6
+
+Non-migratable range access
+
+SM
+
+ioctl
+
+Yes
+
+M2 (§
+5
+)
+
+Serviceable
+
+(benign)
+
+Page fault (demand paging)
+
+SM
+
+normal
+
+No
+
+N/A
+
+Invalid prefetch
+
+SM
+
+normal
+
+No
+
+N/A
+
+Non-replayable
+
+Parse-time
+
+Non-serviceable
+
+HW error conditions
+
+CE
+
+unreachable
+
+n/a
+
+N/A
+
+7
+
+Deferred to servicing
+
+Non-serviceable
+
+OOB
+
+CE
+
+Yes
+
+Contained
+
+N/A
+
+8
+
+Access mismatch
+
+CE
+
+Yes
+
+Contained
+
+N/A
+
+9
+
+Zombie range
+
+CE
+
+unreachable
+
+n/a
+
+10
+
+Non-migratable
+
+CE
+
+unreachable
+
+n/a
+
+11
+
+OOB
+
+PBDMA
+
+Yes
+
+Yes
+
+M1 (§
+5
+)
+
+12
+
+Access mismatch
+
+PBDMA
+
+unreachable
+
+n/a
+
+13
+
+Zombie range
+
+PBDMA
+
+unreachable
+
+n/a
+
+14
+
+Non-migratable
+
+PBDMA
+
+unreachable
+
+n/a
+
+Serviceable
+
+(benign)
+
+Page fault
+
+CE
+
+normal
+
+No
+
+N/A
+
+Page fault
+
+PBDMA
+
+normal
+
+No
+
+N/A
+
+SM Faults
+
+Handled entirely within closed-source
+
+RM/GSP firmware. Discovery methodology
+
+is detailed in §
+A
+.
+
+Lane user stack overflow (EXC_2)
+
+SM
+
+Yes
+
+Yes
+
+§
+6
+
+Illegal instruction (EXC_4)
+
+SM
+
+Yes
+
+Yes
+
+§
+6
+
+Shared/local OOB (EXC_5)
+
+SM
+
+Yes
+
+Yes
+
+§
+6
+
+Misaligned address (EXC_6)
+
+SM
+
+Yes
+
+Yes
+
+§
+6
+
+Invalid address space (EXC_7)
+
+SM
+
+Yes
+
+Yes
+
+§
+6
+
+Device Faults
+
+Thermal faults, device failures. GPU entirely unavailable.
+
+Full device reset required. Out of scope.
+
+Although NVIDIA open-sources its GPU kernel modules, the fault-handling logic is not externally documented, and the relevant control flow spans deep, recursive call chains across multiple software layers.
+To provide a knowledge foundation for designing fault-resilient MPS, this section characterizes GPU faults through a systematic study of NVIDIA’s GPU fault-handling infrastructure, guided by three questions:
+
+Q1
+: What types of faults can occur during GPU execution, and how should they be classified?
+
+Q2
+: How does the driver handle a fault from detection to determination as fatal?
+
+Q3
+: How does a fatal fault propagate from the faulting client to co-running clients under MPS?
+
+4.1.
+Systematic and Comprehensive Fault Taxonomy
+
+We first address Q1 through a systematic and comprehensive taxonomy that classifies GPU faults by two principles into three categories spanning 19 distinct scenarios.
+Table
+2
+summarizes the complete taxonomy.
+
+•
+
+Principle 1:
+
+By fault raisers,
+faults are partitioned at the top level into three categories.
+
+•
+
+Principle 2:
+
+By fault properties,
+faults handled by the open-source driver module are further sub-classified based on their properties.
+
+4.1.1.
+GPU Faults by Raisers (Principle 1)
+
+Category 1: MMU Faults
+are raised when the MMU fails to translate a virtual address during a memory access initiated by any of the three faulting engines: SM, CE, or PBDMA.
+These faults are handled entirely within the open-source UVM kernel module, enabling fine-grained observation and modification of the handling path.
+
+Category 2: SM Faults
+are raised when an SM encounters an execution exception.
+Five fault types fall into this category: lane user stack overflow, illegal instruction, shared/local out-of-range access, misaligned address, and invalid address space.
+These faults are handled entirely within closed-source RM/GSP firmware.
+
+Category 3: Device Faults
+are raised by device-level failures, such as thermal faults or uncorrectable hardware errors, that render the entire GPU unavailable and require a full device reset.
+These faults are out of scope for this work.
+
+4.1.2.
+MMU Faults by Properties (Principle 2)
+
+We further classify MMU faults along three fault properties.
+
+Replayability
+indicates whether the hardware will retry to solve the fault.
+This classification is historical: in pre-Pascal architectures, only SM faults supported hardware retry, while CE and PBDMA faults did not.
+Post-Pascal architectures restored retry capability to CE and PBDMA, but UVM retains the original classification, still labeling CE and PBDMA faults as “non-replayable.”
+
+Fatality stage
+then captures
+when
+in the pipeline a fault is determined fatal:
+parse-time fatal
+faults are identified during initial parsing—these correspond to errors that cannot be resolved through any software intervention; while
+deferred-to-servicing
+faults are exposed only when the driver attempts to resolve them.
+
+Serviceability
+next distinguishes the outcome of the servicing stage: serviceable faults are resolved silently by the driver, while non-serviceable faults cannot be resolved and proceed toward fatal propagation and program termination.
+
+Fault Scenarios and Reachability.
+
+As shown in Table
+2
+, the three fault properties partition deferred-to-servicing MMU faults into four base fault conditions: out-of-bounds access (OOB), access mismatch (AM), zombie range access, and non-migratable range access.
+AM further splits into three variants for MMU faults: two by page residency (CPU-resident and GPU-resident) and one for externally managed VMM ranges.
+Crossing these conditions with the three faulting engines (SM, CE, PBDMA) produces 14 engine-fault scenarios.
+Of these, nine are reachable from user-space CUDA programs, while the remaining five (#9, #10, #12, #13, #14) are architecturally unreachable.
+Two additional scenarios, demand paging and invalid prefetch, are serviceable and resolved transparently by the driver.
+Detailed descriptions of fault scenarios and unreachable combinations are in Appendix
+C
+.
+
+4.2.
+Fault Detection and Fatality Determination
+
+We next examine how the GPU detects a fault and determines its fatality, the first two steps in Figure
+2
+.
+
+❶ Detection.
+
+GPU hardware reports fault signals to the driver through two paths.
+(1) SM faults: when an SM encounters an execution exception, the hardware notifies RM/GSP through a global TRAP signal that reports the error type observed on that SM, but carries no channel information.
+(2) MMU faults: when virtual address translation fails, the MMU writes a fault packet into a hardware fault buffer, encoding the faulting virtual address, access type, and fault type.
+
+The two paths differ in attribution and buffering.
+By studying Nouveau
+(
+nouveau
+)
+, the Linux community’s reverse-engineered NVIDIA GPU driver, we find that MMU fault packets include the channel ID of the faulting context, whereas the SM global TRAP path provides no per-channel attribution.
+
+Furthermore, within the MMU path, replayable and non-replayable faults use different buffer ownership: UVM directly manages replayable-fault buffers through hardware GET/PUT registers, while RM/GSP owns non-replayable-fault buffers and copies their contents into a shadow buffer before notifying UVM.
+Despite this difference, both cases are ultimately handled by UVM, which uses the channel ID to identify the faulting client and perform targeted resolution.
+
+Insight #1: The per-channel attribution from the MMU path offers the information needed for faulting client identification.
+
+❷ Fatality Determination.
+
+Once a fault reaches the driver, handling diverges between the two categories.
+SM faults are handled entirely inside the closed-source RM/GSP, making their path opaque to external tracing.
+We therefore focus our analysis on MMU faults.
+
+Upon receiving an interrupt, UVM retrieves fault packets from the buffer through a two-level model: a top-half Interrupt Service Routine (ISR) reads pending entries and queues a bottom-half work item on a kernel worker thread.
+In the bottom half, UVM handles faults according to the three fault properties.
+It first classifies the fault by
+replayability
+.
+For replayable faults, the MMU follows a
+fault-and-stall
+model: it stalls the faulting GPU channel, along with other channels in the same TSG, and waits for UVM to resolve the fault before issuing a replay command.
+For non-replayable faults, the hardware follows a
+fault-and-switch
+model: it immediately preempts the TSG containing the faulting channel, allowing other TSGs to continue execution.
+
+Insight #2: In both cases, fault handling leaves the GPU with no active kernels, providing a clean point to kill the faulting client without risking collateral impact on co-running kernels.
+
+UVM then parses each fault entry and checks for
+fatality
+.
+Some faults are marked fatal during initial parsing when their internal fault type exceeds UVM’s fatality threshold (Table
+2
+, “Parse-time” rows).
+Faults that pass this check proceed to servicing, where UVM determines
+serviceability
+.
+Serviceable faults are benign memory-management events, such as demand paging and invalid prefetch requests (Table
+2
+, “Benign” rows), and are resolved transparently before execution resumes.
+Non-serviceable faults cannot be resolved and are marked fatal at this stage (Table
+2
+, rows #1–#8 and #11).
+
+Insight #3: RM/GSP observes a fatal MMU fault only after UVM reports it; by resolving the fault before that report, we can prevent shared-context teardown.
+
+4.3.
+Fatal Fault Propagation
+
+Figure 2
+.
+The GPU fault lifecycle and its handling process.
+
+A key question for fault isolation is whether every reachable fatal fault propagates to all co-running MPS clients.
+Among the nine reachable fatal MMU fault combinations (#1–#8 and #11), seven propagate to all co-running clients; all five SM faults also propagate through RC recovery.
+Only two MMU combinations, #7 and #8 (CE OOB and CE AM), are naturally contained without affecting other clients.
+
+❸ Within UVM: Fatal Fault Reporting.
+
+Once a fault is classified as fatal (Figure
+2
+, ❷), the driver reports it to the RM/GSP for further action.
+For SM faults, handling already occurs inside RM/GSP, so no additional reporting step is needed.
+For MMU faults, UVM follows one of two observable reporting paths.
+(1) Fatal
+replayable faults
+: UVM issues a Translation Lookaside Buffer (TLB) invalidation command to the faulting GPU channel, after which RM/GSP takes over.
+(2) Fatal
+non-replayable faults
+: UVM schedules the faulting channel for termination and hands the fault packet to the RM/GSP directly.
+
+❹ Within Driver: RC Recovery and Propagation.
+
+Upon receiving the fatal report, the RM/GSP performs Robust Channel (RC) recovery, tearing down
+all
+channels within the affected TSG while other TSGs remain intact.
+This coarse granularity stems from the lack of per-channel attribution in the SM fault path (as described in §
+4.2
+, ❶).
+
+Under MPS, the impact of TSG-level recovery depends on engine-specific sharing policies:
+SM and PBDMA channels from all clients are multiplexed onto a shared GR TSG, whereas each client has an independent CE TSG.
+Thus, a fatal fault from an SM or PBDMA channel destroys the shared GR TSG and terminates all clients bound to the shared CUDA context, regardless of which client caused the fault.
+In contrast, a fatal fault from an CE channel destroys only the faulting client’s CE TSG, naturally containing the error.
+In both cases, RM/GSP writes an error notifier that tools such as
+cuda-memcheck
+can poll, and the CUDA runtime propagates the error to the application through calls such as
+cudaDeviceSynchronize
+.
+
+Insight #4: SM faults lack isolation due to both hardware limitations (i.e., no per-channel identity) and software opacity (i.e., closed-source RM/GSP firmware).
+
+This makes fast recovery the only viable strategy for SM faults with today’s GPU stack.
+
+5.
+MMU Fault Isolation
+
+Building on Insights #1–#3 from §
+4
+, we achieve complete isolation for all nine reachable MMU fault scenarios (#1–#8 and #11 in Table
+2
+) by enhancing the open GPU kernel modules.
+Software-originated MMU faults are the dominant class of critical GPU errors, accounting for 94% of reported faults in a recent study of over 2.1 million of H100 GPU hours
+(
+story-two-gpus
+)
+.
+In the following, we first describe the requirement and challenge of isolating MMU faults, and then present our UVM-based interception design.
+
+5.1.
+Isolation Requirements and Challenges
+
+Requirement: Proper Faulting Client Termination.
+
+When a fatal MMU fault occurs under MPS, the mechanism must terminate only the faulting client while leaving co-running clients unaffected.
+This requires resolving the fault properly, so no stalled channels, preempted TSGs, or inconsistent driver state remain, and the shared CUDA context stays usable for other clients.
+
+Challenge: Hardware-Safe Fatal Fault Suppression.
+
+A naive approach is to intercept the fatal-fault report inside UVM before it reaches RC recovery.
+As shown in §
+4.3
+, both replayable and non-replayable fatal MMU faults eventually pass through UVM-to-RM/GSP reporting paths.
+Suppressing these reports prevents RM/GSP from observing the fatal fault and tearing down the shared CUDA context.
+However, suppression alone does not restore the GPU to a safe executable state.
+For replayable faults, the MMU stalls the faulting GPU channel and waits for the fault to be resolved.
+Suppressing the fatal report only will cause the stalled channel occupying SM resources forever.
+Similarly, for non-replayable faults, the hardware preempts the entire TSG that the faulting channel belongs to.
+Suppression prevents RC recovery from destroying the shared context, but the TSG remains preempted, blocking all co-running clients whose channels reside on the same TSG.
+
+Therefore, a proper isolation mechanism must first resolve the fault from the hardware’s perspective, so that stalled channels can replay or preempted TSG can resume execution, and then cleanly terminate only the faulting client without tearing down the shared CUDA context.
+
+5.2.
+Design
+
+We intercept faults at UVM’s fatality determination point: after a fault has been parsed and classified, but before UVM reports it as fatal to RM/GSP.
+At this point, RC recovery has not yet begun, giving us a narrow window to properly resolve the faults and terminate the faulting client.
+
+5.2.1.
+Dummy Page Redirection
+
+Within the interception window, if a valid memory mapping is installed before UVM classifies the fault as fatal, UVM will resolve the fault through its normal service path.
+From RM/GSP’s perspective, no fatal fault has occurred, so RC recovery is never triggered.
+
+This can be achieved by creating
+dummy page mappings
+through UVM.
+Rather than allocating real memory for the faulting address, we redirect it to a shared, pre-zeroed dummy page from a driver-global pool.
+Because all faults share the same pre-installed dummy page, the mechanism requires no per-fault memory allocation, keeping handling latency minimal.
+The dummy page is also always freshly zeroed, ensuring that the faulting client cannot observe data belonging to co-running clients.
+
+While the dummy page itself is shared across all cases, the specific mechanism for installing it varies by the state of the virtual address range (
+VA range
+, §
+2.2
+) at the fault address, yielding three dispatch paths.
+
+Mechanism 1 (M1): Range Creation.
+This handles faults where no
+VA range
+exists at the faulting address, corresponding to out-of-bounds faults such as SM OOB #1 and PBDMA OOB #11 in Table
+2
+.
+The mechanism creates a new UVM managed range at the fault address and installs a shared 4 KiB dummy page from a driver-global pool, so UVM services the fault through its normal demand-paging path.
+
+Mechanism 2 (M2): Chunk Substitution.
+
+This handles faults where a UVM managed range exists but the target page is not accessible to the faulting processor, such as access-mismatch faults #2, #3, #5, #6 in Table
+2
+.
+It redirects the faulting page by replacing its backing chunk with a dummy chunk.
+If the original page is GPU-resident, the original chunk is freed in the same pass; if it is CPU-resident, the chunk slot is empty before redirection, so only the dummy chunk is allocated.
+In both cases, the final memory footprint matches what UVM would allocate for a legal first-touch operation: exactly one chunk per faulting page.
+
+Mechanism 3 (M3): Range Conversion.
+
+This handles faults on external ranges created through the VMM APIs, such as access-mismatch faults (#4 in Table
+2
+), for which UVM provides no fault servicing.
+To handle these faults, we first destroy the external range and recreate it as a UVM managed range over the same virtual address span.
+Before the service path runs, a shared 2 MiB dummy chunk from the driver-global pool is installed in the block’s chunk array, causing the normal populate logic to short-circuit.
+
+5.2.2.
+Client-Granularity Termination
+
+We then pinpoint the faulting client and terminate it safely.
+
+Faulting Client Identification.
+
+Insight #1 shows that each MMU fault record carries per-channel identity.
+UVM already maintains a mapping from channel instances to owning process IDs, established when each CUDA client registers during initialization.
+At the interception point, we look up the faulting channel’s instance pointer in this existing mapping to identify the faulting client.
+
+Safe Termination.
+
+After identifying the faulting client, a natural mechanism to terminate it is to issue
+SIGKILL
+; however, this is unsafe in the general MPS case.
+As shown by MuxFlow
+(
+muxflow
+)
+, killing an MPS client while its kernels are still executing can tear down the shared GR TSG and propagate the failure to other clients.
+Our mechanism issues
+SIGKILL
+only at the carefully chosen interception point.
+By then, a fault has already occurred, and the hardware has stopped the faulting execution before UVM reports the fault to RM/GSP (Insight #2).
+Thus, the faulting client can be terminated without killing an actively running GPU workload or triggering secondary propagation through the shared GR TSG.
+GPU resources associated with the terminated process are reclaimed automatically during process exit.
+
+6.
+Fast Recovery for SM Faults
+
+The previous section provided isolation for the dominant MMU fault category.
+Following Insight #4, we complement that mechanism with fast recovery for SM faults.
+We first derive the recovery requirements (§
+6.1
+), then present our design (§
+6.2
+).
+
+6.1.
+Recovery Requirements and Challenges
+
+Requirement: Minimizing Disruption and Overhead.
+
+The recovery mechanism must complete as fast as possible to minimize service disruption for affected clients.
+Traditional service-level redundancy
+(
+bamboo
+;
+oobleck
+)
+, such as redundant computation and backup replicas, can provide strong resilience, but is poorly suited to GPU-sharing workloads.
+For ML services, especially LLM serving, each replica consumes substantial GPU memory for model weights and runtime state, reducing sharing capacity and often doubling the resources required to protect a service.
+Thus, recovery must also minimize the additional GPU resource consumption.
+
+In the following, we focus on LLM serving because it is a demanding GPU-sharing workload with large persistent GPU state, tight latency requirements, and high standby-replica cost.
+The same recovery principles also apply to other GPU workloads as we will show in our evaluation.
+
+Figure 3
+.
+Cold restart latency breakdown for vLLM serving (Qwen2.5) across model sizes.
+
+Challenge 1: Slow Cold Restart.
+
+The simplest recovery strategy without a full standby replica is cold restart: terminate the failed process and launch a new instance from scratch.
+However, cold restart is prohibitively slow for LLM-serving workloads due to their large runtime state.
+Figure
+3
+demonstrates this cost.
+Overall, cold restart incurs 16.1–96.6 s of downtime, several orders of magnitude longer than per-token generation, which typically completes in tens of milliseconds.
+This latency consists of three main components.
+First, rebuilding vLLM runtime state—including scheduler initialization, KV-cache pool allocation, and CUDA graph capture—takes 13.0–14.6 s and dominates restart time.
+Second, reloading model weights from disk to GPU memory adds 2.8–79.4 s, increasing with model size.
+Finally, recovering in-flight requests requires recomputing their KV cache by re-prefilling previously processed tokens, adding 0.2–2.5 s for a single 10,000-token prompt.
+
+Challenge 2: GPU-Resident State Reconstruction.
+
+The sleep mode recently introduced by vLLM
+(
+vllm_sleep_mode
+)
+can preserve an engine’s control-plane state while releasing most GPU memory occupied by model weights and runtime buffers.
+When the engine wakes up, it can reuse the preserved runtime metadata, avoiding expensive scheduler initialization, KV-cache pool allocation, and CUDA graph capture.
+Although sleep mode was designed to save GPU resources for idle instances, we leverage it as a lightweight standby primitive for fast recovery.
+A standby process can remain alive in sleep mode, preserving the runtime state needed for quick takeover without fully duplicating the active instance’s GPU footprint.
+However, sleep mode alone is insufficient because recovery still requires reloading model weights and reconstructing the KV cache by re-executing in-flight requests.
+Both costs scale with workload characteristics.
+Weight reload scales with model size, while KV-cache reconstruction scales with prompt and generation length, which can reach thousands of tokens in long-context workloads.
+
+Figure 4
+.
+The fast recovery design overview.
+
+6.2.
+Design
+
+Addressing the above challenges requires preserving GPU-resident state across failures without reconstruction.
+Our key insight is to use NVIDIA’s VMM API
+(
+cuda_vmm
+)
+, which separates virtual address reservation from physical memory mapping and allows physical pages to be shared across processes with independent references.
+By mapping the pages backing model weights and KV cache into both active and standby instances, the standby can keep the state alive after the active crashes, eliminating reconstruction (Figure
+4
+).
+
+The Active-Standby Architecture.
+
+Based on that, we design an active-standby architecture in which the standby is co-located on the same GPU as the active instance, with model weights and KV cache shared through VMM.
+As shown in Figure
+4
+, both instances maintain independent GPU virtual address spaces, but a build-time
+libcuda.so.1
+interceptor redirects their memory allocations through
+cuMemMap
+to the same underlying physical pages.
+To prevent faults from the active process from affecting the standby, we run the standby as a standalone CUDA process outside the MPS session, time-sharing the GPU with the MPS server through normal context switching.
+As discussed in §
+4.3
+, RC recovery destroys only channels within the affected TSG, leaving processes outside the MPS session intact.
+Moreover, because the standby remains in a sleep mode and issues no GPU kernels while the active instance is alive, it consumes no GPU time slices and imposes no execution overhead.
+
+Forward-State Synchronization.
+
+With VMM sharing, the standby can access model weights and KV-cache contents, but it does not know how to interpret them.
+The reason is that the inference engine manages the KV cache using CPU-resident metadata, including a block table that maps each request’s token positions to physical KV-cache blocks.
+We address this with lightweight forward-state synchronization: after every
+N
+forward passes, the active process publishes a compact snapshot of each in-flight request to a shared
+/dev/shm
+-backed ring buffer (Figure
+4
+, top).
+Each snapshot contains the request’s KV block IDs, generated token list, and current generation progress.
+To reduce overhead, we transmit only incremental deltas since the previous snapshot, keeping the synchronization latency below 10
+\mu
+s.
+
+Fault Recovery.
+
+When the standby detects active process exit through socket closure, it wakes up and uses the latest snapshots to reconstruct its runtime state.
+The scheduler then reuses the existing KV blocks, skips prefill, and resumes decoding from the token after the last published position.
+Thus, recovery requires replaying at most
+N
+forward passes to bridge the gap between the latest snapshot and the failure point.
+The synchronization interval
+N
+trades recovery granularity for steady-state overhead: smaller
+N
+reduces replay work, while larger
+N
+lowers synchronization frequency.
+We evaluate this trade-off in §
+7
+and use
+N=16
+by default, which keeps throughput overhead below 1% for models >3B while bounding recovery to at most 16 forward passes.
+
+7.
+Implementation and Evaluation
+
+Implementation.
+
+We implement our fault isolation mechanism by modifying NVIDIA’s open-source UVM kernel module with
+{\sim}
+500 lines of C code.
+Our fast recovery mechanism consists of
+{\sim}
+500 lines of C for the build-time
+libcuda.so.1
+interceptor and
+{\sim}
+500 lines of Python for vLLM integration patches.
+To support characterization and evaluation, we also build a deterministic fault-injection module covering all nine user-reachable MMU Faults scenarios and documented
+CUDA_EXCEPTION
+SM faults.
+Appendix
+A
+provides implementation details for each component.
+All code and artifacts are publicly available at:
+https://github.com/RixinLiu/Fault-Resilient-MPS
+
+Evaluation Goals.
+
+Our evaluation mainly answers the following four questions:
+(1) Does our isolation mechanism properly isolate all identified MMU fault types (§
+7.1
+)?
+(2) Does our recovery mechanism mitigate all SM faults effectively and efficiently (§
+7.2
+)?
+(3) How much overhead does our system introduce (§
+7.3
+)?
+(4) Does our system generalize across different GPUs and model workloads (§
+7.4
+)?
+
+Experimental setup.
+
+Unless otherwise noted, all experiments run on a single NVIDIA L40 GPU (46 GB VRAM) with an AMD EPYC 7763 CPU (28 cores) and 56 GB DRAM, using driver version 580.95.05 and CUDA 13.0.
+We use the Qwen2.5 model family at five sizes (0.5B, 1.5B, 3B, 7B, 14B); experiments that evaluate model-size sensitivity sweep all five sizes, while others fix the model at 14B.
+Faults are triggered deterministically through our fault injection module (§
+A
+).
+For serving workloads, we replay traces from the ShareGPT dataset
+(
+sharegpt
+)
+, which contains real user–ChatGPT conversations.
+We compare against two baselines: cold restart, which relaunches the service from scratch after failure, and a vLLM sleep-mode standby replica (sleep-only), a state-of-the-art in-place recovery baseline that only reloads model weights.
+
+Our evaluation covers all nine reachable MMU fault combinations and all five SM fault types, measures isolation and recovery across five model sizes on both L40 and H100 GPUs, and validates generality on three diverse workloads including LLM serving, diffusion-based image generation, and traditional DNN-based classification.
+
+7.1.
+Effectiveness of Fault Isolation
+
+Table 3
+.
+MMU Fault containment results.
+All seven shared-TSG faults are successfully isolated, while the two per-client CE TSG faults remain confined by design.
+
+#
+
+Fault Type
+
+Shared TSG?
+
+No Isolation
+
+Isolation
+
+1
+
+OOB
+
+yes
+
+DIED
+
+ALIVE
+
+2
+
+AM (CPU-res.)
+
+yes
+
+DIED
+
+ALIVE
+
+3
+
+AM (GPU-res.)
+
+yes
+
+DIED
+
+ALIVE
+
+4
+
+AM (VMM)
+
+yes
+
+DIED
+
+ALIVE
+
+5
+
+Zombie
+
+yes
+
+DIED
+
+ALIVE
+
+6
+
+Non-migr.
+
+yes
+
+DIED
+
+ALIVE
+
+7
+
+OOB (CE)
+
+per-client
+
+ALIVE
+
+ALIVE
+
+8
+
+AM (CE)
+
+per-client
+
+ALIVE
+
+ALIVE
+
+11
+
+OOB (PBDMA)
+
+yes
+
+DIED
+
+ALIVE
+
+Fault Propagation Containment.
+
+We first validate that our isolation mechanism prevents MMU faults in one MPS client from propagating to a co-located client.
+We co-locate two MPS clients: Client A runs our fault-injection module (§
+A
+), while Client B repeatedly launches a kernel and checks for errors after each iteration.
+We inject each of the nine user-reachable MMU fault combinations (#1–#8, #11) into Client A and monitor Client B.
+Table
+3
+summarizes the results.
+With isolation enabled, Client B survives all seven fault combinations that share the GR TSG.
+The remaining two cases, CE OOB and CE AM, are already confined by per-client CE TSGs and leave Client B unaffected even without isolation, consistent with §
+4.3
+.
+Overall, our mechanism isolates all reachable MMU faults.
+
+Figure 5
+.
+Throughput over time under fault isolation.
+
+End-to-End Fault Isolation.
+
+We use LLM serving as an end-to-end case study for cross-client fault isolation.
+We co-locate two MPS clients on the same GPU: Client A runs our fault-injection module, while Client B runs a vLLM server hosting Qwen2.5-14B under a continuous ShareGPT request stream.
+At
+t=0
+, we inject an SM OOB fault (#1) into Client A.
+Our mechanism intercepts the fault, redirects the invalid access to a dummy page, and terminates Client A, while Client B continues serving requests.
+Figure
+5
+reports Client B’s throughput over time, along with no-fault and no-isolation baselines.
+With isolation enabled, Client B’s throughput matches the no-fault baseline, with no visible drop at the injection point, showing that fault handling is transparent to the co-running serving client.
+In contrast, the no-isolation baseline crashes immediately after the injected fault.
+
+Figure 6
+.
+Fault-handling latency of each isolation mechanism compared to a benign demand-paging baseline.
+
+Stall Time During Fault Isolation.
+
+When a GPU fault occurs, the hardware already enters a fault-handling window for the affected TSG: replayable faults stall the TSG until replay, while non-replayable faults switch it out.
+Our isolation mechanism runs within this window to isolate the faulting client’s state before the GPU resumes, so its cost appears as additional stall time for co-running clients.
+We quantify this overhead for all the three dummy page redirection mechanism (§
+5.2.1
+) by triggering a representative fault for each and using in-driver timestamps to measure the interval from fault identification to GPU readiness for replay or resume.
+Figure
+6
+reports the handling time of each mechanism, compared with a benign baseline: a legal one-page UVM demand-paging fault that can occur under memory oversubscription, which takes 225.7
+\mu
+s.
+M1 (Range Creation) completes in 130.9
+\mu
+s because it reuses a pre-installed dummy page from a driver-global pool.
+M2 (Chunk Substitution) takes 2.28–3.28 ms, and M3 (Range Conversion) takes 1.70 ms.
+Thus, all mechanisms finish within a few milliseconds, adding only a short transient stall to co-running clients.
+
+7.2.
+Effectiveness of Fault Recovery
+
+Table 4
+.
+SM Fault recovery coverage. All five fault types trigger successful failover.
+
+#
+
+Fault Type
+
+No Recovery
+
+Recovery
+
+10
+
+illegal_instruction
+
+DIED
+
+ALIVE
+
+11
+
+invalid_addr_space
+
+DIED
+
+ALIVE
+
+12
+
+lane_user_stack_overflow
+
+DIED
+
+ALIVE
+
+13
+
+misaligned
+
+DIED
+
+ALIVE
+
+14
+
+shared_local_oob
+
+DIED
+
+ALIVE
+
+Fault Recovery Coverage.
+
+We verify that our system can properly recover all SM faults.
+The experiment uses three processes: an active vLLM instance running as an MPS client, a standby instance idling outside MPS and ready to take over, and a co-located MPS client that triggers faults.
+For each of the five SM faults, the fault-trigger process induces the fault, causing the shared MPS context to be destroyed and the active instance to terminate.
+Because the standby runs outside MPS, it is isolated from this context destruction and remains available.
+In all five cases, the standby detects the active failure and successfully takes over.
+This result also demonstrates the benefit of our fault-agnostic recovery design: the standby relies on socket closure rather than fault-specific signals, so the same recovery path applies to any SM fault that terminates the active process.
+
+Figure 7
+.
+Throughput over time under fault recovery.
+
+End-to-End Fault Recovery.
+
+We use LLM serving as an end-to-end case study for recovery effectiveness.
+We deploy an active-standby pair: the active instance runs vLLM serving Qwen2.5-14B under a replayed ShareGPT request stream, while the standby remains ready to take over.
+At
+t=0
+, we inject an illegal-instruction fault (
+EXC_4
+) into the active instance, causing it to terminate and triggering failover.
+Figure
+7
+reports serving throughput over time.
+We define the outage duration as the interval after the fault during which no tokens are produced.
+With our mechanism, the outage lasts only 355 ms, after which the standby resumes serving at the pre-fault throughput.
+In the sleep-only baseline, the standby must reload model weights from CPU memory before serving, extending the outage to 5.5 s, over 15
+\times
+longer.
+Without recovery, throughput drops to zero permanently.
+These results show that VMM-based recovery reduces service interruption from seconds to sub-second failover.
+
+(a)
+
+Recovery time vs. baselines.
+
+(b)
+
+Prefill savings from KV cache sharing.
+
+(c)
+
+Decode savings from KV cache sharing.
+
+Figure 8
+.
+Recovery time microbenchmarks. (a) Our approach achieves 1,155–1,471
+\times
+speedup over cold restart and 2.4–16.9
+\times
+over sleep-only. (b) KV cache sharing eliminates prompt-length-dependent prefill recomputation. (c) KV cache sharing bounds decode-phase recovery to at most
+N
+forward passes.
+
+Microbenchmark: Recovery Speed.
+
+We compare recovery speed against two baselines: cold restart, which relaunches vLLM from scratch after failure, and sleep-only, which uses a vanilla active-standby pair where standby must reload model weights from CPU.
+We kill the active instance immediately after prefill completion, before any decode steps begin, so that the measured recovery time reflects only the takeover cost without decode-phase variability.
+We then use a short six-token prompt to minimize prefill time and sweep across five model sizes.
+As shown in Figure
+8(a)
+, cold restart takes 35.9–118.5 seconds, dominated by model loading and initialization.
+Sleep-only reduces recovery time to 73.4–1359.1 ms by preserving runtime state, but remains model-size dependent because the standby reloads weights from CPU.
+Our approach recovers in 31.1–80.6 ms across all model sizes, achieving 1155
+\times
+–1471
+\times
+speedup over cold restart and 2.4
+\times
+–16.9
+\times
+speedup over sleep-only.
+The speedup over sleep-only grows from 2.4
+\times
+at 0.5B to 16.9
+\times
+at 14B because VMM-based weight sharing removes the model-size-dependent reload cost, keeping recovery latency nearly flat across model sizes.
+
+Ablation: Prefill Savings from KV Cache Sharing.
+
+To measure the benefits of prefill savings, we disable KV sharing and measure recovery time as a function of prompt length.
+We use Qwen2.5-14B and kill the active instance immediately after prefill, so any extra recovery cost comes from recomputing the prompt prefix.
+Figure
+8(b)
+shows the results of prompt lengths from 500 to 4000 tokens.
+Without KV sharing, the standby must re-prefill the prompt, increasing recovery latency from 162.3 ms at 500 tokens to 918.1 ms at 4000 tokens.
+With our full approach, the KV cache is already shared, eliminating re-prefill and keeping recovery latency nearly constant at 44.3–50.4 ms.
+This yields a 3.7
+\times
+–18.2
+\times
+speedup.
+The remaining constant cost comes from vLLM sleep-mode wake-up warmup, which is independent of prompt length.
+These results confirm that KV cache sharing removes prompt-length-dependent recovery cost.
+
+Ablation: Decode Savings from KV Cache Sharing.
+
+To measure the benefits of decode savings, we disable KV sharing and measure recovery time as a function of
+K
+, the number of tokens generated before fault injection.
+We use Qwen2.5-14B with a 20-token prompt to minimize prefill cost, and sweep
+K
+from 1 to 128.
+Without KV sharing, the standby must regenerate tokens 1 through
+K
+.
+With KV cache sharing, the standby reuses the shared decode state and only replays tokens generated since the most recent synchronization.
+As shown in Figure
+8(c)
+,
+without KV sharing, recovery latency grows linearly with
+K
+, from 92.6 ms at
+K=1
+to 4639.7 ms at
+K=128
+.
+With the default synchronization interval
+N=16
+, latency is bounded between 43.4 ms and 589.3 ms.
+With per-step synchronization (
+N=1
+), latency becomes nearly constant at 43.6–44.8 ms across all fault points, achieving 2.13
+\times
+–104
+\times
+speedup over no KV sharing.
+These results show that KV sharing removes generation-length-dependent re-decoding, while
+N=1
+enables constant-time recovery when fine-grained failover is required.
+
+Output Correctness After Recovery.
+
+We verify that failover preserves generated output.
+Using Qwen2.5-14B, we compare recovered outputs against a no-crash baseline for a fixed prompt, injecting faults after
+K\in\{1,2,\ldots,1024\}
+generated tokens.
+For all
+K
+, the recovered sequence matches the baseline token for token, confirming that forward-state synchronization resumes generation without divergence.
+
+7.3.
+System Overhead
+
+Driver-level overhead.
+
+As described in §
+A
+, our isolation path is invoked only after the driver identifies a fault as fatal. During fault-free execution, this path is never reached, so the mechanism introduces no driver-level overhead.
+
+(a)
+
+Standby memory overhead across model sizes.
+
+(b)
+
+Synchronization overhead on throughput.
+
+Figure 9
+.
+System overhead of active-standby recovery.
+
+Standby Memory Overhead.
+
+We compare memory consumption with only the active instance versus an active instance plus a sleeping standby across five model sizes.
+Figure
+9(a)
+shows that the standby adds only 579–641 MiB, nearly independent of model size.
+This is because VMM-based aliasing lets both instances map model weights and KV cache to the same physical GPU pages; the remaining overhead comes from per-process runtime state, such as CUDA context and scheduling metadata.
+
+Synchronization Overhead on Throughput.
+
+Our recovery mechanism periodically synchronizes forward state from the active instance to the standby, trading throughput overhead for finer recovery granularity.
+We sweep the synchronization interval
+N
+from 1 (every decode step) to 64 across all five model sizes, using ShareGPT at saturating batch sizes.
+Figure
+9(b)
+shows two trends.
+First, overhead decreases as
+N
+increases: at
+N=1
+, the worst-case throughput drop is 17.2% for the 0.5B model, while at
+N=16
+it falls below 1% for most models.
+Second, overhead decreases with model size because synchronization cost is nearly constant, whereas decode steps become longer.
+For Qwen2.5-14B, even per-step synchronization incurs only a 1.40% throughput drop.
+We therefore use
+N=16
+by default, keeping overhead below 1% across all model sizes while bounding recovery replay to at most 16 tokens.
+
+Synchronization Latency.
+
+We measure the raw latency of a single forward-state synchronization operation.
+Since the payload depends on per-request sequence length rather than model architecture, we fix the model and sweep sequence length from 8 to 16,000 tokens.
+Median latency increases only slightly, from 5.95
+\mu
+s to 7.96
+\mu
+s, and remains below 10
+\mu
+s even at the longest sequence.
+Thus, synchronization is orders of magnitude faster than a typical decode step and is not a performance bottleneck.
+
+7.4.
+System Generality
+
+We validate our system’s generality by repeating key experiments on an NVIDIA H100 GPU (80 GB) with three diverse workloads: a mixture-of-experts LLM (Qwen3-30B-A3B, 60 GB), a diffusion-transformer image generator (Qwen-Image 20B, 28 GB), and a CNN classifier (ResNet50, 100 MB).
+
+Taxonomy and Isolation Validation.
+
+We repeat the fault-containment and recovery experiments.
+The results match Tables
+3
+and Tables
+4
+: our isolation mechanism contains all MMU faults, while all evaluated SM faults are recovered properly by standby failover.
+
+Recovery with Mixture-of-Experts Model.
+
+We deploy Qwen3-30B-A3B, a mixture-of-experts model (30B total, 3B active), and measure recovery time against cold restart and sleep-only baselines.
+Our mechanism recovers in 73.2 ms, achieving a 2,774
+\times
+speedup over cold restart (202.8 s) and 18.6
+\times
+over sleep-only (1.36 s).
+
+Recovery with Diffusion Model.
+
+We also validate recovery on Qwen-Image, a 20B-parameter MMDiT diffusion model with a 7B text encoder.
+We inject a fault halfway through a 50-step 1024
+\times
+1024 image generation task.
+With only
+{\sim}
+100 lines of application code for latent sharing, our CUDA interception layer transparently shares model weights and resumes from the saved latent state.
+Recovery completes in 25.66 s, nearly identical to the no-fault run (25.65 s) and 40% faster than cold restart (43.22 s), while producing byte-identical output.
+Detailed setup and results are provided in Appendix
+B
+.
+
+Traditional ML Workloads.
+
+Beyond generative AI, we evaluate recovery on ResNet50 image classification over ImageNet.
+Although ResNet50 is small (100 MB), cold restart still takes 9.2 s due to PyTorch and CUDA runtime re-initialization.
+Our active-standby design recovers in 31 ms, a 299
+\times
+speedup, showing that shared weights and sleep-based standby are effective across workloads with very different memory footprints and execution patterns.
+
+8.
+Discussion: Full Fault Isolation
+
+Our isolation mechanism handles all reachable MMU faults, the most frequent class of critical GPU errors.
+However, SM faults remain non-isolable due to hardware limitations and firmware opacity (Insight #4), requiring us to fall back on recovery.
+Achieving full isolation for SM faults requires changes beyond the open software stack, but such support is well within NVIDIA’s control.
+The prerequisite is to prevent different MPS clients from co-locating on the same SM, which is already feasible through two existing mechanisms: kernel launch masks via libsmctrl
+(
+libsmctrl
+)
+and NVIDIA’s recently introduced static SM partitioning
+(
+nvidia_mps_static_sm
+)
+for MPS.
+However, SM-level separation alone is insufficient: closed-source components, including the RM/GSP firmware and CUDA driver, must also be extended to support per-SM fault attribution and client-specific termination.
+With these changes, MPS-based GPU sharing could provide complete fault isolation for both MMU faults and SM faults.
+
+9.
+Related Works
+
+GPU Sharing Systems.
+
+Existing GPU sharing systems trade isolation for utilization.
+Time-sharing systems such as TGS
+(
+tgs
+)
+, Orion
+(
+orion
+)
+, and GaiaGPU
+(
+gaiagpu
+)
+provide strong isolation through exclusive execution windows, but lose concurrency and incur context-switch overhead.
+Hardware partitioning with MIG offers physical isolation across GPU instances; Krypton
+(
+krypton
+)
+adds driver-level control for adaptive scheduling, but remains constrained by MIG’s coarse partition granularity.
+MPS-based systems such as LithOS
+(
+lithos
+)
+, GPUlet
+(
+gpulet
+)
+, and GSLICE
+(
+gslice
+)
+improve utilization through spatial sharing, but do not address fault propagation within the shared CUDA context.
+MuxFlow
+(
+muxflow
+)
+handles policy-induced faults from incorrect MPS client termination, whereas runtime GPU execution faults remain unhandled.
+
+GPU Fault Tolerance.
+
+Checkpoint-restart systems such as CheckFreq
+(
+checkfreq
+)
+, Gemini
+(
+gemini
+)
+, and CRAC
+(
+crac
+)
+recover failed training jobs by periodically snapshotting state, but incur seconds to minutes of rollback latency.
+Redundancy-based systems such as Bamboo
+(
+bamboo
+)
+and Oobleck
+(
+oobleck
+)
+mask node failures in distributed training, while cluster-level managers such as Unicron
+(
+unicron
+)
+optimize recovery scheduling across nodes.
+For LLM inference, TARRAGON
+(
+tarragon
+)
+reroutes MoE tokens around failed nodes, while KevlarFlow
+(
+kevlarflow
+)
+replicates KV cache blocks for fast request redirection.
+These systems target job- or node-level failures, but do not isolate intra-GPU faults under MPS.
+Our work instead targets MPS-specific fault in GPU sharing, providing per-client isolation when faults are visible to UVM and fast recovery when they are handled only by closed-source firmware.
+
+10.
+Conclusion
+
+This work designs fault-resilient MPS.
+We first presented a systematic characterization of GPU faults under MPS, classifying 19 fault scenarios into three categories and identifying the architectural boundaries between isolable and non-isolable faults.
+Guided by this characterization, we designed two complementary mechanisms: a driver-level isolation mechanism that confines all reachable MMU faults to the faulting client with zero runtime overhead, and a VMM-based active-standby recovery that achieves 2.4
+\times
+–16.9
+\times
+speedup with less than 1% throughput overhead.
+Together, these mechanisms bring fault resilience to fine-grained GPU sharing under MPS.
+
+Appendix A
+Implementation
+
+We implement our fault isolation mechanism by modifying NVIDIA’s open-source UVM kernel module with
+{\sim}
+500 lines of C code.
+Our fast recovery mechanism consists of
+{\sim}
+500 lines of C for the build-time
+libcuda.so.1
+interceptor and
+{\sim}
+500 lines of Python for vLLM integration patches.
+
+MMU Fault Isolation.
+
+Our isolation mechanism adds a new handling path to UVM’s replayable and non-replayable fault handlers, entered only after the driver’s own fatality check has already determined a fault to be fatal.
+The existing check logic is left unmodified, so the isolation code path is never entered when no fault occurs, introducing zero runtime overhead during normal execution.
+All isolation behavior is controlled by a single
+sysfs
+-exposed module parameter, allowing the driver to be reverted to stock behavior at runtime.
+
+Fast Recovery.
+
+We intercept CUDA allocation calls by rewriting
+libcuda.so.1
+’s ELF symbol table at build time, as vLLM and PyTorch statically link
+libcudart
+, making
+LD_PRELOAD
+-based interposition ineffective.
+For model weights, the interceptor redirects
+cudaMalloc
+calls to
+cuMemCreate
+/cuMemMap.
+For the KV cache, vLLM allocates tensors via
+torch.zeros
+, which bypasses our interceptor; we therefore implement a custom allocator that calls the VMM API directly.
+We integrate with vLLM through a Python module auto-loaded at interpreter startup, implementing the mechanisms described in §
+6.2
+.
+
+Table 5
+.
+Fault Injection Module
+
+Category
+
+Fault Type
+
+Trigger Method
+
+Engine
+
+MMU Faults
+
+OOB
+
+cudaMalloc
++ kernel write past allocation
+
+SM
+
+AM (CPU-resident)
+
+cudaMallocManaged
++
+cudaMemAdvise(RO)
++ kernel write
+
+SM
+
+AM (GPU-resident)
+
+cudaMallocManaged
++ kernel read (migrate) +
+cudaMemAdvise(RO)
++ kernel write
+
+SM
+
+AM (VMM)
+
+cuMemCreate
++
+cuMemMap
++
+cuMemSetAccess(RO)
++ kernel write
+
+SM
+
+Zombie range
+
+UVM debug ioctl (de-register backing)
+
+SM
+
+Non-migratable range
+
+UVM debug ioctl (pin to host memory)
+
+SM
+
+CE OOB
+
+cudaMalloc
++
+cuMemcpy
+to OOB address
+
+CE
+
+CE AM
+
+cudaMallocManaged(RO)
++
+cuMemcpy
+write
+
+CE
+
+PBDMA OOB
+
+cuStreamWaitValue32
+on unmapped VA
+
+PBDMA
+
+SM Faults
+
+Lane user stack overflow
+
+Deep recursion +
+cudaLimitStackSize=1KB
+
+SM
+
+Illegal instruction
+
+Driver API + patched cubin (invalid opcode)
+
+SM
+
+Shared/local OOB
+
+Inline PTX
+ld.shared
+/
+ld.local
+to OOB address
+
+SM
+
+Misaligned address
+
+Unaligned global memory access
+
+SM
+
+Invalid address space
+
+atom.global.add
+on shared-space address
+
+SM
+
+Fault Injection Module.
+
+Our characterization (§
+4
+) and evaluation (§
+7
+) require deterministic triggers for every fault type in our taxonomy.
+NVIDIA provides no public fault injection interface, so we build a comprehensive fault injection module covering both MMU faults and SM faults.
+For MMU faults, we implement a trigger program for each of the nine reachable fault scenarios.
+For SM faults, no driver-level documentation exists; the only external observation point is
+cuda-gdb
+, which defines a set of
+CUDA_EXCEPTION
+codes.
+We implement a trigger program for each documented code and classify it by observing whether UVM fault processing is invoked (indicating an MMU fault) or only an RC recovery signal appears (indicating an SM fault handled entirely within the RM/GSP firmware).
+Some documented codes no longer produce distinct faults due to hardware evolution since Volta, and one code (
+warp_assert
+) does not trigger RC recovery; the five surviving SM fault types are reported in §
+4.1
+.
+We further validate this classification against Nouveau, the Linux community’s reverse-engineered NVIDIA GPU driver, which confirms that these five fault types are handled entirely within the RM/GSP firmware.
+Table
+5
+lists each fault type alongside its trigger method and faulting engine.
+
+Appendix B
+Recovery with Diffusion Model
+
+We validate on image generation, a workload with fundamentally different patterns from autoregressive LLM inference.
+We deploy Qwen-Image, a 20B-parameter MMDiT diffusion model with a 7B text encoder, generating 1024
+\times
+1024 images over 50 denoising steps, and inject a fault at step 25.
+Although our recovery mechanism targets LLM serving, the CUDA interception layer operates transparently below the application, so model weight sharing requires no code modification; we add only
+{\sim}
+100 lines to implement latent sharing between the active and standby instances.
+Unlike LLM serving where partial output is visible during recovery, diffusion models produce no usable result until all steps complete, making end-to-end completion time the only meaningful metric.
+Without fault, completion takes 25.65 s; with cold restart, the process must reload the model and recompute all 50 steps, increasing it to 43.22 s.
+Our mechanism resumes from step 25, achieving a completion time of 25.66 s, nearly identical to the no-fault case and 40% faster than cold restart.
+The final image produced after recovery is byte-identical to the no-fault output, confirming that latent sharing preserves exact numerical state across failover.
+
+Appendix C
+MMU Fault Catalog
+
+This appendix provides detailed descriptions of all MMU fault scenarios referenced in §
+4.1
+.
+We organize the content into three parts: parse-time fatal faults (§
+C.1
+), deferred-to-servicing fault scenarios (§
+C.2
+), and architecturally unreachable combinations (§
+C.3
+).
+
+C.1.
+Parse-Time Fatal Faults
+
+Parse-time fatal faults are identified during initial fault parsing, before UVM attempts any resolution.
+These correspond to errors that cannot be resolved through any software intervention.
+UVM defines 12 such fault types across five categories:
+(1)
+MMU structural corruption
+(e.g., malformed page directory entries, virtual address limit violations);
+(2)
+Context/channel state corruption
+(e.g., unbound instance blocks, corrupted command streams);
+(3)
+Privilege/security violations
+(e.g., unprivileged SM instructions, confidential computing boundary violations);
+(4)
+Memory attribute/aperture mismatch
+(e.g., unsupported apertures, incompatible memory KIND tags);
+(5)
+Hardware data corruption
+(ECC-poisoned pages).
+
+C.2.
+Deferred-to-Servicing Fault Scenarios
+
+Faults that pass the parse-time check enter UVM’s servicing pipeline, where UVM attempts to resolve the fault by migrating or remapping the target page.
+Non-serviceable faults in this stage fall into four base conditions, with access mismatch further splitting into three variants for SM faults:
+
+Out-of-Bounds Access (OOB).
+
+The faulting virtual address does not fall within any VA range registered with UVM (#1, #7, #11 in Table
+2
+).
+This occurs when a GPU kernel dereferences an uninitialized, freed, or out-of-range pointer.
+Because no VA range owns the address, UVM has no migration target and marks the fault as fatal.
+
+Access Mismatch (AM).
+
+The faulting access type violates the permission declared for the target VA range.
+Three variants arise depending on page residency:
+(1)
+CPU-resident AM
+(#2): the page resides in CPU memory and the GPU attempts a prohibited write.
+UVM cannot resolve this by migration because the access permission itself is incompatible.
+(2)
+GPU-resident AM
+(#3): the page resides in GPU memory but with incompatible access permissions.
+The GPU’s access type (e.g., write to a read-only mapping) conflicts with the declared policy.
+(3)
+VMM external AM
+(#4): the target VA range is managed through NVIDIA’s Virtual Memory Management (VMM) API as an external range.
+Because external ranges are not backed by UVM-managed allocations, UVM cannot perform migration or permission adjustment.
+
+Zombie Range Access.
+
+The backing allocation has been deallocated by the owning process, but the GPU-side VA mappings have not yet been fully torn down (#5).
+The access falls within this teardown window, hitting a mapping that points to memory that no longer belongs to the process.
+
+Non-Migratable Range Access.
+
+The faulting access targets an allocation pinned to a different processor (e.g., host memory marked non-migratable), and the UVM driver has been instructed not to migrate it (#6).
+Because migration is explicitly prohibited, UVM cannot resolve the fault.
+
+C.3.
+Architecturally Unreachable Combinations
+
+Five of the 14 engine-fault combinations in Table
+2
+are architecturally unreachable from user-space CUDA programs:
+
+CE Zombie Range (#9) and CE Non-Migratable Range (#10).
+
+Zombie range and non-migratable range faults arise exclusively from the lifecycle of UVM-tracked allocations (deallocation timing and migration policy, respectively).
+The CUDA runtime dispatches all user operations on managed memory as SM kernels.
+Consequently, the Copy Engine never encounters these allocation states through normal CUDA API usage.
+
+PBDMA Access Mismatch (#12), Zombie Range (#13), and Non-Migratable Range (#14).
+
+The PBDMA semaphore API rejects managed memory at the API layer, preventing PBDMA faults from targeting user-provided virtual addresses.
+PBDMA faults instead target an internal semaphore pool address managed by the driver.
+As a result, the only PBDMA fault reachable from user space is out-of-bounds access (#11), which can occur when a semaphore operation references an invalid pool offset.
+

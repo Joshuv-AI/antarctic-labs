@@ -1,0 +1,6568 @@
+Signs Beat Floats: Low-Rank Double-Binary Adaptation for On-Device Fine-Tuning
+Yoshihiko Fujisawa, Yuma Ichikawa, Yudai Fujimoto, Akira Sakai, Katsuki Fujisawa
+
+Abstract
+On-device adaptation of large language models commonly keeps a quantized base model frozen while training and deploying a small, task-specific LoRA adapter. In the unmerged adapter-mode setting, however, the adapter is more than a compact storage module; it introduces an additional dense floating-point branch, maintains a trainable state for local updates, and acts as a unit of communication and hot-swapping. We introduce LoRDBA, a LoRA-compatible adapter that replaces both low-rank factors with binary sign carriers while representing magnitudes through lightweight, channel-wise scales, converting the dense adapter branch into two sign-accumulation matrix multiplications interleaved with channel-wise scaling. A finite-sample analysis shows that reconstruction quality is governed by the residual-to-magnitude ratio of the original LoRA factors. In adapter-mode experiments, LoRDBA outperforms low-bit baselines at matched model sizes while matching fp16 LoRA quality in selected regimes. The unmerged adapter incurs at most 8 % 8\% prefill latency overhead at matched rank r = 16 r{=}16 despite an over 10 × 10\times reduction in adapter footprint, with moderate training memory overhead of approximately 1.6 × 1.6\times that of fp16 LoRA.
+
+
+
+1
+Introduction
+
+Large language models are increasingly adapted using parameter-efficient updates rather than full fine-tuning. LoRA enables this paradigm by freezing pretrained weights and injecting low-rank adapter matrices into Transformer projections, reducing the number of trainable parameters
+(
+Hu et al. 2022
+)
+. QLoRA extends this approach to low-bit settings by backpropagating through a frozen quantized base model into LoRA adapters
+(
+Dettmers et al. 2023
+)
+. This base-plus-adapter design is attractive for on-device personalization, privacy-preserving adaptation, and communication-efficient update distribution; a compact low-bit base can remain fixed while task-specific adapters are trained, exchanged, or selected. Recent multi-adapter serving systems, including S-LoRA and Punica, demonstrate that practical deployment often treats adapters as swappable runtime objects rather than as weights that are always merged into the base model
+(
+Sheng et al. 2024
+;
+Chen et al. 2024
+)
+.
+
+In practical low-bit deployments, merging a trained adapter into a quantized base requires materializing full-precision weights or requantizing per task, forfeiting hot-swap capability; it is therefore preferable to serve the adapter as an unmerged side branch
+(
+Frantar et al. 2022
+;
+Lin et al. 2024
+)
+. This unmerged branch creates a distinct bottleneck: the base projection runs on fused low-bit kernels while the adapter uses dense fp16 factors. An adapter compressor for this regime must preserve accuracy, reduce unmerged computation cost, and avoid inflating the local training state.
+
+Figure 1
+:
+LoRDBA (red) Pareto-dominates FP16 LoRA and LoRAQuant at matched adapter sizes on
+LLaMA-2-7B
+; cf. Table
+1
+.
+
+Figure 2
+:
+Adapter-mode LoRA versus LoRDBA. The base model is stored in a low-bit codebook and executed with a fused dequantization–matrix multiplication kernel, while the adapter is served in an unmerged form. (a) Standard LoRA introduces two dense fp16 factors and requires a separate fp16 matrix multiplication branch. (b) LoRDBA replaces both factors with sign matrices coupled by three channel-wise scale vectors, reducing the adapter forward pass to two sign-accumulation matrix multiplications.
+
+We introduce LoRDBA, a low-rank double-binary adapter designed for unmerged adapter-mode deployment. LoRDBA replaces both LoRA factors with binary sign carriers and augments them with a compact scale envelope along the input, rank, and output axes. Binary signs encode directional information while lightweight channel-wise scales capture magnitudes; the quantized base model remains frozen and unchanged.
+LoRDBA is trained end-to-end using a smooth-sign straight-through estimator and exported as a near-binary adapter. At inference, it replaces the dense adapter branch with binary-weight accumulation interleaved with scaling. We analyze when this binary reconstruction is accurate, showing that the key quantity is the residual-to-magnitude ratio of the floating-point LoRA factors.
+Unlike BitDelta
+(
+Liu et al. 2024a
+)
+, which binarizes the full
+\Theta(NM)
+delta discarding low-rank structure, and LoRAQuant
+(
+Mirzaei et al. 2025
+)
+, which retains mixed-precision SVD components, LoRDBA commits
+both
+rank-
+R
+factors to
+\pm 1
+and trains end-to-end, preserving the low-rank adapter format.
+
+We evaluate LoRDBA under the adapter-mode protocol—adapter never merged; storage, latency, and training memory measured separately. Across LLaMA-based math reasoning and summarization benchmarks, LoRDBA improves the accuracy–size trade-off over all evaluated low-bit baselines as previewed in Figure
+1
+.
+
+2
+Preliminaries
+
+Notation.
+
+Uppercase Roman letters denote matrices; lowercase boldface denotes vectors.
+\{\pm 1\}^{p\times q}
+is the set of sign matrices.
+\|\cdot\|_{F}
+and
+\|\cdot\|_{\text{op}}
+are the Frobenius and operator norms.
+\diag({\bm{v}})
+constructs a diagonal matrix;
+\sign(U)
+is entry-wise sign with
+\sign(0){=}{+}1
+. The sub-Gaussian Orlicz norm is
+\|X\|_{\psi_{2}}\coloneqq\inf\{t>0:{\mathbb{E}}[\exp(X^{2}/t^{2})]\leq 2\}
+
+(
+Vershynin 2018
+)
+.
+
+LoRA.
+
+Given a frozen effective weight matrix
+W_{0}\in{\mathbb{R}}^{N\times M}
+, LoRA reparameterizes the fine-tuning increment as
+
+\Delta W=AB^{\top}\in{\mathbb{R}}^{N\times M},~~A\in{\mathbb{R}}^{N\times r},~B\in{\mathbb{R}}^{M\times r},
+
+(1)
+
+where
+r\ll\min(N,M)
+is the adapter rank. Following the column-vector convention, the adapted forward pass for an input
+{\bm{x}}\in{\mathbb{R}}^{N}
+is
+
+{\bm{y}}=W_{0}^{\top}{\bm{x}}+B(A^{\top}{\bm{x}})\in{\mathbb{R}}^{M}
+. Thus, each adapted projection incurs two adapter GEMMs with an aggregate arithmetic complexity of
+\mathcal{O}(r(N+M))
+per token and stores
+16r(N+M)
+bits when both factors are kept in fp16. The base weights remain fixed throughout adaptation.
+
+Adapter-mode deployment.
+
+We assess LoRDBA in a QLoRA-style on-device regime
+(
+Dettmers et al. 2023
+;
+Sheng et al. 2024
+;
+Chen et al. 2024
+)
+. Let
+W_{\mathrm{fp}}
+denote the original full-precision pretrained weight, and let
+W_{Q}
+be its stored low-bit codebook representation. The effective deployed base weight is
+
+\widetilde{W}_{0}\coloneqq\mathrm{dequant}(W_{Q}),
+
+which generally differs from
+W_{\mathrm{fp}}
+due to quantization error. In this setting, the base model is never materialized in fp16, and the trained adapter is served in an unmerged state. The adapted forward pass is
+
+{\bm{y}}=\widetilde{W}_{0}^{\top}{\bm{x}}+\Delta W^{\top}{\bm{x}}~=~\mathrm{dequant}(W_{Q})^{\top}{\bm{x}}+\Delta W^{\top}{\bm{x}}.
+
+(2)
+
+This factorizes the operation into a base GEMM—executed by a fused dequantize-matmul kernel when the base is quantized—and an independent adapter side branch. The device-side workload is characterized by the following four conditions:
+
+(A1)
+
+Frozen base:
+the base model is held fixed and is not updated. In typical on-device deployments it is stored in a low-bit format such as NF4 or GPTQ, but the conditions themselves do not mandate a specific base precision.
+
+(A2)
+
+Adapter-only training:
+optimizer states for the base weights are never materialized.
+
+(A3)
+
+unmerged serving:
+the adapter is evaluated as a side branch rather than being merged into a task-specific base weight.
+
+(A4)
+
+Hot-swappability:
+multiple task-specific adapters can share the same on-device base
+(
+Sheng et al. 2024
+;
+Chen et al. 2024
+)
+.
+
+The unmerged regime decouples base and adapter kernels: the base GEMM runs at the codebook’s native precision while the adapter GEMM runs at its own bit width. Reducing the adapter bit width is thus the primary mechanism for improving the bandwidth-compute envelope without violating the no-merging constraint.
+
+Bits per weight (BPW).
+
+Following standard practice
+(
+Mirzaei et al. 2025
+)
+, we quantify adapter compression in
+bits per weight
+(BPW) relative to the reference LoRA parameter count
+r_{0}(N+M)
+. An fp16 LoRA adapter of rank
+r
+thus has BPW
+=16r/r_{0}
+, and the full-size reference at rank
+r_{0}
+has BPW
+=16
+. The LoRDBA-specific BPW metrics are defined in Section
+3.1
+once the adapter parameterization is introduced.
+
+3
+Method
+
+3.1
+Low Rank Double Binary Adapter
+
+LoRDBA parameterizes the LoRA delta with two binary factors and a small collection of channel-wise fp16 scale vectors across the input, rank, and output axes. This design follows the multi-envelope principle introduced for full-weight extreme quantization in MDBF
+(
+Ichikawa et al. 2025b
+)
+, but applies it to the much smaller low-rank LoRA delta. Since a single set of scales is a fragile one-dimensional summary of the rank axis, we allow the adapter to contain multiple envelopes that share the same binary carriers, with the number of envelopes controlled by an integer
+\ell\geq 1
+.
+
+Definition 3.1
+
+(Low Rank Double Binary Adapter)
+.
+
+Fix a reference fp16 LoRA rank
+r_{0}\geq 1
+used only for normalizing storage. A
+LoRDBA adapter
+of binary carrier rank
+R\in\mathbb{N}
+and envelope rank
+\ell\geq 1
+for a host projection of shape
+N\times M
+is represented as the tuple
+\theta=\bigl(B_{1},B_{2},({\bm{\alpha}}^{(i)},{\bm{\beta}}^{(i)},{\bm{\gamma}}^{(i)})_{i=1}^{\ell}\bigr)
+with
+
+B_{1}\in\{\pm 1\}^{N\times R},~B_{2}\in\{\pm 1\}^{R\times M},~{\bm{\alpha}}^{(i)}\in{\mathbb{R}}^{N},~{\bm{\beta}}^{(i)}\in{\mathbb{R}}^{R},~{\bm{\gamma}}^{(i)}\in{\mathbb{R}}^{M},
+
+(3)
+
+whose induced weight update is
+
+\Delta W(\theta)=\sum_{i=1}^{\ell}\diag({\bm{\alpha}}^{(i)})B_{1}\diag({\bm{\beta}}^{(i)})B_{2}\diag({\bm{\gamma}}^{(i)})\in{\mathbb{R}}^{N\times M}.
+
+(4)
+
+The adapted forward pass is
+{\bm{y}}=W_{0}^{\top}{\bm{x}}+\Delta W(\theta)^{\top}{\bm{x}}
+
+and the exact storage cost is
+
+\mathrm{bits}(\theta)=R(N+M)+16\ell(N+R+M).
+
+(5)
+
+We refer to
+R
+as the
+binary carrier rank
+(the inner dimension of the binary matmul), reserving
+r_{0}
+for the fixed reference LoRA rank used only in BPW normalization.
+
+The exact storage cost of Eq. (
+5
+) induces two BPW metrics:
+
+\mathrm{BPW}_{\mathrm{bc}}~\coloneqq~\frac{R}{r_{0}},\qquad\mathrm{BPW}_{\mathrm{tot}}~\coloneqq~\frac{R(N+M)+16\ell(N+R+M)}{r_{0}(N+M)}.
+
+(6)
+
+\mathrm{BPW}_{\mathrm{bc}}
+counts only the binary carriers;
+\mathrm{BPW}_{\mathrm{tot}}
+includes all fp16 scale vectors. At the default operating point
+R{=}r_{0},\ell{=}1
+, we have
+\mathrm{BPW}_{\mathrm{tot}}\to 1
+as
+r_{0},N,M\to\infty
+. All tables report
+\mathrm{BPW}_{\mathrm{tot}}
+and actual storage in MB.
+
+The canonical
+\ell=1
+,
+R=r_{0}
+case reduces to
+\Delta W=\diag({\bm{\alpha}})B_{1}\diag({\bm{\beta}})B_{2}\diag({\bm{\gamma}})
+(Figure
+2
+). For
+\ell\geq 2
+, Eq. (
+4
+) sums
+\ell
+rank-
+R
+terms; inference cost grows linearly in
+\ell
+, while binary-carrier storage is unchanged.
+
+3.2
+LoRDBA Training
+
+Under (A1)–(A4), LoRDBA is trained end-to-end on the downstream task with the base
+\widetilde{W}_{0}=\mathrm{dequant}(W_{Q})
+frozen. The procedure has three components: a forward pass with binarized carriers, a backward pass with a smooth-sign STE, and an SVD-based initialization. We call this pipeline
+QAT Full
+; all main results use it.
+
+Forward and backward pass.
+
+We maintain real-valued latent carriers
+H_{1}\in{\mathbb{R}}^{N\times R}
+,
+H_{2}\in{\mathbb{R}}^{R\times M}
+and binarize them in the forward pass:
+B_{1}=\sign(H_{1})
+,
+B_{2}=\sign(H_{2})
+. The weight update
+\Delta W(\theta)
+is computed via Eq. (
+4
+).
+On the backward pass, the non-differentiable
+\sign(\cdot)
+is replaced by a smooth-sign straight-through estimator (STE)
+(
+Leng et al. 2018
+;
+Liu et al. 2020
+;
+Boža and Macko 2025a
+;
+Ichikawa and Arai 2025
+;
+Ichikawa 2024
+)
+with a temperature schedule (Appendix
+F
+). Recent high-dimensional analyses of quantized-model training further indicate that STE dynamics can be strongly shaped by quantization hyperparameters such as bit width and quantization range
+(
+Ichikawa et al. 2025c
+)
+.
+Channel-wise scales
+({\bm{\alpha}},{\bm{\beta}},{\bm{\gamma}})
+are trained in fp32 and cast to fp16 at export. The rest of the pipeline (AdamW optimizer, data pipeline, learning rate schedule) is identical to a standard LoRA training loop.
+
+Initialization.
+
+The latent carriers are initialized from the rank-
+R
+thin SVD of a short,
+10\%
+-budget fp16 LoRA warm-up. Given
+\Delta W_{\mathrm{warm}}\approx U_{R}S_{R}V_{R}^{\top}
+:
+
+H_{1}^{(0)}=U_{R},~~H_{2}^{(0)}=V_{R}^{\top},~~B_{1}^{(0)}=\sign(H_{1}^{(0)}),~~B_{2}^{(0)}=\sign(H_{2}^{(0)}),~~{\bm{\beta}}^{(0)}=\diag(S_{R}),
+
+(7)
+
+with
+{\bm{\alpha}}^{(0)},{\bm{\gamma}}^{(0)}
+recovered by one closed-form per-axis least-squares sweep, cf. Appendix
+I.1
+. For
+\ell\geq 2
+, additional envelopes are zero-initialized as
+{\bm{\beta}}^{(i)}{=}{\bm{0}}
+, so the initial function equals the
+\ell{=}1
+warm-start. This initialization adds negligible overhead relative to the full QAT budget.
+
+Parameter and storage cost.
+
+The trainable parameter count is
+R(N{+}M)+\ell(N{+}R{+}M)
+—the same leading term as a rank-
+R
+LoRA adapter plus the envelope overhead. At export, only
+\sign(H_{1})
+,
+\sign(H_{2})
+, and the fp16 scales are stored, yielding the storage of Eq. (
+5
+).
+
+Optional training variants.
+
+LoRDBA admits alternative training modes that share the same exported adapter format and inference kernel. These are evaluated as ablations in Appendix
+G
+:
+
+•
+
+QAT Freeze
+: freeze the binary carriers
+B_{1},B_{2}
+from the PTQ initialization and train only the scale vectors
+({\bm{\alpha}},{\bm{\beta}},{\bm{\gamma}})
+, reducing the trainable count to
+\ell(N{+}R{+}M)
+per projection. Wall-clock time is comparable to QAT Full due to the full forward–backward pass through the frozen base.
+
+•
+
+PTQ-LoRDBA
+: a training-data-free scaled-consensus ADMM that fits a LoRDBA adapter to an existing fp16 LoRA
+\Delta W^{\star}
+in Frobenius norm (Appendix
+D
+). It also serves as the initialization for QAT Full.
+
+3.3
+Adapter-Mode Inference Kernel
+
+For an input batch
+X\in{\mathbb{R}}^{T\times N}
+and a canonical
+\ell{=}1
+LoRDBA adapter, the evaluation order is
+
+X\Delta W(\theta)=\Bigl(\Bigl(\Bigl(\bigl(XD_{{\bm{\alpha}}}\bigr)B_{1}\Bigr)D_{{\bm{\beta}}}\Bigr)B_{2}\Bigr)D_{{\bm{\gamma}}},
+
+(8)
+
+where
+D_{{\bm{v}}}\coloneqq\diag({\bm{v}})
+. The diagonal products are element-wise fp16 rescalings; the inner matmuls
+(\cdot)B_{1}
+and
+(\cdot)B_{2}
+are binary-weight GEMMs. Each column reduces to sign-accumulation:
+
+(XB)_{tj}=\sum_{i:B_{ij}=+1}X_{ti}-\sum_{i:B_{ij}=-1}X_{ti},
+
+(9)
+
+which eliminates multiplications in the inner product. We implement the binary GEMMs via
+gemlite
+
+(
+Badri and Shaji 2023
+)
+; the base codebook GEMM is unchanged. The bit-packed
+\{B_{1},B_{2}\}
+is stored once per adapter; for
+\ell\geq 2
+the same carriers are shared across envelopes. Pseudocode and microbenchmarks are in Appendices
+J
+and
+5.2
+.
+
+4
+Theoretical Analysis
+
+We explain why replacing both fp16 LoRA factors by binary sign carriers can preserve the LoRA update when factor magnitudes are not too dispersed. The formal model and proof are in Appendix
+C
+; here we state the guarantee in the compact form used to interpret the method.
+
+Intuition.
+If the entries of each LoRA factor are well-separated from zero (i.e., dominated by their signs), then replacing the factors by their element-wise signs introduces a relative Frobenius error proportional to the residual-to-magnitude ratio
+\zeta/\mu
+.
+
+Theorem 4.1
+
+(Informal LoRDBA expressivity)
+.
+
+Let
+A\in\mathbb{R}^{N\times r}
+and
+B\in\mathbb{R}^{M\times r}
+be fp16 LoRA factors. Suppose that, after fixing the usual positive column-rescaling gauge of LoRA, their entries can be written as
+
+A_{ik}=\mu_{A}\sigma^{A}_{ik}+\xi^{A}_{ik},\qquad B_{jk}=\mu_{B}\sigma^{B}_{jk}+\xi^{B}_{jk},
+
+where
+\mu_{A},\mu_{B}>0
+, the sign arrays are in
+\{\pm 1\}
+, and the residuals are independent, mean-zero, sub-Gaussian with scale at most
+\zeta
+, and independent of the signs. For the relative bound, assume the signs are jointly i.i.d. Rademacher,
+NM>8
+,
+\delta\in(0,1-8/(NM))
+,
+\zeta\leq\max(\mu_{A},\mu_{B})
+, and
+\log(6NM/\delta)\leq c_{1}r
+for a universal constant
+c_{1}>0
+.
+
+Let
+\theta^{\star}
+be the canonical single-envelope LoRDBA adapter with binary carriers
+\sigma^{A}
+and
+(\sigma^{B})^{\top}
+, unit input/output scales, and rank-axis scale
+\mu_{A}\mu_{B}\mathbf{1}_{r}
+. Then, for a universal constant
+C^{\prime}>0
+, with probability at least
+1-\delta-8/(NM)
+,
+
+\frac{\|AB^{\top}-\Delta W(\theta^{\star})\|_{F}}{\|\Delta W(\theta^{\star})\|_{F}}\leq C^{\prime}\frac{\zeta}{\min(\mu_{A},\mu_{B})}\sqrt{\log(2NM/\delta)}.
+
+(10)
+
+The full statement, including the absolute Frobenius bound, the observed-sign version using
+\sign(A)
+and
+\sign(B)
+, and the monotonic extension to envelope rank
+\ell\geq 1
+, is given in Appendix
+C
+.
+
+The bound is controlled by
+\zeta/\mu
+: the residual-to-magnitude ratio after separating signs from factor entries. In the low-noise regime, binary carriers preserve the Frobenius signal up to logarithmic factors, predicting a performance plateau near the binary-carrier limit. Appendix
+C.6
+reports the plug-in diagnostic.
+
+Role of the bound in the QAT pipeline.
+
+Theorem
+4.1
+directly characterises PTQ reconstruction quality: given fp16 LoRA factors whose entries are well-separated from zero, the binary sign carriers preserve most of the Frobenius signal.
+In the QAT Full pipeline (Section
+3.2
+), this PTQ solution serves as the initialization; the subsequent smooth-sign training refines both the binary carriers and the scales on the downstream loss, which explains why QAT Full consistently outperforms PTQ-LoRDBA (Appendix
+G
+).
+The theorem thus plays two complementary roles: (i) it identifies the residual-to-magnitude ratio
+\zeta/\min(\mu_{A},\mu_{B})
+as the diagnostic governing initialization quality, and (ii) it predicts a diminishing-returns plateau near the binary-carrier limit, beyond which spending more bits on dense factors yields little improvement—a prediction confirmed by the BPW sweep of Section
+5.4
+.
+
+5
+Experiments
+
+Under the adapter-mode conditions (A1)–(A4), we evaluate LoRDBA along the three axes that jointly determine deployment viability:
+
+RQ1
+
+Accuracy
+(Section
+5.1
+): Does LoRDBA match or exceed fp16 LoRA at matched adapter size?
+
+RQ2
+
+Inference speed
+(Section
+5.2
+): Does the binary-weight kernel reduce unmerged adapter latency?
+
+RQ3
+
+Training cost
+(Section
+5.3
+): What is the peak memory and wall-clock overhead relative to the corresponding fp16 LoRA loop?
+
+Evaluation protocol.
+
+We follow the adapter-mode plug-and-play protocol
+(
+Liu et al. 2024a
+;
+Mirzaei et al. 2025
+)
+. A reference fp16 LoRA of rank
+r_{0}
+is first fine-tuned on the downstream task atop the frozen base. The candidate method then emits an adapter at the target BPW under (A1)–(A4), and the adapter is evaluated
+without merging
+. Accuracy is compared at matched adapter size, latency on the unmerged forward pass, and peak memory on the same training device. LoRDBA trains end-to-end rather than compressing a pre-trained LoRA; the optional ADMM refinement is in Appendix
+D
+.
+
+Setup
+
+All experiments instantiate (A1)–(A4): the base is frozen in bf16, only the adapter is trainable, and the adapter is served unmerged.
+We use bf16 rather than a quantized base to isolate adapter-compression effects from base-quantization noise; LoRDBA is orthogonal to the base format and composes with base-side PTQ pipelines, including layer-wise error-propagation and submodule-level quantization methods
+(
+Arai and Ichikawa 2025
+;
+Ichikawa et al. 2025a
+)
+, since it only modifies the adapter branch.
+
+Models.
+
+LLaMA-2-7B
+is the primary base;
+LLaMA-3.2-3B
+serves as an ablation base. The reference LoRA targets all seven Transformer projections
+\{q,k,v,o,\mathrm{gate},\mathrm{up},\mathrm{down}\}_{\mathrm{proj}}
+with
+\alpha{=}16
+and rank
+r_{0}{=}16
+; in ablations
+r_{0}\in\{1,2,4,64\}
+.
+
+Tasks and metrics.
+We fine-tune task-specific adapters on
+MetaMathQA
+,
+Magicoder-Evol-Instruct-110K
+, and
+EdinburghNLP/xsum
+, and evaluate on
+GSM8K
+with
+8
+-shot,
+Minerva Math
+with
+4
+-shot, and
+XSum
+via ROUGE-L F1, all through
+lm-evaluation-harness
+
+(
+Gao et al. 2023
+)
+.
+
+Baselines.
+
+LoRA fp16
+at several ranks,
+LoRAQuant
+
+(
+Mirzaei et al. 2025
+)
+, and
+BitDelta
+
+(
+Liu et al. 2024a
+)
+(scalar, column, column
++
+distill, and row variants). All post-hoc compressors operate on the same task-specific fp16 adapter.
+
+Hardware.
+Training and evaluation use NVIDIA H100 (80 GB) and B200 GPUs. The latency benchmark (Table
+2
+) runs single-stream on a single H100 NVL. Full hyper-parameter and hardware details are in Appendix
+K
+.
+
+Compute budget.
+Candidates are matched at equal adapter storage, not equal training compute. QAT Full requires
+1.5
+–
+1.8\times
+total GPU-hours vs. the fp16 LoRA baseline (one-time cost; details in Appendix
+K
+). QAT Freeze offers near-equivalent accuracy at comparable wall-clock cost (Appendix
+G
+).
+
+5.1
+Adapter Accuracy (RQ1)
+
+Table 1
+:
+LLaMA-2-7B adapter-mode accuracy at matched size.
+Rank
+denotes the binary carrier rank
+R
+, cf. Definition
+3.1
+; for uncompressed LoRA rows, it coincides with the standard LoRA rank. BPW is
+\mathrm{BPW}_{\mathrm{tot}}
+of Eq.
+6
+; Avg averages GSM8K, Minerva Math, and XSum. The full-size LoRA FP16 reference at
+r_{0}{=}16
+, 76.3 MB, BPW
+{}=16
+achieves Avg
+28.81
+. Optional training variants are compared in Appendix
+G
+.
+
+Method
+
+Rank
+
+BPW
+
+Size (MB)
+
+GSM8K
+
+Minerva
+
+XSum
+
+Avg
+
+Full-size reference (upper bound)
+
+LoRA FP16
+
+r{=}16
+
+16.0
+
+76.3
+
+54.38
+
+13.17
+
+18.87
+
+28.81
+
+\sim
+7 MB tier
+
+LoRA FP16 (same-size ref.)
+
+r{=}2
+
+2.0
+
+9.5
+
+43.52
+
+8.26
+
+17.85
+
+23.21
+
+QAT Full (Ours)
+
+r{=}16
+
+1.0
+
+7.2
+
+44.43
+
+9.68
+
+18.32
+
+24.14
+
+LoRAQuant
+\rho{=}0.9
+
+r{=}16
+
+1.68
+
+8.0
+
+42.30
+
+8.94
+
+18.27
+
+23.17
+
+LoRAQuant
+\rho{=}0.5
+
+r{=}16
+
+1.20
+
+5.7
+
+36.09
+
+7.18
+
+17.67
+
+20.31
+
+\sim
+9.5 MB tier
+
+LoRA FP16 (same-size ref.)
+
+r{=}2
+
+2.0
+
+9.5
+
+43.52
+
+8.26
+
+17.85
+
+23.21
+
+QAT Full (Ours)
+
+r{=}16
+
+2.0
+
+9.5
+
+48.60
+
+9.68
+
+18.49
+
+25.59
+
+\sim
+19 MB tier
+
+LoRA FP16 (same-size ref.)
+
+r{=}4
+
+4.0
+
+19.1
+
+48.07
+
+10.28
+
+18.23
+
+25.53
+
+QAT Full (Ours)
+
+r{=}64
+
+1.0
+
+19.1
+
+53.60
+
+12.04
+
+18.60
+
+28.08
+
+QAT Full (Ours)
+
+r{=}16
+
+4.0
+
+19.1
+
+53.45
+
+12.28
+
+18.49
+
+28.07
+
+Table
+1
+compares QAT Full LoRDBA against baselines at three matched adapter-size tiers on LLaMA-2-7B.
+
+Result.
+
+LoRDBA outperforms all baselines at every size tier, where Avg
+\coloneqq
+(GSM8K + Minerva + XSum) / 3:
+
+•
+
+{\sim}7
+MB tier.
+QAT Full @1bpw, achieving Avg
+24.14
+at
+7.2
+MB, Pareto-dominates both LoRAQuant
+\rho{=}0.9
+with Avg
+23.17
+at
+8.0
+MB and LoRA FP16
+r{=}2
+with Avg
+23.21
+at
+9.5
+MB.
+
+•
+
+{\sim}9.5
+MB tier.
+QAT Full @2bpw with Avg
+25.59
+exceeds FP16
+r{=}2
+by
++2.4
+pt at the same storage.
+
+•
+
+{\sim}19
+MB tier.
+QAT Full
+r{=}64
+@1bpw with Avg
+28.08
+attains
+97.5\%
+of the full-size FP16 reference Avg of
+28.81
+at
+76.3
+MB, i.e.
+4\times
+compression.
+1
+1
+
+1
+
+The recovery ratio is the absolute Avg ratio
+28.08/28.81
+; it does not measure improvement over a no-adapter baseline.
+Notably,
+r{=}64
+@1bpw and
+r{=}16
+@4bpw achieve near-identical Avg—
+28.08
+vs.
+28.07
+—at the same budget, consistent with the plateau predicted by Theorem
+4.1
+.
+
+The improvement is concentrated on math reasoning, namely GSM8K and Minerva; among the methods evaluated on XSum in Table
+1
+, scores are relatively flat at
+17
+–
+18
+ROUGE-L, so the Avg differences are primarily driven by the math benchmarks.
+The matched comparison on LLaMA-3.2-3B in Appendix
+H
+preserves the same ordering.
+
+5.2
+unmerged Adapter Inference Speed (RQ2)
+
+We ask whether the binary adapter branch introduces latency overhead relative to fp16 LoRA in the unmerged regime.
+
+Table 2
+:
+Prefill latency on a single NVIDIA H100 NVL with
+LLaMA-2-7B
+, prompt length
+=56
+tokens. Unmerged rows execute the adapter as a side branch over a frozen
+4
+-bit base. The LoRDBA kernel at
+\ell{=}1
+is a fused WGMMA CUDA kernel for sign-accumulation matmuls.
+
+Config
+
+Size (MB)
+
+Prefill (ms)
+
+Base model only
+
+–
+
+19.3
+
+LoRA FP16
+r{=}1
+, unmerged
+
+4.8
+
+32.7
+
+LoRA FP16
+r{=}2
+, unmerged
+
+9.5
+
+33.4
+
+LoRA FP16
+r{=}16
+, unmerged
+
+76.2
+
+33.5
+
+LoRDBA
+\ell{=}1
+, unmerged
+
+\mathbf{7.2}
+
+\mathbf{36.1}
+
+Table
+2
+shows that unmerged LoRDBA adds only
+2.6
+ms, or
+8\%
+, to the prefill latency of unmerged fp16 LoRA at
+r{=}16
+—
+36.1
+ms vs.
+33.5
+ms—while compressing the adapter by
+10.6\times
+, from
+76.2
+MB to
+7.2
+MB. Even compared with the closest-size fp16 baseline, LoRA
+r{=}1
+at
+4.8
+MB, LoRDBA adds only
+3.4
+ms or
+10\%
+at
+1.5\times
+the adapter size. The binary kernel does not achieve a net speed-up at prefill batch size
+T{=}56
+because the base-model GEMM dominates total latency; the adapter bandwidth saving becomes more pronounced when multiple adapters are served concurrently or at larger adapter ranks.
+
+Analysis.
+
+The theoretical adapter-bandwidth ratio at
+\ell{=}1,R{=}r_{0}
+is
+
+\frac{16r_{0}(N{+}M)}{r_{0}(N{+}M)+16(N{+}r_{0}{+}M)}~\approx~8.0\times~(r_{0}{=}16),\quad 12.8\times~(r_{0}{=}64),\quad\to 16\times~(r_{0}\to\infty),
+
+(11)
+
+which upper-bounds the wall-clock speedup when the adapter matmul is bandwidth-bound. The end-to-end measurement confirms that, even outside that regime, the fused LoRDBA kernel preserves unmerged fp16 LoRA latency at
+10\times
+smaller adapter size.
+
+5.3
+On-Device Training Memory (RQ3)
+
+We compare LoRDBA QAT Full to standard LoRA fp16 training in peak GPU memory and wall-clock time. Table
+3
+reports measurements on a single NVIDIA B200.
+
+Result.
+
+The overhead is moderate and practical:
+
+•
+
+Peak memory:
+
+58.0
+GB (@4BPW) and
+55.6
+GB (@1BPW) vs.
+36.3
+GB for LoRA fp16, i.e. approximately
+1.5
+–
+1.6\times
+. The overhead is due to the smooth-sign STE keeping both latent and binarized copies of the binary carriers plus their Adam states; @4BPW is slightly larger due to higher carrier rank.
+
+•
+
+Wall-clock time:
+
+718
+–
+744
+min total, approximately
+1.9\times
+the
+385
+min LoRA baseline. Per-step time of
+804
+–
+899
+ms is
+1.7
+–
+1.9\times
+that of LoRA fp16 at
+468
+ms.
+
+When the training budget is limited, QAT Freeze offers an effective trade-off between accuracy and efficiency. By fixing the binary signs obtained from PTQ and updating only the channel-wise scales, it matches QAT Full within
+0.02
+average accuracy points at 2 BPW, while reducing optimizer-state memory through a substantially smaller set of trainable parameters. Detailed wall-clock and memory comparisons across all training modes are reported in Appendix
+G
+.
+
+Table 3
+:
+On-device training peak memory, step time, and total wall-clock time on
+
+LLaMA-2-7B
++
+MetaMathQA
+(single NVIDIA B200).
+LoRA fp16 trains for
+2
+epochs; QAT Full adds
+1
+-epoch STE refinement
+after PTQ initialization. All rows freeze the bf16 base and
+update the adapter only; LoRDBA uses the smooth-sign STE.
+
+Time
+= total wall-clock: LoRA pre-training
++
+PTQ init
++
+QAT fine-tuning.
+
+Method
+
+Size (MB)
+
+Peak (GB)
+
+ms/step
+
+Time (min)
+
+LoRA fp16,
+r{=}16
+
+76.3
+
+36.3
+
+468
+
+385
+
+LoRDBA QAT Full
+@4
+BPW
+,
+r{=}16,\ell{=}1
+
+19.1
+
+58.0
+
+899
+
+744
+
+LoRDBA QAT Full
+@1
+BPW,
+r{=}16,\ell{=}1
+
+7.2
+
+55.6
+
+804
+
+718
+
+5.4
+Ablations
+
+BPW sweep.
+
+Figure
+3
+sweeps the adapter bit budget on the
+LLaMA-3.2-3B
+ablation base. Since the carrier term
+R/r_{0}
+dominates
+\mathrm{BPW}_{\mathrm{tot}}
+(Eq.
+6
+) at practical dimensions, the binary-carrier limit
+\mathrm{BPW}_{\mathrm{bc}}{=}1
+controls the curve’s knee: trimming the carrier rank costs
+{\approx}1
+pt GSM8K, while spending more bits beyond
+\mathrm{BPW}_{\mathrm{tot}}{\approx}1.5
+yields no further gain.
+
+Envelope rank
+\ell\geq 2
+.
+
+Table
+9
+in the Appendix reports
+\ell=2
+ablations. At
+\ell{=}2,R{=}32
+, corresponding to
+19.1
+MB, GSM8K reaches
+47.84\%
+with only
+25.0
+GB peak memory—roughly half the
+\ell{=}1
+variant—at a
+5.6
+pt accuracy cost vs.
+\ell{=}1
+@1bpw
+R{=}64
+at
+53.60\%
+. The
+\ell{=}2,R{=}4
+configuration at
+7.2
+MB and
+24.5
+GB retains
+44.35\%
+GSM8K, competitive with
+\ell{=}1
+@1bpw while halving training memory, demonstrating a practical memory–accuracy dial for constrained devices.
+
+Training mode variants.
+
+Appendix
+G
+(Table
+6
+) compares QAT Freeze, QAT Scratch, and PTQ-LoRDBA against QAT Full. QAT Freeze matches QAT Full within
+0.02
+Avg at 2 BPW. QAT Scratch trails by
+4
+–
+9
+pt on GSM8K due to missing task-informed initialization. PTQ-LoRDBA degrades at
+\leq 2
+BPW on math but retains summarization quality.
+
+6
+Related Work
+
+Low-rank adaptation.
+
+LoRA
+(
+Hu et al. 2022
+)
+reparameterizes fine-tuning updates as a low-rank product of dense fp16 factors. Extensions improve rank structure
+(
+Liu et al. 2024b
+;
+Kopiczko et al. 2024
+)
+, initialization
+(
+Meng et al. 2024
+;
+Hayou et al. 2024
+)
+, or training, but all keep full-precision factors. QLoRA
+(
+Dettmers et al. 2023
+)
+freezes a
+4
+-bit base and trains fp16 LoRA; S-LoRA
+(
+Sheng et al. 2024
+)
+and Punica
+(
+Chen et al. 2024
+)
+operationalize multi-tenant adapter serving. LoRDBA compresses the
+trained
+adapter and composes with any LoRA variant.
+
+Base-model quantization.
+
+LoftQ
+(
+Li et al. 2024
+)
+and QA-LoRA
+(
+Xu et al. 2024a
+)
+quantize the frozen base while initializing adapters to compensate for quantization error; adapters remain floating-point. Base-model PTQ methods
+(
+Frantar et al. 2022
+;
+Lin et al. 2024
+)
+are orthogonal to LoRDBA. Recent PTQ methods further improve the base-side quantization objective by explicitly propagating quantization errors across layers
+(
+Arai and Ichikawa 2025
+)
+or by extending the optimization unit from individual layers to larger submodules
+(
+Ichikawa et al. 2025a
+)
+. LoRDBA instead compresses the
+adapter
+while reusing the base-side codebook kernel without modification.
+
+Adapter compression.
+
+BitDelta
+(
+Liu et al. 2024a
+)
+binarizes the full fine-tuning delta
+\Delta W
+with per-column scales; it discards the low-rank structure, producing a
+\Theta(NM)
+-bit delta much larger than a LoRA adapter at small rank. LoRAQuant
+(
+Mirzaei et al. 2025
+)
+re-decomposes
+AB^{\top}
+via SVD into mixed-bit sub-LoRAs with gradient optimization, retaining floating-point components. LoRDBA differs from both by committing both factors to
+\pm 1
+and training end-to-end.
+
+Binary matrix factorization.
+
+The
+\pm 1
+parameterization connects to binary networks
+(
+Courbariaux et al. 2016
+;
+Rastegari et al. 2016
+;
+Liu et al. 2020
+)
+and full-LLM binarization (BitNet
+(
+Wang et al. 2023
+)
+, OneBit
+(
+Xu et al. 2024b
+)
+).
+DBF
+(
+Boža and Macko 2025b
+)
+factorizes a dense weight as two sign matrices with channel-wise scales; MDBF
+(
+Ichikawa et al. 2025b
+)
+extends this idea to rank-
+\ell
+multi-envelope scaling for full-weight extreme quantization. LoRDBA applies the factorization to the much smaller LoRA delta, adds an expressivity guarantee (Theorem
+4.1
+), and introduces task-specific QAT via the smooth-sign STE
+(
+Leng et al. 2018
+;
+Boža and Macko 2025a
+)
+.
+Complementary to algorithmic compression methods, OneComp
+(
+Ichikawa et al. 2026
+)
+packages heterogeneous post-training compression techniques into a reproducible, hardware-aware pipeline, whereas LoRDBA focuses on the adapter representation and its unmerged inference primitive.
+
+7
+Conclusion
+
+LoRDBA shows that both factors of a low-rank adapter can be binarized to
+\pm 1
+, provided that a compact set of channel-wise scales preserves their row, column, and joint-spectrum magnitudes. Under the QLoRA-style adapter-mode conditions (A1)–(A4), QAT Full LoRDBA achieves accuracy that matches or exceeds fp16 LoRA at the same adapter size, while introducing at most
+8\%
+prefill-latency overhead, and compressing the adapter by more than
+10\times
+.
+The additional training cost is moderate: LoRDBA requires approximately
+1.6\times
+higher peak memory and
+1.8\times
+longer step time due to the smooth-sign STE. Across LLaMA-2-7B math reasoning and summarization benchmarks, as well as LLaMA-3.2-3B ablations, QAT Full LoRDBA Pareto-dominates all evaluated adapter-compression methods at every tested size tier.
+
+Limitations.
+
+Our expressivity guarantee in Theorem
+4.1
+relies on the sub-Gaussian sign-noise decomposition in Assumption
+C.1
+. As a result, the guarantee may weaken when the factor magnitudes are heavy-tailed or bimodal. Our experiments are also limited to LLaMA-2-7B and LLaMA-3.2-3B on math reasoning and summarization tasks, leaving validation on larger models, alternative architectures, and additional domains to future work.
+Finally, LoRDBA targets the unmerged adapter-mode setting. Adapters that must be merged into the base model before inference are outside the scope of the current framework.
+
+Broader impact.
+
+By compressing LoRA adapters to
+{\leq}4
+bits per weight, LoRDBA reduces the communication and storage costs of distributing task-specific models. This makes on-device personalization more practical, as adapters can be deployed locally without requiring users to upload private data to the cloud, providing a direct privacy benefit.
+At the same time, LoRDBA is both model- and task-agnostic, and could therefore also be used to compress adapters fine-tuned for harmful applications. We recommend pairing LoRDBA with the same safety guardrails used for the underlying base model.
+
+Acknowledgments and Disclosure of Funding
+
+This work was supported by the Council for Science, Technology and Innovation (CSTI), Cross-ministerial Strategic Innovation Promotion Program (SIP), “Promotion of Application of Advanced Quantum Technology Infrastructure to Social Issues” (Funding agency: QST), JST BOOST (Grant No. JPMJBY24D0), and was carried out using the TSUBAME4.0 supercomputer at Institute of Science Tokyo.
+
+Appendix Contents
+
+Appendix A
+Symbol Glossary
+
+Table
+4
+collects the principal symbols used throughout
+the paper.
+
+Table 4
+:
+Glossary of the principal symbols used in the paper.
+
+Symbol
+
+Meaning
+
+First used
+
+N,M
+
+in-/out-features of the host projection
+
+Section
+2
+
+r_{0}
+
+reference fp16 LoRA rank used for BPW normalisation
+
+Section
+2
+
+R
+
+binary carrier rank of LoRDBA (inner dim of
+B_{1},B_{2}
+)
+
+Definition
+3.1
+
+\ell
+
+envelope rank of LoRDBA
+
+Definition
+3.1
+
+W_{0}\in{\mathbb{R}}^{N\times M}
+
+frozen base-model weight matrix
+
+Section
+2
+
+A,B
+
+fp16 LoRA factors of rank
+r_{0}
+
+Eq. (
+1
+)
+
+\Delta W
+
+fine-tuning weight update (either LoRA or LoRDBA)
+
+Section
+2
+
+B_{1}\in\{\pm 1\}^{N\times R}
+,
+B_{2}\in\{\pm 1\}^{R\times M}
+
+binary factors of LoRDBA
+
+Definition
+3.1
+
+{\bm{\alpha}}^{(i)},{\bm{\beta}}^{(i)},{\bm{\gamma}}^{(i)}
+
+channel-wise fp16 scale vectors (
+i\in[\ell]
+)
+
+Definition
+3.1
+
+\sign(\cdot),\diag(\cdot)
+
+element-wise sign and diagonal operators
+
+Section
+2
+
+\odot
+
+Hadamard (element-wise) product
+
+Section
+2
+
+\mathrm{BPW}_{\mathrm{bc}},\mathrm{BPW}_{\mathrm{tot}}
+
+binary-carrier and total bits per weight
+
+Eq. (
+6
+)
+
+U_{k},M_{k},Y_{k}
+
+continuous, discrete, scaled dual iterates of PTQ-LoRDBA
+
+App.
+D
+
+n_{1}=NR,n_{2}=RM
+
+number of entries in block
+k\in\{1,2\}
+
+App.
+D
+
+\rho,\widetilde{\rho}_{k}=\rho/n_{k}
+
+ADMM penalty, per-block scaling
+
+Eq. (
+46
+)
+
+\kappa
+
+smooth-sign STE temperature
+
+Eq. (
+65
+)
+
+\|\cdot\|_{F},\|\cdot\|_{\psi_{2}},\|\cdot\|_{\psi_{1}}
+
+Frobenius, sub-Gaussian and sub-exponential Orlicz norms
+
+Sections
+4
+,
+B
+
+\sigma^{A},\sigma^{B}
+
+latent signs in the factor decomposition
+
+App.
+C
+
+\mu_{A},\mu_{B}
+
+mean magnitudes of fp16 LoRA factors
+A,B
+
+App.
+C
+
+\xi^{A},\xi^{B}
+
+zero-mean sub-Gaussian residuals (
+\|\xi\|_{\psi_{2}}\leq\zeta
+)
+
+App.
+C
+
+\theta^{\star}
+
+canonical LoRDBA reconstruction (Eq. (
+17
+))
+
+App.
+C
+
+Appendix B
+Self-contained probabilistic background
+
+This appendix collects the elementary concentration facts used by the
+expressivity proof. Apart from Markov’s inequality, every estimate
+below is proved from scratch using only Cauchy–Schwarz and series
+manipulations, so the proof of Theorem
+4.1
+does not
+depend on any external reference. Throughout we work with real-valued
+random variables defined on a common probability space, write
+
+C,c,c_{1},c_{2},\ldots
+for finite, strictly positive numerical
+constants whose value may change from line to line and which are
+independent of all model parameters, and denote
+
+\|X\|_{\psi_{2}}\coloneqq\inf\bigl\{t>0:{\mathbb{E}}\exp(X^{2}/t^{2})\leq 2\bigr\},\qquad\|X\|_{\psi_{1}}\coloneqq\inf\bigl\{s>0:{\mathbb{E}}\exp(|X|/s)\leq 2\bigr\}.
+
+(12)
+
+Lemma B.1
+
+(Sub-Gaussian tail and second moment)
+.
+
+Let
+X
+be a real random variable with
+\|X\|_{\psi_{2}}\leq K
+.
+Then
+
+{\mathbb{E}}[X^{2}]\;\leq\;K^{2},\qquad\Pr[|X|\geq t]\;\leq\;2\exp(-t^{2}/K^{2}),~t\geq 0,
+
+(13)
+
+and for every integer
+p\geq 1
+,
+
+({\mathbb{E}}|X|^{p})^{1/p}\leq CK\sqrt{p}
+with a numerical constant
+C
+.
+
+Proof.
+
+The inequality
+1+u\leq e^{u}
+at
+u=X^{2}/K^{2}
+and the
+definition of
+\|\cdot\|_{\psi_{2}}
+give
+
+1+{\mathbb{E}}[X^{2}]/K^{2}\leq{\mathbb{E}}\exp(X^{2}/K^{2})\leq 2
+, hence
+
+{\mathbb{E}}[X^{2}]\leq K^{2}
+. Markov’s inequality applied to
+
+\exp(X^{2}/K^{2})
+at level
+\exp(t^{2}/K^{2})
+yields the tail bound.
+For the moment bound, integrate the tail:
+
+{\mathbb{E}}|X|^{p}=p\int_{0}^{\infty}t^{p-1}\Pr[|X|\geq t]dt\leq 2p\int_{0}^{\infty}t^{p-1}e^{-t^{2}/K^{2}}dt=pK^{p}\Gamma(p/2)\leq(CK)^{p}p^{p/2},
+
+where the last step uses Stirling. Taking the
+p
+-th root proves the
+moment bound.
+∎
+
+Lemma B.2
+
+(MGF bound and sub-Gaussian sum)
+.
+
+If
+{\mathbb{E}}X=0
+and
+\|X\|_{\psi_{2}}\leq K
+, then
+
+{\mathbb{E}}\exp(\lambda X)\leq\exp(C\lambda^{2}K^{2})
+for every
+
+\lambda\in{\mathbb{R}}
+. If furthermore
+X_{1},\ldots,X_{n}
+are
+mutually independent, mean-zero with
+
+\|X_{i}\|_{\psi_{2}}\leq K
+, and
+a_{1},\ldots,a_{n}\in{\mathbb{R}}
+
+are deterministic, then for every
+u\geq 0
+,
+
+\Pr\left[\Bigl|\sum_{i=1}^{n}a_{i}X_{i}\Bigr|\geq CK\|a\|_{2}\sqrt{u}\right]\;\leq\;2e^{-u}.
+
+(14)
+
+Proof.
+
+Expanding the exponential as a Taylor series and using
+
+{\mathbb{E}}X=0
+gives
+
+{\mathbb{E}}e^{\lambda X}=1+\sum_{p\geq 2}\frac{\lambda^{p}{\mathbb{E}}X^{p}}{p!}.
+
+By Lemma
+B.1
+,
+
+|{\mathbb{E}}X^{p}|\leq{\mathbb{E}}|X|^{p}\leq(CK\sqrt{p})^{p}
+. Hence
+
+\sum_{p\geq 2}\frac{|\lambda|^{p}|{\mathbb{E}}X^{p}|}{p!}\leq\sum_{p\geq 2}\frac{(C|\lambda|K\sqrt{p})^{p}}{p!}\leq C_{1}\lambda^{2}K^{2}\exp(C_{2}\lambda^{2}K^{2}),
+
+where the last inequality is the standard consequence of
+
+p!\geq(p/e)^{p}
+and splitting the series at
+
+p\simeq\lambda^{2}K^{2}
+. Since
+
+1+s\exp(s^{\prime})\leq\exp(C(s+s^{\prime}))
+for
+s,s^{\prime}\geq 0
+, this yields
+
+{\mathbb{E}}e^{\lambda X}\leq\exp(C^{\prime\prime\prime}\lambda^{2}K^{2})
+for a universal
+constant
+C^{\prime\prime\prime}
+.
+By independence,
+{\mathbb{E}}\exp(\lambda\sum_{i}a_{i}X_{i})=\prod_{i}{\mathbb{E}}e^{\lambda a_{i}X_{i}}\leq\exp(C\lambda^{2}K^{2}\|a\|_{2}^{2})
+.
+Chernoff’s inequality
+
+\Pr[\sum a_{i}X_{i}>t]\leq\inf_{\lambda>0}e^{-\lambda t}{\mathbb{E}}e^{\lambda\sum a_{i}X_{i}}
+
+optimised at
+\lambda=t/(2CK^{2}\|a\|_{2}^{2})
+gives
+
+\Pr[\sum a_{i}X_{i}>t]\leq\exp(-ct^{2}/(K^{2}\|a\|_{2}^{2}))
+.
+A symmetric bound on the negative tail and adjusting constants yields
+Eq. (
+14
+).
+∎
+
+Lemma B.3
+
+(Sub-exponential product and Bernstein bound)
+.
+
+If
+X,Y
+are independent real random variables with
+
+\|X\|_{\psi_{2}}\leq K
+and
+\|Y\|_{\psi_{2}}\leq L
+, then
+
+{\mathbb{E}}[XY]={\mathbb{E}}X{\mathbb{E}}Y
+and the product
+XY
+is
+sub-exponential with
+\|XY\|_{\psi_{1}}\leq KL
+. Moreover, if
+
+W_{1},\ldots,W_{n}
+are mutually independent, mean-zero, and
+
+\|W_{i}\|_{\psi_{1}}\leq L_{0}
+, then for every
+u\geq 0
+,
+
+\Pr\left[\Bigl|\sum_{i=1}^{n}W_{i}\Bigr|\geq t\right]\;\leq\;2\exp\Bigl(-c\min\Bigl(\frac{t^{2}}{nL_{0}^{2}},\frac{t}{L_{0}}\Bigr)\Bigr),\quad t\geq 0.
+
+(15)
+
+Proof.
+
+For the product part, the Young inequality
+|xy|/(KL)\leq x^{2}/(2K^{2})+y^{2}/(2L^{2})
+
+combined with the AM–GM and Cauchy–Schwarz inequalities yields
+
+{\mathbb{E}}\exp(|XY|/(KL))\leq{\mathbb{E}}\exp(X^{2}/(2K^{2})+Y^{2}/(2L^{2}))={\mathbb{E}}\exp(X^{2}/(2K^{2})){\mathbb{E}}\exp(Y^{2}/(2L^{2}))\leq 2,
+
+where we used independence in the equality and the
+
+\psi_{2}
+-defining bound twice in the last step (after noting that
+
+\exp(X^{2}/(2K^{2}))\leq\sqrt{\exp(X^{2}/K^{2})}
+, so its expectation
+is at most
+\sqrt{2}
+). Hence
+\|XY\|_{\psi_{1}}\leq KL
+. For the
+mean,
+{\mathbb{E}}|XY|\leq\sqrt{{\mathbb{E}}X^{2}{\mathbb{E}}Y^{2}}<\infty
+
+by Cauchy–Schwarz and Lemma
+B.1
+, so by Fubini
+
+{\mathbb{E}}[XY]={\mathbb{E}}X{\mathbb{E}}Y
+.
+
+For the Bernstein bound, an argument identical to that of
+Lemma
+B.2
+(now using
+
+({\mathbb{E}}|W|^{p})^{1/p}\leq CL_{0}p
+instead of
+CK\sqrt{p}
+,
+which is the sub-exponential moment bound proved by integrating the
+tail
+\Pr[|W|\geq t]\leq 2e^{-t/L_{0}}
+) yields, for
+
+|\lambda|\leq c/L_{0}
+,
+
+{\mathbb{E}}\exp\Bigl(\lambda\sum_{i=1}^{n}W_{i}\Bigr)\leq\exp(Cn\lambda^{2}L_{0}^{2}).
+
+Optimising the resulting Chernoff bound at
+
+\lambda=\min\bigl(t/(2CnL_{0}^{2}),c/(2L_{0})\bigr)
+gives the
+two-regime bound Eq. (
+15
+).
+∎
+
+Lemma B.4
+
+(Sign-flip bound from a
+\psi_{2}
+residual)
+.
+
+If
+\|X\|_{\psi_{2}}\leq K
+and
+\mu>0
+, then
+
+\Pr[|X|\geq\mu]\leq 2\exp(-\mu^{2}/K^{2})
+.
+
+Proof.
+
+Markov’s inequality applied to
+\exp(X^{2}/K^{2})
+at level
+
+\exp(\mu^{2}/K^{2})
+gives
+
+\Pr[|X|\geq\mu]=\Pr[\exp(X^{2}/K^{2})\geq\exp(\mu^{2}/K^{2})]\leq 2\exp(-\mu^{2}/K^{2})
+.
+∎
+
+Appendix C
+Expressivity of LoRDBA: Proof of Theorem
+4.1
+
+This appendix gives a full, self-contained proof of
+Theorem
+4.1
+from Section
+4
+. The
+argument is entirely a matter of entry-wise sub-Gaussian and
+sub-exponential concentration, and no sketching, Rademacher
+compression, or Johnson–Lindenstrauss reduction is used. All
+underlying probabilistic facts are proved from scratch in
+Appendix
+B
+(sub-Gaussian sum tail
+Lemma
+B.2
+, sub-exponential product and Bernstein
+inequality Lemma
+B.3
+, and the sign-flip bound
+Lemma
+B.4
+). In particular, the sub-Gaussian Orlicz
+norm and the second-moment bound
+
+{\mathbb{E}}[X^{2}]\leq\|X\|_{\psi_{2}}^{2}
+used freely below are
+recorded in Lemma
+B.1
+.
+
+Assumption C.1
+
+(Sign-plus-sub-Gaussian-noise factor model)
+.
+
+The LoRA factors
+A\in{\mathbb{R}}^{N\times r}
+and
+
+B\in{\mathbb{R}}^{M\times r}
+are random matrices defined on a common
+probability space
+(\Omega,{\mathcal{A}},\Pr)
+and admit the entry-wise
+decomposition
+
+A_{ik}=\mu_{A}\sigma^{A}_{ik}+\xi^{A}_{ik},~~B_{jk}=\mu_{B}\sigma^{B}_{jk}+\xi^{B}_{jk},~~i\in[N],~j\in[M],~k\in[r],
+
+(16)
+
+where
+\mu_{A},\mu_{B}>0
+and
+\zeta>0
+are deterministic
+scalars and the sign arrays
+
+\sigma^{A}\in\{\pm 1\}^{N\times r}
+,
+
+\sigma^{B}\in\{\pm 1\}^{M\times r}
+and residual arrays
+
+\xi^{A}\in{\mathbb{R}}^{N\times r}
+,
+
+\xi^{B}\in{\mathbb{R}}^{M\times r}
+satisfy:
+
+1.
+
+The families
+
+\{\xi^{A}_{ik}\}_{(i,k)\in[N]\times[r]}
+and
+
+\{\xi^{B}_{jk}\}_{(j,k)\in[M]\times[r]}
+consist of mutually
+independent random variables, the two families are mutually
+independent, and each entry has zero mean.
+
+2.
+
+The residuals are uniformly sub-Gaussian:
+
+\max\Bigl(\max_{(i,k)\in[N]\times[r]}\|\xi^{A}_{ik}\|_{\psi_{2}},\max_{(j,k)\in[M]\times[r]}\|\xi^{B}_{jk}\|_{\psi_{2}}\Bigr)\leq\zeta.
+
+3.
+
+The sign
+\sigma
+-algebra
+
+{\mathcal{F}}\coloneqq\sigma(\sigma^{A},\sigma^{B})
+is independent
+of
+\sigma(\xi^{A},\xi^{B})
+.
+
+We allow the latent sign arrays to be either fixed or random. When
+
+\sigma^{A},\sigma^{B}
+are fixed, all probability statements are taken
+only over the residual arrays
+(\xi^{A},\xi^{B})
+; in this case
+Assumption
+C.1
+(iii) is vacuous. For the relative bound
+in Theorem
+4.1
+, the entries of
+\sigma^{A}
+and
+
+\sigma^{B}
+are additionally assumed to be jointly i.i.d. Rademacher.
+
+The canonical reconstruction used in Theorem
+4.1
+is
+
+\theta^{\star}\coloneqq\bigl(\sigma^{A},(\sigma^{B})^{\top},{\bm{1}}_{N},\mu_{A}\mu_{B}{\bm{1}}_{r},{\bm{1}}_{M}\bigr),
+
+(17)
+
+which is a single-envelope LoRDBA adapter with the latent signs as the
+binary carriers. For each envelope rank
+\ell\geq 1
+, let
+\Theta_{\ell}
+
+denote the corresponding LoRDBA class of Definition
+3.1
+.
+The zero-padding embedding
+
+\iota_{\ell}:\Theta_{\ell-1}\hookrightarrow\Theta_{\ell},~~\bigl(B_{1},B_{2},\{({\bm{\alpha}}^{(i)},{\bm{\beta}}^{(i)},{\bm{\gamma}}^{(i)})\}_{i=1}^{\ell-1}\bigr)\mapsto\bigl(B_{1},B_{2},\{({\bm{\alpha}}^{(i)},{\bm{\beta}}^{(i)},{\bm{\gamma}}^{(i)})\}_{i=1}^{\ell-1},({\bm{0}},{\bm{0}},{\bm{0}})\bigr)
+
+(18)
+
+preserves
+\Delta W
+, so the best achievable reconstruction error is
+non-increasing in the envelope rank.
+
+Let
+E\coloneqq AB^{\top}-\Delta W(\theta^{\star})\in{\mathbb{R}}^{N\times M}
+
+denote the reconstruction residual. We first expand
+E
+entry-wise
+(Lemma
+C.2
+), then bound each entry by
+sub-exponential concentration (Lemma
+C.3
+), aggregate by a
+union bound to obtain (
+27
+), and finally combine the
+Frobenius upper bound with a Chebyshev lower bound on
+
+\|\Delta W(\theta^{\star})\|_{F}^{2}
+
+(Lemma
+C.4
+) to obtain (
+10
+).
+
+For the absolute bound (
+27
+) the signs
+
+\sigma^{A},\sigma^{B}
+are deterministic, so all probability
+statements below are taken with respect to the residuals
+
+(\xi^{A},\xi^{B})
+. For the relative bound (
+10
+)
+the signs are additionally i.i.d. Rademacher and jointly independent
+of the residuals; every statement proved for deterministic signs
+therefore also holds
+conditionally
+on
+
+(\sigma^{A},\sigma^{B})
+, and by Fubini the residual event of
+probability at least
+1-\delta
+holds on the product space.
+
+C.1
+Entry-wise expansion
+
+The heart of the argument is the following entry-wise expansion of the
+residual into three pieces with distinct concentration behaviour. Its
+pairwise
+L^{2}
+-orthogonality keeps the final variance computation
+additive.
+
+Lemma C.2
+
+(Residual expansion)
+.
+
+Under Assumption
+C.1
+, for every
+i\in[N]
+and
+
+j\in[M]
+,
+
+E_{ij}\;=\;\underbrace{\mu_{A}\sum_{k=1}^{r}\sigma^{A}_{ik}\xi^{B}_{jk}}_{=:T^{(1)}_{ij}}\;+\;\underbrace{\mu_{B}\sum_{k=1}^{r}\xi^{A}_{ik}\sigma^{B}_{jk}}_{=:T^{(2)}_{ij}}\;+\;\underbrace{\sum_{k=1}^{r}\xi^{A}_{ik}\xi^{B}_{jk}}_{=:T^{(3)}_{ij}}.
+
+(19)
+
+Let
+{\mathcal{F}}\coloneqq\sigma(\sigma^{A},\sigma^{B})
+denote the
+
+\sigma
+-algebra generated by the signs (which reduces to the trivial
+
+\sigma
+-algebra when the signs are deterministic). Then the three
+summands are pairwise
+L^{2}
+-orthogonal conditionally on
+{\mathcal{F}}
+:
+
+{\mathbb{E}}\bigl[T^{(a)}_{ij}T^{(b)}_{ij}\big|{\mathcal{F}}\bigr]\;=\;0\quad\text{for every distinct }a,b\in\{1,2,3\}.
+
+(20)
+
+In particular, taking total expectation, the same orthogonality holds
+unconditionally.
+
+Proof.
+
+Step 1: entry-wise identity.
+Substituting
+Eq. (
+16
+) into
+
+(AB^{\top})_{ij}=\sum_{k=1}^{r}A_{ik}B_{jk}
+and expanding the
+scalar product
+
+(\mu_{A}\sigma^{A}_{ik}+\xi^{A}_{ik})(\mu_{B}\sigma^{B}_{jk}+\xi^{B}_{jk})
+
+termwise,
+
+(AB^{\top})_{ij}\;=\;\underbrace{\mu_{A}\mu_{B}\sum_{k=1}^{r}\sigma^{A}_{ik}\sigma^{B}_{jk}}_{=[\Delta W(\theta^{\star})]_{ij}}\;+\;T^{(1)}_{ij}+T^{(2)}_{ij}+T^{(3)}_{ij},
+
+where the identification of the leading term with
+
+[\Delta W(\theta^{\star})]_{ij}
+follows from
+Eq. (
+17
+) together with
+
+[\diag({\bm{1}}_{N})\sigma^{A}\diag(\mu_{A}\mu_{B}{\bm{1}}_{r})(\sigma^{B})^{\top}\diag({\bm{1}}_{M})]_{ij}=\mu_{A}\mu_{B}\sum_{k}\sigma^{A}_{ik}\sigma^{B}_{jk}
+.
+Subtracting this leading term yields
+Eq. (
+19
+).
+
+Step 2: conditional
+L^{2}
+-orthogonality.
+By
+Assumption
+C.1
+(iii) the sign
+\sigma
+-algebra
+
+{\mathcal{F}}=\sigma(\sigma^{A},\sigma^{B})
+is independent of
+
+\sigma(\xi^{A},\xi^{B})
+, which implies that the conditional law of
+
+(\xi^{A},\xi^{B})
+given
+{\mathcal{F}}
+equals its unconditional law; all
+residual moments appearing below therefore equal their unconditional
+counterparts. Fix
+(i,j)
+and recall
+
+T^{(1)}_{ij}T^{(2)}_{ij}=\mu_{A}\mu_{B}\sum_{k,l}\sigma^{A}_{ik}\sigma^{B}_{jl}\xi^{B}_{jk}\xi^{A}_{il}
+.
+The sign factors are
+{\mathcal{F}}
+-measurable and can be pulled out of
+the conditional expectation; Assumption
+C.1
+(i)
+ensures that
+\xi^{A}_{il}
+and
+\xi^{B}_{jk}
+are independent (they
+belong to different independent families) with
+
+{\mathbb{E}}[\xi^{A}_{il}]={\mathbb{E}}[\xi^{B}_{jk}]=0
+, so
+
+{\mathbb{E}}[T^{(1)}_{ij}T^{(2)}_{ij}\mid{\mathcal{F}}]=\mu_{A}\mu_{B}\sum_{k,l=1}^{r}\sigma^{A}_{ik}\sigma^{B}_{jl}{\mathbb{E}}[\xi^{A}_{il}]{\mathbb{E}}[\xi^{B}_{jk}]=0.
+
+For
+T^{(1)}_{ij}T^{(3)}_{ij}=\mu_{A}\sum_{k,l}\sigma^{A}_{ik}\xi^{B}_{jk}\xi^{A}_{il}\xi^{B}_{jl}
+,
+the factor
+\xi^{A}_{il}
+is independent of
+
+(\xi^{B}_{jk},\xi^{B}_{jl})
+(different families, cf. (i)), so its
+expectation factorises and vanishes:
+
+{\mathbb{E}}[T^{(1)}_{ij}T^{(3)}_{ij}\mid{\mathcal{F}}]=\mu_{A}\sum_{k,l=1}^{r}\sigma^{A}_{ik}{\mathbb{E}}[\xi^{A}_{il}]{\mathbb{E}}[\xi^{B}_{jk}\xi^{B}_{jl}]=0.
+
+The identity
+{\mathbb{E}}[T^{(2)}_{ij}T^{(3)}_{ij}\mid{\mathcal{F}}]=0
+is
+symmetric, replacing the roles of
+A
+and
+B
+:
+
+{\mathbb{E}}[T^{(2)}_{ij}T^{(3)}_{ij}\mid{\mathcal{F}}]=\mu_{B}\sum_{k,l=1}^{r}\sigma^{B}_{jk}{\mathbb{E}}[\xi^{B}_{jl}]{\mathbb{E}}[\xi^{A}_{ik}\xi^{A}_{il}]=0.
+
+This establishes Eq. (
+20
+). Taking
+expectations and using the tower property yields the unconditional
+orthogonality.
+∎
+
+C.2
+Sub-exponential tail of each entry
+
+With Lemma
+C.2
+in hand, each summand in
+Eq. (
+19
+) is either a sum of independent
+sub-Gaussians or a sum of independent products of sub-Gaussians; the
+latter is sub-exponential. A union bound over the three summands
+therefore yields a sub-exponential tail for
+E_{ij}
+.
+
+Lemma C.3
+
+(Sub-exponential bound on
+E_{ij}
+)
+.
+
+Let
+V\coloneqq r\zeta^{2}(\mu_{A}^{2}+\mu_{B}^{2}+\zeta^{2})
+.
+There exists a universal constant
+c_{1}>0
+such that, for every
+
+(i,j)\in[N]\times[M]
+and every
+t>0
+,
+
+\Pr\bigl[|E_{ij}|>t\bigr]\;\leq\;6\exp\Bigl(-c_{1}\min\Bigl(\frac{t^{2}}{V},\frac{t}{\zeta^{2}}\Bigr)\Bigr).
+
+(21)
+
+Moreover
+{\mathbb{E}}[E_{ij}^{2}]\leq V
+, hence
+
+{\mathbb{E}}\|E\|_{F}^{2}\leq NMV
+.
+
+Proof.
+
+Fix
+(i,j)\in[N]\times[M]
+and condition on the
+\sigma
+-algebra
+
+{\mathcal{F}}=\sigma(\sigma^{A},\sigma^{B})
+. By
+Assumption
+C.1
+(iii) the residuals
+(\xi^{A},\xi^{B})
+
+are independent of
+{\mathcal{F}}
+, so the conditional joint law of the
+residuals given
+{\mathcal{F}}
+coincides with their unconditional law. All
+probability statements in parts (a)–(c) below are understood
+conditionally on
+{\mathcal{F}}
+; the bounds are uniform over realisations
+of
+{\mathcal{F}}
+and therefore also hold unconditionally. Throughout we
+write
+c_{a},c_{b}>0
+for the universal constants produced by
+Lemma
+B.2
+(sub-Gaussian sum tail) and
+Lemma
+B.3
+(Bernstein) of
+Appendix
+B
+.
+
+(a)
+T^{(1)}_{ij}
+is sub-Gaussian.
+For each
+
+k\in[r]
+,
+|\sigma^{A}_{ik}|=1
+and the positive-homogeneity
+of
+\|\cdot\|_{\psi_{2}}
+give
+
+\|\sigma^{A}_{ik}\xi^{B}_{jk}\|_{\psi_{2}}=\|\xi^{B}_{jk}\|_{\psi_{2}}\leq\zeta
+.
+By Assumption
+C.1
+(i) the family
+
+\{\xi^{B}_{jk}\}_{k=1}^{r}
+is mutually independent and the
+
+{\mathcal{F}}
+-measurable signs
+\sigma^{A}_{ik}
+preserve (conditional)
+independence and the zero mean. Applying Lemma
+B.2
+
+conditionally on
+{\mathcal{F}}
+to
+
+\{X_{k}=\sigma^{A}_{ik}\xi^{B}_{jk}\}_{k=1}^{r}
+with
+
+a_{k}\equiv 1
+,
+K=\zeta
+, scaled by the deterministic
+constant
+\mu_{A}
+, yields
+
+\Pr\bigl[|T^{(1)}_{ij}|>t\big|{\mathcal{F}}\bigr]\;\leq\;2\exp\bigl(-c_{a}t^{2}/(\mu_{A}^{2}r\zeta^{2})\bigr)\qquad\forall t\geq 0.
+
+(22)
+
+(b)
+T^{(2)}_{ij}
+is sub-Gaussian.
+Exchanging the roles of
+the two families in (a),
+
+\Pr\bigl[|T^{(2)}_{ij}|>t\big|{\mathcal{F}}\bigr]\;\leq\;2\exp\bigl(-c_{a}t^{2}/(\mu_{B}^{2}r\zeta^{2})\bigr)\qquad\forall t\geq 0.
+
+(23)
+
+(c)
+T^{(3)}_{ij}
+is sub-exponential.
+By
+Assumption
+C.1
+(i),
+\xi^{A}_{ik}
+and
+\xi^{B}_{jk}
+
+are independent with zero mean, so
+Lemma
+B.3
+gives
+
+{\mathbb{E}}[\xi^{A}_{ik}\xi^{B}_{jk}\mid{\mathcal{F}}]={\mathbb{E}}[\xi^{A}_{ik}]{\mathbb{E}}[\xi^{B}_{jk}]=0
+
+and
+
+\|\xi^{A}_{ik}\xi^{B}_{jk}\|_{\psi_{1}}\leq\|\xi^{A}_{ik}\|_{\psi_{2}}\|\xi^{B}_{jk}\|_{\psi_{2}}\leq\zeta^{2}
+.
+The summands
+\{\xi^{A}_{ik}\xi^{B}_{jk}\}_{k=1}^{r}
+are independent
+across
+k
+: indeed,
+
+\sigma(\xi^{A}_{ik}\xi^{B}_{jk})\subseteq\sigma(\xi^{A}_{ik},\xi^{B}_{jk})
+,
+and the pairs
+(\xi^{A}_{ik},\xi^{B}_{jk})
+for distinct
+
+k\in[r]
+involve disjoint index sets in the mutually independent
+families
+\{\xi^{A}_{\cdot\cdot}\},\{\xi^{B}_{\cdot\cdot}\}
+.
+The Bernstein bound Eq. (
+15
+) of
+Lemma
+B.3
+therefore yields, with
+
+c_{b}>0
+the universal constant of that lemma,
+
+\Pr\bigl[|T^{(3)}_{ij}|>t\big|{\mathcal{F}}\bigr]\;\leq\;2\exp\Bigl(-c_{b}\min\bigl(t^{2}/(r\zeta^{4}),t/\zeta^{2}\bigr)\Bigr)\qquad\forall t\geq 0.
+
+(24)
+
+Combination.
+Triangle inequality gives
+
+|E_{ij}|\leq|T^{(1)}_{ij}|+|T^{(2)}_{ij}|+|T^{(3)}_{ij}|
+,
+so
+
+\{|E_{ij}|>t\}\;\subseteq\;\{|T^{(1)}_{ij}|>t/3\}\cup\{|T^{(2)}_{ij}|>t/3\}\cup\{|T^{(3)}_{ij}|>t/3\}.
+
+Since
+V=r\zeta^{2}(\mu_{A}^{2}+\mu_{B}^{2}+\zeta^{2})
+
+dominates each of
+\mu_{A}^{2}r\zeta^{2}
+,
+\mu_{B}^{2}r\zeta^{2}
+,
+and
+r\zeta^{4}
+, Eqs. (
+22
+)–(
+23
+) at
+
+t/3
+are bounded by
+
+2\exp(-c_{a}t^{2}/(9V))
+, and Eq. (
+24
+) at
+t/3
+is
+bounded by
+
+2\exp(-c_{b}\min(t^{2}/(9V),t/(3\zeta^{2})))
+. Defining
+
+c_{1}\;\coloneqq\;\frac{1}{9}\min(c_{a},c_{b}),
+
+(25)
+
+each of the three bounds is dominated by
+
+2\exp(-c_{1}\min(t^{2}/V,t/\zeta^{2}))
+: indeed
+
+c_{a}/9\geq c_{1}
+,
+c_{b}/9\geq c_{1}
+, and
+
+c_{b}/3\geq c_{1}
+. Taking the union over the three events
+yields Eq. (
+21
+) conditionally on
+{\mathcal{F}}
+;
+uniformity over
+{\mathcal{F}}
+gives the unconditional bound.
+
+Second moment.
+Lemma
+B.1
+gives
+
+{\mathbb{E}}[(\xi^{A}_{ik})^{2}]\leq\zeta^{2}
+and
+
+{\mathbb{E}}[(\xi^{B}_{jk})^{2}]\leq\zeta^{2}
+. Using the mutual
+independence of Assumption
+C.1
+(i), zero means, and
+
+(\sigma^{\cdot}_{\cdot\cdot})^{2}=1
+,
+
+\displaystyle{\mathbb{E}}[(T^{(1)}_{ij})^{2}\mid{\mathcal{F}}]
+
+\displaystyle=\mu_{A}^{2}\sum_{k,l=1}^{r}\sigma^{A}_{ik}\sigma^{A}_{il}{\mathbb{E}}[\xi^{B}_{jk}\xi^{B}_{jl}]=\mu_{A}^{2}\sum_{k=1}^{r}{\mathbb{E}}[(\xi^{B}_{jk})^{2}]\;\leq\;\mu_{A}^{2}r\zeta^{2},
+
+\displaystyle{\mathbb{E}}[(T^{(2)}_{ij})^{2}\mid{\mathcal{F}}]
+
+\displaystyle\leq\;\mu_{B}^{2}r\zeta^{2},
+
+\displaystyle{\mathbb{E}}[(T^{(3)}_{ij})^{2}\mid{\mathcal{F}}]
+
+\displaystyle=\sum_{k,l=1}^{r}{\mathbb{E}}[\xi^{A}_{ik}\xi^{A}_{il}]{\mathbb{E}}[\xi^{B}_{jk}\xi^{B}_{jl}]=\sum_{k=1}^{r}{\mathbb{E}}[(\xi^{A}_{ik})^{2}]{\mathbb{E}}[(\xi^{B}_{jk})^{2}]\;\leq\;r\zeta^{4},
+
+where the off-diagonal (
+k\neq l
+) cross terms vanish because the
+residuals within each family are mean zero and mutually independent.
+Combined with the conditional orthogonality of
+Lemma
+C.2
+,
+
+{\mathbb{E}}[E_{ij}^{2}\mid{\mathcal{F}}]=\sum_{a=1}^{3}{\mathbb{E}}[(T^{(a)}_{ij})^{2}\mid{\mathcal{F}}]\leq V
+.
+Taking total expectation and summing over
+(i,j)\in[N]\times[M]
+
+yields
+{\mathbb{E}}\|E\|_{F}^{2}\leq NMV
+.
+∎
+
+C.3
+Frobenius bound by union
+
+The per-entry bound of Lemma
+C.3
+transforms into a
+Frobenius bound by a union argument over the
+NM
+entries of
+E
+.
+
+Proof of Theorem
+4.1
+, Eq. (
+27
+).
+
+Fix
+N,M\geq 2
+,
+r\geq 1
+, and
+\delta\in(0,1)
+with
+
+u\coloneqq\log(6NM/\delta)\leq c_{1}r
+, where
+c_{1}
+is the
+constant defined in Eq. (
+25
+). Since
+NM\geq 4
+and
+
+\delta<1
+,
+u\geq\log 24>0
+. Set
+
+t_{\star}\coloneqq\sqrt{Vu/c_{1}}>0
+.
+
+Step 1: the sub-Gaussian branch binds at
+t=t_{\star}
+.
+
+In Eq. (
+21
+) the inner minimum satisfies
+
+\min(c_{1}t^{2}/V,c_{1}t/\zeta^{2})=c_{1}t^{2}/V
+iff
+
+t^{2}/V\leq t/\zeta^{2}
+, iff
+t\leq V/\zeta^{2}
+. At
+
+t=t_{\star}
+this becomes
+\sqrt{Vu/c_{1}}\leq V/\zeta^{2}
+,
+equivalently
+u\leq c_{1}V/\zeta^{4}
+. From
+
+V=r\zeta^{2}(\mu_{A}^{2}+\mu_{B}^{2}+\zeta^{2})
+and
+
+\zeta>0
+,
+
+\frac{V}{\zeta^{4}}\;=\;r\Bigl(\frac{\mu_{A}^{2}}{\zeta^{2}}+\frac{\mu_{B}^{2}}{\zeta^{2}}+1\Bigr)\;\geq\;r,
+
+so the standing hypothesis
+u\leq c_{1}r
+entails
+
+u\leq c_{1}V/\zeta^{4}
+, and the sub-Gaussian branch binds:
+
+c_{1}\min(t_{\star}^{2}/V,t_{\star}/\zeta^{2})\;=\;c_{1}t_{\star}^{2}/V\;=\;u.
+
+Step 2: per-entry bound.
+Substituting
+t=t_{\star}
+into
+Eq. (
+21
+) and using Step 1,
+
+\Pr\bigl[E_{ij}^{2}>Vu/c_{1}\bigr]\;=\;\Pr\bigl[|E_{ij}|>t_{\star}\bigr]\;\leq\;6e^{-u}\;=\;\frac{\delta}{NM},\qquad(i,j)\in[N]\times[M].
+
+Step 3: union bound.
+If
+
+\max_{(i,j)}E_{ij}^{2}\leq Vu/c_{1}
+, then
+
+\|E\|_{F}^{2}=\sum_{i,j}E_{ij}^{2}\leq NM\cdot Vu/c_{1}
+.
+Contrapositively,
+
+\{\|E\|_{F}^{2}>NMVu/c_{1}\}\subseteq\bigcup_{i,j}\{E_{ij}^{2}>Vu/c_{1}\}
+.
+A union bound over the
+NM
+entries gives
+
+\Pr[\|E\|_{F}^{2}>NMVu/c_{1}]\leq NM\cdot\delta/(NM)=\delta
+.
+Hence, with probability at least
+1-\delta
+,
+
+\|E\|_{F}^{2}\;\leq\;\frac{NMr\zeta^{2}(\mu_{A}^{2}+\mu_{B}^{2}+\zeta^{2})}{c_{1}}\log(6NM/\delta).
+
+(26)
+
+Step 4: conversion
+\log(6NM/\delta)\to\log(2NM/\delta)
+.
+
+For
+N,M\geq 2
+and
+\delta\in(0,1)
+,
+
+2NM/\delta\geq 8
+, so
+\log(2NM/\delta)\geq\log 8>\log 3
+.
+Therefore
+
+\log(6NM/\delta)\;=\;\log 3+\log(2NM/\delta)\;\leq\;\log(2NM/\delta)+\log(2NM/\delta)\;=\;2\log(2NM/\delta).
+
+Substituting into Eq. (
+26
+) and setting
+
+C\coloneqq 2/c_{1}>0
+yields the absolute bound
+
+\big\|AB^{\top}-\Delta W(\theta^{\star})\big\|_{F}^{2}\;\leq\;C\cdot NMr\zeta^{2}\bigl(\mu_{A}^{2}+\mu_{B}^{2}+\zeta^{2}\bigr)\log(2NM/\delta).
+
+(27)
+
+The constant
+C
+depends only on the universal constants
+
+c_{a},c_{b}
+produced by Lemma
+B.2
+and
+Lemma
+B.3
+of Appendix
+B
+
+through Eq. (
+25
+), and is otherwise independent of all
+model parameters.
+∎
+
+C.4
+Chebyshev lower bound on the signal
+
+The relative bound requires a lower bound on
+
+\|\Delta W(\theta^{\star})\|_{F}^{2}
+. This is supplied by a
+second-moment argument on the Rademacher bilinear form of the signs.
+
+Lemma C.4
+
+(Lower bound on
+\|\Delta W(\theta^{\star})\|_{F}^{2}
+)
+.
+
+Assume
+\{\sigma^{A}_{ik}\}\cup\{\sigma^{B}_{jk}\}
+are i.i.d. Rademacher with
+\sigma^{A}\perp\sigma^{B}
+. Let
+
+W_{ij}\coloneqq\sum_{k=1}^{r}\sigma^{A}_{ik}\sigma^{B}_{jk}
+. Then
+for every
+N,M\geq 1
+,
+r\geq 1
+,
+
+\Pr\Bigl[\textstyle\sum_{i,j}W_{ij}^{2}\geq\frac{1}{2}NMr\Bigr]\;\geq\;1-\frac{8}{NM}.
+
+(28)
+
+In particular, on this event
+
+\|\Delta W(\theta^{\star})\|_{F}^{2}=\mu_{A}^{2}\mu_{B}^{2}\sum_{ij}W_{ij}^{2}\geq\frac{1}{2}\mu_{A}^{2}\mu_{B}^{2}NMr
+.
+
+Proof.
+
+Define
+Z\coloneqq\sum_{i,j}W_{ij}^{2}
+and, for
+k,l\in[r]
+,
+
+G^{A}_{kl}\;\coloneqq\;\sum_{i=1}^{N}\sigma^{A}_{ik}\sigma^{A}_{il},\qquad G^{B}_{kl}\;\coloneqq\;\sum_{j=1}^{M}\sigma^{B}_{jk}\sigma^{B}_{jl},
+
+so that
+G^{A}_{kl}=G^{A}_{lk}
+and
+G^{B}_{kl}=G^{B}_{lk}
+.
+Expanding
+W_{ij}^{2}=\sum_{k,l}\sigma^{A}_{ik}\sigma^{A}_{il}\sigma^{B}_{jk}\sigma^{B}_{jl}
+
+and interchanging the finite sums over
+(i,j)
+and
+(k,l)
+,
+
+Z\;=\;\sum_{k,l=1}^{r}G^{A}_{kl}G^{B}_{kl}\;=\;\underbrace{\sum_{k=1}^{r}G^{A}_{kk}G^{B}_{kk}}_{=rNM}\;+\;\sum_{k\neq l}G^{A}_{kl}G^{B}_{kl},
+
+(29)
+
+where the first sum is deterministic because
+
+G^{A}_{kk}=\sum_{i}(\sigma^{A}_{ik})^{2}=N
+and
+
+G^{B}_{kk}=M
+. If
+r=1
+the off-diagonal sum is empty,
+
+Z=NM=rNM\geq rNM/2
+deterministically, and
+Eq. (
+28
+) is trivial. We henceforth assume
+
+r\geq 2
+.
+
+Mean.
+For
+k\neq l
+and fixed
+i\in[N]
+,
+
+\sigma^{A}_{ik}
+and
+\sigma^{A}_{il}
+are independent Rademachers,
+hence
+{\mathbb{E}}[\sigma^{A}_{ik}\sigma^{A}_{il}]={\mathbb{E}}[\sigma^{A}_{ik}]{\mathbb{E}}[\sigma^{A}_{il}]=0
+,
+so
+{\mathbb{E}}[G^{A}_{kl}]=0
+and similarly
+{\mathbb{E}}[G^{B}_{kl}]=0
+.
+By
+\sigma^{A}\perp\sigma^{B}
+,
+
+{\mathbb{E}}[G^{A}_{kl}G^{B}_{kl}]={\mathbb{E}}[G^{A}_{kl}]{\mathbb{E}}[G^{B}_{kl}]=0
+.
+Hence
+{\mathbb{E}}[Z]=rNM
+.
+
+Variance.
+By symmetry,
+
+\sum_{k\neq l}G^{A}_{kl}G^{B}_{kl}=2S
+with
+
+S\coloneqq\sum_{1\leq k<l\leq r}G^{A}_{kl}G^{B}_{kl}
+. We claim
+
+{\mathbb{E}}\bigl[G^{A}_{kl}G^{A}_{k^{\prime}l^{\prime}}\bigr]\;=\;N\cdot\mathbf{1}\{(k,l)=(k^{\prime},l^{\prime})\}\qquad\text{for }k<l,~k^{\prime}<l^{\prime}.
+
+(30)
+
+Indeed,
+
+G^{A}_{kl}G^{A}_{k^{\prime}l^{\prime}}=\sum_{i,i^{\prime}=1}^{N}\sigma^{A}_{ik}\sigma^{A}_{il}\sigma^{A}_{i^{\prime}k^{\prime}}\sigma^{A}_{i^{\prime}l^{\prime}}
+.
+By the joint i.i.d. Rademacher hypothesis, all
+\{\sigma^{A}_{pq}\}_{(p,q)\in[N]\times[r]}
+
+are mutually independent, so the expectation of any finite product
+factorises across distinct
+(p,q)
+pairs. We split by the coincidence
+pattern of
+i
+and
+i^{\prime}
+:
+
+•
+
+i\neq i^{\prime}
+.
+The four indices
+
+(i,k),(i,l),(i^{\prime},k^{\prime}),(i^{\prime},l^{\prime})
+are pairwise distinct (as
+k\neq l
+
+and
+k^{\prime}\neq l^{\prime}
+and
+i\neq i^{\prime}
+), so the expectation factorises
+into four separate factors
+{\mathbb{E}}[\sigma^{A}_{ik}]\cdots{\mathbb{E}}[\sigma^{A}_{i^{\prime}l^{\prime}}]=0
+.
+
+•
+
+i=i^{\prime}
+.
+The product becomes
+
+\sigma^{A}_{ik}\sigma^{A}_{il}\sigma^{A}_{ik^{\prime}}\sigma^{A}_{il^{\prime}}
+,
+whose expectation equals
+1
+iff each column index
+
+q\in\{k,l,k^{\prime},l^{\prime}\}
+appears with even multiplicity in the
+multiset and equals
+0
+otherwise. Under
+k<l
+and
+k^{\prime}<l^{\prime}
+,
+even multiplicity forces
+\{k,l\}=\{k^{\prime},l^{\prime}\}
+as multisets, hence
+
+(k,l)=(k^{\prime},l^{\prime})
+. In the diagonal case each index appears exactly
+twice,
+(\sigma^{A}_{i\cdot})^{2}=1
+, and the expectation is
+1
+;
+summing over
+i\in[N]
+contributes
+N
+.
+
+This proves Eq. (
+30
+); the identical argument with
+
+B
+in place of
+A
+gives
+
+{\mathbb{E}}[G^{B}_{kl}G^{B}_{k^{\prime}l^{\prime}}]=M\cdot\mathbf{1}\{(k,l)=(k^{\prime},l^{\prime})\}
+
+for
+k<l
+,
+k^{\prime}<l^{\prime}
+. By
+\sigma^{A}\perp\sigma^{B}
+,
+
+{\mathbb{E}}\bigl[G^{A}_{kl}G^{B}_{kl}G^{A}_{k^{\prime}l^{\prime}}G^{B}_{k^{\prime}l^{\prime}}\bigr]={\mathbb{E}}\bigl[G^{A}_{kl}G^{A}_{k^{\prime}l^{\prime}}\bigr]{\mathbb{E}}\bigl[G^{B}_{kl}G^{B}_{k^{\prime}l^{\prime}}\bigr]=NM\cdot\mathbf{1}\{(k,l)=(k^{\prime},l^{\prime})\}.
+
+Summing over the
+\binom{r}{2}
+pairs with
+k<l
+,
+
+{\mathbb{E}}[S^{2}]\;=\;\sum_{\begin{subarray}{c}k<l,\\
+k^{\prime}<l^{\prime}\end{subarray}}{\mathbb{E}}\bigl[G^{A}_{kl}G^{B}_{kl}G^{A}_{k^{\prime}l^{\prime}}G^{B}_{k^{\prime}l^{\prime}}\bigr]\;=\;\binom{r}{2}NM.
+
+Combined with Eq. (
+29
+) and
+Z-rNM=2S
+,
+
+\mathrm{Var}(Z)\;=\;{\mathbb{E}}[(Z-{\mathbb{E}}[Z])^{2}]\;=\;4{\mathbb{E}}[S^{2}]\;=\;2r(r-1)NM\;\leq\;2r^{2}NM.
+
+Chebyshev.
+Since
+Z\geq 0
+,
+
+\{Z<rNM/2\}=\{rNM-Z>rNM/2\}\subseteq\{|Z-rNM|>rNM/2\}
+.
+Chebyshev’s inequality therefore gives
+
+\Pr\bigl[Z<rNM/2\bigr]\;\leq\;\Pr\bigl[|Z-rNM|>rNM/2\bigr]\;\leq\;\frac{\mathrm{Var}(Z)}{(rNM/2)^{2}}\;\leq\;\frac{2r^{2}NM}{r^{2}N^{2}M^{2}/4}\;=\;\frac{8}{NM},
+
+which is the complementary form of Eq. (
+28
+).
+∎
+
+Proof of Theorem
+4.1
+, Eq. (
+10
+).
+
+Transfer of the absolute bound to the joint space.
+
+In the relative statement of Theorem
+4.1
+we assume
+
+NM>8
+and
+\delta\in(0,1-8/(NM))
+, so the final probability lower
+bound is positive. Under the Rademacher hypothesis on the signs, the arguments in
+Lemmas
+C.2
+–
+C.3
+and in the
+preceding proof were performed conditionally on
+
+{\mathcal{F}}=\sigma(\sigma^{A},\sigma^{B})
+. In particular, for every
+realisation
+(s^{A},s^{B})
+of
+(\sigma^{A},\sigma^{B})
+the
+conditional probability
+
+\Pr\bigl[{\mathcal{E}}_{1}\bigl|\sigma^{A}=s^{A},\sigma^{B}=s^{B}\bigr]\;\geq\;1-\delta,\qquad{\mathcal{E}}_{1}\;\coloneqq\;\bigl\{\|E\|_{F}^{2}\leq CNMr\zeta^{2}(\mu_{A}^{2}+\mu_{B}^{2}+\zeta^{2})\log(2NM/\delta)\bigr\}.
+
+Taking expectation over the signs (tower property) gives
+
+\Pr[{\mathcal{E}}_{1}]\geq 1-\delta
+on the joint space. Let
+
+{\mathcal{E}}_{2}\coloneqq\{\sum_{i,j}W_{ij}^{2}\geq NMr/2\}
+be the
+signal event of Lemma
+C.4
+; it depends only on the
+signs and has
+\Pr[{\mathcal{E}}_{2}]\geq 1-8/(NM)
+. The union bound
+
+\Pr[{\mathcal{E}}_{1}^{c}\cup{\mathcal{E}}_{2}^{c}]\leq\delta+8/(NM)
+
+yields
+
+\Pr[{\mathcal{E}}_{1}\cap{\mathcal{E}}_{2}]\;\geq\;1-\delta-\frac{8}{NM}.
+
+Ratio on
+{\mathcal{E}}_{1}\cap{\mathcal{E}}_{2}
+.
+
+By definition of
+{\mathcal{E}}_{2}
+,
+
+\|\Delta W(\theta^{\star})\|_{F}^{2}=\mu_{A}^{2}\mu_{B}^{2}\sum_{i,j}W_{ij}^{2}\;\geq\;\tfrac{1}{2}\mu_{A}^{2}\mu_{B}^{2}NMr.
+
+Combining with the formal upper bound on
+\|E\|_{F}^{2}
+provided by
+
+{\mathcal{E}}_{1}
+,
+
+\frac{\|E\|_{F}^{2}}{\|\Delta W(\theta^{\star})\|_{F}^{2}}\;\leq\;\frac{CNMr\zeta^{2}(\mu_{A}^{2}+\mu_{B}^{2}+\zeta^{2})\log(2NM/\delta)}{\tfrac{1}{2}\mu_{A}^{2}\mu_{B}^{2}NMr}\;=\;2C\cdot\frac{\zeta^{2}(\mu_{A}^{2}+\mu_{B}^{2}+\zeta^{2})}{\mu_{A}^{2}\mu_{B}^{2}}\log(2NM/\delta).
+
+(31)
+
+Let
+\mu_{\max}\coloneqq\max(\mu_{A},\mu_{B})
+and
+
+\mu_{\min}\coloneqq\min(\mu_{A},\mu_{B})
+; the hypothesis
+
+\zeta\leq\mu_{\max}
+yields
+
+\mu_{A}^{2}+\mu_{B}^{2}+\zeta^{2}\leq 3\mu_{\max}^{2}
+.
+Using
+\mu_{A}\mu_{B}=\mu_{\max}\mu_{\min}
+,
+
+\frac{\zeta^{2}(\mu_{A}^{2}+\mu_{B}^{2}+\zeta^{2})}{\mu_{A}^{2}\mu_{B}^{2}}\;\leq\;\frac{3\zeta^{2}\mu_{\max}^{2}}{\mu_{\max}^{2}\mu_{\min}^{2}}\;=\;\frac{3\zeta^{2}}{\mu_{\min}^{2}}.
+
+Substituting into Eq. (
+31
+) yields
+
+\frac{\|E\|_{F}^{2}}{\|\Delta W(\theta^{\star})\|_{F}^{2}}\;\leq\;\frac{6C\zeta^{2}}{\mu_{\min}^{2}}\log(2NM/\delta).
+
+Taking square roots (both sides are non-negative) and setting
+
+C^{\prime}\coloneqq\sqrt{6C}>0
+proves
+Eq. (
+10
+) on the event
+
+{\mathcal{E}}\coloneqq{\mathcal{E}}_{1}\cap{\mathcal{E}}_{2}
+, whose probability is
+at least
+1-\delta-8/(NM)
+.
+
+Small-noise transfer.
+Put
+
+\tau\coloneqq C^{\prime}\zeta\sqrt{\log(2NM/\delta)}/\mu_{\min}
+and
+assume
+\tau\leq 1/2
+. On
+{\mathcal{E}}
+, Eq. (
+10
+)
+gives
+\|E\|_{F}\leq\tau\|\Delta W(\theta^{\star})\|_{F}
+, and
+the reverse triangle inequality
+
+\bigl|\|AB^{\top}\|_{F}-\|\Delta W(\theta^{\star})\|_{F}\bigr|\leq\|AB^{\top}-\Delta W(\theta^{\star})\|_{F}=\|E\|_{F}
+
+implies
+
+\|AB^{\top}\|_{F}\;\geq\;\|\Delta W(\theta^{\star})\|_{F}-\|E\|_{F}\;\geq\;(1-\tau)\|\Delta W(\theta^{\star})\|_{F}\;\geq\;\tfrac{1}{2}\|\Delta W(\theta^{\star})\|_{F}.
+
+Dividing the bound Eq. (
+10
+) by a denominator at
+least
+\tfrac{1}{2}\|\Delta W(\theta^{\star})\|_{F}
+costs at most a
+factor of
+2
+, which establishes the transferred bound
+
+\|E\|_{F}/\|AB^{\top}\|_{F}\leq 2\tau
+on
+{\mathcal{E}}
+.
+∎
+
+The theorem is
+honest
+in the sense that it tracks the actual
+quantity controlling LoRDBA error—the residual-to-mean ratio
+
+\zeta/\min(\mu_{A},\mu_{B})
+. A naive “
+1
+-bit is lossless to
+
+\varepsilon
+” claim is false for arbitrary fp16 adapters (sign
+quantisation loses
+\Theta(1)
+of the Frobenius signal whenever the
+entries are concentrated on a sphere rather than near
+\pm\mu
+); the
+bound above degrades gracefully in the relevant regime and becomes
+vacuous precisely where sign quantisation should fail. The ratio is
+directly observable on any trained adapter, as we verify next.
+
+C.5
+Sign consistency and observed-sign reconstruction
+
+The canonical reconstruction
+\theta^{\star}
+uses the latent sign
+arrays
+\sigma^{A},\sigma^{B}
+, which are not in general equal to the
+observed entrywise signs
+\sign(A),\sign(B)
+. The next lemma shows
+that the two coincide with high probability whenever the residual is
+small relative to the latent mean, so the observed-sign LoRDBA adapter
+inherits the same Theorem
+4.1
+guarantees up to an
+explicit additional failure probability.
+
+Lemma C.5
+
+(Sign consistency of the canonical reconstruction)
+.
+
+Under Assumption
+C.1
+, the latent sign arrays
+
+\sigma^{A},\sigma^{B}
+and the observed entrywise sign patterns
+
+\sign(A),\sign(B)
+agree simultaneously with probability at least
+
+1\;-\;2Nr\exp\bigl(-\mu_{A}^{2}/\zeta^{2}\bigr)\;-\;2Mr\exp\bigl(-\mu_{B}^{2}/\zeta^{2}\bigr).
+
+(32)
+
+Equivalently, on the event of probability (
+32
+),
+
+\sign(A)\;=\;\sigma^{A},\qquad\sign(B)\;=\;\sigma^{B}.
+
+(33)
+
+Consequently, on the same event, the observed-sign choice
+
+B_{1}=\sign(A)
+,
+B_{2}=\sign(B^{\top})
+equals the latent-sign binary
+factors of the canonical reconstruction in
+Eq. (
+17
+).
+
+Proof.
+
+Fix an entry
+(i,k)\in[N]\times[r]
+of
+A
+. By
+Assumption
+C.1
+(i)–(ii),
+
+A_{ik}\;=\;\mu_{A}\sigma^{A}_{ik}+\xi^{A}_{ik},\qquad\sigma^{A}_{ik}\in\{\pm 1\},\qquad\mu_{A}>0,\qquad\|\xi^{A}_{ik}\|_{\psi_{2}}\leq\zeta.
+
+We claim the implication
+
+\sign(A_{ik})\neq\sigma^{A}_{ik}\;\Longrightarrow\;|\xi^{A}_{ik}|\geq\mu_{A}.
+
+(34)
+
+Indeed, multiplying
+A_{ik}
+by
+\sigma^{A}_{ik}\in\{\pm 1\}
+gives
+
+\sigma^{A}_{ik}A_{ik}\;=\;\mu_{A}+\sigma^{A}_{ik}\xi^{A}_{ik}.
+
+Under the convention
+\sign(0)=+1
+, a mismatch implies
+
+\sigma^{A}_{ik}A_{ik}\leq 0
+: if
+\sigma^{A}_{ik}=+1
+then the
+mismatch forces
+A_{ik}<0
+, while if
+\sigma^{A}_{ik}=-1
+it forces
+
+A_{ik}\geq 0
+. Therefore
+
+\sigma^{A}_{ik}A_{ik}=\mu_{A}+\sigma^{A}_{ik}\xi^{A}_{ik}\leq 0,
+
+which implies
+\sigma^{A}_{ik}\xi^{A}_{ik}\leq-\mu_{A}
+and hence
+
+|\xi^{A}_{ik}|\geq\mu_{A}
+. This proves
+Eq. (
+34
+).
+
+By Eq. (
+34
+) and
+Lemma
+B.4
+of Appendix
+B
+applied
+to
+\xi^{A}_{ik}
+with
+K=\zeta
+and
+\mu=\mu_{A}
+,
+
+\Pr\bigl[\sign(A_{ik})\neq\sigma^{A}_{ik}\bigr]\;\leq\;\Pr\bigl[|\xi^{A}_{ik}|\geq\mu_{A}\bigr]\;\leq\;2\exp\bigl(-\mu_{A}^{2}/\zeta^{2}\bigr).
+
+(35)
+
+The identical argument with
+A
+replaced by
+B
+and
+\mu_{A}
+by
+
+\mu_{B}
+gives, for every
+(j,k)\in[M]\times[r]
+,
+
+\Pr\bigl[\sign(B_{jk})\neq\sigma^{B}_{jk}\bigr]\;\leq\;2\exp\bigl(-\mu_{B}^{2}/\zeta^{2}\bigr).
+
+(36)
+
+A union bound over the
+Nr
+entries of
+A
+and the
+Mr
+entries of
+
+B
+, using
+Eqs. (
+35
+)–(
+36
+),
+yields
+
+\Pr\bigl[\sign(A)\neq\sigma^{A}\ \text{or}\ \sign(B)\neq\sigma^{B}\bigr]\;\leq\;2Nr\exp\bigl(-\mu_{A}^{2}/\zeta^{2}\bigr)+2Mr\exp\bigl(-\mu_{B}^{2}/\zeta^{2}\bigr).
+
+(37)
+
+The complement is exactly Eq. (
+33
+) and has
+probability at least the value displayed in
+Eq. (
+32
+).
+
+On the event Eq. (
+33
+), the observed-sign binary
+factors satisfy
+
+B_{1}\;=\;\sign(A)\;=\;\sigma^{A},\qquad B_{2}\;=\;\sign(B^{\top})\;=\;\sign(B)^{\top}\;=\;(\sigma^{B})^{\top},
+
+because
+\sign
+is applied entrywise and is therefore preserved under
+transposition. These coincide with the binary factors of the
+canonical reconstruction in Eq. (
+17
+), completing
+the proof.
+∎
+
+Corollary C.6
+
+(LoRDBA envelope-rank monotonicity)
+.
+
+Under the hypotheses of Theorem
+4.1
+, for every
+
+\ell\geq 1
+,
+
+\inf_{\theta\in\Theta_{\ell}}\|AB^{\top}-\Delta W(\theta)\|_{F}
+
+is bounded by the absolute bound in Eq. (
+27
+) and,
+in the small-noise regime
+\tau\leq 1/2
+, by a factor of two times
+the right-hand side of Eq. (
+10
+) relative to
+
+\|AB^{\top}\|_{F}
+.
+
+Proof.
+
+Apply
+\iota_{\ell}
+iteratively to
+\theta^{\star}\in\Theta_{1}
+to
+obtain a feasible point with the same
+\Delta W
+in
+\Theta_{\ell}
+,
+then invoke Theorem
+4.1
+; the small-noise transfer
+follows from
+\|AB^{\top}\|_{F}\geq\tfrac{1}{2}\|\Delta W(\theta^{\star})\|_{F}
+
+under the standing condition
+\tau\leq 1/2
+.
+∎
+
+Corollary C.7
+
+(Observed-sign reconstruction)
+.
+
+Assume the hypotheses of Theorem
+4.1
+and define the
+observed-sign LoRDBA adapter
+
+\widehat{\theta}\;\coloneqq\;\bigl(\sign(A),\sign(B)^{\top},{\bm{1}}_{N},\mu_{A}\mu_{B}{\bm{1}}_{r},{\bm{1}}_{M}\bigr).
+
+(38)
+
+On the sign-consistency event of Lemma
+C.5
+,
+
+\Delta W(\widehat{\theta})\;=\;\Delta W(\theta^{\star}).
+
+(39)
+
+Consequently, every bound in Theorem
+4.1
+and
+Corollary
+C.6
+applies to
+
+\widehat{\theta}
+, with the failure probability of the corresponding
+event increased by at most
+
+p_{\mathrm{flip}}\;\coloneqq\;2Nr\exp\bigl(-\mu_{A}^{2}/\zeta^{2}\bigr)+2Mr\exp\bigl(-\mu_{B}^{2}/\zeta^{2}\bigr).
+
+(40)
+
+Proof.
+
+By Lemma
+C.5
+, on the event
+Eq. (
+33
+) the binary factors of
+\widehat{\theta}
+
+and
+\theta^{\star}
+coincide,
+
+\sign(A)\;=\;\sigma^{A},\qquad\sign(B)^{\top}\;=\;(\sigma^{B})^{\top}.
+
+The scale vectors of
+\widehat{\theta}
+are the same as those of
+
+\theta^{\star}
+, namely
+{\bm{1}}_{N},\mu_{A}\mu_{B}{\bm{1}}_{r},{\bm{1}}_{M}
+
+in Eq. (
+17
+). Substituting both equalities into
+Eq. (
+4
+) yields
+
+\Delta W(\widehat{\theta})=\Delta W(\theta^{\star})
+on this event,
+proving Eq. (
+39
+).
+
+For each event
+{\mathcal{E}}^{\prime}
+produced by Theorem
+4.1
+
+or Corollary
+C.6
+, the corresponding
+inequality bounds the residual
+
+\|AB^{\top}-\Delta W(\theta^{\star})\|_{F}
+. On the intersection
+
+{\mathcal{E}}^{\prime}\cap\{\sign(A)=\sigma^{A},\sign(B)=\sigma^{B}\}
+, this
+residual equals
+\|AB^{\top}-\Delta W(\widehat{\theta})\|_{F}
+by
+Eq. (
+39
+), so the inequality also bounds
+the observed-sign residual. The complement bound follows from
+
+\Pr\bigl[({\mathcal{E}}^{\prime})^{c}\cup\{\sign(A)\neq\sigma^{A}\ \text{or}\ \sign(B)\neq\sigma^{B}\}\bigr]\;\leq\;\Pr[({\mathcal{E}}^{\prime})^{c}]\;+\;p_{\mathrm{flip}},
+
+which adds at most
+p_{\mathrm{flip}}
+of Eq. (
+40
+) to
+the original failure probability of
+{\mathcal{E}}^{\prime}
+.
+∎
+
+Corollary C.8
+
+(Operator-norm consequence)
+.
+
+Under the hypotheses used for the absolute bound in Theorem
+4.1
+,
+
+E\coloneqq AB^{\top}-\Delta W(\theta^{\star})
+satisfies, with
+probability at least
+1-\delta
+over the residuals,
+
+\|E\|_{\mathrm{op}}\;\leq\;\|E\|_{F}\;\leq\;\sqrt{CNMr\zeta^{2}(\mu_{A}^{2}+\mu_{B}^{2}+\zeta^{2})\log(2NM/\delta)},
+
+(41)
+
+where
+C>0
+is the universal constant of Eq. (
+27
+).
+
+Proof.
+
+For every
+X\in{\mathbb{R}}^{N\times M}
+, the singular value decomposition
+gives
+
+\|X\|_{\mathrm{op}}^{2}\;=\;\sigma_{1}(X)^{2}\;\leq\;\sum_{k=1}^{\min(N,M)}\sigma_{k}(X)^{2}\;=\;\|X\|_{F}^{2},
+
+where
+\sigma_{1}(X)\geq\sigma_{2}(X)\geq\cdots\geq 0
+are the singular
+values of
+X
+. Hence
+\|E\|_{\mathrm{op}}\leq\|E\|_{F}
+
+deterministically. The second inequality of
+Eq. (
+41
+) is exactly the square root of
+Eq. (
+27
+),
+which holds with probability at least
+1-\delta
+.
+∎
+
+C.6
+Gauge fixing and empirical identifiability of Assumption
+C.1
+
+LoRA factor gauge.
+
+The product
+AB^{\top}
+is invariant under the per-column positive
+rescaling
+
+A_{:k}\;\mapsto\;d_{k}A_{:k},\qquad B_{:k}\;\mapsto\;d_{k}^{-1}B_{:k},\qquad d_{k}>0,~k\in[r_{0}],
+
+(42)
+
+since
+(d_{k}A_{:k})(d_{k}^{-1}B_{:k})^{\top}=A_{:k}B_{:k}^{\top}
+.
+The natural plug-in proxies for
+(\mu_{A},\mu_{B},\zeta)
+depend on the
+particular gauge. We therefore compute every diagnostic in the
+following
+column-balancing gauge
+: for every nonzero column pair
+
+(A_{:k},B_{:k})
+, set
+
+d_{k}\;=\;\bigl(\|B_{:k}\|_{2}/\|A_{:k}\|_{2}\bigr)^{1/2},\qquad A_{:k}\leftarrow d_{k}A_{:k},\qquad B_{:k}\leftarrow d_{k}^{-1}B_{:k};
+
+(43)
+
+zero-contribution column pairs (if any) are left unchanged and
+excluded from the diagnostic. By construction this transformation
+preserves
+AB^{\top}
+and the entrywise sign patterns of both columns
+(since
+d_{k}>0
+), and equalises the column norms
+
+\|A_{:k}\|_{2}=\|B_{:k}\|_{2}=\sqrt{\|A_{:k}^{\mathrm{old}}\|_{2}\|B_{:k}^{\mathrm{old}}\|_{2}}
+
+for every nonzero pair. Thus the LoRA update and the canonical LoRDBA
+sign factors are unchanged, while the plug-in magnitude diagnostics
+are computed in a fixed, reproducible gauge. Eq. (
+43
+)
+is the gauge used by every empirical statement of the main paper and by
+every diagnostic in this appendix.
+
+Plug-in estimators.
+
+For any trained fp16 LoRA factors
+A,B
+in the gauge of
+Eq. (
+43
+), the quantities in
+Assumption
+C.1
+are empirically identifiable by the
+plug-in estimators
+
+\widehat{\mu}_{A}\coloneqq\tfrac{1}{Nr_{0}}\sum_{i,k}|A_{ik}|,~~\widehat{\mu}_{B}\coloneqq\tfrac{1}{Mr_{0}}\sum_{j,k}|B_{jk}|,~~\widehat{\zeta}_{A}\coloneqq\bigl(\tfrac{1}{Nr_{0}}\sum_{i,k}(|A_{ik}|-\widehat{\mu}_{A})^{2}\bigr)^{1/2},
+
+\widehat{\zeta}_{B}
+analogous, and
+
+\widehat{\zeta}\coloneqq\max(\widehat{\zeta}_{A},\widehat{\zeta}_{B})
+.
+The reported residual-to-mean ratio is
+
+\widehat{\zeta}/\min(\widehat{\mu}_{A},\widehat{\mu}_{B})
+.
+Table
+5
+reports this quantity on the LoRA adapters
+used in our experiments. The observed
+0.18
+–
+0.27
+window justifies
+the small-noise regime and, together with Theorem
+4.1
+,
+predicts the
+\approx 20\%
+relative reconstruction error we measure
+in Table
+10
+.
+
+Table 5
+:
+Empirical residual-to-mean ratio of fp16 LoRA factors
+(adapter rank
+r_{0}=64
+, averaged over all attention and MLP
+projections), computed in the column-balancing gauge of
+Eq. (
+43
+).
+
+Model
+
+\widehat{\mu}_{A}
+
+\widehat{\mu}_{B}
+
+\widehat{\zeta}
+
+ratio
+
+LLaMA-3.2-3B
+
+0.019
+
+0.021
+
+0.0044
+
+0.23
+
+LLaMA-2-7B
+
+0.016
+
+0.018
+
+0.0030
+
+0.19
+
+Appendix D
+Optional Refinement: PTQ-LoRDBA via Consensus ADMM
+
+This appendix records the optional, training-data-free route that
+refines a pre-trained fp16 LoRA adapter into a LoRDBA adapter without
+running the end-to-end smooth-sign trainer of
+Section
+3.2
+. It is included for completeness: the
+LoRDBA adapter of Definition
+3.1
+is unchanged, the
+inference kernel of Section
+3.3
+is reused unchanged, and
+empirical comparisons in
+Appendix
+H
+–
+L
+confirm
+that the end-to-end trainer is the preferred route under the
+adapter-mode conditions (A1)–(A4) of Section
+2
+. PTQ
+becomes attractive only when an fp16 LoRA is already available and the
+device cannot spare a training pass.
+
+Setup.
+
+Let an fp16 LoRA adapter
+\Delta W^{\star}=A^{\star}(B^{\star})^{\top}
+
+of rank
+r_{0}
+be derived using any standard fine-tuning recipe, and
+fix a target carrier rank
+R\in\mathbb{N}
+. The
+\ell=1
+PTQ-LoRDBA
+problem is the Frobenius least-squares fitting problem
+
+\min_{\theta=(B_{1},B_{2},{\bm{\alpha}},{\bm{\beta}},{\bm{\gamma}})}\frac{1}{2}\bigl\|\Delta W^{\star}-\Delta W(\theta)\bigr\|_{F}^{2}~\text{s.t.}~B_{1}\in\{\pm 1\}^{N\times R},B_{2}\in\{\pm 1\}^{R\times M}.
+
+(44)
+
+The general
+\ell\geq 2
+case replaces the single scale triple by a sum
+of
+\ell
+scale triples; all updates below generalise
+block-coordinate-wise by viewing
+({\bm{\alpha}},{\bm{\beta}},{\bm{\gamma}})
+as
+stacked matrices (Algorithm
+3
+).
+Eq. (
+44
+) is non-convex, non-smooth, and combinatorial
+in
+(B_{1},B_{2})
+but decouples along the three continuous variables
+for fixed binaries and along each binary for fixed other variables.
+
+Consensus ADMM.
+
+To exploit this separability while respecting the discrete constraint,
+we introduce continuous relaxations
+
+U_{1}\in{\mathbb{R}}^{N\times R}
+,
+U_{2}\in{\mathbb{R}}^{R\times M}
+of
+
+(B_{1},B_{2})
+together with binary copies
+M_{1},M_{2}
+, and minimise
+
+f(U;{\bm{\alpha}},{\bm{\beta}},{\bm{\gamma}})+I_{\{\pm 1\}}(M_{1})+I_{\{\pm 1\}}(M_{2}),~\text{s.t.}~U_{k}-M_{k}=0,k\in\{1,2\},
+
+(45)
+
+with
+
+f(U;{\bm{\alpha}},{\bm{\beta}},{\bm{\gamma}})=\frac{1}{2}\|\Delta W^{\star}-\diag({\bm{\alpha}})U_{1}\diag({\bm{\beta}})U_{2}\diag({\bm{\gamma}})\|_{F}^{2}
+
+and
+I_{\{\pm 1\}}
+as the indicator of the binary set. Using per-block
+normalisers
+n_{1}=NR
+,
+n_{2}=RM
+, scaled penalties
+
+\widetilde{\rho}_{k}=\rho/n_{k}
+, and scaled duals
+Y_{1},Y_{2}
+,
+the (Gauss–Seidel) sweep over the consensus-scaled augmented
+Lagrangian
+[
+Boyd et al. 2011
+,
+Themelis and Patrinos 2020
+]
+produces the
+following ordered updates, where
+\widehat{U}^{(t,1)}\coloneqq(U_{1},U_{2}^{(t)})
+
+and
+\widehat{U}^{(t,2)}\coloneqq(U_{1}^{(t+1)},U_{2})
+make the
+within-sweep dependency explicit:
+
+\displaystyle U_{1}^{(t+1)}
+
+\displaystyle=\argmin_{U_{1}}f\bigl(U_{1},U_{2}^{(t)};{\bm{\alpha}}^{(t)},{\bm{\beta}}^{(t)},{\bm{\gamma}}^{(t)}\bigr)+\frac{\widetilde{\rho}_{1}}{2}\|U_{1}-M_{1}^{(t)}+Y_{1}^{(t)}\|_{F}^{2},
+
+(46)
+
+\displaystyle U_{2}^{(t+1)}
+
+\displaystyle=\argmin_{U_{2}}f\bigl(U_{1}^{(t+1)},U_{2};{\bm{\alpha}}^{(t)},{\bm{\beta}}^{(t)},{\bm{\gamma}}^{(t)}\bigr)+\frac{\widetilde{\rho}_{2}}{2}\|U_{2}-M_{2}^{(t)}+Y_{2}^{(t)}\|_{F}^{2},
+
+(47)
+
+\displaystyle({\bm{\alpha}},{\bm{\beta}},{\bm{\gamma}})^{(t+1)}
+
+\displaystyle\leftarrow\text{one block-coordinate sweep of }\argmin_{{\bm{\alpha}},{\bm{\beta}},{\bm{\gamma}}}f\bigl(U^{(t+1)};{\bm{\alpha}},{\bm{\beta}},{\bm{\gamma}}\bigr),
+
+(48)
+
+\displaystyle M_{k}^{(t+1)}
+
+\displaystyle=\sign\bigl(U_{k}^{(t+1)}+Y_{k}^{(t)}\bigr),~Y_{k}^{(t+1)}=Y_{k}^{(t)}+U_{k}^{(t+1)}-M_{k}^{(t+1)},~k\in\{1,2\}.
+
+(49)
+
+We collectively refer to Eqs. (
+46
+)–(
+47
+)
+as the
+U
+-step
+.
+Each
+U_{k}
+-subproblem is a strongly convex Tikhonov least-squares
+problem in
+U_{k}
+(its Hessian is the sum of a positive-semidefinite
+normal-equation Gram matrix and
+\widetilde{\rho}_{k}I
+), and hence
+admits a unique minimiser regardless of the conditioning of the
+cross-covariance. Eq. (
+48
+) is a block-coordinate
+sweep in the three scale variables: with the other two fixed, the
+subproblem in
+{\bm{\alpha}}
+decouples into
+N
+scalar least-squares
+(one per coordinate), the subproblem in
+{\bm{\gamma}}
+into
+M
+scalar
+least-squares, and the subproblem in
+{\bm{\beta}}
+is an
+
+R
+-dimensional positive semidefinite least-squares system whose
+normal matrix is the Hadamard product of two Gram matrices and is hence
+positive semidefinite by the Schur product theorem; the exact normal
+equations and coordinate-wise minimisers are recorded in
+Appendix
+I.1
+. Eq. (
+49
+) is the
+sign-projection step modulated by the dual
+Y_{k}
+, which biases the
+projection by the accumulated discretisation residual.
+
+We warm-start the iteration from the rank-
+R
+thin SVD of
+
+\Delta W^{\star}
+exactly as in Eq. (
+7
+) of the main
+text, with
+(M^{(0)},Y^{(0)})=(U^{(0)},0)
+. A Boyd-style
+residual-balancing schedule on
+\rho
+, with the default
+
+(\tau,\mu)=(2,10)
+, is truncated at
+t_{\max}^{\rho}=K/2
+,
+ensuring the second half of the run is a fixed-penalty tail, exactly
+the regime addressed by the rigorous stabilisation theorem of
+Appendix
+E
+.
+
+Finite stabilisation on a fixed-penalty tail.
+
+Define the sign-test matrices
+
+Z_{k}^{(t)}\coloneqq U_{k}^{(t+1)}+Y_{k}^{(t)}
+so that the binary
+update is precisely
+M_{k}^{(t+1)}=\sign(Z_{k}^{(t)})
+. Once a
+fixed-penalty tail has converged to a single limit and the limit
+remains at a positive distance from the sign boundary
+0
+, the signs
+of
+Z_{k}^{(t)}
+can no longer change, and the binary iterate freezes.
+The precise penalty-agnostic statement is
+Theorem
+E.3
+in
+Appendix
+E
+, and its convergence hypothesis is
+delivered in turn by Theorem
+E.6
+of the same
+appendix, which combines a sufficient-decrease Lyapunov inequality with
+the Kurdyka–Łojasiewicz inequality on the semi-algebraic Lyapunov
+function to guarantee full convergence of the iterate sequence to a
+single limit. Empirically, the freeze occurs within
+
+K^{\star}\lesssim 50
+sweeps for every model and rank tested.
+
+Appendix E
+Convergence of PTQ-LoRDBA
+
+Throughout this appendix we adopt the shorthands
+
+n_{1}\;\coloneqq\;NR,\qquad n_{2}\;\coloneqq\;RM,\qquad\widetilde{\rho}_{k}\;\coloneqq\;\rho/n_{k},\qquad k\in\{1,2\},
+
+(50)
+
+and recall the PTQ-LoRDBA objective
+
+f(U;{\bm{\alpha}},{\bm{\beta}},{\bm{\gamma}})\;\coloneqq\;\tfrac{1}{2}\bigl\|\Delta W^{\star}-\diag({\bm{\alpha}})U_{1}\diag({\bm{\beta}})U_{2}\diag({\bm{\gamma}})\bigr\|_{F}^{2}.
+
+(51)
+
+For fixed scale vectors and one of the two
+U
+-blocks,
+f
+is a convex
+quadratic because the map from that block to the reconstructed matrix
+is linear. The binary projection step, however, is discontinuous at
+zero sign-test entries. Consequently, boundedness and Lipschitz
+smoothness alone do not imply finite binary stabilisation. We therefore
+state the convergence facts in the exact form used by the paper: a
+penalty-agnostic sign-margin theorem, and a standard KL-tail theorem
+whose sufficient-decrease and relative-error hypotheses must hold on
+the fixed-penalty tail.
+
+Assumption E.1
+
+(Bounded fixed-penalty tail)
+.
+
+There exists an iteration
+T_{\rho}
+after which the penalty is fixed,
+
+\rho^{(t)}\equiv\rho>0
+. On this tail, all iterates
+
+(U^{(t)},M^{(t)},Y^{(t)},{\bm{\alpha}}^{(t)},{\bm{\beta}}^{(t)},{\bm{\gamma}}^{(t)})
+
+belong to a compact set
+\mathcal{C}
+. The
+U_{1}
+- and
+
+U_{2}
+-subproblems in Eqs. (
+46
+)–(
+47
+)
+are solved exactly, the scale update is well defined, and the partial
+gradients
+\nabla_{U_{1}}f
+and
+\nabla_{U_{2}}f
+are Lipschitz on
+
+\mathcal{C}
+with respect to all their arguments.
+
+This assumption is the bounded-tail regularity used in the convergence
+statements below. It is not a consequence of discreteness alone; in an
+implementation it is enforced by the usual safeguards on the continuous
+least-squares and scale variables.
+
+Lemma E.2
+
+(Gradient–dual identity on a fixed-penalty tail)
+.
+
+For
+t\geq T_{\rho}
+define the Gauss–Seidel arguments
+
+\widehat{U}^{(t,1)}\;\coloneqq\;(U_{1}^{(t+1)},U_{2}^{(t)}),\qquad\widehat{U}^{(t,2)}\;\coloneqq\;(U_{1}^{(t+1)},U_{2}^{(t+1)}).
+
+(52)
+
+Then, for every
+k\in\{1,2\}
+,
+
+\rho Y_{k}^{(t+1)}\;+\;n_{k}\nabla_{U_{k}}f\bigl(\widehat{U}^{(t,k)};{\bm{\alpha}}^{(t)},{\bm{\beta}}^{(t)},{\bm{\gamma}}^{(t)}\bigr)\;+\;\rho\bigl(M_{k}^{(t+1)}-M_{k}^{(t)}\bigr)\;=\;0.
+
+(53)
+
+Proof.
+
+The first-order condition of the exact
+U_{k}
+-subproblem is
+
+\nabla_{U_{k}}f\bigl(\widehat{U}^{(t,k)};{\bm{\alpha}}^{(t)},{\bm{\beta}}^{(t)},{\bm{\gamma}}^{(t)}\bigr)+\widetilde{\rho}_{k}\bigl(U_{k}^{(t+1)}-M_{k}^{(t)}+Y_{k}^{(t)}\bigr)=0.
+
+The dual update gives
+
+U_{k}^{(t+1)}-M_{k}^{(t)}+Y_{k}^{(t)}=Y_{k}^{(t+1)}+\bigl(M_{k}^{(t+1)}-M_{k}^{(t)}\bigr).
+
+Multiplying by
+n_{k}
+and using
+
+n_{k}\widetilde{\rho}_{k}=\rho
+yields Eq. (
+53
+).
+∎
+
+E.1
+Finite stabilisation under a sign margin
+
+The next theorem is the stabilisation statement invoked in the main
+text. It assumes convergence of the fixed-penalty tail and proves that
+a positive limiting sign margin forces the binary iterate to freeze.
+
+Theorem E.3
+
+(Finite stabilisation on a fixed-penalty tail)
+.
+
+Fix the penalty parameters
+
+\widetilde{\rho}_{1},\widetilde{\rho}_{2}>0
+on the tail
+
+t\geq T_{\rho}
+, and assume that the resulting PTQ-LoRDBA iterates
+
+(U_{k}^{(t)},M_{k}^{(t)},Y_{k}^{(t)},{\bm{\alpha}}^{(t)},{\bm{\beta}}^{(t)},{\bm{\gamma}}^{(t)})
+
+converge to a limit
+
+(U_{k}^{\infty},M_{k}^{\infty},Y_{k}^{\infty},{\bm{\alpha}}^{\infty},{\bm{\beta}}^{\infty},{\bm{\gamma}}^{\infty})
+
+for every
+k\in\{1,2\}
+. Define
+
+Z_{k}^{(t)}\;\coloneqq\;U_{k}^{(t+1)}+Y_{k}^{(t)},\qquad Z_{k}^{\infty}\;\coloneqq\;U_{k}^{\infty}+Y_{k}^{\infty},\qquad k\in\{1,2\},
+
+(54)
+
+and suppose the strict sign-margin condition
+
+\eta\;\coloneqq\;\min_{k\in\{1,2\}}\min_{a,b}\bigl|(Z_{k}^{\infty})_{ab}\bigr|\;>\;0.
+
+(55)
+
+Then:
+
+(i)
+
+There exists a finite iteration
+
+T_{\star}\geq T_{\rho}
+such that, for every
+t\geq T_{\star}
+and
+
+k\in\{1,2\}
+,
+
+M_{k}^{(t+1)}=\sign(Z_{k}^{\infty})\eqqcolon M_{k}^{\infty}.
+
+(56)
+
+(ii)
+
+If the
+U_{k}
+-subproblems are solved exactly
+and
+f
+is continuously differentiable in
+U
+, the limit satisfies
+
+U_{k}^{\infty}=M_{k}^{\infty},\qquad M_{k}^{\infty}=\sign(M_{k}^{\infty}+Y_{k}^{\infty}),\qquad\rho Y_{k}^{\infty}+n_{k}\nabla_{U_{k}}f(U^{\infty};{\bm{\alpha}}^{\infty},{\bm{\beta}}^{\infty},{\bm{\gamma}}^{\infty})=0.
+
+(57)
+
+(iii)
+
+Equivalently,
+
+M_{k}^{\infty}=\sign\Bigl(M_{k}^{\infty}-\tfrac{1}{\widetilde{\rho}_{k}}\nabla_{U_{k}}f(U^{\infty};{\bm{\alpha}}^{\infty},{\bm{\beta}}^{\infty},{\bm{\gamma}}^{\infty})\Bigr).
+
+(58)
+
+Proof.
+
+Since
+U_{k}^{(t+1)}\to U_{k}^{\infty}
+and
+
+Y_{k}^{(t)}\to Y_{k}^{\infty}
+, we have
+
+Z_{k}^{(t)}\to Z_{k}^{\infty}
+entrywise. Choose
+
+T_{\star}
+so that
+
+\|Z_{k}^{(t)}-Z_{k}^{\infty}\|_{\max}<\eta/2
+for both
+k
+and all
+
+t\geq T_{\star}
+. Then every entry of
+Z_{k}^{(t)}
+has the same sign
+as the corresponding entry of
+Z_{k}^{\infty}
+, proving
+Eq. (
+56
+) from
+
+M_{k}^{(t+1)}=\sign(Z_{k}^{(t)})
+.
+
+For
+t\geq T_{\star}
+the dual update becomes
+
+Y_{k}^{(t+1)}-Y_{k}^{(t)}=U_{k}^{(t+1)}-M_{k}^{\infty}
+. Passing to
+the limit gives
+U_{k}^{\infty}=M_{k}^{\infty}
+. Substituting this
+identity into
+M_{k}^{\infty}=\sign(Z_{k}^{\infty})
+gives the second
+relation in Eq. (
+57
+). Finally, for
+
+t\geq T_{\star}+1
+, the term
+M_{k}^{(t+1)}-M_{k}^{(t)}
+in
+Eq. (
+53
+) is zero; passing to the limit in
+Eq. (
+53
+) yields the gradient–dual stationarity
+relation. Solving it for
+Y_{k}^{\infty}
+and using
+
+n_{k}/\rho=1/\widetilde{\rho}_{k}
+gives
+Eq. (
+58
+).
+∎
+
+Remark E.4
+.
+
+The sign-margin condition is checkable on a converged fixed-penalty
+tail. If an entry of
+Z_{k}^{\infty}
+is exactly zero, the entrywise
+binary projection is not unique; in that boundary case the robust
+statement is the argmin form used in Theorem
+E.6
+
+below rather than the single-valued sign equation.
+
+E.2
+KL convergence of a regular fixed-penalty tail
+
+The following theorem is the rigorous convergence statement for the
+ADMM tail. It is deliberately conditional: the nonconvex binary
+projection does not yield an unconditional descent estimate without an
+additional margin or regularisation condition. The assumptions below
+are the standard sufficient-decrease and relative-error hypotheses used
+in KL analyses of nonconvex ADMM and block-coordinate methods.
+
+Let
+
+\mathcal{X}^{(t)}\coloneqq\bigl(U^{(t)},M^{(t)},Y^{(t)},{\bm{\alpha}}^{(t)},{\bm{\beta}}^{(t)},{\bm{\gamma}}^{(t)},M^{(t-1)}\bigr),\qquad t\geq T_{\rho}+1,
+
+(59)
+
+where the last component records the one-step memory needed by the
+usual ADMM Lyapunov functions.
+
+Assumption E.5
+
+(KL-regular ADMM tail)
+.
+
+On the fixed-penalty tail of Assumption
+E.1
+, there
+exist a proper lower-semicontinuous semi-algebraic Lyapunov function
+
+\Phi
+on the state variable
+\mathcal{X}
+, constants
+a,b>0
+, and an
+iteration
+T\geq T_{\rho}+1
+such that, for every
+t\geq T
+,
+
+\displaystyle\Phi(\mathcal{X}^{(t)})-\Phi(\mathcal{X}^{(t+1)})
+
+\displaystyle\geq a\|\mathcal{X}^{(t+1)}-\mathcal{X}^{(t)}\|^{2},
+
+(60)
+
+\displaystyle\operatorname{dist}\bigl(0,\partial\Phi(\mathcal{X}^{(t+1)})\bigr)
+
+\displaystyle\leq b\|\mathcal{X}^{(t+1)}-\mathcal{X}^{(t)}\|.
+
+(61)
+
+The sequence
+\{\Phi(\mathcal{X}^{(t)})\}_{t\geq T}
+is bounded below.
+
+The semi-algebraicity requirement is natural here: after introducing
+the finite binary indicators, all remaining terms in the augmented
+Lagrangian are polynomial functions of the continuous variables. The
+substantive algorithm-dependent requirements are the two inequalities
+(
+60
+)–(
+61
+); they
+are the precise conditions under which the KL convergence conclusion is
+valid.
+
+Theorem E.6
+
+(KL convergence of a regular fixed-penalty tail)
+.
+
+Suppose Assumptions
+E.1
+and
+E.5
+hold.
+Then the PTQ-LoRDBA fixed-penalty tail has finite length and converges
+to a single limit
+
+\bigl(U^{(t)},M^{(t)},Y^{(t)},{\bm{\alpha}}^{(t)},{\bm{\beta}}^{(t)},{\bm{\gamma}}^{(t)}\bigr)\longrightarrow\bigl(U^{\infty},M^{\star},Y^{\infty},{\bm{\alpha}}^{\infty},{\bm{\beta}}^{\infty},{\bm{\gamma}}^{\infty}\bigr).
+
+(62)
+
+Moreover:
+
+(i)
+
+The increments of all tail variables are
+summable, hence square-summable.
+
+(ii)
+
+The binary iterate terminates in finitely many
+steps: there is a finite
+K^{\star}
+such that
+
+M^{(t)}=M^{\star}
+for every
+t\geq K^{\star}
+.
+
+(iii)
+
+The limit satisfies, for each
+k\in\{1,2\}
+,
+
+U_{k}^{\infty}=M_{k}^{\star},\qquad M_{k}^{\star}\in\argmin_{m\in\{\pm 1\}^{n_{k}}}\|m-(U_{k}^{\infty}+Y_{k}^{\infty})\|_{F}^{2},\qquad\rho Y_{k}^{\infty}+n_{k}\nabla_{U_{k}}f(U^{\infty};{\bm{\alpha}}^{\infty},{\bm{\beta}}^{\infty},{\bm{\gamma}}^{\infty})=0.
+
+(63)
+
+If every entry of
+U_{k}^{\infty}+Y_{k}^{\infty}
+is nonzero, the
+argmin is the singleton
+
+\{\sign(U_{k}^{\infty}+Y_{k}^{\infty})\}
+.
+
+Proof.
+
+By Assumption
+E.1
+, the tail sequence has a cluster
+point. Since
+\Phi
+is semi-algebraic, it satisfies the
+Kurdyka–Łojasiewicz inequality at every point of its domain
+
+[
+Bolte et al. 2007
+,
+Attouch et al. 2010
+]
+. Combining
+the KL inequality at a cluster point with the sufficient-decrease and
+relative-error estimates
+(
+60
+)–(
+61
+) gives
+the standard finite-length conclusion for descent methods
+
+[
+Attouch et al. 2013
+,
+Wang et al. 2019
+]
+:
+
+\sum_{t\geq T}\|\mathcal{X}^{(t+1)}-\mathcal{X}^{(t)}\|<\infty.
+
+(64)
+
+Hence
+\{\mathcal{X}^{(t)}\}_{t\geq T}
+is Cauchy and converges to a
+single limit. Projecting this convergence onto the variables
+
+(U,M,Y,{\bm{\alpha}},{\bm{\beta}},{\bm{\gamma}})
+proves
+Eq. (
+62
+), and claim (i) follows immediately
+from Eq. (
+64
+).
+
+For claim (ii), each entry of
+
+\Delta M_{k}^{(t)}=M_{k}^{(t+1)}-M_{k}^{(t)}
+belongs to
+
+\{-2,0,2\}
+. Therefore, whenever
+\Delta M_{k}^{(t)}\neq 0
+,
+
+\|\Delta M_{k}^{(t)}\|_{F}\geq 2
+. The summability in claim (i) implies
+that only finitely many such nonzero jumps can occur. Thus the two
+binary blocks are eventually constant; denote the common tail value by
+
+M^{\star}
+.
+
+It remains to verify stationarity. The dual update gives
+
+Y_{k}^{(t+1)}-Y_{k}^{(t)}=U_{k}^{(t+1)}-M_{k}^{(t+1)}
+. Since the
+left-hand side tends to zero by claim (i), passing to the limit gives
+
+U_{k}^{\infty}=M_{k}^{\star}
+. The binary update is the exact
+entrywise projection
+
+M_{k}^{(t+1)}\in\argmin_{m\in\{\pm 1\}^{n_{k}}}\|m-(U_{k}^{(t+1)}+Y_{k}^{(t)})\|_{F}^{2}.
+
+Taking limits in this finite-dimensional inequality for every
+
+m\in\{\pm 1\}^{n_{k}}
+yields the argmin condition in
+Eq. (
+63
+). Finally, by claim (ii) the term
+
+M_{k}^{(t+1)}-M_{k}^{(t)}
+in Eq. (
+53
+) is zero for
+all sufficiently large
+t
+. Passing to the limit in
+Eq. (
+53
+), using the continuity of
+
+\nabla_{U_{k}}f
+on
+\mathcal{C}
+, gives the gradient–dual
+stationarity equation in Eq. (
+63
+). If
+
+U_{k}^{\infty}+Y_{k}^{\infty}
+has no zero entries, the binary
+projection decouples entrywise and is uniquely given by the sign of
+that vector, proving the final assertion.
+∎
+
+Appendix F
+QAT-LoRDBA: Smooth-Sign STE
+
+QAT-LoRDBA optimizes real-valued latent carrier matrices
+
+U_{1},U_{2}
+together with the scale vectors
+
+({\bm{\alpha}},{\bm{\beta}},{\bm{\gamma}})
+. On the forward pass it exports the
+binary carriers
+B_{1}=\sign(U_{1})
+and
+B_{2}=\sign(U_{2})
+inside
+
+\Delta W(\theta)
+as in Eq. (
+4
+); on the backward pass
+we use the
+smooth-sign
+straight-through
+estimator
+[
+Leng et al. 2018
+,
+Liu et al. 2020
+]
+for the
+non-differentiable sign maps:
+
+\frac{\partial}{\partial u}\sign(u)\;\longleftarrow\;\frac{\partial}{\partial u}\tanh(\kappa u)\;=\;\kappa\bigl(1-\tanh^{2}(\kappa u)\bigr),
+
+(65)
+
+with
+\kappa=100
+by default. The scales
+
+({\bm{\alpha}},{\bm{\beta}},{\bm{\gamma}})
+are trained in fp32 and do not require an
+STE. We initialise the latent carriers
+U_{1},U_{2}
+via the SVD warm start of
+Eq. (
+7
+) from a
+10\%
+-budget warm-up fp16 LoRA run,
+which we find substantially stabilises optimisation at carrier rank
+
+R\geq 64
+. Algorithm
+2
+summarises the training
+loop.
+
+Appendix G
+Training Mode Comparison
+
+Table
+6
+compares the four LoRDBA training modes at each size tier on
+LLaMA-2-7B
+. Several patterns emerge: (i) QAT Full consistently leads, followed closely by QAT Freeze at matched BPW. (ii) QAT Scratch, which does not require a pre-trained FP16 adapter, trails QAT Full by
+4
+–
+9
+pt on GSM8K, confirming that the PTQ warm-start is decisive for task-specific adapters. (iii) PTQ-LoRDBA—training-free and requiring only
+{\sim}2
+min—degrades sharply at
+\leq 2
+BPW on math reasoning but retains reasonable summarization quality, achieving XSum
+17.18
+vs. FP16
+18.87
+at 1 BPW, revealing task-dependent quantization sensitivity that QAT closes.
+
+Table 6
+:
+LLaMA-2-7B: LoRDBA training mode comparison (Avg
+=
+(GSM8K + Minerva + XSum)/3).
+
+Mode
+
+\sim
+7 MB
+
+\sim
+9.5 MB
+
+\sim
+19 MB
+
+QAT Full
+
+24.14
+
+25.59
+
+28.08
+
+QAT Freeze
+
+–
+
+25.61
+
+27.85
+
+QAT Scratch
+
+–
+
+21.46
+
+24.13
+
+PTQ-LoRDBA
+
+17.06
+
+20.15
+
+26.52
+
+“–” = configuration not evaluated at that tier.
+QAT Freeze @2bpw matches QAT Full within
+0.02
+Avg.
+
+QAT Freeze training time.
+
+Despite training only scale vectors—
+l(N{+}R{+}M)
+parameters per layer—QAT Freeze requires wall-clock time comparable to QAT Full, approximately
+11
+–
+15
+h at 2 epochs on H100, because the dominant cost is the full forward–backward pass through the frozen
+4
+-bit base model, which is identical across all QAT modes. The Adam optimizer state is smaller due to the absence of latent carriers, so peak memory is marginally lower, but each training step still performs the complete loss computation and gradient propagation through all Transformer layers. The parameter update itself is a negligible fraction of total step time.
+
+BitDelta comparison.
+
+BitDelta
+[
+Liu et al. 2024a
+]
+operates at
+4.8
+MB in its column
++
+distill variant, a smaller size tier than LoRDBA’s primary operating points of
+7
+–
+19
+MB. At this size, BitDelta achieves GSM8K
+31.92
+, Minerva
+6.46
+, XSum
+18.70
+, yielding Avg
+19.03
+, substantially below QAT Full @1bpw with Avg
+24.14
+at
+7.2
+MB. The XSum result of
+18.70
+is competitive, suggesting that for summarization at the
+{\sim}5
+MB tier a full-rank binary delta may be viable; however, the low-rank LoRDBA structure dominates at all tiers where both methods can operate.
+
+Appendix H
+Extended Numerical Results
+
+This appendix reports adapter-mode results that complement
+Section
+5.1
+: a comprehensive all-methods comparison
+on
+LLaMA-2-7B
+across three tasks
+(Table
+7
+); a
+LLaMA-3.2-3B
+ablation
+(Table
+8
+); and the matched training-time
+accounting (Table
+9
+). All
+rows are evaluated under the adapter-mode protocol of
+Appendix
+K
+. Each task uses a
+task-specific
+
+LoRA FP16
+r{=}16
+adapter; all post-hoc methods compress the same
+adapter per task.
+
+Table 7
+:
+Llama-2-7B, rank 16: All LoRA adapter compression methods across three tasks.
+Each task uses a
+task-specific
+LoRA FP16
+r{=}16
+adapter.
+GSM8K (8-shot exact match %), Minerva Math (4-shot %), XSum (ROUGE-L F1).
+All post-hoc methods compress the same LoRA FP16 per task.
+
+Math
+
+Summ
+
+Method
+
+Rank
+
+BPW
+
+Size (MB)
+
+GSM8K
+
+Minerva
+
+XSum
+
+Time
+‡
+
+Upper bound (full-precision LoRA)
+
+LoRA FP16
+
+r16
+
+16.0
+
+76.3
+
+54.38
+
+13.17
+
+18.87
+
+–
+
+LoRA FP16
+
+r64
+
+16.0
+
+305.0
+
+58.68
+
+15.52
+
+–
+
+–
+
+Existing baselines (post-hoc, compressing LoRA FP16 r=16)
+
+LoRAQuant
+\rho
+=0.5
+
+r16
+
+1.20
+
+5.7
+
+36.09
+
+7.18
+
+17.67
+
++36 min
+
+LoRAQuant
+\rho
+=0.9
+
+r16
+
+1.68
+
+8.0
+
+42.30
+
+8.94
+
+18.27
+
++55 min
+
+BitDelta-scalar
+
+r16
+
+1.00
+
+4.8
+
+30.71
+
+6.38
+
+–
+
++0 min
+
+BitDelta-column
+
+r16
+
+1.00
+
+4.8
+
+31.84
+
+6.28
+
+–
+
++0 min
+
+BitDelta-col+distill
+
+r16
+
+1.00
+
+4.8
+
+31.92
+
+6.46
+
+18.70
+
++17 min
+
+BitDelta-row
+
+r16
+
+2.00
+
+9.5
+
+32.83
+
+6.72
+
+–
+
++0 min
+
+PTQ-LoRDBA (post-hoc, training-free,
+\sim
+2 min compression)
+
+PTQ-LoRDBA
+
+r16
+
+1.0
+
+7.2
+
+27.14
+
+5.74
+
+7.24
+
++2 min
+
+PTQ-LoRDBA
+
+r16
+
+2.0
+
+9.5
+
+34.04
+
+6.36
+
+–
+
++2 min
+
+PTQ-LoRDBA
+
+r16
+
+4.0
+
+19.1
+
+45.34
+
+10.04
+
+–
+
++2 min
+
+PTQ-LoRDBA
+
+r64
+
+1.0
+
+19.1
+
+35.18
+
+7.88
+
+–
+
++2 min
+
+QAT Full (LoRA FP16
+\to
+PTQ
+\to
+1-epoch QAT refinement)
+
+QAT Full
+
+r16
+
+1.0
+
+7.2
+
+44.43
+
+9.68
+
+18.32
+
++11h
+
+QAT Full
+
+r16
+
+2.0
+
+9.5
+
+48.60
+
+9.68
+
+18.49
+
++11h
+
+QAT Full
+
+r16
+
+4.0
+
+19.1
+
+53.45
+
+12.28
+
+18.49
+
++11h
+
+QAT Full
+
+r64
+
+1.0
+
+19.1
+
+53.60
+
+12.04
+
+18.60
+
++15h
+
+QAT Freeze (PTQ
+\to
+freeze binary signs, train scaling vectors only)
+
+QAT Freeze
+
+r16
+
+1.0
+
+7.2
+
+44.20
+
+8.18
+
+–
+
++11h
+
+QAT Freeze
+
+r64
+
+1.0
+
+19.1
+
+50.80
+
+11.38
+
+–
+
++15h
+
+QAT Scratch (end-to-end from random init, no FP16 required)
+
+QAT Scratch
+
+r16
+
+2.0
+
+9.5
+
+39.42
+
+7.32
+
+–
+
+8h
+
+QAT Scratch
+
+r16
+
+4.0
+
+19.1
+
+45.94
+
+8.50
+
+–
+
+9h
+
+QAT Scratch
+
+r64
+
+1.0
+
+19.1
+
+38.51
+
+5.74
+
+–
+
+8h
+
+“–” = not evaluated.
+
+Bold
+= best among compressed methods at
+\leq 19
+MB at matching size tier.
+
+‡
+Time = additional cost after LoRA FP16 training: Math
+\sim
+5h, Summ
+\sim
+3–6h on H100.
+QAT Scratch does not require a pre-trained FP16 adapter. All runs use a single NVIDIA H100 80 GB or B200.
+
+Table 8
+:
+LLaMA-3.2-3B
+, rank 16: all LoRA adapter compression methods across three tasks.
+Each task uses a
+task-specific
+LoRA FP16
+r{=}16
+adapter.
+GSM8K (8-shot exact match %), Minerva Math (4-shot %), XSum (ROUGE-L F1).
+All post-hoc methods compress the same LoRA FP16 per task.
+
+Math
+
+Summ
+
+Method
+
+Rank
+
+BPW
+
+Size (MB)
+
+GSM8K
+
+Minerva
+
+XSum
+
+Time
+‡
+
+Upper bound (full-precision LoRA)
+
+LoRA FP16
+
+r16
+
+16.0
+
+46.4
+
+59.36
+
+17.56
+
+15.38
+
+–
+
+LoRA FP16
+
+r64
+
+16.0
+
+185.5
+
+61.56
+
+20.60
+
+–
+
+–
+
+Existing baselines (post-hoc, compressing LoRA FP16 r=16)
+
+LoRAQuant
+\rho
+=0.5
+
+r16
+
+1.22
+
+3.6
+
+45.26
+
+14.10
+
+15.02
+
++8 min
+
+LoRAQuant
+\rho
+=0.7
+
+r16
+
+1.42
+
+4.1
+
+47.31
+
+14.64
+
+–
+
++11 min
+
+LoRAQuant
+\rho
+=0.9
+
+r16
+
+1.71
+
+5.0
+
+51.63
+
+15.20
+
+15.49
+
++17 min
+
+BitDelta-scalar
+
+r16
+
+1.00
+
+2.9
+
+42.46
+
+13.00
+
+–
+
++0 min
+
+BitDelta-column
+
+r16
+
+1.00
+
+2.9
+
+42.68
+
+12.66
+
+–
+
++0 min
+
+BitDelta-col+distill
+
+r16
+
+1.00
+
+2.9
+
+42.61
+
+12.68
+
+16.78
+
++15 min
+
+BitDelta-row
+
+r16
+
+2.00
+
+5.8
+
+43.29
+
+13.18
+
+–
+
++0 min
+
+PTQ-LoRDBA (post-hoc, training-free,
+\sim
+2 min compression)
+
+PTQ-LoRDBA
+
+r16
+
+1.5
+
+4.4
+
+41.32
+
+12.20
+
+15.52
+
++2 min
+
+PTQ-LoRDBA
+
+r16
+
+2.0
+
+5.8
+
+48.22
+
+12.86
+
+15.55
+
++2 min
+
+PTQ-LoRDBA
+
+r16
+
+4.0
+
+11.6
+
+55.04
+
+16.50
+
+15.19
+
++2 min
+
+PTQ-LoRDBA
+
+r64
+
+1.0
+
+11.6
+
+49.81
+
+14.60
+
+–
+
++2 min
+
+QAT Full (LoRA FP16
+\to
+PTQ
+\to
+1-epoch QAT refinement)
+
+QAT Full
+
+r16
+
+1.5
+
+4.4
+
+52.77
+
+13.86
+
+15.34
+
++7h
+
+QAT Full
+
+r16
+
+2.0
+
+5.8
+
+55.42
+
+15.34
+
+15.49
+
++7h
+
+QAT Full
+
+r16
+
+4.0
+
+11.6
+
+56.63
+
+17.44
+
+15.35
+
++7h
+
+QAT Full
+
+r64
+
+1.0
+
+11.6
+
+56.71
+
+16.32
+
+–
+
++7h
+
+QAT Freeze (PTQ
+\to
+freeze binary signs, train scaling vectors only)
+
+QAT Freeze
+
+r16
+
+1.5
+
+4.4
+
+50.27
+
+13.38
+
+15.54
+
++4h
+
+QAT Freeze
+
+r64
+
+1.0
+
+11.6
+
+57.16
+
+16.46
+
+–
+
++4h
+
+QAT Freeze
+
+r16
+
+2.0
+
+5.8
+
+57.01
+
+15.20
+
+15.18
+
++4h
+
+QAT Freeze
+
+r16
+
+4.0
+
+11.6
+
+58.98
+
+17.10
+
+15.38
+
++4h
+
+QAT Scratch (end-to-end from random init, no FP16 required)
+
+QAT Scratch
+
+r16
+
+1.5
+
+4.4
+
+45.56
+
+12.42
+
+14.72
+
+7h
+
+QAT Scratch
+
+r16
+
+2.0
+
+5.8
+
+50.19
+
+12.76
+
+15.05
+
+7h
+
+QAT Scratch
+
+r16
+
+4.0
+
+11.6
+
+54.66
+
+14.14
+
+15.07
+
+7h
+
+QAT Scratch
+
+r64
+
+1.0
+
+11.6
+
+48.29
+
+13.04
+
+14.54
+
+7h
+
+“–” = not evaluated.
+
+Bold
+= best among compressed methods at the corresponding size tier.
+
+‡
+Time = additional cost after LoRA FP16 training,
+\sim
+5h on H100.
+QAT Scratch does not require a pre-trained FP16 adapter. All runs use a single NVIDIA H100 80 GB or B200.
+
+Table 9
+:
+Adapter-mode QAT Full training statistics on
+
+LLaMA-2-7B
+(MetaMathQA). LoRA pre-trained for
+2
+epochs; QAT
+for
+1
+epoch (bf16 base, single NVIDIA B200).
+“Peak” is the device-side QAT training peak memory; “ms/step” is the
+average wall-clock per QAT training step.
+
+Setting
+
+Mode
+
+Steps
+
+ms/step
+
+Time (min)
+
+Peak (GB)
+
+Hardware
+
+r=16
+, LoRDBA
+@1
+BPW
+
+QAT Full
+
+24687
+
+804
+
+331
+
+55.6
+
+B200
+
+r=16
+, LoRDBA
+@2
+BPW
+
+QAT Full
+
+24687
+
+856
+
+352
+
+56.1
+
+B200
+
+r=16
+, LoRDBA
+@4
+BPW
+
+QAT Full
+
+24687
+
+899
+
+370
+
+58.0
+
+B200
+
+r=64
+, LoRDBA
+@1
+BPW
+
+QAT Full
+
+24687
+
+913
+
+376
+
+58.0
+
+B200
+
+Reconstruction error.
+
+Table
+10
+records the ADMM-converged relative
+reconstruction error of
+\Delta W^{\star}
+by PTQ-LoRDBA as a function
+of BPW. The monotonic decay with rank is qualitatively consistent with
+Theorem
+4.1
+and with the empirical
+residual-to-mean ratios of Table
+5
+.
+
+Table 10
+:
+ADMM-converged per-element relative reconstruction error
+
+\|\Delta W^{\star}-\Delta W(\theta)\|_{F}/\|\Delta W^{\star}\|_{F}
+
+on
+LLaMA-2-7B
+(averaged across projections).
+
+BPW
+
+0.5
+
+1.0
+
+2.0
+
+4.0
+
+8.0
+
+effective carrier rank
+R
+
+\sim 24
+
+\sim 47
+
+\sim 94
+
+\sim 190
+
+\sim 380
+
+Relative error ratio
+
+0.358
+
+0.198
+
+0.099
+
+0.040
+
+0.015
+
+Appendix I
+Pseudocode
+
+I.1
+Closed-form scale updates for PTQ-LoRDBA
+
+This subsection derives the per-axis least-squares updates used by
+Eq. (
+48
+). Throughout, let
+R
+denote the LoRDBA
+binary carrier rank of Definition
+3.1
+(so that
+
+B_{1}\in\{\pm 1\}^{N\times R}
+and
+B_{2}\in\{\pm 1\}^{R\times M}
+);
+to avoid the notation clash, we use the symbol
+T
+for the regression
+target, defined below. We treat the canonical single-envelope case
+
+\ell=1
+; the multi-envelope case applies the same updates
+block-coordinate-wise to each envelope while holding the remaining
+envelopes fixed (see the residual definition at the end of this
+subsection).
+
+Setup.
+
+Fix the binary carriers
+B_{1},B_{2}
+and define the regression target
+
+T\;\coloneqq\;\Delta W^{\star}\;\in\;{\mathbb{R}}^{N\times M}.
+
+(66)
+
+The PTQ-LoRDBA scale subproblem is the joint minimisation
+
+\min_{{\bm{\alpha}}\in{\mathbb{R}}^{N},{\bm{\beta}}\in{\mathbb{R}}^{R},{\bm{\gamma}}\in{\mathbb{R}}^{M}}\;\frac{1}{2}\bigl\|T-\diag({\bm{\alpha}})B_{1}\diag({\bm{\beta}})B_{2}\diag({\bm{\gamma}})\bigr\|_{F}^{2},
+
+(67)
+
+which we solve by per-axis block-coordinate descent. Each per-axis
+subproblem admits a closed-form least-squares solution, derived next.
+
+{\bm{\alpha}}
+-update (rowwise).
+
+For fixed
+B_{1},B_{2},{\bm{\beta}},{\bm{\gamma}}
+, set
+
+D_{\alpha}\;\coloneqq\;B_{1}\diag({\bm{\beta}})B_{2}\diag({\bm{\gamma}})\;\in\;{\mathbb{R}}^{N\times M}.
+
+(68)
+
+Substituting Eq. (
+68
+) into Eq. (
+67
+) and
+expanding the Frobenius norm rowwise,
+
+\frac{1}{2}\bigl\|T-\diag({\bm{\alpha}})D_{\alpha}\bigr\|_{F}^{2}\;=\;\sum_{i=1}^{N}\frac{1}{2}\bigl\|T_{i,:}-\alpha_{i}(D_{\alpha})_{i,:}\bigr\|_{2}^{2},
+
+which decouples over the row index
+i
+. Each scalar problem
+
+\min_{\alpha_{i}\in{\mathbb{R}}}\;\frac{1}{2}\bigl\|T_{i,:}-\alpha_{i}(D_{\alpha})_{i,:}\bigr\|_{2}^{2}
+
+(69)
+
+has the unique minimum-norm least-squares solution
+
+\alpha_{i}\;=\;\begin{cases}\dfrac{\langle T_{i,:},(D_{\alpha})_{i,:}\rangle}{\|(D_{\alpha})_{i,:}\|_{2}^{2}},&\|(D_{\alpha})_{i,:}\|_{2}>0,\\[8.00003pt]
+0,&\|(D_{\alpha})_{i,:}\|_{2}=0,\end{cases}\qquad i\in[N].
+
+(70)
+
+{\bm{\gamma}}
+-update (columnwise).
+
+For fixed
+B_{1},B_{2},{\bm{\alpha}},{\bm{\beta}}
+, set
+
+D_{\gamma}\;\coloneqq\;\diag({\bm{\alpha}})B_{1}\diag({\bm{\beta}})B_{2}\;\in\;{\mathbb{R}}^{N\times M}.
+
+(71)
+
+The objective Eq. (
+67
+) expands columnwise as
+
+\frac{1}{2}\bigl\|T-D_{\gamma}\diag({\bm{\gamma}})\bigr\|_{F}^{2}\;=\;\sum_{j=1}^{M}\frac{1}{2}\bigl\|T_{:,j}-\gamma_{j}(D_{\gamma})_{:,j}\bigr\|_{2}^{2},
+
+and analogously decouples over
+j\in[M]
+. The unique minimum-norm
+least-squares solution is
+
+\gamma_{j}\;=\;\begin{cases}\dfrac{\langle T_{:,j},(D_{\gamma})_{:,j}\rangle}{\|(D_{\gamma})_{:,j}\|_{2}^{2}},&\|(D_{\gamma})_{:,j}\|_{2}>0,\\[8.00003pt]
+0,&\|(D_{\gamma})_{:,j}\|_{2}=0,\end{cases}\qquad j\in[M].
+
+(72)
+
+{\bm{\beta}}
+-update (R-dimensional).
+
+The
+{\bm{\beta}}
+-update is an
+R
+-dimensional least-squares problem.
+For fixed
+B_{1},B_{2},{\bm{\alpha}},{\bm{\gamma}}
+, define
+
+P\;\coloneqq\;\diag({\bm{\alpha}})B_{1}\;\in\;{\mathbb{R}}^{N\times R},\qquad Q\;\coloneqq\;B_{2}\diag({\bm{\gamma}})\;\in\;{\mathbb{R}}^{R\times M}.
+
+(73)
+
+Expanding the bilinear identity
+
+\diag({\bm{\alpha}})B_{1}\diag({\bm{\beta}})B_{2}\diag({\bm{\gamma}})\;=\;P\diag({\bm{\beta}})Q\;=\;\sum_{k=1}^{R}\beta_{k}P_{:,k}Q_{k,:},
+
+(74)
+
+where the second equality uses the column–row decomposition
+
+\diag({\bm{\beta}})=\sum_{k}\beta_{k}{\bm{e}}_{k}{\bm{e}}_{k}^{\top}
+and
+
+P{\bm{e}}_{k}{\bm{e}}_{k}^{\top}Q=P_{:,k}Q_{k,:}
+. Vectorising
+Eq. (
+74
+) gives
+
+\operatorname{vec}(P\diag({\bm{\beta}})Q)=H{\bm{\beta}}
+with
+
+H\in{\mathbb{R}}^{NM\times R}
+defined by
+
+H_{:,k}\;\coloneqq\;\operatorname{vec}(P_{:,k}Q_{k,:}),\qquad k\in[R].
+
+(75)
+
+Hence Eq. (
+67
+) reduces, in the
+{\bm{\beta}}
+-direction,
+to the standard linear least-squares problem
+
+\min_{{\bm{\beta}}\in{\mathbb{R}}^{R}}\;\frac{1}{2}\bigl\|\operatorname{vec}(T)-H{\bm{\beta}}\bigr\|_{2}^{2},
+
+(76)
+
+with normal equations
+H^{\top}H{\bm{\beta}}=H^{\top}\operatorname{vec}(T)
+. We
+record these in our notation as
+
+G_{\beta}{\bm{\beta}}\;=\;{\bm{h}}_{\beta},
+
+(77)
+
+where, for
+k,l\in[R]
+,
+
+(G_{\beta})_{kl}\;=\;\langle P_{:,k},P_{:,l}\rangle\langle Q_{k,:},Q_{l,:}\rangle,\qquad({\bm{h}}_{\beta})_{k}\;=\;\langle T,P_{:,k}Q_{k,:}\rangle_{F}.
+
+(78)
+
+Equivalently, in matrix form,
+
+G_{\beta}\;=\;(P^{\top}P)\odot(QQ^{\top}),
+
+(79)
+
+where
+\odot
+is the Hadamard product. Since
+P^{\top}P
+and
+QQ^{\top}
+
+are positive semidefinite,
+G_{\beta}
+is positive semidefinite by the
+Schur product theorem. When
+G_{\beta}
+is nonsingular, the update is
+
+{\bm{\beta}}=G_{\beta}^{-1}{\bm{h}}_{\beta}
+; when singular, we use the
+unique minimum-norm least-squares solution
+
+{\bm{\beta}}\;=\;G_{\beta}^{\dagger}{\bm{h}}_{\beta},
+
+(80)
+
+where
+G_{\beta}^{\dagger}
+denotes the Moore–Penrose pseudoinverse.
+
+Generalisation to envelope rank
+\ell\geq 2
+.
+
+For envelope rank
+\ell\geq 2
+, the same per-axis updates
+Eqs. (
+70
+), (
+72
+),
+and (
+80
+) apply to one envelope
+i\in[\ell]
+at a
+time after replacing the target
+T
+by the per-envelope residual
+
+T^{(i)}\;\coloneqq\;\Delta W^{\star}-\sum_{m\neq i}\diag({\bm{\alpha}}^{(m)})B_{1}\diag({\bm{\beta}}^{(m)})B_{2}\diag({\bm{\gamma}}^{(m)}),\qquad i\in[\ell].
+
+(81)
+
+Cycling the envelope index
+i\in[\ell]
+in any order produces a
+block-coordinate descent on Eq. (
+67
+) extended to
+
+\ell
+envelopes, and each per-envelope update inherits the closed
+form above with
+T
+replaced by
+T^{(i)}
+.
+
+Algorithm 1
+
+PTQ-LoRDBA at
+\ell=1
+(scaled consensus ADMM).
+
+1:
+
+fp16 LoRA factors
+A^{\star},B^{\star}
+, carrier rank
+R
+, outer iterations
+K
+, penalty schedule
+\{\rho^{(t)}\}
+
+2:
+
+LoRDBA adapter
+\theta^{\star}=(B_{1}^{\star},B_{2}^{\star},{\bm{\alpha}}^{\star},{\bm{\beta}}^{\star},{\bm{\gamma}}^{\star})
+
+3:
+
+(U_{\Sigma},S_{\Sigma},V_{\Sigma})\leftarrow\mathrm{thinSVD}(A^{\star}(B^{\star})^{\top},\text{rank}=R)
+
+\triangleright
+Eq. (
+7
+)
+
+4:
+
+U_{1}^{(0)}\leftarrow\sign(U_{\Sigma})
+,
+U_{2}^{(0)}\leftarrow\sign(V_{\Sigma}^{\top})
+,
+{\bm{\beta}}^{(0)}\leftarrow\diag(S_{\Sigma})
+
+5:
+
+M_{k}^{(0)}\leftarrow U_{k}^{(0)}
+,
+Y_{k}^{(0)}\leftarrow 0
+for
+k\in\{1,2\}
+
+6:
+
+Initialise
+({\bm{\alpha}}^{(0)},{\bm{\gamma}}^{(0)})
+by one block-coordinate sweep of Eq. (
+48
+) at
+(U^{(0)},{\bm{\beta}}^{(0)})
+
+7:
+
+for
+
+t=0,1,\dots,K-1
+
+do
+
+8:
+
+Update
+U_{1}^{(t+1)}
+,
+U_{2}^{(t+1)}
+by Tikhonov least-squares (Eqs. (
+46
+)–(
+47
+))
+
+9:
+
+Update
+({\bm{\alpha}}^{(t+1)},{\bm{\beta}}^{(t+1)},{\bm{\gamma}}^{(t+1)})
+by one block-coordinate sweep of Eq. (
+48
+) (per-axis closed-form least-squares)
+
+10:
+
+M_{k}^{(t+1)}\leftarrow\sign(U_{k}^{(t+1)}+Y_{k}^{(t)})
+for
+k\in\{1,2\}
+
+11:
+
+Y_{k}^{(t+1)}\leftarrow Y_{k}^{(t)}+U_{k}^{(t+1)}-M_{k}^{(t+1)}
+for
+k\in\{1,2\}
+
+12:
+
+Residual-balance
+\rho^{(t+1)}
+(Boyd, truncated at
+K/2
+)
+
+13:
+
+if
+
+M^{(t+1)}=M^{(t)}
+
+then
+
+break
+
+\triangleright
+discrete freeze; Theorem
+E.6
+(ii)
+
+14:
+
+end
+
+if
+
+15:
+
+end
+
+for
+
+16:
+
+return
+
+(M_{1}^{(t)},M_{2}^{(t)},{\bm{\alpha}}^{(t)},{\bm{\beta}}^{(t)},{\bm{\gamma}}^{(t)})
+
+Algorithm 2
+
+QAT-LoRDBA (smooth-sign STE).
+
+1:
+
+base model
+W_{0}
+, stream
+\{({\bm{x}}_{t},{\bm{y}}_{t})\}
+, carrier rank
+R
+, STE temperature
+\kappa
+, optimiser
+\mathsf{opt}
+
+2:
+
+Initialise
+(U_{1},U_{2})
+via Eq. (
+7
+) from a
+10\%
+-budget fp16 LoRA warm-up
+
+3:
+
+Initialise scales
+({\bm{\alpha}},{\bm{\beta}},{\bm{\gamma}})
+by one block-coordinate sweep of Eq. (
+48
+) (per-axis closed-form least-squares)
+
+4:
+
+for
+each training step
+t
+
+do
+
+5:
+
+Forward:
+\Delta W\leftarrow\diag({\bm{\alpha}})\sign(U_{1})\diag({\bm{\beta}})\sign(U_{2})\diag({\bm{\gamma}})
+
+6:
+
+Compute task loss
+\ell_{t}(W_{0}+\Delta W;{\bm{x}}_{t},{\bm{y}}_{t})
+
+7:
+
+Backward: replace
+\partial\sign(U)/\partial U
+by
+\kappa(1-\tanh^{2}(\kappa U))
+in autograd
+
+8:
+
+Step
+(U_{1},U_{2},{\bm{\alpha}},{\bm{\beta}},{\bm{\gamma}})\leftarrow\mathsf{opt}(\cdot,\nabla\ell_{t})
+
+9:
+
+end
+
+for
+
+10:
+
+return
+
+(B_{1},B_{2},{\bm{\alpha}},{\bm{\beta}},{\bm{\gamma}})\leftarrow(\sign(U_{1}),\sign(U_{2}),{\bm{\alpha}},{\bm{\beta}},{\bm{\gamma}})
+
+Algorithm 3
+
+PTQ-LoRDBA at general envelope rank
+\ell\geq 1
+.
+
+1:
+
+fp16 LoRA factors
+A^{\star},B^{\star}
+, carrier rank
+R
+, envelope rank
+\ell\geq 1
+, outer iterations
+K
+
+2:
+
+(U_{\Sigma},S_{\Sigma},V_{\Sigma})\leftarrow\mathrm{thinSVD}(A^{\star}(B^{\star})^{\top},\text{rank}=R)
+
+3:
+
+Split singular spectrum into
+\ell
+disjoint index sets
+\mathcal{I}_{1},\dots,\mathcal{I}_{\ell}\subseteq[R]
+; initialise
+{\bm{\beta}}^{(i)}
+from
+\{(S_{\Sigma})_{jj}\}_{j\in\mathcal{I}_{i}}
+(extended by zeros to
+{\mathbb{R}}^{R}
+)
+
+4:
+
+Initialise
+(B_{1},B_{2})
+by Eq. (
+7
+), and
+\{({\bm{\alpha}}^{(i)},{\bm{\gamma}}^{(i)})\}_{i=1}^{\ell}
+by solving the per-envelope scale step
+
+5:
+
+for
+
+t=0,1,\dots,K-1
+
+do
+
+6:
+
+(U_{1},U_{2})
+-update: outer-loop sign-ADMM step (Algorithm
+1
+, lines 6–10) with
+f
+replaced by the envelope-sum objective
+\frac{1}{2}\|\Delta W^{\star}-\sum_{i}\diag({\bm{\alpha}}^{(i)})U_{1}\diag({\bm{\beta}}^{(i)})U_{2}\diag({\bm{\gamma}}^{(i)})\|_{F}^{2}
+
+7:
+
+Update
+\{({\bm{\alpha}}^{(i)},{\bm{\beta}}^{(i)},{\bm{\gamma}}^{(i)})\}_{i=1}^{\ell}
+by block-coordinate closed-form least-squares, cycling over envelope index
+i
+
+8:
+
+end
+
+for
+
+9:
+
+return
+
+\bigl(B_{1},B_{2},\{({\bm{\alpha}}^{(i)},{\bm{\beta}}^{(i)},{\bm{\gamma}}^{(i)})\}_{i=1}^{\ell}\bigr)
+
+Appendix J
+Inference-Kernel Details
+
+Equation (
+8
+) expresses the LoRDBA forward pass as
+three element-wise scale fusions and two binary matmuls. Each binary
+matmul
+{\bm{z}}=B^{\top}{\bm{w}}
+with
+B\in\{\pm 1\}^{p\times q}
+and
+fp16 input
+{\bm{w}}\in{\mathbb{R}}^{p}
+computes, for every
+j\in[q]
+,
+the exact sign-accumulation
+
+z_{j}\;=\;\sum_{i=1}^{p}B_{ij}w_{i}\;=\;\sum_{i:B_{ij}=+1}w_{i}\;-\;\sum_{i:B_{ij}=-1}w_{i},
+
+(82)
+
+i.e. a signed sum of fp16 values with no floating-point multiplications.
+On contemporary GPUs this primitive is realised by the
+
+gemlite
+library
+[
+Badri and Shaji 2023
+]
+using warp-level
+predicated fp16 reductions (the same kernel used by
+DBF
+[
+Boža and Macko 2025b
+]
+, BitNet
+[
+Wang et al. 2023
+]
+, and
+OneBit
+[
+Xu et al. 2024b
+]
+), giving a measured
+\approx 2\times
+
+speedup over an INT4 GEMM at typical adapter shapes.
+Table
+11
+summarises the arithmetic intensity.
+
+Table 11
+:
+Arithmetic-intensity breakdown of the adapter matmul on a
+host projection of shape
+N\times M
+. The fp16/INT4 LoRA baselines
+use rank
+r_{0}
+; LoRDBA uses binary carrier rank
+R
+and
+envelope rank
+\ell
+(the table is for
+\ell=1
+). One fp16
+multiplication and one fp16 addition count as two separate ops.
+LoRDBA trades two fp16 GEMMs for two sign-accumulation matmuls (zero
+floating-point multiplications on the inner edges) plus three
+channel-wise vector scales that fuse into the residual-stream epilogue
+with the scale traffic already accounted for in the bytes column.
+
+Method
+
+Bytes loaded (per output row)
+
+Arithmetic (ops/row)
+
+Dominant kernel
+
+LoRA fp16
+
+2r_{0}(N{+}M)
+
+2r_{0}(N{+}M)
+, half muls / half adds
+
+fp16 GEMM
+
+LoftQ (INT4)
+
+0.5r_{0}(N{+}M)
+
+2r_{0}(N{+}M)
+, half muls / half adds
+
+INT4 GEMM
+
+BitDelta (full-
+\Delta
+)
+
+NM/8+O(1)
+
+NM
+fp16 adds
+
+addition-only GEMM
+
+LoRDBA (
+\ell=1
+)
+
+R(N{+}M)/8+2(N{+}R{+}M)
+
+R(N{+}M)
+fp16 adds
++O(N{+}R{+}M)
+muls
+
+sign-accumulation GEMM
+
+Appendix K
+Implementation Details and Compute
+
+Hyper-parameters.
+
+PTQ-LoRDBA.
+
+K=100
+outer iterations; Boyd
+residual-balancing with
+(\tau,\mu)=(2,10)
+; scale-matched warm
+penalty
+\rho^{(0)}=\|\Delta W^{\star}\|_{F}^{2}/(NR+RM)
+. The
+SVD warm start of Eq. (
+7
+) is used throughout.
+
+QAT-LoRDBA.
+LoRA warm-up: two epochs, AdamW,
+\mathrm{lr}=2\times 10^{-4}
+;
+QAT refinement: one epoch,
+\mathrm{lr}=5\times 10^{-5}
+.
+Both use linear warm-up over
+5\%
+of steps, cosine to zero,
+\kappa=100
+.
+
+Envelope rank.
+Identical schedule for
+\ell\geq 2
+, with
+the split-spectrum initialisation of
+Algorithm
+3
+.
+
+Compute budget.
+
+On a single NVIDIA H100 (80 GB), PTQ-LoRDBA completes in
+{\sim}2
+
+minutes per model, while QAT Full requires
+{\sim}11
+h (1 epochs)
+for
+LLaMA-2-7B
+on MetaMathQA.
+Full-run numbers are in Table
+12
+.
+
+Table 12
+:
+Wall-clock budget for adapter production on a single
+NVIDIA H100 (80GB).
+
+Stage
+
+LLaMA-2-7B
+
+LLaMA-3.2-3B
+
+fp16 LoRA fine-tuning
+
+\sim
+5 h
+
+\sim
+5 h
+
+PTQ-LoRDBA (
+\ell=1
+)
+
+\sim
+2 min
+
+\sim
+2 min
+
+QAT Full (
+\ell=1
+, 2 ep)
+
+\sim
+11 h
+
+\sim
+7 h
+
+QAT Freeze (
+\ell=1
+, 2 ep)
+
+\sim
+11–15 h
+
+\sim
+7 h
+
+QAT Scratch (
+\ell=1
+, 2 ep)
+
+\sim
+8–9 h
+
+\sim
+7 h
+
+Appendix L
+Additional Figures
+
+Figure 3
+:
+BPW sweep on
+LLaMA-3.2-3B
++
+MetaMathQA
+(GSM8K,
+r{=}16
+).
+Four training modes are compared; PTQ saturates below
+2
+BPW while QAT variants close the gap to FP16 LoRA.
+

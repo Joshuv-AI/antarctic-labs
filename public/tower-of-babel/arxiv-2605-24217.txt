@@ -1,0 +1,692 @@
+Identifying and Mitigating Systemic Measurement Bias in Production LLM Inference Benchmarks
+Ashok Chandrasekar, Jason Kramberger
+
+Abstract
+As Large Language Models (LLMs) transition from research environments to production deployments, evaluating their performance against strict Service Level Objectives (SLOs) has become critical. However, current evaluation methodologies suffer from severe measurement bias at scale. We demonstrate that widely used benchmarking utilities rely on single-process, asyncio-driven architectures that introduce fundamental client-side queuing bottlenecks under high concurrency. By modeling the benchmarking client as an M / G / 1 M/G/1 queue, we mathematically demonstrate how the Python Global Interpreter Lock (GIL) artificially inflates Time to First Token (TTFT) and Time Per Output Token (TPOT) metrics as request rates scale. To resolve this systematic inaccuracy, we propose an unbiased, multi-process evaluation framework that effectively distributes client-side load, ensuring negligible queuing overhead. Furthermore, we formalize a composite metric, Normalized Time Per Output Token (NTPOT), to robustly amortize end-to-end latency, including prefill and scheduling delays across sequence lengths. Our empirical evaluation demonstrates that this methodology successfully isolates pure serving engine performance, enabling accurate, reproducible profiling of LLMs at production scales exceeding thousands of queries per second.
+
+
+
+1
+Introduction
+
+The rapid adoption of LLMs has catalyzed a shift in how the AI community evaluates system performance. While early research heavily prioritized raw throughput, production systems are governed by strict user-facing SLOs, necessitating precise latency profiling. Consequently, the accuracy of the utilities used to benchmark serving frameworks such as vLLM
+[
+10
+]
+, SGLang
+[
+30
+]
+, NVIDIA TensorRT-LLM
+[
+17
+]
+, and Hugging Face Text Generation Inference (TGI)
+[
+6
+]
+directly dictates infrastructural decisions and architectural optimizations.
+
+Despite the critical nature of these evaluations, we identify a systemic flaw in standard benchmarking methodologies: the tools used to measure high-concurrency systems are fundamentally bottlenecked by their own architectures. Existing benchmarking utilities
+[
+28
+]
+,
+[
+24
+]
+,
+[
+19
+]
+typically employ single-process Python scripts relying on asynchronous event loops. While sufficient for low-load testing, we empirically demonstrate that under production-scale request rates (100s to 1000s of Queries Per Second), the Python Global Interpreter Lock (GIL) fundamentally throttles the client’s service rate.
+
+This limitation introduces a severe measurement bias into LLM evaluation. When utilizing a saturated, single-process client to evaluate a high-concurrency server, the benchmarking utility artificially inflates the resulting latency metrics. By modeling the evaluation client as an
+M/G/1
+queue, we show that as the utilization factor of the event loop approaches saturation, client-side wait times approach infinity. Because standard benchmarks record latency upon processing a token rather than its network arrival, this client-side bottleneck is erroneously recorded as model server degradation. Consequently, what is frequently diagnosed as an infrastructural failure is, in reality, a measurement bias induced by the observer itself.
+
+Furthermore, traditional latency metrics fail to accurately capture the true computational cost of serving. The emergence of prefix caching has rendered initial response times highly variable, while standard TPOT measurements obscure heavy prefill computations by focusing solely on the decode phase.
+
+To address these methodological shortcomings, this paper introduces a rigorous framework for unbiased LLM evaluation. Our specific contributions are threefold:
+
+1.
+
+Empirical Isolation of Measurement Bias:
+We provide a quantitative analysis of client-side queuing bottlenecks, demonstrating mathematically and empirically how single-process architectures artificially inflate latency metrics under high concurrency.
+
+2.
+
+Formalization of a Unified SLO Metric:
+We define Normalized Time Per Output Token (NTPOT), a robust composite metric that amortizes end-to-end request latency, incorporating both queue contention and prefill penalties across output sequences to standardize performance evaluation.
+
+3.
+
+Design of an Unbiased Evaluation Framework:
+We propose a multi-process benchmarking methodology that mitigates client-side measurement bias. By integrating NTPOT with continuous latency profiling, this framework enables the empirical discovery of true hardware saturation points at production scale.
+
+2
+Background and Related Work
+
+The deployment of LLM inference workloads in production environments is highly complex, necessitating the execution of models across diverse accelerator and machine architectures. These environments frequently manage heterogeneous workloads, such as serving various LoRA adapters
+[
+5
+]
+or concurrently serving models of different sizes, while accommodating fluctuating traffic patterns, including diurnal variations and severe traffic spikes
+[
+7
+]
+. Modern serving strategies further complicate evaluation by employing prefill/decode disaggregation
+[
+31
+]
+,
+[
+20
+]
+and various parallelism modalities, including tensor parallelism (TP)
+[
+27
+]
+, pipeline parallelism (PP)
+[
+15
+]
+, data parallelism (DP)
+[
+12
+]
+, and expert parallelism (EP)
+[
+11
+]
+for Mixture-of-Experts (MoE) models
+[
+26
+]
+.
+
+Given these architectural complexities, achieving an unbiased, production-grade benchmark requires satisfying strict methodological prerequisites:
+
+1.
+
+High-Concurrency Load Generation:
+The methodology must sustain high queries per second (QPS) to accurately map the throughput vs. latency curve and identify true hardware saturation thresholds.
+
+2.
+
+Representative Workload Simulation:
+Evaluations must utilize real-world prompt datasets and simulate complex traffic shaping (e.g., burst traffic, traffic splitting) rather than relying on uniform, randomly generated tokens.
+
+3.
+
+Granular LLM Metrics:
+The framework must capture LLM-specific token-level latency metrics (TTFT, TPOT, ITL) while remaining independent of the underlying server backend.
+
+Despite these clear prerequisites, an analysis of the current benchmarking landscape reveals significant methodological fragmentation. Standardized hardware performance evaluation frameworks like MLPerf
+[
+22
+]
+or analyst utilities like Semi Analysis’ Inference X
+[
+24
+]
+evaluate systems as "black box" endpoints with the primary objective of demonstrating competitive accelerator performance
+[
+14
+]
+,
+[
+23
+]
+. Other analysts like Artificial Analysis
+[
+1
+]
+or the now-deprecated LLM Perf
+[
+21
+]
+prioritize the benchmarking of hosted inference offerings like Google’s Vertex, Amazon Bedrock, etc. In general, they lack the granular, high-load stress testing capabilities necessary for evaluating a production serving stack. Conversely, general-purpose HTTP load testers (e.g., K6
+[
+3
+]
+, and Locust
+[
+4
+]
+) successfully manage high concurrency but are fundamentally decoupled from the specific streaming transport semantics and unbounded output domains of generative AI.
+
+To bridge this gap, an industry-wide anti-pattern has emerged where practitioners misapply model server micro-benchmarking utilities (e.g., vLLM Bench
+[
+28
+]
+, SGLang benchmark
+[
+25
+]
+, NVIDIA GenAI Perf
+[
+19
+]
+) for production-level evaluations. Because these tools rely heavily on single-process Python
+asyncio
+architectures, adapting them for high-load concurrency introduces fundamental client-side constraints that skew the resulting data. To resolve these systemic constraints, a new class of multi-process utilities like GuideLLM
+[
+16
+]
+and NVIDIA AI Perf
+[
+18
+]
+has recently emerged. However, the theoretical foundations validating this architectural shift remain unformalized, and as our empirical evaluation reveals, early implementations of this paradigm still encounter structural bottlenecks at high concurrency. In this paper, we formalize this distributed evaluation methodology and concretely instantiate it through
+Inference Perf
+
+[
+9
+]
+, an open-source evaluation system engineered to optimally operationalize this architecture. Through this implementation, we demonstrate how multi-process load partitioning mathematically mitigates client-side measurement bias, while empirically proving that Inference Perf sustains significantly higher load fidelity than contemporary multi-process alternatives at production scales exceeding 5,000 QPS.
+
+3
+Continuous Latency Profiling and Saturation Detection
+
+The evaluation of LLM inference systems cannot be reduced to static, single-point measurements. As established in our analysis of evaluation methodologies, measuring a serving stack at an arbitrary, static concurrency limit obscures the complex queuing dynamics that emerge under dynamic production traffic. To accurately characterize the true operational capacity of an inference engine, performance must be empirically mapped across a continuous load spectrum.
+
+To achieve this, we advocate for the standardized use of
+Latency Profiles
+: empirical mappings of a system’s latency versus throughput frontier. A latency profile is generated by executing an unbiased benchmark that initiates at a baseline arrival rate and systematically sweeps the load via linear or geometric progression until the serving stack reaches full structural saturation. See Appendix A.1 for a comprehensive, empirical latency profile generated by Inference Perf.
+
+3.1
+Saturation Detection and Latency Normalization
+
+The primary utility of a latency profile is the precise identification of the server’s saturation inflection point, the critical threshold where the system achieves maximum token throughput immediately prior to queuing degradation. Optimizing hardware utilization inherently requires operating the serving stack right below this threshold to avoid the exponential latency penalties associated with queue over-utilization. However, mapping standard end-to-end latency on the y-axis introduces a critical methodological flaw: request latency scales linearly with input and output sequence lengths, making it impossible to directly compare profiles across disparate models or datasets. To construct a universal performance curve, we must normalize the latency measurement against the actual computational work performed by the engine.
+
+3.2
+Formalization and Advantages of NTPOT
+
+We propose the use of Normalized Time per Output Token (NTPOT) for latency reporting. For a given inference request
+i
+, we define
+L_{i}
+as the total end-to-end latency and
+N_{i}
+as the total number of generated output tokens:
+
+\text{NTPOT}_{i}=\frac{L_{i}}{N_{i}}
+
+To capture the comprehensive computational expense in proportion to its magnitude, we expand this definition to isolate the underlying serving phases:
+
+\text{NTPOT}_{i}=\frac{T_{\text{queue}}^{(i)}+(I_{i}\times T_{\text{prefill}}^{(i)})+(N_{i}\times T_{\text{decode}}^{(i)})}{N_{i}}
+
+Where
+T_{\text{queue}}^{(i)}
+is the server-side wait time,
+I_{i}
+is the input length,
+T_{\text{prefill}}^{(i)}
+is the prefill token latency, and
+T_{\text{decode}}^{(i)}
+is the decode token latency. In a production scenario, individual measurements are subject to system jitter. Therefore, for a benchmark comprising
+M
+requests, performance must be evaluated across the mean
+\mathbb{E}[\text{NTPOT}]
+and sample variance to quantify stability. Unlike isolated decode metrics, NTPOT is a composite metric of inference latencies. In highly loaded systems, pure decode TPOT often remains relatively flat, while queue times and prefill compute degrade exponentially. By encapsulating these initial delays and dividing them by the output length, a spike in p99
+NTPOT
+immediately alerts teams that scheduling capacity is saturated. Furthermore, it intrinsically normalizes the massive prefill costs associated with Retrieval-Augmented Generation (RAG) workflows, accurately reflecting the wait time the end user experiences before receiving the payload.
+
+4
+Confounding Variables and Reproducibility Anti-Patterns
+
+To establish a reproducible evaluation standard, we must systematically isolate the variables that introduce measurement bias during the request lifecycle. A standard Python-based evaluation client initiates asynchronous tasks to manage a target QPS, awaits token delivery via streaming requests, and subsequently calculates metrics such as TTFT and TPOT. However, several systemic anti-patterns frequently impact this process.
+
+4.1
+Client-Side Utilization Constraints
+
+Most common utilities, including vLLM, SGLang, and competitive benchmarks like Semi Analysis’s Inference X, utilize single-process Python scripts. These rely on asyncio to manage concurrent requests. However, the load capacity of such tools is fundamentally constrained by the single CPU core and its clock speed because of Python’s Global Interpreter Lock (GIL), which allows only one thread to execute at a time.
+
+To understand why this architecture fundamentally skews performance metrics at scale, we model the benchmarking client’s single-threaded event loop as an
+M/G/1
+queue.
+
+Let
+\lambda
+represent the arrival rate of incoming server responses (tokens) across all concurrent streams. Let
+\mu
+represent the service rate, defined as the speed at which the Python event loop can deserialize and record a single token. The utilization factor of the event loop is therefore
+\rho=\frac{\lambda}{\mu}
+.
+
+According to the Pollaczek-Khinchine formula
+[
+8
+]
+, the expected waiting time in the client’s internal processing queue,
+W_{q}
+, is:
+
+W_{q}=\frac{\lambda\mathbb{E}[S^{2}]}{2(1-\rho)}
+
+Where
+\mathbb{E}[S^{2}]
+is the second moment of the client’s service time distribution. As the user-requested QPS increases toward production loads of 1,000 or 5,000, the aggregate token arrival rate
+\lambda
+rapidly approaches the event loop’s maximum service capacity
+\mu
+. As
+\rho\to 1
+, the client-side wait time
+W_{q}\to\infty
+.
+
+In production evaluations, this queuing bottleneck on the client side leads to two primary issues:
+
+1.
+
+Rate Failure
+: The tool may fail to hit the requested QPS without providing explicit warnings. This is often only detectable by analyzing actual run durations against the expected rate.
+
+2.
+
+Latency Inflation
+: Uncapped asyncio tasks cause significant slowdowns due to context switching overhead, resulting in inaccurately high reported latency numbers. Because the benchmark records latency upon processing the token rather than its network arrival, the measured TTFT and TPOT are heavily inflated by
+W_{q}
+.
+
+By distributing
+\lambda
+across
+k
+isolated Python processes, a multi-process architecture (such as Inference Perf) reduces the utilization factor per process to
+\rho_{k}=\frac{\lambda}{k\mu}
+. This structural change ensures that
+\rho_{k}
+remains well below 1, keeping
+W_{q}
+negligible and ensuring that reported latency metrics accurately reflect the server’s performance rather than the client’s bottleneck.
+
+4.2
+The Illusion of Concurrency-Based Load Generation
+
+Due to the rate failures inherent in achieving a target QPS on single-process architectures, many modern benchmarking utilities have deprecated strict QPS targeting in favor of concurrency-based load definition. While defining load via a fixed number of concurrent threads or asyncio tasks simplifies execution on restricted hardware, it fundamentally obscures system degradation. Concurrency bounds do not resolve the
+M/G/1
+queuing bottleneck; they merely cap the arrival rate,
+\lambda
+, to artificially prevent the event loop’s utilization factor,
+\rho
+, from approaching or exceeding
+1
+. Consequently, evaluations relying strictly on bounded concurrency fail to expose the true latency spikes associated with the unthrottled, dynamic traffic patterns characteristic of production deployments.
+
+4.3
+Impact of Stochastic Sampling Parameters on Throughput
+
+Benchmarking reproducibility is severely compromised when stochastic sampling parameters are inconsistently applied. For instance, modifying the model’s temperature parameter fundamentally alters the decoding phase’s arithmetic intensity
+[
+29
+]
+,
+[
+2
+]
+. Setting the temperature to
+0
+disables probabilistic sampling, forcing the model into Greedy Scheduling, which eliminates the need to evaluate lower-probability branches and artificially accelerates token generation. As detailed in Appendix A.2, identical hardware processing 1,000 requests exhibited a 21% throughput variance solely due to temperature configuration (6,767 tok/s at Temp=0 versus 5,573 tok/s at Temp=0.7). Benchmarks that default to a temperature of 0 fail to reflect the compute requirements of real-world, non-deterministic generative workloads.
+
+4.4
+Context-Awareness and Prefix Caching Bias
+
+Discrepancies in performance results frequently arise between different benchmarking tools even when utilizing identical public datasets, such as HuggingFace ShareGPT. These variations are often artifacts of how the client handles prompt truncation, random sampling, and request sequencing. As illustrated in Appendix A.2, two different utilities processing the exact same dataset generated a 50% discrepancy in the volume of processed input tokens. Furthermore, server-side optimizations like prefix caching introduce extreme variance into TTFT measurements based purely on request sequencing. To ensure empirical validity, benchmarking frameworks must explicitly report the enforced cache hit ratio and strictly standardize truncation limits across all evaluation runs.
+
+5
+Empirical Evaluation of Measurement Bias at Scale
+
+This section presents a comparative empirical analysis to quantify the measurement bias introduced by single-process benchmarking architectures under high-concurrency conditions. To isolate client-side evaluation overhead from actual model server performance, we conducted testing against the
+llm-d-inference-sim
+simulator
+[
+13
+]
+. This simulator models production server traffic and returns tokens without added computational delay, guaranteeing that any observed performance degradation is strictly an artifact of the benchmarking utility.
+
+To ensure controlled experimentation, all evaluations utilized fixed-length random data generation, configured strictly to 320 input tokens and 200 output tokens. The benchmarking client was hosted on an identically configured c4-standard-144 instance, utilizing a 6th generation Intel Xeon processor with 144 vCPUs, to eliminate hardware-induced bottlenecks. The methodological paradigms evaluated in this study are detailed in Table 1.
+
+Table 1
+:
+Classification of LLM benchmarking tools
+
+Utility
+
+Architecture
+
+Primary Application
+
+vLLM Bench
+
+Single-Process
+
+Micro Benchmarking
+
+Semi Analysis Inference X
+
+Single-Process
+
+Competitive Black-box API Evaluation
+
+Inference Perf
+
+Multi-Process
+
+Production Scale Evaluation
+
+GuideLLM
+
+Multi-Process
+
+Production Scale Evaluation
+
+NVIDIA AI Perf
+
+Multi-Process
+
+Production Scale Evaluation
+
+Table 2
+:
+Effect of hardware and single vs. multi-process architectures on QPS and throughput
+
+Tool
+
+Benchmarking Hardware
+
+User Requested QPS
+
+Actual Request QPS
+
+Total Token Throughput (tok/s)
+
+Single-process
+
+E2-medium (2 vCPU shared core Intel)
+
+100
+
+38.59
+
+19410
+
+Multi-process
+
+E2-medium (2 vCPU shared core Intel)
+
+100
+
+65.47
+
+31702
+
+Single-process
+
+C4-standard-144 (144 vCPU Intel 6th Gen Xeon)
+
+200
+
+171.47
+
+86258
+
+Multi-process
+
+C4-standard-144 (144 vCPU Intel 6th Gen Xeon)
+
+200
+
+199.57
+
+96623
+
+5.1
+Hardware Constraints on Load Generation
+
+Before analyzing the methodological biases at extreme concurrency, we must first isolate the impact of the underlying client-side hardware on load generation capacity. Client hardware specifications significantly influence benchmarking load fidelity. For example, our baseline testing revealed that a single-process architecture executing on an entry-level e2-medium instance saturated at merely 38.59 QPS. Conversely, executing our multi-process methodology on a 144-vCPU instance successfully achieved the target 200 QPS baseline without throttling (see Table 2 for the full hardware ablation study with Inference X as the single-process tool and Inference Perf as the multi-process tool).
+
+If the benchmarking tool itself acts as the bottleneck, the reported throughput becomes deceptive. Consequently, to mathematically eliminate hardware-induced bottlenecks from our analysis, all subsequent high-concurrency trials (1,000 and 5,000 QPS) were conducted strictly on the c4-standard-144 instance.
+
+(a)
+
+Throughput in QPS
+
+(b)
+
+Throughput in tokens/second
+
+(c)
+
+Median TTFT latency in ms
+
+Figure 1
+:
+Analysis of throughput and latency. (a) and (b) demonstrate the rate failure of single-process tools, while (c) highlights the exponential inflation of TTFT
+
+5.2
+Analysis of Load Fidelity and Rate Failure
+
+The data in Figure 1a validates our theoretical model regarding the limitations of single-threaded
+asyncio
+event loops. When tasked with target arrival rates of 1,000 and 5,000 QPS, single-process utilities exhibited catastrophic rate failure. At the 1,000 QPS threshold, vLLM Bench and Inference X saturated at 146 and 443 QPS, respectively. Conversely, multi-process frameworks maintained higher load fidelity, with Inference Perf successfully sustaining the requested 1,000 QPS load without throttling.
+
+At extreme concurrency (5,000 QPS), the utilization factor
+\rho
+of single-process tools exceeded 1, causing vLLM Bench and Inference X to experience timeouts and excessive error rates, necessitating their exclusion from the final results. The distributed multi-process methodology of Inference Perf successfully processed 4,998 QPS, demonstrating that partitioning the load generation across isolated processes effectively mitigates the event loop bottleneck.
+
+Figure 1b illustrates the total token throughput (input and output) processed during the trials. The performance degradation of single-process architectures is stark: at 1,000 QPS, vLLM Bench processed only 75,574 tokens compared to the 545,733 tokens processed by the distributed architecture, representing a 7.2x discrepancy in measurement capacity. At 5,000 QPS, Inference Perf processed 2.6 million tokens, outperforming the nearest alternative multi-process tool (AI Perf) by 24%.
+
+5.3
+Quantification of Latency Inflation
+
+The most critical evidence of measurement bias is observed in the latency discrepancies illustrated in Figure 1c. Because the simulation environment imposes near-zero server-side latency, any recorded latency is purely client-side evaluation overhead.
+
+During the 1,000 QPS trial, single-process utilities injected massive artificial delays, adding overhead ranging from 8 milliseconds to an extreme 58 seconds. In stark contrast, the optimized multi-process architecture of Inference Perf maintained an end-to-end overhead of merely 0.63 milliseconds.
+
+This massive disparity confirms our hypothesis: as the single CPU core managing the event loop becomes overwhelmed by context switching and concurrent request dispatch, it fails to record token arrivals accurately. Consequently, single-process tools severely inflate TTFT and end-to-end latency metrics at scale. Relying on such tools for production evaluation will inevitably lead practitioners to diagnose non-existent server bottlenecks, proving the necessity of distributed evaluation frameworks for mathematically sound benchmarking.
+
+(a)
+
+Throughput in QPS
+
+(b)
+
+Throughput in tokens/second
+
+Figure 2
+:
+Analysis of throughput and latency against native HTTP load generators
+
+5.4
+Cross-Paradigm Validation Against Native HTTP Generators
+
+To definitively isolate the Python Global Interpreter Lock (GIL) as the primary constraint on high-concurrency evaluation, we conducted a cross-paradigm validation against established, high-scale HTTP load generators. This comparison evaluated the proposed multi-process methodology against Grafana k6 (utilizing Go’s native goroutines for concurrency), Locust (a Python-based distributed tester restricted here to a single node), and MLPerf’s load generator (featuring a C++ core interfacing with Python bindings).
+
+Because general-purpose HTTP tools lack native support for continuous token-level latency calculations, we restricted this evaluation to non-streaming standard HTTP requests. This methodological constraint theoretically favored the baseline utilities by eliminating the heavy deserialization overhead required for LLM token metrics.
+
+While all utilities successfully sustained the 1,000 QPS baseline, extreme concurrency testing at 5,000 QPS revealed critical architectural limitations (see Figure 2). Locust and MLPerf reached saturation ceilings at 1,634 and 1,944 QPS, respectively. Despite MLPerf’s C++ execution core, its reliance on a Python-based request processing interface reintroduced the GIL bottleneck under high load, causing the event loop utilization factor
+\rho
+to hit saturation. Similarly, Locust’s Python architecture constrained its theoretical capacity despite executing on a 144-vCPU instance.
+
+In contrast, the Go-based k6 framework successfully bypassed these constraints via native multi-threading, sustaining the full 5,000 QPS load. Crucially, the proposed multi-process Python methodology achieved complete performance parity with k6, successfully processing the 5,000 QPS target without rate failure.
+
+These results yield a vital architectural conclusion: while Python’s single-threaded nature historically disqualifies it from extreme-scale benchmarking, its rich ecosystem of LLM libraries and tokenizers can be safely leveraged for production evaluation
+if and only if
+the underlying execution relies on a distributed, multi-process architecture to bypass the GIL.
+
+6
+Design of an Unbiased Evaluation Framework
+
+To address the aforementioned benchmarking challenges and eliminate systemic measurement bias, we propose a distributed evaluation methodology. We utilize Inference Perf as an experimental apparatus to demonstrate how this framework effectively isolates pure serving engine performance.
+
+6.1
+Distributed Load Partitioning
+
+To bypass the client-side queuing bottlenecks inherent in single-process architectures, the framework employs a distributed multi-process design. The evaluation load is partitioned by spawning
+m
+isolated processes corresponding to the available vCPUs on the host machine. Within these processes, Python’s
+asyncio
+coroutines manage streaming server requests, allowing each worker to execute up to
+n
+concurrent coroutines dictated by queue demand.
+
+During execution, a data generator produces prompts from real or synthetic datasets based on specified distribution constraints. A load generator sequentially queues these requests according to user-defined arrival patterns (e.g., Poisson or constant distributions). Available workers pull from this queue to initiate tasks and track individual token arrival times. By distributing the load, this architecture mitigates single-threaded event loop saturation, ensuring the aggregated data accurately reflects server performance (refer to Appendix A.3 for a complete architectural flow diagram).
+
+6.2
+Dynamic Concurrency Regulation
+
+To maintain strict experimental control, researchers can exercise precise regulation over the architecture via
+max_workers
+and
+worker_max_concurrency
+parameters. While manual tuning is permitted, the framework is mathematically designed to automatically determine the optimal values based on the target load and available hardware resources. This ensures the client continuously operates below its utilization threshold and does not inadvertently throttle the evaluation.
+
+6.3
+Empirical Validation of Load Fidelity
+
+To guarantee the integrity of the benchmark, the framework provides continuous observability into its own operational efficiency, ensuring that hardware limitations or external interference do not skew the data. We introduce two critical metrics to quantify measurement fidelity:
+
+•
+
+Scheduling Precision:
+The framework tracks the distribution of delays between a request’s intended dispatch time and its actual transmission. For results to be scientifically valid, the median, P90, and P99 of these delays must remain under one millisecond, ensuring target QPS is achieved without artificially injected latency.
+
+•
+
+Dispatch Throughput:
+Unlike traditional tools that strictly report response-based QPS, this methodology actively monitors the actual QPS successfully transmitted by the load generator. This guarantees the evaluation adhered to the requested load pattern.
+
+6.4
+Methodological Reproducibility and Constraints
+
+Scientific rigor demands exact reproducibility. The framework utilizes a declarative configuration system that governs request handling, dataset selection, and load generation. By archiving both user-defined parameters and default settings within a report directory, external researchers can identically reproduce the benchmark environment and prevent unintended consequences from variables like API temperature.
+
+While this methodology reliably supports loads exceeding 10,000 QPS, it currently relies on vertical scaling across multi-core hardware. Scaling to extreme thresholds (e.g., 200,000+ QPS) may eventually necessitate a multi-node load-generation architecture. Furthermore, while Python introduces specific concurrency constraints, its unparalleled ecosystem of LLM libraries and tokenizers makes it the optimal foundation for reproducible, community-driven evaluation tooling.
+
+7
+Limitations and Future Work
+
+While this study establishes a robust methodological foundation for unbiased LLM evaluation, several avenues for future research remain critical to capturing the full complexity of production inference environments.
+
+7.1
+Multi-Node Distributed Evaluation
+
+Our empirical validation demonstrates that a localized, multi-process architecture successfully maintains load fidelity up to 5,000 QPS. However, as frontier models are increasingly deployed across massive, multi-datacenter clusters, evaluating extreme thresholds (e.g., >100,000 QPS) will eventually exceed the physical vCPU and network limitations of any single load-generating node. Future work must explore the theoretical and practical constraints of coordinating distributed, multi-node benchmarking frameworks, specifically addressing clock synchronization drift across nodes and network topology impacts on latency distributions.
+
+7.2
+Mathematical Isolation of Prefix Caching
+
+As highlighted in our analysis of the prefill penalty, prefix caching introduces high variance into initial response times. While NTPOT effectively amortizes this variance across the output sequence, future research should develop standardized, mathematically constrained prompt datasets designed to guarantee exact cache-hit ratios (e.g., strict
+0\%
+,
+50\%
+, and
+100\%
+shared prefix lengths). Formalizing these datasets will allow researchers to isolate the computational efficiency of a serving engine’s radix tree or block-matching algorithms independent of raw, un-cached compute speed.
+
+7.3
+Modeling Non-Uniform Traffic Distributions
+
+The current framework assumes standard mathematical arrival distributions, such as constant or Poisson processes. However, real-world LLM traffic is frequently highly bursty and non-uniform. Future methodological enhancements should incorporate heavy-tailed Pareto distributions and Markov-modulated Poisson processes to simulate the "thundering herd" traffic spikes common in consumer-facing chatbots, allowing researchers to evaluate the resilience of continuous batching schedulers under sudden degradation.
+
+8
+Conclusion
+
+As the AI community transitions from focusing purely on model capabilities to the realities of production deployment, the scientific rigor of our evaluation methodologies must scale commensurately. This paper identifies a critical, systemic measurement bias in the current LLM benchmarking ecosystem: the pervasive reliance on single-process
+asyncio
+architectures for high-concurrency evaluation.
+
+By modeling the benchmarking client as an
+M/G/1
+queue, we demonstrated both theoretically and empirically that these architectures become fundamentally bottlenecked at scale. As utilization reaches saturation, client-side wait times artificially inflate reported metrics, leading practitioners to misdiagnose measurement artifacts as model server failures. To resolve this, we introduced a distributed, multi-process evaluation framework that effectively partitions load generation, maintaining absolute scheduling precision and dispatch throughput even at 5,000 QPS.
+
+Furthermore, we formalized Normalized Time Per Output Token to address the inadequacies of standard latency metrics. By amortizing the entirety of the request lifecycle, including queue contention and heavy prefill computations across the output sequence, NTPOT provides a unified, statistically robust metric that accurately reflects the true Service Level Objectives experienced by end users.
+
+Robust inference infrastructure is the bedrock of applied AI. By transitioning from constrained micro-benchmarking scripts to unbiased, distributed evaluation methodologies, the community can ensure that future architectural optimizations are driven by mathematically sound, reproducible data.
+
+9
+Acknowledgements
+
+We are grateful to all the contributors of the Inference Perf project, especially Yuan Tang, Sachin Varghese, Brendan Slabe and Chen Wang for their vital role in helping develop and maintain it.
+
+Appendix A
+Appendix
+
+A.1
+Latency profiles
+
+This section provides visual representations of latency profiles, including a general illustration showing the pre- and post- saturation regimes and the ideal operating zone for a model server (Figure 3) and specific results obtained using the Gemma-3-1b-it model on an 8xH100 GPU cluster (Figures 4, 5, 6).
+
+Figure 3
+:
+Latency profile illustration showing the ideal operating zone (blue dot), saturation point (green diamond) and post-saturation points (red triangle) where latency SLOs will be severely affected
+
+Figure 4
+:
+Latency profile showing the throughput vs latency curve for the Gemma-3-1b-it model on 8xH100 GPUs trending towards saturation
+
+Figure 5
+:
+Latency vs QPS chart showing the latency growth relative to load and how NTPOT is able to provide a normalized view of latency
+
+Figure 6
+:
+Throughput vs QPS chart showing the throughput growth relative to load and how even at 200 QPS we are not fully saturated, which shows that the Python GIL bottleneck of single-process tools can affect the outcome even at a relatively low QPS like 200 when combined with the result in Table 2
+
+A.2
+Factors affecting benchmarking reproducibility
+
+This section explores the impact of experimental variables on benchmarking reproducibility, quantifying throughput variance due to probabilistic sampling configurations (temperature settings) and analyzing the effects of dataset processing discrepancies between different benchmarking tools. This shows the need for standardized configuration across tools in the ecosystem with enough specificity to reproduce them without discrepancies.
+
+Table 3
+:
+Variance in throughput induced by probabilistic sampling configurations
+
+Configuration
+
+Output Token Throughput (tok/s)
+
+Batch, 1000 requests (Server/Model Default, Temp=0.7)
+
+5573
+
+Batch, 1000 requests (Temp=0)
+
+6767
+
+Table 4
+:
+Effect of dataset processing by benchmarking tools
+
+Tool
+
+Configuration
+
+Input Tokens Processed
+
+Tool 1 (Inference X)
+
+ShareGPT, 3000 requests at 10 QPS
+
+702,412
+
+Tool 2 (Inference Perf)
+
+ShareGPT, 3000 requests at 10 QPS
+
+1,052,100
+
+A.3
+Multi-process request workflow in Inference Perf
+
+This section illustrates the multi-process request workflow implemented in the benchmarking framework, detailing how the architecture manages load partitioning to mitigate measurement bias.
+
+Figure 7
+:
+Multi-process request workflow in Inference Perf showing how the architecture overcomes the single event loop and CPU exhaustion issue in single-process benchmarking tools by using a main orchestration process and
+n
+worker processes to evenly distribute the load
+
