@@ -2,16 +2,19 @@
 // Babel full-text reader.
 //
 // FOUNDATION (expandable): a draggable, edge-snapping floating orb that opens
-// a feature menu. Features register in FEATURES below; today there are three —
+// a feature menu. Features register in FEATURES below; today there are four —
 // "Search", a Ctrl+F-style find-in-page bar, "Contents", an Apple
-// Books-style table of contents, and "Share", an Apple share-sheet style
+// Books-style table of contents, "Share", an Apple share-sheet style
 // panel with "Share from the Top" / "Share from Current Place" intents plus
-// an optional Apple Books-style passage highlight. Adding a feature later =
-// one registry entry + one panel component.
+// an optional Apple Books-style passage highlight, and "Listen", a read-aloud
+// mode with a persistent bottom player bar and karaoke word-follow. Adding a
+// feature later = one registry entry + one panel component (or, like Listen,
+// a mode with its own overlay).
 //
-// The menu fans out D-pad style around the orb: up / inward-side / down,
-// swinging to an inward diagonal when the orb is parked too close to the
-// top or bottom edge for a straight slot. Slot order follows FEATURES order.
+// The menu fans out D-pad style around the orb: up / inward-side / down /
+// outward-diagonal, swinging to an inward diagonal when the orb is parked too
+// close to the top or bottom edge for a straight slot. Slot order follows
+// FEATURES order.
 //
 // Share links: bare entry URL = from the top; ?at=<char offset> jumps the
 // receiver to the sharer's scroll position; &hl=<start>-<end> additionally
@@ -50,6 +53,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { extractContents } from "../lib/contents.js";
+import { useReadAloud, ReadAloudBar, ListenIcon } from "./ReadAloud.jsx";
 
 export const SUPPORTS_HIGHLIGHTS =
   typeof CSS !== "undefined" &&
@@ -246,6 +250,7 @@ const FEATURES = [
   { id: "search", label: "Search", icon: MagnifierIcon },
   { id: "contents", label: "Contents", icon: ContentsIcon },
   { id: "share", label: "Share", icon: ShareIcon },
+  { id: "listen", label: "Listen", icon: ListenIcon },
 ];
 
 // ---------------------------------------------------------------------------
@@ -1247,6 +1252,169 @@ export default function ReaderAssist({
   const [hlMode, setHlMode] = useState(false);
   const orbRef = useRef(null);
 
+  // --- Read-aloud word-follow highlighting ---------------------------------
+  // Two fixed-position overlays (no text DOM mutation): a soft highlight
+  // pill over the spoken word + a small "bouncy ball" dot that hops above it.
+  // Positioned from the word's bounding rect each time the engine reports a
+  // new word (global char offsets -> chunk -> text node -> Range).
+  const speakHlRef = useRef(null);
+  const speakBallRef = useRef(null);
+  const speakBallTick = useRef(0);
+
+  const clearSpeakHl = useCallback(() => {
+    if (speakHlRef.current) speakHlRef.current.style.opacity = "0";
+    if (speakBallRef.current) speakBallRef.current.style.opacity = "0";
+  }, []);
+
+  const showSpeakWord = useCallback(
+    (gStart, gEnd) => {
+      if (gStart == null || gEnd == null) {
+        clearSpeakHl();
+        return;
+      }
+      // Chunk containing gStart (chunkStarts is sorted).
+      let ci = 0;
+      for (let i = 0; i < chunkStarts.length; i++) {
+        if (chunkStarts[i] <= gStart) ci = i;
+        else break;
+      }
+      const chunkEl = chunkElsRef.current && chunkElsRef.current[ci];
+      if (!chunkEl) {
+        clearSpeakHl();
+        return;
+      }
+      const local = gStart - chunkStarts[ci];
+      const localEnd = gEnd - chunkStarts[ci];
+      // Walk text nodes to the one containing `local`.
+      const walker = document.createTreeWalker(chunkEl, NodeFilter.SHOW_TEXT);
+      let node = null;
+      let acc = 0;
+      let n;
+      while ((n = walker.nextNode())) {
+        const len = n.textContent.length;
+        if (acc + len > local) {
+          node = n;
+          break;
+        }
+        acc += len;
+      }
+      if (!node) {
+        clearSpeakHl();
+        return;
+      }
+      let range;
+      try {
+        range = document.createRange();
+        const sOff = Math.max(0, Math.min(local - acc, node.textContent.length));
+        const eOff = Math.max(
+          sOff,
+          Math.min(localEnd - acc, node.textContent.length)
+        );
+        range.setStart(node, sOff);
+        range.setEnd(node, eOff);
+      } catch {
+        clearSpeakHl();
+        return;
+      }
+      const rect = range.getBoundingClientRect();
+      if (!rect || rect.width === 0) {
+        clearSpeakHl();
+        return;
+      }
+      // Highlight pill over the word.
+      const hl = speakHlRef.current;
+      if (hl) {
+        hl.style.opacity = "1";
+        hl.style.transform = `translate(${rect.left - 3}px, ${rect.top - 2}px)`;
+        hl.style.width = `${rect.width + 6}px`;
+        hl.style.height = `${rect.height + 4}px`;
+      }
+      // Bouncy ball: hop above the word, re-trigger the bounce each word.
+      const ball = speakBallRef.current;
+      if (ball) {
+        const bx = rect.left + rect.width / 2 - 5;
+        const by = rect.top - 16;
+        ball.style.opacity = "1";
+        ball.style.transform = `translate(${bx}px, ${by}px)`;
+        // Restart the hop animation.
+        ball.classList.remove("ra-speak-hop");
+        void ball.offsetWidth;
+        ball.classList.add("ra-speak-hop");
+      }
+      // Gentle auto-scroll: keep the spoken word in the middle band.
+      const vh = window.innerHeight;
+      if (rect.top < vh * 0.22 || rect.bottom > vh * 0.78) {
+        try {
+          const y =
+            window.scrollY + rect.top - vh * 0.42;
+          window.scrollTo({ top: y, behavior: "smooth" });
+        } catch {
+          /* noop */
+        }
+      }
+    },
+    [chunkStarts, chunkElsRef, clearSpeakHl]
+  );
+
+  const handleSpeakWord = useCallback(
+    (gStart, gEnd) => {
+      showSpeakWord(gStart, gEnd);
+    },
+    [showSpeakWord]
+  );
+
+  // Current reading position as a global char offset (probe at ~12% viewport
+  // headroom — the same "where I was reading" the share feature uses).
+  const speakStartOffset = useCallback(() => {
+    if (!text) return 0;
+    const probe = window.scrollY + window.innerHeight * 0.12;
+    const els = chunkElsRef.current;
+    let ci = 0;
+    let top = 0;
+    let nextTop = Infinity;
+    for (let i = 0; i < shownChunks; i++) {
+      const el = els[i];
+      if (!el) continue;
+      const t = el.getBoundingClientRect().top + window.scrollY;
+      if (t <= probe) {
+        ci = i;
+        top = t;
+      } else {
+        nextTop = t;
+        break;
+      }
+    }
+    if (nextTop === Infinity)
+      nextTop = document.documentElement.scrollHeight;
+    const chunkEnd =
+      chunkStarts[ci + 1] !== undefined ? chunkStarts[ci + 1] : text.length;
+    const frac = Math.max(
+      0,
+      Math.min(1, (probe - top) / Math.max(1, nextTop - top))
+    );
+    return Math.round(
+      chunkStarts[ci] + frac * Math.max(0, chunkEnd - chunkStarts[ci])
+    );
+  }, [chunkStarts, shownChunks, chunkElsRef, text]);
+
+  const readAloud = useReadAloud({
+    text,
+    getStartOffset: speakStartOffset,
+    chunkElsRef,
+    chunkStarts,
+    onWord: handleSpeakWord,
+  });
+  const listening = readAloud.status !== "idle";
+
+  // Hide the Listen icon when speech synthesis is unavailable.
+  const visibleFeatures = useMemo(
+    () =>
+      readAloud.supported
+        ? FEATURES
+        : FEATURES.filter((f) => f.id !== "listen"),
+    [readAloud.supported]
+  );
+
   // New text (entry navigation): the saved passage and capture mode belong
   // to the previous entry — reset cleanly.
   useEffect(() => {
@@ -1556,6 +1724,7 @@ export default function ReaderAssist({
     const R = 26; // fan item radius (52px circle)
     const d = ORB / 2 + 16 + R; // center distance from the orb center
     const inward = cx > viewport.w / 2 ? -1 : 1; // away from the snapped edge
+    const outward = -inward; // toward the snapped edge
     const minC = R + 10;
     const maxX = Math.max(minC, viewport.w - R - 10);
     const maxY = Math.max(minC, viewport.h - R - 10);
@@ -1563,8 +1732,12 @@ export default function ReaderAssist({
       { dx: 0, dy: -1 }, // up
       { dx: inward, dy: 0 }, // inward side
       { dx: 0, dy: 1 }, // down
+      // 4th: outward-up diagonal. Pure outward would clamp onto the orb
+      // (the orb hugs the edge); the diagonal clears it and reads as a
+      // natural fan extension.
+      { dx: outward * 0.65, dy: -0.75 },
     ];
-    return FEATURES.map((f, i) => {
+    return visibleFeatures.map((f, i) => {
       const s = slots[i % slots.length];
       let x = cx + s.dx * d;
       let y = cy + s.dy * d;
@@ -1587,7 +1760,7 @@ export default function ReaderAssist({
         delay: i * 45,
       };
     });
-  }, [cx, cy, viewport]);
+  }, [cx, cy, viewport, visibleFeatures]);
 
   const panelStyle = useMemo(() => {
     const pw = Math.min(372, viewport.w - 24);
@@ -1648,8 +1821,16 @@ export default function ReaderAssist({
               }}
               onClick={() => {
                 setMenuOpen(false);
-                setPanel(f.id);
                 poke();
+                if (f.id === "listen") {
+                  // Listen is a mode, not a panel: start reading aloud from
+                  // the current scroll position. The player bar appears at
+                  // the bottom; tapping Listen while active is a no-op.
+                  // (The icon is hidden when speech synthesis is unsupported.)
+                  if (!listening) readAloud.startFromCurrent();
+                } else {
+                  setPanel(f.id);
+                }
               }}
             >
               {f.icon}
@@ -1733,6 +1914,38 @@ export default function ReaderAssist({
             poke();
             if (orbRef.current) orbRef.current.focus();
           }}
+        />
+      )}
+
+      {/* Read-aloud word-follow overlays (fixed, pointer-transparent). */}
+      <div
+        ref={speakHlRef}
+        className="ra-speak-hl"
+        aria-hidden="true"
+        style={{ opacity: 0 }}
+      />
+      <div
+        ref={speakBallRef}
+        className="ra-speak-ball"
+        aria-hidden="true"
+        style={{ opacity: 0 }}
+      />
+
+      {/* Read-aloud player bar (persistent while listening). */}
+      {listening && (
+        <ReadAloudBar
+          status={readAloud.status}
+          rate={readAloud.rate}
+          wordIdx={readAloud.wordIdx}
+          wordCount={readAloud.wordCount}
+          onToggle={readAloud.toggle}
+          onStop={() => {
+            readAloud.stop();
+            clearSpeakHl();
+            poke();
+          }}
+          onSkip={readAloud.skip}
+          onRate={readAloud.setRate}
         />
       )}
     </div>,
