@@ -932,6 +932,8 @@ function HighlightPill({
   chunkStarts,
   chunkElsRef,
   anchorStyle,
+  savedCount,
+  onAdd,
   onDone,
   onCancel,
 }) {
@@ -950,16 +952,35 @@ function HighlightPill({
 
   useEffect(() => () => window.clearTimeout(hintTimer.current), []);
 
+  // Suppress the iOS native selection callout (Copy/Lookup/Share) while
+  // capturing — it pops up over our pill and blocks it. -webkit-touch-callout
+  // disables the menu without affecting text selection itself.
+  useEffect(() => {
+    document.body.classList.add("ra-hl-capturing");
+    return () => document.body.classList.remove("ra-hl-capturing");
+  }, []);
+
   const chars = pending ? pending.end - pending.start : 0;
 
-  const done = () => {
-    if (pending) {
-      onDone(pending);
+  const add = () => {
+    if (!pending) {
+      setHint(true);
+      window.clearTimeout(hintTimer.current);
+      hintTimer.current = window.setTimeout(() => setHint(false), 2200);
       return;
     }
-    setHint(true);
-    window.clearTimeout(hintTimer.current);
-    hintTimer.current = window.setTimeout(() => setHint(false), 2200);
+    onAdd(pending);
+    // Clear the selection so the next passage starts fresh.
+    try {
+      window.getSelection()?.removeAllRanges();
+    } catch {}
+    setPending(null);
+  };
+
+  const done = () => {
+    // If there's a pending selection, add it first, then finish.
+    if (pending) onAdd(pending);
+    onDone();
   };
 
   return (
@@ -984,21 +1005,34 @@ function HighlightPill({
         ) : (
           "Select a passage"
         )}
+        {savedCount > 0 && (
+          <span className="ra-hlmode-saved" aria-label={`${savedCount} passages saved`}>
+            {savedCount} saved
+          </span>
+        )}
       </span>
       <button type="button" className="ra-hlmode-btn" onClick={onCancel}>
         Cancel
       </button>
       <button
         type="button"
+        className="ra-hlmode-btn"
+        onClick={add}
+        disabled={!pending}
+      >
+        Add
+      </button>
+      <button
+        type="button"
         className="ra-hlmode-btn ra-hlmode-done"
         onClick={done}
-        disabled={!pending}
+        disabled={savedCount === 0 && !pending}
       >
         Done
       </button>
       {hint && (
         <div className="ra-toast" role="status" aria-live="polite">
-          Select some text first, then tap Done.
+          Select some text first, then tap Add.
         </div>
       )}
     </div>
@@ -1012,7 +1046,7 @@ function SharePanel({
   shownChunks,
   chunkElsRef,
   anchorStyle,
-  savedHl,
+  savedHls,
   onHighlightStart,
   onClearHl,
   onClose,
@@ -1116,9 +1150,13 @@ function SharePanel({
 
   const shareFromCurrent = () => {
     const at = clamp(probeOffset(), 0, Math.max(0, text.length - 1));
-    // The highlight was captured beforehand via the highlight-capture pill
-    // (savedHl) — no live selection needed at share time.
-    const hlParam = savedHl ? `&hl=${savedHl.start}-${savedHl.end}` : "";
+    // The highlights were captured beforehand via the highlight-capture pill
+    // (savedHls) — no live selection needed at share time. Multiple ranges
+    // are comma-separated: &hl=s1-e1,s2-e2
+    const hlParam =
+      savedHls && savedHls.length > 0
+        ? `&hl=${savedHls.map((h) => `${h.start}-${h.end}`).join(",")}`
+        : "";
     doShare({
       url: `${entryUrl()}?at=${at}${hlParam}`,
       message: `"${title}" — jumping you right to where I was, in the Tower of Babel`,
@@ -1180,8 +1218,8 @@ function SharePanel({
           type="button"
           className="ra-share-hl-main"
           aria-label={
-            savedHl
-              ? "Change the highlighted passage"
+            savedHls && savedHls.length > 0
+              ? "Add more highlighted passages"
               : "Highlight a passage when sharing from your current place"
           }
           onClick={onHighlightStart}
@@ -1191,16 +1229,18 @@ function SharePanel({
           </span>
           <span className="ra-share-row-text">
             <span className="ra-share-row-title">
-              {savedHl ? "Passage highlighted ✓" : "Highlight a passage"}
+              {savedHls && savedHls.length > 0
+                ? `${savedHls.length} passage${savedHls.length > 1 ? "s" : ""} highlighted ✓`
+                : "Highlight a passage"}
             </span>
             <span className="ra-share-row-sub">
-              {savedHl
-                ? "Tap to pick a different passage"
+              {savedHls && savedHls.length > 0
+                ? "Tap to add more"
                 : "Optional — select text, then share"}
             </span>
           </span>
         </button>
-        {savedHl && (
+        {savedHls && savedHls.length > 0 && (
           <button
             type="button"
             className="ra-share-hl-clear"
@@ -1248,7 +1288,8 @@ export default function ReaderAssist({
   // Highlight-for-share: savedHl is the captured {start,end} passage (lives
   // here so it survives the share panel unmounting during capture);
   // hlMode shows the minimal capture pill instead of any panel.
-  const [savedHl, setSavedHl] = useState(null);
+  // savedHls is an array of {start,end} — multiple highlights per share.
+  const [savedHls, setSavedHls] = useState([]);
   const [hlMode, setHlMode] = useState(false);
   const orbRef = useRef(null);
 
@@ -1881,14 +1922,15 @@ export default function ReaderAssist({
           shownChunks={shownChunks}
           chunkElsRef={chunkElsRef}
           anchorStyle={panelStyle}
-          savedHl={savedHl}
+          savedHls={savedHls}
           onHighlightStart={() => {
-            setSavedHl(null);
+            // Don't clear savedHls — the user can keep adding to the list
+            // across multiple capture sessions.
             setPanel(null);
             setHlMode(true);
             poke();
           }}
-          onClearHl={() => setSavedHl(null)}
+          onClearHl={() => setSavedHls([])}
           onClose={() => {
             setPanel(null);
             poke();
@@ -1903,8 +1945,12 @@ export default function ReaderAssist({
           chunkStarts={chunkStarts}
           chunkElsRef={chunkElsRef}
           anchorStyle={panelStyle}
-          onDone={(hl) => {
-            setSavedHl(hl);
+          savedCount={savedHls.length}
+          onAdd={(hl) => {
+            setSavedHls((prev) => [...prev, hl]);
+            poke();
+          }}
+          onDone={() => {
             setHlMode(false);
             setPanel("share");
             poke();

@@ -1745,29 +1745,33 @@ function LibraryFullText({ artifact }) {
   const [text, setText] = useState(null);
   const [textError, setTextError] = useState(false);
   const [shownChunks, setShownChunks] = useState(1);
-  // Shared-link landing (?at=<char offset>[&hl=<start>-<end>]): a "Share from
-  // Current Place" link jumps the reader to the sharer's scroll position and,
-  // when present, highlights the shared passage in Apple Books yellow. Parsed
-  // once per entry mount — a share link is always a fresh page load, so stale
-  // params must never re-trigger on in-app navigation.
+  // Shared-link landing (?at=<char offset>[&hl=<start>-<end>[,<start>-<end>...]]):
+  // a "Share from Current Place" link jumps the reader to the sharer's scroll
+  // position and, when present, highlights the shared passages in Apple Books
+  // yellow. Parsed once per entry mount — a share link is always a fresh page
+  // load, so stale params must never re-trigger on in-app navigation.
   const [shareLanding] = useState(() => {
     try {
       const q = new URLSearchParams(window.location.search);
       const atRaw = q.get("at");
       if (atRaw === null || !/^\d{1,9}$/.test(atRaw)) return null;
       const at = parseInt(atRaw, 10);
-      let hl = null;
+      let hls = [];
       const hlRaw = q.get("hl");
-      if (hlRaw && /^\d{1,9}-\d{1,9}$/.test(hlRaw)) {
-        const [a, b] = hlRaw.split("-").map((n) => parseInt(n, 10));
-        if (b > a) hl = { start: a, end: Math.min(b, a + 20000) };
+      if (hlRaw) {
+        for (const part of hlRaw.split(",")) {
+          if (!/^\d{1,9}-\d{1,9}$/.test(part)) continue;
+          const [a, b] = part.split("-").map((n) => parseInt(n, 10));
+          if (b > a) hls.push({ start: a, end: Math.min(b, a + 20000) });
+          if (hls.length >= 20) break; // sanity cap
+        }
       }
-      return { at, hl, done: false };
+      return { at, hls, done: false };
     } catch {
       return null;
     }
   });
-  const [shareHl, setShareHl] = useState(null); // {start, end} global offsets
+  const [shareHls, setShareHls] = useState([]); // [{start, end}] global offsets
   // The orb must never sit on top of the Tower boot loader: wait until the
   // boot overlay is fully dismissed before mounting it. Re-arms on every
   // entry navigation (the boot raises on each in-app tower visit).
@@ -1798,7 +1802,7 @@ function LibraryFullText({ artifact }) {
     setShownChunks(1);
     chunkElsRef.current = [];
     setActiveMark(null);
-    setShareHl(null);
+    setShareHls([]);
     if (!canRead) return;
     fetch(url)
       .then((r) => {
@@ -1867,9 +1871,10 @@ function LibraryFullText({ artifact }) {
       return;
     const tlen = text.length;
     const at = Math.min(shareLanding.at, Math.max(0, tlen - 1));
-    const hlEnd = shareLanding.hl
-      ? Math.min(shareLanding.hl.end, tlen)
-      : at;
+    const hlEnd =
+      shareLanding.hls.length > 0
+        ? Math.min(shareLanding.hls[shareLanding.hls.length - 1].end, tlen)
+        : at;
     const need = Math.max(
       chunkIndexOf(at),
       chunkIndexOf(Math.max(0, hlEnd - 1))
@@ -1902,11 +1907,13 @@ function LibraryFullText({ artifact }) {
         top = rect.top + window.scrollY - headroom;
       }
       window.scrollTo({ top: Math.max(0, top), behavior: "auto" });
-      if (shareLanding.hl) {
-        setShareHl({
-          start: Math.min(shareLanding.hl.start, tlen - 1),
-          end: Math.min(shareLanding.hl.end, tlen),
-        });
+      if (shareLanding.hls.length > 0) {
+        setShareHls(
+          shareLanding.hls.map((h) => ({
+            start: Math.min(h.start, tlen - 1),
+            end: Math.min(h.end, tlen),
+          }))
+        );
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1936,20 +1943,43 @@ function LibraryFullText({ artifact }) {
         </>
       );
     }
-    if (shareHl && chunkStarts.length > 0) {
+    if (shareHls.length > 0 && chunkStarts.length > 0) {
       const gStart = chunkStarts[i];
-      const s = shareHl.start - gStart;
-      const e = shareHl.end - gStart;
-      if (s < c.length && e > 0) {
-        const cs = Math.max(0, s);
-        const ce = Math.min(c.length, e);
-        return (
-          <>
-            {c.slice(0, cs)}
-            <mark className="ra-share-mark">{c.slice(cs, ce)}</mark>
-            {c.slice(ce)}
-          </>
-        );
+      // Collect all ranges that intersect this chunk, converted to chunk-local.
+      const local = [];
+      for (const h of shareHls) {
+        const s = h.start - gStart;
+        const e = h.end - gStart;
+        if (s < c.length && e > 0) {
+          local.push({ s: Math.max(0, s), e: Math.min(c.length, e) });
+        }
+      }
+      if (local.length > 0) {
+        // Sort and merge overlapping ranges.
+        local.sort((a, b) => a.s - b.s);
+        const merged = [local[0]];
+        for (let k = 1; k < local.length; k++) {
+          const last = merged[merged.length - 1];
+          if (local[k].s <= last.e) {
+            last.e = Math.max(last.e, local[k].e);
+          } else {
+            merged.push(local[k]);
+          }
+        }
+        // Build fragments with <mark> for each range.
+        const parts = [];
+        let pos = 0;
+        merged.forEach((r, k) => {
+          if (r.s > pos) parts.push(c.slice(pos, r.s));
+          parts.push(
+            <mark key={k} className="ra-share-mark">
+              {c.slice(r.s, r.e)}
+            </mark>
+          );
+          pos = r.e;
+        });
+        if (pos < c.length) parts.push(c.slice(pos));
+        return <>{parts}</>;
       }
     }
     return c;
