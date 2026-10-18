@@ -174,10 +174,6 @@ export const routes = [
   // matchRoute resolves it as its own page, not an artifact id.
   "/tower-of-babel/library/suggest",
   "/tower-of-babel/library/:id",
-  // In-library full-text reader. Five segments, so it never collides with
-  // the :id pattern (four) or suggest (four, literal). Deliberately absent
-  // from the sitemap: reader pages are noindex (see metaFor below).
-  "/tower-of-babel/library/:id/text",
   "/government-contracting",
   "/about",
   "/contact",
@@ -206,6 +202,14 @@ export function legacyRedirect(path) {
   ) {
     const id = path.slice("/expeditions/".length);
     return `/projects/${id}`;
+  }
+  // Retired 2026-10-18: the full-text reader was merged into the entry
+  // page, so /tower-of-babel/library/:id/text now lands on the entry
+  // itself (which renders the full text below the catalog record).
+  // Matches exactly one path segment between /library/ and /text.
+  {
+    const m = path.match(/^\/tower-of-babel\/library\/([^/]+)\/text$/);
+    if (m) return `/tower-of-babel/library/${m[1]}`;
   }
   return null;
 }
@@ -273,21 +277,6 @@ export function metaFor(path) {
       return {
         title: `Project | ${SITE_NAME}`,
         description: DEFAULT_DESCRIPTION,
-      };
-    }
-    if (match.pattern === "/tower-of-babel/library/:id/text") {
-      const artifacts = getCachedArtifacts();
-      const art = artifacts
-        ? artifacts.find((a) => a.artifact_id === match.params.id)
-        : null;
-      return {
-        title: art ? `Read: ${art.title} | Tower of Babel` : `Full Text | Tower of Babel`,
-        description: art
-          ? `Read the full text of ${art.title}${art.creator ? ` by ${art.creator}` : ""} — free in the Tower of Babel online library.`
-          : DEFAULT_DESCRIPTION,
-        // Reader pages duplicate the entry page's content: keep them out
-        // of the index; the canonical entry page is the indexed one.
-        robots: "noindex, follow",
       };
     }
     if (match.pattern === "/tower-of-babel/library/:id") {
