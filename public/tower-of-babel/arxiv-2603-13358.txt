@@ -1,0 +1,1648 @@
+Not All Prefills Are Equal: PPD Disaggregation for Multi-turn LLM Serving
+Zongze Li, Jingyu Liu, Zach Xu, Yineng Zhang, Tahseen Rabbani, Ce Zhang
+
+Abstract
+Prefill-Decode (PD) disaggregation has become the standard architecture for modern LLM inference engines, which alleviates the interference of two distinctive workloads. With the growing demand for multi-turn interactions in chatbots and agentic systems, we re-examined PD in this case and found two fundamental inefficiencies: (1) every turn requires prefilling the new prompt and response from the last turn, and (2) repeated KV transfers between prefill and decode nodes saturate the bandwidth, leading to high latency and even service degradation. Our key insight is that not all prefill operations are equally disruptive: append-prefill —processing only the new input tokens while reusing cached KV states—incurs substantially less decoding slowdown than full prefill. This motivates routing append-prefill to decode nodes locally. However, through comprehensive analysis, we show that no single fixed routing strategy satisfies all Service Level Objectives (SLOs) simultaneously . Based on this insight, we propose P refill P refill-capable D ecode (PPD) disaggregation, a dynamic routing system that decides when to process Turn 2+ requests locally on decode nodes using cached KV states. PPD adapts to varying SLOs via configurable weights and seamlessly integrates with traditional PD deployments. With extensive evaluations, we show that PPD reduces Turn 2+ time-to-first-token (TTFT) by 68% while maintaining competitive time-per-output-token (TPOT), effectively alleviating KV transfer congestion under high load. We believe PPD represents a flexible and efficient paradigm for multi-turn LLM serving.
+
+
+
+1
+Introduction
+
+Prefill-decode (PD) disaggregation has become the standard architecture for LLM inference
+(
+39
+;
+25
+;
+7
+;
+30
+)
+, which places compute-intensive prompt processing (prefill) and memory-bound token generation (decode) separately on dedicated GPU pools.
+Despite being effective for independent single-turn queries, PD exhibits critical inefficiencies under
+multi-turn conversations
+—the dominant usage pattern in chatbots and agentic systems
+(
+8
+)
+.
+When a typical PD handles a new-turn query, PD routes the prompt to the prefill node along with the output string from the last turn. The prefill node needs to recompute the KV cache for the output and the new prompt from the current turn, which then gets transferred to the corresponding decode node.
+We re-examine PD under the case where multi-turn conversations are prevalent, and found that the standard PD strategy would cause time-to-first-token (TTFT) for turn 2+ (the second turn and beyond) to remain high even with shorter inputs, and these repeated KV transfers can saturate network bandwidth (
+Section
+
+6
+).
+
+Our key insight is that the behavior of prefill operations for the first and later turns differs significantly, which motivates a more specialized strategy to deal with them efficiently. In
+Figure
+
+2
+, we demonstrate that
+not all prefill operations are equally disruptive for decoding
+: full prefill (processing a new prompt without cached context) causes significantly more decode slowdown compared to
+append-prefill
+(processing only the new input tokens while reusing cached KV states).
+This order-of-magnitude gap indicates that running append-prefill (AP) on decode nodes locally can efficiently handle turn-2+ prompts with minimal interference.
+While a concurrent work
+(
+12
+)
+shares the high-level intuition of routing incremental prefills to decode nodes, our work uniquely grounds this approach in a rigorous micro-architectural interference analysis and formalizes the routing decision as an optimization problem.
+
+On the one hand, routing AP operations to prefill nodes can potentially maintain a high TPOT, and on the other hand, routing to the decode nodes can improve the overall throughput. Therefore, the central question we are interested in is
+should we put the AP operations to the prefill or decode node
+? We formalize this problem with a common framework to analyze different strategies for disaggregated serving, where PD is a special case and always puts AP to the prefill nodes. To better understand the trade-offs, we conducted a comprehensive evaluation where (see
+Section
+
+4
+), for each strategy, we sent a different fixed percentage of the AP to decode nodes. Surprisingly, we found
+there is no single fixed strategy that can meet all Service Level Objective (SLO)
+. (see
+Table
+
+2
+)
+
+To this end, we introduce
+P
+refill
+P
+refill-capable
+D
+ecode (PPD) disaggregation (
+Section
+
+5
+), which proposes to dynamically route AP operations to the decode nodes based on the current workload estimate, user-specified SLO, and initial node assignment. PPD optimizes the disaggregated serving objective with a simple yet effective algorithm using precomputed offline statistics, and can always recover the default PD configuration when it needs to. In the extreme case, PPD can route all AP operations to the decode node, in which locally cached KV states can be fully reused without extra recomputation or KV transfers.
+
+On both synthetic and real datasets, we evaluate the effectiveness of our proposed PPD framework and show that PPD achieves the best Pareto-Frontier compared to fixed routing or the default PD (see
+Figure
+
+1
+). We also conducted detailed ablation studies to justify our design choices, as well as providing analysis in complicated serving scenarios with varying requirements. We summarize our main contributions as follows:
+
+•
+
+We identify the inefficiencies of PD in multi-turn conversations with a detailed analysis (
+Section
+
+4.1
+), which shows that running the AP operations on the prefill node can incur extra recomputation and saturate the bandwidth with frequent KV cache transfers.
+
+•
+
+We found that full prefill and AP behave quite differently and have drastically distinctive influence on the decoding speed. And this motivates our core idea of selectively putting some AP to the decode nodes.
+
+•
+
+We formalize the multi-turn inference serving as an optimization problem where PD is a special case. Under this framework, we show that there is no single fixed strategy that outperforms the rest (
+Section
+
+4.4
+).
+
+•
+
+We propose PPD, which is a dynamic routing system that decides when to route the AP to the decode nodes based on current workload estimate, user-specified SLO, and the initial node assignments.
+
+•
+
+Through detailed evaluations (
+Section
+
+6
+), we show that PPD outperforms standard PD and other fixed strategies, achieving 48–73% Turn 2+ TTFT reduction while maintaining competitive TPOT.
+
+Figure 1
+:
+
+P99 TTFT vs. Tokens-per-Second (TPS) Pareto frontiers
+under a long-context workload (10k input, 100 output tokens, 5 turns) at three load levels. Higher TPS and lower TTFT are better (upper-left is ideal).
+Baselines
+(orange): PD and Replica configurations where Turn 2+ requests always require P-node processing.
+D-local capable
+(blue): configurations allowing decode nodes to process Turn 2+ locally via append-prefill. The “Best” annotation marks the configuration selected by our dynamic PPD routing system, validating correct trade-off optimization. See
+Figure
+
+8
+in the Appendix for small-context results showing consistent trends across different workloads.
+
+2
+Background
+
+2.1
+LLM Inference and Scaling
+
+LLM inference proceeds in two phases.
+
+Prefill
+processes the input prompt in parallel,
+producing the first output token and populating the KV
+cache; it is compute-bound with
+O(n^{2})
+attention complexity for
+
+n
+tokens
+(
+19
+;
+29
+)
+, though FlashAttention
+(
+6
+;
+27
+)
+reduces memory complexity from quadratic to linear.
+
+Decode
+then generates tokens autoregressively, loading
+the full model weights for each token; it is
+memory-bandwidth-bound
+(
+35
+;
+17
+)
+. Grouped Query Attention (GQA)
+(
+2
+)
+reduces the KV cache memory footprint while maintaining model quality.
+The KV cache—key-value states from prior tokens—grows linearly with context and, alongside model weights, dominates GPU memory.
+
+The most straightforward approach to scaling LLM serving is
+
+replication
+: deploying identical model instances across
+GPUs, each handling requests independently.
+However, co-locating prefill and decode on the same GPU leads to
+
+prefill-decode interference
+
+(
+39
+)
+—long-running prefill
+computations block decode iterations, causing unpredictable latency
+spikes for ongoing generation.
+Chunked-prefill techniques
+(
+1
+)
+mitigate this
+by splitting prefill into smaller chunks that interleave with decode;
+DeepSpeed-FastGen
+(
+13
+)
+further introduces Dynamic SplitFuse for efficient token composition.
+However, these techniques cannot fully eliminate interference when prefill workloads are
+heavy (we quantify this gap in
+Section
+
+4.1
+).
+
+2.2
+Prefill-Decode Disaggregation
+
+Prefill-decode (PD) disaggregation addresses interference by
+physically separating prefill and decode onto a dedicated GPU
+pools
+(
+39
+;
+25
+)
+.
+Prefill nodes (P) process incoming prompts and transfer the
+resulting KV cache to decode nodes (D) over the network; D then
+performs autoregressive generation without interruption.
+This architecture eliminates interference, enables independent
+scaling of P and D resources, and permits hardware
+heterogeneity
+(
+25
+)
+.
+
+PD disaggregation has rapidly become the industry standard.
+It is supported by all major serving frameworks—vLLM
+(
+17
+)
+,
+SGLang
+(
+38
+)
+, TensorRT-LLM, LMDeploy
+(
+5
+)
+, and NVIDIA
+Dynamo
+(
+24
+)
+—and is deployed in production
+scale by providers such as DeepSeek
+(
+7
+)
+.
+However, disaggregation introduces a fundamental cost: every
+request requires transferring the full KV cache over the network.
+For Llama-3-8B with a 2K-token context, each transfer is
+
+\sim
+512MB.
+Recent work explores alternative disaggregation strategies: DuetServe
+(
+11
+)
+achieves disaggregation-level isolation within a single GPU through adaptive SM partitioning; Nexus
+(
+28
+)
+proactively reallocates GPU resources between phases; and TaiChi
+(
+32
+)
+unifies aggregation and disaggregation, showing that the optimal strategy depends on SLO constraints.
+
+2.3
+Multi-turn Serving and KV Cache Reuse
+
+Real-world LLM deployments are dominated by multi-turn
+conversations—chatbots and agentic systems typically involve
+multiple turns per session
+(
+16
+)
+.
+Under PD disaggregation, each new turn is sent to a P node, which re-computes the KV cache for the entire conversation history (including prior outputs), then transfers it to a D node for autoregressive generation.
+Analysis on ShareGPT—a widely-used dataset of real ChatGPT conversations—shows that up to 99% of prefill cost stems from recomputing KV for historical tokens, as they dominate input length in later turns
+(
+10
+)
+.
+
+Figure 2
+:
+
+Prefill-decode interference.
+
+Decode TPOT degradation when co-locating with one full-prefill vs. one append-prefill operation (both processing 1,024 tokens).
+Full prefill causes a significant slowdown; append prefill remains close to baseline.
+See
+Figure
+
+6
+in the Appendix for 4-prefill experiments showing consistent trends.
+
+Existing Approaches.
+
+A growing line of work addresses this via
+external KV cache stores
+:
+CachedAttention
+(
+10
+)
+uses hierarchical caching;
+Mooncake
+(
+26
+)
+provides cluster-wide distributed KV stores;
+MemServe
+(
+14
+)
+unifies context caching with disaggregation;
+and LMCache
+(
+21
+)
+offers a modular KV cache layer.
+Prefix caching in SGLang
+(
+38
+)
+and vLLM
+(
+17
+)
+enables KV reuse for repeated prefixes.
+Complementary approaches include selective recomputation
+(
+33
+)
+, CPU offloading
+(
+3
+;
+31
+)
+, KV compression
+(
+18
+;
+20
+)
+, streaming
+(
+22
+)
+, prefix-aware attention
+(
+34
+)
+, and compressive memory
+(
+23
+)
+.
+
+These approaches share a common strategy: storing KV caches externally or requiring requests to return to the same instance.
+We take a complementary approach: adjusting
+routing
+so follow-up turns execute directly on the decode GPU that already holds the KV cache.
+A concurrent work, AMPD
+(
+12
+)
+, also explores a routing-based approach to mitigate multi-turn inefficiencies, albeit using real-time queue states rather than our offline optimization framework.
+We discuss the relationship with distributed KV stores and concurrent routing system in
+Section
+
+7
+.
+
+3
+Dynamic Routing Append-Prefill Operations as an Optimization Problem
+
+The central question we care about is where we compute the
+A
+ppend-
+P
+refill (AP) operations (i.e., the prefill or decode nodes) for the disaggregated setting. The main objective is to find the right percentage of the AP operations routed to the decode nodes in order to mitigate the interference. We define the objective functio we want to optimize as
+\text{SLO}\in\{\text{TTFT},\text{TPOT}\}
+(per-request latency metrics; throughput is a system-level metric analyzed separately) and we can let the user to define the distribution
+\text{SLO}\sim\phi
+, the node assignment as
+\pi
+(i.e. how many nodes are prefill or decode), the workload as
+\psi
+(e.g. server QPS, average prefill, append-prefill, and decode lengths, number of turns, etc) and the percentage of AP operations routed to the decode nodes as
+x\in[0,1]
+. Formally, the performance of a disaggregated inference engine for multi-turn conversations is defined as:
+
+\displaystyle\mathcal{J}(x;\pi,\phi):=\mathbb{E}_{\psi,\text{SLO}\sim\phi}[\text{SLO}(P_{\pi}(1-x),D_{\pi}(x),\psi)]
+
+First, we conduct a comprehensive analysis sweeping over the cartesian product of
+x\times\pi\times\psi
+for
+x\in\{0,\frac{1}{3},\frac{1}{2},\frac{2}{3},1\}
+,
+\pi\in\{1\text{P}3\text{D},2\text{P}2\text{D},3\text{P}1\text{D}\}
+1
+1
+
+1
+
+We focus on pure P/D configurations as hybrid configurations combining R with P/D generally underperform; see
+Section
+
+4.2
+, and workloads
+\psi
+spanning decode-heavy, balanced, and prefill-heavy profiles (see
+Section
+
+4.2
+for details). We found no single
+x
+beats others for all SLOs. Our proposed
+\text{PPD}(\pi,\phi)
+is a dynamic routing scheme that aims to solve the following optimization problem:
+
+\displaystyle\arg\max_{x}\mathcal{J}(x;\pi,\phi)
+
+Under this generalized framework for disaggregated serving, we can see that PD is one solution to this problem with
+x=0
+, where all AP operations are sent to the prefill nodes. We show that PPD, which dynamically optimizes
+x
+based on workload, consistently outperforms static
+x
+(including traditional PD with
+x=0
+) across varying SLO requirements.
+
+4
+Interference Analysis and Comprehensive Trade-offs
+
+In this section, we begin by establishing a key empirical result that underpins the benefit of routing AP to D:
+Append-prefill causes substantially less interference than full
+prefill, making it feasible for decode nodes to handle Turn 2+
+locally.
+We then conduct a comprehensive benchmark spanning 3,060
+configurations to evaluate the effectiveness of Full AP-to-D configurations (
+x{=}1
+) and characterize
+their trade-offs.
+Throughout this section, we analyze static deployments where D nodes with
+x{=}1
+always handle Turn 2+ locally;
+Section
+
+5
+extends this to PPD, our dynamic per-request routing system.
+
+4.1
+Quantifying Prefill Interference
+
+The core assumption behind PD disaggregation is that
+all
+
+prefill operations interfere severely with decode, necessitating
+physical isolation.
+Recent work
+(
+11
+;
+28
+)
+has begun to challenge this assumption by exploring adaptive isolation strategies.
+We further this direction by distinguishing two types of prefill.
+
+Full Prefill vs. Append Prefill.
+
+Full prefill
+processes a new prompt without any cached context—this is the standard Turn-1 scenario with
+O(n^{2})
+attention complexity for
+n
+input tokens.
+
+Append prefill
+processes only new tokens while reusing cached KV from previous turns.
+For Turn 2+ with
+m
+new tokens appended to the context of
+n
+cached tokens, append prefill computes attention only for the
+m
+new tokens (each attending over
+n+m
+keys), yielding
+O(m(n+m))
+complexity.
+When
+m\ll n
+(typical for follow-ups), append prefill is substantially cheaper than full prefill of the same total sequence length.
+
+Interference Measurement.
+
+We conduct controlled micro-benchmarks on a single H100 GPU using Llama-3.1-8B to isolate interference effects, following established roofline analysis methodology
+(
+36
+)
+.
+We measure decode TPOT degradation when co-locating with full or append prefill (
+Figure
+
+2
+).
+Full prefill causes
+\sim
+48% slowdown at batch size 200; append prefill causes only
+\sim
+2%—
+an order of magnitude less
+.
+With 4 concurrent prefills (see
+Figure
+
+6
+): full reaches +57%, append stays at +21%.
+In short, append-prefill interference remains bounded under increased concurrency, while full-prefill interference grows substantially.
+
+This gap persists across context lengths: full prefill interference grows to 3–4
+\times
+at 32K tokens while append prefill stays below 25% even at 64K (
+Figure
+
+7
+in Appendix).
+These results confirm that decode nodes can safely handle Turn 2+ locally.
+
+4.2
+Configuration Space and Methodology
+
+In this subsection, we describe the configuration space and methodology for systematically evaluating how different P/D assignments and routing parameters affect multi-turn serving performance.
+
+Figure 3
+:
+Dynamic routing of append-prefill with PPD.
+We illustrate the core concept behind PPD:
+PPD
+(Right) dynamically routes the append-prefill operations for multi-turn conversations to the prefill or decode nodes based on user SLO, estimated workload from the system, and the initial node configuration. Compared to
+Replica
+(Left), PPD retains all the benefits of disaggregation. In contrast to
+PD
+(Middle), PPD alleviates heavy KV cache transfer as well as extra recomputation for append-prefill with local cache, and can always adjust to meet various serving requirements. We want to highlight that both PD and any strategies with a fixed
+x\%
+of append-prefill routed to decode nodes are special cases of our PPD.
+
+Machine Types and Routing Parameter.
+
+We define three machine types:
+P
+(prefill-only),
+D
+(decode), and
+R
+(replica).
+The routing parameter
+x\in[0,1]
+determines D’s Turn 2+ behavior: when
+x{=}0
+, D receives KV transfer from P every turn (traditional PD); when
+x{=}1
+, D processes new input tokens locally using cached prefix (Full AP-to-D), eliminating network transfer overhead.
+
+Figure
+
+3
+a illustrates how these routing schemes operate: Replica (local execution), PD (
+x{=}0
+: P
+\rightarrow
+D with KV transfer every turn), and Full AP-to-D (
+x{=}1
+: P
+\rightarrow
+D with KV transfer only on Turn 1).
+
+Configuration Space.
+
+Using these three machine types with 4 GPUs, we explore 17 configurations, including 7 hybrid that combine R with P/D (see
+Table
+
+3
+in Appendix).
+However, since hybrid configurations generally underperform pure PD alternatives and are orthogonal to AP routing optimization, we concentrate on 10 core configurations:
+
+\bm{Replica}
+(1 config: all local execution),
+
+\bm{x=0}
+configurations (3 configs: traditional PD with KV transfer every turn),
+
+\bm{x=1}
+configurations (3 configs: Full AP-to-D with local Turn 2+ processing),
+and
+\bm{0<x<1}
+(3 configs: partial AP routing to D, e.g.,
+x{=}\frac{1}{3},\frac{1}{2},\frac{2}{3}
+).
+
+Workloads.
+
+We design 18 synthetic workloads by combining 2 Turn-1 profiles with 9 Turn-2 profiles.
+The Turn-2 profiles span three categories:
+decode-heavy
+(4 configurations with short input and long output),
+balanced
+(2 configurations with similar input/output lengths), and
+prefill-heavy
+(3 configurations with long input and short output), covering the full spectrum of multi-turn conversation patterns.
+
+Experimental Setup.
+
+All experiments were run on an internal cluster node with 4 NVIDIA H100 80GB HBM3 GPUs connected via NVLink.
+We use Llama-3.1-8B as the primary model, with validation experiments on Qwen2.5-14B and Qwen3-30B-A3B.
+Each configuration is evaluated at 10 QPS levels (0.5, 1, 2, 4, 6, 8, 10, 12, 16, 20), yielding
+17\times 18\times 10=3{,}060
+data points.
+For each test point, we run a fixed 10-second duration with conversations arriving according to a Poisson process at the target QPS (e.g., QPS=4 generates
+\sim
+40 two-turn conversations).
+We measure Turn-1 TTFT, Turn-2 TTFT, average TPOT, throughput (tokens/sec), and success rate.
+
+4.3
+Full AP-to-D Advantage: Eliminating KV Transfer Overhead
+
+In this section, we demonstrate the substantial advantage of
+x{=}1
+configurations (Full AP-to-D) over traditional PD disaggregation (
+x{=}0
+).
+The core finding:
+switching from
+x{=}0
+to
+x{=}1
+reduces Turn-2 TTFT by 48–73%
+by eliminating KV transfer for follow-up turns.
+
+Table
+
+1
+compares matched configurations:
+x{=}1
+consistently outperforms
+x{=}0
+on Turn-2 TTFT, with 1P_3D achieving up to 73.3% improvement and even 3P_1D showing 24.9–44.3% gains.
+
+Table 1
+:
+T2 TTFT improvement when switching from
+x{=}0
+to
+x{=}1
+. Negative values indicate improvement. The
+x{=}1
+advantage increases with load for P-scarce configurations (1P, 2P) but diminishes when P is abundant (3P).
+
+Config
+
+Low QPS
+
+Med QPS
+
+High QPS
+
+(0.5–2)
+
+(4–8)
+
+(12–20)
+
+1P_3D:
+x{=}0\rightarrow x{=}1
+
+-
+57.8%
+
+-
+65.2%
+
+\mathbf{-73.3\%}
+
+2P_2D:
+x{=}0\rightarrow x{=}1
+
+-
+47.7%
+
+-
+51.6%
+
+-
+56.2%
+
+3P_1D:
+x{=}0\rightarrow x{=}1
+
+-
+44.3%
+
+-
+38.1%
+
+-
+24.9%
+
+A striking pattern emerges:
+the
+x{=}1
+advantage increases with load
+—as QPS rises, transfer queuing grows, and D’s local cache access becomes increasingly valuable.
+The table also reveals that the
+x{=}1
+advantage is maximized when P resources are scarce: 1P shows up to 73.3% improvement while 3P shows diminishing returns.
+This leads to a key insight:
+x{=}1
+value
+\approx f(1/P_{\text{count}})
+.
+
+When P servers are scarce, they become a bottleneck. In
+x{=}0
+mode, Turn 2+ must traverse this bottleneck (P
+\rightarrow
+D), while
+x{=}1
+bypasses P entirely, providing an “escape valve.”
+This makes
+x{=}1
+configurations more resilient: at high QPS, they exhibit lower failure rates (see
+Table
+
+4
+in Appendix) since only Turn 1 contends for P capacity.
+When P is abundant, prefill capacity is no longer the bottleneck, and local AP overhead becomes relatively more significant.
+
+Validation: Turn and Model Scaling.
+
+The
+x{=}1
+advantage generalizes beyond 2-turn conversations and the primary 8B model.
+Scaling experiments (see
+Figure
+
+9
+in Appendix) show stable
+\sim
+70% T2+ TTFT improvement across 2–16 turns and three model sizes (8B, 14B, 30B), confirming that the benefit stems from architectural properties rather than model-specific characteristics.
+
+4.4
+No Universal Best: Objective-Dependent Optimization
+
+The previous section established
+x{=}1
+’s clear advantage for Turn-2 TTFT.
+However, production LLM serving must balance multiple objectives: latency (TTFT), generation smoothness (TPOT), and system efficiency (throughput).
+When we expand our analysis to these dimensions, a more nuanced picture emerges.
+
+Core Finding.
+
+92.2% of workload-QPS combinations have different optimal configurations for T2 TTFT versus Avg TPOT.
+
+This fundamental tension means no single configuration dominates across all objectives—the optimal choice depends on what you are optimizing for.
+
+Table
+
+2
+quantifies this trade-off by showing the winner percentage for each configuration category across three objectives.
+Three patterns stand out:
+
+Table 2
+:
+Winner distribution across three optimization objectives: minimizing Turn-2 TTFT, minimizing TPOT, and maximizing throughput. Each cell shows the percentage of (workload, QPS) combinations where that configuration category achieves the best result. Columns do not sum to 100% as hybrid configurations (which rarely win) are excluded. Full AP-to-D (
+x{=}1
+) configurations demonstrate the most balanced competitiveness, achieving the highest average win rate across all objectives.
+
+Mode
+
+TTFT
+
+TPOT
+
+Thpt
+
+Avg
+
+Replica (4R)
+
+63.3%
+
+0.6%
+
+0%
+
+21.3%
+
+x{=}0
+(PD)
+
+0%
+
+38.3%
+
+4.4%
+
+14.2%
+
+0{<}x{<}1
+
+3.3%
+
+33.3%
+
+27.8%
+
+21.5%
+
+x{=}1
+(Full AP-to-D)
+
+27.2%
+
+15.6%
+
+38.3%
+
+27.0%
+
+(1) Replica dominates T2 TTFT
+.
+With zero network transfer and local prefix caching, Replica achieves the lowest Turn-2 latency.
+However, Replica wins almost no TPOT or throughput scenarios—its lack of workload isolation causes prefill operations to interfere with decode batches.
+
+(2)
+x{=}0
+and
+0{<}x{<}1
+configurations dominate TPOT
+.
+Physical separation of prefill and decode workloads ensures stable token generation without interference.
+The decode-only (D) machines maintain consistent batch sizes and dedicated memory bandwidth, yielding predictable per-token latency.
+
+(3) Full AP-to-D (
+x{=}1
+) is the best disaggregated option for T2 TTFT
+.
+Among disaggregated configurations,
+x{=}1
+captures over a quarter of T2 TTFT wins while
+x{=}0
+captures none.
+Moreover,
+x{=}1
+leads to throughput optimization
+(38.3%)—its cache reuse and reduced network load translate to higher system efficiency.
+
+Full AP-to-D’s Balanced Profile.
+
+A key observation from
+Table
+
+2
+:
+x{=}1
+(Full AP-to-D) is the
+only
+disaggregated mode that is competitive across all three objectives.
+While
+x{=}0
+and
+0{<}x{<}1
+configurations specialize in TPOT optimization, they rarely win on T2 TTFT.
+
+x{=}1
+achieves the highest average win rate across objectives (see Avg column), making it a robust default choice when workload characteristics are uncertain.
+While
+x{=}1
+achieves the highest average win rate, production deployments where smooth token delivery is paramount may still prefer
+x{=}0
+configurations.
+
+5
+PPD: Dynamic AP Routing System
+
+The trade-off analysis in
+Section
+
+4.4
+reveals that no single static
+x
+value dominates across all objectives.
+We therefore design PPD, a dynamic routing system that optimizes
+x
+per-request based on workload characteristics and operator-specified weights, following the principle that workload-aware scheduling decisions can significantly improve serving performance
+(
+9
+;
+15
+)
+.
+
+Algorithm 1
+
+PPD Dynamic Routing
+
+1:
+
+Phase 1: Offline Table Construction
+
+2:
+
+for
+each discretized workload
+\hat{\psi}_{i}
+in benchmark grid
+do
+
+3:
+
+Measure T2 TTFT and TPOT under
+x{=}0
+(route to P) and
+x{=}1
+(route to D)
+
+4:
+
+\Delta_{\text{ttft}}\leftarrow(\text{TTFT}_{x=0}-\text{TTFT}_{x=1})\,/\,\text{TTFT}_{x=0}
+
+5:
+
+\Delta_{\text{tpot}}\leftarrow(\text{TPOT}_{x=1}-\text{TPOT}_{x=0})\,/\,\text{TPOT}_{x=0}
+
+6:
+
+\text{score}\leftarrow w_{\text{ttft}}\cdot\Delta_{\text{ttft}}-w_{\text{tpot}}\cdot\Delta_{\text{tpot}}
+
+7:
+
+Store
+x^{*}(\hat{\psi}_{i})=1
+if
+\text{score}>0
+, else
+x^{*}(\hat{\psi}_{i})=0
+
+8:
+
+end
+
+for
+
+9:
+
+10:
+
+Phase 2: Online Per-Request Decision
+
+11:
+
+Require:
+Request workload
+\psi=(t,n_{\text{in}},n_{\text{out}},n_{\text{ctx}},q)
+
+12:
+
+if
+
+t=1
+
+then
+
+13:
+
+return
+
+x=0
+{Turn 1 always do KV transfer}
+
+14:
+
+end
+
+if
+
+15:
+
+Map
+\psi
+to nearest benchmark entry
+\hat{\psi}_{i}
+via discretization:
+
+16:
+
+context class from
+n_{\text{ctx}}
+, workload type from
+n_{\text{in}}/n_{\text{out}}
+, QPS bin from
+q
+
+17:
+
+return
+
+x^{*}(\hat{\psi}_{i})
+
+The algorithm operates in two phases.
+
+Phase 1 (offline)
+constructs a decision table by benchmarking each discretized workload under both
+x{=}0
+and
+x{=}1
+, computing a weighted score that balances TTFT improvement against TPOT degradation.
+
+Phase 2 (online)
+maps incoming Turn 2+ requests to the nearest benchmark entry and returns the precomputed optimal
+x
+value.
+Turn 1 requests always use
+x{=}0
+(P
+\rightarrow
+D with KV transfer) since no cached context exists.
+The decision lookup adds negligible overhead (
+<
+1ms per request).
+
+Our prototype builds on vLLM’s disaggregated serving infrastructure, reusing its KV transfer protocol and prefix cache.
+Implementation details, including session management and routing protocol, are provided in
+Appendix
+
+B
+.
+
+Figure 4
+:
+
+PPD improves stability and reduces latency.
+
+Average query latency vs. QPS for three configurations (1P_3D, 2P_2D, 3P_1D) on ShareGPT (blue) and WildChat (orange) datasets.
+Dashed lines: PD (
+x{=}0
+); solid lines: PPD (
+x\in[0,1]
+).
+
+\times
+markers indicate service degradation
+(success rate
+<
+95% due to request timeout).
+PPD consistently achieves lower latency than PD while maintaining stability across the entire QPS range.
+
+6
+Real-world Validation
+
+Synthetic workloads provide well-controlled conditions for systematically exploring the configuration space and isolating individual factors.
+To validate that these findings generalize to the heterogeneous distributions found in real traffic, we further evaluate PPD on real-world multi-turn conversation datasets.
+
+6.1
+Datasets and Setup
+
+We use two publicly available multi-turn conversation datasets:
+
+ShareGPT
+
+(
+4
+)
+with user-shared ChatGPT conversations with diverse topics and interaction styles, and
+WildChat
+
+(
+37
+)
+with in-the-wild user conversations with varied prefill-to-decode ratios.
+
+We filter multi-turn conversations from both datasets and evaluate three representative PD configurations (1P_3D, 2P_2D, 3P_1D) with and without dynamic PPD enabled at QPS levels from 1 to 20.
+The dynamic PPD mode uses balanced weights (
+w_{\text{ttft}}=w_{\text{tpot}}=1.0
+).
+We measure Turn 2+ TTFT, average query latency, throughput, and success rate (defined as
+\geq
+95% of requests completing without timeout).
+
+6.2
+PPD Improves Both Stability and Latency
+
+Our real-world experiments (
+Figure
+
+4
+) reveal two key findings: (1) PPD achieves consistently lower average query latency than baseline (
+x{=}0
+) across both datasets, and (2) PPD resolves the KV transfer bottleneck that causes
+x{=}0
+mode degradation under multi-turn workloads.
+
+Finding 1: Lower Latency.
+
+As shown in
+Figure
+
+4
+, PPD curves (solid lines) consistently lie below baseline curves (dashed lines) across all configurations and QPS levels where both modes succeed.
+For the stable 1P_3D configuration on ShareGPT, PPD reduces average query latency by 15–25% across the QPS range.
+This improvement stems from PPD’s elimination of redundant KV transfers for Turn 2+ requests: instead of traversing the P
+\rightarrow
+D network path every turn, follow-up requests execute locally on D machines using cached prefixes.
+
+Finding 2: Resolving Service Instability.
+
+Beyond latency improvement, PPD transforms previously unusable configurations into stable deployments.
+The baseline (
+x{=}0
+) configurations exhibit service degradation (defined as success rate
+<
+95%, primarily caused by request queuing and timeout under KV transfer saturation—not memory exhaustion or hardware failure):
+2P_2D degrades at 9 out of 12 QPS levels, 3P_1D degrades at 7 out of 9, and only 1P_3D remains stable where sufficient D capacity absorbs the KV load.
+
+In contrast,
+PPD-enabled configurations achieve 100% success rate across all QPS levels and both datasets
+.
+The
+\times
+markers in
+Figure
+
+4
+visually demonstrate this gap: baseline curves are fragmented with numerous failure points, while PPD curves remain complete and continuous.
+
+Root Cause of Baseline Degradation.
+
+The root cause is
+KV transfer saturation
+: in
+x{=}0
+mode (traditional PD), D machines receive KV transfers for
+every
+turn, while PPD dynamically routes Turn 2+ requests with higher
+x
+values, significantly reducing KV transfer load.
+At 3.1 average turns per conversation, this creates a
+\sim
+3
+\times
+difference in network load, explaining why PD configurations degrade while PPD remains stable.
+PPD eliminates this bottleneck by dynamically routing Turn 2+ directly to D locally, reducing KV transfer volume by
+\sim
+75%.
+
+6.3
+Case Study: Weight-based TTFT-TPOT Trade-off
+
+The dynamic PPD system allows operators to configure the trade-off between TTFT optimization and TPOT protection via the weight parameters
+w_{\text{ttft}}
+and
+w_{\text{tpot}}
+.
+We demonstrate this flexibility through a controlled experiment on prefill-heavy workloads where PPD exhibits measurable TPOT degradation.
+
+Experimental Setup.
+
+We randomly sample 500 multi-turn conversations from ShareGPT and WildChat, filtering for prefill-heavy Turn 2+ patterns—a scenario where append_prefill causes noticeable decode interference.
+Using the 1P_3D configuration, we compare
+x{=}0
+(baseline) against PPD with varying
+w_{\text{tpot}}
+weights at QPS levels 8 and 16.
+Higher
+w_{\text{tpot}}
+penalizes TPOT degradation more heavily, causing the decision engine to route more requests via the traditional PD path.
+
+Finding: Configurable TTFT-TPOT Trade-off.
+
+Figure
+
+5
+presents the trade-off curve.
+PPD achieves 94–96% TTFT reduction while TPOT degradation remains bounded at 7–12%, confirming that append-prefill interference is manageable.
+By adjusting
+w_{\text{tpot}}
+, operators can smoothly interpolate between TTFT-optimized and TPOT-optimized configurations.
+
+Figure 5
+:
+
+Weight-based TTFT-TPOT trade-off.
+
+Turn 2+ latency for 1P_3D on prefill-heavy workloads.
+The gray band shows the achievable trade-off frontier.
+Markers indicate D-local routing ratios: 0% (Static PD baseline), 20% (
+w_{\text{tpot}}{=}6
+), 50% (
+w_{\text{tpot}}{=}3
+), and 95% (balanced,
+w_{\text{tpot}}{=}1
+).
+Higher
+w_{\text{tpot}}
+penalizes TPOT degradation, routing fewer requests to D locally.
+
+The decision engine adds negligible overhead (
+<
+1ms per request) via precomputed lookup tables, making dynamic mode selection practical for production deployments.
+
+7
+Discussion
+
+Relationship with Concurrent Work.
+
+Concurrently, AMPD
+(
+12
+)
+also identifies multi-turn PD inefficiencies and proposes routing incremental prefills to decode nodes. While AMPD focuses on online queue-delay estimation and offline hardware planning, PPD takes an analysis-driven approach. We rigorously quantify the micro-architectural interference gap between full and append prefills (
+Section
+
+4.1
+) to demonstrate
+why
+this routing is viable. Furthermore, we formalize multi-turn serving as a mathematical optimization over the routing ratio
+x
+. Instead of dynamic queue estimation, PPD employs an efficient offline table-based algorithm, requiring minimal runtime overhead (
+<1
+ms) while providing operators a predictable, configurable trade-off between TTFT and TPOT.
+
+Relationship with Distributed KV Cache.
+
+A complementary approach to improving multi-turn serving performance is the use of distributed CPU memory as a shared KV cache storage layer.
+By leveraging RDMA to interconnect CPU memory across nodes (e.g., Mooncake
+(
+26
+)
+), prefill and decode workers can access previously computed prefix states without recomputation or GPU-to-GPU transfer, reducing both latency and network bandwidth consumption.
+
+This approach operates at a fundamentally different layer than PPD.
+Distributed KV cache addresses
+where
+prefix states are stored and how they are shared across nodes—it is a
+caching mechanism
+.
+PPD addresses
+how
+requests are scheduled based on their cache-hit characteristics, preventing cache-hitting (warm) requests from being delayed by cache-missing (cold) ones—it is a
+scheduling isolation mechanism
+.
+
+The two approaches are fully compatible and address orthogonal concerns.
+Distributed prefix storage can be combined with general replication, conventional PD disaggregation, or PPD.
+When used together, distributed cache maximizes prefix reuse across the cluster, while PPD ensures that requests benefiting from cached prefixes are not interrupted by those requiring full prefill.
+This joint deployment can further improve the effectiveness of prefix reuse in large-scale LLM serving systems.
+
+8
+Conclusion
+
+Multi-turn conversations expose fundamental limitations in PD disaggregation that single-turn workloads do not reveal.
+The order-of-magnitude interference gap between full prefill and append-prefill opens a new design dimension: decode nodes can safely handle Turn 2+ requests locally.
+Yet our systematic exploration of 3,060 configurations confirms that static routing cannot universally optimize TTFT, TPOT, and throughput.
+PPD resolves this tension through workload-aware dynamic routing, achieving Pareto-optimal trade-offs with 68% TTFT reduction, minimal TPOT impact, and
+<
+1ms decision overhead.
+
+9
+Impact Statement
+
+This work improves the efficiency of multi-turn LLM serving, potentially reducing computational costs and energy consumption in large-scale deployments.
+We do not foresee direct negative societal impacts beyond those inherent to LLM technology broadly.
+
+Appendix A
+Configuration Space
+
+Table 3
+:
+Complete list of 17 configurations evaluated in our experiments. The routing parameter
+x
+determines the fraction of AP operations routed to D nodes.
+
+Category
+
+Configurations
+
+x
+
+Count
+
+Replica
+
+4R
+
+N/A
+
+1
+
+x{=}0
+(PD)
+
+1P_3D, 2P_2D, 3P_1D
+
+0
+
+3
+
+x{=}1
+(Full AP-to-D)
+
+1P_3D, 2P_2D, 3P_1D
+
+1
+
+3
+
+0{<}x{<}1
+(partial AP routing)
+
+1P_3D, 2P_2D
+
+\frac{1}{3}
+,
+\frac{2}{3}
+,
+\frac{1}{2}
+
+3
+
+Hybrid
+
+1R_1P_2D, 1R_2P_1D, 2R_1P_1D, etc.
+
+0, 1,
+\frac{1}{2}
+
+7
+
+All configurations use a fixed budget of 4 GPUs. Notation: xP = x Prefill-only nodes, xD = x Decode nodes, xR = x Replica nodes. The routing parameter
+x\in[0,1]
+determines D’s Turn 2+ behavior.
+
+Why Hybrid Configurations Are Excluded from Main Analysis.
+
+Our experiments include 7 hybrid configurations that combine R (Replica) nodes with P/D nodes, as listed in
+Table
+
+3
+.
+However, we exclude hybrid configurations from our main analysis for two reasons.
+
+First, R nodes do not benefit from disaggregation’s workload isolation.
+Unlike dedicated P and D nodes, an R node handles both prefill and decode operations on the same GPU.
+When R processes a prefill operation, it interferes with its own ongoing decode batches—the very problem that PD disaggregation was designed to solve.
+This means the routing parameter
+x
+(which controls AP routing to D nodes) does not apply to R nodes, making hybrid configurations orthogonal to our focus on AP routing optimization.
+
+Second, hybrid configurations reduce the pool of dedicated P/D resources.
+For example, 1R_1P_2D allocates only 1 GPU to prefill (vs. 2 in 2P_2D), creating potential prefill bottlenecks under high load.
+In our experiments, hybrid configurations rarely achieved the best performance on any metric, winning only 6.1% of TTFT, 12.2% of TPOT, and 16.1% of throughput test points.
+
+Appendix B
+Implementation Details
+
+This appendix provides implementation details for the PPD routing system described in
+Section
+
+5
+.
+
+B.1
+KV Transfer Protocol
+
+Our implementation reuses vLLM’s disaggregated serving infrastructure.
+P servers run with
+kv_role=kv_producer
+, generating KV caches and sending them via ZeroMQ.
+D servers run with
+kv_role=kv_consumer
+, receiving KV caches and storing them in local prefix cache for Turn 2+ processing when
+x{>}0
+.
+The transfer protocol follows vLLM’s standard disaggregated serving format, requiring no custom modifications.
+
+B.2
+Session Management
+
+The routing proxy maintains a session table as an in-memory dictionary:
+
+session_table[conv_hash] = {
+"turn_count": int,
+"assigned_pd": str,
+"last_access": timestamp
+}
+
+Conversation identifiers are computed as MD5 hashes of the first user message.
+Sessions are evicted after 60 minutes of inactivity, aligning with vLLM’s default prefix cache TTL.
+
+B.3
+Service Discovery
+
+Backend servers register with the proxy via ZeroMQ heartbeats every 10 seconds.
+The proxy maintains instance lists for each server type (P, D, R) and removes servers after 30 seconds without a heartbeat.
+This enables dynamic scaling and automatic failure recovery.
+
+B.4
+Proxy Implementation
+
+The routing proxy is implemented using Quart (async Flask) and handles:
+
+•
+
+Request parsing: Extract conversation context and determine turn number
+
+•
+
+Session lookup/creation: Manage conversation-to-server mappings
+
+•
+
+Request forwarding: Stream responses from backend to client
+
+•
+
+Statistics collection: Track routing decisions and latency metrics
+
+Appendix C
+Additional Experimental Results
+
+C.1
+Extended Interference Analysis
+
+The main paper (
+Figure
+
+2
+) demonstrates the interference gap between full prefill and append-prefill with a single concurrent prefill operation. Here we extend this analysis to examine robustness under higher concurrency and longer context lengths.
+
+Figure
+
+6
+increases concurrency to 4 simultaneous prefill operations. The interference gap persists: full prefill causes
+\sim
+57% TPOT degradation at batch size 200, while append prefill remains within
+\sim
+21% of baseline. This confirms that the fundamental difference in interference characteristics is not an artifact of low concurrency.
+
+Figure
+
+7
+varies context length from 2K to 64K tokens. Full prefill interference grows quadratically, reaching 3–4
+\times
+slowdown at 32K tokens. In contrast, append prefill interference remains below 25% even at 64K tokens, validating that append-prefill scales linearly with context length.
+
+Figure 6
+:
+
+Prefill-decode interference with 4 concurrent prefills.
+
+Same setup as
+Figure
+
+2
+but with 4 concurrent prefill operations.
+Full prefill causes
+\sim
+57% slowdown at batch size 200; append prefill remains within
+\sim
+21% of baseline.
+
+Figure 7
+:
+
+Interference scaling with context length.
+
+Full prefill interference grows to 3–4
+\times
+at 32K tokens; append prefill stays below 25% even at 64K.
+
+C.2
+Pareto Analysis
+
+Figure
+
+8
+presents the complete Pareto frontier analysis across all workload types and QPS levels evaluated in our benchmark. Each subplot shows P99 TTFT versus throughput (TPS) for all 10 core configurations. The visualization enables direct comparison of configuration trade-offs under different operating conditions, complementing the aggregate statistics presented in the main paper.
+
+Figure 8
+:
+
+P99 TTFT vs. TPS Pareto frontiers.
+
+Columns: Decode-heavy, Balanced, Prefill-heavy workloads.
+Rows: QPS=2, 8, 20.
+D-local capable configurations (blue) achieve lower TTFT while maintaining competitive TPS, with the advantage most pronounced under high QPS and decode-heavy workloads.
+
+C.3
+Scaling Validation
+
+A natural question is whether the
+x{=}1
+advantage observed in our 8B experiments generalizes to longer conversations and larger models.
+Figure
+
+9
+addresses this by measuring T2+ TTFT across (a) 2–16 turn conversations and (b) 8B–30B model sizes.
+
+The results confirm that
+x{=}1
+maintains its advantage across both dimensions. For turn scaling, the TTFT gap between
+x{=}0
+and
+x{=}1
+widens as conversations grow longer, because accumulated context amplifies KV transfer overhead. For model scaling, the relative improvement remains stable at
+\sim
+70%, indicating that the benefit stems from architectural properties rather than model-specific characteristics.
+
+Our comprehensive experiments focus on 8B models for practical reasons: replica configurations require the full model to fit on a single GPU, and each configuration switch requires a complete server restart. Testing 17 configurations across 180 workload-QPS combinations with larger models would incur prohibitive initialization overhead.
+
+Figure 9
+:
+
+x{=}1
+maintains advantage across turns and model sizes.
+
+(a) Turn scaling: T2+ TTFT across 2–16 turns.
+(b) Model scaling: T2 TTFT across 8B–30B models.
+
+x{=}1
+closely matches Replica performance while preserving disaggregation benefits;
+x{=}0
+degrades sharply with context growth.
+
+C.4
+Failure Rate Analysis
+
+Beyond latency metrics, system reliability is critical for production deployments.
+Table
+
+4
+reports request failure rates (timeout
+>
+30s) across configurations at high QPS levels.
+
+Two patterns emerge. First, configurations with extreme P:D ratios (3P_1D) are inherently fragile: with only one decode GPU, any queuing at the decode stage cascades into timeouts. Second, within each P:D ratio,
+x{=}1
+consistently achieves lower failure rates than
+x{=}0
+. For example, 2P_2D with
+x{=}1
+maintains 0% failure rate at QPS=12 where
+x{=}0
+already shows 6% failures. This reliability advantage stems from reduced network contention:
+x{=}1
+eliminates Turn 2+ KV transfers, freeing bandwidth for Turn 1 transfers that cannot be avoided.
+
+Table 4
+:
+Failure rates at high QPS.
+x{=}1
+configurations consistently show lower failure rates than their
+x{=}0
+counterparts.
+
+Config
+
+QPS=8
+
+QPS=12
+
+QPS=16
+
+QPS=20
+
+3P_1D (
+x{=}0
+)
+
+11%
+
+44%
+
+61%
+
+89%
+
+3P_1D (
+x{=}1
+)
+
+6%
+
+22%
+
+44%
+
+67%
+
+2P_2D (
+x{=}0
+)
+
+0%
+
+6%
+
+11%
+
+22%
+
+2P_2D (
+x{=}1
+)
+
+0%
+
+0%
+
+6%
+
+11%
+
+4R
+
+0%
+
+0%
+
+0%
+
+0%
+
