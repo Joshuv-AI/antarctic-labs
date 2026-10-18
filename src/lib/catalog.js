@@ -131,6 +131,15 @@ export function isCatalogPending() {
 let shardManifest = null;
 let shardManifestPending = null;
 const shardCache = {};
+const shardPending = {};
+// LRU cap for shardCache (2026-10-18): browsing across shards could retain ~90MB.
+const SHARD_CACHE_MAX = 3;
+function touchShardCache(key) {
+  const keys = Object.keys(shardCache);
+  while (keys.length > SHARD_CACHE_MAX) {
+    delete shardCache[keys.shift()];
+  }
+}
 function loadShardManifest() {
   if (shardManifest) return Promise.resolve(shardManifest);
   if (!shardManifestPending) {
@@ -149,16 +158,34 @@ function loadShardManifest() {
   }
   return shardManifestPending;
 }
+// Warm the manifest from the library list page (2026-10-18): fire-and-forget
+// so entry visits usually hit the in-memory cache instead of a 3.9MB download.
+export function warmShardManifest() {
+  loadShardManifest();
+}
 function loadCatalogShard(n) {
   const key = `shard-${n}`;
   if (shardCache[key]) return Promise.resolve(shardCache[key]);
-  return fetchJsonOnce(`/catalog-shards/catalog-${String(n).padStart(2, "0")}.json`).then(
-    (data) => {
-      const items = Array.isArray(data) ? data : data?.artifacts || data?.items || [];
-      shardCache[key] = items;
-      return items;
-    }
-  );
+  if (shardPending[key]) return shardPending[key];
+  const url = `/catalog-shards/catalog-${String(n).padStart(2, "0")}.json`;
+  // Retry once on failure (mirrors loadWithRetry semantics).
+  const attempt = (retried) =>
+    fetchJsonOnce(url).then(
+      (data) => {
+        const items = Array.isArray(data) ? data : data?.artifacts || data?.items || [];
+        shardCache[key] = items;
+        touchShardCache(key);
+        delete shardPending[key];
+        return items;
+      },
+      (err) => {
+        if (!retried) return attempt(true);
+        delete shardPending[key];
+        throw err;
+      }
+    );
+  shardPending[key] = attempt(false);
+  return shardPending[key];
 }
 export function getFullArtifact(artifactId) {
   if (fullCache) {

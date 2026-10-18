@@ -414,6 +414,9 @@ export function useReadAloud({ text, getStartOffset, chunkElsRef, chunkStarts, o
       } catch {
         /* noop */
       }
+      // Don't clobber a handler someone else installed (2026-10-18).
+      if (synth.onvoiceschanged === refresh) synth.onvoiceschanged = null;
+      stop();
       clearTimer();
     };
   }, []);

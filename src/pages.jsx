@@ -25,6 +25,7 @@ import {
   getDescription,
   onIndexReady,
   isIndexLoading,
+  warmShardManifest,
 } from "./lib/catalog.js";
 // Two-level browse taxonomy for the library filter (revamp 2026-10-17):
 // top-level lanes + subcategories derived from the artifact_id prefix.
@@ -57,6 +58,24 @@ import { applyMeta } from "./seo.js";
 import { government } from "./content/government.js";
 import { transmission } from "./content/transmission.js";
 import { services } from "./content/services.js";
+// Module-level LRU cache for entry full texts (2026-10-18): avoids re-downloading
+// up to 9MB on back/forward or prev/next navigation. Cap 5 entries.
+const textCache = new Map();
+const TEXT_CACHE_MAX = 5;
+function getCachedText(url) {
+  if (!textCache.has(url)) return undefined;
+  const t = textCache.get(url);
+  textCache.delete(url);
+  textCache.set(url, t);
+  return t;
+}
+function setCachedText(url, text) {
+  textCache.set(url, text);
+  while (textCache.size > TEXT_CACHE_MAX) {
+    const oldest = textCache.keys().next().value;
+    textCache.delete(oldest);
+  }
+}
 // ----- Projects archive + detail (was: Expeditions) -------------------------
 const PROJECT_STATUS_TONE = {
   ACTIVE: "#4ade80",
@@ -656,6 +675,9 @@ async function deriveTowerData(artifacts, isCancelled) {
 const TOWER_ROWS_PER_PAGE = 50;
 
 function TowerLibrarySection({ go, onReady }) {
+  // Warm the shard manifest in the background (2026-10-18): entry pages need
+  // it for getFullArtifact, so start the 3.9MB download now while the user browses.
+  useEffect(() => { warmShardManifest(); }, []);
   // The catalog loads asynchronously (see ./lib/catalog.js). While it is
   // null the Tower boot loader covers the screen, so rendering nothing is
   // correct — never a half-built page.
@@ -1533,13 +1555,6 @@ export function LibraryArtifact({ go, params, onReady }) {
       cancelAnimationFrame(raf2);
     };
   }, [onReady, params.id, artifacts]);
-  // Text background mode: cycles transparent -> light -> dark (2026-10-18).
-  // Only affects the .tower-fulltext section below the divider.
-  // NOTE: Must be before any early returns (Rules of Hooks).
-  const [textMode, setTextMode] = useState("transparent");
-  const cycleTextMode = () => {
-    setTextMode((m) => (m === "transparent" ? "light" : m === "light" ? "dark" : "transparent"));
-  };
   if (catalogError) return <TowerCatalogError onRetry={retryArtifacts} />;
   if (!artifacts) return null;
   const index = artifacts.findIndex((a) => a.artifact_id === params.id);
@@ -1721,6 +1736,12 @@ function LibraryFullText({ artifact }) {
   const artifactId = artifact.artifact_id;
   const status = artifact.download_status;
   const url = artifact.download_url;
+  // Text background mode: cycles transparent -> light -> dark (2026-10-18).
+  // Only affects the .tower-fulltext section below the divider.
+  const [textMode, setTextMode] = useState("transparent");
+  const cycleTextMode = () => {
+    setTextMode((m) => (m === "transparent" ? "light" : m === "light" ? "dark" : "transparent"));
+  };
   // Same C1 guard as the old reader: local /tower-of-babel/*.txt files are
   // verified against the build-time manifest so the text never 404s.
   // External links are always attempted (and degrade gracefully on CORS).
@@ -1804,6 +1825,7 @@ function LibraryFullText({ artifact }) {
   const [activeMark, setActiveMark] = useState(null);
   useEffect(() => {
     let live = true;
+    const ctrl = new AbortController();
     setText(null);
     setTextError(false);
     setShownChunks(1);
@@ -1811,14 +1833,27 @@ function LibraryFullText({ artifact }) {
     setActiveMark(null);
     setShareHls([]);
     if (!canRead) return;
-    fetch(url)
+    // Check LRU cache first — instant on back/forward navigation.
+    const cached = getCachedText(url);
+    if (cached !== undefined) {
+      setText(cached);
+      return () => { live = false; };
+    }
+    fetch(url, { signal: ctrl.signal })
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.text();
       })
-      .then((t) => { if (live) setText(t); })
-      .catch(() => { if (live) setTextError(true); });
-    return () => { live = false; };
+      .then((t) => {
+        if (live) {
+          setCachedText(url, t);
+          setText(t);
+        }
+      })
+      .catch((e) => {
+        if (live && e.name !== "AbortError") setTextError(true);
+      });
+    return () => { live = false; ctrl.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, canRead]);
 
@@ -2021,7 +2056,7 @@ function LibraryFullText({ artifact }) {
         </button>
       </div>
       {text === null && !textError && canRead && (
-        <p className="tower-reader-status">Preparing the full text…</p>
+        <p className="tower-reader-status">Loading full text…</p>
       )}
       {textError && (
         <div className="tower-reader-empty">

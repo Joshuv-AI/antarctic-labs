@@ -273,6 +273,9 @@ function FindPanel({
   const [active, setActive] = useState(-1);
   const [navTick, setNavTick] = useState(0);
   const inputRef = useRef(null);
+  // Memoize the normalized search haystack (2026-10-18): was re-created
+  // (two full-string copies) on every debounced keystroke.
+  const hay = useMemo(() => text.normalize("NFC").toLowerCase(), [text]);
   const reduced = useMemo(
     () =>
       typeof window !== "undefined" &&
@@ -316,7 +319,6 @@ function FindPanel({
     }
     const t = window.setTimeout(() => {
       const needle = query.normalize("NFC").toLowerCase();
-      const hay = text.normalize("NFC").toLowerCase();
       const out = [];
       let count = 0;
       let i = hay.indexOf(needle);
@@ -1459,7 +1461,7 @@ export default function ReaderAssist({
   // New text (entry navigation): the saved passage and capture mode belong
   // to the previous entry — reset cleanly.
   useEffect(() => {
-    setSavedHl(null);
+    setSavedHls([]);
     setHlMode(false);
   }, [text]);
 
