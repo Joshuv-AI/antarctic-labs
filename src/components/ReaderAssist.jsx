@@ -1448,8 +1448,9 @@ export default function ReaderAssist({
     const vp = vpRef.current;
     const nx = clamp(d.ox + dx, 0, Math.max(0, vp.w - ORB));
     const ny = clamp(d.oy + dy, 0, Math.max(0, vp.h - ORB));
-    const t = dragTarget.current;
-    if (Math.abs(nx - t.x) < 0.5 && Math.abs(ny - t.y) < 0.5) return; // sub-pixel noise
+    // No sub-pixel gate: on 3x screens a 0.5px threshold is 1.5 device px of
+    // stick-then-jump on slow drags. rAF coalescing already bounds us to one
+    // DOM write per frame; fractional translate3d is free on the compositor.
     dragTarget.current = { x: nx, y: ny };
     ensureDragRaf();
   };
