@@ -4,34 +4,63 @@
 // Reads every staged /tower-of-babel/*.txt, stems + counts terms per document,
 // and writes sharded term postings plus a manifest under public/search-index/.
 //
-// Design notes:
+// Reads the catalog from the sharded JSON files at public/catalog-shards/
+// (catalog-00.json, catalog-01.json, …), concatenating them in shard order.
+// This replaced the old `import { artifacts } from "../src/content/library-catalog.js"`:
+// that file is 103MB — over GitHub's 100MB per-file limit — so it is frozen
+// and can never carry new entries. The shards are the catalog source of truth.
+// Only the fields the indexer needs are projected to keep memory flat; the
+// rest of the pipeline is unchanged from the library-catalog.js era.
 // - Term -> [[docIdx, count]] postings only. NO positions are stored: snippets
 //   are cut from the actual TXT at query time, so the index stays small and
 //   can never disagree with the file about where a hit is.
-// - Sharded by hash(stem) % SHARD_COUNT so a query only downloads the 1-3
-//   small shards its terms live in, instead of one giant index.
+// - Sharded by hash(stem) % 64 so a query only downloads the 1-3 small shards
+//   its terms live in, instead of one giant index.
 // - NEVER fails the build: any error writes a minimal manifest and exits 0.
 //   Deep search then reports "unavailable"; the site itself is unaffected.
 //
-// PREBUILT INDEX (2026-10-12): at 83k+ texts a full re-index takes far
-// longer than the Cloudflare Pages build limit, so the index is generated
-// ahead of time (by the library push pipeline) and committed under
-// search-index-data/. When that directory exists, this script just stages
-// it into public/search-index/ and skips generation. To regenerate:
-//   SEARCH_INDEX_OUT=search-index-data SEARCH_INDEX_BUILD_ID=<12-char id> \
-//     node scripts/build-search-index.mjs
-// (SEARCH_INDEX_FORCE_BUILD=1 also forces a rebuild into public/.)
+// The generated files are build artifacts (gitignored) — they are NOT pushed
+// to the repo; Cloudflare regenerates them on every deploy.
 
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, copyFileSync, linkSync, readdirSync, openSync, writeSync, closeSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { artifacts } from "../src/content/library-catalog.js";
 import { analyze, shardFor, SHARD_COUNT } from "../src/lib/search-text.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-let OUT = join(ROOT, "public", "search-index");
-if (process.env.SEARCH_INDEX_OUT) OUT = join(ROOT, process.env.SEARCH_INDEX_OUT);
-const COMMITTED = join(ROOT, "search-index-data");
+const OUT = join(ROOT, "public", "search-index");
+
+// Load catalog entries from the sharded JSON files. Shards are read in sorted
+// order (catalog-00.json, catalog-01.json, …) and each shard's array in file
+// order, so docIdx assignment stays deterministic across builds. Throws on
+// any read/parse failure — the top-level catch turns that into the empty
+// fail-safe manifest, never a build failure.
+function loadArtifacts() {
+  const dir = join(ROOT, "public", "catalog-shards");
+  const files = readdirSync(dir)
+    .filter((f) => /^catalog-\d+\.json$/.test(f))
+    .sort();
+  const artifacts = [];
+  for (const f of files) {
+    const parsed = JSON.parse(readFileSync(join(dir, f), "utf8"));
+    const entries = Array.isArray(parsed) ? parsed : parsed.artifacts || parsed.items || [];
+    for (const e of entries) {
+      // Project only what the indexer uses (id/url for file lookup,
+      // title/creator/year/collection for the manifest docs array).
+      artifacts.push({
+        artifact_id: e.artifact_id,
+        download_url: e.download_url,
+        title: e.title,
+        creator: e.creator,
+        year: e.year,
+        collection: e.collection,
+      });
+    }
+  }
+  return artifacts;
+}
+
+const artifacts = loadArtifacts();
 
 function failSafe(reason) {
   console.warn(`[search-index] FAILED (${reason}); writing empty manifest so the build continues.`);
@@ -44,33 +73,9 @@ function failSafe(reason) {
   } catch { /* last resort: ignore */ }
 }
 
-// If a prebuilt index is committed under search-index-data/, stage it into
-// public/search-index/ (hardlinks where possible — instant, no extra disk)
-// instead of re-indexing the whole library inside the deploy build.
-function stageCommitted() {
-  if (!existsSync(join(COMMITTED, "manifest.json"))) return false;
-  rmSync(OUT, { recursive: true, force: true });
-  mkdirSync(OUT, { recursive: true });
-  const walk = (src, dst) => {
-    for (const e of readdirSync(src, { withFileTypes: true })) {
-      const s = join(src, e.name);
-      const d = join(dst, e.name);
-      if (e.isDirectory()) {
-        mkdirSync(d, { recursive: true });
-        walk(s, d);
-      } else {
-        try { linkSync(s, d); } catch { copyFileSync(s, d); }
-      }
-    }
-  };
-  walk(COMMITTED, OUT);
-  console.log("[search-index] staged prebuilt index from search-index-data/");
-  return true;
-}
-
 function main() {
   const buildId =
-    (process.env.SEARCH_INDEX_BUILD_ID || process.env.CF_PAGES_COMMIT_SHA || "").slice(0, 12) ||
+    (process.env.CF_PAGES_COMMIT_SHA || "").slice(0, 12) ||
     `local-${Date.now().toString(36)}`;
   const t0 = Date.now();
 
@@ -99,12 +104,6 @@ function main() {
   // flat no matter how large the library grows. Line format per shard file:
   // [stem, docIdx, count] as JSON, one per line, in docIdx order.
   let skippedRef = 0;
-  // Keep one fd per shard temp file: at 83k docs, opening the file per doc
-  // (the old writeFileSync-append pattern) costs millions of extra syscalls.
-  const shardFds = [];
-  for (let i = 0; i < SHARD_COUNT; i++) {
-    shardFds.push(openSync(join(tmpDir, i + ".jsonl"), "a"));
-  }
   for (const a of artifacts) {
     const url = a.download_url || "";
     if (!url.startsWith("/tower-of-babel/") || !url.endsWith(".txt")) continue;
@@ -137,10 +136,9 @@ function main() {
       b.push(JSON.stringify([stem, docIdx, count]));
     }
     for (const [si, b] of bufs) {
-      writeSync(shardFds[si], b.join("\n") + "\n");
+      writeFileSync(join(tmpDir, si + ".jsonl"), b.join("\n") + "\n", { flag: "a" });
     }
   }
-  for (const fd of shardFds) closeSync(fd);
 
   // PASS 2 — merge one shard at a time into its final postings object.
   const dir = join(OUT, buildId, "terms");
@@ -190,18 +188,7 @@ function main() {
 }
 
 try {
-  if (process.env.SEARCH_INDEX_OUT || process.env.SEARCH_INDEX_FORCE_BUILD) {
-    main();
-  } else if (!stageCommitted()) {
-    // REMOTE INDEX (2026-10-17): the full-text index now lives in the
-    // Joshuv-AI/antarctic-labs-texts repo and is served by Pages Functions
-    // (functions/search-index/*). With no search-index-data/ in this repo,
-    // NEVER attempt a full local regeneration during deploy builds: at
-    // 115k+ texts it exceeds Cloudflare's build time limit. Write a minimal
-    // placeholder manifest and exit 0; the functions serve the real index.
-    // (Pipeline regeneration still works via SEARCH_INDEX_OUT.)
-    failSafe("index served from antarctic-labs-texts repo; local regeneration skipped");
-  }
+  main();
 } catch (err) {
   failSafe(String((err && err.message) || err));
 }
