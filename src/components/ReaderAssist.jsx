@@ -65,7 +65,7 @@ const DRAG_TAP_PX = 8; // movement threshold separating tap from drag
 const IDLE_MS = 2500; // idle fade delay
 const DEBOUNCE_MS = 250;
 const MAX_OFFSETS = 20000; // stored offsets cap; the true total is always counted
-const MAX_RANGES = 1000; // cap on highlight ranges
+const MAX_RANGES = 300; // cap on highlight ranges (paint cost on huge paragraphs)
 const STORE_KEY = "tob-reader-orb-v1";
 const SNAP_MS = 320; // edge-snap tween duration (matches the old CSS timing)
 const TOOLBAR_WOBBLE_PX = 120; // height-only resizes below this pin the orb (iOS toolbar)
@@ -375,7 +375,12 @@ function FindPanel({
     }
     const hlAll = new Highlight();
     const hlCur = new Highlight();
-    const paintAll = qlen >= 2; // 1-char queries: count only, skip highlight-all
+    // 1-char queries: count only, skip highlight-all. Huge match counts
+    // (a common word in a long book): also count + current match only —
+    // painting thousands of ranges across 60k-char paragraphs is pure
+    // paint load on the same pipeline the crash report came from
+    // (2026-10-21); navigation still walks every stored match.
+    const paintAll = qlen >= 2 && matches.length <= 5000;
     let n = 0;
     for (let k = 0; k < matches.length && n < MAX_RANGES; k++) {
       if (!paintAll && k !== active) continue;
@@ -448,7 +453,11 @@ function FindPanel({
       }
       window.scrollTo({
         top: Math.max(0, top),
-        behavior: reduced ? "auto" : "smooth",
+        // Same rule as Contents jumps: far = instant, near = smooth.
+        behavior:
+          reduced || Math.abs(top - window.scrollY) > window.innerHeight * 1.5
+            ? "auto"
+            : "smooth",
       });
     });
   }, [
@@ -673,7 +682,14 @@ function ContentsPanel({
       }
       window.scrollTo({
         top: Math.max(0, top),
-        behavior: reduced ? "auto" : "smooth",
+        // Far jumps land instantly. A smooth traverse of a
+        // multi-million-px book keeps iOS repainting the whole way and
+        // was part of the Contents/Find tab crash (2026-10-21); only
+        // short hops animate.
+        behavior:
+          reduced || Math.abs(top - window.scrollY) > window.innerHeight * 1.5
+            ? "auto"
+            : "smooth",
       });
     });
     setJump(null);
