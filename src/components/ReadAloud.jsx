@@ -147,9 +147,12 @@ function chunkWords(words, per = 180) {
 const WPM = 150; // baseline words-per-minute at 1x for the timer fallback
 
 // ---------------------------------------------------------------------------
-// useReadAloud — the speech engine.
+// useReadAloudLegacy — the original Web Speech engine. Kept as the automatic
+// fallback: if the Kokoro model can't load (offline first run, very old
+// browser, synthesis failures), the dispatcher hands control to this engine
+// and listening continues with the system voice.
 // ---------------------------------------------------------------------------
-export function useReadAloud({ text, getStartOffset, chunkElsRef, chunkStarts, onWord }) {
+function useReadAloudLegacy({ text, getStartOffset, chunkElsRef, chunkStarts, onWord }) {
   const [status, setStatus] = useState("idle"); // idle | playing | paused
   if (typeof window !== "undefined" && status !== "idle") {
   }
@@ -446,12 +449,682 @@ export function useReadAloud({ text, getStartOffset, chunkElsRef, chunkStarts, o
 }
 
 // ---------------------------------------------------------------------------
+// Kokoro engine (2026-10-21) — the primary Listen voice.
+//
+// Kokoro-82M (open source, Apache-2.0) synthesizes speech on-device in a
+// Web Worker (src/lib/kokoro-worker.js), lazily loaded on the first Listen
+// tap: a one-time ~90 MB model download, cached by the browser afterwards.
+// Sentences are synthesized a few ahead of playback and played through a
+// single <audio> element, which makes pause a true pause, ±10s a true
+// seek, and the speed control the element's playbackRate (instant, no
+// re-synthesis). Word tracking is per-sentence: the spoken word is the
+// char-weighted estimate inside the current sentence's audio.
+//
+// Any fatal failure (no Worker/WASM, model download error, repeated
+// synthesis errors) calls onFatalError and the dispatcher swaps in the
+// legacy Web Speech engine, so Listen never just dies.
+// ---------------------------------------------------------------------------
+
+// Group words into synthesis sentences: end at sentence punctuation, break
+// over-long sentences at clause punctuation (~200 chars per Kokoro call).
+const CLAUSE_END_RE = /[,;:]\s*$/;
+function splitSentences(words, text) {
+  const out = [];
+  let start = 0;
+  let chars = 0;
+  const push = (end) => {
+    const s = {
+      from: start,
+      to: end,
+      text: text.slice(words[start].s, words[end - 1].e),
+      cum: [],
+    };
+    const total = Math.max(1, s.text.length);
+    for (let i = start; i < end; i++) {
+      s.cum.push((words[i].s - words[start].s) / total);
+    }
+    out.push(s);
+    start = end;
+    chars = 0;
+  };
+  for (let i = 0; i < words.length; i++) {
+    chars += words[i].w.length + 1;
+    const last = i === words.length - 1;
+    if (last) {
+      push(i + 1);
+    } else if (SENT_END_RE.test(words[i].w) && chars >= 40) {
+      push(i + 1);
+    } else if (
+      chars >= 200 &&
+      (SENT_END_RE.test(words[i].w) || CLAUSE_END_RE.test(words[i].w))
+    ) {
+      push(i + 1);
+    } else if (chars >= 240) {
+      // Kokoro truncates past ~512 phonemes (~240 chars) — never feed it
+      // a longer unit, even mid-clause.
+      push(i + 1);
+    }
+  }
+  return out;
+}
+
+// The word being spoken at fraction f of a sentence's audio (char-weighted).
+function wordAtFrac(sentence, words, f) {
+  const cum = sentence.cum;
+  let lo = 0;
+  let hi = cum.length - 1;
+  let hit = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (cum[mid] <= f) {
+      hit = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return sentence.from + hit;
+}
+
+const KOKORO_POSSIBLE =
+  typeof window !== "undefined" &&
+  typeof Worker !== "undefined" &&
+  typeof WebAssembly !== "undefined";
+
+// A 0.25s silent WAV — played (and instantly paused) inside the Listen tap
+// so iOS/Chrome unlock the audio element for later programmatic playback.
+const SILENT_WAV =
+  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+
+function useReadAloudKokoro({
+  text,
+  getStartOffset,
+  onWord,
+  onFatalError,
+}) {
+  const [status, setStatus] = useState("idle");
+  const [rate, setRateState] = useState(1);
+  const [wordIdx, setWordIdx] = useState(0);
+  const [wordCount, setWordCount] = useState(0);
+  const [voiceState, setVoiceState] = useState("idle"); // idle|loading|ready
+  const [voiceProgress, setVoiceProgress] = useState(0);
+
+  const statusRef = useRef("idle");
+  const rateRef = useRef(1);
+  const eng = useRef(null);
+  // The worker's message handlers are registered once and would otherwise
+  // capture the text of the render that created them; always read latest.
+  const textRef = useRef(text);
+  textRef.current = text;
+  const setStatusBoth = (s) => {
+    statusRef.current = s;
+    setStatus(s);
+  };
+
+  const getEng = () => {
+    if (!eng.current) {
+      eng.current = {
+        worker: null,
+        workerState: "none", // none | loading | ready | error
+        progressDismissed: false,
+        pendingStartWi: null,
+        words: null,
+        sentences: null,
+        text: null,
+        audio: null,
+        cache: new Map(), // sentenceIdx -> { url, dur }
+        pending: new Map(), // synthId -> sentenceIdx
+        seq: 0,
+        cur: -1,
+        loadedIdx: -1,
+        wantPlay: false,
+        waitingFor: -1,
+        waitingSeek: null, // { atSec } | { atWord }
+        charRate: 13.5, // measured chars/sec of finished sentences
+        fails: 0,
+        lastWi: 0,
+        raf: 0,
+      };
+    }
+    return eng.current;
+  };
+
+  // --- audio element -------------------------------------------------------
+  const ensureAudio = useCallback(() => {
+    const E = getEng();
+    if (E.audio) return E.audio;
+    const a = new Audio();
+    a.preload = "auto";
+    a.setAttribute("playsinline", "");
+    a.playbackRate = rateRef.current;
+    a.addEventListener("ended", () => {
+      const E2 = getEng();
+      if (!E2.wantPlay) return;
+      const next = E2.cur + 1;
+      if (E2.sentences && next < E2.sentences.length) {
+        playSentence(next, null);
+      } else {
+        E2.wantPlay = false;
+        setStatusBoth("idle");
+        setWordIdx(E2.words ? E2.words.length : 0);
+        if (onWord) onWord(null);
+      }
+    });
+    a.addEventListener("error", () => {
+      // A blob that fails to decode: skip forward rather than stall.
+      const E2 = getEng();
+      if (E2.wantPlay && E2.sentences && E2.cur + 1 < E2.sentences.length) {
+        playSentence(E2.cur + 1, null);
+      }
+    });
+    E.audio = a;
+    try {
+      if ("mediaSession" in navigator) {
+        navigator.mediaSession.metadata = new window.MediaMetadata({
+          title: document.title || "Tower of Babel",
+          artist: "Antarctic Labs — Tower of Babel",
+        });
+      }
+    } catch {
+      /* media session is a bonus, never a blocker */
+    }
+    return a;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onWord]);
+
+  // --- worker --------------------------------------------------------------
+  const requestSynth = useCallback((idx) => {
+    const E = getEng();
+    if (!E.worker || E.workerState !== "ready") return;
+    if (idx < 0 || !E.sentences || idx >= E.sentences.length) return;
+    if (E.cache.has(idx)) return;
+    for (const v of E.pending.values()) if (v === idx) return;
+    const id = ++E.seq;
+    E.pending.set(id, idx);
+    E.worker.postMessage({
+      type: "synth",
+      id,
+      text: E.sentences[idx].text,
+    });
+  }, []);
+
+  const handleAudioReady = useCallback(
+    (idx, url, dur) => {
+      const E = getEng();
+      E.cache.set(idx, { url, dur });
+      const s = E.sentences && E.sentences[idx];
+      if (s && dur > 0) {
+        // Rolling chars/sec calibration for duration estimates.
+        const cps = s.text.length / dur;
+        if (cps > 4 && cps < 40) E.charRate = E.charRate * 0.6 + cps * 0.4;
+      }
+      // Evict far-behind sentences to bound memory (each WAV ~50 KB/s).
+      for (const k of [...E.cache.keys()]) {
+        if (k < E.cur - 2 || k > E.cur + 4) {
+          const c = E.cache.get(k);
+          if (c && c.url) URL.revokeObjectURL(c.url);
+          E.cache.delete(k);
+        }
+      }
+      if (E.waitingFor === idx) {
+        const seek = E.waitingSeek;
+        E.waitingFor = -1;
+        E.waitingSeek = null;
+        playSentence(idx, seek);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  const ensureWorker = useCallback(() => {
+    const E = getEng();
+    if (E.worker) return E.worker;
+    let w;
+    try {
+      w = new Worker(new URL("../lib/kokoro-worker.js", import.meta.url), {
+        type: "module",
+      });
+    } catch {
+      if (onFatalError) onFatalError();
+      return null;
+    }
+    E.worker = w;
+    E.workerState = "loading";
+    w.onmessage = (ev) => {
+      const msg = ev.data || {};
+      const E2 = getEng();
+      if (msg.type === "progress") {
+        if (msg.total > 0) {
+          setVoiceProgress(
+            Math.min(99, Math.round((msg.loaded / msg.total) * 100))
+          );
+        }
+      } else if (msg.type === "ready") {
+        E2.workerState = "ready";
+        setVoiceProgress(100);
+        setVoiceState("ready");
+        if (E2.pendingStartWi !== null) {
+          const wi = E2.pendingStartWi;
+          E2.pendingStartWi = null;
+          beginAt(wi);
+        }
+      } else if (msg.type === "load-error") {
+        E2.workerState = "error";
+        setVoiceState("idle");
+        if (onFatalError) onFatalError();
+      } else if (msg.type === "audio") {
+        const idx = E2.pending.get(msg.id);
+        E2.pending.delete(msg.id);
+        if (idx === undefined) return;
+        // The session may have been stopped while this was synthesizing.
+        if (!E2.sentences || idx >= E2.sentences.length) return;
+        const blob = new Blob([msg.wav], { type: "audio/wav" });
+        const url = URL.createObjectURL(blob);
+        // Probe the duration off-DOM, then hand it to the player.
+        const probe = new Audio();
+        probe.preload = "metadata";
+        probe.onloadedmetadata = () => {
+          handleAudioReady(idx, url, probe.duration || 0);
+          probe.src = "";
+        };
+        probe.onerror = () => handleAudioReady(idx, url, 0);
+        probe.src = url;
+        E2.fails = 0;
+      } else if (msg.type === "synth-error") {
+        const idx = E2.pending.get(msg.id);
+        E2.pending.delete(msg.id);
+        E2.fails += 1;
+        if (E2.fails >= 3) {
+          if (onFatalError) onFatalError();
+          return;
+        }
+        if (idx !== undefined && E2.waitingFor === idx) {
+          // Skip the broken sentence rather than stalling playback.
+          E2.waitingFor = -1;
+          playSentence(idx + 1, null);
+        }
+      }
+    };
+    w.onerror = () => {
+      E.workerState = "error";
+      setVoiceState("idle");
+      if (onFatalError) onFatalError();
+    };
+    w.postMessage({ type: "init" });
+    return w;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onFatalError]);
+
+  // --- playback ------------------------------------------------------------
+  const estDur = useCallback((idx) => {
+    const E = getEng();
+    const c = E.cache.get(idx);
+    if (c && c.dur > 0) return c.dur;
+    const s = E.sentences && E.sentences[idx];
+    return s ? Math.max(0.4, s.text.length / E.charRate) : 1;
+  }, []);
+
+  const trackTick = useCallback(() => {
+    const E = getEng();
+    const a = E.audio;
+    if (!a || !E.sentences || E.cur < 0) return;
+    if (!a.paused && a.duration > 0 && a.currentTime >= 0) {
+      const s = E.sentences[E.cur];
+      const f = Math.min(1, a.currentTime / a.duration);
+      const wi = wordAtFrac(s, E.words, f);
+      if (wi !== E.lastWi) {
+        E.lastWi = wi;
+        setWordIdx(wi);
+        if (onWord) onWord(E.words[wi].s, E.words[wi].e, wi);
+      }
+    }
+    if (statusRef.current === "playing") {
+      E.raf = requestAnimationFrame(trackTick);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onWord]);
+
+  const startTracking = useCallback(() => {
+    const E = getEng();
+    cancelAnimationFrame(E.raf);
+    E.raf = requestAnimationFrame(trackTick);
+  }, [trackTick]);
+
+  function playSentence(idx, seek) {
+    const E = getEng();
+    if (!E.sentences || idx < 0 || idx >= E.sentences.length) {
+      E.wantPlay = false;
+      setStatusBoth("idle");
+      if (onWord) onWord(null);
+      return;
+    }
+    E.cur = idx;
+    const s = E.sentences[idx];
+    // Position the highlight at the sentence (or seek) start immediately.
+    let wi = s.from;
+    if (seek && typeof seek.atSec === "number") {
+      wi = wordAtFrac(s, E.words, Math.min(1, seek.atSec / estDur(idx)));
+    } else if (seek && typeof seek.atWord === "number") {
+      wi = Math.max(s.from, Math.min(seek.atWord, s.to - 1));
+    }
+    E.lastWi = wi;
+    setWordIdx(wi);
+    if (onWord) onWord(E.words[wi].s, E.words[wi].e, wi);
+    requestSynth(idx);
+    requestSynth(idx + 1);
+    requestSynth(idx + 2);
+    const cached = E.cache.get(idx);
+    const a = ensureAudio();
+    if (!cached) {
+      E.waitingFor = idx;
+      E.waitingSeek = seek;
+      return;
+    }
+    E.waitingFor = -1;
+    if (E.loadedIdx !== idx) {
+      a.src = cached.url;
+      E.loadedIdx = idx;
+    }
+    const applySeekAndPlay = () => {
+      try {
+        if (seek && typeof seek.atSec === "number") {
+          a.currentTime = Math.min(seek.atSec, Math.max(0, (a.duration || 0) - 0.05));
+        } else if (seek && typeof seek.atWord === "number") {
+          const f = s.cum[seek.atWord - s.from] || 0;
+          a.currentTime = f * (a.duration || 0);
+        } else if (E.loadedIdx === idx && a.currentTime > 0 && !seek) {
+          // Re-entering the same sentence without a seek: leave position.
+        }
+      } catch {
+        /* seek is best-effort */
+      }
+      a.playbackRate = rateRef.current;
+      if (E.wantPlay) {
+        const p = a.play();
+        if (p && p.catch) p.catch(() => {});
+      }
+      startTracking();
+    };
+    if (a.readyState >= 1) applySeekAndPlay();
+    else a.addEventListener("loadedmetadata", applySeekAndPlay, { once: true });
+  }
+
+  function beginAt(wi) {
+    const E = getEng();
+    const t = textRef.current;
+    if (!t) return;
+    if (!E.sentences || E.text !== t) {
+      const words = splitWords(t);
+      E.words = words;
+      E.sentences = splitSentences(words, t);
+      E.text = t;
+      E.cache.clear();
+      E.loadedIdx = -1;
+      setWordCount(words.length);
+    }
+    wi = Math.max(0, Math.min(wi, E.words.length - 1));
+    let si = E.sentences.findIndex((s) => wi >= s.from && wi < s.to);
+    if (si < 0) si = E.sentences.length - 1;
+    E.wantPlay = true;
+    setStatusBoth("playing");
+    playSentence(si, wi > E.sentences[si].from ? { atWord: wi } : null);
+  }
+
+  // --- public controls -----------------------------------------------------
+  const startFromCurrent = useCallback(() => {
+    if (!KOKORO_POSSIBLE) {
+      if (onFatalError) onFatalError();
+      return "unsupported";
+    }
+    if (!text) return "empty";
+    // Unlock the audio element inside the tap gesture.
+    const a = ensureAudio();
+    try {
+      a.src = SILENT_WAV;
+      const p = a.play();
+      if (p && p.then) {
+        p.then(() => {
+          try {
+            a.pause();
+          } catch {
+            /* noop */
+          }
+        }).catch(() => {});
+      }
+    } catch {
+      /* unlocking is best-effort */
+    }
+    const off = Math.max(0, getStartOffset ? getStartOffset() : 0);
+    const words = splitWords(text);
+    let wi = words.findIndex((w) => w.e > off);
+    if (wi < 0) wi = 0;
+    const E = getEng();
+    if (E.workerState === "ready") {
+      beginAt(wi);
+    } else {
+      E.pendingStartWi = wi;
+      E.progressDismissed = false;
+      setVoiceProgress(0);
+      setVoiceState("loading");
+      ensureWorker();
+    }
+    return "ok";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text, getStartOffset, ensureWorker, ensureAudio, onFatalError]);
+
+  const toggle = useCallback(() => {
+    const E = getEng();
+    if (statusRef.current === "playing") {
+      E.wantPlay = false;
+      cancelAnimationFrame(E.raf);
+      if (E.audio) {
+        try {
+          E.audio.pause();
+        } catch {
+          /* noop */
+        }
+      }
+      setStatusBoth("paused");
+      if (onWord) onWord(null, null, E.lastWi, true);
+    } else if (statusRef.current === "paused") {
+      E.wantPlay = true;
+      setStatusBoth("playing");
+      if (E.waitingFor >= 0) {
+        // Still synthesizing the current sentence; playback starts on
+        // arrival (playSentence checks wantPlay).
+      } else if (E.audio && E.loadedIdx === E.cur) {
+        const p = E.audio.play();
+        if (p && p.catch) p.catch(() => {});
+      } else if (E.cur >= 0) {
+        playSentence(E.cur, null);
+      }
+      startTracking();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onWord, startTracking]);
+
+  const stop = useCallback(() => {
+    const E = getEng();
+    E.wantPlay = false;
+    E.pendingStartWi = null;
+    E.waitingFor = -1;
+    cancelAnimationFrame(E.raf);
+    if (E.audio) {
+      try {
+        E.audio.pause();
+        E.audio.removeAttribute("src");
+        E.audio.load();
+      } catch {
+        /* noop */
+      }
+    }
+    for (const c of E.cache.values()) {
+      if (c.url) URL.revokeObjectURL(c.url);
+    }
+    E.cache.clear();
+    E.pending.clear();
+    E.loadedIdx = -1;
+    E.cur = -1;
+    if (E.workerState === "loading") setVoiceState("idle");
+    setStatusBoth("idle");
+    setWordIdx(0);
+    if (onWord) onWord(null);
+  }, [onWord]);
+
+  const skip = useCallback(
+    (seconds) => {
+      const E = getEng();
+      if (!E.sentences || statusRef.current === "idle") return;
+      // Build the position on the sentence timeline.
+      let pos = 0;
+      for (let i = 0; i < E.cur; i++) pos += estDur(i);
+      const a = E.audio;
+      if (a && E.loadedIdx === E.cur && a.duration > 0) {
+        pos += a.currentTime || 0;
+      } else if (E.waitingSeek && typeof E.waitingSeek.atSec === "number") {
+        pos += E.waitingSeek.atSec;
+      }
+      let total = 0;
+      for (let i = 0; i < E.sentences.length; i++) total += estDur(i);
+      const target = Math.max(0, Math.min(total - 0.1, pos + seconds));
+      let acc = 0;
+      let j = 0;
+      while (j < E.sentences.length - 1 && acc + estDur(j) <= target) {
+        acc += estDur(j);
+        j++;
+      }
+      const intra = target - acc;
+      if (statusRef.current === "paused") {
+        E.cur = j;
+        E.wantPlay = false;
+        playSentence(j, { atSec: intra });
+        // playSentence starts audio only if wantPlay; re-pause instantly.
+        if (E.audio) {
+          try {
+            E.audio.pause();
+          } catch {
+            /* noop */
+          }
+        }
+      } else {
+        E.wantPlay = true;
+        playSentence(j, { atSec: intra });
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [estDur]
+  );
+
+  const setRate = useCallback((r) => {
+    r = Math.max(0.5, Math.min(2, r));
+    rateRef.current = r;
+    setRateState(r);
+    const E = getEng();
+    if (E.audio) E.audio.playbackRate = r;
+  }, []);
+
+  // New text: stop everything (sentences belong to the old entry).
+  useEffect(() => {
+    stop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text]);
+
+  // Unmount: stop and release the worker.
+  useEffect(() => {
+    return () => {
+      const E = eng.current;
+      if (E) {
+        cancelAnimationFrame(E.raf);
+        if (E.audio) {
+          try {
+            E.audio.pause();
+          } catch {
+            /* noop */
+          }
+        }
+        if (E.worker) {
+          try {
+            E.worker.terminate();
+          } catch {
+            /* noop */
+          }
+        }
+      }
+    };
+  }, []);
+
+  return {
+    status,
+    statusRef,
+    rate,
+    wordIdx,
+    wordCount,
+    startFromCurrent,
+    toggle,
+    stop,
+    skip,
+    setRate,
+    supported: KOKORO_POSSIBLE,
+    voiceState,
+    voiceProgress,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// useReadAloud — dispatcher: Kokoro first, legacy Web Speech on any fatal
+// failure. If a Listen tap was in flight when Kokoro failed, the legacy
+// engine starts automatically so the tap still results in speech.
+// ---------------------------------------------------------------------------
+export function useReadAloud(args) {
+  const [mode, setMode] = useState(KOKORO_POSSIBLE ? "kokoro" : "legacy");
+  const autoStartRef = useRef(false);
+  const onFatalError = useCallback(() => {
+    setMode((m) => (m === "kokoro" ? "legacy" : m));
+  }, []);
+  const kokoro = useReadAloudKokoro({ ...args, onFatalError });
+  const legacy = useReadAloudLegacy(args);
+
+  const startFromCurrent = useCallback(() => {
+    autoStartRef.current = true;
+    const active = mode === "kokoro" ? kokoro : legacy;
+    return active.startFromCurrent();
+  }, [mode, kokoro, legacy]);
+
+  useEffect(() => {
+    if (mode === "legacy" && autoStartRef.current) {
+      autoStartRef.current = false;
+      legacy.startFromCurrent();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
+  if (mode === "legacy") {
+    return {
+      ...legacy,
+      startFromCurrent,
+      voiceState: "fallback",
+      voiceProgress: 100,
+    };
+  }
+  return {
+    ...kokoro,
+    startFromCurrent,
+    supported: kokoro.supported || legacy.supported,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // ReadAloudBar — the persistent bottom player overlay.
 // ---------------------------------------------------------------------------
 // Speed control (2026-10-20): a tap-to-cycle step button instead of the old
-// slider (which read as a volume control). Steps snap to standard rates.
-const RATE_STEPS = [0.75, 1, 1.25, 1.5, 1.75, 2];
-const rateLabel = (r) => `${parseFloat(r.toFixed(2))}×`;
+// slider (which read as a volume control). Finer steps (2026-10-20, Joshua):
+// an extra stop between every standard rate — eighth increments all the
+// way, all exact binary fractions so labels stay honest.
+const RATE_STEPS = [
+  0.75, 0.875, 1, 1.125, 1.25, 1.375, 1.5, 1.625, 1.75, 1.875, 2,
+];
+const rateLabel = (r) => `${parseFloat(r.toFixed(3))}×`;
 const RateGlyph = (
   <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true">
     <path d="M12 4.5 17.5 11h-11z" />
@@ -488,31 +1161,7 @@ export function ReadAloudBar({
         />
       </div>
       <div className="ra-listen-row">
-        <button
-          type="button"
-          className="ra-listen-btn ra-listen-skipbtn"
-          onClick={() => onSkip(-10)}
-          aria-label="Back 10 seconds"
-        >
-          {RewindGlyph}
-        </button>
-        <button
-          type="button"
-          className="ra-listen-btn ra-listen-play"
-          onClick={onToggle}
-          aria-label={playing ? "Pause reading" : "Resume reading"}
-        >
-          {playing ? PauseGlyph : PlayGlyph}
-        </button>
-        <button
-          type="button"
-          className="ra-listen-btn ra-listen-skipbtn"
-          onClick={() => onSkip(10)}
-          aria-label="Forward 10 seconds"
-        >
-          {ForwardGlyph}
-        </button>
-        <div className="ra-listen-speed">
+        <div className="ra-listen-zone ra-listen-zone-left">
           <button
             type="button"
             className="ra-listen-ratebtn"
@@ -527,11 +1176,79 @@ export function ReadAloudBar({
             <span>{rateLabel(rate)}</span>
           </button>
         </div>
+        <div className="ra-listen-zone ra-listen-zone-center">
+          <button
+            type="button"
+            className="ra-listen-btn ra-listen-skipbtn"
+            onClick={() => onSkip(-10)}
+            aria-label="Back 10 seconds"
+          >
+            {RewindGlyph}
+          </button>
+          <button
+            type="button"
+            className="ra-listen-btn ra-listen-play"
+            onClick={onToggle}
+            aria-label={playing ? "Pause reading" : "Resume reading"}
+          >
+            {playing ? PauseGlyph : PlayGlyph}
+          </button>
+          <button
+            type="button"
+            className="ra-listen-btn ra-listen-skipbtn"
+            onClick={() => onSkip(10)}
+            aria-label="Forward 10 seconds"
+          >
+            {ForwardGlyph}
+          </button>
+        </div>
+        <div className="ra-listen-zone ra-listen-zone-right">
+          <button
+            type="button"
+            className="ra-listen-btn ra-listen-stop"
+            onClick={onStop}
+            aria-label="Stop reading"
+          >
+            {StopGlyph}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ReadAloudLoadingBar — shown once, while the Kokoro voice model downloads
+// (a one-time ~90 MB fetch, cached afterwards). Reuses the player bar shell
+// so it lands in exactly the place the controls are about to appear.
+// ---------------------------------------------------------------------------
+export function ReadAloudLoadingBar({ progress, onCancel }) {
+  const pct =
+    typeof progress === "number" && progress > 0 ? Math.round(progress) : null;
+  return (
+    <div
+      className="ra-listen-bar ra-listen-loading"
+      role="status"
+      aria-label="Preparing the reading voice"
+    >
+      <div className="ra-listen-progress" aria-hidden="true">
+        <div
+          className="ra-listen-progress-fill"
+          style={{ width: pct !== null ? `${pct}%` : "8%" }}
+        />
+      </div>
+      <div className="ra-listen-loading-row">
+        <span className="ra-listen-loading-text">
+          Preparing the reading voice{pct !== null ? ` — ${pct}%` : "…"}
+          <span className="ra-listen-loading-sub">
+            One-time download. After this, Listen starts instantly.
+          </span>
+        </span>
         <button
           type="button"
           className="ra-listen-btn ra-listen-stop"
-          onClick={onStop}
-          aria-label="Stop reading"
+          onClick={onCancel}
+          aria-label="Cancel voice download"
         >
           {StopGlyph}
         </button>

@@ -9,6 +9,12 @@
 // destinations already share the home-page visual grammar.
 import { useState, useEffect, useMemo, useDeferredValue, useRef, memo, Fragment } from "react";
 import { searchDeep, getSnippets } from "./lib/deep-search.js";
+import {
+  normText,
+  queryTokens,
+  pinsForQuery,
+  scoreArtifact,
+} from "./lib/search-rank.js";
 import { site } from "./content/site.js";
 import { expeditions, expeditionsArchive } from "./content/expeditions.js";
 import { projectsIntro } from "./content/faq.js";
@@ -516,22 +522,24 @@ function TowerCatalogError({ onRetry }) {
   );
 }
 
-// Case-insensitive haystack for catalog search: title, creator, year,
+// Normalized search haystack for catalog search: title, creator, year,
 // description, collection, subcategory label, and tags. The subcategory
 // label (e.g. "CIA", "PLOS Journals") makes the revamp's buckets findable
-// by search too.
+// by search too. Text goes through normText (lib/search-rank.js) — the
+// same normalization the query gets — so "quran" finds "Qur'an" titles
+// and "moby dick" finds "Moby-Dick".
 function towerHaystack(a, subLabel) {
-  return [
-    a.title || "",
-    a.creator || "",
-    a.year ? String(a.year) : "",
-    a.description || "",
-    a.collection || "",
-    subLabel || "",
-    Array.isArray(a.tags) ? a.tags.join(" ") : "",
-  ]
-    .join("\n")
-    .toLowerCase();
+  return normText(
+    [
+      a.title || "",
+      a.creator || "",
+      a.year ? String(a.year) : "",
+      a.description || "",
+      a.collection || "",
+      subLabel || "",
+      Array.isArray(a.tags) ? a.tags.join(" ") : "",
+    ].join("\n")
+  );
 }
 
 // Derived catalog data, built AFTER first paint in a deferred, chunked task
@@ -640,8 +648,15 @@ async function deriveTowerData(artifacts, isCancelled) {
   if (!titleOrder || isCancelled()) return null;
   const haystacks = await buildHaystacks(artifacts, bucketKeys, isCancelled);
   if (!haystacks || isCancelled()) return null;
+  // artifact_id -> index, for resolving curated search pins (built once
+  // here so a keystroke never pays for it).
+  const idIndex = new Map();
+  for (let i = 0; i < artifacts.length; i++) {
+    idIndex.set(artifacts[i].artifact_id, i);
+  }
   const data = {
     haystacks,
+    idIndex,
     counts,
     subCounts,
     bucketKeys,
@@ -791,24 +806,83 @@ function TowerLibrarySection({ go, onReady }) {
   // Active lane for the subcategory row: the lane part of bucketFilter.
   const activeLane = bucketFilter ? bucketFilter.split(":")[0] : "";
   const activeSubs = TOWER_SUBS[activeLane] || [];
-  const { rankMap, matchCount } = useMemo(() => {
+  const { rankMap, matchCount, rankedIndices } = useMemo(() => {
     const map = new Map();
-    if (!artifacts || !towerData) return { rankMap: map, matchCount: 0 };
+    if (!artifacts || !towerData)
+      return { rankMap: map, matchCount: 0, rankedIndices: null };
     // Two-level filter: a lane bucket ("PAPERS") matches every record whose
     // bucket key starts with "PAPERS:" (the subcategory partition is exact,
     // so this is identical to the old collection equality check); a
     // subcategory bucket ("PAPERS:bio") matches its key exactly.
     const bf = bucketFilter;
     const bfLane = bf && bf.indexOf(":") < 0 ? bf + ":" : null;
-    for (let k = 0; k < towerOrder.length; k++) {
-      const i = towerOrder[k];
+    const passesBucket = (i) => {
       const bk = towerData.bucketKeys[i];
-      if (bf && bk !== bf && !(bfLane && bk.indexOf(bfLane) === 0)) continue;
-      const a = artifacts[i];
-      if (q && !towerData.haystacks[i].includes(q)) continue;
-      map.set(a.artifact_id, map.size + 1);
+      return !bf || bk === bf || (bfLane && bk.indexOf(bfLane) === 0);
+    };
+    const qNorm = q ? normText(q) : "";
+    if (!qNorm) {
+      // Browsing: the chosen sort order governs, as before.
+      for (let k = 0; k < towerOrder.length; k++) {
+        const i = towerOrder[k];
+        if (!passesBucket(i)) continue;
+        map.set(artifacts[i].artifact_id, map.size + 1);
+      }
+      return { rankMap: map, matchCount: map.size, rankedIndices: null };
     }
-    return { rankMap: map, matchCount: map.size };
+    // Searching (2026-10-20 relevance overhaul, lib/search-rank.js):
+    // token-AND matching over the normalized haystacks, field-weighted
+    // scoring, and curated canon pins first — so the work a searcher
+    // means leads, not whatever sorts first alphabetically. The sort
+    // dropdown governs browsing only; while a query is active the best
+    // answer leads.
+    const tokens = queryTokens(qNorm);
+    const scored = [];
+    // Bound by the haystacks length, not artifacts.length: during the
+    // bootstrap->full catalog upgrade the two can briefly disagree, and
+    // the derived arrays are the internally consistent ones.
+    const N = Math.min(artifacts.length, towerData.haystacks.length);
+    for (let i = 0; i < N; i++) {
+      if (!passesBucket(i)) continue;
+      const hay = towerData.haystacks[i];
+      let ok = true;
+      for (const t of tokens) {
+        if (!hay.includes(t)) { ok = false; break; }
+      }
+      if (!ok) continue;
+      const bk = towerData.bucketKeys[i];
+      const colon = bk.indexOf(":");
+      const subLabel =
+        colon < 0
+          ? ""
+          : towerSubLabel(artifacts[i].collection, bk.slice(colon + 1));
+      scored.push({ i, s: scoreArtifact(artifacts[i], subLabel, qNorm, tokens) });
+    }
+    scored.sort(
+      (x, y) =>
+        y.s - x.s ||
+        (artifacts[x.i].title || "").localeCompare(artifacts[y.i].title || "")
+    );
+    const seen = new Set();
+    const ordered = [];
+    const pins = pinsForQuery(qNorm, tokens);
+    if (pins) {
+      for (const id of pins) {
+        const ix = towerData.idIndex.get(id);
+        if (ix !== undefined && !seen.has(ix) && passesBucket(ix)) {
+          seen.add(ix);
+          ordered.push(ix);
+        }
+      }
+    }
+    for (const { i } of scored) {
+      if (!seen.has(i)) {
+        seen.add(i);
+        ordered.push(i);
+      }
+    }
+    for (const i of ordered) map.set(artifacts[i].artifact_id, map.size + 1);
+    return { rankMap: map, matchCount: map.size, rankedIndices: ordered };
   }, [q, bucketFilter, sortId, towerOrder, artifacts, towerData]);
   // Report ready exactly once when the section settles: the first 50 rows
   // have painted, or the error UI is up. The double rAF waits for paint;
@@ -963,6 +1037,7 @@ function TowerLibrarySection({ go, onReady }) {
               artifacts={artifacts}
               towerOrder={towerOrder}
               rankMap={rankMap}
+              rankedIndices={rankedIndices}
               matchCount={matchCount}
               rowBudget={rowBudget}
               onLoadMore={() => setRowBudget((b) => b + TOWER_ROWS_PER_PAGE)}
@@ -1233,6 +1308,7 @@ const LibraryResults = memo(function LibraryResults({
   artifacts,
   towerOrder,
   rankMap,
+  rankedIndices,
   matchCount,
   rowBudget,
   onLoadMore,
@@ -1248,6 +1324,10 @@ const LibraryResults = memo(function LibraryResults({
   // paint stay cheap. (The previous hidden-flip approach kept input fast
   // but made every filter/sort update walk all 3,448 rows.)
   const visibleIndices = useMemo(() => {
+    // Searching: mount the top `rowBudget` by relevance rank — walking
+    // the sort order here would mount an alphabetical slice and the
+    // best answers (ranked first by the search memo) might never mount.
+    if (rankedIndices) return rankedIndices.slice(0, rowBudget);
     const out = [];
     // Walk the full sort order, collecting the first `rowBudget` MATCHING
     // items — not just the first `rowBudget` in sort order (which breaks
@@ -1257,7 +1337,7 @@ const LibraryResults = memo(function LibraryResults({
       if (rankMap.has(artifacts[i].artifact_id)) out.push(i);
     }
     return out;
-  }, [artifacts, towerOrder, rankMap, rowBudget]);
+  }, [artifacts, towerOrder, rankMap, rankedIndices, rowBudget]);
   // While searching, the top "entries matching" list is capped at 2 rows
   // with a show-more expander — so the "Mentions in texts" section stays
   // visible on screen instead of being buried under dozens of title hits.

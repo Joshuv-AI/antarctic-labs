@@ -51,7 +51,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { extractContents } from "../lib/contents.js";
-import { useReadAloud, ReadAloudBar, ListenIcon } from "./ReadAloud.jsx";
+import { useReadAloud, ReadAloudBar, ReadAloudLoadingBar, ListenIcon } from "./ReadAloud.jsx";
 
 export const SUPPORTS_HIGHLIGHTS =
   typeof CSS !== "undefined" &&
@@ -1144,7 +1144,7 @@ function SharePanel({
   const shareFromTop = () => {
     doShare({
       url: entryUrl(),
-      message: `"${title}" — read the full text free in the Tower of Babel`,
+      message: `"${title}" — click to read the full text`,
     });
   };
 
@@ -1159,7 +1159,7 @@ function SharePanel({
         : "";
     doShare({
       url: `${entryUrl()}?at=${at}${hlParam}`,
-      message: `"${title}" — jumping you right to where I was, in the Tower of Babel`,
+      message: `"${title}" — click to pick up where I left off`,
     });
     onClearHl();
   };
@@ -2002,42 +2002,39 @@ export default function ReaderAssist({
   const cx = orbX + ORB / 2;
   const cy = orbY + ORB / 2;
 
-  // Fan-out menu: feature icons orbit the orb D-pad style — up, inward-side,
-  // down, in FEATURES order. When the orb is parked too close to the top or
-  // bottom edge for a straight slot, that icon swings to an inward diagonal
-  // so it never clamps onto the orb. Every icon stays inside the viewport.
+  // Fan-out menu (reworked 2026-10-20, twice): the orb always parks on the
+  // left or right edge, so the fan opens inward. Its angular window is
+  // solved from the actual vertical room above/below the orb: mid-edge the
+  // window is the full half-plane (up / in-up / in-down / down, D-pad-like);
+  // near the top or bottom it narrows to the room that exists, and the
+  // radius grows just enough that adjacent icons keep a clear chord. The
+  // earlier slot+clamp layout stacked icons onto one row at the bottom
+  // edge, and a fixed symmetric arc still swung its end slots off the side
+  // edge — solving the window from the room is what makes overlap and
+  // off-screen placement impossible by construction.
   const fanItems = useMemo(() => {
     const R = 26; // fan item radius (52px circle)
-    const d = ORB / 2 + 16 + R; // center distance from the orb center
-    const inward = cx > viewport.w / 2 ? -1 : 1; // away from the snapped edge
-    const minC = R + 10;
-    const maxX = Math.max(minC, viewport.w - R - 10);
-    const maxY = Math.max(minC, viewport.h - R - 10);
-    const slots = [
-      { dx: 0, dy: -1 }, // up
-      { dx: inward, dy: 0 }, // inward side
-      { dx: 0, dy: 1 }, // down
-      // 4th: inward-down diagonal (2026-10-18). D-pad style — sits 45° between
-      // the inward and down slots, clear of both. Inward (away from the snapped
-      // edge) always has room, so it never clamps onto the orb.
-      { dx: inward * 0.72, dy: 0.72 },
-    ];
+    const M = R + 8; // min distance from a screen edge to an item center
+    const inward = cx <= viewport.w / 2 ? 1 : -1;
+    const up = Math.max(0, cy - M);
+    const down = Math.max(0, viewport.h - M - cy);
+    let d = 84;
+    let tLo = -Math.PI / 2;
+    let tHi = Math.PI / 2;
+    for (let iter = 0; iter < 3; iter++) {
+      tLo = Math.asin(clamp(-up / d, -1, 1));
+      tHi = Math.asin(clamp(down / d, -1, 1));
+      const spacing = (tHi - tLo) / 3;
+      if (2 * d * Math.sin(spacing / 2) >= 56 || d >= 150) break;
+      d = Math.min(150, 28 / Math.sin(spacing / 2));
+    }
+    const minC = R + 8;
+    const maxX = Math.max(minC, viewport.w - R - 8);
+    const maxY = Math.max(minC, viewport.h - R - 8);
     return visibleFeatures.map((f, i) => {
-      const s = slots[i % slots.length];
-      let x = cx + s.dx * d;
-      let y = cy + s.dy * d;
-      if (s.dy !== 0) {
-        const clampedY = clamp(y, minC, maxY);
-        if (Math.abs(clampedY - cy) < d * 0.7) {
-          // Orb hugging the top/bottom edge: swing to the inward diagonal.
-          x = cx + inward * d * 0.72;
-          y = cy + s.dy * d * 0.72;
-        } else {
-          y = clampedY;
-        }
-      }
-      x = clamp(x, minC, maxX);
-      y = clamp(y, minC, maxY);
+      const t = tLo + ((tHi - tLo) * i) / Math.max(1, visibleFeatures.length - 1);
+      const x = clamp(cx + inward * Math.cos(t) * d, minC, maxX);
+      const y = clamp(cy + Math.sin(t) * d, minC, maxY);
       return {
         ...f,
         left: Math.round(x - R),
@@ -2237,6 +2234,14 @@ export default function ReaderAssist({
           }}
           onSkip={readAloud.skip}
           onRate={readAloud.setRate}
+        />
+      )}
+
+      {/* One-time voice download (Kokoro model) progress. */}
+      {!listening && readAloud.voiceState === "loading" && (
+        <ReadAloudLoadingBar
+          progress={readAloud.voiceProgress}
+          onCancel={() => readAloud.stop()}
         />
       )}
     </div>,
