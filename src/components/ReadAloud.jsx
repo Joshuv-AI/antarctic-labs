@@ -53,15 +53,17 @@ const PauseGlyph = (
   </svg>
 );
 const RewindGlyph = (
-  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-    <path d="M4 5v14" />
-    <path d="M19 5.5v13L8.5 12z" />
+  <svg viewBox="0 0 24 24" width="30" height="30" fill="none" aria-hidden="true">
+    <path d="M5.7 7.9 A8.3 8.3 0 1 0 14.8 4.0" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+    <path d="M10.6 1.3 L3.8 4.6 L10.1 7.9 Z" fill="currentColor" transform="rotate(-12 7.2 4.6)" />
+    <text x="12" y="15.6" textAnchor="middle" fontSize="8.8" fontWeight="700" fill="currentColor" fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif">10</text>
   </svg>
 );
 const ForwardGlyph = (
-  <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
-    <path d="M20 5v14" />
-    <path d="M5 5.5v13l10.5-6.5z" />
+  <svg viewBox="0 0 24 24" width="30" height="30" fill="none" aria-hidden="true">
+    <path d="M18.3 7.9 A8.3 8.3 0 1 1 9.2 4.0" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+    <path d="M13.4 1.3 L20.2 4.6 L13.9 7.9 Z" fill="currentColor" transform="rotate(12 16.8 4.6)" />
+    <text x="12" y="15.6" textAnchor="middle" fontSize="8.8" fontWeight="700" fill="currentColor" fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif">10</text>
   </svg>
 );
 const StopGlyph = (
@@ -477,12 +479,11 @@ export function ReadAloudBar({
       <div className="ra-listen-row">
         <button
           type="button"
-          className="ra-listen-btn"
+          className="ra-listen-btn ra-listen-skipbtn"
           onClick={() => onSkip(-10)}
           aria-label="Back 10 seconds"
         >
           {RewindGlyph}
-          <span className="ra-listen-skip">10</span>
         </button>
         <button
           type="button"
@@ -494,12 +495,11 @@ export function ReadAloudBar({
         </button>
         <button
           type="button"
-          className="ra-listen-btn"
+          className="ra-listen-btn ra-listen-skipbtn"
           onClick={() => onSkip(10)}
           aria-label="Forward 10 seconds"
         >
           {ForwardGlyph}
-          <span className="ra-listen-skip">10</span>
         </button>
         <div className="ra-listen-speed">
           <input
