@@ -17,16 +17,18 @@ export async function onRequest(context) {
   } catch {
     /* keep the raw param */
   }
-  // Flat directory of generated names only — reject anything else outright.
+  // Only *.txt names belong to this function. Any other single-segment
+  // path under /tower-of-babel/ is an app route (e.g. /tower-of-babel/library)
+  // — fall through to the normal Pages asset handling so the SPA shell
+  // serves instead of a hard 404.
+  if (!file.endsWith(".txt")) {
+    return context.next();
+  }
+  // Flat directory of generated names only — reject traversal outright.
   // (Names are mostly ASCII slugs, but a few legitimately contain accented
   // letters, e.g. sima-qian-...-tome-cinquième.txt — allow any name that
   // cannot traverse out of the flat directory.)
-  if (
-    !file.endsWith(".txt") ||
-    file.includes("/") ||
-    file.includes("\\") ||
-    file.includes("..")
-  ) {
+  if (file.includes("/") || file.includes("\\") || file.includes("..")) {
     return new Response("Not found", { status: 404 });
   }
 
