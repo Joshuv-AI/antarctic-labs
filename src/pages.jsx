@@ -2027,6 +2027,28 @@ function LibraryFullText({ artifact }) {
     return c;
   };
 
+  // Memoized chunk elements (2026-10-20): a text-mode toggle (or any other
+  // small state change in this component) must not re-run the chunk map —
+  // recreating every chunk <p> and churning its inline ref made the mode
+  // switch feel delayed on long texts. Rebuilds only when the inputs
+  // renderChunk actually reads change.
+  const chunkEls = useMemo(
+    () =>
+      chunks.slice(0, shownChunks).map((c, i) => (
+        <p
+          key={i}
+          ref={(el) => {
+            chunkElsRef.current[i] = el;
+          }}
+          className="tower-reader-chunk"
+        >
+          {renderChunk(c, i)}
+        </p>
+      )),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [chunks, shownChunks, activeMark, shareHls, chunkStarts]
+  );
+
   return (
     <section className="tower-fulltext section" aria-label="Full text" data-textmode={textMode}>
       <div className="section-index">FULL TEXT</div>
@@ -2085,15 +2107,7 @@ function LibraryFullText({ artifact }) {
       )}
       {text !== null && (
         <div className="tower-reader-text" role="document" aria-label={`Full text of ${artifact.title}`}>
-          {chunks.slice(0, shownChunks).map((c, i) => (
-            <p
-              key={i}
-              ref={(el) => { chunkElsRef.current[i] = el; }}
-              className="tower-reader-chunk"
-            >
-              {renderChunk(c, i)}
-            </p>
-          ))}
+          {chunkEls}
           {shownChunks < chunks.length && (
             <div className="tower-reader-more">
               <div ref={sentinelRef} className="tower-reader-sentinel" aria-hidden="true" />

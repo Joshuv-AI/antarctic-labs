@@ -640,8 +640,7 @@ function App() {
         {(path === "/tower-of-babel" ||
           path === "/tower-of-babel/api" ||
           path === "/tower-of-babel/library" ||
-          path === "/tower-of-babel/library/suggest" ||
-          matchedPattern === "/tower-of-babel/library/:id") && (
+          path === "/tower-of-babel/library/suggest") && (
           <div
             className={
               path === "/tower-of-babel" || path === "/tower-of-babel/library"
