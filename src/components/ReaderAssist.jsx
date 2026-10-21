@@ -258,6 +258,7 @@ function FindPanel({
   text,
   chunkStarts,
   shownChunks,
+  isMounted,
   ensureChunk,
   chunkElsRef,
   onActiveMark,
@@ -380,7 +381,7 @@ function FindPanel({
       if (!paintAll && k !== active) continue;
       const off = matches[k];
       const ci = chunkIndexOf(off);
-      if (ci >= shownChunks) continue; // chunk not rendered yet — skip for now
+      if (!isMounted(ci)) continue; // chunk not rendered yet — skip for now
       const el = chunkElsRef.current[ci];
       const tn = el && el.firstChild;
       if (!tn || tn.nodeType !== 3) continue;
@@ -407,6 +408,7 @@ function FindPanel({
     matches,
     active,
     shownChunks,
+    isMounted,
     qlen,
     chunkIndexOf,
     chunkStarts,
@@ -419,7 +421,7 @@ function FindPanel({
     if (active < 0 || !matches || matches.length === 0) return;
     const off = matches[active];
     const ci = chunkIndexOf(off);
-    if (ci >= shownChunks) {
+    if (!isMounted(ci)) {
       ensureChunk(ci);
       return; // effect re-runs once the chunk renders
     }
@@ -453,6 +455,7 @@ function FindPanel({
     active,
     navTick,
     shownChunks,
+    isMounted,
     matches,
     chunkIndexOf,
     chunkStarts,
@@ -571,6 +574,8 @@ function ContentsPanel({
   title,
   chunkStarts,
   shownChunks,
+  winStart,
+  isMounted,
   ensureChunk,
   chunkElsRef,
   anchorStyle,
@@ -642,7 +647,7 @@ function ContentsPanel({
     if (!jump) return;
     const off = jump.offset;
     const ci = chunkIndexOf(off);
-    if (ci >= shownChunks) {
+    if (!isMounted(ci)) {
       ensureChunk(ci);
       return; // effect re-runs once the chunk renders
     }
@@ -676,6 +681,7 @@ function ContentsPanel({
   }, [
     jump,
     shownChunks,
+    isMounted,
     chunkIndexOf,
     chunkStarts,
     chunkElsRef,
@@ -701,7 +707,7 @@ function ContentsPanel({
     const boundaryTop = (secIdx) => {
       const off = sections[secIdx].offset;
       const ci = chunkIndexOf(off);
-      if (ci >= shownChunks) return null;
+      if (!isMounted(ci)) return null;
       const el = chunkElsRef.current[ci];
       const tn = el && el.firstChild;
       if (!tn || tn.nodeType !== 3) return null;
@@ -718,10 +724,10 @@ function ContentsPanel({
 
     const compute = () => {
       raf = 0;
-      if (!topsCache || topsCache.shownChunks !== shownChunks) {
+      if (!topsCache || topsCache.key !== `${winStart}:${shownChunks}`) {
         const els = chunkElsRef.current;
         const rows = [];
-        for (let i = 0; i < shownChunks; i++) {
+        for (let i = winStart; i < shownChunks; i++) {
           const el = els[i];
           if (!el) continue;
           rows.push({
@@ -730,7 +736,7 @@ function ContentsPanel({
           });
         }
         if (rows.length === 0) return;
-        topsCache = { shownChunks, rows };
+        topsCache = { key: `${winStart}:${shownChunks}`, rows };
       }
       const { rows } = topsCache;
       const probe = window.scrollY + window.innerHeight * HEADROOM_FRAC;
@@ -794,7 +800,7 @@ function ContentsPanel({
       window.removeEventListener("scroll", onScroll);
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [sections, shownChunks, chunkStarts, chunkIndexOf, chunkElsRef, text]);
+  }, [sections, shownChunks, winStart, isMounted, chunkStarts, chunkIndexOf, chunkElsRef, text]);
 
   // Same orb-anchored left/width as the find panel, but pull the top up when
   // the tall panel would otherwise run past the viewport bottom (max-height
@@ -1271,10 +1277,17 @@ export default function ReaderAssist({
   title,
   chunkStarts,
   shownChunks,
+  winStart = 0,
   ensureChunk,
   chunkElsRef,
   onActiveMark,
 }) {
+  // Windowed rendering (2026-10-21): chunks mount in [winStart,
+  // shownChunks) only — panels must treat anything outside as unrendered.
+  const isMounted = useCallback(
+    (ci) => ci >= winStart && ci < shownChunks,
+    [winStart, shownChunks]
+  );
   const [viewport, setViewport] = useState(() => ({
     w: typeof window !== "undefined" ? window.innerWidth : 390,
     h: typeof window !== "undefined" ? window.innerHeight : 844,
@@ -2127,6 +2140,7 @@ export default function ReaderAssist({
           text={text}
           chunkStarts={chunkStarts}
           shownChunks={shownChunks}
+          isMounted={isMounted}
           ensureChunk={ensureChunk}
           chunkElsRef={chunkElsRef}
           onActiveMark={onActiveMark}
@@ -2145,6 +2159,8 @@ export default function ReaderAssist({
           title={title}
           chunkStarts={chunkStarts}
           shownChunks={shownChunks}
+          winStart={winStart}
+          isMounted={isMounted}
           ensureChunk={ensureChunk}
           chunkElsRef={chunkElsRef}
           anchorStyle={panelStyle}

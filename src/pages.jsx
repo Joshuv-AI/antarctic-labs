@@ -7,7 +7,7 @@
 // Visual language is intentionally not redesigned here — these shells
 // use the same classes the existing Home page already uses, so the
 // destinations already share the home-page visual grammar.
-import { useState, useEffect, useMemo, useDeferredValue, useRef, memo, Fragment } from "react";
+import { useState, useEffect, useMemo, useDeferredValue, useRef, useCallback, memo, Fragment } from "react";
 import { searchDeep, getSnippets } from "./lib/deep-search.js";
 import {
   normText,
@@ -1866,7 +1866,16 @@ function LibraryFullText({ artifact }) {
 
   const [text, setText] = useState(null);
   const [textError, setTextError] = useState(false);
-  const [shownChunks, setShownChunks] = useState(1);
+  // Windowed chunk rendering (2026-10-21): only chunks in [win.start,
+  // win.end) are mounted. Rendering used to be a prefix (0..shown), so a
+  // Search/Contents jump to the end of a 1.4 MB book mounted the WHOLE
+  // text at once — iOS killed the tab for memory, which readers saw as a
+  // crash to "UNKNOWN ARTIFACT" and a doubled page on the way back. Far
+  // jumps now re-anchor a small window around the target instead; the
+  // skipped prefix becomes a spacer of estimated height.
+  const [win, setWin] = useState({ start: 0, end: 1 });
+  const winStart = win.start;
+  const winEnd = win.end;
   // Shared-link landing (?at=<char offset>[&hl=<start>-<end>[,<start>-<end>...]]):
   // a "Share from Current Place" link jumps the reader to the sharer's scroll
   // position and, when present, highlights the shared passages in Apple Books
@@ -1922,7 +1931,7 @@ function LibraryFullText({ artifact }) {
     const ctrl = new AbortController();
     setText(null);
     setTextError(false);
-    setShownChunks(1);
+    setWin({ start: 0, end: 1 });
     chunkElsRef.current = [];
     setActiveMark(null);
     setShareHls([]);
@@ -1964,22 +1973,44 @@ function LibraryFullText({ artifact }) {
     return starts;
   }, [chunks]);
   const sentinelRef = useRef(null);
-  // Long texts (the largest is ~9MB) render in chunks; more load as the
-  // reader scrolls, so the first paint stays fast on phones.
+  // Long texts (the largest is ~9MB) render in chunks inside the window;
+  // more load at the window's end as the reader scrolls, so the first
+  // paint stays fast on phones and the mounted DOM stays bounded.
   useEffect(() => {
     const el = sentinelRef.current;
-    if (!el || shownChunks >= chunks.length) return;
+    if (!el || win.end >= chunks.length) return;
     const io = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting) {
-          setShownChunks((n) => Math.min(n + 2, chunks.length));
+          setWin((w) => ({ ...w, end: Math.min(w.end + 2, chunks.length) }));
         }
       },
       { rootMargin: "1200px" }
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [shownChunks, chunks.length]);
+  }, [win.end, chunks.length]);
+
+  // Bring a chunk into the mounted window (ReaderAssist panels call this
+  // before scrolling to a match/section). Nearby targets just extend the
+  // window contiguously; a FAR target re-anchors a small window around it
+  // — never the whole prefix (that full-book mount is what crashed iOS).
+  const ensureChunk = useCallback(
+    (ci) => {
+      setWin((w) => {
+        if (ci >= w.start && ci < w.end) return w;
+        if (ci >= w.end && ci - w.end <= 8)
+          return { start: w.start, end: ci + 1 };
+        if (ci < w.start && w.start - ci <= 8)
+          return { start: ci, end: w.end };
+        return {
+          start: Math.max(0, ci - 1),
+          end: Math.min(chunks.length, ci + 3),
+        };
+      });
+    },
+    [chunks.length]
+  );
 
   const chunkIndexOf = (off) => {
     let lo = 0;
@@ -2015,8 +2046,8 @@ function LibraryFullText({ artifact }) {
       chunkIndexOf(at),
       chunkIndexOf(Math.max(0, hlEnd - 1))
     );
-    if (need >= shownChunks) {
-      setShownChunks((n) => Math.max(n, need + 1));
+    if (need < win.start || need >= win.end) {
+      ensureChunk(need);
       return; // effect re-runs once the chunks render
     }
     shareLanding.done = true;
@@ -2053,7 +2084,7 @@ function LibraryFullText({ artifact }) {
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text, shownChunks, chunkStarts]);
+  }, [text, win, chunkStarts]);
 
   const stats = useMemo(() => {
     if (!text) return null;
@@ -2127,21 +2158,64 @@ function LibraryFullText({ artifact }) {
   // switch feel delayed on long texts. Rebuilds only when the inputs
   // renderChunk actually reads change.
   const chunkEls = useMemo(
-    () =>
-      chunks.slice(0, shownChunks).map((c, i) => (
-        <p
-          key={i}
-          ref={(el) => {
-            chunkElsRef.current[i] = el;
-          }}
-          className="tower-reader-chunk"
-        >
-          {renderChunk(c, i)}
-        </p>
-      )),
+    () => {
+      const out = [];
+      for (let i = win.start; i < win.end; i++) {
+        out.push(
+          <p
+            key={i}
+            ref={(el) => {
+              chunkElsRef.current[i] = el;
+            }}
+            className="tower-reader-chunk"
+          >
+            {renderChunk(chunks[i], i)}
+          </p>
+        );
+      }
+      return out;
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [chunks, shownChunks, activeMark, shareHls, chunkStarts]
+    [chunks, win, activeMark, shareHls, chunkStarts]
   );
+
+  // Spacer calibration: the skipped prefix's height is estimated from the
+  // mounted chunks' measured px-per-char (sampled, so no layout thrash).
+  // Only scroll positions ABOVE the window depend on it — everything at
+  // and below the window is measured from real elements.
+  const pxPerCharRef = useRef(0.45);
+  useEffect(() => {
+    let h = 0;
+    let chars = 0;
+    const sample = [];
+    for (let i = win.start; i < win.end && sample.length < 3; i++)
+      sample.push(i);
+    for (let i = win.end - 1; i >= win.start && sample.length < 6; i--)
+      if (!sample.includes(i)) sample.push(i);
+    for (const i of sample) {
+      const el = chunkElsRef.current[i];
+      if (el && chunks[i]) {
+        h += el.offsetHeight;
+        chars += chunks[i].length;
+      }
+    }
+    if (chars > 400 && h > 0) pxPerCharRef.current = h / chars;
+  }, [win, chunks, textMode]);
+  const spacerPx =
+    win.start > 0
+      ? Math.round(chunkStarts[win.start] * pxPerCharRef.current)
+      : 0;
+  const textBoxRef = useRef(null);
+  const backToBeginning = () => {
+    setWin({ start: 0, end: Math.min(3, chunks.length) });
+    requestAnimationFrame(() => {
+      const box = textBoxRef.current;
+      if (box) {
+        const y = box.getBoundingClientRect().top + window.scrollY - 8;
+        window.scrollTo({ top: Math.max(0, y), behavior: "auto" });
+      }
+    });
+  };
 
   return (
     <section className="tower-fulltext section" aria-label="Full text" data-textmode={textMode}>
@@ -2200,17 +2274,37 @@ function LibraryFullText({ artifact }) {
         </div>
       )}
       {text !== null && (
-        <div className="tower-reader-text" role="document" aria-label={`Full text of ${artifact.title}`}>
+        <div className="tower-reader-text" role="document" aria-label={`Full text of ${artifact.title}`} ref={textBoxRef}>
+          {win.start > 0 && (
+            <>
+              <div className="tower-reader-jumpbar">
+                <span>Jumped ahead — the earlier text isn&rsquo;t loaded.</span>
+                <button type="button" onClick={backToBeginning}>
+                  BACK TO THE BEGINNING
+                </button>
+              </div>
+              <div
+                className="tower-reader-spacer"
+                style={{ height: spacerPx }}
+                aria-hidden="true"
+              />
+            </>
+          )}
           {chunkEls}
-          {shownChunks < chunks.length && (
+          {win.end < chunks.length && (
             <div className="tower-reader-more">
               <div ref={sentinelRef} className="tower-reader-sentinel" aria-hidden="true" />
               <button
                 type="button"
                 className="tower-source-btn"
-                onClick={() => setShownChunks(chunks.length)}
+                onClick={() =>
+                  setWin((w) => ({
+                    ...w,
+                    end: Math.min(w.end + 30, chunks.length),
+                  }))
+                }
               >
-                LOAD FULL TEXT
+                LOAD MORE TEXT
               </button>
             </div>
           )}
@@ -2221,8 +2315,9 @@ function LibraryFullText({ artifact }) {
           text={text}
           title={artifact.title}
           chunkStarts={chunkStarts}
-          shownChunks={shownChunks}
-          ensureChunk={(i) => setShownChunks((n) => Math.max(n, i + 1))}
+          shownChunks={win.end}
+          winStart={win.start}
+          ensureChunk={ensureChunk}
           chunkElsRef={chunkElsRef}
           onActiveMark={setActiveMark}
         />

@@ -710,9 +710,24 @@ function useReadAloudKokoro({
           beginAt(wi);
         }
       } else if (msg.type === "load-error") {
-        E2.workerState = "error";
-        setVoiceState("idle");
-        if (onFatalError) onFatalError();
+        E2.loadAttempts = (E2.loadAttempts || 0) + 1;
+        if (E2.loadAttempts < 2) {
+          // One clean retry with a fresh worker: a transient fetch
+          // failure (or a poisoned runtime state) must not silently cost
+          // the reader the real voice.
+          try {
+            E2.worker.terminate();
+          } catch {
+            /* noop */
+          }
+          E2.worker = null;
+          E2.workerState = "none";
+          ensureWorker();
+        } else {
+          E2.workerState = "error";
+          setVoiceState("idle");
+          if (onFatalError) onFatalError();
+        }
       } else if (msg.type === "audio") {
         const idx = E2.pending.get(msg.id);
         E2.pending.delete(msg.id);
