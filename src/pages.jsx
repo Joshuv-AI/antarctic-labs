@@ -1000,7 +1000,7 @@ function CategoryGroups({ stack, byId, artifacts, go }) {
   );
 }
 
-function TowerDiscovery({ artifacts, towerData, go, onBrowse }) {
+function TowerDiscovery({ artifacts, towerData, go, onBrowse, onShelfChange }) {
   // Resolve curated ids against the artifacts array directly — NOT the
   // derivation's idIndex. The derivation phases in over seconds on a big
   // catalog; the shelves should be whole the moment the catalog itself
@@ -1016,9 +1016,18 @@ function TowerDiscovery({ artifacts, towerData, go, onBrowse }) {
   // stack swaps Featured for that category's shelf + grouped showcase;
   // selecting it again returns to Featured.
   const [shelf, setShelf] = useState(null);
+  // Report selection upward: while a shelf is open the browse/results
+  // section below hides, exactly like the Featured rails swap out.
+  useEffect(() => {
+    if (onShelfChange) onShelfChange(!!shelf);
+  }, [shelf, onShelfChange]);
+  useEffect(
+    () => () => {
+      if (onShelfChange) onShelfChange(false);
+    },
+    [onShelfChange],
+  );
   const stack = shelf ? STACKS.find((s) => s.bucket === shelf) || null : null;
-  const shelfLane = stack ? stack.bucket.split(":")[0] : "";
-  const shelfSubs = stack ? TOWER_SUBS[shelfLane] || [] : [];
   const shelfCount = !stack
     ? 0
     : stack.bucket.indexOf(":") >= 0
@@ -1082,33 +1091,12 @@ function TowerDiscovery({ artifacts, towerData, go, onBrowse }) {
               See all ›
             </button>
           </div>
-          {shelfSubs.length > 0 && stack.bucket.indexOf(":") < 0 && (
-            <div className="shelf-subs">
-              {shelfSubs.map((s) => {
-                const key = `${shelfLane}:${s.id}`;
-                const n = towerData.subCounts[key] || 0;
-                if (!n) return null;
-                return (
-                  <button
-                    key={s.id}
-                    type="button"
-                    className="shelf-sub"
-                    onClick={() => onBrowse(key)}
-                  >
-                    {s.label} <span>{n.toLocaleString()}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          {stack.bucket !== "BOOKS:sacred" && (
-            <CoverRail
-              title="Notable works"
-              items={stack.rail.map(byId)}
-              go={go}
-              wide={stack.bucket === "PODCASTS"}
-            />
-          )}
+          <CoverRail
+            title="Notable works"
+            items={stack.rail.map(byId)}
+            go={go}
+            wide={stack.bucket === "PODCASTS"}
+          />
         </div>
       )}
       {stack && stack.bucket === "BOOKS:sacred" && (
@@ -1246,6 +1234,7 @@ function TowerLibrarySection({ go, onReady }) {
   // is never mounted at once — the DOM stays small so style recalc and
   // paint stay cheap, and the loader releases after the first 50 paint.
   const [rowBudget, setRowBudget] = useState(TOWER_ROWS_PER_PAGE);
+  const [shelfActive, setShelfActive] = useState(false);
   // The input stays bound to the raw query so typing never waits on work;
   // the expensive filter/sort and the deep index search run on the deferred
   // value at background priority, which removes the keystroke lag.
@@ -1522,9 +1511,14 @@ function TowerLibrarySection({ go, onReady }) {
                 towerData={towerData}
                 go={go}
                 onBrowse={browseTo}
+                onShelfChange={setShelfActive}
               />
             )}
-            <div className="tower-browse-layout" id="tower-results">
+            <div
+              className="tower-browse-layout"
+              id="tower-results"
+              style={shelfActive ? { display: "none" } : undefined}
+            >
               <aside className="tower-facets" aria-label="Refine results">
                 <div className="tower-facets-title">Zoom in</div>
                 <button
