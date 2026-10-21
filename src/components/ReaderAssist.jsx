@@ -1323,6 +1323,66 @@ export default function ReaderAssist({
     }
   }, [inText]);
 
+  // Global char offset -> DOM point inside the rendered chunks (walks the
+  // chunk's text nodes; chunks can hold several nodes once marks split
+  // them). Null when the offset's chunk isn't rendered yet.
+  const globalPoint = useCallback(
+    (off) => {
+      let ci = 0;
+      for (let i = 0; i < chunkStarts.length; i++) {
+        if (chunkStarts[i] <= off) ci = i;
+        else break;
+      }
+      const el = chunkElsRef.current && chunkElsRef.current[ci];
+      if (!el) return null;
+      const local = off - chunkStarts[ci];
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let acc = 0;
+      let n;
+      while ((n = walker.nextNode())) {
+        const len = n.textContent.length;
+        if (acc + len >= local) {
+          return { node: n, offset: Math.min(local - acc, len) };
+        }
+        acc += len;
+      }
+      return null;
+    },
+    [chunkStarts, chunkElsRef]
+  );
+
+  // Paint the creator's saved share highlights in the text (2026-10-20):
+  // they used to exist only as a count in the share panel, invisible in
+  // the text, so there was no way to see what was already marked. Now
+  // every saved passage stays painted (same yellow a share-link recipient
+  // sees) and accumulates as more are added. CSS Custom Highlight API,
+  // same as Find; browsers without it keep the panel count as before.
+  useEffect(() => {
+    if (!SUPPORTS_HIGHLIGHTS) return undefined;
+    if (!savedHls.length) {
+      CSS.highlights.delete("ra-mine");
+      return undefined;
+    }
+    const hl = new Highlight();
+    for (const h of savedHls) {
+      const a = globalPoint(h.start);
+      const b = globalPoint(h.end);
+      if (!a || !b) continue;
+      try {
+        const r = new Range();
+        r.setStart(a.node, a.offset);
+        r.setEnd(b.node, b.offset);
+        if (!r.collapsed) hl.add(r);
+      } catch {
+        /* stale node — skip */
+      }
+    }
+    CSS.highlights.set("ra-mine", hl);
+    return () => {
+      CSS.highlights.delete("ra-mine");
+    };
+  }, [savedHls, shownChunks, globalPoint]);
+
   // --- Read-aloud word-follow highlighting ---------------------------------
   // Two fixed-position overlays (no text DOM mutation): a soft highlight
   // pill over the spoken word + a small "bouncy ball" dot that hops above it.
@@ -1330,23 +1390,27 @@ export default function ReaderAssist({
   // new word (global char offsets -> chunk -> text node -> Range).
   const speakHlRef = useRef(null);
   const speakBallRef = useRef(null);
-  // Manual-scroll detection during Listen (2026-10-18): if the user scrolls
-  // while audio plays, auto-scroll yields for 2.5s so it never fights them.
+  // Manual-scroll detection during Listen (2026-10-18; yield raised to 3s
+  // and paired with the refocus glide on 2026-10-20).
   const userScrolledAt = useRef(0);
   const autoScrolling = useRef(false);
   const speakBallTick = useRef(0);
+  // Currently spoken word's global offsets (2026-10-20): kept in a ref so
+  // scroll frames can re-anchor the fixed overlays to the word's live
+  // position, and so the refocus timer can find the word again.
+  const speakWordRef = useRef(null);
+  const refocusTimerRef = useRef(0);
+  const speakRafRef = useRef(0);
 
   const clearSpeakHl = useCallback(() => {
     if (speakHlRef.current) speakHlRef.current.style.opacity = "0";
     if (speakBallRef.current) speakBallRef.current.style.opacity = "0";
   }, []);
 
-  const showSpeakWord = useCallback(
+  // Live rect of a spoken word (global offsets -> chunk -> text node ->
+  // Range). Null when the word isn't currently rendered.
+  const speakWordRect = useCallback(
     (gStart, gEnd) => {
-      if (gStart == null || gEnd == null) {
-        clearSpeakHl();
-        return;
-      }
       // Chunk containing gStart (chunkStarts is sorted).
       let ci = 0;
       for (let i = 0; i < chunkStarts.length; i++) {
@@ -1354,10 +1418,7 @@ export default function ReaderAssist({
         else break;
       }
       const chunkEl = chunkElsRef.current && chunkElsRef.current[ci];
-      if (!chunkEl) {
-        clearSpeakHl();
-        return;
-      }
+      if (!chunkEl) return null;
       const local = gStart - chunkStarts[ci];
       const localEnd = gEnd - chunkStarts[ci];
       // Walk text nodes to the one containing `local`.
@@ -1373,13 +1434,9 @@ export default function ReaderAssist({
         }
         acc += len;
       }
-      if (!node) {
-        clearSpeakHl();
-        return;
-      }
-      let range;
+      if (!node) return null;
       try {
-        range = document.createRange();
+        const range = document.createRange();
         const sOff = Math.max(0, Math.min(local - acc, node.textContent.length));
         const eOff = Math.max(
           sOff,
@@ -1387,54 +1444,89 @@ export default function ReaderAssist({
         );
         range.setStart(node, sOff);
         range.setEnd(node, eOff);
+        const rect = range.getBoundingClientRect();
+        return rect && rect.width !== 0 ? rect : null;
       } catch {
-        clearSpeakHl();
-        return;
+        return null;
       }
-      const rect = range.getBoundingClientRect();
-      if (!rect || rect.width === 0) {
-        clearSpeakHl();
-        return;
-      }
-      // Highlight pill over the word.
-      const hl = speakHlRef.current;
-      if (hl) {
-        hl.style.opacity = "1";
-        hl.style.transform = `translate(${rect.left - 3}px, ${rect.top - 2}px)`;
-        hl.style.width = `${rect.width + 6}px`;
-        hl.style.height = `${rect.height + 4}px`;
-      }
-      // Bouncy ball: hop above the word, re-trigger the bounce each word.
-      const ball = speakBallRef.current;
-      if (ball) {
-        const bx = rect.left + rect.width / 2 - 5;
-        const by = rect.top - 16;
-        ball.style.opacity = "1";
-        ball.style.transform = `translate(${bx}px, ${by}px)`;
+    },
+    [chunkStarts, chunkElsRef]
+  );
+
+  // Paint the pill + ball over a word rect. `hop` restarts the ball's
+  // bounce (a new word); scroll repositioning passes hop=false so the ball
+  // glides with the text instead of re-bouncing every frame.
+  const placeSpeakOverlays = useCallback((rect, hop) => {
+    const hl = speakHlRef.current;
+    if (hl) {
+      hl.style.opacity = "1";
+      hl.style.transform = `translate(${rect.left - 3}px, ${rect.top - 2}px)`;
+      hl.style.width = `${rect.width + 6}px`;
+      hl.style.height = `${rect.height + 4}px`;
+    }
+    const ball = speakBallRef.current;
+    if (ball) {
+      const bx = rect.left + rect.width / 2 - 5;
+      const by = rect.top - 16;
+      ball.style.opacity = "1";
+      ball.style.transform = `translate(${bx}px, ${by}px)`;
+      if (hop) {
         // Restart the hop animation.
         ball.classList.remove("ra-speak-hop");
         void ball.offsetWidth;
         ball.classList.add("ra-speak-hop");
       }
+    }
+  }, []);
+
+  const showSpeakWord = useCallback(
+    (gStart, gEnd) => {
+      if (gStart == null || gEnd == null) {
+        speakWordRef.current = null;
+        clearSpeakHl();
+        return;
+      }
+      speakWordRef.current = { s: gStart, e: gEnd };
+      const rect = speakWordRect(gStart, gEnd);
+      if (!rect) {
+        clearSpeakHl();
+        return;
+      }
+      placeSpeakOverlays(rect, true);
       // Gentle auto-scroll: keep the spoken word in the middle band.
-      // Yields to manual scrolling — if the user scrolled in the last 2.5s,
-      // skip auto-scroll so it never fights their finger (2026-10-18).
+      // Yields to manual scrolling — once the reader scrolls, the follow
+      // waits until 3s after their last scroll (the refocus glide in the
+      // scroll effect fires on the same beat) so it never fights them.
       const vh = window.innerHeight;
       if (rect.top < vh * 0.22 || rect.bottom > vh * 0.78) {
-        if (Date.now() - userScrolledAt.current > 2500) {
+        if (Date.now() - userScrolledAt.current >= 3000) {
           try {
             const y = window.scrollY + rect.top - vh * 0.42;
             autoScrolling.current = true;
             window.scrollTo({ top: y, behavior: "smooth" });
-            setTimeout(() => { autoScrolling.current = false; }, 600);
+            setTimeout(() => { autoScrolling.current = false; }, 900);
           } catch {
             /* noop */
           }
         }
       }
     },
-    [chunkStarts, chunkElsRef, clearSpeakHl]
+    [speakWordRect, placeSpeakOverlays, clearSpeakHl]
   );
+
+  // Re-anchor the pill + ball to the spoken word's live position. Called
+  // on scroll frames: the overlays are viewport-fixed, so without this
+  // they floated over the wrong words while the text moved (2026-10-20).
+  const repositionSpeakWord = useCallback(() => {
+    const w = speakWordRef.current;
+    if (!w) return;
+    const rect = speakWordRect(w.s, w.e);
+    if (!rect) {
+      clearSpeakHl();
+      return;
+    }
+    placeSpeakOverlays(rect, false);
+  }, [speakWordRect, placeSpeakOverlays, clearSpeakHl]);
 
   const handleSpeakWord = useCallback(
     (gStart, gEnd) => {
@@ -1539,16 +1631,61 @@ export default function ReaderAssist({
   });
   const listening = readAloud.status !== "idle";
 
-  // Track manual scrolls during Listen (2026-10-18): distinguishes the user's
-  // finger from our own auto-scroll so showSpeakWord can yield.
+  // Scroll behavior during Listen (2026-10-18, reworked 2026-10-20):
+  // - Every scroll frame re-anchors the pill + ball to the spoken word, so
+  //   the follow-along tracks the text while the reader scrolls.
+  // - A manual scroll suspends the follow; 3s after the reader stops
+  //   scrolling, the view glides back to the spoken word on its own.
   useEffect(() => {
     if (!listening) return;
-    const onScroll = () => {
-      if (!autoScrolling.current) userScrolledAt.current = Date.now();
+    const statusRef = readAloud.statusRef;
+    const glideToWord = () => {
+      if (statusRef.current !== "playing") return;
+      const w = speakWordRef.current;
+      if (!w) return;
+      const rect = speakWordRect(w.s, w.e);
+      if (!rect) return;
+      const vh = window.innerHeight;
+      if (rect.top >= vh * 0.22 && rect.bottom <= vh * 0.78) return;
+      try {
+        const y = window.scrollY + rect.top - vh * 0.42;
+        autoScrolling.current = true;
+        // The glide counts as the follow resuming, not as a manual scroll.
+        userScrolledAt.current = 0;
+        window.scrollTo({ top: y, behavior: "smooth" });
+        setTimeout(() => {
+          autoScrolling.current = false;
+        }, 900);
+      } catch {
+        /* noop */
+      }
     };
+    const onScroll = () => {
+      if (!speakRafRef.current) {
+        speakRafRef.current = requestAnimationFrame(() => {
+          speakRafRef.current = 0;
+          repositionSpeakWord();
+        });
+      }
+      if (autoScrolling.current) return;
+      userScrolledAt.current = Date.now();
+      if (refocusTimerRef.current) clearTimeout(refocusTimerRef.current);
+      // Fires 3s after the last scroll event (momentum included) = 3s
+      // after the reader actually stops.
+      refocusTimerRef.current = setTimeout(glideToWord, 3000);
+    };
+    const onResize = () => repositionSpeakWord();
     window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, [listening]);
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onResize);
+      if (refocusTimerRef.current) clearTimeout(refocusTimerRef.current);
+      if (speakRafRef.current) cancelAnimationFrame(speakRafRef.current);
+      speakRafRef.current = 0;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listening, repositionSpeakWord, speakWordRect]);
 
   // Hide the Listen icon when speech synthesis is unavailable.
   const visibleFeatures = useMemo(

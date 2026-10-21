@@ -3,7 +3,7 @@
 //
 // Reads the entry text aloud from the reader's current scroll position using
 // the free built-in Web Speech API (no servers, no keys, no cost). Includes:
-//  - a persistent bottom player bar (play/pause, ±10s, speed slider, stop)
+//  - a persistent bottom player bar (play/pause, ±10s, speed step button, stop)
 //  - karaoke-style word-follow highlighting (overlay, no DOM mutation) with
 //    a subtle bouncy-ball dot over the active word
 //  - gentle auto-scroll to keep the spoken word in view
@@ -448,6 +448,17 @@ export function useReadAloud({ text, getStartOffset, chunkElsRef, chunkStarts, o
 // ---------------------------------------------------------------------------
 // ReadAloudBar — the persistent bottom player overlay.
 // ---------------------------------------------------------------------------
+// Speed control (2026-10-20): a tap-to-cycle step button instead of the old
+// slider (which read as a volume control). Steps snap to standard rates.
+const RATE_STEPS = [0.75, 1, 1.25, 1.5, 1.75, 2];
+const rateLabel = (r) => `${parseFloat(r.toFixed(2))}×`;
+const RateGlyph = (
+  <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" aria-hidden="true">
+    <path d="M12 4.5 17.5 11h-11z" />
+    <path d="M12 19.5 6.5 13h11z" />
+  </svg>
+);
+
 export function ReadAloudBar({
   status,
   rate,
@@ -502,17 +513,19 @@ export function ReadAloudBar({
           {ForwardGlyph}
         </button>
         <div className="ra-listen-speed">
-          <input
-            type="range"
-            min="0.5"
-            max="2"
-            step="0.05"
-            value={rate}
-            onChange={(e) => onRate(parseFloat(e.target.value))}
-            aria-label="Reading speed"
-            className="ra-listen-slider"
-          />
-          <span className="ra-listen-rate">{rate.toFixed(2)}×</span>
+          <button
+            type="button"
+            className="ra-listen-ratebtn"
+            onClick={() => {
+              const next =
+                RATE_STEPS.find((s) => s > rate + 0.001) ?? RATE_STEPS[0];
+              onRate(next);
+            }}
+            aria-label={`Reading speed ${rateLabel(rate)}. Activate to change speed.`}
+          >
+            {RateGlyph}
+            <span>{rateLabel(rate)}</span>
+          </button>
         </div>
         <button
           type="button"
