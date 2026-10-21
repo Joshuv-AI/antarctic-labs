@@ -8,13 +8,12 @@
 // extended.
 //
 // Canonical site IA:
-// HOME, THE LAB, PROJECTS, TOWER OF BABEL, GOVERNMENT, ABOUT, CONTACT.
+// HOME, TOWER OF BABEL, GOVERNMENT, ABOUT, CONTACT.
 //
 // Old routes remain as backward-compatibility aliases where useful.
 // In particular, /transmission now redirects to the canonical /contact
 // route.
 import { site } from "./site.js";
-import { expeditions } from "./expeditions.js";
 // The artifact catalog is lazy (see ../../lib/catalog.js) — route metadata
 // must stay synchronous, so entry pages use the cached array when available
 // and fall back to generic Tower meta until the catalog arrives (the entry
@@ -24,7 +23,7 @@ const DEFAULT_DESCRIPTION = site.description;
 const SITE_NAME = site.brand;
 // Per-page SEO: every canonical route carries keyword-targeted metadata
 // aimed at the obvious simple searches for its sector. Service pages
-// (home, contact, about, projects) target hire-intent freelance searches
+// (home, contact, about) target hire-intent freelance searches
 // — client acquisition is the site's main goal. Tower of Babel pages
 // target free-library/archive searches for authority and traffic.
 // Titles stay near ~60 chars, descriptions near ~155, keyword up front.
@@ -63,11 +62,6 @@ export const routeMeta = {
     title: `Lead Generation Automation Systems | Antarctic Labs`,
     description:
       "Lead generation automation: systems that source, enrich, and qualify B2B prospects on autopilot. Built by a freelance developer. Free quote in 24 hours.",
-  },
-  "/projects": {
-    title: `AI Automation Examples | ${SITE_NAME} Projects`,
-    description:
-      "Real AI automation examples: n8n workflows, AI agents, web apps, and data pipelines built and delivered — proof of work from Antarctic Labs.",
   },
   "/tower-of-babel": {
     title: `Free Online Library | Tower of Babel`,
@@ -109,21 +103,14 @@ export const routeMeta = {
 //
 // /transmission is now a legacy alias for /contact.
 // The other historical routes remain unchanged.
+// Retired 2026-10-21: the Projects pages were
+// deleted outright, and every alias that redirected into them
+// was removed with them.
 export const routeMetaLegacy = {
   "/systems": {
     title: `Systems — ${SITE_NAME}`,
     description: DEFAULT_DESCRIPTION,
     redirect: "/",
-  },
-  "/expeditions": {
-    title: `Projects — ${SITE_NAME}`,
-    description: `Selected projects, case studies, and expeditions. ${DEFAULT_DESCRIPTION}`,
-    redirect: "/projects",
-  },
-  "/the-lab": {
-    title: `Projects — ${SITE_NAME}`,
-    description: `Selected projects, case studies, and expeditions. ${DEFAULT_DESCRIPTION}`,
-    redirect: "/projects",
   },
   "/government": {
     title: `Government Contracting — ${SITE_NAME}`,
@@ -165,8 +152,6 @@ export const routes = [
   "/services/web-development",
   "/services/web-scraping",
   "/services/lead-generation",
-  "/projects",
-  "/projects/:id",
   "/tower-of-babel",
   "/tower-of-babel/api",
   "/tower-of-babel/library",
@@ -179,29 +164,15 @@ export const routes = [
   "/contact",
   // Legacy patterns preserved for backward compatibility.
   "/systems",
-  "/expeditions",
-  "/expeditions/:id",
   "/history",
   "/operator",
   "/field-interests",
   "/transmission",
 ];
 // Map any legacy path to its canonical redirect target.
-//
-// Supports literal paths AND legacy dynamic patterns
-// (/expeditions/:id → /projects/:id).
 export function legacyRedirect(path) {
   if (path in routeMetaLegacy) {
     return routeMetaLegacy[path].redirect;
-  }
-  // Legacy dynamic pattern:
-  // /expeditions/:id → /projects/:id
-  if (
-    path.startsWith("/expeditions/") &&
-    path.length > "/expeditions/".length
-  ) {
-    const id = path.slice("/expeditions/".length);
-    return `/projects/${id}`;
   }
   // Retired 2026-10-18: the full-text reader was merged into the entry
   // page, so /tower-of-babel/library/:id/text now lands on the entry
@@ -264,21 +235,6 @@ export function metaFor(path) {
   // { pattern, params } for dynamic ones — compare against
   // match.pattern, not match itself.
   if (match && typeof match === "object") {
-    if (match.pattern === "/projects/:id") {
-      const exp = expeditions.find((e) => e.id === match.params.id);
-      if (exp) {
-        return {
-          title: `${exp.title} | ${SITE_NAME} Projects`,
-          description: exp.shortDescription
-            ? `${exp.shortDescription} — a freelance build by Antarctic Labs.`
-            : DEFAULT_DESCRIPTION,
-        };
-      }
-      return {
-        title: `Project | ${SITE_NAME}`,
-        description: DEFAULT_DESCRIPTION,
-      };
-    }
     if (match.pattern === "/tower-of-babel/library/:id") {
       const artifacts = getCachedArtifacts();
       const art = artifacts

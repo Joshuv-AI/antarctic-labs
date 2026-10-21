@@ -531,6 +531,16 @@ const KOKORO_POSSIBLE =
   typeof Worker !== "undefined" &&
   typeof WebAssembly !== "undefined";
 
+// Phones get the q4 model (~half the download and memory of q8): iOS
+// Safari's per-tab memory ceiling and its small Cache Storage quota are
+// the two ways the full-size load dies on mobile while desktop sails
+// through. Voice quality difference at q4 is negligible for speech.
+const KOKORO_MOBILE =
+  typeof window !== "undefined" &&
+  ((typeof window.matchMedia === "function" &&
+    window.matchMedia("(pointer: coarse)").matches) ||
+    /iPhone|iPad|iPod|Android/i.test(window.navigator.userAgent || ""));
+
 // A 0.25s silent WAV — played (and instantly paused) inside the Listen tap
 // so iOS/Chrome unlock the audio element for later programmatic playback.
 const SILENT_WAV =
@@ -710,6 +720,7 @@ function useReadAloudKokoro({
           beginAt(wi);
         }
       } else if (msg.type === "load-error") {
+        console.warn("[kokoro] model load failed:", msg.error);
         E2.loadAttempts = (E2.loadAttempts || 0) + 1;
         if (E2.loadAttempts < 2) {
           // One clean retry with a fresh worker: a transient fetch
@@ -761,12 +772,35 @@ function useReadAloudKokoro({
         }
       }
     };
-    w.onerror = () => {
-      E.workerState = "error";
+    w.onerror = (ev) => {
+      console.warn("[kokoro] worker error:", ev && ev.message);
+      const E2 = getEng();
+      if (E2.workerState === "loading") {
+        E2.loadAttempts = (E2.loadAttempts || 0) + 1;
+        if (E2.loadAttempts < 2) {
+          try {
+            E2.worker.terminate();
+          } catch {
+            /* noop */
+          }
+          E2.worker = null;
+          E2.workerState = "none";
+          ensureWorker();
+          return;
+        }
+      }
+      E2.workerState = "error";
       setVoiceState("idle");
       if (onFatalError) onFatalError();
     };
-    w.postMessage({ type: "init" });
+    w.postMessage({
+      type: "init",
+      dtype: KOKORO_MOBILE ? "q4" : "q8",
+      // The one retry runs cache-free: if the browser cache write is
+      // what killed the first load (iOS quota), the retry must not die
+      // the same way.
+      noCache: (E.loadAttempts || 0) > 0,
+    });
     return w;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onFatalError]);
@@ -1234,27 +1268,23 @@ export function ReadAloudBar({
 
 // ---------------------------------------------------------------------------
 // ReadAloudLoadingBar — shown once, while the Kokoro voice model downloads
-// (a one-time ~90 MB fetch, cached afterwards). Reuses the player bar shell
-// so it lands in exactly the place the controls are about to appear.
+// (a one-time fetch, cached afterwards). Reuses the player bar shell so it
+// lands in exactly the place the controls are about to appear. No progress
+// bar or percentage (2026-10-21): the download callbacks report per-file
+// figures that jump forwards and backwards as files start, restart, and
+// complete — a bar built on them lies. A plain spinner + label instead.
 // ---------------------------------------------------------------------------
-export function ReadAloudLoadingBar({ progress, onCancel }) {
-  const pct =
-    typeof progress === "number" && progress > 0 ? Math.round(progress) : null;
+export function ReadAloudLoadingBar({ onCancel }) {
   return (
     <div
       className="ra-listen-bar ra-listen-loading"
       role="status"
-      aria-label="Preparing the reading voice"
+      aria-label="Preparing voice"
     >
-      <div className="ra-listen-progress" aria-hidden="true">
-        <div
-          className="ra-listen-progress-fill"
-          style={{ width: pct !== null ? `${pct}%` : "8%" }}
-        />
-      </div>
       <div className="ra-listen-loading-row">
+        <span className="ra-listen-spinner" aria-hidden="true" />
         <span className="ra-listen-loading-text">
-          Preparing the reading voice{pct !== null ? ` — ${pct}%` : "…"}
+          Preparing voice…
           <span className="ra-listen-loading-sub">
             One-time download. After this, Listen starts instantly.
           </span>

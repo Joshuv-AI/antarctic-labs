@@ -3,9 +3,9 @@
 //
 // This file is the exact upstream component with the following documented
 // site adaptations (labels/actions wired to the real site navigation):
-//   1. MODERN_ITEMS carries five routes — Projects, Tower of Babel,
+//   1. MODERN_ITEMS carries four routes — Tower of Babel,
 //      Gov Contracts, About, Contact — instead of the demo catalogue
-//      items. Projects/About/Contact icons are reused verbatim from the
+//      items. About/Contact icons are reused verbatim from the
 //      authored modern set (layers, document, tag); Tower of Babel
 //      (open book) and Gov Contracts (landmark) are new icons drawn in
 //      the same 16px stroke style. There is no separate Home item: the
@@ -91,17 +91,6 @@ const BRAND_MARK = (
 );
 
 const MODERN_ITEMS: readonly DockItem[] = [
-  {
-    id: "projects",
-    label: "Projects",
-    path: "/projects",
-    icon: (
-      <>
-        <path d="M8 1.9 14.4 5.6 8 9.3 1.6 5.6z" />
-        <path d="m2.6 8 5.4 3.1L13.4 8M2.6 10.7 8 13.8l5.4-3.1" />
-      </>
-    ),
-  },
   {
     id: "tower",
     label: "Tower of Babel",

@@ -125,6 +125,27 @@ class RouteErrorBoundary extends Component {
     return this.props.children;
   }
 }
+// Shield for decorative WebGL layers (hero shaders, the orbital sphere,
+// the typography vortex). If one throws while mounting or rendering — a
+// GPU or context failure on a single device is enough — the shield swaps
+// in nothing and the page itself renders normally. A visual effect must
+// never be able to surface the route error panel. (2026-10-21: the
+// homepage alone was hitting the panel; its three.js layer is the one
+// most pages never mount.)
+class WebGLShield extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch() {}
+  render() {
+    if (this.state.error) return null;
+    return this.props.children;
+  }
+}
 // Minimal recovery panel. Only ever renders after a genuine failure — it
 // reuses the existing 404 page's classes so it reads as part of the site,
 // not as a browser error.
@@ -172,20 +193,31 @@ const DefenseLines = lazy(() =>
   importWithChunkRetry(() =>
     import("./shaders/neuform-isolated/NeuformBatchEffects.tsx")
   ).then((m) => ({ default: m.DefenseLines }))
+    // A decorative shader that fails to load or evaluate must never take
+    // the page down with it: substitute an empty component instead of
+    // throwing into the route error boundary. (2026-10-21)
+    .catch(() => ({ default: () => null }))
 );
 import { AnimatedTopDock } from "./shaders/animated-top-dock/AnimatedTopDock.tsx";
 const TypographyVortexCanvas = lazy(() =>
   importWithChunkRetry(() =>
     import("./shaders/typography-vortex/TypographyVortexCanvas.tsx")
   ).then((m) => ({ default: m.TypographyVortexCanvas }))
+    // A decorative shader that fails to load or evaluate must never take
+    // the page down with it: substitute an empty component instead of
+    // throwing into the route error boundary. (2026-10-21)
+    .catch(() => ({ default: () => null }))
 );
 const OrbitalSphereBackground = lazy(() =>
   importWithChunkRetry(() =>
     import("./shaders/orbital-sphere/OrbitalSphereBackground.tsx")
   ).then((m) => ({ default: m.OrbitalSphereBackground }))
+    // A decorative shader that fails to load or evaluate must never take
+    // the page down with it: substitute an empty component instead of
+    // throwing into the route error boundary. (2026-10-21)
+    .catch(() => ({ default: () => null }))
 );
 import { site as content } from "./content/site.js";
-import { expeditions } from "./content/expeditions.js";
 import { matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
 // Lazy Tower catalog (see ./lib/catalog.js): prefetched on Tower navigation
@@ -225,8 +257,6 @@ const LibraryArtifact = lazyPage("LibraryArtifact");
 const SuggestEntry = lazyPage("SuggestEntry");
 const Government = lazyPage("Government");
 const Transmission = lazyPage("Transmission");
-const Projects = lazyPage("Projects");
-const ProjectDetail = lazyPage("ProjectDetail");
 const About = lazyPage("About");
 const ServiceDetail = lazyPage("ServiceDetail");
 const TowerApiPage = lazyPage("TowerApiPage");
@@ -272,12 +302,9 @@ function pathLabel(path) {
   if (path === "/") return "ANTARCTIC LABS";
   return path.replace("/", "").replaceAll("-", " ").toUpperCase();
 }
-// Map the current route to the animated dock's active item id. Project
-// detail pages highlight Projects; anything else leaves no item active.
+// Map the current route to the animated dock's active item id.
 function dockActiveId(path) {
   if (path === "/") return "home";
-  if (path === "/projects" || path.startsWith("/projects/"))
-    return "projects";
   if (path === "/tower-of-babel" || path.startsWith("/tower-of-babel/"))
     return "tower";
   if (path === "/government-contracting") return "gov";
@@ -554,6 +581,7 @@ function App() {
                 otherwise paint the editorial content on top of them. */}
             <div className="constellation-layer">
               <Suspense fallback={null}>
+                <WebGLShield>
                 <DefenseLines
                   mode="dark"
                   speed={1.2}
@@ -565,6 +593,7 @@ function App() {
                   saturation={0.0}
                   brightness={1.65}
                 />
+                </WebGLShield>
               </Suspense>
             </div>
             {/* Brand greeting: monumental center lockup over the opening
@@ -605,13 +634,6 @@ function App() {
             <Home go={go} />
           </>
         )}
-        {path === "/projects" && <Projects go={go} />}
-        {matchedPattern === "/projects/:id" && (
-          <ProjectDetail
-            go={go}
-            params={pageParams}
-          />
-        )}
         {path === "/tower-of-babel" && (
           <TowerOfBabel go={go} onReady={handleTowerReady} />
         )}
@@ -649,6 +671,7 @@ function App() {
           path === "/tower-of-babel/library/suggest") && (
           <div className="tower-vortex-layer" aria-hidden="true">
             <Suspense fallback={null}>
+              <WebGLShield>
               <TypographyVortexCanvas
                 key="vortex-light"
                 mode="light"
@@ -660,6 +683,7 @@ function App() {
                 particleAmount={1.00}
                 suctionDuration={1100}
               />
+              </WebGLShield>
             </Suspense>
           </div>
         )}
@@ -671,6 +695,7 @@ function App() {
         {path === "/government-contracting" && (
           <div className="gov-orbital-layer" aria-hidden="true">
             <Suspense fallback={null}>
+              <WebGLShield>
               <OrbitalSphereBackground
                 speed={2.90}
                 particleSize={0.031}
@@ -680,15 +705,14 @@ function App() {
                 scale={0.83}
                 haloOpacity={0.00}
               />
+              </WebGLShield>
             </Suspense>
           </div>
         )}
-        {/* Projects / About / Contact share the homepage's resting
+        {/* Services / About / Contact share the homepage's resting
             environment: the iceberg video parked at its final position,
             with no scroll choreography (that belongs to the homepage). */}
-        {(path === "/projects" ||
-          matchedPattern === "/projects/:id" ||
-          path.startsWith("/services/") ||
+        {(path.startsWith("/services/") ||
           path === "/about" ||
           path === "/contact") && <NewBackgroundVideo rest />}
         {path === "/government-contracting" && (
@@ -914,8 +938,7 @@ function useManifestoFill(scope) {
 // HOME STATS BAND
 // ============================================================================
 //
-// Montfort-style animated counters: honest, data-derived numbers
-// (same source of truth as the projects page) that count up once when
+// Montfort-style animated counters that count up once when
 // the band scrolls into view. With prefers-reduced-motion the final
 // numbers render immediately — no animation, no observer needed.
 function useCountUp(value, started) {
@@ -981,19 +1004,12 @@ function HomeStats() {
     io.observe(el);
     return () => io.disconnect();
   }, []);
-  const categories = [];
-  expeditions.forEach((e) => {
-    if (!categories.includes(e.category))
-      categories.push(e.category);
-  });
+  // Static figures (2026-10-21): the Projects archive was retired and
+  // its dataset deleted with it; the band keeps its numbers as literals.
   const stats = [
-    [expeditions.length, "PROJECTS BUILT"],
-    [
-      expeditions.filter((e) => e.status === "ACTIVE")
-        .length,
-      "ACTIVE NOW",
-    ],
-    [categories.length, "DISCIPLINES"],
+    [7, "PROJECTS BUILT"],
+    [3, "ACTIVE NOW"],
+    [5, "DISCIPLINES"],
   ];
   return (
     <section

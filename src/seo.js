@@ -15,7 +15,6 @@ import { operator } from "./content/operator.js";
 import { government } from "./content/government.js";
 import { transmission } from "./content/transmission.js";
 import { towerOfBabel } from "./content/tower-of-babel.js";
-import { expeditions } from "./content/expeditions.js";
 import { services } from "./content/services.js";
 // Entry JSON-LD uses the cached catalog when available (see
 // ./lib/catalog.js); falls back to a generic entry node until it arrives.
@@ -92,9 +91,8 @@ export function applyMeta(path) {
   // for the homepage, so we update this in JS for the routes that
   // benefit from a more specific value (article for detail pages,
   // profile for /about).
-  const isProjectDetail = path.startsWith("/projects/") && path.length > "/projects/".length;
   const isArtifactDetail = path.startsWith("/tower-of-babel/library/") && path.length > "/tower-of-babel/library/".length;
-  const ogType = isProjectDetail || isArtifactDetail
+  const ogType = isArtifactDetail
     ? "article"
     : path === "/about"
     ? "profile"
@@ -211,27 +209,6 @@ function buildBaseJsonLd(path, canonicalHref) {
   // matchRoute returns a string for literal matches and
   // { pattern, params } for dynamic ones.
   if (match && typeof match === "object") {
-    if (match.pattern === "/projects/:id") {
-      const exp = expeditions.find((e) => e.id === match.params.id);
-      const crumb = breadcrumbJsonLd([
-        { name: "HOME", url: SITE_URL + "/" },
-        { name: "PROJECTS", url: SITE_URL + "/projects" },
-        // W6 fix (2026-10-01): guard against null/undefined titles. A malformed
-        // record would throw inside useEffect and unmount the entire React tree.
-        { name: exp ? String(exp.title ?? "PROJECT").toUpperCase() : "PROJECT", url: canonicalHref },
-      ]);
-      if (!exp) return crumb;
-      // Project detail pages emit a CreativeWork node so Google
-      // understands each page as a distinct portfolio piece.
-      const work = {
-        "@type": "CreativeWork",
-        name: exp.title,
-        url: canonicalHref,
-        author: { "@id": SITE_URL + "/#organization" },
-      };
-      if (exp.shortDescription) work.description = exp.shortDescription;
-      return { "@context": "https://schema.org", "@graph": [crumb, work] };
-    }
     if (match.pattern === "/tower-of-babel/library/:id") {
       const artifacts = getCachedArtifacts();
       const art = artifacts

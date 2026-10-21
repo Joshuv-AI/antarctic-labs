@@ -13,17 +13,31 @@
 //        { type: "audio", id, wav }            (WAV ArrayBuffer, transferred)
 //        { type: "synth-error", id, error }
 import { KokoroTTS } from "kokoro-js";
+import { env } from "@huggingface/transformers";
 
 const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
 const VOICE = "af_heart"; // Kokoro's flagship voice — warm, natural female.
 
 let ttsPromise = null;
+// Set by the init message: phones load q4 (about half the size and
+// memory); a retry after a failed load runs with the browser cache off
+// (iOS Cache Storage quotas can fail a ~90 MB cache write, which used
+// to kill the load outright and silently drop readers to the robot
+// voice).
+let loadOpts = { dtype: "q8", noCache: false };
 
 function loadModel() {
   if (!ttsPromise) {
+    if (loadOpts.noCache) {
+      try {
+        env.useBrowserCache = false;
+      } catch {
+        /* noop */
+      }
+    }
     const fileTotals = new Map();
     ttsPromise = KokoroTTS.from_pretrained(MODEL_ID, {
-      dtype: "q8",
+      dtype: loadOpts.dtype,
       device: "wasm",
       progress_callback: (p) => {
         if (p && p.status === "progress" && p.file) {
@@ -45,6 +59,8 @@ function loadModel() {
 self.onmessage = async (e) => {
   const msg = e.data || {};
   if (msg.type === "init") {
+    if (msg.dtype) loadOpts.dtype = msg.dtype;
+    if (msg.noCache) loadOpts.noCache = true;
     try {
       await loadModel();
       self.postMessage({ type: "ready" });
