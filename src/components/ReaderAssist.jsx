@@ -2266,6 +2266,11 @@ export default function ReaderAssist({
           }}
           onSkip={readAloud.skip}
           onRate={readAloud.setRate}
+          notice={
+            readAloud.kokoroError
+              ? `Neural voice unavailable — using device voice (${readAloud.kokoroError})`
+              : null
+          }
         />
       )}
 

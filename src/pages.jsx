@@ -1939,12 +1939,14 @@ export function LibraryArtifact({ go, params, onReady }) {
   }, [params.id]);
   // Full record loads on demand (the index has list fields only).
   const [fullArtifact, setFullArtifact] = useState(null);
+  const [fullSettled, setFullSettled] = useState(false);
   useEffect(() => {
     let live = true;
     setFullArtifact(null);
+    setFullSettled(false);
     getFullArtifact(params.id).then(
-      (a) => { if (live) setFullArtifact(a); },
-      () => { if (live) setFullArtifact(null); }
+      (a) => { if (live) { setFullArtifact(a); setFullSettled(true); } },
+      () => { if (live) { setFullArtifact(null); setFullSettled(true); } }
     );
     return () => { live = false; };
   }, [params.id]);
@@ -1994,6 +1996,11 @@ export function LibraryArtifact({ go, params, onReady }) {
   // Prefer the full record (has description, download_url, etc.); fall back
   // to the index record for basic fields while the full catalog loads.
   const artifact = fullArtifact || indexRecord;
+  // While the full record is still in flight and the index has no entry
+  // either, render nothing rather than a false UNKNOWN ARTIFACT — after
+  // an iOS crash-reload that state latched on screen for a record that
+  // exists (2026-10-21). UNKNOWN is only for a settled miss.
+  if (!artifact && !fullSettled) return null;
   if (!artifact) {
     return (
       <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
@@ -2228,6 +2235,18 @@ function LibraryFullText({ artifact }) {
   const [win, setWin] = useState({ start: 0, end: 1 });
   const winStart = win.start;
   const winEnd = win.end;
+  // The window SLIDES (2026-10-21, second fix): the first windowing pass
+  // re-anchored far jumps but let the window grow as a prefix forever —
+  // contiguous jumps and plain forward reading extended the end while the
+  // start stayed at 0, so a few Contents jumps into a big book mounted
+  // ~19 chunks (~1.1M chars) and iOS killed the tab on the third jump.
+  // The mounted window is now capped; advancing the end past the cap
+  // advances the start with it. Dropped chunks leave their MEASURED
+  // heights in chunkHeightsRef, so the prefix spacer stays exact and
+  // sliding moves nothing on screen.
+  const READER_MAX_WINDOW = 8;
+  const chunkHeightsRef = useRef({});
+  const heightsModeRef = useRef(null);
   // Shared-link landing (?at=<char offset>[&hl=<start>-<end>[,<start>-<end>...]]):
   // a "Share from Current Place" link jumps the reader to the sharer's scroll
   // position and, when present, highlights the shared passages in Apple Books
@@ -2285,6 +2304,8 @@ function LibraryFullText({ artifact }) {
     setTextError(false);
     setWin({ start: 0, end: 1 });
     chunkElsRef.current = [];
+    chunkHeightsRef.current = {};
+    heightsModeRef.current = null;
     setActiveMark(null);
     setShareHls([]);
     if (!canRead) return;
@@ -2334,7 +2355,10 @@ function LibraryFullText({ artifact }) {
     const io = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting) {
-          setWin((w) => ({ ...w, end: Math.min(w.end + 2, chunks.length) }));
+          setWin((w) => {
+            const end = Math.min(w.end + 2, chunks.length);
+            return { start: Math.max(w.start, end - READER_MAX_WINDOW), end };
+          });
         }
       },
       { rootMargin: "1200px" }
@@ -2351,10 +2375,14 @@ function LibraryFullText({ artifact }) {
     (ci) => {
       setWin((w) => {
         if (ci >= w.start && ci < w.end) return w;
-        if (ci >= w.end && ci - w.end <= 8)
-          return { start: w.start, end: ci + 1 };
-        if (ci < w.start && w.start - ci <= 8)
-          return { start: ci, end: w.end };
+        if (ci >= w.end && ci - w.end <= 8) {
+          const end = ci + 1;
+          return { start: Math.max(w.start, end - READER_MAX_WINDOW), end };
+        }
+        if (ci < w.start && w.start - ci <= 8) {
+          const start = ci;
+          return { start, end: Math.min(w.end, start + READER_MAX_WINDOW) };
+        }
         return {
           start: Math.max(0, ci - 1),
           end: Math.min(chunks.length, ci + 3),
@@ -2537,6 +2565,10 @@ function LibraryFullText({ artifact }) {
   // and below the window is measured from real elements.
   const pxPerCharRef = useRef(0.45);
   useEffect(() => {
+    if (heightsModeRef.current !== textMode) {
+      chunkHeightsRef.current = {};
+      heightsModeRef.current = textMode;
+    }
     let h = 0;
     let chars = 0;
     const sample = [];
@@ -2544,19 +2576,31 @@ function LibraryFullText({ artifact }) {
       sample.push(i);
     for (let i = win.end - 1; i >= win.start && sample.length < 6; i--)
       if (!sample.includes(i)) sample.push(i);
-    for (const i of sample) {
+    for (let i = win.start; i < win.end; i++) {
       const el = chunkElsRef.current[i];
       if (el && chunks[i]) {
-        h += el.offsetHeight;
-        chars += chunks[i].length;
+        if (el.offsetHeight > 0)
+          chunkHeightsRef.current[i] = el.offsetHeight;
+        if (sample.includes(i)) {
+          h += el.offsetHeight;
+          chars += chunks[i].length;
+        }
       }
     }
     if (chars > 400 && h > 0) pxPerCharRef.current = h / chars;
   }, [win, chunks, textMode]);
-  const spacerPx =
-    win.start > 0
-      ? Math.round(chunkStarts[win.start] * pxPerCharRef.current)
-      : 0;
+  const spacerPx = (() => {
+    if (win.start <= 0) return 0;
+    let px = 0;
+    for (let i = 0; i < win.start; i++) {
+      const measured = chunkHeightsRef.current[i];
+      px +=
+        measured != null
+          ? measured
+          : Math.round((chunks[i] ? chunks[i].length : 0) * pxPerCharRef.current);
+    }
+    return px;
+  })();
   const textBoxRef = useRef(null);
   const backToBeginning = () => {
     setWin({ start: 0, end: Math.min(3, chunks.length) });
@@ -2650,10 +2694,13 @@ function LibraryFullText({ artifact }) {
                 type="button"
                 className="tower-source-btn"
                 onClick={() =>
-                  setWin((w) => ({
-                    ...w,
-                    end: Math.min(w.end + 30, chunks.length),
-                  }))
+                  setWin((w) => {
+                    const end = Math.min(w.end + READER_MAX_WINDOW, chunks.length);
+                    return {
+                      start: Math.max(w.start, end - READER_MAX_WINDOW),
+                      end,
+                    };
+                  })
                 }
               >
                 LOAD MORE TEXT

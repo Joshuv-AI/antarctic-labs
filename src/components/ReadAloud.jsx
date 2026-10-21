@@ -696,7 +696,7 @@ function useReadAloudKokoro({
         type: "module",
       });
     } catch {
-      if (onFatalError) onFatalError();
+      if (onFatalError) onFatalError("worker-create");
       return null;
     }
     E.worker = w;
@@ -737,7 +737,8 @@ function useReadAloudKokoro({
         } else {
           E2.workerState = "error";
           setVoiceState("idle");
-          if (onFatalError) onFatalError();
+          if (onFatalError)
+            onFatalError("load: " + String(msg.error || "unknown").slice(0, 110));
         }
       } else if (msg.type === "audio") {
         const idx = E2.pending.get(msg.id);
@@ -762,7 +763,8 @@ function useReadAloudKokoro({
         E2.pending.delete(msg.id);
         E2.fails += 1;
         if (E2.fails >= 3) {
-          if (onFatalError) onFatalError();
+          if (onFatalError)
+            onFatalError("synth: " + String(msg.error || "unknown").slice(0, 100));
           return;
         }
         if (idx !== undefined && E2.waitingFor === idx) {
@@ -791,7 +793,8 @@ function useReadAloudKokoro({
       }
       E2.workerState = "error";
       setVoiceState("idle");
-      if (onFatalError) onFatalError();
+      if (onFatalError)
+        onFatalError("worker: " + String((ev && ev.message) || "error").slice(0, 110));
     };
     w.postMessage({
       type: "init",
@@ -923,7 +926,7 @@ function useReadAloudKokoro({
   // --- public controls -----------------------------------------------------
   const startFromCurrent = useCallback(() => {
     if (!KOKORO_POSSIBLE) {
-      if (onFatalError) onFatalError();
+      if (onFatalError) onFatalError("unsupported-env");
       return "unsupported";
     }
     if (!text) return "empty";
@@ -1127,8 +1130,12 @@ function useReadAloudKokoro({
 // ---------------------------------------------------------------------------
 export function useReadAloud(args) {
   const [mode, setMode] = useState(KOKORO_POSSIBLE ? "kokoro" : "legacy");
+  const [kokoroError, setKokoroError] = useState(null);
   const autoStartRef = useRef(false);
-  const onFatalError = useCallback(() => {
+  const onFatalError = useCallback((reason) => {
+    // Keep the failure reason: the player bar shows it when the device
+    // voice takes over, so a fallback is never silent or mysterious.
+    if (reason) setKokoroError(String(reason).slice(0, 150));
     setMode((m) => (m === "kokoro" ? "legacy" : m));
   }, []);
   const kokoro = useReadAloudKokoro({ ...args, onFatalError });
@@ -1154,12 +1161,14 @@ export function useReadAloud(args) {
       startFromCurrent,
       voiceState: "fallback",
       voiceProgress: 100,
+      kokoroError,
     };
   }
   return {
     ...kokoro,
     startFromCurrent,
     supported: kokoro.supported || legacy.supported,
+    kokoroError,
   };
 }
 
@@ -1190,6 +1199,7 @@ export function ReadAloudBar({
   onStop,
   onSkip,
   onRate,
+  notice,
 }) {
   const playing = status === "playing";
   const pct =
@@ -1209,6 +1219,11 @@ export function ReadAloudBar({
           style={{ width: `${pct}%` }}
         />
       </div>
+      {notice ? (
+        <div className="ra-listen-notice" role="note">
+          {notice}
+        </div>
+      ) : null}
       <div className="ra-listen-row">
         <div className="ra-listen-zone ra-listen-zone-left">
           <button
@@ -1283,12 +1298,7 @@ export function ReadAloudLoadingBar({ onCancel }) {
     >
       <div className="ra-listen-loading-row">
         <span className="ra-listen-spinner" aria-hidden="true" />
-        <span className="ra-listen-loading-text">
-          Preparing voice…
-          <span className="ra-listen-loading-sub">
-            One-time download. After this, Listen starts instantly.
-          </span>
-        </span>
+        <span className="ra-listen-loading-text">Preparing voice…</span>
         <button
           type="button"
           className="ra-listen-btn ra-listen-stop"
