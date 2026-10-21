@@ -642,10 +642,26 @@ function App() {
           path === "/tower-of-babel/library" ||
           path === "/tower-of-babel/library/suggest" ||
           matchedPattern === "/tower-of-babel/library/:id") && (
-          <div className="tower-vortex-layer" aria-hidden="true">
+          <div
+            className={
+              path === "/tower-of-babel" || path === "/tower-of-babel/library"
+                ? "tower-vortex-layer tower-vortex-layer--dark"
+                : "tower-vortex-layer"
+            }
+            aria-hidden="true"
+          >
             <Suspense fallback={null}>
               <TypographyVortexCanvas
-                mode="light"
+                key={
+                  path === "/tower-of-babel" || path === "/tower-of-babel/library"
+                    ? "vortex-dark"
+                    : "vortex-light"
+                }
+                mode={
+                  path === "/tower-of-babel" || path === "/tower-of-babel/library"
+                    ? "dark"
+                    : "light"
+                }
                 phrase="TOWER OF BABEL / ANTARCTIC LABS / "
                 speed={0.85}
                 ringGrowth={1.30}
