@@ -342,6 +342,7 @@ export const STACKS_POOL = [
 export const STACK_GROUPS = {
   BOOKS: {
     title: "Browse books by shelf",
+    sub: "Literature, classics, and philosophy — the library’s books, shelved by kind.",
     groups: [
       {
         bucket: "BOOKS:lit",
@@ -371,6 +372,7 @@ export const STACK_GROUPS = {
   },
   PAPERS: {
     title: "Browse papers by field",
+    sub: "Research from every field the library collects — biomedicine to astrophysics, grouped by discipline.",
     groups: [
       {
         bucket: "PAPERS:bio",
@@ -412,6 +414,7 @@ export const STACK_GROUPS = {
   },
   DECLASSIFIED: {
     title: "Browse the releases",
+    sub: "What governments have let go — files and records from the agencies that held them, grouped by source.",
     groups: [
       {
         bucket: "DECLASSIFIED:congress",
@@ -463,6 +466,7 @@ export const STACK_GROUPS = {
   },
   DOCUMENTS: {
     title: "Browse documents",
+    sub: "The documentary record — founding laws, investigations, patents, and the papers history runs on.",
     groups: [
       {
         bucket: "DOCUMENTS:founding",
@@ -500,6 +504,7 @@ export const STACK_GROUPS = {
   },
   PODCASTS: {
     title: "Browse by show",
+    sub: "Every conversation in the library, show by show — read the transcripts.",
     groups: [
       {
         bucket: "PODCASTS:joerogan",
@@ -535,6 +540,7 @@ export const STACK_GROUPS = {
   },
   REFERENCE: {
     title: "Browse the collections",
+    sub: "Encyclopedias and dictionaries, old and new — the reference shelf, collection by collection.",
     groups: [
       {
         prefix: "catholic-encyclopedia",

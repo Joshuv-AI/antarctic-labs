@@ -973,7 +973,10 @@ function CategoryGroups({ stack, byId, artifacts, go }) {
   if (!groups.length) return null;
   return (
     <div className="tower-traditions">
-      <h3 className="tower-block-title">{data.title}</h3>
+      <div className="tower-block-head">
+        <h2 className="tower-block-title">{data.title}</h2>
+        {data.sub && <p className="tower-block-sub">{data.sub}</p>}
+      </div>
       {groups.map(({ g, works }) => (
         <div className="trad-group" key={g.bucket || g.label}>
           <h4 className="trad-group-title">{g.label}</h4>
