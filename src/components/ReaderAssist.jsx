@@ -1293,6 +1293,36 @@ export default function ReaderAssist({
   const [hlMode, setHlMode] = useState(false);
   const orbRef = useRef(null);
 
+  // Scroll gate (2026-10-20): the orb and its tools belong to the FULL TEXT
+  // section only — hidden while the reader is still in the title /
+  // description / catalog-record sections above. The orb appears once the
+  // text section's top crosses ~55% of the viewport height (the reference
+  // point Joshua picked) and hides again when scrolled back above it. The
+  // Listen player bar is exempt: it only exists during playback started
+  // from the text and must stay reachable wherever the reader scrolls.
+  const [inText, setInText] = useState(false);
+  useEffect(() => {
+    const sec = document.querySelector("section.tower-fulltext");
+    if (!sec || typeof IntersectionObserver === "undefined") {
+      setInText(true); // fail open: never strand the tools
+      return undefined;
+    }
+    const io = new IntersectionObserver(
+      (entries) => setInText(entries[0].isIntersecting),
+      { rootMargin: "0px 0px -45% 0px", threshold: 0 }
+    );
+    io.observe(sec);
+    return () => io.disconnect();
+  }, []);
+  // Leaving the text zone closes whatever the orb had open.
+  useEffect(() => {
+    if (!inText) {
+      setMenuOpen(false);
+      setPanel(null);
+      setHlMode(false);
+    }
+  }, [inText]);
+
   // --- Read-aloud word-follow highlighting ---------------------------------
   // Two fixed-position overlays (no text DOM mutation): a soft highlight
   // pill over the spoken word + a small "bouncy ball" dot that hops above it.
@@ -1891,6 +1921,7 @@ export default function ReaderAssist({
 
   const orbClass =
     "ra-orb" +
+    (!inText ? " is-gated" : "") +
     (dragging ? " is-dragging" : "") +
     (snapping ? " is-snapping" : "") +
     (idle && !menuOpen && !panel && !hlMode ? " is-idle" : "");
