@@ -328,3 +328,232 @@ export const STACKS_POOL = [
   "kalpa-sutra-jacobi-1884",
   "tob-4274-d1",
 ];
+
+// --- Per-category grouped showcases (2026-10-21 category panels) ---------
+// Each stack card, when selected, swaps the Featured rails for its own
+// grouped tile section in the "Sacred texts of the world" layout. Groups
+// are the lane's real subcategories (taxonomy) — or, for Reference which
+// has none, its source families by artifact_id prefix. `seeds` are
+// verified landmark ids; the panel tops each group up from the live
+// catalog (bucket- or prefix-matched, title-filtered), so a group is
+// only ever as curated as the catalog honestly supports, and a group
+// with fewer than two resolvable works is not shown. The Sacred Texts
+// stack uses TRADITIONS above instead of this table.
+export const STACK_GROUPS = {
+  BOOKS: {
+    title: "Browse books by shelf",
+    groups: [
+      {
+        bucket: "BOOKS:lit",
+        label: "Literature & Classics",
+        tone: "#6d4c2f",
+        seeds: [
+          "homer-iliad-butler",
+          "homer-odyssey-butler",
+          "dante-divine-comedy-longfellow",
+          "shakespeare-hamlet",
+          "austen-pride-and-prejudice",
+          "melville-moby-dick-1851",
+        ],
+      },
+      {
+        bucket: "BOOKS:philo",
+        label: "Philosophy & Esoteric",
+        tone: "#5b4a8a",
+        seeds: [
+          "the-republic-of-plato-jowett-3rd-ed",
+          "meditations-of-marcus-aurelius-casaubon-1946",
+          "discourses-and-enchiridion-of-epictetus",
+          "the-art-of-war-giles-1910",
+        ],
+      },
+    ],
+  },
+  PAPERS: {
+    title: "Browse papers by field",
+    groups: [
+      {
+        bucket: "PAPERS:bio",
+        label: "Biomedical & Life Sciences",
+        tone: "#33685c",
+        seeds: ["pmc-7095418"],
+      },
+      {
+        bucket: "PAPERS:cs",
+        label: "Physics, Math & Computing",
+        tone: "#33566e",
+        seeds: [],
+      },
+      {
+        bucket: "PAPERS:plos",
+        label: "PLOS Journals",
+        tone: "#4f6152",
+        seeds: [],
+      },
+      {
+        bucket: "PAPERS:energy",
+        label: "Energy Research",
+        tone: "#77683a",
+        seeds: [],
+      },
+      {
+        bucket: "PAPERS:space",
+        label: "Space & Aeronautics",
+        tone: "#44546a",
+        seeds: [],
+      },
+      {
+        bucket: "PAPERS:other",
+        label: "Other Papers",
+        tone: "#575046",
+        seeds: [],
+      },
+    ],
+  },
+  DECLASSIFIED: {
+    title: "Browse the releases",
+    groups: [
+      {
+        bucket: "DECLASSIFIED:congress",
+        label: "Congressional Records",
+        tone: "#575046",
+        seeds: ["govdocs-archive_org-mkultra-the-hidden-record-14pt-complete-"],
+      },
+      {
+        bucket: "DECLASSIFIED:cia",
+        label: "CIA",
+        tone: "#6e3b2e",
+        seeds: [],
+      },
+      {
+        bucket: "DECLASSIFIED:state",
+        label: "State Department & Diplomacy",
+        tone: "#44546a",
+        seeds: [
+          "frus-1964-1968-vol1-vietnam-editorial-note-tonkin-gulf-incident",
+        ],
+      },
+      {
+        bucket: "DECLASSIFIED:un",
+        label: "United Nations",
+        tone: "#33685c",
+        seeds: [],
+      },
+      {
+        bucket: "DECLASSIFIED:nsa",
+        label: "National Security Archive",
+        tone: "#3e4a3a",
+        seeds: [
+          "govdocs-nsarchive-Briefing_Book_dnsa-intelligence_The_Top_Secret_Testimony_of_CIAs_MKULTRA_Chief",
+        ],
+      },
+      {
+        bucket: "DECLASSIFIED:fbi",
+        label: "FBI",
+        tone: "#5d4037",
+        seeds: [],
+      },
+      {
+        bucket: "DECLASSIFIED:other",
+        label: "Other Releases",
+        tone: "#4a4a42",
+        seeds: [],
+      },
+    ],
+  },
+  DOCUMENTS: {
+    title: "Browse documents",
+    groups: [
+      {
+        bucket: "DOCUMENTS:founding",
+        label: "Laws & Founding Documents",
+        tone: "#44546a",
+        seeds: [
+          "us-declaration-of-independence",
+          "us-constitution-bill-of-rights",
+          "gettysburg-address",
+          "emancipation-proclamation-1863",
+          "universal-declaration-of-human-rights",
+          "magna-carta-1215",
+          "english-bill-of-rights-1689",
+        ],
+      },
+      {
+        bucket: "DOCUMENTS:trials",
+        label: "Trials & Investigations",
+        tone: "#6e3b2e",
+        seeds: ["pentagon-papers-vol-2"],
+      },
+      {
+        bucket: "DOCUMENTS:patents",
+        label: "Patents & Inventions",
+        tone: "#77683a",
+        seeds: [],
+      },
+      {
+        bucket: "DOCUMENTS:other",
+        label: "Other Documents",
+        tone: "#575046",
+        seeds: [],
+      },
+    ],
+  },
+  PODCASTS: {
+    title: "Browse by show",
+    groups: [
+      {
+        bucket: "PODCASTS:joerogan",
+        label: "Joe Rogan",
+        tone: "#26262b",
+        seeds: [
+          "joe-rogan-experience-2526-jd-vance",
+          "joe-rogan-experience-2533-diana-pasulka",
+        ],
+      },
+      {
+        bucket: "PODCASTS:dannyjones",
+        label: "Danny Jones",
+        tone: "#3a3f4a",
+        seeds: [
+          "podcast-dannyjones--FQghS0GRhU",
+          "podcast-dannyjones--T38tBm54vs",
+        ],
+      },
+      {
+        bucket: "PODCASTS:tuckercarlson",
+        label: "Tucker Carlson",
+        tone: "#4a3436",
+        seeds: ["podcast-tuckercarlson-0jwHNHCUROo"],
+      },
+      {
+        bucket: "PODCASTS:other",
+        label: "Other Podcasts",
+        tone: "#333330",
+        seeds: [],
+      },
+    ],
+  },
+  REFERENCE: {
+    title: "Browse the collections",
+    groups: [
+      {
+        prefix: "catholic-encyclopedia",
+        label: "The Catholic Encyclopedia",
+        tone: "#7a5c2e",
+        seeds: [],
+      },
+      {
+        prefixes: ["smith-dictionary", "hastings-dictionary", "isbe-1915", "encyclopaedia-biblica"],
+        label: "Bible Dictionaries & Encyclopedias",
+        tone: "#54677a",
+        seeds: [],
+      },
+      {
+        prefixes: ["johnson-dictionary", "webster-american", "littre-dictionary", "appletons-cyclopaedia", "allibone-critical"],
+        label: "Classic Dictionaries",
+        tone: "#6b5136",
+        seeds: [],
+      },
+    ],
+  },
+};

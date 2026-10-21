@@ -51,6 +51,7 @@ import {
 } from "./lib/tower-covers.js";
 import {
   STACKS,
+  STACK_GROUPS,
   TRADITIONS,
   RAIL_ESSENTIAL,
   RAIL_RECORDS,
@@ -922,6 +923,80 @@ function TraditionsGrid({ byId, go }) {
 // panel, the traditions grid, and the featured rails. Shown only in the
 // unfiltered browse state; searching or filtering hands the page to the
 // results, exactly one scroll away.
+// A category's own grouped showcase (2026-10-21 category panels): the
+// traditions layout generalized — groups are the lane's subcategories
+// (or Reference's source families), tiles are landmark seeds topped up
+// from the live catalog. Groups with fewer than two works don't render.
+function CategoryGroups({ stack, byId, artifacts, go }) {
+  const data = STACK_GROUPS[stack.bucket.split(":")[0]];
+  const fill = useMemo(() => {
+    const byBucket = new Map();
+    for (const a of artifacts) {
+      const t = a.title || "";
+      if (t.length < 10 || t.length > 120 || !t.includes(" ")) continue;
+      const key = towerBucketKey(a) || a.collection;
+      const arr = byBucket.get(key);
+      if (!arr) byBucket.set(key, [a]);
+      else if (arr.length < 10) arr.push(a);
+    }
+    return byBucket;
+  }, [artifacts]);
+  if (!data) return null;
+  const used = new Set();
+  const groups = [];
+  for (const g of data.groups) {
+    const works = [];
+    const take = (a) => {
+      if (!a || used.has(a.artifact_id) || works.length >= 4) return;
+      used.add(a.artifact_id);
+      works.push({
+        a,
+        label: a.title,
+        sub: a.creator || (a.year ? String(a.year) : ""),
+      });
+    };
+    for (const id of g.seeds || []) {
+      const a = byId(id);
+      if (a && (!g.bucket || (towerBucketKey(a) || a.collection) === g.bucket))
+        take(a);
+    }
+    if (g.bucket) for (const a of fill.get(g.bucket) || []) take(a);
+    const prefs = g.prefix ? [g.prefix] : g.prefixes || null;
+    if (prefs) {
+      for (const a of artifacts) {
+        if (works.length >= 4) break;
+        if (prefs.some((p) => a.artifact_id.startsWith(p))) take(a);
+      }
+    }
+    if (works.length >= 2) groups.push({ g, works });
+  }
+  if (!groups.length) return null;
+  return (
+    <div className="tower-traditions">
+      <h3 className="tower-block-title">{data.title}</h3>
+      {groups.map(({ g, works }) => (
+        <div className="trad-group" key={g.bucket || g.label}>
+          <h4 className="trad-group-title">{g.label}</h4>
+          <div className="trad-tiles">
+            {works.map(({ a, label, sub }) => (
+              <button
+                key={a.artifact_id}
+                type="button"
+                className="trad-tile"
+                style={{ background: g.tone }}
+                onClick={() => go(`/tower-of-babel/library/${a.artifact_id}`)}
+              >
+                <span className="trad-tile-name">{label}</span>
+                {sub && <span className="trad-tile-sub">{sub}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function TowerDiscovery({ artifacts, towerData, go, onBrowse }) {
   // Resolve curated ids against the artifacts array directly — NOT the
   // derivation's idIndex. The derivation phases in over seconds on a big
@@ -933,12 +1008,17 @@ function TowerDiscovery({ artifacts, towerData, go, onBrowse }) {
     return m;
   }, [artifacts]);
   const byId = useCallback((id) => byIdMap.get(id) || null, [byIdMap]);
-  const [shelf, setShelf] = useState(STACKS[0].bucket);
-  const stack = STACKS.find((s) => s.bucket === shelf) || STACKS[0];
-  const shelfLane = stack.bucket.split(":")[0];
-  const shelfSubs = TOWER_SUBS[shelfLane] || [];
-  const shelfCount =
-    stack.bucket.indexOf(":") >= 0
+  // The stacks are a selector (2026-10-21 category panels): nothing is
+  // selected by default — the Featured rails own the page. Selecting a
+  // stack swaps Featured for that category's shelf + grouped showcase;
+  // selecting it again returns to Featured.
+  const [shelf, setShelf] = useState(null);
+  const stack = shelf ? STACKS.find((s) => s.bucket === shelf) || null : null;
+  const shelfLane = stack ? stack.bucket.split(":")[0] : "";
+  const shelfSubs = stack ? TOWER_SUBS[shelfLane] || [] : [];
+  const shelfCount = !stack
+    ? 0
+    : stack.bucket.indexOf(":") >= 0
       ? towerData.subCounts[stack.bucket] || 0
       : towerData.counts[stack.bucket] || 0;
   // "From the stacks" rotates a fixed slice of the pool by week —
@@ -965,7 +1045,7 @@ function TowerDiscovery({ artifacts, towerData, go, onBrowse }) {
               role="tab"
               aria-selected={shelf === s.bucket}
               className={`stack-card${shelf === s.bucket ? " is-active" : ""}`}
-              onClick={() => setShelf(s.bucket)}
+              onClick={() => setShelf(shelf === s.bucket ? null : s.bucket)}
             >
               <span className="stack-collage" aria-hidden="true">
                 {faces.map((a, k) => (
@@ -982,67 +1062,78 @@ function TowerDiscovery({ artifacts, towerData, go, onBrowse }) {
           );
         })}
       </div>
-      <div className="shelf-panel">
-        <div className="shelf-head">
-          <div>
-            <h3 className="shelf-title">{stack.label}</h3>
-            <p className="shelf-blurb">
-              {stack.blurb} · {shelfCount.toLocaleString()} works
-            </p>
+      {stack && (
+        <div className="shelf-panel">
+          <div className="shelf-head">
+            <div>
+              <h3 className="shelf-title">{stack.label}</h3>
+              <p className="shelf-blurb">
+                {stack.blurb} · {shelfCount.toLocaleString()} works
+              </p>
+            </div>
+            <button
+              type="button"
+              className="shelf-seeall"
+              onClick={() => onBrowse(stack.bucket)}
+            >
+              See all ›
+            </button>
           </div>
-          <button
-            type="button"
-            className="shelf-seeall"
-            onClick={() => onBrowse(stack.bucket)}
-          >
-            See all ›
-          </button>
+          {shelfSubs.length > 0 && stack.bucket.indexOf(":") < 0 && (
+            <div className="shelf-subs">
+              {shelfSubs.map((s) => {
+                const key = `${shelfLane}:${s.id}`;
+                const n = towerData.subCounts[key] || 0;
+                if (!n) return null;
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className="shelf-sub"
+                    onClick={() => onBrowse(key)}
+                  >
+                    {s.label} <span>{n.toLocaleString()}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {stack.bucket !== "BOOKS:sacred" && (
+            <CoverRail
+              title="Notable works"
+              items={stack.rail.map(byId)}
+              go={go}
+              wide={stack.bucket === "PODCASTS"}
+            />
+          )}
         </div>
-        {shelfSubs.length > 0 && stack.bucket.indexOf(":") < 0 && (
-          <div className="shelf-subs">
-            {shelfSubs.map((s) => {
-              const key = `${shelfLane}:${s.id}`;
-              const n = towerData.subCounts[key] || 0;
-              if (!n) return null;
-              return (
-                <button
-                  key={s.id}
-                  type="button"
-                  className="shelf-sub"
-                  onClick={() => onBrowse(key)}
-                >
-                  {s.label} <span>{n.toLocaleString()}</span>
-                </button>
-              );
-            })}
+      )}
+      {stack && stack.bucket === "BOOKS:sacred" && (
+        <TraditionsGrid byId={byId} go={go} />
+      )}
+      {stack && stack.bucket !== "BOOKS:sacred" && (
+        <CategoryGroups stack={stack} byId={byId} artifacts={artifacts} go={go} />
+      )}
+      {!stack && (
+        <div className="tower-featured">
+          <div className="tower-block-head">
+            <h2 className="tower-block-title">Featured</h2>
           </div>
-        )}
-        <CoverRail
-          title="Notable works"
-          items={stack.rail.map(byId)}
-          go={go}
-          wide={stack.bucket === "PODCASTS"}
-        />
-      </div>
-      <TraditionsGrid byId={byId} go={go} />
-      <div className="tower-featured">
-        <div className="tower-block-head">
-          <h2 className="tower-block-title">Featured</h2>
+          <CoverRail title="Essential texts" items={RAIL_ESSENTIAL.map(byId)} go={go} />
+          <CoverRail
+            title="Declassified & founding documents"
+            items={RAIL_RECORDS.map(byId)}
+            go={go}
+          />
+          <CoverRail
+            title="Podcasts — read the conversation"
+            items={(STACKS.find((s) => s.bucket === "PODCASTS") || { rail: [] }).rail.map(byId)}
+            go={go}
+            wide
+          />
+          <CoverRail title="From the stacks" items={rotated.map(byId)} go={go} />
         </div>
-        <CoverRail title="Essential texts" items={RAIL_ESSENTIAL.map(byId)} go={go} />
-        <CoverRail
-          title="Declassified & founding documents"
-          items={RAIL_RECORDS.map(byId)}
-          go={go}
-        />
-        <CoverRail
-          title="Podcasts — read the conversation"
-          items={(STACKS.find((s) => s.bucket === "PODCASTS") || { rail: [] }).rail.map(byId)}
-          go={go}
-          wide
-        />
-        <CoverRail title="From the stacks" items={rotated.map(byId)} go={go} />
-      </div>
+      )}
     </div>
   );
 }
