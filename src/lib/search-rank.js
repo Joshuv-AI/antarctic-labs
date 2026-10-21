@@ -186,7 +186,7 @@ export function pinsForQuery(qNorm, tokens) {
 // Words that mark a work as being ABOUT a text rather than the text
 // itself. Demoted only when the word is not part of the query (someone
 // searching "bible dictionary" wants the dictionary).
-const SECONDARY_MARKERS = [
+export const SECONDARY_MARKERS = [
   "commentary", "dictionary", "encyclopedia", "encyclopaedia",
   "concordance", "study guide", "companion", "handbook of",
   "introduction to", "history of", "notes on", "about the",
@@ -198,10 +198,43 @@ function hasWordPhrase(hay, phrase) {
   return (" " + hay + " ").includes(" " + phrase + " ");
 }
 
-// Field-weighted relevance of one catalog record for a normalized query.
-// a: the artifact; subLabel: its subcategory label ("" when none).
-export function scoreArtifact(a, subLabel, qNorm, tokens) {
-  const T = normText(a.title || "");
+// --- Precomputed-field scoring (2026-10-21 speed pass) ---------------------
+// scoreArtifact normalized the title, creator, and collection of every
+// matching record on every query — three regex-heavy normText calls per
+// record per keystroke, which dominated query time at catalog scale. The
+// catalog derivation now precomputes those normalized fields once (plus a
+// secondary-marker bitmask and a volume-number flag per record), and the
+// search loop calls scoreArtifactPre with them. scoreArtifact delegates
+// to the same core, so the two paths can never drift apart.
+
+// Bit i of the mask = SECONDARY_MARKERS[i] appears (word-boundary) in the
+// already-normalized title.
+export function secondaryMaskFor(normTitle) {
+  let mask = 0;
+  for (let i = 0; i < SECONDARY_MARKERS.length; i++) {
+    if (hasWordPhrase(normTitle, SECONDARY_MARKERS[i])) mask |= 1 << i;
+  }
+  return mask;
+}
+
+// Bit i = SECONDARY_MARKERS[i] appears (substring, matching the original
+// semantics) in the normalized query — such markers do not demote.
+export function querySecondaryMask(qNorm) {
+  let mask = 0;
+  for (let i = 0; i < SECONDARY_MARKERS.length; i++) {
+    if (qNorm.includes(SECONDARY_MARKERS[i])) mask |= 1 << i;
+  }
+  return mask;
+}
+
+const VOLNUM_RE = /\b(vol|volume|part) \d+/;
+const VOLQUERY_RE = /\b(vol|volume|part|book)\b/;
+
+// Field-weighted relevance from precomputed normalized fields.
+// T/C/coll: normText of title / creator / (collection + subcategory label).
+// secMask: secondaryMaskFor(T). hasVolNum: VOLNUM_RE.test(T) ? 1 : 0.
+// qMask: querySecondaryMask(qNorm).
+export function scoreArtifactPre(T, C, coll, secMask, hasVolNum, qNorm, tokens, qMask) {
   if (!T) return 0;
   const paddedT = " " + T + " ";
   let s = 0;
@@ -220,7 +253,6 @@ export function scoreArtifact(a, subLabel, qNorm, tokens) {
   if (tokens.length > 0 && hits === tokens.length) s += 160;
   else if (hits > 0) s += Math.round(80 * (hits / tokens.length));
   // Creator match.
-  const C = normText(a.creator || "");
   if (C) {
     if (C === qNorm) s += 120;
     else if ((" " + C + " ").includes(" " + qNorm + " ")) s += 60;
@@ -236,19 +268,34 @@ export function scoreArtifact(a, subLabel, qNorm, tokens) {
     }
   }
   // Collection / subcategory mention.
-  const coll = normText((a.collection || "") + " " + (subLabel || ""));
   if (coll && (" " + coll + " ").includes(" " + qNorm + " ")) s += 40;
   // Secondary-literature demotion (markers absent from the query).
-  for (const m of SECONDARY_MARKERS) {
-    if (!qNorm.includes(m) && hasWordPhrase(T, m)) { s -= 160; break; }
-  }
+  if ((secMask & ~qMask) !== 0) s -= 160;
   // Multi-volume / partial-set demotion for bare-name queries: a bare
   // "talmud" should not land on Vol. 11. Pins cover the Vol. 1 cases.
-  if (!/\b(vol|volume|part|book)\b/.test(qNorm) &&
-      /\b(vol|volume|part) \d+/.test(T)) {
-    s -= 70;
-  }
+  if (!VOLQUERY_RE.test(qNorm) && hasVolNum) s -= 70;
   // Shorter titles win ties — primary texts have terse titles.
   s += Math.max(0, 24 - Math.floor(T.length / 3));
   return s;
+}
+
+// Field-weighted relevance of one catalog record for a normalized query.
+// a: the artifact; subLabel: its subcategory label ("" when none).
+// Delegates to scoreArtifactPre with on-the-fly normalization — the hot
+// search loop passes precomputed fields to the same core instead.
+export function scoreArtifact(a, subLabel, qNorm, tokens) {
+  const T = normText(a.title || "");
+  if (!T) return 0;
+  const C = normText(a.creator || "");
+  const coll = normText((a.collection || "") + " " + (subLabel || ""));
+  return scoreArtifactPre(
+    T,
+    C,
+    coll,
+    secondaryMaskFor(T),
+    VOLNUM_RE.test(T) ? 1 : 0,
+    qNorm,
+    tokens,
+    querySecondaryMask(qNorm)
+  );
 }

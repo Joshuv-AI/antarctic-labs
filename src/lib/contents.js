@@ -5,18 +5,29 @@
 //
 // Detection tiers (in order):
 //   1. The text's own table of contents: dense runs of ToC-like lines near
-//      the head are parsed into entry keys; each entry's first occurrence
-//      (the ToC line itself) is skipped so sections land on the body
-//      occurrence, never the ToC.
+//      the head are parsed into entry keys; an entry's occurrence INSIDE
+//      the ToC's char span (front matter only — the anchor must start in
+//      the first 12% of the text) is skipped so sections land on the body
+//      occurrence, never the ToC. Bare-name entries ("Ezra") map to their
+//      body headings via a heading-form guard.
 //   2. Explicit standalone headings: chapter/part/section/book/canto/surah/
 //      article/act/scene/verse/psalm/appendix/… followed by a number (digits,
 //      roman numerals, number words, single letters), the bare keyword alone,
-//      or keyword + colon; ordinal phrases ("First Article"); markdown #
+//      or keyword + colon; ordinal phrases ("First Article", "Third Book of
+//      Nephi"); "The <division> of …" titles ("The Book of Joshua", "The
+//      Gospel According to…") in caps/title-case/isolated form; markdown #
 //      headers; § markers; scripture book headers ("Book 01 Genesis") and,
 //      in single-book scriptures only, chapter starts ("01:001:001");
 //      dotted numbered headings ("1. Introduction", "2.1 Methods") that are
 //      not wrapped paragraph lines; numbered ALL-CAPS standalone lines;
-//      standalone roman numerals.
+//      standalone roman numerals (kept only in consecutive sequence).
+//   2b. Printed-matter cleanup: dense candidate runs whose labels mostly
+//      reappear later are printed ToCs (head or mid-text) and drop out;
+//      front-zone list copies (repeating labels) drop out; weak labels
+//      recurring 3+ times across the text are speakers/running heads.
+//      Selection keeps weak (ALL-CAPS) structure unless strong headings
+//      dominate; a picked set huddled in the first 5% is front matter,
+//      not navigation, and yields to the fallback.
 //   3. Repeated structural delimiters (* * *, long rules) splitting the text.
 //   4. Fallback: equal character ranges with honest "Part N of M" labels.
 //
@@ -33,7 +44,7 @@ const TINY_CHARS = 4000; // below this: exactly one section (the title)
 const MAX_LINE = 90; // heading lines are short; longer lines are body
 const MAX_LABEL = 80;
 const TOC_SCAN_LINES = 3000; // a ToC lives at the head of the text
-const MIN_GAP = 60; // min chars between consecutive sections
+const MIN_GAP = 20; // min chars between consecutive sections (stacked title + subtitle headings sit ~one line apart)
 
 // ---- keyword sets (first-word dispatch — no large regex alternations) ----
 const HEADWORDS = new Set(
@@ -51,6 +62,15 @@ const ORDINAL_NOUNS = new Set(
 );
 const ORDINAL_FULL_RE =
   /^(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|last|final)\s+(article|chapter|part|section|book|question|theorem|lemma|proposition|commandment)\b(\s*[:–—\-\(\[]|\s+\d|\s+[ivxlc]+\b|\s+(one|two|three|four|five|six|seven|eight|nine|ten)\b|\s*$)/i;
+// "The <X> of …" division titles: scripture books and classic divisions whose
+// heading starts with "The" ("The Book of Joshua", "The Gospel According to
+// Saint Matthew", "The Acts of the Apostles", "The Words of Mormon"). The old
+// first-word dispatch was blind to all of them — the KJV fell back to equal
+// parts and the Book of Mormon's real books lost to front-matter noise.
+const THE_SECOND_RANK0 = new Set(
+  'book words acts gospel epistle revelation history life'.split(' ')
+);
+const THE_THIRD_NOUN = new Set('book part section chapter article'.split(' '));
 
 // ---- precompiled patterns (all anchored, no /g/, no nested quantifiers) ----
 const MD_RE = /^#{1,4}\s+(?=[A-Za-z0-9])\S/;
@@ -125,6 +145,89 @@ function secondWordLower(t, wlen) {
     else break;
   }
   return w;
+}
+
+// Lowercase nth word (0-based) of a short line, letters only.
+function nthWordLower(t, n) {
+  let word = 0;
+  let i = 0;
+  const len = t.length;
+  while (i < len) {
+    while (i < len && (t.charCodeAt(i) === 32 || t.charCodeAt(i) === 9)) i++;
+    let w = '';
+    while (i < len) {
+      const c = t.charCodeAt(i);
+      if (c >= 65 && c <= 90) w += String.fromCharCode(c + 32);
+      else if (c >= 97 && c <= 122) w += t[i];
+      else break;
+      i++;
+    }
+    if (word === n) return w;
+    word++;
+    while (i < len && t.charCodeAt(i) !== 32 && t.charCodeAt(i) !== 9) i++;
+  }
+  return '';
+}
+
+// "The …" division headings (see THE_SECOND_RANK0): rank 0 or -1.
+//   "The Book of Joshua" / "The Words of Mormon" / "The Gospel According to…"
+//   "The First Book of Moses: Called Genesis" (ordinal + division noun)
+// Anything else starting with "The" ("The Project Gutenberg eBook of…",
+// running prose) is not a heading.
+function theHeadingRank(t) {
+  const w2 = nthWordLower(t, 1);
+  if (THE_SECOND_RANK0.has(w2)) return 0;
+  if (ORDINAL_WORDS.has(w2) && THE_THIRD_NOUN.has(nthWordLower(t, 2))) return 0;
+  return -1;
+}
+
+function isAllCapsLine(t) {
+  let letters = 0;
+  for (let i = 0; i < t.length; i++) {
+    const c = t.charCodeAt(i);
+    if (c >= 97 && c <= 122) return false;
+    if (c >= 65 && c <= 90) letters++;
+  }
+  return letters >= 3;
+}
+
+const TITLE_STOP = new Set('of the and to a an in by from or'.split(' '));
+function isTitleCaseLine(t) {
+  const words = t.split(/\s+/).filter(Boolean);
+  if (words.length < 2) return false;
+  let content = 0;
+  for (const w of words) {
+    const lw = w.toLowerCase().replace(/[^a-z']/g, '');
+    if (!lw || TITLE_STOP.has(lw)) continue;
+    content++;
+    const c = w.charCodeAt(0);
+    if (!(c >= 65 && c <= 90)) return false;
+  }
+  return content >= 2;
+}
+
+// A heading stands alone: blank line (or text edge) on both sides. Wrapped
+// paragraph lines fail this — a paragraph's first line is followed by more
+// paragraph lines — which is what keeps "The history of the family was…"
+// (a wrapped body line) from ever counting as a "The …" heading.
+function isIsolated(text, s, e) {
+  let before = false;
+  if (s <= 1) before = true;
+  else {
+    let i = s - 1;
+    if (text.charCodeAt(i) === 10) i--;
+    if (i < 0 || text.charCodeAt(i) === 10) before = true;
+  }
+  let after = false;
+  const n = text.length;
+  if (e >= n - 1) after = true;
+  else {
+    let i = e;
+    if (text.charCodeAt(i) === 13) i++;
+    if (text.charCodeAt(i) === 10) i++;
+    if (i >= n || text.charCodeAt(i) === 10 || text.charCodeAt(i) === 13) after = true;
+  }
+  return before && after;
 }
 
 // Strict headword check: the keyword must be followed by a number-ish with a
@@ -399,6 +502,11 @@ function tocKind(line) {
     return TOCNUM_RE.test(line) || NUMSEC_RE.test(line) ? 2 : 0;
   if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) {
     const w = firstWordLower(line);
+    if (w === 'the')
+      return theHeadingRank(line) >= 0 &&
+        (isAllCapsLine(line) || isTitleCaseLine(line))
+        ? 2
+        : 0;
     if (HEADWORDS.has(w)) return headwordRank(line, w) >= 0 ? 2 : 0;
     if (ORDINAL_WORDS.has(w) && ORDINAL_NOUNS.has(secondWordLower(line, w.length))) return 2;
     if (w === 'book' && BOOKHDR_RE.test(line)) return 2;
@@ -435,7 +543,7 @@ function findToc(text) {
   const runs = [];
   let cur = null;
   for (const t of tl) {
-    if (cur && t.idx - cur.lastIdx <= 3) {
+    if (cur && t.idx - cur.lastIdx <= 6) {
       cur.items.push(t);
       cur.lastIdx = t.idx;
       if (t.kind === 2) cur.struct++;
@@ -445,7 +553,13 @@ function findToc(text) {
     }
   }
   if (cur) runs.push(cur);
-  const ai = runs.findIndex((r) => r.items.length >= 8 && r.struct >= 3);
+  // A table of contents is front matter: the anchor run must START in the
+  // first 12% of the text. Without this, dense apparatus deep in a text
+  // (a paper's methods subheads + file-size list at ~75%) can chain into
+  // a false anchor whose span swallows real body headings.
+  const ai = runs.findIndex(
+    (r) => r.items.length >= 8 && r.struct >= 3 && r.items[0].s < text.length * 0.12
+  );
   if (ai === -1) return null;
   let endIdx = runs[ai].lastIdx;
   let ei = ai;
@@ -472,7 +586,53 @@ function findToc(text) {
     }
     if (set.size >= 6000) break;
   }
-  return { set, hashes, toks };
+  // Widen (2026-10-21): every short line inside the merged ToC span is an
+  // entry, including ones tocKind can't rate on their own ("Ezra",
+  // "Ecclesiastes", "The Proverbs") — without them those books could never
+  // be mapped to their body headings.
+  const spanFirst = runs[ai].firstIdx;
+  const spanLast = runs[ei].lastIdx;
+  scanLines(text, (s, e, idx) => {
+    if (idx < spanFirst) return;
+    if (idx > spanLast || set.size >= 6000) return false;
+    if (e - s > 0 && e - s <= 64) {
+      const line = trimLine(text, s, e);
+      if (line) {
+        const k1 = cheapKey(line);
+        if (k1.length >= 4 && !set.has(k1)) {
+          set.add(k1);
+          hashes.add(keyHash(line));
+          const ft = firstTokenLower(k1);
+          if (ft) toks.add(ft);
+        }
+      }
+    }
+  });
+  // The skip rule (accept) is position-aware: only occurrences INSIDE the
+  // anchor run's char span count as "the ToC line itself". A label can
+  // occur three times (title page, ToC, body) — occurrences outside the
+  // span are body structure and must never be skipped. The span ends at
+  // the anchor run's dense core: walking the entries, the span stops
+  // before the first line-gap that dwarfs every gap before it (a body
+  // heading standing two blank lines after a bare list — gaps of 1 —
+  // must stay outside; a uniform abstract-style list — gaps of ~5 —
+  // sets its own scale and is covered whole).
+  const anchorItems = runs[ai].items;
+  let spanEndItem = anchorItems[0];
+  let maxGapSoFar = 0;
+  for (let i2 = 1; i2 < anchorItems.length; i2++) {
+    const g = anchorItems[i2].idx - anchorItems[i2 - 1].idx;
+    if (maxGapSoFar > 0 && g > Math.max(2, 2 * maxGapSoFar)) break;
+    if (g > maxGapSoFar) maxGapSoFar = g;
+    spanEndItem = anchorItems[i2];
+  }
+  return {
+    set,
+    hashes,
+    toks,
+    startOff: anchorItems[0].s,
+    endOff: spanEndItem.e,
+  };
 }
 
 // Scripture pre-scan: distinct "Book NN Name" headers in the head.
@@ -559,6 +719,23 @@ function classify(t, s, e, text, ctx) {
   const up = c >= 65 && c <= 90;
   if (up || (c >= 97 && c <= 122)) {
     const w = firstWordLower(t);
+    if (w === 'the') {
+      // "The …" division titles — accepted only in unmistakably heading
+      // form (ALL-CAPS, Title Case, or standing alone between blanks) so
+      // wrapped body lines can never qualify. A sentence-terminated line
+      // ("The words of Job are ended.") needs caps or title case: standing
+      // alone is not enough.
+      const sentenceEnded = /[.,;:]$/.test(t);
+      if (
+        theHeadingRank(t) >= 0 &&
+        (isAllCapsLine(t) ||
+          isTitleCaseLine(t) ||
+          (!sentenceEnded && isIsolated(text, s, e)))
+      )
+        return { rank: 0, label: t };
+      // No return: ALL-CAPS "THE …" lines that aren't division titles
+      // ("THE PX SUBMISSION TOOL") still reach the caps checks below.
+    }
     if (HEADWORDS.has(w)) {
       const r = headwordRank(t, w);
       if (r >= 0) return { rank: 0, label: t };
@@ -568,11 +745,25 @@ function classify(t, s, e, text, ctx) {
       // Full strict check (gated by the cheap Set hits): "First Article",
       // "Second Chapter 3" — but not "fourth part of an hin" (body text).
       if (ORDINAL_FULL_RE.test(t)) return { rank: 1, label: t };
+      // "Third Book of Nephi" form: ordinal + Book + of + Name. Restricted
+      // to 'book' (prose is full of "first part of…") and to heading form.
+      if (
+        secondWordLower(t, w.length) === 'book' &&
+        /^\S+\s+book\s+of\s+[A-Z]/i.test(t) &&
+        (isAllCapsLine(t) || isTitleCaseLine(t) || isIsolated(text, s, e))
+      )
+        return { rank: 1, label: t };
       return null;
     }
     if (w === 'book' && BOOKHDR_RE.test(t)) return { rank: 0, label: t };
     if (up) {
-      if (isAllCapsHeading(t)) return { rank: 2, label: t };
+      if (isAllCapsHeading(t)) {
+        // Ordinal-led short caps lines are real divisions in scripture and
+        // the classics ("FOURTH NEPHI") — minor, not weak noise.
+        if (ORDINAL_WORDS.has(w) && t.split(/\s+/).length <= 6)
+          return { rank: 1, label: t };
+        return { rank: 2, label: t };
+      }
       if (isRomanChars(t) && ROMAN_RE.test(t)) return { rank: 2, label: t };
     }
     return null;
@@ -592,6 +783,93 @@ function prune(cands) {
   }
   if (arr.length > MAX_SECTIONS) return null; // caller falls back
   return arr;
+}
+
+// Printed-matter purges (2026-10-21): candidates that come from the text's
+// own printed apparatus — title pages, witness lists, printed tables of
+// contents — rather than from body structure. Two signatures:
+//  (a) Echo runs: a dense run of candidates (≥4, gaps < 500 chars — list
+//      lines have no body between them) whose labels mostly REAPPEAR as
+//      later candidates is a printed ToC (at the head, or mid-text like a
+//      New Testament list before the Gospels); the body copies stay.
+//  (b) Front clusters: in the front zone, candidates packed at list
+//      density before the first candidate that is followed by a real body
+//      gap are front matter (the Book of Mormon's title-page lines and
+//      witness names sat at 0% as "sections" before this).
+// A candidate followed by ≥1500 chars before the next one behaves like a
+// body heading and is never purged by either rule.
+function purgePrinted(cands, n) {
+  if (cands.length < 5) return cands;
+  const drop = new Set();
+  const keyOf = (x) => cheapKey(x.label);
+  const gapAfter = (k) =>
+    (k + 1 < cands.length ? cands[k + 1].off : n) - cands[k].off;
+  let i = 0;
+  while (i < cands.length) {
+    let j = i;
+    while (j + 1 < cands.length && cands[j + 1].off - cands[j].off < 500) j++;
+    const runLen = j - i + 1;
+    if (runLen >= 4) {
+      const later = new Set();
+      for (let k = j + 1; k < cands.length; k++) later.add(keyOf(cands[k]));
+      let echo = 0;
+      for (let k = i; k <= j; k++) if (later.has(keyOf(cands[k]))) echo++;
+      if (echo >= Math.ceil(runLen * 0.6)) {
+        for (let k = i; k <= j; k++) {
+          // Drop only members that are themselves list copies: their
+          // label echoes later, or they sit at bare-list density. The
+          // run's tail can be a body heading glued to the list (the Book
+          // of Mormon heading 22 chars after the last entry, followed by
+          // a chapter-summary line ~1000 chars on) — its label never
+          // echoes verbatim, and it must survive.
+          if (later.has(keyOf(cands[k])) || gapAfter(k) < 200) drop.add(k);
+        }
+      }
+    }
+    i = j + 1;
+  }
+  const zone = Math.max(6000, Math.round(n * 0.08));
+  let bodyStart = -1;
+  for (let k = 0; k < cands.length; k++) {
+    if (cands[k].off >= zone) break;
+    if (gapAfter(k) >= 1500) {
+      bodyStart = k;
+      break;
+    }
+  }
+  if (bodyStart > 0) {
+    // Drop only front-zone candidates whose label REPEATS later — a
+    // printed list copy, whatever its rank or spacing (abstract-style
+    // contents entries sit 600+ chars apart; a law's short opening
+    // sections sit ~300 apart but never repeat, and must survive).
+    // Non-repeating front matter (title-page lines, witness names) is
+    // left to the selection stage, which drops weak candidates whenever
+    // strong headings dominate.
+    const labelCounts = new Map();
+    for (const x of cands) {
+      const k = keyOf(x);
+      labelCounts.set(k, (labelCounts.get(k) || 0) + 1);
+    }
+    for (let k = 0; k < bodyStart; k++) {
+      if (labelCounts.get(keyOf(cands[k])) >= 2 && gapAfter(k) < 1500) drop.add(k);
+    }
+    // Publisher/title-page blocks: when the front zone carries a crowd
+    // of weak candidates (≥6 — a law's two or three opening section
+    // heads don't qualify), clustered weak lines before the body start
+    // are imprint and dedication junk ("PRINTED AT THE UNIVERSITY
+    // PRESS BY", "MCMIV"), however the book's structure shapes up.
+    let frontWeak = 0;
+    for (const x of cands) if (x.off < zone && x.rank === 2) frontWeak++;
+    if (frontWeak >= 6) {
+      for (let k = 0; k < bodyStart; k++) {
+        if (cands[k].rank !== 2) continue;
+        const gapPrev = k > 0 ? cands[k].off - cands[k - 1].off : Infinity;
+        if (gapAfter(k) < 500 || gapPrev < 500) drop.add(k);
+      }
+    }
+  }
+  if (drop.size === 0) return cands;
+  return cands.filter((_, idx) => !drop.has(idx));
 }
 
 /**
@@ -626,9 +904,12 @@ export function extractContents(text, title) {
     if (!force && lastOff >= 0 && off - lastOff < MIN_GAP) return false;
     label = cleanLabel(label);
     if (!label) return false;
-    // Tier-1 rule: a ToC entry's own first occurrence is the ToC line itself —
-    // skip it so the section lands on the body occurrence, never the ToC.
-    if (toc && toc.toks.has(firstTokenLower(label))) {
+    // Tier-1 rule: a ToC entry's occurrence INSIDE the ToC span is the ToC
+    // line itself — skip it (once per key) so the section lands on the
+    // body occurrence, never the ToC. Occurrences outside the span are
+    // body structure (a title can appear on the title page, in the ToC,
+    // and as a body heading — only the in-span one is the list copy).
+    if (toc && off >= toc.startOff && off <= toc.endOff && toc.toks.has(firstTokenLower(label))) {
       if (toc.hashes.has(keyHash(label))) {
         const k1 = cheapKey(label);
         if (toc.set.has(k1) && !seenTocKeys.has(k1)) {
@@ -648,13 +929,23 @@ export function extractContents(text, title) {
   // Tier 1 helper: map the text's own ToC entries to body occurrences.
   // First-token + hash prefilters (range-based, no allocation); exact
   // cheapKey verify only on hit.
-  const mapToc = (s, a, b) => {
+  const mapToc = (s, e, a, b) => {
     if (!toc || b - a > 60) return;
+    // A wrapped verse/prose fragment can exactly equal a bare-name ToC
+    // entry ("Zechariah." inside a genealogy) — fragments carry sentence
+    // punctuation; real bare-name headings don't.
+    const lastC = text.charCodeAt(b - 1);
+    if (lastC === 46 || lastC === 44 || lastC === 59 || lastC === 58) return;
     const ft = firstTokenLowerRange(text, a, b);
     if (!ft || !toc.toks.has(ft)) return;
     if (!toc.hashes.has(keyHashRange(text, a, b))) return;
     const line = text.slice(a, b);
-    if (toc.set.has(cheapKey(line))) accept(0, s, line);
+    if (!toc.set.has(cheapKey(line))) return;
+    // The matched line must stand in the body like a heading (caps, title
+    // case, or blank-surrounded) — a wrapped prose line that merely
+    // equals a set entry is not a section.
+    if (!isAllCapsLine(line) && !isTitleCaseLine(line) && !isIsolated(text, s, e)) return;
+    accept(0, s, line);
   };
 
   const stripQuotes = (t) => {
@@ -714,58 +1005,138 @@ export function extractContents(text, title) {
         if (t) {
           const r = classify(t, s, e, text, ctx);
           if (r) accept(r.rank, s, r.label, r.force, r.ns);
-          else mapToc(s, a, b);
+          else mapToc(s, e, a, b);
         }
       } else if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) {
         const w = firstWordLowerRange(text, a, b);
-        if (HEADWORDS.has(w) || ORDINAL_WORDS.has(w) || w === 'book') {
+        if (HEADWORDS.has(w) || ORDINAL_WORDS.has(w) || w === 'book' || w === 'the') {
           const t = stripQuotes(text.slice(a, b));
           if (t) {
             const r = classify(t, s, e, text, ctx);
             if (r) accept(r.rank, s, r.label, r.force, r.ns);
-            else mapToc(s, a, b);
+            else mapToc(s, e, a, b);
           }
         } else if (c >= 65 && c <= 90) {
           if (isAllCapsHeadingRange(text, a, b)) accept(2, s, text.slice(a, b));
           else if (isRomanCharsRange(text, a, b)) {
             const t = text.slice(a, b);
             if (ROMAN_RE.test(t)) accept(2, s, t);
-            else mapToc(s, a, b);
-          } else mapToc(s, a, b);
+            else mapToc(s, e, a, b);
+          } else mapToc(s, e, a, b);
         } else {
-          mapToc(s, a, b);
+          mapToc(s, e, a, b);
         }
       } else if (c === 34 || c === 39 || c === 40 || c === 91) {
         const t = stripQuotes(text.slice(a, b));
         if (t) {
           const r = classify(t, s, e, text, ctx);
           if (r) accept(r.rank, s, r.label, r.force, r.ns);
-          else mapToc(s, a, b);
+          else mapToc(s, e, a, b);
         }
       } else {
-        mapToc(s, a, b);
+        mapToc(s, e, a, b);
       }
     }
     s = e + 1;
   }
 
+  const kept = purgePrinted(cands, n);
+
+  // Bare roman-numeral candidates are chapter markers only in sequence
+  // (I, II, III, …): a chain of 3+ consecutive values is structure.
+  // Scattered roman-valid letters in scientific texts ("C", "X", "V" —
+  // symbols stranded on their own lines) are not sections.
+  const ROMAN_VAL = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 };
+  const romanVal = (s) => {
+    let v = 0;
+    for (let i = 0; i < s.length; i++) {
+      const cur = ROMAN_VAL[s[i]];
+      const nxt = ROMAN_VAL[s[i + 1]] || 0;
+      v += cur < nxt ? -cur : cur;
+    }
+    return v;
+  };
+  const isBareRoman = (x) =>
+    x.rank === 2 && /^[MDCLXVI]{1,8}$/.test(x.label) && ROMAN_RE.test(x.label);
+  const romanKeep = new Set();
+  {
+    let chain = [];
+    const flush = () => {
+      if (chain.length >= 3) for (const x of chain) romanKeep.add(x);
+      chain = [];
+    };
+    for (const x of kept) {
+      if (!isBareRoman(x)) continue;
+      if (chain.length && romanVal(x.label) === romanVal(chain[chain.length - 1].label) + 1)
+        chain.push(x);
+      else {
+        flush();
+        chain = [x];
+      }
+    }
+    flush();
+  }
+  // Speaker / running-head rule: a weak label that recurs 3+ times across
+  // a wide span is a dialogue speaker ("A LORD.", "A SOLDIER.") or a
+  // running head, never a section — real section titles don't repeat
+  // like that. (Single-word speakers like "HAMLET" never classify.)
+  const labelSpan = new Map();
+  for (const x of kept) {
+    const k = cheapKey(x.label);
+    const cur = labelSpan.get(k);
+    if (cur) {
+      cur.count++;
+      cur.last = x.off;
+    } else labelSpan.set(k, { count: 1, first: x.off, last: x.off });
+  }
+  const isRecurringWeak = (x) => {
+    if (x.rank !== 2) return false;
+    const s = labelSpan.get(cheapKey(x.label));
+    return s && s.count >= 3 && s.last - s.first > n * 0.1;
+  };
+
+  const kept2 = kept.filter(
+    (x) => !isRecurringWeak(x) && (!isBareRoman(x) || romanKeep.has(x))
+  );
   let picked = null;
   let rank0 = 0;
   let numsec = 0;
   let weakCount = 0;
-  for (const x of cands) {
+  let weakReal = 0; // weak with a real-word label (≥4 chars) — single-char
+  // roman/symbol junk ("C", "L", "X" in a science paper) doesn't count
+  // when judging whether strong headings dominate.
+  for (const x of kept2) {
     if (x.rank === 0) rank0++;
-    else if (x.rank === 2) weakCount++;
+    else if (x.rank === 2) {
+      weakCount++;
+      if (x.label.length >= 4) weakReal++;
+    }
     if (x.ns) numsec++;
   }
   // A flood of dotted-numbered lines is a numbered list (dictionary senses,
   // memo paragraphs), not chapters — drop them all.
-  let pool = numsec > 60 ? cands.filter((x) => !x.ns) : cands;
-  if (rank0 >= 2) picked = prune(pool.filter((x) => x.rank !== 2));
+  let pool = numsec > 60 ? kept2.filter((x) => !x.ns) : kept2;
+  // Drop weak candidates only when strong headings DOMINATE — in mixed
+  // documents (laws, papers) the ALL-CAPS lines ARE the structure, and a
+  // stray pair of keyword headings must not nuke them. Exception: a weak
+  // FLOOD (>60) alongside a solid strong skeleton (≥10) is granularity
+  // noise (chapter subheads, running heads) — drop it.
+  if (
+    rank0 >= 2 &&
+    (rank0 >= weakReal || (weakReal > 60 && rank0 >= 10))
+  )
+    picked = prune(pool.filter((x) => x.rank !== 2));
   // Weak-only floods (>60) are noise (OCR fragments, form labels), not
   // structure — fall back instead of emitting hundreds of junk rows.
   else if (rank0 === 0 && weakCount > 60) picked = null;
   else if (pool.length >= 6) picked = prune(pool);
+
+  // Coverage rule: a handful of "sections" huddled in the first 5% is
+  // front matter that matched heading forms, not navigation (a one-tale
+  // volume whose only matches are its title lines). The delimiter /
+  // equal-parts fallback below serves such texts better.
+  if (picked && picked.length <= 5 && picked[picked.length - 1].off < n * 0.05)
+    picked = null;
 
   if (!picked || picked.length === 0) {
     // Tier 3: repeated structural delimiters separating substantial parts.
@@ -793,8 +1164,13 @@ export function extractContents(text, title) {
   }
 
   const sections = [{ label: headLabel, offset: 0, percent: 0 }];
+  const headKey = cheapKey(headLabel);
   for (const x of picked) {
     if (x.off <= 0) continue; // first section is always the title
+    // A title-page line repeating the entry's own title in the first 1%
+    // is the title page, not a section (the same label deep in the text —
+    // "THE BOOK OF MORMON" the book within the Book of Mormon — stays).
+    if (x.off < n * 0.01 && cheapKey(x.label) === headKey) continue;
     sections.push({ label: x.label, offset: x.off, percent: Math.round((100 * x.off) / n) });
   }
   return sections;

@@ -13,7 +13,9 @@ import {
   normText,
   queryTokens,
   pinsForQuery,
-  scoreArtifact,
+  scoreArtifactPre,
+  secondaryMaskFor,
+  querySecondaryMask,
 } from "./lib/search-rank.js";
 import { site } from "./content/site.js";
 import { expeditions, expeditionsArchive } from "./content/expeditions.js";
@@ -562,16 +564,21 @@ function towerHaystack(a, subLabel) {
 let towerDataCache = null;
 let towerDataFor = null;
 
-// Stable bottom-up merge sort over index positions, yielding to the browser
-// between row ranges. The comparator is identical to the old
-// Array.prototype.sort with localeCompare (verified byte-identical order on
-// the full catalog, including tie order), so the row sequence is unchanged —
-// only the scheduling differs: no single block ever exceeds ~120ms, so the
-// boot animation never freezes.
-async function buildTitleOrder(artifacts, isCancelled) {
-  const n = artifacts.length;
-  const keys = new Array(n);
-  for (let i = 0; i < n; i++) keys[i] = artifacts[i].title || "";
+// One shared collator for every catalog sort. Intl.Collator.compare is
+// measurably faster than String.localeCompare per call (notably on
+// JavaScriptCore), and an explicit "en-US" locale makes the order
+// deterministic instead of depending on the visitor's default locale.
+// Verified on the full catalog: the produced title and creator orders are
+// identical to the localeCompare orders they replaced.
+const TITLE_COLLATOR = new Intl.Collator("en-US");
+
+// Stable bottom-up merge sort over index positions into a keys array,
+// yielding to the browser between row ranges. No single block ever
+// exceeds ~120ms, so the boot animation never freezes. Stability matches
+// Array.prototype.sort, so tie order is the catalog's own order, exactly
+// as the sorts this replaced.
+async function buildOrder(keys, cmp, isCancelled) {
+  const n = keys.length;
   const idx = new Array(n);
   for (let i = 0; i < n; i++) idx[i] = i;
   const tmp = new Array(n);
@@ -586,7 +593,7 @@ async function buildTitleOrder(artifacts, isCancelled) {
       let i = lo, j = mid, k = lo;
       while (i < mid && j < hi) {
         tmp[k++] =
-          keys[idx[i]].localeCompare(keys[idx[j]]) <= 0 ? idx[i++] : idx[j++];
+          cmp(keys[idx[i]], keys[idx[j]]) <= 0 ? idx[i++] : idx[j++];
       }
       while (i < mid) tmp[k++] = idx[i++];
       while (j < hi) tmp[k++] = idx[j++];
@@ -601,31 +608,54 @@ async function buildTitleOrder(artifacts, isCancelled) {
   return idx;
 }
 
-// Chunked haystack build: 20k records per macrotask, so filtering data
-// never blocks the thread either. Output is identical to the old
-// artifacts.map(towerHaystack).
-async function buildHaystacks(artifacts, bucketKeys, isCancelled) {
-  const out = new Array(artifacts.length);
-  for (let from = 0; from < artifacts.length; from += 20000) {
+// Chunked search-data build: 20k records per macrotask, so filtering data
+// never blocks the thread. One pass produces everything a keystroke
+// needs, all aligned with `artifacts` by index:
+//   haystacks    — the normalized match text (as towerHaystack builds)
+//   normTitles / normCreators / normColls — the normalized fields the
+//     relevance scorer used to recompute per record per query
+//   secMasks     — per-record secondary-marker bitmask for the scorer
+//   volFlags     — per-record "title carries Vol./Part N" flag
+async function buildSearchData(artifacts, bucketKeys, isCancelled) {
+  const n = artifacts.length;
+  const haystacks = new Array(n);
+  const normTitles = new Array(n);
+  const normCreators = new Array(n);
+  const normColls = new Array(n);
+  const secMasks = new Uint32Array(n);
+  const volFlags = new Uint8Array(n);
+  for (let from = 0; from < n; from += 20000) {
     if (isCancelled()) return null;
-    const end = Math.min(from + 20000, artifacts.length);
+    const end = Math.min(from + 20000, n);
     for (let i = from; i < end; i++) {
       const a = artifacts[i];
       const bk = bucketKeys[i];
       const colon = bk.indexOf(":");
-      out[i] = towerHaystack(
-        a,
-        colon < 0 ? "" : towerSubLabel(a.collection, bk.slice(colon + 1))
-      );
+      const subLabel =
+        colon < 0 ? "" : towerSubLabel(a.collection, bk.slice(colon + 1));
+      haystacks[i] = towerHaystack(a, subLabel);
+      const T = normText(a.title || "");
+      normTitles[i] = T;
+      normCreators[i] = normText(a.creator || "");
+      normColls[i] = normText((a.collection || "") + " " + subLabel);
+      secMasks[i] = secondaryMaskFor(T);
+      volFlags[i] = /\b(vol|volume|part) \d+/.test(T) ? 1 : 0;
     }
     await new Promise((r) => setTimeout(r, 0));
   }
-  return out;
+  return { haystacks, normTitles, normCreators, normColls, secMasks, volFlags };
 }
 
-// Full derivation for one catalog array identity. Resolves to the towerData
-// object, or null if cancelled/superseded before finishing.
-async function deriveTowerData(artifacts, isCancelled) {
+// Full derivation for one catalog array identity, in two phases
+// (2026-10-21 speed pass). Phase 1 builds the search data and publishes
+// it through onPhase the moment it is ready — the catalog is fully
+// searchable and browsable (in catalog order) at that point. Phase 2
+// builds the sort orders in the background and the resolved object
+// carries them; sorting no longer gates searching, which it did when a
+// 300k+ record derivation had to finish before the first keystroke
+// could be answered. Resolves to the final towerData object, or null if
+// cancelled/superseded before finishing.
+async function deriveTowerData(artifacts, isCancelled, onPhase) {
   if (towerDataCache && towerDataFor === artifacts) return towerDataCache;
   const counts = {};
   for (let i = 0; i < artifacts.length; i++) {
@@ -644,18 +674,16 @@ async function deriveTowerData(artifacts, isCancelled) {
     bucketKeys[i] = bk;
     subCounts[bk] = (subCounts[bk] || 0) + 1;
   }
-  const titleOrder = await buildTitleOrder(artifacts, isCancelled);
-  if (!titleOrder || isCancelled()) return null;
-  const haystacks = await buildHaystacks(artifacts, bucketKeys, isCancelled);
-  if (!haystacks || isCancelled()) return null;
+  const search = await buildSearchData(artifacts, bucketKeys, isCancelled);
+  if (!search || isCancelled()) return null;
   // artifact_id -> index, for resolving curated search pins (built once
   // here so a keystroke never pays for it).
   const idIndex = new Map();
   for (let i = 0; i < artifacts.length; i++) {
     idIndex.set(artifacts[i].artifact_id, i);
   }
-  const data = {
-    haystacks,
+  const base = {
+    ...search,
     idIndex,
     counts,
     subCounts,
@@ -663,20 +691,38 @@ async function deriveTowerData(artifacts, isCancelled) {
     collections: Object.keys(counts).sort(
       (a, b) => counts[b] - counts[a] || (a < b ? -1 : a > b ? 1 : 0)
     ),
+    order: null,
+  };
+  if (onPhase) onPhase(base);
+  // Phase 2: the sort orders. All four go through the same chunked merge
+  // sort, so none of them is a single blocking task (the creator sort
+  // used to be one synchronous Array.sort over the whole catalog).
+  const byCollator = (x, y) => TITLE_COLLATOR.compare(x, y);
+  const titleOrder = await buildOrder(
+    artifacts.map((a) => a.title || ""),
+    byCollator,
+    isCancelled
+  );
+  if (!titleOrder || isCancelled()) return null;
+  const creatorOrder = await buildOrder(
+    artifacts.map((a) => a.creator || ""),
+    byCollator,
+    isCancelled
+  );
+  if (!creatorOrder || isCancelled()) return null;
+  const years = artifacts.map((a) => a.year || 0);
+  const yearAsc = await buildOrder(years, (x, y) => x - y, isCancelled);
+  if (!yearAsc || isCancelled()) return null;
+  const yearDesc = await buildOrder(years, (x, y) => y - x, isCancelled);
+  if (!yearDesc || isCancelled()) return null;
+  const data = {
+    ...base,
     order: {
       "title-asc": titleOrder,
       "title-desc": titleOrder.slice().reverse(),
-      "creator-asc": artifacts
-        .map((_, i) => i)
-        .sort((p, q) =>
-          (artifacts[p].creator || "").localeCompare(artifacts[q].creator || "")
-        ),
-      "year-desc": artifacts
-        .map((_, i) => i)
-        .sort((p, q) => (artifacts[q].year || 0) - (artifacts[p].year || 0)),
-      "year-asc": artifacts
-        .map((_, i) => i)
-        .sort((p, q) => (artifacts[p].year || 0) - (artifacts[q].year || 0)),
+      "creator-asc": creatorOrder,
+      "year-desc": yearDesc,
+      "year-asc": yearAsc,
     },
   };
   towerDataCache = data;
@@ -715,7 +761,16 @@ function TowerLibrarySection({ go, onReady }) {
       return;
     }
     let cancelled = false;
-    deriveTowerData(artifacts, () => cancelled).then(
+    deriveTowerData(
+      artifacts,
+      () => cancelled,
+      (phase) => {
+        // Phase 1 (search data) is live the moment it lands — the sort
+        // orders still building in the background must not hold search
+        // hostage.
+        if (!cancelled) setTowerData(phase);
+      }
+    ).then(
       (data) => {
         if (cancelled) return;
         if (data) setTowerData(data);
@@ -794,8 +849,17 @@ function TowerLibrarySection({ go, onReady }) {
     };
   }, [deferredQuery]);
   const q = listQuery;
+  // While the sort orders are still building (phase 1 data only), browse
+  // in plain catalog order — the rows and the search work immediately,
+  // and the chosen sort snaps in when its order lands.
+  const identityOrder = useMemo(
+    () => (artifacts ? artifacts.map((_, i) => i) : []),
+    [artifacts]
+  );
   const towerOrder = towerData
-    ? towerData.order[sortId] || towerData.order["title-asc"]
+    ? towerData.order
+      ? towerData.order[sortId] || towerData.order["title-asc"]
+      : identityOrder
     : [];
   // Rank of each matching artifact in the current filter/sort (1-based), as
   // a Map from artifact_id. LibraryResults mounts only the matching rows,
@@ -822,13 +886,19 @@ function TowerLibrarySection({ go, onReady }) {
     };
     const qNorm = q ? normText(q) : "";
     if (!qNorm) {
-      // Browsing: the chosen sort order governs, as before.
+      // Browsing: the chosen sort order governs, as before. Only the
+      // first `rowBudget` ranks are materialized into the map (they are
+      // the only rows that can mount); the full match count comes from
+      // a counting pass, so a filter/sort change costs a light scan
+      // instead of a catalog-sized Map build.
+      let count = 0;
       for (let k = 0; k < towerOrder.length; k++) {
         const i = towerOrder[k];
         if (!passesBucket(i)) continue;
-        map.set(artifacts[i].artifact_id, map.size + 1);
+        count++;
+        if (map.size < rowBudget) map.set(artifacts[i].artifact_id, count);
       }
-      return { rankMap: map, matchCount: map.size, rankedIndices: null };
+      return { rankMap: map, matchCount: count, rankedIndices: null };
     }
     // Searching (2026-10-20 relevance overhaul, lib/search-rank.js):
     // token-AND matching over the normalized haystacks, field-weighted
@@ -837,31 +907,44 @@ function TowerLibrarySection({ go, onReady }) {
     // dropdown governs browsing only; while a query is active the best
     // answer leads.
     const tokens = queryTokens(qNorm);
+    // Rarest first: longer tokens are usually the most selective, so
+    // checking them first rejects most records on the first includes().
+    const scanTokens =
+      tokens.length > 1
+        ? tokens.slice().sort((a, b) => b.length - a.length)
+        : tokens;
+    const qMask = querySecondaryMask(qNorm);
     const scored = [];
     // Bound by the haystacks length, not artifacts.length: during the
     // bootstrap->full catalog upgrade the two can briefly disagree, and
     // the derived arrays are the internally consistent ones.
     const N = Math.min(artifacts.length, towerData.haystacks.length);
+    const NT = towerData.normTitles;
     for (let i = 0; i < N; i++) {
       if (!passesBucket(i)) continue;
       const hay = towerData.haystacks[i];
       let ok = true;
-      for (const t of tokens) {
+      for (const t of scanTokens) {
         if (!hay.includes(t)) { ok = false; break; }
       }
       if (!ok) continue;
-      const bk = towerData.bucketKeys[i];
-      const colon = bk.indexOf(":");
-      const subLabel =
-        colon < 0
-          ? ""
-          : towerSubLabel(artifacts[i].collection, bk.slice(colon + 1));
-      scored.push({ i, s: scoreArtifact(artifacts[i], subLabel, qNorm, tokens) });
+      scored.push({
+        i,
+        s: scoreArtifactPre(
+          NT[i],
+          towerData.normCreators[i],
+          towerData.normColls[i],
+          towerData.secMasks[i],
+          towerData.volFlags[i],
+          qNorm,
+          tokens,
+          qMask
+        ),
+      });
     }
     scored.sort(
       (x, y) =>
-        y.s - x.s ||
-        (artifacts[x.i].title || "").localeCompare(artifacts[y.i].title || "")
+        y.s - x.s || (NT[x.i] < NT[y.i] ? -1 : NT[x.i] > NT[y.i] ? 1 : 0)
     );
     const seen = new Set();
     const ordered = [];
@@ -881,9 +964,12 @@ function TowerLibrarySection({ go, onReady }) {
         ordered.push(i);
       }
     }
-    for (const i of ordered) map.set(artifacts[i].artifact_id, map.size + 1);
-    return { rankMap: map, matchCount: map.size, rankedIndices: ordered };
-  }, [q, bucketFilter, sortId, towerOrder, artifacts, towerData]);
+    // Only the first page of ranks is materialized (the only rows that
+    // can mount); the count is the full ordered length.
+    const cap = Math.min(ordered.length, rowBudget);
+    for (let k = 0; k < cap; k++) map.set(artifacts[ordered[k]].artifact_id, k + 1);
+    return { rankMap: map, matchCount: ordered.length, rankedIndices: ordered };
+  }, [q, bucketFilter, sortId, towerOrder, artifacts, towerData, rowBudget]);
   // Report ready exactly once when the section settles: the first 50 rows
   // have painted, or the error UI is up. The double rAF waits for paint;
   // the timeout fallback covers background tabs (and any dropped frame
