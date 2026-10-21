@@ -328,9 +328,14 @@ function App() {
     towerBootStarted.current = Date.now();
     // Prefetch the bootstrap chunk now (43KB, instant) — the route awaits
     // the same cached promise, so this head start is usually the whole fetch.
-    // The full index loads in the background after the bootstrap paints.
-    loadBootstrap().catch(() => {});
-    loadCatalog().catch(() => {});
+    // The full index loads only AFTER the bootstrap lands (2026-10-21 load
+    // fix): starting the multi-MB index download at the same moment starved
+    // the bootstrap that gates first paint, and its JSON.parse blocked the
+    // main thread the bootstrap derivation needed. The route's own effect
+    // also starts the index post-bootstrap; both share the cached promise.
+    loadBootstrap()
+      .catch(() => {})
+      .then(() => loadCatalog().catch(() => {}));
     const t = setTimeout(() => {
       if (isCatalogPending()) {
         const t2 = setTimeout(dismissTowerBoot, 4000);
@@ -631,36 +636,22 @@ function App() {
         {path.startsWith("/services/") && (
           <ServiceDetail go={go} path={path} />
         )}
-        {/* Tower of Babel family only: the typography vortex environment.
-            Exact ThreeUI source, configured usage (mode="light", speed 0.85,
-            ringGrowth 1.30, opacity 0.81, dissolveRadius 1.50,
-            particleAmount 1.00, suctionDuration 1100) with a site phrase.
-            Fixed behind the page content; pointer interactivity is parked
-            because the page sits above it. */}
-        {(path === "/tower-of-babel" ||
-          path === "/tower-of-babel/api" ||
-          path === "/tower-of-babel/library" ||
+        {/* Typography vortex environment — the agent-resources and
+            suggest pages only. The Tower landing/library page itself no
+            longer carries it (2026-10-21 revamp): the page is a paper
+            library surface now, and the canvas's init cost was part of
+            that page's load time. Exact ThreeUI source, configured usage
+            (mode="light", speed 0.85, ringGrowth 1.30, opacity 0.81,
+            dissolveRadius 1.50, particleAmount 1.00, suctionDuration
+            1100) with a site phrase. Fixed behind the page content;
+            pointer interactivity is parked because the page sits above. */}
+        {(path === "/tower-of-babel/api" ||
           path === "/tower-of-babel/library/suggest") && (
-          <div
-            className={
-              path === "/tower-of-babel" || path === "/tower-of-babel/library"
-                ? "tower-vortex-layer tower-vortex-layer--dark"
-                : "tower-vortex-layer"
-            }
-            aria-hidden="true"
-          >
+          <div className="tower-vortex-layer" aria-hidden="true">
             <Suspense fallback={null}>
               <TypographyVortexCanvas
-                key={
-                  path === "/tower-of-babel" || path === "/tower-of-babel/library"
-                    ? "vortex-dark"
-                    : "vortex-light"
-                }
-                mode={
-                  path === "/tower-of-babel" || path === "/tower-of-babel/library"
-                    ? "dark"
-                    : "light"
-                }
+                key="vortex-light"
+                mode="light"
                 phrase="TOWER OF BABEL / ANTARCTIC LABS / "
                 speed={0.85}
                 ringGrowth={1.30}
@@ -668,14 +659,6 @@ function App() {
                 dissolveRadius={1.50}
                 particleAmount={1.00}
                 suctionDuration={1100}
-                // The library index is the heaviest page on the site (3,448
-                // rows over a live canvas). Freeze the backdrop to one static
-                // frame here: every animated frame was forcing the
-                // frosted-glass rows above it to repaint their backdrop blur,
-                // which is what made scrolling and typing feel heavy. The
-                // option is read live, so navigating away resumes motion with
-                // no remount and no blank gap.
-                frozen={path === "/tower-of-babel/library"}
               />
             </Suspense>
           </div>

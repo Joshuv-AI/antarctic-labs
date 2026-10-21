@@ -44,7 +44,11 @@ import {
   towerBucketKey,
   towerSubLabel,
 } from "./lib/tower-taxonomy.js";
-import { coverCandidates, coverTone } from "./lib/tower-covers.js";
+import {
+  coverCandidates,
+  coverTone,
+  lookupOpenLibraryCover,
+} from "./lib/tower-covers.js";
 import {
   STACKS,
   TRADITIONS,
@@ -654,15 +658,17 @@ async function buildSearchData(artifacts, bucketKeys, isCancelled) {
   return { haystacks, normTitles, normCreators, normColls, secMasks, volFlags };
 }
 
-// Full derivation for one catalog array identity, in two phases
-// (2026-10-21 speed pass). Phase 1 builds the search data and publishes
-// it through onPhase the moment it is ready — the catalog is fully
-// searchable and browsable (in catalog order) at that point. Phase 2
-// builds the sort orders in the background and the resolved object
-// carries them; sorting no longer gates searching, which it did when a
-// 300k+ record derivation had to finish before the first keystroke
-// could be answered. Resolves to the final towerData object, or null if
-// cancelled/superseded before finishing.
+// Full derivation for one catalog array identity, in three phases
+// (2026-10-21 speed pass; phase 0 added in the load fix later that day).
+// Phase 0 publishes the cheap browse data (counts, bucket keys, id index)
+// the moment those loops finish — the page paints and browses off it.
+// Phase 1 builds the search data and publishes it through onPhase the
+// moment it is ready — the catalog is fully searchable at that point.
+// Phase 2 builds the sort orders in the background and the resolved
+// object carries them; sorting no longer gates searching, which it did
+// when a 300k+ record derivation had to finish before the first
+// keystroke could be answered. Resolves to the final towerData object,
+// or null if cancelled/superseded before finishing.
 async function deriveTowerData(artifacts, isCancelled, onPhase) {
   if (towerDataCache && towerDataFor === artifacts) return towerDataCache;
   const counts = {};
@@ -682,23 +688,46 @@ async function deriveTowerData(artifacts, isCancelled, onPhase) {
     bucketKeys[i] = bk;
     subCounts[bk] = (subCounts[bk] || 0) + 1;
   }
-  const search = await buildSearchData(artifacts, bucketKeys, isCancelled);
-  if (!search || isCancelled()) return null;
   // artifact_id -> index, for resolving curated search pins (built once
   // here so a keystroke never pays for it).
   const idIndex = new Map();
   for (let i = 0; i < artifacts.length; i++) {
     idIndex.set(artifacts[i].artifact_id, i);
   }
+  const collections = Object.keys(counts).sort(
+    (a, b) => counts[b] - counts[a] || (a < b ? -1 : a > b ? 1 : 0)
+  );
+  // Phase 0 (2026-10-21 load fix): everything above is two cheap loops —
+  // publish it immediately. The page paints, browses (bucket filter +
+  // catalog order), renders the shelves, and the boot loader dismisses
+  // off this alone; the expensive search-data build below no longer
+  // gates first paint. Search activates when phase 1 lands (the results
+  // memo treats a query as browsing while haystacks is null).
+  if (onPhase) {
+    onPhase({
+      counts,
+      subCounts,
+      bucketKeys,
+      collections,
+      idIndex,
+      order: null,
+      haystacks: null,
+      normTitles: null,
+      normCreators: null,
+      normColls: null,
+      secMasks: null,
+      volFlags: null,
+    });
+  }
+  const search = await buildSearchData(artifacts, bucketKeys, isCancelled);
+  if (!search || isCancelled()) return null;
   const base = {
     ...search,
     idIndex,
     counts,
     subCounts,
     bucketKeys,
-    collections: Object.keys(counts).sort(
-      (a, b) => counts[b] - counts[a] || (a < b ? -1 : a > b ? 1 : 0)
-    ),
+    collections,
     order: null,
   };
   if (onPhase) onPhase(base);
@@ -751,19 +780,33 @@ const TOWER_ROWS_PER_PAGE = 50;
 // every browse action drives the section's existing bucket filter.
 
 // A record's cover: real image candidates in order (lib/tower-covers.js),
-// generated typographic tile when none load — never a broken image.
+// then an Open Library lookup for books the deterministic chain can't
+// reach, and the generated typographic tile last — never a broken image.
 function TowerCover({ a }) {
   const candidates = useMemo(() => coverCandidates(a), [a]);
   const [step, setStep] = useState(0);
+  const [olUrl, setOlUrl] = useState(null);
   useEffect(() => {
     setStep(0);
+    setOlUrl(null);
   }, [a]);
+  useEffect(() => {
+    if (!a || candidates.length > 0) return;
+    let live = true;
+    lookupOpenLibraryCover(a).then((u) => {
+      if (live && u) setOlUrl(u);
+    });
+    return () => {
+      live = false;
+    };
+  }, [a, candidates.length]);
   if (!a) return null;
-  if (step < candidates.length) {
+  const all = olUrl ? [...candidates, olUrl] : candidates;
+  if (step < all.length) {
     return (
       <img
         className="tower-cover-img"
-        src={candidates[step]}
+        src={all[step]}
         alt=""
         loading="lazy"
         decoding="async"
@@ -1005,9 +1048,16 @@ function TowerDiscovery({ artifacts, towerData, go, onBrowse }) {
 }
 
 function TowerLibrarySection({ go, onReady }) {
-  // Warm the shard manifest in the background (2026-10-18): entry pages need
-  // it for getFullArtifact, so start the 3.9MB download now while the user browses.
-  useEffect(() => { warmShardManifest(); }, []);
+  // Warm the shard manifest in the background for entry pages — deferred
+  // well past first paint (2026-10-21 load fix): the manifest fetch
+  // competed with the catalog on the critical path, and nothing on THIS
+  // page needs it. Entry pages fetch it on demand if they arrive first.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      warmShardManifest();
+    }, 6000);
+    return () => clearTimeout(t);
+  }, []);
   // The catalog loads asynchronously (see ./lib/catalog.js). While it is
   // null the Tower boot loader covers the screen, so rendering nothing is
   // correct — never a half-built page.
@@ -1189,8 +1239,10 @@ function TowerLibrarySection({ go, onReady }) {
       return !bf || bk === bf || (bfLane && bk.indexOf(bfLane) === 0);
     };
     const qNorm = q ? normText(q) : "";
-    if (!qNorm) {
-      // Browsing: the chosen sort order governs, as before. Only the
+    if (!qNorm || !towerData.haystacks) {
+      // Browsing: the chosen sort order governs, as before. (Also the
+      // phase-0 path: until the search data lands, a typed query browses
+      // in catalog order rather than blocking on the indexing.) Only the
       // first `rowBudget` ranks are materialized into the map (they are
       // the only rows that can mount); the full match count comes from
       // a counting pass, so a filter/sort change costs a light scan
@@ -1362,6 +1414,11 @@ function TowerLibrarySection({ go, onReady }) {
               {!fullIndexReady && (
                 <p className="tower-index-status" aria-live="polite">
                   Loading full catalog…
+                </p>
+              )}
+              {fullIndexReady && towerData && !towerData.haystacks && (
+                <p className="tower-index-status" aria-live="polite">
+                  Indexing the catalog for search…
                 </p>
               )}
             </div>
