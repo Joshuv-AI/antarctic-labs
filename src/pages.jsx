@@ -1605,7 +1605,21 @@ export function LibraryArtifact({ go, params, onReady }) {
           </p>
         )}
         {(descOverride || artifact.description) && (
-          <p className="tower-entry-lede">{descOverride || artifact.description}</p>
+          <details className="tower-desc">
+            <summary>
+              <span className="section-index">DESCRIPTION</span>
+              <span className="tower-about-chevron" aria-hidden="true">▾</span>
+            </summary>
+            <div className="tower-desc-body">
+              {(descOverride || artifact.description)
+                .split(/\n\s*\n/)
+                .map((p) => p.trim())
+                .filter(Boolean)
+                .map((p, i) => (
+                  <p className="tower-entry-lede" key={i}>{p}</p>
+                ))}
+            </div>
+          </details>
         )}
         <div className="tower-entry-actions">
           {artifact.source_url && (
