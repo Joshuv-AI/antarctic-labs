@@ -260,10 +260,9 @@ const Transmission = lazyPage("Transmission");
 const About = lazyPage("About");
 const ServiceDetail = lazyPage("ServiceDetail");
 const TowerApiPage = lazyPage("TowerApiPage");
-// FaqBlock is shared: the homepage renders it below the fold, so it lazy
-// loads with its own tight Suspense in Home — the hero never waits on it.
+// FaqBlock stays available from the shared lazy pages chunk for the
+// pages that still render one; the homepage no longer renders an FAQ.
 const FaqBlock = lazyPage("FaqBlock");
-import { siteFaqs } from "./content/faq.js";
 gsap.registerPlugin(ScrollTrigger);
 // iOS Safari perf (2026-10-01, researched): the address bar showing/hiding
 // resizes the viewport, which triggers ScrollTrigger.refresh() and stalls
@@ -1004,12 +1003,12 @@ function HomeStats() {
     io.observe(el);
     return () => io.disconnect();
   }, []);
-  // Static figures (2026-10-21): the Projects archive was retired and
-  // its dataset deleted with it; the band keeps its numbers as literals.
+  // Static figures for the firm as it stands: three partners,
+  // two countries, zero clients. The firm takes no client work.
   const stats = [
-    [7, "PROJECTS BUILT"],
-    [3, "ACTIVE NOW"],
-    [5, "DISCIPLINES"],
+    [3, "PARTNERS"],
+    [2, "COUNTRIES"],
+    [0, "CLIENTS"],
   ];
   return (
     <section
@@ -1384,12 +1383,32 @@ function Home({ go }) {
           ))}
         </div>
       </section>
-      {/* FaqBlock rides the shared lazy pages chunk; its own Suspense keeps
-          the hero painting immediately on cold load — the FAQ section is
-          below the fold and fills in when the chunk arrives. */}
-      <Suspense fallback={null}>
-        <FaqBlock index="QUESTIONS" faqs={siteFaqs} />
-      </Suspense>
+      <section id="firm" className="copy-block section reveal">
+        <span className="section-index">THE FIRM</span>
+        <div>
+          <p className="display-copy">
+            Small, private, and deliberate.
+          </p>
+          <p className="body-copy">
+            The firm is three partners. Andrew leads engineering and the hardware build. Jay runs the ground operation in the Philippines, including registration and compliance. Joshua runs logistics, operations, accounting, and oversight.
+          </p>
+          <p className="body-copy">
+            Where things stand: the Philippine company is being registered, the office is selected, and the hardware build runs in phases. Trading starts on paper, then with limited capital.
+          </p>
+          <p className="body-copy">
+            We are not hiring and we do not take clients. Developers or traders with something real to bring, and business inquiries, go through one door.
+          </p>
+          <button type="button"
+            className="text-link"
+            onClick={() => go("/contact")}
+          >
+            CONTACT
+            <span aria-hidden="true">
+              ↗
+            </span>
+          </button>
+        </div>
+      </section>
     </main>
   );
 }

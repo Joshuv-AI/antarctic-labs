@@ -127,7 +127,6 @@ const ORG_NAME = site.brand;
 // Optional chaining throughout — content lands in phases, and a missing
 // array must never break meta application.
 function faqsForPath(path) {
-  if (path === "/") return site.faqs;
   if (path === "/government-contracting") return government.faqs;
   if (path === "/tower-of-babel/library") return towerOfBabel.library.faqs;
   if (path === "/tower-of-babel/api") return towerOfBabel.agentFaqs;
@@ -239,38 +238,22 @@ function buildBaseJsonLd(path, canonicalHref) {
 }
 
 function homeJsonLd(url) {
-  // Homepage emits an @graph: the Organization, the WebSite, and a
-  // ProfessionalService node describing the freelance services offered.
-  // The service node is the structured-data counterpart of the
-  // hire-intent keyword targeting (freelance AI developer, n8n expert…).
+  // Homepage emits an @graph: the Organization and the WebSite.
+  // The firm offers no services, so there is no service node.
   return {
     "@context": "https://schema.org",
     "@graph": [
-      organizationJsonLd(url),
+      {
+        ...organizationJsonLd(url),
+        description:
+          "Antarctic Labs is a proprietary trading and computing firm building its own data center in the Philippines. Our capital, our hardware, our systems. Not for hire.",
+      },
       {
         "@type": "WebSite",
         "@id": SITE_URL + "/#website",
         url: SITE_URL + "/",
         name: ORG_NAME,
         publisher: { "@id": SITE_URL + "/#organization" },
-      },
-      {
-        "@type": "ProfessionalService",
-        "@id": SITE_URL + "/#service",
-        name: "Antarctic Labs — Freelance AI Automation & Web Development",
-        url: SITE_URL + "/",
-        provider: { "@id": SITE_URL + "/#organization" },
-        areaServed: "Worldwide",
-        description: site.description,
-        serviceType: [
-          "AI automation",
-          "n8n workflow automation",
-          "AI agent development",
-          "Web development",
-          "Web scraping & data extraction",
-          "Lead generation",
-          "API & systems integration",
-        ],
       },
     ],
   };
@@ -303,9 +286,9 @@ function personJsonLd(url) {
     name: operator.name,
     url: url,
     worksFor: { "@id": SITE_URL + "/#organization" },
-    jobTitle: "Founder",
+    jobTitle: "Partner",
     description: operator.positioning,
-    knowsAbout: ["AI automation", "Web scraping & data", "Lead-generation systems", "Web development"],
+    knowsAbout: ["Proprietary trading", "Computing infrastructure", "Trading systems", "Business operations"],
     homeLocation: {
       "@type": "Place",
       name: operator.location,

@@ -21,63 +21,29 @@ export const site = {
     title: ["READY TO WORK", "ON YOUR", "PROJECT."],
     sub: "AI automation, websites, and data systems — designed and built by one person you talk to directly. Send the details, get a working solution back.",
     cta: { label: "GET A FREE QUOTE", to: "/contact" },
-    signal: "Have a project? Let's get it built.",
-    body: "Antarctic Labs is a freelance studio for practical technology: automation that replaces manual work, websites that ship, data you can actually use. Real projects, built, tested, and delivered ready to work.",
-    method: "Scope it → Build it → Ship it.",
+    signal: "Antarctic Labs is not for hire.",
+    body: "Antarctic Labs is a proprietary trading and computing firm. We build our own infrastructure, run our own systems, and trade our own capital. Nothing here is a service, and nothing is built for clients.",
+    method: "Our capital. Our hardware. Our code.",
   },
 
   // Territory list rendered on the homepage below the stats —
-  // the full map of what the lab can do for clients.
+  // what the firm itself does. No services, no client links.
   territory: [
     [
-      "AI AGENTS & AUTOMATION",
-      "AI workflows and agents that take repetitive work off your team's plate.",
-      "/services/ai-agents",
+      "PROPRIETARY TRADING",
+      "Trading algorithms developed by the partners, run on our own infrastructure. Strategies are tested on paper and with limited capital before they are trusted with more.",
     ],
     [
-      "WEB DESIGN & DEVELOPMENT",
-      "Fast, modern websites and web applications — designed, built, and shipped.",
-      "/services/web-development",
+      "OWNED INFRASTRUCTURE",
+      "A small data center of our own in the Philippines, built around hardware we own and operate. Power, cooling, and backup are designed in from the start.",
     ],
     [
-      "BUSINESS AUTOMATION",
-      "n8n, Make, and Zapier systems for lead handling, notifications, data processing, and business processes.",
-      "/services/n8n-workflows",
+      "NETWORK POSITION",
+      "A Philippine base with a direct connection toward Hong Kong. Routes are benchmarked against the actual exchanges and endpoints we use, never assumed from a cable map.",
     ],
     [
-      "WEB SCRAPING & DATA",
-      "Clean, structured data from public sources — delivered in Excel or CSV.",
-      "/services/web-scraping",
-    ],
-    [
-      "LEAD GENERATION",
-      "Targeted B2B lists with verified contacts, built to your spec.",
-      "/services/lead-generation",
-    ],
-    [
-      "DATA CLEANING & SPREADSHEETS",
-      "Messy files turned into clean, usable datasets.",
-    ],
-    [
-      "WORDPRESS & CMS",
-      "Page builds, fixes, and clean setups.",
-    ],
-    [
-      "API & SYSTEMS INTEGRATION",
-      "Your tools connected as one system — CRMs, chat, docs, webhooks, custom APIs.",
-      "/services/ai-automation",
-    ],
-    [
-      "TRADING SYSTEMS",
-      "Backtested strategy harnesses and automated trade workflows — built and tested, honestly labeled.",
-    ],
-    [
-      "BLOCKCHAIN",
-      "Smart contracts, DeFi tooling, and on-chain experimentation.",
-    ],
-    [
-      "PROTOTYPES & EXPERIMENTS",
-      "Interactive interfaces, unusual tools, and ideas worth building to learn from.",
+      "RESEARCH AND SYSTEMS",
+      "Strategy research, execution, monitoring, and risk controls are kept separate, so a problem in one is visible in the others.",
     ],
   ],
 

@@ -1,6 +1,6 @@
 // About — Antarctic Labs. Identity fields are populated from the
 // global site identity; the narrative fields below drive the About page:
-// who we are, our mission, what we do, principles, and the team.
+// who we are, our mission, what we do, principles, and the partners.
 
 import { site } from "./site.js";
 
@@ -12,25 +12,25 @@ export const operator = {
   email: site.email,
 
   index: "ABOUT",
-  heading: "WHO WE ARE.",
+  heading: "THE FIRM.",
 
   positioning:
-    "Antarctic Labs is a freelance technology studio — AI automation, websites, and data systems, built and delivered ready to work. When you reach out, you talk directly to the team building your project — no account managers, no handoffs.",
+    "Antarctic Labs is a proprietary trading and computing firm. We trade our own capital on infrastructure we own. We do not build for clients, and we do not sell services.",
 
   whoWeAre: {
     title: "WHO WE ARE",
     paragraphs: [
-      "Antarctic Labs started as a personal practice: a place to experiment across AI, automation, software, data, and blockchain. It grew into something more deliberate — a one-person studio taking on real client work and turning it into systems that hold up under real conditions.",
-      "The focus is practical: automation that replaces slow, manual work; websites that ship; data you can actually use. Everything here is built, not theorized — if it can't survive real data, real users, and real constraints, it doesn't ship.",
+      "Antarctic Labs began as a freelance technology studio. That chapter is closed. The firm is now a partnership of three, built around one idea: own the hardware, own the systems, and let the results decide what grows.",
+      "One partner is on the ground in the Philippines, where the firm is establishing its base: a commercial office and a small data center built around hardware we own and operate. The position matters. The Philippines connects directly toward Hong Kong, and every route is chosen by measurement, not by maps.",
     ],
   },
 
   mission: {
     title: "OUR MISSION",
-    statement: "Replace manual work with systems that run.",
+    statement: "Turn owned infrastructure into durable profit.",
     paragraphs: [
-      "Most worthwhile problems start as unknowns — a process nobody has mapped, data nobody has tamed, a workflow held together by manual effort. The mission is to take those unknowns seriously: scope them clearly, rebuild them properly, and automate what should never have been manual in the first place.",
-      "Ready to work on your project isn't a slogan. It's the job description.",
+      "The trading comes first. Algorithms developed by the partners run on our own machines, tested on paper and with limited capital before anything scales. The capital is the partners' own, so protecting it is part of the strategy, not a footnote.",
+      "The same hardware can do more than trade. What it becomes beyond trading will be decided the same way everything here is decided: by what proves real when it is measured.",
     ],
   },
 
@@ -38,39 +38,41 @@ export const operator = {
     title: "OPERATING BELIEFS",
     items: [
       {
-        title: "Show the work",
-        since: "SINCE DAY ONE",
-        text: "I don't sell roadmaps. If I say I'll build something, it's because I've built the hard parts before — or I'm already building them.",
+        title: "Own the machine",
+        since: "THE FOUNDATION",
+        text: "Renting puts the core of the business in someone else's hands. We own the hardware our systems run on, and we operate it ourselves.",
       },
       {
-        title: "Constraints are the brief",
-        since: "FROM YEARS IN OPERATIONS",
-        text: "Budget, time, messy data — I spent years working inside constraints in service and operations jobs. They don't scare me. They're what shape systems that survive contact with reality.",
+        title: "Measure, do not assume",
+        since: "ON EVERY ROUTE",
+        text: "A fast connection is a claim until it is timed. Latency, reliability, and execution are measured against the real endpoints before money depends on them.",
       },
       {
-        title: "Working beats flashy",
-        since: "ON EVERY PROJECT",
-        text: "Demos impress; working systems get used. Every build is scoped clearly and delivered clean and ready to use — not a prototype dressed up as a solution.",
-      },
-      {
-        title: "Keep moving",
+        title: "Protect the capital",
         since: "ALWAYS",
-        text: "I learn by building. Most of what I know, I know because I tried it, broke it, and fixed it. Stuck isn't a state — it's a signal to try the next thing.",
+        text: "The firm runs on the partners' own money. No single result justifies risking the base that makes the next result possible.",
+      },
+      {
+        title: "No pitch",
+        since: "SINCE THE PIVOT",
+        text: "We do not sell services and we do not perform for clients. The work is the pitch, and most of it is not public.",
       },
     ],
   },
 
   team: {
-    title: "THE TEAM",
-    headline: "Joshua Almodovar.",
+    title: "THE PARTNERS",
+    headline: "Three partners.",
     paragraphs: [
-      "Antarctic Labs is operated by Joshua Almodovar. No account managers, no handoffs, no juniors learning on your project — the person you talk to is the person who builds it.",
-      "Joshua's path into technology wasn't a straight line. He spent years in customer service, retail, restaurant operations, management, and training — environments where getting things right meant understanding people, processes, constraints, and what happens when something breaks.",
-      "That instinct moved toward software: systems that process information, automate work, connect tools, and operate without someone manually pushing every button. Today that work is the service — AI workflow automation with n8n, Make, and Zapier; web scraping and data extraction; lead generation; and website development — scoped clearly up front, delivered clean and ready to use.",
+      "Joshua runs the firm day to day: logistics, business operations, accounting, and overall oversight. Direction is set jointly, with Joshua and Andrew holding the strongest voices.",
+      "Andrew leads engineering: the trading algorithms, the server build, and the systems the firm runs on. He also funds the firm.",
+      "Jay is based in the Philippines and runs the ground operation: the location, the hardware sourcing, and the company's registration and compliance there.",
     ],
     facts: [
-      ["BASED", "SANFORD, FLORIDA / WORLDWIDE"],
-      ["FOCUS", "AI AUTOMATION · DATA · WEB DEV"],
+      ["STRUCTURE", "PARTNERSHIP OF THREE"],
+      ["BASES", "UNITED STATES · PHILIPPINES"],
+      ["CLIENT WORK", "NONE"],
+      ["STATUS", "IN FORMATION, PHILIPPINES"],
     ],
   },
 

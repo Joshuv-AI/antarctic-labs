@@ -29,9 +29,9 @@ const SITE_NAME = site.brand;
 // Titles stay near ~60 chars, descriptions near ~155, keyword up front.
 export const routeMeta = {
   "/": {
-    title: `AI Automation Developer | ${SITE_NAME}`,
+    title: `Proprietary Trading & Computing | ${SITE_NAME}`,
     description:
-      "Hire a freelance AI automation developer: n8n workflows, AI agents, websites, web scraping, lead generation. Scoped clearly, delivered ready to work.",
+      "Antarctic Labs is a proprietary trading and computing firm building its own data center in the Philippines. Our capital, our hardware, our systems. Not for hire.",
   },
   "/services/ai-automation": {
     title: `AI Automation Services for Small Business | Antarctic Labs`,
@@ -89,9 +89,9 @@ export const routeMeta = {
       "Antarctic Labs is developing toward public-sector work: AI analyst workflows, data systems, and automation for primes — pilots, SBIR/STTR, and teaming.",
   },
   "/about": {
-    title: `Joshua Almodovar | ${SITE_NAME}`,
+    title: `The Firm | ${SITE_NAME}`,
     description:
-      "Joshua Almodovar runs Antarctic Labs, a freelance studio for AI automation, websites, and data systems. No account managers — you talk to the builder.",
+      "About Antarctic Labs: a three-partner proprietary trading and computing firm. Operations in the United States, infrastructure in the Philippines. No client work.",
   },
   "/contact": {
     title: `Hire AI Automation Developer — Free Quote | ${SITE_NAME}`,
