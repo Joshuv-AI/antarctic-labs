@@ -1,5 +1,5 @@
-// Generates public/sitemap.xml from the canonical route registry and
-// project catalog. Runs on every build (see package.json "prebuild")
+// Generates public/sitemap.xml from the canonical route registry.
+// Runs on every build (see package.json "prebuild")
 // so lastmod never goes stale and new pages are picked up automatically.
 //
 // Canonical pages only — legacy redirect aliases (/systems, /expeditions,
@@ -14,7 +14,6 @@ const siteRoot = join(here, "..");
 const publicDir = join(siteRoot, "public");
 
 const { routes } = await import("../src/content/routes.js");
-const { expeditions } = await import("../src/content/expeditions.js");
 
 const SITE = "https://antarctic-labs.com";
 const today = new Date().toISOString().slice(0, 10);
@@ -38,8 +37,6 @@ const PRIORITY = {
   "/tower-of-babel/library": "0.6",
   "/tower-of-babel/library/suggest": "0.4",
 };
-const PROJECT_DETAIL_PRIORITY = "0.8";
-
 const urls = [];
 
 // Canonical literal routes (skip dynamic :id patterns and legacy aliases).
@@ -52,15 +49,6 @@ for (const pattern of routes) {
   urls.push({
     loc: `${SITE}${pattern === "/" ? "/" : pattern}`,
     priority: PRIORITY[pattern] ?? "0.5",
-  });
-}
-
-// Project detail pages — one per expedition id.
-for (const exp of expeditions) {
-  if (!exp || !exp.id) continue;
-  urls.push({
-    loc: `${SITE}/projects/${exp.id}`,
-    priority: PROJECT_DETAIL_PRIORITY,
   });
 }
 

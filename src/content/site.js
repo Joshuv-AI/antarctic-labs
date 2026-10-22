@@ -7,7 +7,7 @@ import { siteFaqs } from "./faq.js";
 export const site = {
   brand: "ANTARCTIC LABS",
   operator: "JOSHUA ALMODOVAR",
-  philosophy: "READY TO WORK ON YOUR PROJECT.",
+  philosophy: "OUR CAPITAL. OUR HARDWARE. OUR CODE.",
   description:
     "Freelance AI automation, web development, and data systems — working solutions, built and delivered ready to use.",
   location: "SANFORD, FLORIDA / WORLDWIDE",
@@ -17,10 +17,10 @@ export const site = {
 
   // Home / arrival copy.
   hero: {
-    eyebrow: "INDEPENDENT TECHNOLOGY LABORATORY",
-    title: ["READY TO WORK", "ON YOUR", "PROJECT."],
-    sub: "AI automation, websites, and data systems — designed and built by one person you talk to directly. Send the details, get a working solution back.",
-    cta: { label: "GET A FREE QUOTE", to: "/contact" },
+    eyebrow: "PROPRIETARY TRADING & COMPUTING",
+    title: ["WE TRADE", "OUR OWN", "CAPITAL."],
+    sub: "A proprietary trading and computing firm. We trade our own capital on infrastructure we own — and we are not for hire.",
+    cta: { label: "CONTACT", to: "/contact" },
     signal: "Antarctic Labs is not for hire.",
     body: "Antarctic Labs is a proprietary trading and computing firm. We build our own infrastructure, run our own systems, and trade our own capital. Nothing here is a service, and nothing is built for clients.",
     method: "Our capital. Our hardware. Our code.",
