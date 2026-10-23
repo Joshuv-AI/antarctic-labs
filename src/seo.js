@@ -13,7 +13,6 @@ import { metaFor, matchRoute } from "./content/routes.js";
 import { site } from "./content/site.js";
 import { operator } from "./content/operator.js";
 import { government } from "./content/government.js";
-import { transmission } from "./content/transmission.js";
 import { towerOfBabel } from "./content/tower-of-babel.js";
 import { services } from "./content/services.js";
 // Entry JSON-LD uses the cached catalog when available (see

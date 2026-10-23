@@ -8,11 +8,11 @@
 // extended.
 //
 // Canonical site IA:
-// HOME, TOWER OF BABEL, GOVERNMENT, ABOUT, CONTACT.
+// HOME, TOWER OF BABEL, GOVERNMENT, ABOUT.
 //
 // Old routes remain as backward-compatibility aliases where useful.
-// In particular, /transmission now redirects to the canonical /contact
-// route.
+// Retired 2026-10-23: the Contact page was deleted outright, and
+// every alias that redirected into it was removed with it.
 import { site } from "./site.js";
 // The artifact catalog is lazy (see ../../lib/catalog.js) — route metadata
 // must stay synchronous, so entry pages use the cached array when available
@@ -23,7 +23,7 @@ const DEFAULT_DESCRIPTION = site.description;
 const SITE_NAME = site.brand;
 // Per-page SEO: every canonical route carries keyword-targeted metadata
 // aimed at the obvious simple searches for its sector. Service pages
-// (home, contact, about) target hire-intent freelance searches
+// (home, about) target hire-intent freelance searches
 // — client acquisition is the site's main goal. Tower of Babel pages
 // target free-library/archive searches for authority and traffic.
 // Titles stay near ~60 chars, descriptions near ~155, keyword up front.
@@ -93,15 +93,9 @@ export const routeMeta = {
     description:
       "About Antarctic Labs: a proprietary trading and computing firm. Operations in the United States, infrastructure in the Philippines. No client work.",
   },
-  "/contact": {
-    title: `Hire AI Automation Developer — Free Quote | ${SITE_NAME}`,
-    description:
-      "Hire an AI automation developer: send your project brief and get an honest quote within 24 hours. AI automation, web development, and data systems.",
-  },
 };
 // Old routes kept for SEO/canonicalization purposes only.
 //
-// /transmission is now a legacy alias for /contact.
 // The other historical routes remain unchanged.
 // Retired 2026-10-21: the Projects pages were
 // deleted outright, and every alias that redirected into them
@@ -132,18 +126,10 @@ export const routeMetaLegacy = {
     description: DEFAULT_DESCRIPTION,
     redirect: "/about",
   },
-  "/transmission": {
-    title: `Contact — ${SITE_NAME}`,
-    description: `Contact Antarctic Labs. ${DEFAULT_DESCRIPTION}`,
-    redirect: "/contact",
-  },
 };
 // The full list of literal + dynamic patterns that the App should
 // recognize.
 //
-// /transmission is intentionally NOT a canonical route. It is kept
-// here so the runtime can recognize the old URL before legacyRedirect()
-// moves it to /contact.
 export const routes = [
   "/",
   "/services/ai-automation",
@@ -161,13 +147,11 @@ export const routes = [
   "/tower-of-babel/library/:id",
   "/government-contracting",
   "/about",
-  "/contact",
   // Legacy patterns preserved for backward compatibility.
   "/systems",
   "/history",
   "/operator",
   "/field-interests",
-  "/transmission",
 ];
 // Map any legacy path to its canonical redirect target.
 export function legacyRedirect(path) {

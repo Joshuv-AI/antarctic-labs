@@ -1,4 +1,4 @@
-// Global site identity — single source of truth for brand, contact,
+// Global site identity — single source of truth for brand,
 // operator, philosophy, and footer. Updating any field here updates the
 // header, menu, footer, and SEO metadata across the site.
 

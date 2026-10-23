@@ -41,7 +41,7 @@ export const services = [
       {
         num: "01",
         title: "Scope",
-        text: "You describe the manual process in the contact form, in plain language. Within 24 hours you get a reply with an honest assessment: what can be automated, what cannot, what it would take, and what it would cost. If automation is not worth it, you are told that. Some processes are cheaper done by hand.",
+        text: "You describe the manual process by email, in plain language. Within 24 hours you get a reply with an honest assessment: what can be automated, what cannot, what it would take, and what it would cost. If automation is not worth it, you are told that. Some processes are cheaper done by hand.",
       },
       {
         num: "02",
@@ -91,8 +91,8 @@ export const services = [
     },
     pricing: {
       title: "What AI automation services cost",
-      body: "Agency AI automation projects are commonly quoted at $5K to $50K per project, per thecrunch.io's 2026 cost survey of AI automation agencies. Freelance n8n builders quote far lower: community rate cards on community.n8n.io show $200 to $700 per workflow. These are market observations, not this studio's prices. What a build costs depends on the number of steps, the number of systems it touches, and whether AI judgment steps are involved. A single workflow connecting two tools is a small job. A multi-system process with AI classification, approvals, and reporting is a bigger one. The quote you get from the contact page is per project, fixed, and honest: if the work is not worth automating, the reply says so.",
-      note: "Market figures above are observed from the named sources (2026). For an exact number on your process, use the contact page. Quotes are free and answered within 24 hours.",
+      body: "Agency AI automation projects are commonly quoted at $5K to $50K per project, per thecrunch.io's 2026 cost survey of AI automation agencies. Freelance n8n builders quote far lower: community rate cards on community.n8n.io show $200 to $700 per workflow. These are market observations, not this studio's prices. What a build costs depends on the number of steps, the number of systems it touches, and whether AI judgment steps are involved. A single workflow connecting two tools is a small job. A multi-system process with AI classification, approvals, and reporting is a bigger one. The quote you get by email is per project, fixed, and honest: if the work is not worth automating, the reply says so.",
+      note: "Market figures above are observed from the named sources (2026). For an exact number on your process, email hello@antarctic-labs.com. Quotes are free and answered within 24 hours.",
     },
     useCases: [
       {
@@ -127,7 +127,7 @@ export const services = [
       },
       {
         q: "How much do AI automation services cost for a small business?",
-        a: "Market observations (2026): agencies quote $5K to $50K per project (thecrunch.io); freelance n8n builders charge $200 to $700 per workflow (community.n8n.io rate cards). A single two-tool workflow is a small job; a multi-system process with AI judgment steps is a bigger one. Exact quotes come from the contact page within 24 hours, per project, fixed.",
+        a: "Market observations (2026): agencies quote $5K to $50K per project (thecrunch.io); freelance n8n builders charge $200 to $700 per workflow (community.n8n.io rate cards). A single two-tool workflow is a small job; a multi-system process with AI judgment steps is a bigger one. Exact quotes come by email within 24 hours, per project, fixed.",
       },
       {
         q: "What is AI workflow automation?",
@@ -147,7 +147,7 @@ export const services = [
       },
       {
         q: "Who can build AI automations for my small business?",
-        a: "Freelance automation developers, n8n specialists, and small AI consultancies build these systems for small businesses. Look for someone who asks about your process before quoting, shows working systems (not demos), and hands over ownership with documentation. Antarctic Labs does exactly this: describe the manual work in the contact form and get an honest assessment within 24 hours, including a straight answer if automation is not worth it.",
+        a: "Freelance automation developers, n8n specialists, and small AI consultancies build these systems for small businesses. Look for someone who asks about your process before quoting, shows working systems (not demos), and hands over ownership with documentation. Antarctic Labs does exactly this: describe the manual work by email and get an honest assessment within 24 hours, including a straight answer if automation is not worth it.",
       },
     ],
     metaTitle: "AI Automation Services for Small Business | Antarctic Labs",
@@ -160,7 +160,7 @@ export const services = [
     kicker: "SERVICES",
     h1: "n8n workflow automation",
     intro:
-      "n8n workflow automation connects your business tools into systems that run themselves. Antarctic Labs designs, builds, and fixes n8n workflows: lead pipelines, data syncs, AI-powered processing steps, scheduled jobs, and integrations between the apps you already pay for. Self-hosted or cloud, documented, and owned by you. Describe the workflow in the contact form for a quote within 24 hours.",
+      "n8n workflow automation connects your business tools into systems that run themselves. Antarctic Labs designs, builds, and fixes n8n workflows: lead pipelines, data syncs, AI-powered processing steps, scheduled jobs, and integrations between the apps you already pay for. Self-hosted or cloud, documented, and owned by you. Describe the workflow by email for a quote within 24 hours.",
     definition:
       "n8n is an open-source workflow automation platform: a visual builder where each step (called a node) performs one action, like reading a spreadsheet row, calling an API, sending a message, or asking an AI model a question. Steps chain into workflows that trigger on schedules, webhooks, or events. Unlike closed automation tools, n8n can be self-hosted, which means your data never has to pass through a third party's servers, and there are no per-step execution fees scaling against you. It connects to hundreds of apps natively and to anything with an API through HTTP nodes. For a small business, it is the practical middle ground between fragile scripts and expensive enterprise platforms.",
     included: [
@@ -193,7 +193,7 @@ export const services = [
       {
         num: "01",
         title: "Scope",
-        text: "Describe the workflow in the contact form: what should trigger it, what should happen, which tools are involved. Within 24 hours you get an honest reply: whether n8n is the right tool (sometimes a simple script is), what the build involves, and a fixed quote.",
+        text: "Describe the workflow by email: what should trigger it, what should happen, which tools are involved. Within 24 hours you get an honest reply: whether n8n is the right tool (sometimes a simple script is), what the build involves, and a fixed quote.",
       },
       {
         num: "02",
@@ -243,8 +243,8 @@ export const services = [
     },
     pricing: {
       title: "What n8n workflow automation costs",
-      body: "Freelance n8n builders publish community rate cards on community.n8n.io showing $200 to $700 per workflow, with price depending on step count, integrations, and AI components. That is the observed market for individual workflow builds. Agency automation projects are quoted far higher: $5K to $50K per project per thecrunch.io's 2026 survey. The gap exists because agencies bundle discovery, project management, and account overhead that a one-person build does not need. A simple two-app sync sits at the low end; a multi-branch workflow with AI classification, error handling, and monitoring sits higher. These are market observations, not this studio's prices. Describe the workflow in the contact form for a fixed per-project quote within 24 hours.",
-      note: "Market figures above are observed from the named sources (2026). For an exact number on your workflow, use the contact page. Quotes are free and answered within 24 hours.",
+      body: "Freelance n8n builders publish community rate cards on community.n8n.io showing $200 to $700 per workflow, with price depending on step count, integrations, and AI components. That is the observed market for individual workflow builds. Agency automation projects are quoted far higher: $5K to $50K per project per thecrunch.io's 2026 survey. The gap exists because agencies bundle discovery, project management, and account overhead that a one-person build does not need. A simple two-app sync sits at the low end; a multi-branch workflow with AI classification, error handling, and monitoring sits higher. These are market observations, not this studio's prices. Describe the workflow by email for a fixed per-project quote within 24 hours.",
+      note: "Market figures above are observed from the named sources (2026). For an exact number on your workflow, email hello@antarctic-labs.com. Quotes are free and answered within 24 hours.",
     },
     useCases: [
       {
@@ -275,7 +275,7 @@ export const services = [
     faqs: [
       {
         q: "Who can build an n8n workflow for my business?",
-        a: "Freelance n8n developers and automation specialists build these for small businesses. The n8n community forum has an active Jobs board where businesses post exactly this request. Look for someone who maps the process before building, tests with real data, and hands over the workflow in your own n8n instance with documentation. That is how Antarctic Labs works: describe the workflow in the contact form, get a fixed quote within 24 hours.",
+        a: "Freelance n8n developers and automation specialists build these for small businesses. The n8n community forum has an active Jobs board where businesses post exactly this request. Look for someone who maps the process before building, tests with real data, and hands over the workflow in your own n8n instance with documentation. That is how Antarctic Labs works: describe the workflow by email, get a fixed quote within 24 hours.",
       },
       {
         q: "n8n vs Zapier vs Make: which should I use?",
@@ -283,7 +283,7 @@ export const services = [
       },
       {
         q: "How much does it cost to hire an n8n developer?",
-        a: "Observed market (2026): freelance n8n builders quote $200 to $700 per workflow on community rate cards (community.n8n.io); agencies quote $5K to $50K per automation project (thecrunch.io). Price depends on steps, integrations, and AI components. A simple sync is a small job; a multi-branch workflow with AI classification and monitoring is a bigger one. Fixed per-project quotes come from the contact page within 24 hours.",
+        a: "Observed market (2026): freelance n8n builders quote $200 to $700 per workflow on community rate cards (community.n8n.io); agencies quote $5K to $50K per automation project (thecrunch.io). Price depends on steps, integrations, and AI components. A simple sync is a small job; a multi-branch workflow with AI classification and monitoring is a bigger one. Fixed per-project quotes come by email within 24 hours.",
       },
       {
         q: "Can n8n be self-hosted to keep my business data private?",
@@ -312,7 +312,7 @@ export const services = [
     kicker: "SERVICES",
     h1: "AI agent development",
     intro:
-      "AI agent development builds software that does operational work on its own: reading inboxes, answering customers, qualifying leads, processing documents, operating your tools through APIs. Antarctic Labs designs and builds custom AI agents for small businesses, scoped to real tasks, tested against real inputs, and handed over running. Describe the job you want done in the contact form for a quote within 24 hours.",
+      "AI agent development builds software that does operational work on its own: reading inboxes, answering customers, qualifying leads, processing documents, operating your tools through APIs. Antarctic Labs designs and builds custom AI agents for small businesses, scoped to real tasks, tested against real inputs, and handed over running. Describe the job you want done by email for a quote within 24 hours.",
     definition:
       "An AI agent is software that perceives, decides, and acts: it takes a goal, gathers context from your tools and documents, takes steps (sending messages, updating records, calling APIs, searching files), and reports back. The difference from a chatbot is initiative. A chatbot waits for a message and replies. An agent works a queue: new support ticket arrives, the agent reads the history, checks the order system, drafts a resolution, and either sends it or escalates with a summary. Agents are built from three parts: a language model for judgment, tool connections for action, and a knowledge base for facts. They are also built with limits: defined tasks, defined tools, human review where the stakes require it.",
     included: [
@@ -345,7 +345,7 @@ export const services = [
       {
         num: "01",
         title: "Scope",
-        text: "Describe the job in the contact form: what arrives, what should happen, what a good outcome looks like. Within 24 hours you get an honest reply. Some jobs fit agents well; some are better as simple workflows; some should stay human. The reply says which.",
+        text: "Describe the job by email: what arrives, what should happen, what a good outcome looks like. Within 24 hours you get an honest reply. Some jobs fit agents well; some are better as simple workflows; some should stay human. The reply says which.",
       },
       {
         num: "02",
@@ -395,8 +395,8 @@ export const services = [
     },
     pricing: {
       title: "What AI agent development costs",
-      body: "There is no standard market price for custom AI agent builds the way there is for n8n workflows; agency AI projects are quoted at $5K to $50K per project (thecrunch.io, 2026). A freelance agent build for a single well-scoped task sits well below agency bands: the cost drivers are the number of tool integrations, the size and messiness of the knowledge base, and how much adversarial testing the task demands. Ongoing cost is separate and small: API fees per action, typically cents per task, tracked and reported. These are market observations, not this studio's prices. Because every agent is scoped differently, the honest quote comes after the scope reply: describe the job in the contact form and get a fixed per-project number within 24 hours.",
-      note: "Market figures above are observed from the named sources (2026). For an exact number on your agent build, use the contact page. Quotes are free and answered within 24 hours.",
+      body: "There is no standard market price for custom AI agent builds the way there is for n8n workflows; agency AI projects are quoted at $5K to $50K per project (thecrunch.io, 2026). A freelance agent build for a single well-scoped task sits well below agency bands: the cost drivers are the number of tool integrations, the size and messiness of the knowledge base, and how much adversarial testing the task demands. Ongoing cost is separate and small: API fees per action, typically cents per task, tracked and reported. These are market observations, not this studio's prices. Because every agent is scoped differently, the honest quote comes after the scope reply: describe the job by email and get a fixed per-project number within 24 hours.",
+      note: "Market figures above are observed from the named sources (2026). For an exact number on your agent build, email hello@antarctic-labs.com. Quotes are free and answered within 24 hours.",
     },
     useCases: [
       {
@@ -427,11 +427,11 @@ export const services = [
     faqs: [
       {
         q: "Who can build a custom AI agent for my business?",
-        a: "Freelance AI developers and small AI consultancies build custom agents for small businesses. Look for someone who defines the agent's tasks and boundaries in writing before building, tests against your real historical inputs, and builds in guardrails and human review. Avoid anyone who demos on toy data and promises full autonomy. Describe the job in the contact form for an honest assessment within 24 hours, including a straight answer if an agent is not the right tool.",
+        a: "Freelance AI developers and small AI consultancies build custom agents for small businesses. Look for someone who defines the agent's tasks and boundaries in writing before building, tests against your real historical inputs, and builds in guardrails and human review. Avoid anyone who demos on toy data and promises full autonomy. Describe the job by email for an honest assessment within 24 hours, including a straight answer if an agent is not the right tool.",
       },
       {
         q: "How much does it cost to build an AI agent?",
-        a: "Market observations (2026): agency AI projects run $5K to $50K per project (thecrunch.io). A freelance build for one well-scoped task sits well below agency bands. Cost drivers: number of tool integrations, knowledge base size, testing depth. Ongoing API fees are separate and small, typically cents per task. Exact quotes are fixed per project from the contact page within 24 hours.",
+        a: "Market observations (2026): agency AI projects run $5K to $50K per project (thecrunch.io). A freelance build for one well-scoped task sits well below agency bands. Cost drivers: number of tool integrations, knowledge base size, testing depth. Ongoing API fees are separate and small, typically cents per task. Exact quotes are fixed per project by email within 24 hours.",
       },
       {
         q: "Can an AI agent handle my customer support?",
@@ -464,7 +464,7 @@ export const services = [
     kicker: "SERVICES",
     h1: "Freelance web developer",
     intro:
-      "A freelance web developer for businesses that need a website built, rebuilt, or fixed by one person who answers directly. Antarctic Labs designs and builds fast, modern websites and web applications: marketing sites, landing pages, booking flows, dashboards, and full web apps. No templates resold as custom work, no page builders slowing the result. Describe the site in the contact form for a quote within 24 hours.",
+      "A freelance web developer for businesses that need a website built, rebuilt, or fixed by one person who answers directly. Antarctic Labs designs and builds fast, modern websites and web applications: marketing sites, landing pages, booking flows, dashboards, and full web apps. No templates resold as custom work, no page builders slowing the result. Describe the site by email for a quote within 24 hours.",
     definition:
       "Freelance web development is the design and construction of websites by an independent developer rather than an agency team. The practical difference is the chain: one person hears the requirement, designs the page, writes the code, and ships it. Nothing is lost between account manager and developer because they are the same person. Modern freelance builds use current frameworks (React and similar), ship as static or server-rendered pages for speed, and deploy to global edge networks. The result loads fast, works on phones, and can be updated without calling anyone. For a small business, this is usually the right scale: agency process overhead is built for bigger budgets.",
     included: [
@@ -497,7 +497,7 @@ export const services = [
       {
         num: "01",
         title: "Scope",
-        text: "Describe the site in the contact form: what the business does, what the site must do, examples you like. Within 24 hours you get an honest reply with a fixed quote and a realistic timeline. If a simple template would serve you better than custom work, you are told that.",
+        text: "Describe the site by email: what the business does, what the site must do, examples you like. Within 24 hours you get an honest reply with a fixed quote and a realistic timeline. If a simple template would serve you better than custom work, you are told that.",
       },
       {
         num: "02",
@@ -547,8 +547,8 @@ export const services = [
     },
     pricing: {
       title: "What a freelance web developer charges",
-      body: "Observed market (2026): freelance web developer rates run $20 to $150+ per hour (thejustifiable.com), with project pricing varying by scope. A focused landing page is a small project; a multi-page marketing site is a medium one; a web application with logins, databases, and integrations is a large one. Agencies quote the same work at multiples of freelance pricing because the price carries account management and overhead. DIY builders look cheap until the subscription years, the template limits, and the slow load times are counted. These are market observations, not this studio's prices. The fixed per-project quote comes from the contact page within 24 hours, after a look at what the site actually needs to do.",
-      note: "Market figures above are observed from the named source (2026). For an exact number on your site, use the contact page. Quotes are free and answered within 24 hours.",
+      body: "Observed market (2026): freelance web developer rates run $20 to $150+ per hour (thejustifiable.com), with project pricing varying by scope. A focused landing page is a small project; a multi-page marketing site is a medium one; a web application with logins, databases, and integrations is a large one. Agencies quote the same work at multiples of freelance pricing because the price carries account management and overhead. DIY builders look cheap until the subscription years, the template limits, and the slow load times are counted. These are market observations, not this studio's prices. The fixed per-project quote comes by email within 24 hours, after a look at what the site actually needs to do.",
+      note: "Market figures above are observed from the named source (2026). For an exact number on your site, email hello@antarctic-labs.com. Quotes are free and answered within 24 hours.",
     },
     useCases: [
       {
@@ -579,7 +579,7 @@ export const services = [
     faqs: [
       {
         q: "How much does a freelancer charge to build a website?",
-        a: "Observed market (2026): freelance web developer rates run $20 to $150+ per hour (thejustifiable.com). Project pricing depends on scope: a landing page is a small project, a multi-page marketing site is medium, a web app with logins and databases is large. Agencies charge multiples of freelance rates for the same work. Fixed per-project quotes come from the contact page within 24 hours.",
+        a: "Observed market (2026): freelance web developer rates run $20 to $150+ per hour (thejustifiable.com). Project pricing depends on scope: a landing page is a small project, a multi-page marketing site is medium, a web app with logins and databases is large. Agencies charge multiples of freelance rates for the same work. Fixed per-project quotes come by email within 24 hours.",
       },
       {
         q: "Should I hire a freelance web developer or an agency?",
@@ -616,7 +616,7 @@ export const services = [
     kicker: "SERVICES",
     h1: "Web scraping services",
     intro:
-      "Web scraping services turn public web data into clean, structured files you can actually use. Antarctic Labs builds scrapers that collect the data, clean it, and deliver it in Excel or CSV: product prices, business listings, lead lists, market data. Anti-bot handling, scheduling, and dedupe included. Describe the data you need in the contact form for a quote within 24 hours.",
+      "Web scraping services turn public web data into clean, structured files you can actually use. Antarctic Labs builds scrapers that collect the data, clean it, and deliver it in Excel or CSV: product prices, business listings, lead lists, market data. Anti-bot handling, scheduling, and dedupe included. Describe the data you need by email for a quote within 24 hours.",
     definition:
       "Web scraping is the automated collection of data from websites: a program loads pages the way a browser would, extracts the target fields (names, prices, addresses, dates, product details), and writes them into a structured file or database. Done professionally, it includes handling for the realities of the live web: JavaScript-rendered pages, pagination, rate limits, login sessions, IP rotation, and layout changes that break naive scrapers. The deliverable is not a script but the data: cleaned, deduplicated, validated, and delivered on a schedule or as a one-time extract. What it is not: hacking, bypassing paywalls, or taking data you have no right to use. The legality section below draws the line precisely.",
     included: [
@@ -649,7 +649,7 @@ export const services = [
       {
         num: "01",
         title: "Scope",
-        text: "Describe the data in the contact form: which sites, which fields, one-time or recurring, what volume. Within 24 hours you get an honest reply: whether the target is scrapable, whether an API would be better, and a fixed quote. Targets behind logins or paywalls get a straight answer about what is and is not done.",
+        text: "Describe the data by email: which sites, which fields, one-time or recurring, what volume. Within 24 hours you get an honest reply: whether the target is scrapable, whether an API would be better, and a fixed quote. Targets behind logins or paywalls get a straight answer about what is and is not done.",
       },
       {
         num: "02",
@@ -699,8 +699,8 @@ export const services = [
     },
     pricing: {
       title: "What web scraping services cost",
-      body: "There is no single market price for scraping because every target differs: a simple listing site is a small job, a JavaScript-heavy site with anti-bot measures is a bigger one, and a recurring monitored pipeline costs more than a one-time extract. Demand is clearly visible: Fiverr's data-scraping category holds 6,400+ gig listings and Upwork shows 2,600+ open web-scraping jobs at any given time (thewebscrapingclub scraping-wiki, observed 2026), which is why pricing varies so widely across sellers. What moves the price: target complexity, volume, cleaning requirements, and whether the job repeats on a schedule. These are market observations, not this studio's prices. The fixed quote comes after the scope reply: describe the target sites and fields in the contact form and get a number within 24 hours, including a straight answer if the target is better served by an official API.",
-      note: "Market figures above are observed from the named sources (2026). For an exact number on your data job, use the contact page. Quotes are free and answered within 24 hours.",
+      body: "There is no single market price for scraping because every target differs: a simple listing site is a small job, a JavaScript-heavy site with anti-bot measures is a bigger one, and a recurring monitored pipeline costs more than a one-time extract. Demand is clearly visible: Fiverr's data-scraping category holds 6,400+ gig listings and Upwork shows 2,600+ open web-scraping jobs at any given time (thewebscrapingclub scraping-wiki, observed 2026), which is why pricing varies so widely across sellers. What moves the price: target complexity, volume, cleaning requirements, and whether the job repeats on a schedule. These are market observations, not this studio's prices. The fixed quote comes after the scope reply: describe the target sites and fields by email and get a number within 24 hours, including a straight answer if the target is better served by an official API.",
+      note: "Market figures above are observed from the named sources (2026). For an exact number on your data job, email hello@antarctic-labs.com. Quotes are free and answered within 24 hours.",
     },
     useCases: [
       {
@@ -735,11 +735,11 @@ export const services = [
       },
       {
         q: "How much does web scraping cost?",
-        a: "It depends on the target: a simple listing site is a small job, a JavaScript-heavy site with anti-bot protection is bigger, and a recurring monitored pipeline costs more than a one-time extract. The freelance market varies widely (6,400+ scraping gigs on Fiverr, 2,600+ open Upwork scraping jobs observed in 2026). Fixed quotes come from the contact page within 24 hours after a look at the actual target sites.",
+        a: "It depends on the target: a simple listing site is a small job, a JavaScript-heavy site with anti-bot protection is bigger, and a recurring monitored pipeline costs more than a one-time extract. The freelance market varies widely (6,400+ scraping gigs on Fiverr, 2,600+ open Upwork scraping jobs observed in 2026). Fixed quotes come by email within 24 hours after a look at the actual target sites.",
       },
       {
         q: "Who can scrape data from a website for me?",
-        a: "Freelance web scraping developers and data extraction specialists. Look for someone who assesses the target before quoting, delivers cleaned data (not raw dumps), handles anti-bot realities, and is upfront about legal boundaries. That assessment-first approach is how Antarctic Labs works: describe the target in the contact form and get an honest answer about feasibility within 24 hours.",
+        a: "Freelance web scraping developers and data extraction specialists. Look for someone who assesses the target before quoting, delivers cleaned data (not raw dumps), handles anti-bot realities, and is upfront about legal boundaries. That assessment-first approach is how Antarctic Labs works: describe the target by email and get an honest answer about feasibility within 24 hours.",
       },
       {
         q: "What data can I legally scrape from websites?",
@@ -768,7 +768,7 @@ export const services = [
     kicker: "SERVICES",
     h1: "Lead generation automation",
     intro:
-      "Lead generation automation builds the system that finds, enriches, and qualifies prospects on its own. Antarctic Labs builds automated lead sourcing pipelines: scraping target lists, enriching contacts, scoring fit, and triggering follow-up, all running on a schedule. You get a working prospecting machine, not a purchased list. Describe your ideal customer in the contact form for a quote within 24 hours.",
+      "Lead generation automation builds the system that finds, enriches, and qualifies prospects on its own. Antarctic Labs builds automated lead sourcing pipelines: scraping target lists, enriching contacts, scoring fit, and triggering follow-up, all running on a schedule. You get a working prospecting machine, not a purchased list. Describe your ideal customer by email for a quote within 24 hours.",
     definition:
       "Lead generation automation is a system, not a list. It has four stages: sourcing (finding businesses or people matching your criteria from directories, maps, and public data), enrichment (adding contact details, firmographics, and signals), qualification (scoring fit against your definition of a good prospect), and activation (routing hot prospects to outreach or follow-up sequences). Built with web scraping plus n8n workflows, it runs continuously: new prospects matching your criteria appear in your pipeline weekly without manual prospecting. The difference from buying a list is fit and freshness: the criteria are yours, the data is current, and the system keeps producing.",
     included: [
@@ -801,7 +801,7 @@ export const services = [
       {
         num: "01",
         title: "Scope",
-        text: "Describe your ideal customer in the contact form: who buys, what signals they show, what a good lead looks like to you. Within 24 hours you get an honest reply: whether your market is sourceable, what the system would look like, and a fixed quote. Some markets have no good public data; you are told that upfront.",
+        text: "Describe your ideal customer by email: who buys, what signals they show, what a good lead looks like to you. Within 24 hours you get an honest reply: whether your market is sourceable, what the system would look like, and a fixed quote. Some markets have no good public data; you are told that upfront.",
       },
       {
         num: "02",
@@ -851,8 +851,8 @@ export const services = [
     },
     pricing: {
       title: "What lead generation automation costs",
-      body: "Appointment-setting agencies typically charge monthly retainers; purchased lists charge per record and decay from the day of purchase. An automation system is a one-time build with small running costs (data source fees, enrichment API usage), which is a different cost shape: the investment is upfront, the marginal cost per additional prospect is near zero. What moves the build price: number of data sources, enrichment depth, follow-up complexity, and CRM integration. These are structural observations, not this studio's prices. The fixed per-project quote comes from the contact page within 24 hours, after a look at your market: the scope reply includes an honest assessment of whether your ideal customer is actually sourceable from public data, because some markets are not, and that answer is free.",
-      note: "For an exact number on your lead system, use the contact page. Quotes are free and answered within 24 hours.",
+      body: "Appointment-setting agencies typically charge monthly retainers; purchased lists charge per record and decay from the day of purchase. An automation system is a one-time build with small running costs (data source fees, enrichment API usage), which is a different cost shape: the investment is upfront, the marginal cost per additional prospect is near zero. What moves the build price: number of data sources, enrichment depth, follow-up complexity, and CRM integration. These are structural observations, not this studio's prices. The fixed per-project quote comes by email within 24 hours, after a look at your market: the scope reply includes an honest assessment of whether your ideal customer is actually sourceable from public data, because some markets are not, and that answer is free.",
+      note: "For an exact number on your lead system, email hello@antarctic-labs.com. Quotes are free and answered within 24 hours.",
     },
     useCases: [
       {
@@ -891,7 +891,7 @@ export const services = [
       },
       {
         q: "How much do lead generation services cost?",
-        a: "Appointment agencies charge monthly retainers; list vendors charge per record. An automation system is a one-time build with small ongoing data costs, so the comparison depends on your time horizon and volume. Build price depends on sources, enrichment depth, and follow-up complexity. Fixed per-project quotes come from the contact page within 24 hours, with an honest read on whether your market is sourceable.",
+        a: "Appointment agencies charge monthly retainers; list vendors charge per record. An automation system is a one-time build with small ongoing data costs, so the comparison depends on your time horizon and volume. Build price depends on sources, enrichment depth, and follow-up complexity. Fixed per-project quotes come by email within 24 hours, with an honest read on whether your market is sourceable.",
       },
       {
         q: "Is automated lead generation the same as buying a lead list?",

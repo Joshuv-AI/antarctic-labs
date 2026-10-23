@@ -253,7 +253,6 @@ const TowerOfBabel = lazyPage("TowerOfBabel");
 const LibraryArtifact = lazyPage("LibraryArtifact");
 const SuggestEntry = lazyPage("SuggestEntry");
 const Government = lazyPage("Government");
-const Transmission = lazyPage("Transmission");
 const About = lazyPage("About");
 const ServiceDetail = lazyPage("ServiceDetail");
 const TowerApiPage = lazyPage("TowerApiPage");
@@ -305,7 +304,6 @@ function dockActiveId(path) {
     return "tower";
   if (path === "/government-contracting") return "gov";
   if (path === "/about") return "about";
-  if (path === "/contact") return "contact";
   // Service pages: a sentinel no dock item matches, so nothing highlights.
   if (path.startsWith("/services/")) return "services";
   return undefined;
@@ -691,20 +689,16 @@ function App() {
             </Suspense>
           </div>
         )}
-        {/* Services / About / Contact share the homepage's resting
+        {/* Services / About share the homepage's resting
             environment: the iceberg video parked at its final position,
             with no scroll choreography (that belongs to the homepage). */}
         {(path.startsWith("/services/") ||
-          path === "/about" ||
-          path === "/contact") && <NewBackgroundVideo rest />}
+          path === "/about") && <NewBackgroundVideo rest />}
         {path === "/government-contracting" && (
           <Government go={go} />
         )}
         {path === "/about" && (
           <About go={go} />
-        )}
-        {path === "/contact" && (
-          <Transmission go={go} />
         )}
         {(path === "/404" ||
           (matchedPattern === null &&

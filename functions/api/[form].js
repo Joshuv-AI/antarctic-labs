@@ -1,6 +1,5 @@
 // Cloudflare Pages Function — form intake for antarctic-labs.com.
 //
-//   POST /api/contact  -> { name, company, email, subject, message, website? }
 //   POST /api/suggest  -> { type, title, format, seriesDetails, creator,
 //                           year, source, notes, website? }
 //
@@ -16,16 +15,6 @@
 const DEFAULT_TO = "joshuaalmodovar@gmail.com";
 const FROM = "Antarctic Labs <noreply@antarctic-labs.com>";
 const MAX_LEN = 8000;
-
-const CONTACT_SUBJECTS = {
-  project: "PROJECT",
-  collaboration: "COLLABORATION",
-  "tower-of-babel": "TOWER OF BABEL",
-  government: "GOV CONTRACTS",
-  general: "GENERAL",
-  question: "QUESTION",
-  "just-saying-hello": "JUST SAYING HELLO",
-};
 
 // Light per-isolate rate limit: max 8 submissions per IP per 10 minutes.
 const hits = new Map();
@@ -47,7 +36,6 @@ function json(data, status = 200) {
 }
 
 const str = (v) => (typeof v === "string" ? v.trim().slice(0, MAX_LEN) : "");
-const emailOk = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
 async function sendEmail(env, { to, replyTo, subject, text }) {
   const key = env.RESEND_API_KEY;
@@ -78,23 +66,6 @@ async function sendEmail(env, { to, replyTo, subject, text }) {
   return { ok: true };
 }
 
-function buildContactEmail(d) {
-  const label = CONTACT_SUBJECTS[d.subject] || "GENERAL";
-  const lines = [
-    `Name: ${d.name}`,
-    d.company ? `Company / Project: ${d.company}` : null,
-    `Email: ${d.email}`,
-    `About: ${label}`,
-    "",
-    d.message,
-  ].filter((l) => l !== null);
-  return {
-    replyTo: d.email,
-    subject: `[Contact] ${label} — ${d.name}`,
-    text: lines.join("\n"),
-  };
-}
-
 function buildSuggestEmail(d) {
   const row = (k, v) => (v ? `${k}: ${v}` : null);
   const lines = [
@@ -117,7 +88,7 @@ function buildSuggestEmail(d) {
 
 export async function onRequestPost({ request, env, params }) {
   const kind = params.form;
-  if (kind !== "contact" && kind !== "suggest") {
+  if (kind !== "suggest") {
     return json({ ok: false, error: "unknown form" }, 404);
   }
 
@@ -142,35 +113,20 @@ export async function onRequestPost({ request, env, params }) {
   // Honeypot: bots fill it, humans never see it. Swallow silently.
   if (str(data.website).length > 0) return json({ ok: true });
 
-  let email;
-  if (kind === "contact") {
-    const d = {
-      name: str(data.name),
-      company: str(data.company),
-      email: str(data.email),
-      subject: str(data.subject),
-      message: str(data.message),
-    };
-    if (!d.name || !emailOk(d.email) || !d.message || !CONTACT_SUBJECTS[d.subject]) {
-      return json({ ok: false, error: "missing or invalid fields" }, 400);
-    }
-    email = buildContactEmail(d);
-  } else {
-    const d = {
-      type: str(data.type),
-      title: str(data.title),
-      format: str(data.format),
-      seriesDetails: str(data.seriesDetails),
-      creator: str(data.creator),
-      year: str(data.year),
-      source: str(data.source),
-      notes: str(data.notes),
-    };
-    if (!d.type || !d.title || !d.format) {
-      return json({ ok: false, error: "missing or invalid fields" }, 400);
-    }
-    email = buildSuggestEmail(d);
+  const d = {
+    type: str(data.type),
+    title: str(data.title),
+    format: str(data.format),
+    seriesDetails: str(data.seriesDetails),
+    creator: str(data.creator),
+    year: str(data.year),
+    source: str(data.source),
+    notes: str(data.notes),
+  };
+  if (!d.type || !d.title || !d.format) {
+    return json({ ok: false, error: "missing or invalid fields" }, 400);
   }
+  const email = buildSuggestEmail(d);
 
   const sent = await sendEmail(env, {
     to: env.FORMS_TO || DEFAULT_TO,

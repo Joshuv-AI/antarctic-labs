@@ -3,17 +3,17 @@
 //
 // This file is the exact upstream component with the following documented
 // site adaptations (labels/actions wired to the real site navigation):
-//   1. MODERN_ITEMS carries four routes — Tower of Babel,
-//      Gov Contracts, About, Contact — instead of the demo catalogue
-//      items. About/Contact icons are reused verbatim from the
-//      authored modern set (layers, document, tag); Tower of Babel
+//   1. MODERN_ITEMS carries three routes — Tower of Babel,
+//      Gov Contracts, About — instead of the demo catalogue
+//      items. The About icon (document) is reused verbatim from the
+//      authored modern set; Tower of Babel
 //      (open book) and Gov Contracts (landmark) are new icons drawn in
 //      the same 16px stroke style. There is no separate Home item: the
 //      brand is the home button (navigates to "/", active on "/").
 //   2. The brand wordmark reads "Antarctic Labs", navigates home, and
 //      shows the active pill (data-active) when the route is "/".
 //   3. The actions area keeps only the "Email me" mailto ghost button;
-//      the "Start a project" CTA was removed (it duplicated Contact).
+//      the "Start a project" CTA was removed.
 //   4. The demo showcase stage (aria-hidden "Everything above the fold"
 //      headline) and the catalogue caption are not rendered; the bar is
 //      the component here.
@@ -122,17 +122,6 @@ const MODERN_ITEMS: readonly DockItem[] = [
       <>
         <path d="M3.4 2.4h5.4l3.8 3.8v7.4H3.4z" />
         <path d="M8.8 2.4v3.8h3.8M5.9 9h4.2M5.9 11.2h3" />
-      </>
-    ),
-  },
-  {
-    id: "contact",
-    label: "Contact",
-    path: "/contact",
-    icon: (
-      <>
-        <path d="M8.6 2.2H13v4.4l-6.6 6.6a1.2 1.2 0 0 1-1.7 0L2.2 10.5a1.2 1.2 0 0 1 0-1.7z" />
-        <circle cx="10.6" cy="4.6" r=".9" />
       </>
     ),
   },

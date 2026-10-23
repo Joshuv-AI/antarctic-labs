@@ -2,8 +2,8 @@
 // Runs on every build (see package.json "prebuild")
 // so lastmod never goes stale and new pages are picked up automatically.
 //
-// Canonical pages only — legacy redirect aliases (/systems, /expeditions,
-// /transmission, …) are intentionally excluded; they 301 to canonicals.
+// Canonical pages only — legacy redirect aliases are intentionally
+// excluded; they 301 to canonicals.
 
 import { writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -18,11 +18,9 @@ const { routes } = await import("../src/content/routes.js");
 const SITE = "https://antarctic-labs.com";
 const today = new Date().toISOString().slice(0, 10);
 
-// Per-page priority. The contact page is the conversion page for the
-// freelance business — it outranks everything except the homepage.
+// Per-page priority.
 const PRIORITY = {
   "/": "1.0",
-  "/contact": "0.9",
   "/projects": "0.9",
   "/services/ai-automation": "0.8",
   "/services/n8n-workflows": "0.8",
@@ -44,7 +42,7 @@ for (const pattern of routes) {
   if (pattern.includes(":")) continue;
   if (
     ["/systems", "/expeditions", "/the-lab", "/government",
-     "/history", "/operator", "/field-interests", "/transmission"].includes(pattern)
+     "/history", "/operator", "/field-interests"].includes(pattern)
   ) continue;
   urls.push({
     loc: `${SITE}${pattern === "/" ? "/" : pattern}`,

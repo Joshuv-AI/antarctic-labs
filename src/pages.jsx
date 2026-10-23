@@ -18,7 +18,6 @@ import {
   querySecondaryMask,
 } from "./lib/search-rank.js";
 import { site } from "./content/site.js";
-import { projectsIntro } from "./content/faq.js";
 import { operator } from "./content/operator.js";
 import { towerOfBabel } from "./content/tower-of-babel.js";
 // The artifact catalog is lazy (see ./lib/catalog.js): it is ~2.6MB of
@@ -77,7 +76,6 @@ function getTowerFiles() {
 import ReaderAssist, { SUPPORTS_HIGHLIGHTS } from "./components/ReaderAssist.jsx";
 import { applyMeta } from "./seo.js";
 import { government } from "./content/government.js";
-import { transmission } from "./content/transmission.js";
 import { services } from "./content/services.js";
 // Module-level LRU cache for entry full texts (2026-10-18): avoids re-downloading
 // up to 9MB on back/forward or prev/next navigation. Cap 5 entries.
@@ -2895,266 +2893,6 @@ export function About({ go }) {
     </main>
   );
 }
-// ----- Transmission --------------------------------------------------------
-export function Transmission({ go }) {
-  const initialValues = transmission.fields.reduce((acc, f) => {
-    acc[f.name] = "";
-    return acc;
-  }, {});
-  const [values, setValues] = useState(initialValues);
-  const [errors, setErrors] = useState({});
-  const [submitted, setSubmitted] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [submitError, setSubmitError] = useState("");
-  // Honeypot: invisible to humans, bots fill it. The API drops those silently.
-  const [honeypot, setHoneypot] = useState("");
-  const reduceMotion =
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const validate = (next) => {
-    const errs = {};
-    transmission.fields.forEach((f) => {
-      const v = (next[f.name] || "").trim();
-      if (f.required && v.length === 0) {
-        errs[f.name] = "Required.";
-      } else if (f.type === "email" && v.length > 0) {
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
-          errs[f.name] = "Enter a valid email address.";
-        }
-      }
-    });
-    return errs;
-  };
-  const onChange = (name) => (e) => {
-    const next = { ...values, [name]: e.target.value };
-    setValues(next);
-    if (errors[name]) {
-      const errs = { ...errors };
-      delete errs[name];
-      setErrors(errs);
-    }
-    if (submitError) setSubmitError("");
-  };
-  const onSubmit = async (e) => {
-    e.preventDefault();
-    const errs = validate(values);
-    setErrors(errs);
-    if (Object.keys(errs).length > 0) {
-      const firstInvalid = transmission.fields.find((f) => errs[f.name]);
-      if (firstInvalid && typeof document !== "undefined") {
-        const el = document.getElementById(firstInvalid.id);
-        if (el && typeof el.focus === "function") {
-          el.focus();
-        }
-      }
-      return;
-    }
-    setSending(true);
-    setSubmitError("");
-    try {
-      const res = await fetch("/api/contact", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...values, website: honeypot }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) throw new Error(data.error || "send failed");
-    } catch (err) {
-      setSending(false);
-      setSubmitError(
-        "Something went wrong sending your message. Please try again, or email hello@antarctic-labs.com directly."
-      );
-      return;
-    }
-    setSending(false);
-    setSubmitted(true);
-    if (typeof window !== "undefined") {
-      window.setTimeout(() => {
-        const region = document.getElementById("transmission-success");
-        if (region && typeof region.focus === "function") {
-          region.focus();
-        }
-      }, 50);
-    }
-  };
-  const onReset = () => {
-    setValues(initialValues);
-    setErrors({});
-    setSubmitted(false);
-    setSending(false);
-    setSubmitError("");
-    setHoneypot("");
-  };
-  return (
-    <main className="page-shell inner-page contact-page" id="main-content" tabIndex={-1}>
-      <section className="inner-hero section">
-        <div className="section-index">{transmission.sectionIndex}</div>
-        <h1>
-          {transmission.heading.split("\n").map((line, i) => (
-            <span key={i}>
-              {line}
-              <br />
-            </span>
-          ))}
-        </h1>
-        <p className="display-copy contact-lede">{transmission.body}</p>
-      </section>
-
-      <section className={"section contact-form-wrap" + (reduceMotion ? "" : " reveal")}>
-          <div className="section-index">SEND A MESSAGE</div>
-          {!submitted ? (
-            <form
-              className="transmission-form"
-              onSubmit={onSubmit}
-              noValidate={false}
-              aria-label="Contact form"
-            >
-              {transmission.fields.map((f) => {
-                const fieldError = errors[f.name];
-                const errorId = `${f.id}-error`;
-                return (
-                  <div className="transmission-field" key={f.id}>
-                    <label htmlFor={f.id}>
-                      {f.label}
-                      {f.required && <span className="req" aria-hidden="true"> *</span>}
-                    </label>
-                    {f.type === "select" ? (
-                      <select
-                        id={f.id}
-                        name={f.name}
-                        required={f.required}
-                        value={values[f.name]}
-                        onChange={onChange(f.name)}
-                        aria-required={f.required || undefined}
-                        aria-invalid={fieldError ? "true" : undefined}
-                        aria-describedby={fieldError ? errorId : undefined}
-                      >
-                        <option value="" disabled>Select a subject</option>
-                        {f.options.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                    ) : f.type === "textarea" ? (
-                      <textarea
-                        id={f.id}
-                        name={f.name}
-                        required={f.required}
-                        rows={f.rows || 6}
-                        value={values[f.name]}
-                        onChange={onChange(f.name)}
-                        autoComplete={f.autoComplete}
-                        aria-required={f.required || undefined}
-                        aria-invalid={fieldError ? "true" : undefined}
-                        aria-describedby={fieldError ? errorId : undefined}
-                      />
-                    ) : (
-                      <input
-                        id={f.id}
-                        name={f.name}
-                        type={f.type}
-                        required={f.required}
-                        value={values[f.name]}
-                        onChange={onChange(f.name)}
-                        autoComplete={f.autoComplete}
-                        placeholder={f.placeholder}
-                        aria-required={f.required || undefined}
-                        aria-invalid={fieldError ? "true" : undefined}
-                        aria-describedby={fieldError ? errorId : undefined}
-                      />
-                    )}
-                    {fieldError && (
-                      <p id={errorId} className="transmission-error" role="alert">
-                        {fieldError}
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
-              {/* Honeypot: positioned off-screen, never visible to humans. */}
-              <div aria-hidden="true" style={{ position: "absolute", left: "-9999px", top: "auto", width: "1px", height: "1px", overflow: "hidden" }}>
-                <label htmlFor="transmission-website">Website</label>
-                <input
-                  id="transmission-website"
-                  name="website"
-                  type="text"
-                  value={honeypot}
-                  onChange={(e) => setHoneypot(e.target.value)}
-                  tabIndex={-1}
-                  autoComplete="off"
-                />
-              </div>
-              {submitError && (
-                <p className="transmission-error" role="alert">
-                  {submitError}
-                </p>
-              )}
-              <div className="transmission-actions">
-                <button
-                  type="submit"
-                  className="contact-submit"
-                  aria-label={transmission.submit.ariaLabel}
-                  disabled={sending}
-                >
-                  {sending ? "SENDING…" : transmission.submit.label}{" "}
-                  <span aria-hidden="true">↗</span>
-                </button>
-                <button
-                  type="button"
-                  className="text-link transmission-reset"
-                  onClick={onReset}
-                >
-                  CLEAR <span aria-hidden="true">×</span>
-                </button>
-              </div>
-              <p className="transmission-notice" role="note">
-                {transmission.noBackendNotice}
-              </p>
-            </form>
-          ) : (
-            <div
-              id="transmission-success"
-              className="transmission-success"
-              role="status"
-              aria-live="polite"
-              tabIndex={-1}
-            >
-              <span className="section-index">{transmission.success.heading}</span>
-              <p className="body-copy">{transmission.success.body}</p>
-              <p className="body-copy">{transmission.success.note}</p>
-              {transmission.booking.url && (
-                <p className="contact-alt-path">
-                  {transmission.success.bookingPrompt}{" "}
-                  <a href={transmission.booking.url} target="_blank" rel="noreferrer">
-                    {transmission.booking.label} <span aria-hidden="true">↗</span>
-                  </a>
-                </p>
-              )}
-              <div className="transmission-actions">
-                <button type="button" className="text-link" onClick={onReset}>
-                  SEND ANOTHER <span aria-hidden="true">↗</span>
-                </button>
-              </div>
-            </div>
-          )}
-      </section>
-      <section className="contact-next" aria-label="What happens next">
-          <div className="section-index">{transmission.next.sectionIndex}</div>
-          <ol className="contact-next-steps">
-            {transmission.next.steps.map((s) => (
-              <li key={s.num}>
-                <span className="step-num">{s.num}</span>
-                <h3>{s.title}</h3>
-                <p>{s.body}</p>
-              </li>
-            ))}
-          </ol>
-      </section>
-    </main>
-  );
-}
 // ----- Shared: FAQ block -----------------------------------------------------
 // Native <details>/<summary> — zero JS, fully crawler-visible (the Q&A text
 // is in the HTML, which is what search + AI engines index), keyboard
@@ -3204,8 +2942,8 @@ export function ServiceDetail({ go, path }) {
           <p className="display-copy">
             That service page does not exist — but the work does.
           </p>
-          <button type="button" className="text-link" onClick={() => go("/contact")}>
-            GET A FREE QUOTE <span aria-hidden="true">↗</span>
+          <button type="button" className="text-link" onClick={() => go("/")}>
+            BACK TO THE HOMEPAGE <span aria-hidden="true">↗</span>
           </button>
         </section>
       </main>
@@ -3306,9 +3044,6 @@ export function ServiceDetail({ go, path }) {
       <FaqBlock index="QUESTIONS" faqs={svc.faqs} />
 
       <section className="section">
-        <button type="button" className="text-link" onClick={() => go("/contact")}>
-          GET A FREE QUOTE <span aria-hidden="true">↗</span>
-        </button>
         <p className="svc-updated">Updated {svc.updated}.</p>
       </section>
     </main>
