@@ -1314,24 +1314,11 @@ function Home({ go }) {
           </h1>
           <div className="hero-bottom">
             <p>{content.hero.sub}</p>
-            <a
-              className="hero-cta"
-              href={content.hero.cta.to}
-              onClick={(e) => { e.preventDefault(); go(content.hero.cta.to); }}
-            >
-              {content.hero.cta.label}
-              <span aria-hidden="true">
-                ↗
-              </span>
-            </a>
           </div>
         </div>
       </section>
       <section id="manifesto" className="manifesto section reveal">
         <div className="manifesto-text">
-          <p className="signal-line">
-            {content.hero.signal}
-          </p>
           <p className="display-copy">
             {content.hero.body}
           </p>
@@ -1382,17 +1369,8 @@ function Home({ go }) {
             Where things stand: the Philippine company is being registered, the office is selected, and the hardware build runs in phases. Trading starts on paper, then with limited capital.
           </p>
           <p className="body-copy">
-            We are not hiring and we do not take clients. Developers or traders with something real to bring, and business inquiries, go through one door.
+            We are not hiring and we do not take clients.
           </p>
-          <button type="button"
-            className="text-link"
-            onClick={() => go("/contact")}
-          >
-            CONTACT
-            <span aria-hidden="true">
-              ↗
-            </span>
-          </button>
         </div>
       </section>
     </main>

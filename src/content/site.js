@@ -19,9 +19,7 @@ export const site = {
   hero: {
     eyebrow: "PROPRIETARY TRADING & COMPUTING",
     title: ["WE TRADE", "OUR OWN", "CAPITAL."],
-    sub: "A proprietary trading and computing firm. We trade our own capital on infrastructure we own — and we are not for hire.",
-    cta: { label: "CONTACT", to: "/contact" },
-    signal: "Antarctic Labs is not for hire.",
+    sub: "A proprietary trading and computing firm. We trade our own capital on infrastructure we own.",
     body: "Antarctic Labs is a proprietary trading and computing firm. We build our own infrastructure, run our own systems, and trade our own capital. Nothing here is a service, and nothing is built for clients.",
     method: "Our capital. Our hardware. Our code.",
   },
