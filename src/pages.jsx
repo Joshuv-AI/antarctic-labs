@@ -30,6 +30,7 @@ import {
   getCachedArtifacts,
   getFullArtifact,
   getDescription,
+  getCover,
   onIndexReady,
   isIndexLoading,
   warmShardManifest,
@@ -488,22 +489,38 @@ function TowerCover({ a }) {
   const candidates = useMemo(() => coverCandidates(a), [a]);
   const [step, setStep] = useState(0);
   const [olUrl, setOlUrl] = useState(null);
+  const [scUrl, setScUrl] = useState(null);
   useEffect(() => {
     setStep(0);
     setOlUrl(null);
+    setScUrl(null);
   }, [a]);
   useEffect(() => {
     if (!a || candidates.length > 0) return;
     let live = true;
-    lookupOpenLibraryCover(a).then((u) => {
-      if (live && u) setOlUrl(u);
+    // Acquired-covers sidecar first (pre-verified real covers, keyed by
+    // id — the only source that works for index records, which carry no
+    // source_url); the live Open Library lookup remains the fallback.
+    getCover(a.artifact_id).then((u) => {
+      if (!live) return;
+      if (u) {
+        setScUrl(u);
+        return;
+      }
+      lookupOpenLibraryCover(a).then((ol) => {
+        if (live && ol) setOlUrl(ol);
+      });
     });
     return () => {
       live = false;
     };
   }, [a, candidates.length]);
   if (!a) return null;
-  const all = olUrl ? [...candidates, olUrl] : candidates;
+  const all = [
+    ...(scUrl ? [scUrl] : []),
+    ...candidates,
+    ...(olUrl ? [olUrl] : []),
+  ];
   if (step < all.length) {
     return (
       <img

@@ -219,6 +219,38 @@ function descShardKey(artifactId) {
   const s = String(artifactId || "").toLowerCase().slice(-2).replace(/[^a-z0-9]/g, "_");
   return (s + "__").slice(0, 2);
 }
+// Acquired cover images (2026-10-22 cover acquisition pipeline).
+// Sidecar sharded exactly like the descriptions sidecar (LAST 2 chars of
+// the artifact id): /tower-covers/<xx>.json, each a {artifact_id: url}
+// map of covers verified over HTTP by the resolver — a stored URL is a
+// real cover that served an image when checked. Loaded lazily per shard
+// and cached; a failed shard resolves {} and callers fall back to the
+// client-side derivation chain.
+const coverShardCache = {};
+const coverShardPending = {};
+export function getCover(artifactId) {
+  const key = descShardKey(artifactId);
+  if (coverShardCache[key]) {
+    return Promise.resolve(coverShardCache[key][artifactId] || null);
+  }
+  if (!coverShardPending[key]) {
+    coverShardPending[key] = fetchJsonOnce(`/tower-covers/${key}.json`)
+      .then(
+        (data) => {
+          coverShardCache[key] = data || {};
+          coverShardPending[key] = null;
+          return coverShardCache[key];
+        },
+        () => {
+          coverShardCache[key] = {};
+          coverShardPending[key] = null;
+          return coverShardCache[key];
+        }
+      );
+  }
+  return coverShardPending[key].then((shard) => shard[artifactId] || null);
+}
+
 export function getDescription(artifactId) {
   const key = descShardKey(artifactId);
   if (descShardCache[key]) {
