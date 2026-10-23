@@ -210,8 +210,19 @@ export default function StarfieldCanvas() {
       }
       drawConstellation(now);
       if (now >= nextMeteor) {
-        spawnMeteor(now);
-        nextMeteor = now + rand(2200, 5600);
+        // Cadence (2026-10-23, Joshua: "a few more shooting stars —
+        // not that many more, just a few more"): a spawn every
+        // ~1.3–3.4s instead of ~2.2–5.6s, plus an occasional companion
+        // meteor (~30% chance) born a few hundred ms earlier so pairs
+        // streak slightly staggered rather than in lockstep. Hard cap
+        // of 3 concurrent meteors keeps the sky calm.
+        if (meteors.length < 3) {
+          spawnMeteor(now);
+          if (meteors.length < 3 && Math.random() < 0.3) {
+            spawnMeteor(now - rand(150, 450));
+          }
+        }
+        nextMeteor = now + rand(1300, 3400);
       }
       drawMeteors(now, dt);
       raf = requestAnimationFrame(frame);
