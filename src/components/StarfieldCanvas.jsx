@@ -42,15 +42,42 @@ export default function StarfieldCanvas() {
 
     const rand = (min, max) => min + Math.random() * (max - min);
 
-    function build() {
+    // The sky is generated ONCE (buildField) and only ever RESCALED
+    // afterwards (layout). The previous version regenerated every
+    // star/node position with Math.random() on each debounced resize —
+    // on mobile Safari, scrolling shows/hides the URL bar, which fires
+    // resize, which re-randomized the whole sky 150ms later: the stars
+    // visibly jumped/repositioned mid-scroll. Now a resize — URL-bar
+    // band changes included — only re-sizes the canvas bitmap and
+    // scales the existing field proportionally, so every star keeps
+    // its relative position, radius, and twinkle phase forever.
+    let fieldBuilt = false;
+
+    function layout() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const rect = canvas.getBoundingClientRect();
-      w = Math.max(1, Math.floor(rect.width));
-      h = Math.max(1, Math.floor(rect.height));
+      const nw = Math.max(1, Math.floor(rect.width));
+      const nh = Math.max(1, Math.floor(rect.height));
+      if (fieldBuilt && w > 0 && h > 0 && (nw !== w || nh !== h)) {
+        const sx = nw / w;
+        const sy = nh / h;
+        for (const s of stars) {
+          s.x *= sx;
+          s.y *= sy;
+        }
+        for (const n of nodes) {
+          n.x *= sx;
+          n.y *= sy;
+        }
+      }
+      w = nw;
+      h = nh;
       canvas.width = Math.floor(w * dpr);
       canvas.height = Math.floor(h * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
 
+    function buildField() {
       const starCount = Math.min(240, Math.max(90, Math.floor((w * h) / 8500)));
       stars = Array.from({ length: starCount }, () => ({
         x: Math.random() * w,
@@ -63,16 +90,20 @@ export default function StarfieldCanvas() {
 
       // Constellation nodes: a sparse set of brighter stars that drift
       // very slowly and link to near neighbours with faint lines.
+      // They spread over nearly the full height (0.95) so the field
+      // reads as filling the viewport down to where the aurora takes
+      // over, matching the layer's full-height mask in styles.css.
       const nodeCount = w < 700 ? 14 : 24;
       nodes = Array.from({ length: nodeCount }, () => ({
         x: Math.random() * w,
-        y: Math.random() * h * 0.85,
+        y: Math.random() * h * 0.95,
         r: rand(1.1, 2.0),
         vx: rand(-4, 4),
         vy: rand(-2.5, 2.5),
         phase: Math.random() * Math.PI * 2,
       }));
       meteors = [];
+      fieldBuilt = true;
     }
 
     function drawStars(t) {
@@ -198,7 +229,8 @@ export default function StarfieldCanvas() {
       raf = 0;
     }
 
-    build();
+    layout();
+    buildField();
     if (reduce) {
       // One static frame: stars + constellation, no meteors, no loop.
       ctx.clearRect(0, 0, w, h);
@@ -212,7 +244,11 @@ export default function StarfieldCanvas() {
     const onResize = () => {
       window.clearTimeout(resizeTimer);
       resizeTimer = window.setTimeout(() => {
-        build();
+        // Rescale only — never regenerate (see layout/buildField).
+        // Small height-only deltas are the mobile URL-bar band; the
+        // proportional rescale absorbs them without any star moving
+        // relative to the field.
+        layout();
         if (reduce) {
           ctx.clearRect(0, 0, w, h);
           drawStars(0);
