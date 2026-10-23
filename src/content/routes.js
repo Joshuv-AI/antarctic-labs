@@ -91,7 +91,7 @@ export const routeMeta = {
   "/about": {
     title: `The Firm | ${SITE_NAME}`,
     description:
-      "About Antarctic Labs: a three-partner proprietary trading and computing firm. Operations in the United States, infrastructure in the Philippines. No client work.",
+      "About Antarctic Labs: a proprietary trading and computing firm. Operations in the United States, infrastructure in the Philippines. No client work.",
   },
   "/contact": {
     title: `Hire AI Automation Developer — Free Quote | ${SITE_NAME}`,

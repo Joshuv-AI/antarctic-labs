@@ -1,6 +1,10 @@
 // About — Antarctic Labs. Identity fields are populated from the
 // global site identity; the narrative fields below drive the About page:
-// who we are, our mission, what we do, principles, and the partners.
+// who we are, our mission, what we do, principles, and the profiles.
+// Privacy rule (Joshua, 2026-10-22): partner details are context for
+// the firm, not site copy. The profiles at the bottom of this file are
+// the ONLY place a partner is named or described; every other section
+// talks about what the firm does, never who does it.
 
 import { site } from "./site.js";
 
@@ -20,8 +24,8 @@ export const operator = {
   whoWeAre: {
     title: "WHO WE ARE",
     paragraphs: [
-      "Antarctic Labs began as a freelance technology studio. That chapter is closed. The firm is now a partnership of three, built around one idea: own the hardware, own the systems, and let the results decide what grows.",
-      "One partner is on the ground in the Philippines, where the firm is establishing its base: a commercial office and a small data center built around hardware we own and operate. The position matters. The Philippines connects directly toward Hong Kong, and every route is chosen by measurement, not by maps.",
+      "Antarctic Labs is a proprietary trading and computing firm. It began as a freelance technology studio; that chapter is closed. The firm now does one thing: it trades its own capital on infrastructure it owns and operates, built around one idea — own the hardware, own the systems, and let the results decide what grows.",
+      "The work has three parts. Trading systems are developed and run in-house. The hardware is owned: a base in the Philippines — a commercial office and a small data center — is being established around machines the firm owns and operates. And the position is measured, not assumed: the Philippines connects directly toward Hong Kong, and every route is chosen by benchmarking the real endpoints, not by reading maps.",
     ],
   },
 
@@ -29,7 +33,7 @@ export const operator = {
     title: "OUR MISSION",
     statement: "Turn owned infrastructure into durable profit.",
     paragraphs: [
-      "The trading comes first. Algorithms developed by the partners run on our own machines, tested on paper and with limited capital before anything scales. The capital is the partners' own, so protecting it is part of the strategy, not a footnote.",
+      "The trading comes first. Algorithms developed in-house run on our own machines, tested on paper and with limited capital before anything scales. The capital is the firm's own, so protecting it is part of the strategy, not a footnote.",
       "The same hardware can do more than trade. What it becomes beyond trading will be decided the same way everything here is decided: by what proves real when it is measured.",
     ],
   },
@@ -50,7 +54,7 @@ export const operator = {
       {
         title: "Protect the capital",
         since: "ALWAYS",
-        text: "The firm runs on the partners' own money. No single result justifies risking the base that makes the next result possible.",
+        text: "The firm runs on its own money. No single result justifies risking the base that makes the next result possible.",
       },
       {
         title: "No pitch",
@@ -62,14 +66,24 @@ export const operator = {
 
   team: {
     title: "THE PARTNERS",
-    headline: "Three partners.",
-    paragraphs: [
-      "Joshua runs the firm day to day: logistics, business operations, accounting, and overall oversight. Direction is set jointly, with Joshua and Andrew holding the strongest voices.",
-      "Andrew leads engineering: the trading algorithms, the server build, and the systems the firm runs on. He also funds the firm.",
-      "Jay is based in the Philippines and runs the ground operation: the location, the hardware sourcing, and the company's registration and compliance there.",
+    // Profiles (2026-10-22): the single panel of partner paragraphs is
+    // replaced by individual profile cards — Joshua and Andrew only.
+    // This is the only place on the site where a partner is named or
+    // described; keep every other section about the work, not the people.
+    profiles: [
+      {
+        name: "JOSHUA",
+        role: "OPERATIONS, LOGISTICS & ACCOUNTING",
+        text: "Runs the firm day to day: logistics, business operations, accounting, and overall oversight.",
+      },
+      {
+        name: "ANDREW",
+        role: "ENGINEERING & SYSTEMS",
+        text: "Leads engineering: the trading algorithms, the server build, and the systems the firm runs on.",
+      },
     ],
     facts: [
-      ["STRUCTURE", "PARTNERSHIP OF THREE"],
+      ["STRUCTURE", "PRIVATE PARTNERSHIP"],
       ["BASES", "UNITED STATES · PHILIPPINES"],
       ["CLIENT WORK", "NONE"],
       ["STATUS", "IN FORMATION, PHILIPPINES"],

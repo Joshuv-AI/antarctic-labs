@@ -2867,13 +2867,21 @@ export function About({ go }) {
         </div>
       </section>
 
-      <section className="about-grid about-grid-single section reveal">
-        <div className="about-panel">
-          <div className="section-index">{operator.team.title}</div>
-          <p className="display-copy">{operator.team.headline}</p>
-          {operator.team.paragraphs.map((p, i) => (
-            <p className="body-copy" key={i}>{p}</p>
+      <section className="section reveal profiles-section">
+        <div className="section-index">{operator.team.title}</div>
+        <div className="about-grid profiles-grid">
+          {operator.team.profiles.map((p, i) => (
+            <div className="about-panel profile-panel" key={p.name}>
+              <span className="profile-index">
+                PROFILE {String(i + 1).padStart(2, "0")}
+              </span>
+              <p className="display-copy">{p.name}</p>
+              <span className="profile-role">{p.role}</span>
+              <p className="body-copy profile-text">{p.text}</p>
+            </div>
           ))}
+        </div>
+        <div className="about-panel profile-facts-panel">
           <ul className="about-facts">
             {operator.team.facts.map(([k, v]) => (
               <li key={k}>

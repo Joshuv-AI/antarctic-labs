@@ -31,7 +31,7 @@ export const site = {
   territory: [
     [
       "PROPRIETARY TRADING",
-      "Trading algorithms developed by the partners, run on our own infrastructure. Strategies are tested on paper and with limited capital before they are trusted with more.",
+      "Trading algorithms developed in-house, run on our own infrastructure. Strategies are tested on paper and with limited capital before they are trusted with more.",
     ],
     [
       "OWNED INFRASTRUCTURE",

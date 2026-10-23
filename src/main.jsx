@@ -13,6 +13,7 @@ import { ScrollTrigger } from "gsap/ScrollTrigger";
 import "./styles.css";
 import "./shaders/threeui.css";
 import NewBackgroundVideo from "./components/NewBackgroundVideo.jsx";
+import StarfieldCanvas from "./components/StarfieldCanvas.jsx";
 // Silent recovery on chunk-load failure (2026-10-14, hardened 2026-10-17).
 // Deploys ship new hashed chunk filenames; a cached index.html (or an
 // interrupted fetch) can reference a chunk that no longer exists, which
@@ -185,19 +186,15 @@ function RouteErrorFallback({ onRetry }) {
 }
 // Perf (2026-10-01): route-specific WebGL components are lazy-loaded.
 // three.js (~600KB) was shipping to all 15 routes but only renders on
-// /government-contracting. DefenseLines only on /, TypographyVortexCanvas
-// only on Tower routes. Lazy-loading drops the main bundle ~60%.
+// /government-contracting. TypographyVortexCanvas only on Tower routes.
+// Lazy-loading drops the main bundle ~60%.
 // (2026-10-14): wrapped in importWithChunkRetry — a stale cached chunk
 // reference reloads once, silently, instead of blanking the page.
-const DefenseLines = lazy(() =>
-  importWithChunkRetry(() =>
-    import("./shaders/neuform-isolated/NeuformBatchEffects.tsx")
-  ).then((m) => ({ default: m.DefenseLines }))
-    // A decorative shader that fails to load or evaluate must never take
-    // the page down with it: substitute an empty component instead of
-    // throwing into the route error boundary. (2026-10-21)
-    .catch(() => ({ default: () => null }))
-);
+// (2026-10-22): the homepage constellation is no longer the lazy
+// DefenseLines iframe — its canvas stopped painting in production and
+// the opening sky rendered empty. It is now the self-contained
+// StarfieldCanvas (imported with the shell components below): one
+// canvas, no iframe, no CDN, no chunk that can fail silently.
 import { AnimatedTopDock } from "./shaders/animated-top-dock/AnimatedTopDock.tsx";
 const TypographyVortexCanvas = lazy(() =>
   importWithChunkRetry(() =>
@@ -579,21 +576,7 @@ function App() {
                 escape the .page-shell z-index:5 stacking context that would
                 otherwise paint the editorial content on top of them. */}
             <div className="constellation-layer">
-              <Suspense fallback={null}>
-                <WebGLShield>
-                <DefenseLines
-                  mode="dark"
-                  speed={1.2}
-                  size={1.0}
-                  length={0.35}
-                  density={1.0}
-                  opacity={0.05}
-                  hue={0}
-                  saturation={0.0}
-                  brightness={1.65}
-                />
-                </WebGLShield>
-              </Suspense>
+              <StarfieldCanvas />
             </div>
             {/* Brand greeting: monumental center lockup over the opening
                 starfield (Montfort-style). Fades and lifts away on the
@@ -1003,10 +986,13 @@ function HomeStats() {
     io.observe(el);
     return () => io.disconnect();
   }, []);
-  // Static figures for the firm as it stands: three partners,
-  // two countries, zero clients. The firm takes no client work.
+  // Static figures for the firm as it stands: one owned data center
+  // (in formation in the Philippines), two countries, zero clients.
+  // The firm takes no client work. (2026-10-22: the old "3 PARTNERS"
+  // figure came out with the partner details — the stats describe
+  // what the firm does, not who is in it.)
   const stats = [
-    [3, "PARTNERS"],
+    [1, "DATA CENTER"],
     [2, "COUNTRIES"],
     [0, "CLIENTS"],
   ];
@@ -1390,7 +1376,7 @@ function Home({ go }) {
             Small, private, and deliberate.
           </p>
           <p className="body-copy">
-            The firm is three partners. Andrew leads engineering and the hardware build. Jay runs the ground operation in the Philippines, including registration and compliance. Joshua runs logistics, operations, accounting, and oversight.
+            The work is proprietary trading, the infrastructure it runs on, and the research and systems behind both. Algorithms are developed in-house and run on machines the firm owns and operates. Strategy research, execution, monitoring, and risk controls are kept separate, so a problem in one is visible in the others.
           </p>
           <p className="body-copy">
             Where things stand: the Philippine company is being registered, the office is selected, and the hardware build runs in phases. Trading starts on paper, then with limited capital.
