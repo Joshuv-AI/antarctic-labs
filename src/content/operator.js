@@ -38,32 +38,6 @@ export const operator = {
     ],
   },
 
-  beliefs: {
-    title: "OPERATING BELIEFS",
-    items: [
-      {
-        title: "Own the machine",
-        since: "THE FOUNDATION",
-        text: "Renting puts the core of the business in someone else's hands. We own the hardware our systems run on, and we operate it ourselves.",
-      },
-      {
-        title: "Measure, do not assume",
-        since: "ON EVERY ROUTE",
-        text: "A fast connection is a claim until it is timed. Latency, reliability, and execution are measured against the real endpoints before money depends on them.",
-      },
-      {
-        title: "Protect the capital",
-        since: "ALWAYS",
-        text: "The firm runs on its own money. No single result justifies risking the base that makes the next result possible.",
-      },
-      {
-        title: "No pitch",
-        since: "SINCE THE PIVOT",
-        text: "We do not sell services and we do not perform for clients. The work is the pitch, and most of it is not public.",
-      },
-    ],
-  },
-
   team: {
     title: "THE PARTNERS",
     // Profiles (2026-10-22): the single panel of partner paragraphs is

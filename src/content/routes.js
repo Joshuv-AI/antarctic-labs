@@ -83,6 +83,11 @@ export const routeMeta = {
     description:
       "Suggest a book, document, or text for the Tower of Babel free online library. Every suggestion is reviewed; accepted works are preserved in clean text.",
   },
+  "/tower-of-babel/donate": {
+    title: `Donate to the Free Online Library | Tower of Babel`,
+    description:
+      "Support the Tower of Babel free online library: one-time or monthly contributions keep more than 390,000 books and texts free for everyone — no ads, no paywalls, no data sold.",
+  },
   "/government-contracting": {
     title: `Small Business Government Contracting | ${SITE_NAME}`,
     description:
@@ -144,6 +149,7 @@ export const routes = [
   // Literal suggest route must precede the dynamic :id pattern so
   // matchRoute resolves it as its own page, not an artifact id.
   "/tower-of-babel/library/suggest",
+  "/tower-of-babel/donate",
   "/tower-of-babel/library/:id",
   "/government-contracting",
   "/about",

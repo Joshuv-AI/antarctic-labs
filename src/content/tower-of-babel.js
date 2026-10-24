@@ -158,4 +158,41 @@ export const towerOfBabel = {
       },
     ],
   },
+  // Support / donate — the /tower-of-babel/donate page. Modeled on the
+  // Internet Archive / Open Library patron page: letter left, three-step
+  // panel right. HONESTY RULE: Antarctic Labs is NOT a registered charity,
+  // so the letter must never claim tax-deductibility (unlike IA's page).
+  // Crypto wallets supplied by Joshua 2026-10-24 (format-checked: BTC
+  // 34-char P2SH, ETH 42-char hex). Never put a placeholder address here.
+  support: {
+    eyebrow:
+      "The Tower is free to read, forever. It stays that way because readers who can afford to help, do.",
+    letter: {
+      title: "A Message From the Team Behind the Tower of Babel",
+      greeting: "Dear Tower of Babel Patron,",
+      paragraphs: [
+        "As a project of Antarctic Labs — an independent library dedicated to preserving the written record of humankind — the Tower of Babel is working to make the essential texts of every culture, religion, and era available to everyone, everywhere, free. The library already holds more than 390,000 works — books, sacred texts, declassified documents, papers, and transcripts — and it grows every day on the road to 500,000.",
+        "Our goal is simple to say and enormous to do: every published work that matters, within everyone's reach. Achieving it will take servers, storage, bandwidth, and years of steady preservation work — and, most importantly, readers like you.",
+        "Because we firmly believe libraries should be free, we will never run ads, sell reader data, or charge for access to the collection. Instead, we rely on the generosity of the people who use it to keep the lights on.",
+        "If you enjoy wandering our virtual stacks, please consider supporting the Tower today. A little goes a long way — most readers never give, so every contribution, one-time or monthly, carries real weight.",
+      ],
+      signoff: "Thank you for reading with us.",
+      signature: { name: "Joshua Almodovar", role: "Founder, Antarctic Labs" },
+      fineprint:
+        "You will receive an email receipt from our payment processor for your records. One honest note: Antarctic Labs is an independent project, not a registered charity, so contributions are not tax-deductible. Every dollar goes directly to the servers, storage, and preservation work that keep the library online and growing.",
+    },
+    amounts: [5, 10, 25, 50, 100, 500, 1000],
+    crypto: [
+      {
+        symbol: "BTC",
+        name: "Bitcoin",
+        address: "33fQp6EVPpcamqeBYgmgLyQwfgokfacCno",
+      },
+      {
+        symbol: "ETH",
+        name: "Ethereum",
+        address: "0x74Fb7F08a971c291C0736eE3608767d36Fd76559",
+      },
+    ],
+  },
 };

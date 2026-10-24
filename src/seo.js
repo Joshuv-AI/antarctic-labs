@@ -203,6 +203,13 @@ function buildBaseJsonLd(path, canonicalHref) {
       { name: "SUGGEST", url: canonicalHref },
     ]);
   }
+  if (path === "/tower-of-babel/donate") {
+    return breadcrumbJsonLd([
+      { name: "HOME", url: SITE_URL + "/" },
+      { name: "TOWER OF BABEL", url: SITE_URL + "/tower-of-babel" },
+      { name: "DONATE", url: canonicalHref },
+    ]);
+  }
   const match = matchRoute(path);
   // matchRoute returns a string for literal matches and
   // { pattern, params } for dynamic ones.

@@ -1305,6 +1305,13 @@ function TowerLibrarySection({ go, onReady }) {
           >
             SUGGEST AN ENTRY <span aria-hidden="true">↗</span>
           </button>
+          <button
+            type="button"
+            className="tower-access-btn tower-donate-btn"
+            onClick={() => go("/tower-of-babel/donate")}
+          >
+            DONATE <span aria-hidden="true">♥</span>
+          </button>
         </div>
         {artifacts.length === 0 ? (
           <div className="tower-index-empty">
@@ -1756,6 +1763,260 @@ export function SuggestEntry({ go }) {
             </div>
           )}
         </div>
+      </section>
+    </main>
+  );
+}
+
+// ----- Tower of Babel / donate ----------------------------------------------
+// Patron page modeled on the Internet Archive / Open Library donate page:
+// letter left, three-step panel right. Donors pick the real payment method
+// inside Stripe Checkout; the tiles here are just a preview. Amounts and
+// the letter live in towerOfBabel.support so copy stays data-driven.
+const DONATE_FEE_RATE = 0.029;
+const DONATE_FEE_FIXED_CENTS = 30;
+const donateGrossUp = (cents) =>
+  Math.ceil((cents + DONATE_FEE_FIXED_CENTS) / (1 - DONATE_FEE_RATE));
+const donateFmt = (cents) => `$${(cents / 100).toFixed(2)}`;
+
+export function DonatePage() {
+  const support = towerOfBabel.support || {};
+  const letter = support.letter || {};
+  const amounts = support.amounts || [5, 10, 25, 50, 100, 500, 1000];
+  const crypto = support.crypto || [];
+  const params =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search)
+      : new URLSearchParams();
+  const [frequency, setFrequency] = useState("once");
+  const [preset, setPreset] = useState(25);
+  const [customMode, setCustomMode] = useState(false);
+  const [customValue, setCustomValue] = useState("");
+  const [coverFees, setCoverFees] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [notLive, setNotLive] = useState(false);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState("");
+  const monthly = frequency === "monthly";
+  const parsedCustom = Math.round(parseFloat(customValue || "0") * 100);
+  const baseCents = customMode
+    ? Number.isFinite(parsedCustom) && parsedCustom > 0
+      ? parsedCustom
+      : 0
+    : preset * 100;
+  const totalCents = coverFees && baseCents > 0 ? donateGrossUp(baseCents) : baseCents;
+  const feeCents = totalCents - baseCents;
+
+  async function submit() {
+    if (busy || baseCents < 100) {
+      if (baseCents < 100) setError("Enter an amount of $1 or more.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotLive(false);
+    try {
+      const res = await fetch("/api/donate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          frequency,
+          amount_cents: baseCents,
+          cover_fees: coverFees,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.status === 503) {
+        setNotLive(true);
+      } else if (data && data.ok && data.url) {
+        window.location.href = data.url;
+      } else {
+        setError("Checkout could not be started. Please try again.");
+      }
+    } catch {
+      setError("Checkout could not be started. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function copyAddress(address, symbol) {
+    const done = () => setCopied(symbol);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(address).then(done).catch(done);
+    } else {
+      done();
+    }
+  }
+
+  return (
+    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
+      <section className="donate-section">
+        {support.eyebrow ? <p>{support.eyebrow}</p> : null}
+        {params.get("thanks") === "1" ? (
+          <div className="donate-thanks" role="status">
+            Thank you — your support keeps the Tower free for everyone.
+          </div>
+        ) : null}
+        {params.get("canceled") === "1" ? (
+          <div className="donate-canceled" role="status">
+            Your donation was canceled — nothing was charged. You can try
+            again whenever you like.
+          </div>
+        ) : null}
+        <div className="donate-layout">
+          <div className="donate-letter">
+            {letter.title ? (
+              <h2 className="donate-letter-title">{letter.title}</h2>
+            ) : null}
+            {letter.greeting ? <p>{letter.greeting}</p> : null}
+            {(letter.paragraphs || []).map((p, i) => (
+              <p key={i}>{p}</p>
+            ))}
+            {letter.signoff ? <p>{letter.signoff}</p> : null}
+            {letter.signature ? (
+              <p className="donate-sign">
+                <strong>{letter.signature.name}</strong>
+                <br />
+                <em>{letter.signature.role}</em>
+              </p>
+            ) : null}
+            {letter.fineprint ? (
+              <p className="donate-fineprint">{letter.fineprint}</p>
+            ) : null}
+          </div>
+          <aside className="donate-panel">
+            <div className="donate-step">
+              <span className="donate-step-n">1</span>
+              <h3>Choose a frequency</h3>
+              <div className="donate-toggle">
+                <button
+                  type="button"
+                  className={frequency === "once" ? "active" : ""}
+                  onClick={() => setFrequency("once")}
+                >
+                  One time
+                </button>
+                <button
+                  type="button"
+                  className={frequency === "monthly" ? "active" : ""}
+                  onClick={() => setFrequency("monthly")}
+                >
+                  Monthly
+                </button>
+              </div>
+            </div>
+            <div className="donate-step">
+              <span className="donate-step-n">2</span>
+              <h3>Choose an amount (USD)</h3>
+              <div className="donate-amounts">
+                {amounts.map((a) => (
+                  <button
+                    key={a}
+                    type="button"
+                    className={!customMode && preset === a ? "active" : ""}
+                    onClick={() => {
+                      setCustomMode(false);
+                      setPreset(a);
+                    }}
+                  >
+                    ${a.toLocaleString()}
+                  </button>
+                ))}
+                <div className="donate-custom">
+                  <span>Custom: $</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="0.01"
+                    inputMode="decimal"
+                    value={customValue}
+                    placeholder="Other"
+                    aria-label="Custom amount in dollars"
+                    onFocus={() => setCustomMode(true)}
+                    onChange={(e) => {
+                      setCustomMode(true);
+                      setCustomValue(e.target.value);
+                    }}
+                  />
+                </div>
+              </div>
+              <label className="donate-cover">
+                <input
+                  type="checkbox"
+                  checked={coverFees}
+                  onChange={(e) => setCoverFees(e.target.checked)}
+                />
+                {baseCents > 0 && feeCents > 0
+                  ? ` I'll generously add ${donateFmt(feeCents)} to cover fees.`
+                  : " I'll generously add a little extra to cover fees."}
+              </label>
+            </div>
+            <p className="donate-total">
+              Total: {donateFmt(totalCents)}
+              {monthly ? " / month" : ""}
+            </p>
+            <div className="donate-step">
+              <span className="donate-step-n">3</span>
+              <h3>Choose a payment method</h3>
+              <div className="donate-methods">
+                {["Apple Pay", "G Pay", "PayPal", "Credit Card"].map((m) => (
+                  <span key={m}>{m}</span>
+                ))}
+              </div>
+              <p className="donate-methods-note">
+                You pick the exact method on Stripe&apos;s secure checkout
+                page — we never see or store your card number.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="donate-go"
+              disabled={busy || baseCents < 100}
+              onClick={submit}
+            >
+              {busy
+                ? "Working…"
+                : `DONATE ${donateFmt(totalCents)}${monthly ? " / MONTH" : ""}`}
+            </button>
+            {notLive ? (
+              <p className="donate-notlive" role="status">
+                Donations are being switched on — card payments will be
+                available here shortly. Thank you for your patience.
+              </p>
+            ) : null}
+            {error ? (
+              <p className="donate-error" role="status">
+                {error}
+              </p>
+            ) : null}
+          </aside>
+        </div>
+        {crypto.length > 0 ? (
+          <div className="donate-other">
+            <h3 className="donate-other-title">Other ways to support</h3>
+            <p>
+              Prefer crypto? Send to one of these wallets — every
+              contribution goes to the same servers, storage, and
+              preservation work.
+            </p>
+            {crypto.map((c) => (
+              <div className="donate-crypto-row" key={c.symbol}>
+                <div className="donate-crypto-head">
+                  {c.symbol} — {c.name}
+                </div>
+                <div className="donate-crypto-addr">{c.address}</div>
+                <button
+                  type="button"
+                  className="donate-copy-btn"
+                  onClick={() => copyAddress(c.address, c.symbol)}
+                >
+                  {copied === c.symbol ? "Copied" : "Copy"}
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </section>
     </main>
   );
@@ -2999,7 +3260,7 @@ export function Government({ go }) {
 // ----- About ---------------------------------------------------------------
 export function About({ go }) {
   return (
-    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
+    <main className="page-shell inner-page about-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">{operator.index}</div>
         <h1>{operator.heading}</h1>
@@ -3023,21 +3284,6 @@ export function About({ go }) {
           </p>
           {operator.mission.paragraphs.map((p, i) => (
             <p className="body-copy" key={i}>{p}</p>
-          ))}
-        </div>
-      </section>
-
-      <section className="section reveal">
-        <div className="section-index">{operator.beliefs.title}</div>
-        <div className="beliefs-list">
-          {operator.beliefs.items.map((b) => (
-            <div className="belief-row" key={b.title}>
-              <div>
-                <h3>{b.title}</h3>
-                <span className="belief-since">{b.since}</span>
-              </div>
-              <p className="body-copy">{b.text}</p>
-            </div>
           ))}
         </div>
       </section>

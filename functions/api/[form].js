@@ -2,6 +2,8 @@
 //
 //   POST /api/suggest  -> { type, title, format, seriesDetails, creator,
 //                           year, source, notes, website? }
+//   POST /api/donate   -> { frequency, amount_cents, cover_fees, website? }
+//                         creates a Stripe Checkout Session (see below).
 //
 // Validates the payload, drops bot submissions via the `website` honeypot
 // field, applies a light per-IP rate limit, and forwards the submission to
@@ -86,9 +88,69 @@ function buildSuggestEmail(d) {
   };
 }
 
+// ----- Donations: Stripe Checkout session (POST /api/donate) --------------
+// The Tower donate page posts { frequency, amount_cents, cover_fees } and
+// this creates a Stripe Checkout Session with a server-built price, so
+// the amount a donor is charged is always computed here — never trusted
+// from the client beyond the chosen base amount (validated to a sane
+// range). Donors pick the actual payment method (card, Apple Pay,
+// Google Pay, PayPal — whatever the Stripe account has enabled) on
+// Stripe's hosted page. Requires STRIPE_SECRET_KEY (secret key from
+// Joshua's own Stripe account) as a Pages secret; without it the answer
+// is 503 and the page shows its not-live notice. Standard Stripe US
+// pricing is assumed for the cover-fees gross-up: 2.9% + 30¢.
+const DONATE_FEE_RATE = 0.029;
+const DONATE_FEE_FIXED_CENTS = 30;
+const donateGrossUp = (cents) =>
+  Math.ceil((cents + DONATE_FEE_FIXED_CENTS) / (1 - DONATE_FEE_RATE));
+
+async function createDonateCheckout(env, { frequency, baseCents, coverFees, origin }) {
+  const key = env.STRIPE_SECRET_KEY;
+  if (!key) return { ok: false, notConfigured: true };
+  const total = coverFees ? donateGrossUp(baseCents) : baseCents;
+  const monthly = frequency === "monthly";
+  const p = new URLSearchParams();
+  p.set("mode", monthly ? "subscription" : "payment");
+  if (!monthly) p.set("submit_type", "donate");
+  p.set("success_url", `${origin}/tower-of-babel/donate?thanks=1`);
+  p.set("cancel_url", `${origin}/tower-of-babel/donate?canceled=1`);
+  p.set("line_items[0][quantity]", "1");
+  p.set("line_items[0][price_data][currency]", "usd");
+  p.set("line_items[0][price_data][unit_amount]", String(total));
+  p.set(
+    "line_items[0][price_data][product_data][name]",
+    monthly
+      ? "Tower of Babel Library — monthly support"
+      : "Tower of Babel Library — one-time support"
+  );
+  if (monthly) p.set("line_items[0][price_data][recurring][interval]", "month");
+  p.set("metadata[source]", "tower-donate");
+  p.set("metadata[frequency]", frequency);
+  p.set("metadata[base_amount_cents]", String(baseCents));
+  p.set("metadata[cover_fees]", coverFees ? "yes" : "no");
+  if (monthly) p.set("subscription_data[metadata][source]", "tower-donate");
+  let res;
+  try {
+    res = await fetch("https://api.stripe.com/v1/checkout/sessions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: p.toString(),
+    });
+  } catch {
+    return { ok: false };
+  }
+  if (!res.ok) return { ok: false };
+  const data = await res.json().catch(() => null);
+  if (!data || typeof data.url !== "string" || !data.url) return { ok: false };
+  return { ok: true, url: data.url };
+}
+
 export async function onRequestPost({ request, env, params }) {
   const kind = params.form;
-  if (kind !== "suggest") {
+  if (kind !== "suggest" && kind !== "donate") {
     return json({ ok: false, error: "unknown form" }, 404);
   }
 
@@ -112,6 +174,39 @@ export async function onRequestPost({ request, env, params }) {
 
   // Honeypot: bots fill it, humans never see it. Swallow silently.
   if (str(data.website).length > 0) return json({ ok: true });
+
+  if (kind === "donate") {
+    const frequency = str(data.frequency);
+    const baseCents = Number(data.amount_cents);
+    const coverFees = data.cover_fees === true;
+    if (
+      (frequency !== "once" && frequency !== "monthly") ||
+      !Number.isInteger(baseCents) ||
+      baseCents < 100 ||
+      baseCents > 2500000
+    ) {
+      return json({ ok: false, error: "invalid amount" }, 400);
+    }
+    let origin = "https://antarctic-labs.com";
+    try {
+      origin = new URL(request.url).origin;
+    } catch {
+      /* keep the production origin */
+    }
+    const session = await createDonateCheckout(env, {
+      frequency,
+      baseCents,
+      coverFees,
+      origin,
+    });
+    if (!session.ok) {
+      if (session.notConfigured) {
+        return json({ ok: false, error: "payments not configured" }, 503);
+      }
+      return json({ ok: false, error: "checkout failed" }, 502);
+    }
+    return json({ ok: true, url: session.url });
+  }
 
   const d = {
     type: str(data.type),
