@@ -38,6 +38,17 @@ export const towerOfBabel = {
     // Library FAQ — rendered on /tower-of-babel/library, FAQPage JSON-LD.
     faqs: libraryFaqs,
   },
+  // Collections & hubs — server-rendered hub pages (Pages Functions, not
+  // SPA routes): /tower-of-babel/hubs. Rendered on the landing as a plain
+  // anchor (full page load), never via the SPA router.
+  hubs: {
+    sectionIndex: "COLLECTIONS & HUBS",
+    label: "COLLECTIONS & HUBS",
+    body:
+      "Browse the catalog by collection: sacred texts by tradition, the most-collected authors, declassified documents grouped by programme, and a course list of primary sources.",
+    cta: "EXPLORE THE HUBS",
+    href: "/tower-of-babel/hubs",
+  },
   // Agent-resource FAQ — emitted as FAQPage JSON-LD on /tower-of-babel/api.
   agentFaqs: apiPage.faqs,
   // Full agent-resource page content for /tower-of-babel/api.

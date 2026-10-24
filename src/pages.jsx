@@ -136,6 +136,16 @@ export function TowerOfBabel({ go, onReady }) {
         </details>
       </section>
 
+      {/* Collections & hubs — server-rendered pages (Pages Functions), so
+          this is a plain anchor (full page load), NOT an SPA go() route. */}
+      <section className="section tower-hubs-section">
+        <div className="section-index">{towerOfBabel.hubs.sectionIndex}</div>
+        <p className="body-copy">{towerOfBabel.hubs.body}</p>
+        <a className="text-link" href={towerOfBabel.hubs.href}>
+          {towerOfBabel.hubs.cta} <span aria-hidden="true">↗</span>
+        </a>
+      </section>
+
       {/* The full library, poured directly below the landing content. */}
       <TowerLibrarySection go={go} onReady={onReady} />
     </main>

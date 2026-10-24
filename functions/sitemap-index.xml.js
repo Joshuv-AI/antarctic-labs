@@ -4,6 +4,10 @@
 //   2. /sitemap-entries/N.xml  one <urlset> per 45,000 library entries,
 //      streamed from the catalog shards by
 //      functions/sitemap-entries/[n].js
+//   3. /sitemap-hubs.xml     the Phase 2 hub pages (functions/sitemap-hubs.xml.js)
+//      [PHASE 2 CHANGE: this entry and its <sitemap> block below were
+//      added in Phase 2; everything else is the Phase 1 function as
+//      deployed.]
 //
 // Why a function and not committed XML files: the catalog grows by tens of
 // thousands of entries via data-only pushes that skip the site build
@@ -70,6 +74,13 @@ export async function onRequest(context) {
       `  </sitemap>`
     );
   }
+  // PHASE 2: hub pages urlset.
+  lines.push(
+    `  <sitemap>`,
+    `    <loc>${SITE}/sitemap-hubs.xml</loc>`,
+    `    <lastmod>${today}</lastmod>`,
+    `  </sitemap>`
+  );
   lines.push(`</sitemapindex>`, ``);
 
   const res = new Response(lines.join("\n"), {
