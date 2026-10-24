@@ -38,17 +38,10 @@ export const towerOfBabel = {
     // Library FAQ — rendered on /tower-of-babel/library, FAQPage JSON-LD.
     faqs: libraryFaqs,
   },
-  // Collections & hubs — server-rendered hub pages (Pages Functions, not
-  // SPA routes): /tower-of-babel/hubs. Rendered on the landing as a plain
-  // anchor (full page load), never via the SPA router.
-  hubs: {
-    sectionIndex: "COLLECTIONS & HUBS",
-    label: "COLLECTIONS & HUBS",
-    body:
-      "Browse the catalog by collection: sacred texts by tradition, the most-collected authors, declassified documents grouped by programme, and a course list of primary sources.",
-    cta: "EXPLORE THE HUBS",
-    href: "/tower-of-babel/hubs",
-  },
+  // Collections — removed 2026-10-24: the old server-rendered hub pages
+  // (/tower-of-babel/hubs) were deleted. Collections now live only as a
+  // filter inside the library browse section (src/lib/tower-collections.js),
+  // fed by public/tower-hubs-index.json. No hub link belongs here.
   // Agent-resource FAQ — emitted as FAQPage JSON-LD on /tower-of-babel/api.
   agentFaqs: apiPage.faqs,
   // Full agent-resource page content for /tower-of-babel/api.

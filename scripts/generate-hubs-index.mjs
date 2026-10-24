@@ -7,6 +7,16 @@
 //   node scripts/generate-hubs-index.mjs [shardsDir] [outFile]
 // Defaults: public/catalog-shards/ -> public/tower-hubs-index.json
 //
+// WARNING (2026-10-24): the local public/catalog-shards/ snapshot in this
+// tree is STALE (133,509 records, Oct 18) and must NOT be used for a live
+// regeneration — it would silently shrink the index. Regenerate from the
+// CURRENT live shards at the exact main HEAD (fetch via the GitHub API,
+// never raw.githubusercontent.com alone — the CDN copy can be stale),
+// and verify the shard total against the live catalog count (OAI
+// completeListSize / the site's own live total) before writing:
+//   node scripts/generate-hubs-index.mjs <live-shards-dir> public/tower-hubs-index.json
+// The 2026-10-24 regeneration from live shards gave 419,322 records.
+//
 // Why precomputed: the hub walk (two full passes over ~400k catalog records
 // with per-record regex matching) exceeds the Cloudflare Workers CPU time
 // limit when run per-request (diagnosed 2026-10-24: ExceededCpu on

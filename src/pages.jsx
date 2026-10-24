@@ -1096,7 +1096,7 @@ function TowerLibrarySection({ go, onReady }) {
       return;
     }
     requestCatalogIndex();
-  }, [query, bucketFilter, sortId, rowBudget]);
+  }, [query, bucketFilter, sortId, rowBudget, collKey]);
   // Approach trigger: start the index when the results area comes within
   // ~800px of the viewport, so it is usually ready before the visitor
   // arrives at it. Re-armed on every data phase (bootstrap, phase 0/1,
