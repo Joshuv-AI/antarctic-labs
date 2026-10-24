@@ -1779,7 +1779,89 @@ const donateGrossUp = (cents) =>
   Math.ceil((cents + DONATE_FEE_FIXED_CENTS) / (1 - DONATE_FEE_RATE));
 const donateFmt = (cents) => `$${(cents / 100).toFixed(2)}`;
 
-export function DonatePage() {
+// Payment-brand marks for the donate panel, drawn as small inline SVGs so
+// the method tiles read like a real checkout screen (white badges, brand
+// colors) instead of plain text bubbles. These are nominative marks: they
+// name the methods Stripe's checkout page offers when enabled.
+function AppleMark() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" fill="#000">
+      <path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.702" />
+    </svg>
+  );
+}
+function GoogleMark() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+      <path fill="#4285F4" d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47a5.53 5.53 0 0 1-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82z" />
+      <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09A12 12 0 0 0 12 24z" />
+      <path fill="#FBBC05" d="M5.27 14.29A7.2 7.2 0 0 1 4.89 12c0-.8.14-1.57.38-2.29H1.29a12 12 0 0 0 0 8.58l3.98-3z" />
+      <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42A11.97 11.97 0 0 0 12 0 12 12 0 0 0 1.29 6.62l3.98 3.09C6.22 6.86 8.87 4.75 12 4.75z" />
+    </svg>
+  );
+}
+function MastercardMark() {
+  return (
+    <svg viewBox="0 0 36 22" width="30" height="18" aria-hidden="true">
+      <circle cx="13" cy="11" r="10" fill="#EB001B" />
+      <circle cx="23" cy="11" r="10" fill="#F79E1B" fillOpacity="0.85" />
+    </svg>
+  );
+}
+function AmexMark() {
+  return (
+    <svg viewBox="0 0 34 20" width="30" height="18" aria-hidden="true">
+      <rect width="34" height="20" rx="3" fill="#2E77BC" />
+      <text x="17" y="14" textAnchor="middle" fontSize="8.5" fontWeight="800" fill="#fff" fontFamily="Arial, sans-serif">AMEX</text>
+    </svg>
+  );
+}
+function DiscoverMark() {
+  return (
+    <svg viewBox="0 0 52 20" width="44" height="17" aria-hidden="true">
+      <circle cx="10" cy="10" r="8" fill="#F48120" />
+      <text x="21" y="14" fontSize="8.5" fontWeight="800" fill="#20242b" fontFamily="Arial, sans-serif">DISCOVER</text>
+    </svg>
+  );
+}
+function JcbMark() {
+  return (
+    <svg viewBox="0 0 30 20" width="27" height="18" aria-hidden="true">
+      <rect width="30" height="20" rx="3" fill="#0B4EA2" />
+      <rect x="10" width="10" height="20" fill="#CC122E" />
+      <rect x="20" width="10" height="20" fill="#0E8A3E" />
+      <text x="15" y="14.5" textAnchor="middle" fontSize="8" fontWeight="800" fill="#fff" fontFamily="Arial, sans-serif">JCB</text>
+    </svg>
+  );
+}
+function BtcIcon({ size = 34 }) {
+  return (
+    <svg viewBox="0 0 40 40" width={size} height={size} aria-hidden="true">
+      <circle cx="20" cy="20" r="20" fill="#F7931A" />
+      <text x="20" y="28.5" textAnchor="middle" fontSize="22" fontWeight="700" fill="#fff" fontFamily="Arial, sans-serif">₿</text>
+    </svg>
+  );
+}
+function EthIcon({ size = 34 }) {
+  return (
+    <svg viewBox="0 0 40 40" width={size} height={size} aria-hidden="true">
+      <polygon points="20,3 31,20 20,25 9,20" fill="#627EEA" />
+      <polygon points="20,37 31,22 20,27 9,22" fill="#3C5ACD" />
+    </svg>
+  );
+}
+function CoinIcon({ symbol, size }) {
+  if (symbol === "BTC") return <BtcIcon size={size} />;
+  if (symbol === "ETH") return <EthIcon size={size} />;
+  return null;
+}
+
+export function DonatePage({ onReady }) {
+  // Report ready on mount so the Tower boot loader (same ceremony as the
+  // library pages) dismisses on its normal beat instead of the failsafe.
+  useEffect(() => {
+    if (onReady) onReady();
+  }, [onReady]);
   const support = towerOfBabel.support || {};
   const letter = support.letter || {};
   const amounts = support.amounts || [5, 10, 25, 50, 100, 500, 1000];
@@ -2002,9 +2084,31 @@ export function DonatePage() {
               <span className="donate-step-n">4</span>
               <h3>Choose a payment method</h3>
               <div className="donate-methods">
-                {["Apple Pay", "G Pay", "PayPal", "Credit Card"].map((m) => (
-                  <span key={m}>{m}</span>
-                ))}
+                <div className="donate-pay-row">
+                  <span className="donate-pay-tile" aria-label="Apple Pay">
+                    <AppleMark />
+                    <span className="donate-pay-word">Pay</span>
+                  </span>
+                  <span className="donate-pay-tile" aria-label="Google Pay">
+                    <GoogleMark />
+                    <span className="donate-pay-word donate-pay-word-g">Pay</span>
+                  </span>
+                  <span className="donate-pay-tile donate-paypal" aria-label="PayPal">
+                    <span className="donate-paypal-a">Pay</span>
+                    <span className="donate-paypal-b">Pal</span>
+                  </span>
+                </div>
+                <div className="donate-card-tile">
+                  <span className="donate-card-label">Credit Card</span>
+                  <span className="donate-card-marks" aria-label="Visa, Mastercard, American Express, Discover, JCB, UnionPay">
+                    <span className="donate-visa">VISA</span>
+                    <MastercardMark />
+                    <AmexMark />
+                    <DiscoverMark />
+                    <JcbMark />
+                    <span className="donate-unionpay">UnionPay</span>
+                  </span>
+                </div>
               </div>
               <p className="donate-methods-note">
                 You pick the exact method on Stripe&apos;s secure checkout
@@ -2058,27 +2162,37 @@ export function DonatePage() {
         {crypto.length > 0 ? (
           <div className="donate-other reveal">
             <div className="donate-or">OR</div>
-            <h3 className="donate-other-title">Donate cryptocurrency</h3>
-            <p className="body-copy">
-              Prefer crypto? Send to one of these wallets — every
-              contribution goes to the same servers, storage, and
-              preservation work.
-            </p>
-            {crypto.map((c) => (
-              <div className="donate-crypto-row" key={c.symbol}>
-                <div className="donate-crypto-head">
-                  {c.symbol} — {c.name}
-                </div>
-                <div className="donate-crypto-addr">{c.address}</div>
-                <button
-                  type="button"
-                  className="donate-copy-btn"
-                  onClick={() => copyAddress(c.address, c.symbol)}
-                >
-                  {copied === c.symbol ? "Copied" : "Copy"}
-                </button>
+            <div className="donate-crypto-box">
+              <h3 className="donate-other-title">Donate cryptocurrency</h3>
+              <div className="donate-crypto-icons" aria-hidden="true">
+                {crypto.map((c) => (
+                  <CoinIcon key={c.symbol} symbol={c.symbol} size={34} />
+                ))}
               </div>
-            ))}
+              <p className="donate-crypto-intro">
+                Prefer crypto? Send to one of these wallets — every
+                contribution goes to the same servers, storage, and
+                preservation work.
+              </p>
+              {crypto.map((c) => (
+                <div className="donate-crypto-row" key={c.symbol}>
+                  <div className="donate-crypto-head">
+                    <span className="donate-crypto-name">
+                      <CoinIcon symbol={c.symbol} size={20} />
+                      {c.symbol} — {c.name}
+                    </span>
+                    <button
+                      type="button"
+                      className="donate-copy-btn"
+                      onClick={() => copyAddress(c.address, c.symbol)}
+                    >
+                      {copied === c.symbol ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                  <div className="donate-crypto-addr">{c.address}</div>
+                </div>
+              ))}
+            </div>
           </div>
         ) : null}
       </section>

@@ -431,6 +431,7 @@ function App() {
     const p = window.location.pathname;
     const isTowerDest =
       p === "/tower-of-babel/library" ||
+      p === "/tower-of-babel/donate" ||
       (p.startsWith("/tower-of-babel/library/") &&
         p !== "/tower-of-babel/library/suggest");
     if (isTowerDest) raiseTowerBoot();
@@ -483,15 +484,18 @@ function App() {
     // Fires only on real navigation intent, never speculatively, so no
     // bandwidth is wasted.
     import("./pages.jsx").catch(() => {});
-    // Entering the Tower of Babel (landing, library, or any entry page) from
-    // inside the app: raise the Tower loader so the transition gets the same
-    // branded beat as the initial page load and the ENTER THE LIBRARY button.
-    // The suggest-an-entry form is excluded: it is a lightweight form, not a
-    // destination, and it never reports ready — so the boot overlay would sit
-    // on it until the 4s failsafe. It uses the standard fast swap instead.
+    // Entering the Tower of Babel (landing, library, donate, or any entry
+    // page) from inside the app: raise the Tower loader so the transition
+    // gets the same branded beat as the initial page load and the ENTER THE
+    // LIBRARY button. The suggest-an-entry form is excluded: it is a
+    // lightweight form, not a destination, and it never reports ready — so
+    // the boot overlay would sit on it until the 4s failsafe. It uses the
+    // standard fast swap instead. Donate reports ready on mount, so it is
+    // safe to include.
     const enteringTower =
       (canonical === "/tower-of-babel" ||
         canonical === "/tower-of-babel/library" ||
+        canonical === "/tower-of-babel/donate" ||
         (canonical.startsWith("/tower-of-babel/library/") &&
           canonical !== "/tower-of-babel/library/suggest")) &&
       path !== canonical;
@@ -524,6 +528,7 @@ function App() {
     const isTower =
       canonical === "/tower-of-babel" ||
       canonical === "/tower-of-babel/library" ||
+      canonical === "/tower-of-babel/donate" ||
       canonical.startsWith("/tower-of-babel/library/");
     if (!isTower) raiseBrandBoot();
     go(to);
@@ -640,7 +645,7 @@ function App() {
           <SuggestEntry go={go} />
         )}
         {path === "/tower-of-babel/donate" && (
-          <DonatePage go={go} />
+          <DonatePage go={go} onReady={handleTowerReady} />
         )}
         {path === "/tower-of-babel/api" && (
           <TowerApiPage go={go} />
