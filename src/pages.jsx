@@ -52,6 +52,14 @@ import {
   towerBucketKey,
   towerSubLabel,
 } from "./lib/tower-taxonomy.js";
+// Collections browser (2026-10-24): the old hub pages were deleted and
+// folded into a filter on this section's entry list. The hub index JSON
+// is fetched lazily (see below) — never in the initial page load.
+import {
+  COLLECTION_GROUPS,
+  loadHubsIndex,
+  buildCollections,
+} from "./lib/tower-collections.js";
 import {
   coverCandidates,
   coverTone,
@@ -136,17 +144,9 @@ export function TowerOfBabel({ go, onReady }) {
         </details>
       </section>
 
-      {/* Collections & hubs — server-rendered pages (Pages Functions), so
-          this is a plain anchor (full page load), NOT an SPA go() route. */}
-      <section className="section tower-hubs-section">
-        <div className="section-index">{towerOfBabel.hubs.sectionIndex}</div>
-        <p className="body-copy">{towerOfBabel.hubs.body}</p>
-        <a className="text-link" href={towerOfBabel.hubs.href}>
-          {towerOfBabel.hubs.cta} <span aria-hidden="true">↗</span>
-        </a>
-      </section>
-
-      {/* The full library, poured directly below the landing content. */}
+      {/* The full library, poured directly below the landing content.
+          Collections live inside the library browse section below as a
+          filter on the same entry list — there is no separate hub page. */}
       <TowerLibrarySection go={go} onReady={onReady} />
     </main>
   );
@@ -1007,6 +1007,68 @@ function TowerLibrarySection({ go, onReady }) {
       /* private mode — the choice just won't persist */
     }
   };
+  // Collections filter (2026-10-24, replaces the deleted hub pages):
+  // collGroup is a COLLECTION_GROUPS id (or "" for no group tab), and
+  // collKey is the selected collection's key (or "" for none). The
+  // collection's work ids come from the precomputed hub index, fetched
+  // lazily — the page paints and browses normally before it lands, and
+  // a failed fetch simply hides this UI (collFailed) instead of
+  // erroring the browse. The collection filter intersects with the
+  // existing search + category filter + sort in the rank memo below;
+  // it never renders a second list.
+  const [collGroup, setCollGroup] = useState("");
+  const [collKey, setCollKey] = useState("");
+  const [collData, setCollData] = useState(null);
+  const [collLoading, setCollLoading] = useState(false);
+  const [collFailed, setCollFailed] = useState(false);
+  const collSectionRef = useRef(null);
+  const ensureCollections = useCallback(() => {
+    if (collData || collFailed || collLoading) return;
+    setCollLoading(true);
+    loadHubsIndex().then((d) => {
+      setCollLoading(false);
+      if (!d) {
+        setCollFailed(true);
+        return;
+      }
+      setCollData(buildCollections(d));
+    });
+  }, [collData, collFailed, collLoading]);
+  // Approach trigger: start the hub-index fetch when the collections
+  // block comes within ~800px of the viewport, so it is usually ready
+  // before the visitor taps a group tab.
+  useEffect(() => {
+    const el = collSectionRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          ensureCollections();
+          io.disconnect();
+        }
+      },
+      { rootMargin: "800px" }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [ensureCollections]);
+  const activeCollection = useMemo(() => {
+    if (!collData || !collKey) return null;
+    for (const g of collData.groups) {
+      const found = g.collections.find((c) => c.key === collKey);
+      if (found) return found;
+    }
+    return null;
+  }, [collData, collKey]);
+  const collSet = activeCollection ? activeCollection.ids : null;
+  const selectCollGroup = (g) => {
+    setCollGroup(g);
+    setCollKey("");
+    if (g) ensureCollections();
+  };
+  const selectCollection = (key) => {
+    setCollKey((prev) => (prev === key ? "" : key));
+  };
   // Stack-card "See all" / subcategory jumps: apply the existing bucket
   // filter, then bring the results into view (the discovery zone hands
   // the page over to the results in the filtered state).
@@ -1083,7 +1145,7 @@ function TowerLibrarySection({ go, onReady }) {
     setMatchesExpanded(false);
     // Reset pagination to first 50 when filters change.
     setRowBudget(TOWER_ROWS_PER_PAGE);
-  }, [listQuery, bucketFilter, sortId]);
+  }, [listQuery, bucketFilter, sortId, collKey]);
   // Deep full-text search: same query, second mode. Debounced; searches the
   // full contents of every staged text via the build-time index. Title
   // results above are untouched by this.
@@ -1147,6 +1209,11 @@ function TowerLibrarySection({ go, onReady }) {
       const bk = towerData.bucketKeys[i];
       return !bf || bk === bf || (bfLane && bk.indexOf(bfLane) === 0);
     };
+    // Collections filter: intersect with the bucket filter above. The
+    // collection's id Set comes from the hub index; a work not in the
+    // set is out, whatever the search/category state says.
+    const passesCollection = (i) =>
+      !collSet || collSet.has(artifacts[i].artifact_id);
     const qNorm = q ? normText(q) : "";
     if (!qNorm || !towerData.haystacks) {
       // Browsing: the chosen sort order governs, as before. (Also the
@@ -1159,7 +1226,7 @@ function TowerLibrarySection({ go, onReady }) {
       let count = 0;
       for (let k = 0; k < towerOrder.length; k++) {
         const i = towerOrder[k];
-        if (!passesBucket(i)) continue;
+        if (!passesBucket(i) || !passesCollection(i)) continue;
         count++;
         if (map.size < rowBudget) map.set(artifacts[i].artifact_id, count);
       }
@@ -1186,7 +1253,7 @@ function TowerLibrarySection({ go, onReady }) {
     const N = Math.min(artifacts.length, towerData.haystacks.length);
     const NT = towerData.normTitles;
     for (let i = 0; i < N; i++) {
-      if (!passesBucket(i)) continue;
+      if (!passesBucket(i) || !passesCollection(i)) continue;
       const hay = towerData.haystacks[i];
       let ok = true;
       for (const t of scanTokens) {
@@ -1217,7 +1284,7 @@ function TowerLibrarySection({ go, onReady }) {
     if (pins) {
       for (const id of pins) {
         const ix = towerData.idIndex.get(id);
-        if (ix !== undefined && !seen.has(ix) && passesBucket(ix)) {
+        if (ix !== undefined && !seen.has(ix) && passesBucket(ix) && passesCollection(ix)) {
           seen.add(ix);
           ordered.push(ix);
         }
@@ -1234,7 +1301,7 @@ function TowerLibrarySection({ go, onReady }) {
     const cap = Math.min(ordered.length, rowBudget);
     for (let k = 0; k < cap; k++) map.set(artifacts[ordered[k]].artifact_id, k + 1);
     return { rankMap: map, matchCount: ordered.length, rankedIndices: ordered };
-  }, [q, bucketFilter, sortId, towerOrder, artifacts, towerData, rowBudget]);
+  }, [q, bucketFilter, sortId, towerOrder, artifacts, towerData, rowBudget, collSet]);
   // Report ready exactly once when the section settles: the first 50 rows
   // have painted, or the error UI is up. The double rAF waits for paint;
   // the timeout fallback covers background tabs (and any dropped frame
@@ -1353,7 +1420,7 @@ function TowerLibrarySection({ go, onReady }) {
                 </p>
               )}
             </div>
-            {!q && !bucketFilter && (
+            {!q && !bucketFilter && !collKey && (
               <TowerDiscovery
                 artifacts={artifacts}
                 towerData={towerData}
@@ -1450,6 +1517,77 @@ function TowerLibrarySection({ go, onReady }) {
                     </button>
                   </div>
                 </div>
+            {/* Collections browser (2026-10-24): the deleted hub pages,
+                folded into this section as a filter on the same entry
+                list. Group tabs, then collection pills for the chosen
+                group; a collection filters the list below (intersected
+                with search + category + sort), it never renders a
+                second list. The container uses inline layout so it
+                stays visible on desktop, where .tower-chips is hidden
+                in favour of the facets sidebar; the pills themselves
+                reuse the existing .tower-chip style. On a hub-index
+                fetch failure this block hides and category browse
+                carries on — no error panel. */}
+            {!collFailed && (
+              <div ref={collSectionRef} style={{ margin: "0 0 12px" }}>
+                <div className="section-index">COLLECTIONS</div>
+                <div
+                  style={{ display: "flex", flexWrap: "wrap", gap: "10px", margin: "0 0 6px" }}
+                  role="group"
+                  aria-label="Browse by collection group"
+                >
+                  <button
+                    type="button"
+                    className={`tower-chip${collGroup === "" ? " is-active" : ""}`}
+                    onClick={() => selectCollGroup("")}
+                    aria-pressed={collGroup === ""}
+                  >
+                    All collections
+                  </button>
+                  {COLLECTION_GROUPS.map((g) => (
+                    <button
+                      key={g.id}
+                      type="button"
+                      className={`tower-chip${collGroup === g.id ? " is-active" : ""}`}
+                      onClick={() => selectCollGroup(g.id)}
+                      aria-pressed={collGroup === g.id}
+                    >
+                      {g.label}
+                    </button>
+                  ))}
+                </div>
+                {collLoading && (
+                  <p className="tower-index-status" aria-live="polite">
+                    Loading collections…
+                  </p>
+                )}
+                {collData && collGroup && (
+                  <div
+                    style={{ display: "flex", flexWrap: "wrap", gap: "10px", margin: "0 0 6px" }}
+                    role="group"
+                    aria-label={`Collections in ${COLLECTION_GROUPS.find((g) => g.id === collGroup)?.label || collGroup}`}
+                  >
+                    {(collData.groups.find((g) => g.id === collGroup)?.collections || []).map((c) => (
+                      <button
+                        key={c.key}
+                        type="button"
+                        className={`tower-chip${collKey === c.key ? " is-active" : ""}`}
+                        onClick={() => selectCollection(c.key)}
+                        aria-pressed={collKey === c.key}
+                      >
+                        {c.label} <span>{c.count.toLocaleString()}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {activeCollection && (
+                  <p className="tower-index-status">
+                    {activeCollection.blurb}{" "}
+                    <span>{activeCollection.count.toLocaleString()} works</span>
+                  </p>
+                )}
+              </div>
+            )}
             <div className="tower-chips" role="group" aria-label="Filter by collection">
               <button
                 type="button"
@@ -1878,12 +2016,11 @@ export function DonatePage({ onReady }) {
   const [donorName, setDonorName] = useState("");
   const [donorEmail, setDonorEmail] = useState("");
   // Step 4 is a real selection, not decoration: the chosen method is
-  // posted to /api/donate and shapes the Stripe Checkout session
-  // (card-family for card/Apple Pay/Google Pay, PayPal-only for PayPal).
+  // posted to /api/donate and recorded on the session (metadata
+  // preferred_method). PayPal was removed 2026-10-24 — it is not
+  // offered for this Stripe account — so the tiles are card-family
+  // only: card, Apple Pay, Google Pay.
   const [method, setMethod] = useState("card");
-  // Stripe recurring PayPal is Europe-only, so a US account cannot run
-  // a monthly donation through PayPal — block it here AND server-side.
-  const paypalMonthlyBlocked = method === "paypal" && frequency === "monthly";
   const [busy, setBusy] = useState(false);
   const [notLive, setNotLive] = useState(false);
   const [error, setError] = useState("");
@@ -1901,14 +2038,10 @@ export function DonatePage({ onReady }) {
   const infoOk = donorName.trim().length > 0 && emailOk;
 
   async function submit() {
-    if (busy || baseCents < 100 || !infoOk || paypalMonthlyBlocked) {
+    if (busy || baseCents < 100 || !infoOk) {
       if (baseCents < 100) setError("Enter an amount of $1 or more.");
       else if (!donorName.trim()) setError("Enter your name.");
       else if (!emailOk) setError("Enter a valid email address.");
-      else if (paypalMonthlyBlocked)
-        setError(
-          "PayPal can't be used for monthly donations — choose One time, or pay by card."
-        );
       return;
     }
     setBusy(true);
@@ -2117,16 +2250,6 @@ export function DonatePage({ onReady }) {
                     <GoogleMark />
                     <span className="donate-pay-word donate-pay-word-g">Pay</span>
                   </button>
-                  <button
-                    type="button"
-                    className={`donate-pay-tile donate-paypal${method === "paypal" ? " is-on" : ""}`}
-                    aria-label="PayPal"
-                    aria-pressed={method === "paypal"}
-                    onClick={() => setMethod("paypal")}
-                  >
-                    <span className="donate-paypal-a">Pay</span>
-                    <span className="donate-paypal-b">Pal</span>
-                  </button>
                 </div>
                 <button
                   type="button"
@@ -2146,25 +2269,16 @@ export function DonatePage({ onReady }) {
                   </span>
                 </button>
               </div>
-              {paypalMonthlyBlocked ? (
-                <p className="donate-method-warn" role="status">
-                  PayPal can&apos;t be used for monthly donations — choose
-                  One time above, or pay by card.
-                </p>
-              ) : (
-                <p className="donate-methods-note">
-                  {method === "paypal"
-                    ? "You complete payment with PayPal on Stripe's secure checkout page."
-                    : method === "apple_pay" || method === "google_pay"
-                      ? "Your gift opens on Stripe's secure checkout page, where the wallet button appears on a supported device — we never see or store your card number."
-                      : "You complete payment on Stripe's secure checkout page — we never see or store your card number."}
-                </p>
-              )}
+              <p className="donate-methods-note">
+                {method === "apple_pay" || method === "google_pay"
+                  ? "Your gift opens on Stripe's secure checkout page, where the wallet button appears on a supported device — we never see or store your card number."
+                  : "You complete payment on Stripe's secure checkout page — we never see or store your card number."}
+              </p>
             </div>
             <button
               type="button"
               className="donate-go"
-              disabled={busy || baseCents < 100 || !infoOk || paypalMonthlyBlocked}
+              disabled={busy || baseCents < 100 || !infoOk}
               onClick={submit}
             >
               {busy ? "Working…" : "DONATE"}

@@ -105,9 +105,12 @@ function buildSuggestEmail(d) {
 // payment_method_types[0] was added, for card AND PayPal alike.
 // The exact Stripe error is visible only in Dashboard -> Developers
 // -> Logs; check there before ever reintroducing the parameter.
-// - paypal, monthly -> REFUSED (400). Stripe recurring PayPal is
-//   Europe-only; a US account cannot run it. The page blocks this
-//   first, but the server enforces it too.
+// PAYPAL REMOVED 2026-10-24 (Joshua's call): PayPal is not offered
+// as an enableable method on this Stripe account, so the tile is
+// gone and "paypal" is no longer an accepted method value — any
+// stray paypal value falls through to the card default. The offered
+// methods are card, Apple Pay, and Google Pay (wallets surface on
+// Stripe's page on supporting devices when enabled in the Dashboard).
 // Requires STRIPE_SECRET_KEY (secret key from Joshua's own Stripe
 // account) as a Pages secret; without it the answer is 503 and the
 // page shows its not-live notice. Standard Stripe US pricing is
@@ -122,7 +125,6 @@ async function createDonateCheckout(env, { frequency, baseCents, coverFees, dono
   if (!key) return { ok: false, notConfigured: true };
   const total = coverFees ? donateGrossUp(baseCents) : baseCents;
   const monthly = frequency === "monthly";
-  if (method === "paypal" && monthly) return { ok: false, blocked: true };
   const p = new URLSearchParams();
   p.set("mode", monthly ? "subscription" : "payment");
   // Method intent is recorded, not forced: explicit
@@ -208,7 +210,7 @@ export async function onRequestPost({ request, env, params }) {
     const donorName = str(data.donor_name).trim().slice(0, 200);
     const donorEmail = str(data.donor_email).trim().slice(0, 254);
     const methodRaw = str(data.payment_method);
-    const method = ["card", "apple_pay", "google_pay", "paypal"].includes(methodRaw)
+    const method = ["card", "apple_pay", "google_pay"].includes(methodRaw)
       ? methodRaw
       : "card";
     if (
@@ -218,9 +220,6 @@ export async function onRequestPost({ request, env, params }) {
       baseCents > 2500000
     ) {
       return json({ ok: false, error: "invalid amount" }, 400);
-    }
-    if (method === "paypal" && frequency === "monthly") {
-      return json({ ok: false, error: "paypal does not support monthly donations" }, 400);
     }
     if (!donorName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(donorEmail)) {
       return json({ ok: false, error: "invalid donor info" }, 400);
@@ -243,9 +242,6 @@ export async function onRequestPost({ request, env, params }) {
     if (!session.ok) {
       if (session.notConfigured) {
         return json({ ok: false, error: "payments not configured" }, 503);
-      }
-      if (session.blocked) {
-        return json({ ok: false, error: "paypal does not support monthly donations" }, 400);
       }
       return json({ ok: false, error: "checkout failed" }, 502);
     }
