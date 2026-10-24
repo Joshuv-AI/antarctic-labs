@@ -64,7 +64,9 @@ function load() {
       });
       const ai = aiReferrer();
       posthog.register({
-        ai_referrer: ai,
+        // "none" rather than null: PostHog drops null super-properties,
+        // and an explicit value keeps AI-referral filtering clean.
+        ai_referrer: ai || "none",
         is_ai_referred: Boolean(ai),
       });
       // Plain-text downloads: one delegated listener catches every
