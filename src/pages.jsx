@@ -2157,12 +2157,10 @@ export function DonatePage({ onReady }) {
                 {error}
               </p>
             ) : null}
-          </aside>
-        </div>
-        {crypto.length > 0 ? (
-          <div className="donate-other reveal">
-            <div className="donate-or">OR</div>
-            <div className="donate-crypto-box">
+            {crypto.length > 0 ? (
+              <div className="donate-other">
+                <div className="donate-or">OR</div>
+                <div className="donate-crypto-box">
               <h3 className="donate-other-title">Donate cryptocurrency</h3>
               <div className="donate-crypto-icons" aria-hidden="true">
                 {crypto.map((c) => (
@@ -2192,9 +2190,11 @@ export function DonatePage({ onReady }) {
                   <div className="donate-crypto-addr">{c.address}</div>
                 </div>
               ))}
-            </div>
-          </div>
-        ) : null}
+                </div>
+              </div>
+            ) : null}
+          </aside>
+        </div>
       </section>
     </main>
   );
