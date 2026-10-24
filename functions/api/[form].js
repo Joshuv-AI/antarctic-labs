@@ -94,17 +94,17 @@ function buildSuggestEmail(d) {
 // Checkout Session with a server-built price, so the amount a donor is
 // charged is always computed here — never trusted from the client
 // beyond the chosen base amount (validated to a sane range).
-// PAYMENT ROUTING (this is the contract the page promises):
-// - card / apple_pay / google_pay -> payment_method_types ['card'].
-//   Stripe's hosted page then offers the card form, and surfaces the
-//   Apple Pay / Google Pay button on a supporting device when the
-//   wallet is enabled in the Stripe Dashboard. Checkout cannot be
-//   deep-linked straight into a wallet — the wallet renders on
-//   Stripe's page, not ours — so the tile records the donor's intent
-//   (metadata preferred_method) and the session stays card-family.
-// - paypal, one-time -> payment_method_types ['paypal']: the hosted
-//   page opens PayPal-only. PayPal must be enabled in the Dashboard;
-//   if it isn't, Stripe rejects the session and we answer 502.
+// PAYMENT ROUTING (2026-10-24, corrected after a live outage):
+// The page's tiles record the donor's chosen method in metadata
+// (preferred_method) and the session uses Stripe's automatic payment
+// methods — the donor picks the exact method on Stripe's hosted page,
+// where wallets surface on supporting devices when enabled in the
+// Dashboard. DO NOT re-add explicit payment_method_types: on
+// 2026-10-24 the ['card']/['paypal'] sessions that verified fine at
+// 11:58 EDT started returning Stripe rejections (our 502) the moment
+// payment_method_types[0] was added, for card AND PayPal alike.
+// The exact Stripe error is visible only in Dashboard -> Developers
+// -> Logs; check there before ever reintroducing the parameter.
 // - paypal, monthly -> REFUSED (400). Stripe recurring PayPal is
 //   Europe-only; a US account cannot run it. The page blocks this
 //   first, but the server enforces it too.
@@ -125,9 +125,10 @@ async function createDonateCheckout(env, { frequency, baseCents, coverFees, dono
   if (method === "paypal" && monthly) return { ok: false, blocked: true };
   const p = new URLSearchParams();
   p.set("mode", monthly ? "subscription" : "payment");
-  // Route the session to the method the donor actually tapped.
-  if (method === "paypal") p.set("payment_method_types[0]", "paypal");
-  else p.set("payment_method_types[0]", "card");
+  // Method intent is recorded, not forced: explicit
+  // payment_method_types broke live session creation on 2026-10-24
+  // (see header). Stripe's automatic methods decide what the hosted
+  // page offers; the donor picks there.
   p.set("metadata[preferred_method]", method || "card");
   // Prefill Checkout with the donor's email; the name rides on metadata
   // (Stripe receipts + the dashboard show who each gift came from).
