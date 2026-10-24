@@ -192,10 +192,17 @@ function useArtifacts() {
         }
       );
     } else if (state.artifacts && !state.fullIndexReady) {
-      // Bootstrap is showing; upgrade to full index when it arrives
-      // (whenever an intent trigger or the idle schedule starts it).
-      const unsub = onIndexReady((full) => {
-        if (live) setState((s) => ({ ...s, artifacts: full, fullIndexReady: true }));
+      // Bootstrap is showing; upgrade as the index arrives (whenever an
+      // intent trigger or the idle schedule starts it). Stage 2 publishes
+      // progressively: artifacts grows chunk by chunk, and fullIndexReady
+      // flips only on the final (complete) publish.
+      const unsub = onIndexReady((full, complete) => {
+        if (live)
+          setState((s) => ({
+            ...s,
+            artifacts: full,
+            fullIndexReady: complete ? true : s.fullIndexReady,
+          }));
       });
       return () => {
         live = false;

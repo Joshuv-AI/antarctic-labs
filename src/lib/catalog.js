@@ -3,8 +3,10 @@
 // Three-tier loading:
 // - `catalog-bootstrap.json` (first 200 records) loads INSTANTLY.
 //   The list renders immediately, no spinner.
-// - `catalog-index.json` (all records, compact projection) loads in the
-//   BACKGROUND. Search/filter upgrade to the full catalog when it arrives.
+// - The full index (all records, compact projection) loads as versioned
+//   chunks via /catalog-index2/ (Stage 2), parsed in a Web Worker and
+//   published progressively; /catalog-index.json remains as the legacy
+//   fallback. Search/filter upgrade as chunks arrive.
 // - `catalog.json` (full records) loads ON DEMAND for detail pages.
 //
 // This keeps the page paint fast even on a slow connection: the shell and
@@ -73,19 +75,131 @@ export function loadBootstrap() {
   );
 }
 
-// Full index: every record (compact projection), loads in background.
-export function loadCatalog() {
-  return loadWithRetry(
-    "/catalog-index.json",
-    () => indexPending,
-    (p) => { indexPending = p; },
-    () => indexCache,
-    (d) => { indexCache = d; },
-    (data) => {
-      // Notify listeners that the full index is ready.
-      indexReadyListeners.forEach((cb) => { try { cb(data); } catch {} });
+// Full index: every record (compact projection). Stage 2 (2026-10-23):
+// the index loads as versioned chunks (see functions/catalog-index2/),
+// fetched and JSON-parsed in a Web Worker, and is PUBLISHED PROGRESSIVELY
+// — listeners receive (records, complete) as each contiguous chunk run
+// lands, with complete=true on the final chunk. If the v2 path is
+// unavailable (manifest unreachable or malformed, or the worker fails
+// before any chunk lands), the loader falls back to the legacy
+// single-file /catalog-index.json fetch.
+let indexComplete = false;
+
+function publishIndex(data, complete) {
+  indexCache = data;
+  if (complete) indexComplete = true;
+  indexReadyListeners.forEach((cb) => {
+    try { cb(data, complete); } catch {}
+  });
+}
+
+function fetchJsonWithRetry(url) {
+  return fetchJsonOnce(url).catch(() => fetchJsonOnce(url));
+}
+
+function loadLegacyIndex() {
+  return fetchJsonWithRetry("/catalog-index.json").then((data) => {
+    publishIndex(data, true);
+    return data;
+  });
+}
+
+// Stream chunks through the worker. Resolves true if the worker failed
+// (unavailable, crashed, or a chunk failed twice inside it), false when
+// every chunk was delivered.
+function streamChunksViaWorker(version, chunks, onChunk) {
+  return new Promise((resolve) => {
+    let worker;
+    try {
+      worker = new Worker(new URL("./index-worker.js", import.meta.url), {
+        type: "module",
+      });
+    } catch {
+      resolve(true);
+      return;
     }
-  );
+    let settled = false;
+    const finish = (failed) => {
+      if (settled) return;
+      settled = true;
+      try { worker.terminate(); } catch {}
+      resolve(failed);
+    };
+    worker.onmessage = (e) => {
+      const m = e.data || {};
+      if (m.type === "chunk") onChunk(m.index, m.records);
+      else if (m.type === "done") finish(false);
+      else if (m.type === "error") finish(true);
+    };
+    worker.onerror = () => finish(true);
+    try {
+      worker.postMessage({ version, chunks });
+    } catch {
+      finish(true);
+    }
+  });
+}
+
+async function loadIndexV2() {
+  let manifest;
+  try {
+    manifest = await fetchJsonWithRetry("/catalog-index2/manifest.json");
+  } catch {
+    return loadLegacyIndex();
+  }
+  const version = manifest && manifest.v;
+  const chunks = manifest && manifest.chunks;
+  if (!version || !Number.isInteger(chunks) || chunks < 1) {
+    return loadLegacyIndex();
+  }
+  // Chunks arrive in any order; only the contiguous prefix is published,
+  // so subscribers always see a valid catalog-order prefix.
+  const parts = new Array(chunks).fill(null);
+  let published = 0;
+  let acc = [];
+  const publishContiguous = () => {
+    while (published < chunks && parts[published]) {
+      acc = acc.concat(parts[published]);
+      parts[published] = undefined;
+      published++;
+      publishIndex(acc, published === chunks);
+    }
+  };
+  const workerFailed = await streamChunksViaWorker(version, chunks, (i, records) => {
+    parts[i] = records;
+    publishContiguous();
+  });
+  // The worker delivered nothing and failed — prefer the legacy monolith
+  // (one edge-cached stream) over ten main-thread chunk parses.
+  if (workerFailed && published === 0) return loadLegacyIndex();
+  // Fill any gaps on the main thread (worker died midway).
+  for (let i = 0; i < chunks; i++) {
+    if (i >= published && !parts[i]) {
+      parts[i] = await fetchJsonWithRetry(
+        `/catalog-index2/${version}/${i}.json`
+      );
+      publishContiguous();
+    }
+  }
+  if (!indexComplete) publishIndex(acc, true);
+  return acc;
+}
+
+export function loadCatalog() {
+  if (indexComplete && indexCache) return Promise.resolve(indexCache);
+  if (!indexPending) {
+    indexPending = loadIndexV2().then(
+      (data) => {
+        indexPending = null;
+        return data;
+      },
+      (err) => {
+        indexPending = null;
+        throw err;
+      }
+    );
+  }
+  return indexPending;
 }
 
 // Deferred index loading (Stage 1 ungating, 2026-10-23): the full index
@@ -129,20 +243,26 @@ export function loadFullCatalog() {
   );
 }
 
-// Subscribe to full-index readiness. Returns unsubscribe.
+// Subscribe to index readiness. The callback receives (records,
+// complete): Stage 2 publishes progressively, so it fires once per
+// chunk run with complete=false and a final time with complete=true.
+// Returns unsubscribe.
 export function onIndexReady(cb) {
   if (indexCache) {
-    // Already loaded — call immediately (async to keep consistent).
-    Promise.resolve().then(() => cb(indexCache));
-    return () => {};
+    // Something is already cached (partial or complete) — call
+    // immediately (async to keep consistent), then keep listening for
+    // further publishes unless the index is already complete.
+    Promise.resolve().then(() => cb(indexCache, indexComplete));
+    if (indexComplete) return () => {};
   }
   indexReadyListeners.add(cb);
   return () => { indexReadyListeners.delete(cb); };
 }
 
-// True while the full index is still loading.
+// True until the full index has completely arrived (Stage 2: a partial
+// progressive cache still counts as loading).
 export function isIndexLoading() {
-  return indexCache === null;
+  return !indexComplete;
 }
 
 // The best available data: full index if ready, bootstrap otherwise.
