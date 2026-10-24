@@ -31,8 +31,10 @@ import { towerOfBabel } from "./content/tower-of-babel.js";
 // source and used to ride in the main bundle, stalling every cold load.
 // Components that need it use useArtifacts() below.
 import {
-  loadCatalog,
   loadBootstrap,
+  requestCatalogIndex,
+  scheduleCatalogIndex,
+  isIndexInFlight,
   getCachedArtifacts,
   getFullArtifact,
   getDescription,
@@ -176,25 +178,25 @@ function useArtifacts() {
   const [watchdogError, setWatchdogError] = useState(false);
   useEffect(() => {
     let live = true;
-    // Load bootstrap first (instant), then full index in background.
+    // Load bootstrap first (instant). The full index is NOT started here
+    // anymore (Stage 1 ungating, 2026-10-23): it starts on visitor intent
+    // via requestCatalogIndex() or on the idle schedule — see
+    // TowerLibrarySection's triggers and ./lib/catalog.js.
     if (!state.artifacts && !state.error) {
       loadBootstrap().then(
         (a) => {
           if (live) setState((s) => ({ ...s, artifacts: a, error: false }));
-          // Start full index load in background after bootstrap paints.
-          loadCatalog().catch(() => {});
         },
         () => {
           if (live) setState({ artifacts: null, error: true, fullIndexReady: false });
         }
       );
     } else if (state.artifacts && !state.fullIndexReady) {
-      // Bootstrap is showing; upgrade to full index when it arrives.
+      // Bootstrap is showing; upgrade to full index when it arrives
+      // (whenever an intent trigger or the idle schedule starts it).
       const unsub = onIndexReady((full) => {
         if (live) setState((s) => ({ ...s, artifacts: full, fullIndexReady: true }));
       });
-      // Also trigger the load if not already in flight.
-      loadCatalog().catch(() => {});
       return () => {
         live = false;
         unsub();
@@ -958,6 +960,45 @@ function TowerLibrarySection({ go, onReady }) {
   // paint stay cheap, and the loader releases after the first 50 paint.
   const [rowBudget, setRowBudget] = useState(TOWER_ROWS_PER_PAGE);
   const [shelfActive, setShelfActive] = useState(false);
+  // Stage 1 ungating (2026-10-23): the full catalog index no longer loads
+  // automatically with the page. It starts when the visitor shows intent —
+  // the first change to any browse control (search text, filter, sort,
+  // Load more) — or from the approach/idle triggers below. The bootstrap
+  // slice stays fully browsable in the meantime.
+  const indexIntentSeen = useRef(false);
+  useEffect(() => {
+    if (!indexIntentSeen.current) {
+      indexIntentSeen.current = true;
+      return;
+    }
+    requestCatalogIndex();
+  }, [query, bucketFilter, sortId, rowBudget]);
+  // Approach trigger: start the index when the results area comes within
+  // ~800px of the viewport, so it is usually ready before the visitor
+  // arrives at it. Re-armed on every data phase (bootstrap, phase 0/1,
+  // full index): the results node is replaced as phases render, and an
+  // observer left on a detached node would never fire (QA catch).
+  useEffect(() => {
+    if (!artifacts) return;
+    const el = document.getElementById("tower-results");
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          requestCatalogIndex();
+          io.disconnect();
+        }
+      },
+      { rootMargin: "800px" }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [artifacts, towerData]);
+  // Idle schedule: if the visitor just reads, the index still arrives —
+  // 12s after mount, long after first paint has settled.
+  useEffect(() => {
+    scheduleCatalogIndex();
+  }, []);
   // The input stays bound to the raw query so typing never waits on work;
   // the expensive filter/sort and the deep index search run on the deferred
   // value at background priority, which removes the keystroke lag.
@@ -1229,9 +1270,10 @@ function TowerLibrarySection({ go, onReady }) {
                 placeholder="Search titles, creators, tags… — or words inside the texts"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
+                onFocus={() => requestCatalogIndex()}
                 aria-label="Search the library catalog and the full text of every work"
               />
-              {!fullIndexReady && (
+              {!fullIndexReady && isIndexInFlight() && (
                 <p className="tower-index-status" aria-live="polite">
                   Loading full catalog…
                 </p>
@@ -1973,6 +2015,9 @@ export function LibraryArtifact({ go, params, onReady }) {
   // Fire-and-forget: it never blocks rendering and never changes the UI.
   useEffect(() => {
     getTowerFiles();
+    // Entry pages keep the pre-ungating behavior: arriving at an entry IS
+    // the intent, so the full index starts here for neighbor/related data.
+    requestCatalogIndex();
   }, [params.id]);
   // Analytics: reader scroll-depth milestones (25/50/75/100%), once each
   // per work per session. Passive listener, no layout reads beyond the

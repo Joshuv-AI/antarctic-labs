@@ -88,6 +88,36 @@ export function loadCatalog() {
   );
 }
 
+// Deferred index loading (Stage 1 ungating, 2026-10-23): the full index
+// is heavy — a multi-MB download, a main-thread JSON.parse, and a full
+// derivation pass — so the Tower page no longer starts it automatically
+// at load. The bootstrap paints the page completely; the index starts
+// only on visitor intent (search focus/typing, any browse control,
+// scrolling toward the results) via requestCatalogIndex(), or on the
+// idle schedule armed by scheduleCatalogIndex(). loadCatalog() itself
+// is unchanged and idempotent, so requesting is always safe.
+let indexIdleTimer = null;
+export function requestCatalogIndex() {
+  if (indexIdleTimer) {
+    clearTimeout(indexIdleTimer);
+    indexIdleTimer = null;
+  }
+  return loadCatalog().catch(() => {});
+}
+export function scheduleCatalogIndex(delayMs = 12000) {
+  if (indexCache || indexPending || indexIdleTimer) return;
+  indexIdleTimer = setTimeout(() => {
+    indexIdleTimer = null;
+    loadCatalog().catch(() => {});
+  }, delayMs);
+}
+// True only while the index fetch is actually in flight (the deferred
+// state before any request is NOT "loading" — the status line in the
+// library UI keys off this so it never claims a load that isn't running).
+export function isIndexInFlight() {
+  return indexPending !== null;
+}
+
 // Full records for detail pages — loaded on demand.
 export function loadFullCatalog() {
   return loadWithRetry(

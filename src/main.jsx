@@ -220,7 +220,7 @@ import { matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
 // Lazy Tower catalog (see ./lib/catalog.js): prefetched on Tower navigation
 // so the chunk usually arrives before the route needs it.
-import { loadCatalog, loadBootstrap, isCatalogPending } from "./lib/catalog.js";
+import { loadBootstrap, isCatalogPending } from "./lib/catalog.js";
 // Route-level code-splitting (2026-10-14): every destination page lives in
 // ./pages.jsx, which also pulls the 256KB tower-files manifest, the deep
 // search libs, and the reader UI. Importing it eagerly put all of that in
@@ -350,14 +350,10 @@ function App() {
     towerBootStarted.current = Date.now();
     // Prefetch the bootstrap chunk now (43KB, instant) — the route awaits
     // the same cached promise, so this head start is usually the whole fetch.
-    // The full index loads only AFTER the bootstrap lands (2026-10-21 load
-    // fix): starting the multi-MB index download at the same moment starved
-    // the bootstrap that gates first paint, and its JSON.parse blocked the
-    // main thread the bootstrap derivation needed. The route's own effect
-    // also starts the index post-bootstrap; both share the cached promise.
-    loadBootstrap()
-      .catch(() => {})
-      .then(() => loadCatalog().catch(() => {}));
+    // The full index is NOT started here anymore (Stage 1 ungating,
+    // 2026-10-23): it begins on visitor intent or the idle schedule —
+    // see requestCatalogIndex/scheduleCatalogIndex in lib/catalog.js.
+    loadBootstrap().catch(() => {});
     const t = setTimeout(() => {
       if (isCatalogPending()) {
         const t2 = setTimeout(dismissTowerBoot, 4000);
