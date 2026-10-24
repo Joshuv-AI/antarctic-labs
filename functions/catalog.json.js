@@ -9,6 +9,7 @@
 //
 // NOTE: SHARD_COUNT must match the number of shard files in the repo. If a
 // future batch adds another shard, bump this constant in the same commit.
+// (25 since the 2026-10-23 re-shard; was 10.)
 
 const SHARD_COUNT = 25;
 const shardUrl = (i) =>

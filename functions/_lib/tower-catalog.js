@@ -12,13 +12,18 @@
 //
 // SHARD_COUNT must match the number of shard files in the repo — the same
 // constant functions/catalog.json.js carries. If a future batch adds a
-// shard, bump it in BOTH places in the same commit.
+// shard, bump it in BOTH places in the same commit. (25 since the
+// 2026-10-23 re-shard; was 10. A stale value silently drops most of the
+// catalog from every consumer that loops `i < SHARD_COUNT` — diagnosed
+// 2026-10-24 on the hub pages, /catalog.json, OAI and the sitemap.)
 
 export const SITE = "https://antarctic-labs.com";
-export const SHARD_COUNT = 10;
+export const SHARD_COUNT = 25;
 
-const RAW =
+export const RAW =
   "https://raw.githubusercontent.com/Joshuv-AI/antarctic-labs/main/public";
+
+export const hubsIndexUrl = `${RAW}/tower-hubs-index.json`;
 
 export const shardUrl = (i) =>
   `${RAW}/catalog-shards/catalog-${String(i).padStart(2, "0")}.json`;

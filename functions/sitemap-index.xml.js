@@ -22,24 +22,9 @@
 // <lastmod> at all (per-entry dates are not in the catalog, and a made-up
 // date is worse than none).
 
-import {
-  SITE,
-  SHARD_COUNT,
-  escapeXml,
-  getShardRecords,
-} from "./_lib/tower-catalog.js";
+import { SITE, SHARD_COUNT, escapeXml } from "./_lib/tower-catalog.js";
 
-export const ENTRIES_PER_SITEMAP = 45000;
 const CACHE_TTL_SECONDS = 24 * 3600;
-
-export async function catalogEntryTotal() {
-  const counts = await Promise.all(
-    Array.from({ length: SHARD_COUNT }, (_, i) =>
-      getShardRecords(i).then((r) => (r ? r.length : 0))
-    )
-  );
-  return counts.reduce((a, b) => a + b, 0);
-}
 
 export async function onRequest(context) {
   const cache = caches.default;
@@ -47,16 +32,11 @@ export async function onRequest(context) {
   const hit = await cache.match(cacheKey);
   if (hit) return hit;
 
-  const total = await catalogEntryTotal();
-  if (!total) {
-    // Catalog unreachable — tell crawlers to retry later instead of
-    // caching an empty index.
-    return new Response("Sitemap temporarily unavailable", {
-      status: 503,
-      headers: { "Retry-After": "3600" },
-    });
-  }
-  const shards = Math.ceil(total / ENTRIES_PER_SITEMAP);
+  // Entry sitemaps follow the catalog shards 1:1 (shard n serves
+  // /sitemap-entries/<n>.xml), so the index simply lists every shard.
+  // (Previously this derived a positional slice count from a record
+  // total; the per-shard scheme keeps each sitemap request to a single
+  // shard parse, inside the Workers CPU limit.)
   const today = new Date().toISOString().slice(0, 10);
 
   const lines = [
@@ -66,7 +46,7 @@ export async function onRequest(context) {
     `    <loc>${SITE}/sitemap.xml</loc>`,
     `  </sitemap>`,
   ];
-  for (let n = 1; n <= shards; n++) {
+  for (let n = 0; n < SHARD_COUNT; n++) {
     lines.push(
       `  <sitemap>`,
       `    <loc>${SITE}/sitemap-entries/${n}.xml</loc>`,

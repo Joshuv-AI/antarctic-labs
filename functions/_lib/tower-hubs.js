@@ -1,12 +1,16 @@
 // Tower of Babel — Phase 2 hub data layer + shared rendering.
 //
-// Builds (once per isolate, memoized ~1h like the Phase 1 manifest) a
-// light index over the full catalog: per-collection counts, creator
-// counts, tradition membership, declassified programme membership, and
-// the course-primary-sources list. Hub route functions under
-// functions/tower-of-babel/hubs/ render from this index. (The OAI-PMH
-// endpoint streams the same shards directly — it needs full records,
-// one page at a time.)
+// ARCHITECTURE (2026-10-24 fix): the hub data is PRECOMPUTED by
+// scripts/generate-hubs-index.mjs into public/tower-hubs-index.json
+// (regenerated on every catalog-shards refresh, like the search index).
+// Request-time code only fetches that JSON (1h edge cache) and adapts it
+// to the Maps the renderers consume — it never walks the catalog.
+// The walk itself (buildHubIndexData, exported for the generator) exceeds
+// the Workers CPU time limit at live scale (~400k records, two full
+// passes with regex matching per record; diagnosed 2026-10-24 as
+// ExceededCpu on /tower-of-babel/hubs), so it must never run per-request.
+// (The OAI-PMH endpoint streams the same shards directly — it needs full
+// records, one page at a time.)
 //
 // MEMBERSHIP RULES (deterministic; the manifest documents them too):
 // - Traditions: the site's editorial key works per tradition (TRADITIONS
@@ -47,6 +51,8 @@ import {
   entryPath,
   textFileUrl,
   escapeHtml,
+  fetchJsonCached,
+  hubsIndexUrl,
 } from "./tower-catalog.js";
 
 // Re-exported for hub route modules that render their own lists.
@@ -330,7 +336,10 @@ let indexMemo = null; // { at, promise }
 const byTitle = (a, b) =>
   a.title.toLowerCase().localeCompare(b.title.toLowerCase()) || (a.id < b.id ? -1 : 1);
 
-async function buildIndex() {
+// Full catalog walk. Exported for scripts/generate-hubs-index.mjs —
+// NEVER call this per-request (CPU limit). getRecords defaults to the
+// live shard fetcher; the generator injects a local-file reader.
+export async function buildHubIndexData(getRecords = getShardRecords) {
   const total = { n: 0 };
   const collections = new Map();
   const creatorCounts = new Map();
@@ -369,7 +378,7 @@ async function buildIndex() {
   const programmes = new Map(PROGRAMME_DEFS.map((d) => [d.id, []]));
 
   for (let s = 0; s < SHARD_COUNT; s++) {
-    const records = await getShardRecords(s);
+    const records = await getRecords(s);
     if (!records) throw new Error("catalog shard unavailable");
     for (const r of records) {
       if (!r || !r.artifact_id) continue;
@@ -430,7 +439,7 @@ async function buildIndex() {
   const topNames = new Set(topAuthors.map((a) => a.name));
   const authorWorks = new Map(topAuthors.map((a) => [a.name, []]));
   for (let s = 0; s < SHARD_COUNT; s++) {
-    const records = await getShardRecords(s);
+    const records = await getRecords(s);
     if (!records) continue;
     for (const r of records) {
       if (!r || !r.artifact_id) continue;
@@ -473,17 +482,42 @@ async function buildIndex() {
     `${HUBS_BASE}/course-primary-sources`,
   ];
 
+  // Plain JSON-serializable hub data (written by the generator to
+  // public/tower-hubs-index.json; read back per-request by buildIndex).
   return {
+    snapshotDate: CATALOG_SNAPSHOT_DATE,
     total: total.n,
-    collections,
-    wanted,
-    topAuthors,
-    authorBySlug,
-    authorWorks,
-    traditions: traditionLists,
-    programmes,
+    collections: Object.fromEntries(collections),
+    wanted: Object.fromEntries(wanted),
+    traditions: Object.fromEntries(traditionLists),
+    topAuthors: topAuthors.map((a) => ({
+      name: a.name,
+      slug: a.slug,
+      count: a.count,
+      works: authorWorks.get(a.name),
+    })),
+    programmes: Object.fromEntries(programmes),
     course: { groups: courseGroups, courseCount },
     hubPaths,
+  };
+}
+
+// Request-time path: fetch the precomputed hub index (edge-cached 1h)
+// and adapt it to the Map shapes the renderers consume. No catalog walk.
+async function buildIndex() {
+  const d = await fetchJsonCached(hubsIndexUrl, 3600);
+  if (!d || !d.traditions || !d.topAuthors) throw new Error("hub index unavailable");
+  return {
+    total: d.total,
+    collections: new Map(Object.entries(d.collections || {})),
+    wanted: new Map(Object.entries(d.wanted || {})),
+    topAuthors: d.topAuthors,
+    authorBySlug: new Map(d.topAuthors.map((a) => [a.slug, a])),
+    authorWorks: new Map(d.topAuthors.map((a) => [a.name, a.works || []])),
+    traditions: new Map(Object.entries(d.traditions)),
+    programmes: new Map(Object.entries(d.programmes || {})),
+    course: d.course || { groups: [], courseCount: 0 },
+    hubPaths: d.hubPaths || [],
   };
 }
 
