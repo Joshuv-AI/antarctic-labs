@@ -1788,11 +1788,13 @@ export function DonatePage() {
     typeof window !== "undefined"
       ? new URLSearchParams(window.location.search)
       : new URLSearchParams();
-  const [frequency, setFrequency] = useState("once");
-  const [preset, setPreset] = useState(25);
+  const [frequency, setFrequency] = useState("monthly");
+  const [preset, setPreset] = useState(5);
   const [customMode, setCustomMode] = useState(false);
   const [customValue, setCustomValue] = useState("");
   const [coverFees, setCoverFees] = useState(false);
+  const [donorName, setDonorName] = useState("");
+  const [donorEmail, setDonorEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [notLive, setNotLive] = useState(false);
   const [error, setError] = useState("");
@@ -1806,10 +1808,14 @@ export function DonatePage() {
     : preset * 100;
   const totalCents = coverFees && baseCents > 0 ? donateGrossUp(baseCents) : baseCents;
   const feeCents = totalCents - baseCents;
+  const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(donorEmail.trim());
+  const infoOk = donorName.trim().length > 0 && emailOk;
 
   async function submit() {
-    if (busy || baseCents < 100) {
+    if (busy || baseCents < 100 || !infoOk) {
       if (baseCents < 100) setError("Enter an amount of $1 or more.");
+      else if (!donorName.trim()) setError("Enter your name.");
+      else if (!emailOk) setError("Enter a valid email address.");
       return;
     }
     setBusy(true);
@@ -1823,6 +1829,8 @@ export function DonatePage() {
           frequency,
           amount_cents: baseCents,
           cover_fees: coverFees,
+          donor_name: donorName.trim(),
+          donor_email: donorEmail.trim(),
         }),
       });
       const data = await res.json().catch(() => null);
@@ -1852,7 +1860,9 @@ export function DonatePage() {
   return (
     <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
       <section className="donate-section">
-        {support.eyebrow ? <p>{support.eyebrow}</p> : null}
+        {support.eyebrow ? (
+          <p className="donate-eyebrow">{support.eyebrow}</p>
+        ) : null}
         {params.get("thanks") === "1" ? (
           <div className="donate-thanks" role="status">
             Thank you — your support keeps the Tower free for everyone.
@@ -1864,7 +1874,7 @@ export function DonatePage() {
             again whenever you like.
           </div>
         ) : null}
-        <div className="donate-layout">
+        <div className="donate-layout reveal">
           <div className="donate-letter">
             {letter.title ? (
               <h2 className="donate-letter-title">{letter.title}</h2>
@@ -1892,14 +1902,16 @@ export function DonatePage() {
               <div className="donate-toggle">
                 <button
                   type="button"
-                  className={frequency === "once" ? "active" : ""}
+                  className={frequency === "once" ? "is-on" : ""}
+                  aria-pressed={frequency === "once"}
                   onClick={() => setFrequency("once")}
                 >
                   One time
                 </button>
                 <button
                   type="button"
-                  className={frequency === "monthly" ? "active" : ""}
+                  className={frequency === "monthly" ? "is-on" : ""}
+                  aria-pressed={frequency === "monthly"}
                   onClick={() => setFrequency("monthly")}
                 >
                   Monthly
@@ -1914,7 +1926,8 @@ export function DonatePage() {
                   <button
                     key={a}
                     type="button"
-                    className={!customMode && preset === a ? "active" : ""}
+                    className={!customMode && preset === a ? "is-on" : ""}
+                    aria-pressed={!customMode && preset === a}
                     onClick={() => {
                       setCustomMode(false);
                       setPreset(a);
@@ -1958,6 +1971,35 @@ export function DonatePage() {
             </p>
             <div className="donate-step">
               <span className="donate-step-n">3</span>
+              <h3>Your information</h3>
+              <label className="donate-field">
+                <span>Name</span>
+                <input
+                  type="text"
+                  autoComplete="name"
+                  value={donorName}
+                  placeholder="Your full name"
+                  aria-label="Your full name"
+                  onChange={(e) => setDonorName(e.target.value)}
+                />
+              </label>
+              <label className="donate-field">
+                <span>Email</span>
+                <input
+                  type="email"
+                  autoComplete="email"
+                  value={donorEmail}
+                  placeholder="you@example.com"
+                  aria-label="Your email address"
+                  onChange={(e) => setDonorEmail(e.target.value)}
+                />
+              </label>
+              <p className="donate-methods-note">
+                We only use this to send your receipt and to thank you.
+              </p>
+            </div>
+            <div className="donate-step">
+              <span className="donate-step-n">4</span>
               <h3>Choose a payment method</h3>
               <div className="donate-methods">
                 {["Apple Pay", "G Pay", "PayPal", "Credit Card"].map((m) => (
@@ -1972,13 +2014,34 @@ export function DonatePage() {
             <button
               type="button"
               className="donate-go"
-              disabled={busy || baseCents < 100}
+              disabled={busy || baseCents < 100 || !infoOk}
               onClick={submit}
             >
-              {busy
-                ? "Working…"
-                : `DONATE ${donateFmt(totalCents)}${monthly ? " / MONTH" : ""}`}
+              {busy ? "Working…" : "DONATE"}
             </button>
+            {!busy && !infoOk ? (
+              <p className="donate-hint">
+                Enter your name and email to continue.
+              </p>
+            ) : null}
+            <p className="donate-go-lock">
+              <svg
+                className="donate-lock"
+                viewBox="0 0 24 24"
+                width="13"
+                height="13"
+                aria-hidden="true"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <rect x="4" y="10" width="16" height="11" rx="2" />
+                <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+              </svg>
+              Your payment will be securely processed
+              <br />
+              Secure checkout by Stripe
+            </p>
             {notLive ? (
               <p className="donate-notlive" role="status">
                 Donations are being switched on — card payments will be
@@ -1993,9 +2056,10 @@ export function DonatePage() {
           </aside>
         </div>
         {crypto.length > 0 ? (
-          <div className="donate-other">
-            <h3 className="donate-other-title">Other ways to support</h3>
-            <p>
+          <div className="donate-other reveal">
+            <div className="donate-or">OR</div>
+            <h3 className="donate-other-title">Donate cryptocurrency</h3>
+            <p className="body-copy">
               Prefer crypto? Send to one of these wallets — every
               contribution goes to the same servers, storage, and
               preservation work.

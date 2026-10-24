@@ -173,7 +173,7 @@ export const towerOfBabel = {
       paragraphs: [
         "As a project of Antarctic Labs — an independent library dedicated to preserving the written record of humankind — the Tower of Babel is working to make the essential texts of every culture, religion, and era available to everyone, everywhere, free. The library already holds more than 390,000 works — books, sacred texts, declassified documents, papers, and transcripts — and it grows every day on the road to 500,000.",
         "Our goal is simple to say and enormous to do: every published work that matters, within everyone's reach. Achieving it will take servers, storage, bandwidth, and years of steady preservation work — and, most importantly, readers like you.",
-        "Because we firmly believe libraries should be free, we will never run ads, sell reader data, or charge for access to the collection. Instead, we rely on the generosity of the people who use it to keep the lights on.",
+        "The Tower is free to read, and reader support is what keeps it that way.",
         "If you enjoy wandering our virtual stacks, please consider supporting the Tower today. A little goes a long way — most readers never give, so every contribution, one-time or monthly, carries real weight.",
       ],
       signoff: "Thank you for reading with us.",

@@ -89,7 +89,8 @@ function buildSuggestEmail(d) {
 }
 
 // ----- Donations: Stripe Checkout session (POST /api/donate) --------------
-// The Tower donate page posts { frequency, amount_cents, cover_fees } and
+// The Tower donate page posts { frequency, amount_cents, cover_fees,
+// donor_name, donor_email } and
 // this creates a Stripe Checkout Session with a server-built price, so
 // the amount a donor is charged is always computed here — never trusted
 // from the client beyond the chosen base amount (validated to a sane
@@ -104,13 +105,17 @@ const DONATE_FEE_FIXED_CENTS = 30;
 const donateGrossUp = (cents) =>
   Math.ceil((cents + DONATE_FEE_FIXED_CENTS) / (1 - DONATE_FEE_RATE));
 
-async function createDonateCheckout(env, { frequency, baseCents, coverFees, origin }) {
+async function createDonateCheckout(env, { frequency, baseCents, coverFees, donorName, donorEmail, origin }) {
   const key = env.STRIPE_SECRET_KEY;
   if (!key) return { ok: false, notConfigured: true };
   const total = coverFees ? donateGrossUp(baseCents) : baseCents;
   const monthly = frequency === "monthly";
   const p = new URLSearchParams();
   p.set("mode", monthly ? "subscription" : "payment");
+  // Prefill Checkout with the donor's email; the name rides on metadata
+  // (Stripe receipts + the dashboard show who each gift came from).
+  if (donorEmail) p.set("customer_email", donorEmail);
+  if (donorName) p.set("metadata[donor_name]", donorName);
   if (!monthly) p.set("submit_type", "donate");
   p.set("success_url", `${origin}/tower-of-babel/donate?thanks=1`);
   p.set("cancel_url", `${origin}/tower-of-babel/donate?canceled=1`);
@@ -128,7 +133,10 @@ async function createDonateCheckout(env, { frequency, baseCents, coverFees, orig
   p.set("metadata[frequency]", frequency);
   p.set("metadata[base_amount_cents]", String(baseCents));
   p.set("metadata[cover_fees]", coverFees ? "yes" : "no");
-  if (monthly) p.set("subscription_data[metadata][source]", "tower-donate");
+  if (monthly) {
+    p.set("subscription_data[metadata][source]", "tower-donate");
+    if (donorName) p.set("subscription_data[metadata][donor_name]", donorName);
+  }
   let res;
   try {
     res = await fetch("https://api.stripe.com/v1/checkout/sessions", {
@@ -179,6 +187,8 @@ export async function onRequestPost({ request, env, params }) {
     const frequency = str(data.frequency);
     const baseCents = Number(data.amount_cents);
     const coverFees = data.cover_fees === true;
+    const donorName = str(data.donor_name).trim().slice(0, 200);
+    const donorEmail = str(data.donor_email).trim().slice(0, 254);
     if (
       (frequency !== "once" && frequency !== "monthly") ||
       !Number.isInteger(baseCents) ||
@@ -186,6 +196,9 @@ export async function onRequestPost({ request, env, params }) {
       baseCents > 2500000
     ) {
       return json({ ok: false, error: "invalid amount" }, 400);
+    }
+    if (!donorName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(donorEmail)) {
+      return json({ ok: false, error: "invalid donor info" }, 400);
     }
     let origin = "https://antarctic-labs.com";
     try {
@@ -197,6 +210,8 @@ export async function onRequestPost({ request, env, params }) {
       frequency,
       baseCents,
       coverFees,
+      donorName,
+      donorEmail,
       origin,
     });
     if (!session.ok) {
