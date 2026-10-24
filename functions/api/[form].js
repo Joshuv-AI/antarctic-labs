@@ -90,28 +90,45 @@ function buildSuggestEmail(d) {
 
 // ----- Donations: Stripe Checkout session (POST /api/donate) --------------
 // The Tower donate page posts { frequency, amount_cents, cover_fees,
-// donor_name, donor_email } and
-// this creates a Stripe Checkout Session with a server-built price, so
-// the amount a donor is charged is always computed here — never trusted
-// from the client beyond the chosen base amount (validated to a sane
-// range). Donors pick the actual payment method (card, Apple Pay,
-// Google Pay, PayPal — whatever the Stripe account has enabled) on
-// Stripe's hosted page. Requires STRIPE_SECRET_KEY (secret key from
-// Joshua's own Stripe account) as a Pages secret; without it the answer
-// is 503 and the page shows its not-live notice. Standard Stripe US
-// pricing is assumed for the cover-fees gross-up: 2.9% + 30¢.
+// donor_name, donor_email, payment_method } and this creates a Stripe
+// Checkout Session with a server-built price, so the amount a donor is
+// charged is always computed here — never trusted from the client
+// beyond the chosen base amount (validated to a sane range).
+// PAYMENT ROUTING (this is the contract the page promises):
+// - card / apple_pay / google_pay -> payment_method_types ['card'].
+//   Stripe's hosted page then offers the card form, and surfaces the
+//   Apple Pay / Google Pay button on a supporting device when the
+//   wallet is enabled in the Stripe Dashboard. Checkout cannot be
+//   deep-linked straight into a wallet — the wallet renders on
+//   Stripe's page, not ours — so the tile records the donor's intent
+//   (metadata preferred_method) and the session stays card-family.
+// - paypal, one-time -> payment_method_types ['paypal']: the hosted
+//   page opens PayPal-only. PayPal must be enabled in the Dashboard;
+//   if it isn't, Stripe rejects the session and we answer 502.
+// - paypal, monthly -> REFUSED (400). Stripe recurring PayPal is
+//   Europe-only; a US account cannot run it. The page blocks this
+//   first, but the server enforces it too.
+// Requires STRIPE_SECRET_KEY (secret key from Joshua's own Stripe
+// account) as a Pages secret; without it the answer is 503 and the
+// page shows its not-live notice. Standard Stripe US pricing is
+// assumed for the cover-fees gross-up: 2.9% + 30¢.
 const DONATE_FEE_RATE = 0.029;
 const DONATE_FEE_FIXED_CENTS = 30;
 const donateGrossUp = (cents) =>
   Math.ceil((cents + DONATE_FEE_FIXED_CENTS) / (1 - DONATE_FEE_RATE));
 
-async function createDonateCheckout(env, { frequency, baseCents, coverFees, donorName, donorEmail, origin }) {
+async function createDonateCheckout(env, { frequency, baseCents, coverFees, donorName, donorEmail, method, origin }) {
   const key = env.STRIPE_SECRET_KEY;
   if (!key) return { ok: false, notConfigured: true };
   const total = coverFees ? donateGrossUp(baseCents) : baseCents;
   const monthly = frequency === "monthly";
+  if (method === "paypal" && monthly) return { ok: false, blocked: true };
   const p = new URLSearchParams();
   p.set("mode", monthly ? "subscription" : "payment");
+  // Route the session to the method the donor actually tapped.
+  if (method === "paypal") p.set("payment_method_types[0]", "paypal");
+  else p.set("payment_method_types[0]", "card");
+  p.set("metadata[preferred_method]", method || "card");
   // Prefill Checkout with the donor's email; the name rides on metadata
   // (Stripe receipts + the dashboard show who each gift came from).
   if (donorEmail) p.set("customer_email", donorEmail);
@@ -189,6 +206,10 @@ export async function onRequestPost({ request, env, params }) {
     const coverFees = data.cover_fees === true;
     const donorName = str(data.donor_name).trim().slice(0, 200);
     const donorEmail = str(data.donor_email).trim().slice(0, 254);
+    const methodRaw = str(data.payment_method);
+    const method = ["card", "apple_pay", "google_pay", "paypal"].includes(methodRaw)
+      ? methodRaw
+      : "card";
     if (
       (frequency !== "once" && frequency !== "monthly") ||
       !Number.isInteger(baseCents) ||
@@ -196,6 +217,9 @@ export async function onRequestPost({ request, env, params }) {
       baseCents > 2500000
     ) {
       return json({ ok: false, error: "invalid amount" }, 400);
+    }
+    if (method === "paypal" && frequency === "monthly") {
+      return json({ ok: false, error: "paypal does not support monthly donations" }, 400);
     }
     if (!donorName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(donorEmail)) {
       return json({ ok: false, error: "invalid donor info" }, 400);
@@ -212,11 +236,15 @@ export async function onRequestPost({ request, env, params }) {
       coverFees,
       donorName,
       donorEmail,
+      method,
       origin,
     });
     if (!session.ok) {
       if (session.notConfigured) {
         return json({ ok: false, error: "payments not configured" }, 503);
+      }
+      if (session.blocked) {
+        return json({ ok: false, error: "paypal does not support monthly donations" }, 400);
       }
       return json({ ok: false, error: "checkout failed" }, 502);
     }

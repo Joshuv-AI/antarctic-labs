@@ -1877,6 +1877,13 @@ export function DonatePage({ onReady }) {
   const [coverFees, setCoverFees] = useState(false);
   const [donorName, setDonorName] = useState("");
   const [donorEmail, setDonorEmail] = useState("");
+  // Step 4 is a real selection, not decoration: the chosen method is
+  // posted to /api/donate and shapes the Stripe Checkout session
+  // (card-family for card/Apple Pay/Google Pay, PayPal-only for PayPal).
+  const [method, setMethod] = useState("card");
+  // Stripe recurring PayPal is Europe-only, so a US account cannot run
+  // a monthly donation through PayPal — block it here AND server-side.
+  const paypalMonthlyBlocked = method === "paypal" && frequency === "monthly";
   const [busy, setBusy] = useState(false);
   const [notLive, setNotLive] = useState(false);
   const [error, setError] = useState("");
@@ -1894,10 +1901,14 @@ export function DonatePage({ onReady }) {
   const infoOk = donorName.trim().length > 0 && emailOk;
 
   async function submit() {
-    if (busy || baseCents < 100 || !infoOk) {
+    if (busy || baseCents < 100 || !infoOk || paypalMonthlyBlocked) {
       if (baseCents < 100) setError("Enter an amount of $1 or more.");
       else if (!donorName.trim()) setError("Enter your name.");
       else if (!emailOk) setError("Enter a valid email address.");
+      else if (paypalMonthlyBlocked)
+        setError(
+          "PayPal can't be used for monthly donations — choose One time, or pay by card."
+        );
       return;
     }
     setBusy(true);
@@ -1913,6 +1924,7 @@ export function DonatePage({ onReady }) {
           cover_fees: coverFees,
           donor_name: donorName.trim(),
           donor_email: donorEmail.trim(),
+          payment_method: method,
         }),
       });
       const data = await res.json().catch(() => null);
@@ -2085,20 +2097,44 @@ export function DonatePage({ onReady }) {
               <h3>Choose a payment method</h3>
               <div className="donate-methods">
                 <div className="donate-pay-row">
-                  <span className="donate-pay-tile" aria-label="Apple Pay">
+                  <button
+                    type="button"
+                    className={`donate-pay-tile${method === "apple_pay" ? " is-on" : ""}`}
+                    aria-label="Apple Pay"
+                    aria-pressed={method === "apple_pay"}
+                    onClick={() => setMethod("apple_pay")}
+                  >
                     <AppleMark />
                     <span className="donate-pay-word">Pay</span>
-                  </span>
-                  <span className="donate-pay-tile" aria-label="Google Pay">
+                  </button>
+                  <button
+                    type="button"
+                    className={`donate-pay-tile${method === "google_pay" ? " is-on" : ""}`}
+                    aria-label="Google Pay"
+                    aria-pressed={method === "google_pay"}
+                    onClick={() => setMethod("google_pay")}
+                  >
                     <GoogleMark />
                     <span className="donate-pay-word donate-pay-word-g">Pay</span>
-                  </span>
-                  <span className="donate-pay-tile donate-paypal" aria-label="PayPal">
+                  </button>
+                  <button
+                    type="button"
+                    className={`donate-pay-tile donate-paypal${method === "paypal" ? " is-on" : ""}`}
+                    aria-label="PayPal"
+                    aria-pressed={method === "paypal"}
+                    onClick={() => setMethod("paypal")}
+                  >
                     <span className="donate-paypal-a">Pay</span>
                     <span className="donate-paypal-b">Pal</span>
-                  </span>
+                  </button>
                 </div>
-                <div className="donate-card-tile">
+                <button
+                  type="button"
+                  className={`donate-card-tile${method === "card" ? " is-on" : ""}`}
+                  aria-label="Credit Card"
+                  aria-pressed={method === "card"}
+                  onClick={() => setMethod("card")}
+                >
                   <span className="donate-card-label">Credit Card</span>
                   <span className="donate-card-marks" aria-label="Visa, Mastercard, American Express, Discover, JCB, UnionPay">
                     <span className="donate-visa">VISA</span>
@@ -2108,17 +2144,27 @@ export function DonatePage({ onReady }) {
                     <JcbMark />
                     <span className="donate-unionpay">UnionPay</span>
                   </span>
-                </div>
+                </button>
               </div>
-              <p className="donate-methods-note">
-                You pick the exact method on Stripe&apos;s secure checkout
-                page — we never see or store your card number.
-              </p>
+              {paypalMonthlyBlocked ? (
+                <p className="donate-method-warn" role="status">
+                  PayPal can&apos;t be used for monthly donations — choose
+                  One time above, or pay by card.
+                </p>
+              ) : (
+                <p className="donate-methods-note">
+                  {method === "paypal"
+                    ? "You complete payment with PayPal on Stripe's secure checkout page."
+                    : method === "apple_pay" || method === "google_pay"
+                      ? "Your gift opens on Stripe's secure checkout page, where the wallet button appears on a supported device — we never see or store your card number."
+                      : "You complete payment on Stripe's secure checkout page — we never see or store your card number."}
+                </p>
+              )}
             </div>
             <button
               type="button"
               className="donate-go"
-              disabled={busy || baseCents < 100 || !infoOk}
+              disabled={busy || baseCents < 100 || !infoOk || paypalMonthlyBlocked}
               onClick={submit}
             >
               {busy ? "Working…" : "DONATE"}
