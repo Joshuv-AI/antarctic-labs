@@ -736,6 +736,37 @@ function TowerDiscovery({ artifacts, towerData, go, onBrowse, onShelfChange }) {
     return m;
   }, [artifacts]);
   const byId = useCallback((id) => byIdMap.get(id) || null, [byIdMap]);
+  // Most Popular (2026-10-23, Joshua's call — sits on top of Featured,
+  // the curated rails stay below it): the real reader ranking, counted
+  // from PostHog `work_viewed` events by the /tower-popular.json Pages
+  // function (server-side query, edge-cached 1h; the PostHog API key
+  // never reaches the browser). Deferred past first paint like the
+  // other warm-up work on this page, and every failure mode is silent:
+  // no key configured, endpoint down, or fewer than POPULAR_MIN_DISTINCT
+  // distinct works viewed yet all leave the page exactly as it was.
+  const POPULAR_MIN_DISTINCT = 8;
+  const [popularIds, setPopularIds] = useState(null);
+  useEffect(() => {
+    let live = true;
+    const t = setTimeout(() => {
+      fetch("/tower-popular.json")
+        .then((r) => (r && r.ok ? r.json() : null))
+        .then((d) => {
+          if (!live || !d || !Array.isArray(d.items)) return;
+          const ids = d.items
+            .map((it) => it && it.artifact_id)
+            .filter((id) => typeof id === "string" && id);
+          if (ids.length >= POPULAR_MIN_DISTINCT) setPopularIds(ids);
+        })
+        .catch(() => {});
+    }, 2500);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, []);
+  const popularItems = popularIds ? popularIds.map(byId).filter(Boolean) : null;
+  const showPopular = !!popularItems && popularItems.length >= 4;
   // The stacks are a selector (2026-10-21 category panels): nothing is
   // selected by default — the Featured rails own the page. Selecting a
   // stack swaps Featured for that category's shelf + grouped showcase;
@@ -831,7 +862,20 @@ function TowerDiscovery({ artifacts, towerData, go, onBrowse, onShelfChange }) {
         <CategoryGroups stack={stack} byId={byId} artifacts={artifacts} go={go} />
       )}
       {!stack && (
-        <div className="tower-featured">
+        <>
+          {showPopular && (
+            <div className="tower-popular">
+              <div className="tower-block-head">
+                <h2 className="tower-block-title">Most Popular</h2>
+                <p className="tower-block-sub">
+                  What readers are opening most — ranked from real visits
+                  over the last 30 days, updated hourly.
+                </p>
+              </div>
+              <CoverRail title="Most viewed" items={popularItems} go={go} />
+            </div>
+          )}
+          <div className="tower-featured">
           <div className="tower-block-head">
             <h2 className="tower-block-title">Featured</h2>
           </div>
@@ -848,7 +892,8 @@ function TowerDiscovery({ artifacts, towerData, go, onBrowse, onShelfChange }) {
             wide
           />
           <CoverRail title="From the stacks" items={rotated.map(byId)} go={go} />
-        </div>
+          </div>
+        </>
       )}
     </div>
   );
