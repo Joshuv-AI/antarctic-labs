@@ -14,6 +14,7 @@ import "./styles.css";
 import "./shaders/threeui.css";
 import NewBackgroundVideo from "./components/NewBackgroundVideo.jsx";
 import StarfieldCanvas from "./components/StarfieldCanvas.jsx";
+import { initAnalytics, trackPageview } from "./lib/analytics.js";
 // Silent recovery on chunk-load failure (2026-10-14, hardened 2026-10-17).
 // Deploys ship new hashed chunk filenames; a cached index.html (or an
 // interrupted fetch) can reference a chunk that no longer exists, which
@@ -442,6 +443,15 @@ function App() {
   }, []);
   useEffect(() => {
     applyMeta(path);
+  }, [path]);
+  // Analytics: start the lazy loader once, then one anonymous pageview per
+  // route. trackPageview queues until posthog-js arrives, so early routes
+  // are not lost; if the library never loads, nothing here can throw.
+  useEffect(() => {
+    initAnalytics();
+  }, []);
+  useEffect(() => {
+    trackPageview(path);
   }, [path]);
   // Every page starts at the top. This runs after React commits the new
   // page's DOM (effects fire post-commit), then waits two animation frames

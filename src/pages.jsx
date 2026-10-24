@@ -9,6 +9,13 @@
 // destinations already share the home-page visual grammar.
 import { useState, useEffect, useMemo, useDeferredValue, useRef, useCallback, memo, Fragment } from "react";
 import { searchDeep, getSnippets } from "./lib/deep-search.js";
+import { track } from "./lib/analytics.js";
+
+// Analytics de-dup guards: entry components do not remount on
+// entry-to-entry navigation, and effects can re-fire as fuller records
+// arrive — each work view / reader open is counted once per session.
+const trackedWorkViews = new Set();
+const trackedReaderOpens = new Set();
 import {
   normText,
   queryTokens,
@@ -1153,6 +1160,20 @@ function TowerLibrarySection({ go, onReady }) {
       clearTimeout(t);
     };
   }, [settled, onReady]);
+  // Analytics: one search_performed per settled query (900ms debounce so
+  // keystrokes don't flood it), with the result count the user saw.
+  useEffect(() => {
+    const qv = query.trim();
+    if (qv.length < 2) return;
+    const t = setTimeout(() => {
+      track("search_performed", {
+        query: qv,
+        results: matchCount,
+        bucket: bucketFilter || "all",
+      });
+    }, 900);
+    return () => clearTimeout(t);
+  }, [query, matchCount, bucketFilter]);
   // Catalog failed even after the automatic retry: show the error state,
   // never a blank page. While the catalog loads, render the page shell —
   // the Tower boot loader covers the first seconds, but its failsafe can
@@ -1468,6 +1489,7 @@ export function SuggestEntry({ go }) {
       return;
     }
     setSending(true);
+    track("suggestion_submitted", {});
     try {
       await submitSuggestion({ ...values, website: honeypot });
     } catch (err) {
@@ -1952,6 +1974,26 @@ export function LibraryArtifact({ go, params, onReady }) {
   useEffect(() => {
     getTowerFiles();
   }, [params.id]);
+  // Analytics: reader scroll-depth milestones (25/50/75/100%), once each
+  // per work per session. Passive listener, no layout reads beyond the
+  // standard scroll metrics, removed on navigation.
+  useEffect(() => {
+    const seen = new Set();
+    const onScroll = () => {
+      const el = document.documentElement;
+      const max = el.scrollHeight - el.clientHeight;
+      if (max <= 0) return;
+      const pct = Math.min(100, Math.round((el.scrollTop / max) * 100));
+      for (const m of [25, 50, 75, 100]) {
+        if (pct >= m && !seen.has(m)) {
+          seen.add(m);
+          track("reader_progress", { artifact_id: params.id, percent: m });
+        }
+      }
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [params.id]);
   // Full record loads on demand (the index has list fields only).
   const [fullArtifact, setFullArtifact] = useState(null);
   const [fullSettled, setFullSettled] = useState(false);
@@ -1965,6 +2007,23 @@ export function LibraryArtifact({ go, params, onReady }) {
     );
     return () => { live = false; };
   }, [params.id]);
+  // Analytics: one work_viewed per work per session, fired when any
+  // usable record for the entry is in hand.
+  useEffect(() => {
+    if (trackedWorkViews.has(params.id)) return;
+    const rec =
+      fullArtifact ||
+      (artifacts && artifacts.find((a) => a.artifact_id === params.id));
+    if (!rec) return;
+    trackedWorkViews.add(params.id);
+    track("work_viewed", {
+      artifact_id: rec.artifact_id,
+      title: rec.title,
+      collection: rec.collection,
+      creator: rec.creator,
+      year: rec.year,
+    });
+  }, [params.id, fullArtifact, artifacts]);
   // Rewritten description from the sidecar (2026-10-18 revamp); falls back
   // to the catalog record's own description while loading or on failure.
   const [descOverride, setDescOverride] = useState(null);
@@ -2240,6 +2299,17 @@ function LibraryFullText({ artifact }) {
 
   const [text, setText] = useState(null);
   const [textError, setTextError] = useState(false);
+  // Analytics: the full text actually loaded and is on screen — the
+  // strongest reading-intent signal the library produces.
+  useEffect(() => {
+    if (!text || trackedReaderOpens.has(artifactId)) return;
+    trackedReaderOpens.add(artifactId);
+    track("reader_opened", {
+      artifact_id: artifactId,
+      collection: artifact.collection,
+      chars: text.length,
+    });
+  }, [text, artifactId]);
   // Windowed chunk rendering (2026-10-21): only chunks in [win.start,
   // win.end) are mounted. Rendering used to be a prefix (0..shown), so a
   // Search/Contents jump to the end of a 1.4 MB book mounted the WHOLE
