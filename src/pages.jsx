@@ -1007,6 +1007,14 @@ function TowerLibrarySection({ go, onReady }) {
       /* private mode — the choice just won't persist */
     }
   };
+  // Search mode (2026-10-25): the page visibly offers TWO searches over the
+  // same query — Titles (catalog title/creator/tags, always available) and
+  // Full text (words and quoted phrases inside the texts, via the
+  // /search-index deep index). "both" is the default and preserves the
+  // previous behavior exactly (title list + "Mentions in texts" section);
+  // "titles" / "fulltext" show only that mode. Full-text mode lights up
+  // the moment the index lands; until then it says so instead of hiding.
+  const [searchMode, setSearchMode] = useState("both");
   // Collections filter (2026-10-24, replaces the deleted hub pages):
   // collGroup is a COLLECTION_GROUPS id (or "" for no group tab), and
   // collKey is the selected collection's key (or "" for none). The
@@ -1424,6 +1432,36 @@ function TowerLibrarySection({ go, onReady }) {
                 onFocus={() => requestCatalogIndex()}
                 aria-label="Search the library catalog and the full text of every work"
               />
+              <div
+                className="tower-view-toggle"
+                role="group"
+                aria-label="Search mode"
+              >
+                <button
+                  type="button"
+                  className={searchMode === "both" ? " is-active" : ""}
+                  aria-pressed={searchMode === "both"}
+                  onClick={() => setSearchMode("both")}
+                >
+                  Titles + full text
+                </button>
+                <button
+                  type="button"
+                  className={searchMode === "titles" ? " is-active" : ""}
+                  aria-pressed={searchMode === "titles"}
+                  onClick={() => setSearchMode("titles")}
+                >
+                  Titles
+                </button>
+                <button
+                  type="button"
+                  className={searchMode === "fulltext" ? " is-active" : ""}
+                  aria-pressed={searchMode === "fulltext"}
+                  onClick={() => setSearchMode("fulltext")}
+                >
+                  Full text
+                </button>
+              </div>
               {!fullIndexReady && isIndexInFlight() && (
                 <p className="tower-index-status" aria-live="polite">
                   Loading full catalog…
@@ -1634,6 +1672,8 @@ function TowerLibrarySection({ go, onReady }) {
               matchesExpanded={matchesExpanded}
               onToggleMatches={() => setMatchesExpanded((v) => !v)}
               viewMode={viewMode}
+              searchMode={searchMode}
+              searching={!!q && q.trim().length >= 2}
             />
               </div>
             </div>
@@ -2328,6 +2368,8 @@ const LibraryResults = memo(function LibraryResults({
   matchesExpanded,
   onToggleMatches,
   viewMode,
+  searchMode,
+  searching,
 }) {
   // Render only the matching rows instead of keeping all 3,448 mounted and
   // flipping `hidden`: a filter update then reconciles dozens of rows
@@ -2361,53 +2403,66 @@ const LibraryResults = memo(function LibraryResults({
     deep.state === "empty" ||
     deep.state === "unavailable" ||
     (deep.state === "ready" && (!deep.works || deep.works.length === 0));
-  const searching = !!q && q.trim().length >= 2;
-  const showExpander = searching && !deepHasNothing && matchCount > SEARCH_TOP_N;
+  // Search-mode split (2026-10-25): "titles" shows only the title list
+  // (uncapped — there is no mentions section to protect), "fulltext"
+  // shows only the mentions section, "both" keeps the previous layout
+  // (title list capped at 2 rows while mentions are present).
+  const titleVisible = searchMode !== "fulltext";
+  const deepVisible = searchMode !== "titles";
+  const showExpander =
+    titleVisible &&
+    searching &&
+    deepVisible &&
+    !deepHasNothing &&
+    matchCount > SEARCH_TOP_N;
   const shownIndices =
-    searching && !deepHasNothing && !matchesExpanded
+    titleVisible && searching && deepVisible && !deepHasNothing && !matchesExpanded
       ? visibleIndices.slice(0, SEARCH_TOP_N)
       : visibleIndices;
   return (
     <>
-      <p className="tower-result-count" aria-live="polite">
-        {matchCount} of {artifacts.length}{" "}
-        {artifacts.length === 1 ? "entry" : "entries"}
-        {q ? ` matching “${q}”` : ""}
-      </p>
-      {matchCount === 0 && (
+      {titleVisible && (
+        <p className="tower-result-count" aria-live="polite">
+          {matchCount} of {artifacts.length}{" "}
+          {artifacts.length === 1 ? "entry" : "entries"}
+          {q ? ` matching “${q}”` : ""}
+        </p>
+      )}
+      {titleVisible && matchCount === 0 && (
         <p className="tower-empty-results">
           No entries match. Clear the search or choose a different collection.
         </p>
       )}
-      {viewMode === "grid" ? (
-        <div className="tower-grid">
-          {shownIndices.map((i) => {
-            const a = artifacts[i];
-            return (
-              <TowerBookCard
-                key={a.artifact_id}
-                a={a}
-                go={go}
-                wide={a.collection === "PODCASTS"}
-              />
-            );
-          })}
-        </div>
-      ) : (
-        <div className="tower-rows">
-          {shownIndices.map((i) => {
-            const a = artifacts[i];
-            return (
-              <TowerRow
-                key={a.artifact_id}
-                a={a}
-                index={rankMap.get(a.artifact_id)}
-                go={go}
-              />
-            );
-          })}
-        </div>
-      )}
+      {titleVisible &&
+        (viewMode === "grid" ? (
+          <div className="tower-grid">
+            {shownIndices.map((i) => {
+              const a = artifacts[i];
+              return (
+                <TowerBookCard
+                  key={a.artifact_id}
+                  a={a}
+                  go={go}
+                  wide={a.collection === "PODCASTS"}
+                />
+              );
+            })}
+          </div>
+        ) : (
+          <div className="tower-rows">
+            {shownIndices.map((i) => {
+              const a = artifacts[i];
+              return (
+                <TowerRow
+                  key={a.artifact_id}
+                  a={a}
+                  index={rankMap.get(a.artifact_id)}
+                  go={go}
+                />
+              );
+            })}
+          </div>
+        ))}
       {showExpander && (
         <button
           type="button"
@@ -2421,7 +2476,7 @@ const LibraryResults = memo(function LibraryResults({
         </button>
       )}
       {/* Pagination: 50 per page, "Load more" for the next 50. */}
-      {!searching && matchCount > rowBudget && (
+      {titleVisible && !searching && matchCount > rowBudget && (
         <button
           type="button"
           className="tower-load-more"
@@ -2430,7 +2485,7 @@ const LibraryResults = memo(function LibraryResults({
           Load more — showing {Math.min(rowBudget, matchCount)} of {matchCount}
         </button>
       )}
-      <DeepMentions deep={deep} go={go} />
+      {deepVisible && <DeepMentions deep={deep} go={go} searching={searching} />}
     </>
   );
 });
@@ -2529,6 +2584,16 @@ function DeepMentionRow({ work, rank, go, parsedQuery }) {
           {open ? "▾" : "▸"}
         </span>
       </button>
+      <div style={{ padding: "2px 0 10px 48px" }}>
+        <button
+          type="button"
+          className="text-link"
+          onClick={() => go(`/tower-of-babel/library/${doc.id}`)}
+          aria-label={`Open ${doc.title} entry page`}
+        >
+          Open entry ↗
+        </button>
+      </div>
       {open && (
         <div className="tower-snippets">
           {!snips && <p className="tower-snippets-status">Finding passages…</p>}
@@ -2560,7 +2625,24 @@ function DeepMentionRow({ work, rank, go, parsedQuery }) {
   );
 }
 
-function DeepMentions({ deep, go }) {
+function DeepMentions({ deep, go, searching }) {
+  // Unavailable must be VISIBLE, not silent: with no index (today, until
+  // the first R2 build lands) the section previously rendered nothing,
+  // so a searcher could not tell full-text search from a no-match. The
+  // notice disappears the moment the index answers, with no code change.
+  if (deep.state === "unavailable" && searching) {
+    return (
+      <div className="tower-mentions">
+        <div className="tower-mentions-head">
+          <div className="section-index">Mentions in texts</div>
+        </div>
+        <p className="tower-mentions-status">
+          Full-text search is unavailable right now — the search index is
+          being rebuilt. Title results still work.
+        </p>
+      </div>
+    );
+  }
   if (deep.state === "idle" || deep.state === "unavailable") return null;
   const works = deep.works || [];
   return (
