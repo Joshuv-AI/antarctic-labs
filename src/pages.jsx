@@ -1061,14 +1061,29 @@ function TowerLibrarySection({ go, onReady }) {
     return null;
   }, [collData, collKey]);
   const collSet = activeCollection ? activeCollection.ids : null;
+  // Unified filter revamp (2026-10-25, visual only): a Collections tap
+  // mounts/unmounts the whole discovery zone above the results, which
+  // used to leave the viewport stranded on stacks / Featured / FAQ.
+  // After a tap, land deterministically on the Collections block itself
+  // (instant, not smooth — smooth scrolling fights the height change
+  // on iOS). Filter logic, counts and click-to-clear are unchanged.
+  const collScrollPending = useRef(false);
   const selectCollGroup = (g) => {
+    collScrollPending.current = true;
     setCollGroup(g);
     setCollKey("");
     if (g) ensureCollections();
   };
   const selectCollection = (key) => {
+    collScrollPending.current = true;
     setCollKey((prev) => (prev === key ? "" : key));
   };
+  useEffect(() => {
+    if (!collScrollPending.current) return;
+    collScrollPending.current = false;
+    const el = collSectionRef.current;
+    if (el) el.scrollIntoView({ behavior: "auto", block: "start" });
+  }, [collGroup, collKey]);
   // Stack-card "See all" / subcategory jumps: apply the existing bucket
   // filter, then bring the results into view (the discovery zone hands
   // the page over to the results in the filtered state).
@@ -1434,54 +1449,12 @@ function TowerLibrarySection({ go, onReady }) {
               id="tower-results"
               style={shelfActive ? { display: "none" } : undefined}
             >
-              <aside className="tower-facets" aria-label="Refine results">
-                <div className="tower-facets-title">Zoom in</div>
-                <button
-                  type="button"
-                  className={`tower-facet${bucketFilter === "" ? " is-active" : ""}`}
-                  onClick={() => setBucketFilter("")}
-                >
-                  All collections <span>{artifacts.length.toLocaleString()}</span>
-                </button>
-                {towerData.collections.map((c) => {
-                  const laneActive =
-                    bucketFilter === c || bucketFilter.indexOf(c + ":") === 0;
-                  return (
-                    <Fragment key={c}>
-                      <button
-                        type="button"
-                        className={`tower-facet${laneActive ? " is-active" : ""}`}
-                        onClick={() =>
-                          setBucketFilter(bucketFilter === c ? "" : c)
-                        }
-                        aria-pressed={laneActive}
-                      >
-                        {TOWER_TOP_LABELS[c] || c}{" "}
-                        <span>{(towerData.counts[c] || 0).toLocaleString()}</span>
-                      </button>
-                      {laneActive &&
-                        (TOWER_SUBS[c] || []).map((s) => {
-                          const key = `${c}:${s.id}`;
-                          const n = towerData.subCounts[key] || 0;
-                          if (!n) return null;
-                          return (
-                            <button
-                              key={s.id}
-                              type="button"
-                              className={`tower-facet tower-facet-sub${bucketFilter === key ? " is-active" : ""}`}
-                              onClick={() =>
-                                setBucketFilter(bucketFilter === key ? c : key)
-                              }
-                              aria-pressed={bucketFilter === key}
-                            >
-                              {s.label} <span>{n.toLocaleString()}</span>
-                            </button>
-                          );
-                        })}
-                    </Fragment>
-                  );
-                })}
-              </aside>
+              {/* Unified filter revamp (2026-10-25, visual only): the desktop
+                  "Zoom in" sidebar is retired. Format lanes now render once,
+                  as the chip row below, on every platform — same order,
+                  same styles, same counts as mobile. No filter logic
+                  changed; the sidebar was a second rendering of the
+                  same bucketFilter state. */}
               <div className="tower-results-col">
                 <div className="tower-toolbar">
                   <label className="tower-sort">
@@ -1517,22 +1490,21 @@ function TowerLibrarySection({ go, onReady }) {
                     </button>
                   </div>
                 </div>
-            {/* Collections browser (2026-10-24): the deleted hub pages,
-                folded into this section as a filter on the same entry
-                list. Group tabs, then collection pills for the chosen
-                group; a collection filters the list below (intersected
-                with search + category + sort), it never renders a
-                second list. The container uses inline layout so it
-                stays visible on desktop, where .tower-chips is hidden
-                in favour of the facets sidebar; the pills themselves
-                reuse the existing .tower-chip style. On a hub-index
-                fetch failure this block hides and category browse
-                carries on — no error panel. */}
+            {/* Collections browser (2026-10-24, unified 2026-10-25):
+                the deleted hub pages, folded into this section as a
+                filter on the same entry list. Group tabs, then — in
+                the old subchip style, indented with a ↳ and a group
+                label — the collections in the chosen group; a
+                collection filters the list below (intersected with
+                search + category + sort), it never renders a second
+                list. Same markup and order on desktop and mobile.
+                On a hub-index fetch failure this block hides and
+                category browse carries on — no error panel. */}
             {!collFailed && (
-              <div ref={collSectionRef} style={{ margin: "0 0 12px" }}>
+              <div ref={collSectionRef} className="tower-collections">
                 <div className="section-index">COLLECTIONS</div>
                 <div
-                  style={{ display: "flex", flexWrap: "wrap", gap: "10px", margin: "0 0 6px" }}
+                  className="tower-chips"
                   role="group"
                   aria-label="Browse by collection group"
                 >
@@ -1563,15 +1535,18 @@ function TowerLibrarySection({ go, onReady }) {
                 )}
                 {collData && collGroup && (
                   <div
-                    style={{ display: "flex", flexWrap: "wrap", gap: "10px", margin: "0 0 6px" }}
+                    className="tower-subchips"
                     role="group"
                     aria-label={`Collections in ${COLLECTION_GROUPS.find((g) => g.id === collGroup)?.label || collGroup}`}
                   >
+                    <span className="tower-coll-sub-label" aria-hidden="true">
+                      IN {COLLECTION_GROUPS.find((g) => g.id === collGroup)?.label?.toUpperCase() || collGroup}
+                    </span>
                     {(collData.groups.find((g) => g.id === collGroup)?.collections || []).map((c) => (
                       <button
                         key={c.key}
                         type="button"
-                        className={`tower-chip${collKey === c.key ? " is-active" : ""}`}
+                        className={`tower-subchip${collKey === c.key ? " is-active" : ""}`}
                         onClick={() => selectCollection(c.key)}
                         aria-pressed={collKey === c.key}
                       >
@@ -1588,13 +1563,14 @@ function TowerLibrarySection({ go, onReady }) {
                 )}
               </div>
             )}
-            <div className="tower-chips" role="group" aria-label="Filter by collection">
+            <div className="section-index">ZOOM IN</div>
+            <div className="tower-chips" role="group" aria-label="Filter by format">
               <button
                 type="button"
                 className={`tower-chip${bucketFilter === "" ? " is-active" : ""}`}
                 onClick={() => setBucketFilter("")}
               >
-                All <span>{artifacts.length}</span>
+                All entries <span>{artifacts.length}</span>
               </button>
               {towerData.collections.map((c) => {
                 const laneActive =
@@ -3637,6 +3613,27 @@ export function About({ go }) {
               <p className="display-copy">{p.name}</p>
               <span className="profile-role">{p.role}</span>
               <p className="body-copy profile-text">{p.text}</p>
+              {p.highlights && (
+                <ul className="profile-highlights">
+                  {p.highlights.map((h) => (
+                    <li key={h}>{h}</li>
+                  ))}
+                </ul>
+              )}
+              {p.linkedin && (
+                <a
+                  className="profile-linkedin"
+                  href={p.linkedin}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label={`${p.name} on LinkedIn`}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z" />
+                  </svg>
+                  <span>LinkedIn</span>
+                </a>
+              )}
             </div>
           ))}
         </div>

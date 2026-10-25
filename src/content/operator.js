@@ -51,9 +51,17 @@ export const operator = {
         text: "Runs the firm day to day: logistics, business operations, accounting, and overall oversight.",
       },
       {
-        name: "ANDREW",
-        role: "ENGINEERING & SYSTEMS",
-        text: "Leads engineering: the trading algorithms, the server build, and the systems the firm runs on.",
+        name: "ANDREW OWENS",
+        role: "PARTNER, ENGINEERING & SYSTEMS",
+        text: "At Antarctic Labs, Andrew leads engineering: the trading algorithms developed in-house, the server build, and the systems the firm runs on. His work is why the firm trades on infrastructure it owns and operates, tested on paper and with limited capital before anything scales.",
+        highlights: [
+          "Senior AI Accelerator Tools Development Engineer at Microsoft, and GPU Kernel Development Engineer — AI accelerator and low-level systems work",
+          "10+ years in engineering across avionics, blockchain, logistics, defense programs, security research, and AAA games",
+          "Lead Engineer at OMEGA.xyz, building decentralized lending protocols focused on yield optimization for institutional investors",
+          "Senior Software Engineer at Thales on mission-critical aircraft hardware, and Senior Backend Engineer at FYX Gaming on a blockchain gaming platform handling over 4 million UTXO transactions a day",
+          "Projects include Madden NFL 15 and 16, VBS3 training courseware, and the KC-46A Pegasus",
+        ],
+        linkedin: "https://www.linkedin.com/in/owensa",
       },
     ],
     facts: [
