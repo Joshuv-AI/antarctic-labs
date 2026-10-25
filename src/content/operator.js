@@ -37,9 +37,10 @@ export const operator = {
     // described; keep every other section about the work, not the people.
     profiles: [
       {
-        name: "JOSHUA",
-        role: "OPERATIONS, LOGISTICS & ACCOUNTING",
-        text: "Runs the firm day to day: logistics, business operations, accounting, and overall oversight.",
+        name: "JOSHUA ALMODOVAR",
+        role: "FOUNDER, OPERATIONS, LOGISTICS & ACCOUNTING",
+        text: "Founder and partner running Antarctic Labs day to day. Leads the Philippines venture — entity, office, and owned data-center build — and directs the Tower of Babel library, 392,852 works live toward 500,000. Andrew's engineering plugs into the firm Joshua runs; the direction, the business, and the delivery are his.",
+        linkedin: "https://www.linkedin.com/in/joshua-almodovar-a28241433",
       },
       {
         name: "ANDREW OWENS",
