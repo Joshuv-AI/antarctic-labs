@@ -1,27 +1,27 @@
-// Serves /search-index/manifest.json — the deep-search manifest (32+ MiB at
-// 103,606 texts), which exceeds the 25 MiB per-file limit for static
-// Cloudflare Pages files. The build holds it out of dist/
-// (scripts/stage-deploy.mjs); this function proxies it from the git
-// repo's raw content with a short edge-cache TTL.
+// Serves /search-index/manifest.json — the deep-search manifest.
 //
-// IMPORTANT: the manifest is fetched at the DEPLOYED commit
-// (CF_PAGES_COMMIT_SHA), not main. The manifest's buildId must always match
-// the term shards shipped in the same deploy — pinning to the deployed
-// commit keeps them atomically consistent (no broken deep search during or
-// right after a deploy).
+// R2 ROUTE (2026-10-25): the manifest now lives in the R2 bucket
+// tower-search-index, published by the GitHub Actions build
+// (.github/workflows/build-search-index.yml), and is read from the bucket's
+// public custom domain. R2 has no 25 MiB Pages-file cap and no 100 MiB
+// git per-file cap, which the git-hosted manifest was about to hit
+// (~72 MiB at full catalog scale).
 //
-// CACHE HARDENING (2026-10-16): raw.githubusercontent.com has regionally-
-// stale caches. We bypass ALL upstream caches via Cache-Control: no-cache
-// and cf.cacheTtl 0, so the function always fetches fresh content for the
-// pinned SHA. Edge cache (caches.default) is keyed by request URL; the SHA
-// in the deployed URL makes each deploy's manifest immutable and safe.
+// FALLBACK: if R2 does not answer (bucket not yet enabled, domain not yet
+// connected, or no Actions build has landed), the function falls back to
+// the old texts-repo proxy (raw.githubusercontent.com/.../search-index-data),
+// so deep search is no worse than today (404) until the first R2 build
+// lands. The client requires manifest.docs to be a non-empty array and
+// treats any failure as "unavailable", leaving title search untouched.
+//
+// The manifest at the R2 root is the LATEST build (overwritten per build);
+// term shards are immutable per buildId, so a manifest/shard mismatch
+// across a build boundary is impossible for a single manifest read.
 
+const R2_BASE = "https://search-index.antarctic-labs.com";
 const REPO = "Joshuv-AI/antarctic-labs-texts";
 
 export async function onRequest(context) {
-  const sha = "main"; // index lives in the texts repo; "main" keeps manifest+shards consistent
-  const ORIGIN = `https://raw.githubusercontent.com/${REPO}/${sha}/search-index-data/manifest.json`;
-
   const cache = caches.default;
   const cacheKey = new Request(context.request.url, { method: "GET" });
   if (context.request.method === "GET") {
@@ -29,11 +29,21 @@ export async function onRequest(context) {
     if (hit) return hit;
   }
 
-  const upstream = await fetch(ORIGIN, {
-    headers: { "Cache-Control": "no-cache", "Pragma": "no-cache" },
-    cf: { cacheTtl: 0 },
-  });
-  if (!upstream.ok) {
+  // R2 first.
+  let upstream = await fetch(`${R2_BASE}/manifest.json`, {
+    cf: { cacheTtl: 300 },
+  }).catch(() => null);
+  // Fallback: texts repo (old path). Bypass upstream caches as before.
+  if (!upstream || !upstream.ok) {
+    upstream = await fetch(
+      `https://raw.githubusercontent.com/${REPO}/main/search-index-data/manifest.json`,
+      {
+        headers: { "Cache-Control": "no-cache", "Pragma": "no-cache" },
+        cf: { cacheTtl: 0 },
+      }
+    ).catch(() => null);
+  }
+  if (!upstream || !upstream.ok) {
     return new Response("Not found", { status: 404 });
   }
 

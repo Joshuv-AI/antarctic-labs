@@ -1,14 +1,16 @@
 // Serves /search-index/<buildId>/terms/<n>.json — the deep-search term
-// shards (2.5 GiB total at 121k texts), which cannot be deployed as static
-// Cloudflare Pages files (25 MiB per-file cap, 20,000-file site limit, and
-// the sheer upload volume). The build holds the shard dirs out of dist/
-// (scripts/stage-deploy.mjs); this function proxies them from the git
-// repo's raw content with edge caching.
+// shards. R2 route (2026-10-25): shards live in the R2 bucket
+// tower-search-index under <buildId>/terms/, published by the GitHub
+// Actions build; the bucket's public custom domain serves them. Fallback
+// to the old texts-repo proxy when R2 404s, so search is no worse than
+// today until the first R2 build lands.
 //
-// IMPORTANT: shards are fetched at the DEPLOYED commit
-// (CF_PAGES_COMMIT_SHA), not main — the manifest's buildId must always
-// match the term shards shipped in the same deploy.
+// Validation is unchanged from the git route: buildId must be 12 lowercase
+// hex chars, shard 0-255 — so the index still has at most 256 shards,
+// and the client honors manifest.shards. Shard URLs are immutable per
+// buildId, so the 24h edge cache here is safe.
 
+const R2_BASE = "https://search-index.antarctic-labs.com";
 const REPO = "Joshuv-AI/antarctic-labs-texts";
 
 export async function onRequest(context) {
@@ -28,11 +30,6 @@ export async function onRequest(context) {
     return new Response("Not found", { status: 404 });
   }
 
-  const sha = "main"; // index lives in the texts repo; "main" keeps manifest+shards consistent
-  const ORIGIN =
-    `https://raw.githubusercontent.com/${REPO}/${sha}/search-index-data/` +
-    `${buildId}/terms/${n}.json`;
-
   const cache = caches.default;
   const cacheKey = new Request(context.request.url, { method: "GET" });
   if (context.request.method === "GET") {
@@ -40,10 +37,18 @@ export async function onRequest(context) {
     if (hit) return hit;
   }
 
-  const upstream = await fetch(ORIGIN, {
+  // R2 first.
+  let upstream = await fetch(`${R2_BASE}/${buildId}/terms/${n}.json`, {
     cf: { cacheTtl: 86400, cacheEverything: true },
-  });
-  if (!upstream.ok) {
+  }).catch(() => null);
+  // Fallback: texts repo (old path).
+  if (!upstream || !upstream.ok) {
+    upstream = await fetch(
+      `https://raw.githubusercontent.com/${REPO}/main/search-index-data/${buildId}/terms/${n}.json`,
+      { cf: { cacheTtl: 86400, cacheEverything: true } }
+    ).catch(() => null);
+  }
+  if (!upstream || !upstream.ok) {
     return new Response("Not found", { status: 404 });
   }
 
