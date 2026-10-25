@@ -3651,6 +3651,61 @@ export function About({ go }) {
     </main>
   );
 }
+// ----- Privacy Policy -------------------------------------------------------
+// AdSense-ready privacy page (2026-10-25): states, in plain language, what
+// the site collects, that third-party vendors including Google use cookies
+// to serve ads, and how to opt out of personalized advertising. Deliberately
+// makes no permanent "never" pledge about advertising or data use — the
+// site's advertising and data practices are described as they are now.
+export function PrivacyPage({ go }) {
+  return (
+    <main className="page-shell inner-page about-page" id="main-content" tabIndex={-1}>
+      <section className="inner-hero section">
+        <div className="section-index">PRIVACY</div>
+        <h1>Privacy Policy</h1>
+        <p className="display-copy">Last updated: October 25, 2026. Antarctic Labs operates antarctic-labs.com, including the Tower of Babel free library.</p>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">READING WITHOUT AN ACCOUNT</span>
+        <div>
+          <p className="body-copy">You do not need an account, a sign-in, or any personal information to read the Tower of Babel library. The texts in the library are public-domain and openly licensed works, hosted on this site in plain text.</p>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">INFORMATION WE COLLECT</span>
+        <div>
+          <p className="body-copy">We collect as little as possible. Anonymous analytics: we use PostHog to count page views, library browsing, reading progress, and text downloads. PostHog is configured for anonymous visitors only — no user profiles are created, session recording is disabled, and automatic event capture is off. Only events we deliberately record are sent, tied to an anonymous visitor identifier, not to a name or email address.</p>
+          <p className="body-copy">Information you choose to give us: if you donate, you provide a name and email address, which are passed to our payment processor, Stripe, to create a checkout session and send a receipt. We do not receive or store your card number. If you suggest a work for the library, you provide the title, creator, source link, and any notes you choose to add. Our hosting provider may process basic technical information needed to deliver pages securely, such as IP address and browser type, in its normal server logs.</p>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">COOKIES AND ADVERTISING</span>
+        <div>
+          <p className="body-copy">We use Google AdSense to show advertising on the Tower of Babel library pages. No advertising is shown on the donation page. Third-party vendors, including Google, use cookies to serve ads based on a user&apos;s prior visits to this website or other websites. Google&apos;s use of advertising cookies enables it and its partners to serve ads to users based on their visit to this site and other sites on the internet.</p>
+          <p className="body-copy">You may opt out of personalized advertising by visiting <a href="https://adssettings.google.com/" target="_blank" rel="noreferrer">Google Ads Settings</a> and <a href="https://optout.aboutads.info/" target="_blank" rel="noreferrer">aboutads.info</a>. You can also set your browser to refuse cookies, though some site features may work less well without them. PostHog also uses cookies and local storage to keep its anonymous visitor identifier between visits.</p>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">HOW INFORMATION IS USED AND SHARED</span>
+        <div>
+          <p className="body-copy">Information is used to operate the site and the library, to understand which works readers use, to process donations, and to show advertising. It is shared only with the service providers needed for those purposes — analytics, payment processing, and advertising — and as required by law. We do not publish or display information you provide through donation or suggestion forms.</p>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">CHANGES AND CONTACT</span>
+        <div>
+          <p className="body-copy">This policy may be updated as the site changes; the date at the top of this page will change with it. Questions about this policy can be sent to hello@antarctic-labs.com, or through the suggestion form on the Tower of Babel library pages.</p>
+          <p className="body-copy"><a href="#" onClick={(e) => { e.preventDefault(); go("/about"); }}>About Antarctic Labs</a> · <a href="#" onClick={(e) => { e.preventDefault(); go("/tower-of-babel"); }}>Tower of Babel</a></p>
+        </div>
+      </section>
+    </main>
+  );
+}
 // ----- Shared: FAQ block -----------------------------------------------------
 // Native <details>/<summary> — zero JS, fully crawler-visible (the Q&A text
 // is in the HTML, which is what search + AI engines index), keyboard

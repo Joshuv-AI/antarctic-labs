@@ -256,6 +256,7 @@ const SuggestEntry = lazyPage("SuggestEntry");
 const DonatePage = lazyPage("DonatePage");
 const Government = lazyPage("Government");
 const About = lazyPage("About");
+const PrivacyPage = lazyPage("PrivacyPage");
 const ServiceDetail = lazyPage("ServiceDetail");
 const TowerApiPage = lazyPage("TowerApiPage");
 // FaqBlock stays available from the shared lazy pages chunk for the
@@ -715,11 +716,26 @@ function App() {
         {path === "/about" && (
           <About go={go} />
         )}
+        {path === "/privacy" && (
+          <PrivacyPage go={go} />
+        )}
         {(path === "/404" ||
           (matchedPattern === null &&
             path !== "/")) && <NotFound go={go} />}
       </Suspense>
       </RouteErrorBoundary>
+      {/* Minimal site footer (2026-10-25): a single quiet Privacy link, so
+          the privacy policy is one click from every page — required for
+          AdSense review. No CTA, no redirect block, no dock change. */}
+      <footer className="site-footer">
+        <span>ANTARCTIC LABS</span>
+        <a
+          href="/privacy"
+          onClick={(e) => { e.preventDefault(); go("/privacy"); }}
+        >
+          Privacy Policy
+        </a>
+      </footer>
     </>
   );
 }

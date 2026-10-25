@@ -86,7 +86,7 @@ export const routeMeta = {
   "/tower-of-babel/donate": {
     title: `Donate to the Free Online Library | Tower of Babel`,
     description:
-      "Support the Tower of Babel free online library: one-time or monthly contributions keep more than 390,000 books and texts free for everyone — no ads, no paywalls, no data sold.",
+      "Support the Tower of Babel free online library: one-time or monthly contributions keep more than 390,000 books and texts free for everyone — no paywalls.",
   },
   "/government-contracting": {
     title: `Small Business Government Contracting | ${SITE_NAME}`,
@@ -97,6 +97,11 @@ export const routeMeta = {
     title: `The Firm | ${SITE_NAME}`,
     description:
       "About Antarctic Labs: a proprietary trading and computing firm. Operations in the United States, infrastructure in the Philippines. No client work.",
+  },
+  "/privacy": {
+    title: `Privacy Policy | ${SITE_NAME}`,
+    description:
+      "Privacy Policy for antarctic-labs.com: what Antarctic Labs collects, how cookies and Google AdSense advertising work, and how to opt out of personalized advertising.",
   },
 };
 // Old routes kept for SEO/canonicalization purposes only.
@@ -153,6 +158,7 @@ export const routes = [
   "/tower-of-babel/library/:id",
   "/government-contracting",
   "/about",
+  "/privacy",
   // Legacy patterns preserved for backward compatibility.
   "/systems",
   "/history",
