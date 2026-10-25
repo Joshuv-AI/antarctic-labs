@@ -1,25 +1,91 @@
 // OAI-PMH 2.0 endpoint for the Tower of Babel catalog.
 // Base URL: https://antarctic-labs.com/oai
 //
+// 2026-10-25 REWRITE (lane A2, discovery-100) — shard-paging alternative
+// to lane A's precomputed-snapshot design. Lane A is correct but its
+// oai-data snapshot (~216 MB per snapshot in the repo) is blocked for
+// now: the repo's Pages clone step already failed once at 36 minutes,
+// and adding 216 MB per snapshot would make clone failures worse.
+// This file adds NO repo data at all: it serves ListRecords and
+// ListIdentifiers straight from the existing catalog shards, one shard
+// per request, with per-shard resumption tokens.
+//
+// PER-SHARD TOKENS (v3): {v:3, i: shardIndex, o: offsetWithinShard,
+// s: set|null, k: "records"|"identifiers", f: from|null, u: until|null,
+// c: checksum}. The offset is WITHIN the current shard's filtered list
+// (the full shard for the unfiltered list, the set-filtered list for a
+// set list) — never a global offset, because a global offset cannot be
+// honored without walking every earlier shard to count matches. Pages
+// advance within a shard, then to the next shard. Page size is 100, as
+// the old code used, so one shard yields many pages and sparse sets
+// still progress.
+//
+// PARTIAL PAGES (the key spec point): when a shard yields fewer than
+// 100 matching records, the response returns that PARTIAL page together
+// with a token to the next shard, instead of parsing a second shard in
+// the same request to fill the page. This is spec-legal: OAI-PMH 2.0
+// puts list size at the repository's discretion — a repository may
+// return any number of records per response as long as an incomplete
+// list carries a resumptionToken, and harvesters MUST follow the token
+// rather than assume a page is complete. Returning a partial page with
+// a token is the mechanism the spec provides for exactly this case.
+// The same rule covers a shard with zero set matches: an empty page
+// with a token to the next shard (the harvester advances; the cost is
+// one cheap request per empty shard, bounded by the 25-shard count).
+// No list request ever parses more than ONE catalog shard. If any case
+// below forced a second shard parse, that would be a design failure —
+// none does; the only multi-parse path in this file is GetRecord's
+// pre-existing manifest + single-shard path, which the crawler entry
+// pages already prove daily.
+//
+// completeListSize and cursor are OMITTED from resumptionTokens, on
+// purpose. Both are optional attributes in the spec, and neither can
+// be computed honestly without a full catalog walk: the total for a
+// set list is the sum of that set's matches across all 25 shards, and
+// a global cursor needs the same sum for every earlier shard. Emitting
+// a guessed total would be worse than omitting an optional attribute;
+// harvesters that need the end of the list use the empty token, which
+// this implementation always emits at the true end.
+//
+// DATESTAMP POLICY (same as lane A): the catalog carries no per-entry
+// dates, so every record's datestamp is the repository snapshot date
+// (SNAPSHOT_DATE below, bumped in the same push as any catalog-shards
+// refresh — see the push note at the bottom of this file). from/until
+// are therefore evaluated against that single date, per shard, with
+// no walk: a window excluding the snapshot date matches nothing
+// (noRecordsMatch); any other window matches every record in the
+// shard. Date filters are NEVER silently ignored: they are checked on
+// the initial request and carried in the token and re-checked on
+// every token page.
+//
+// Tokens v1 (old code, {o, s}) and v2 (lane A, global offset) are
+// rejected with badResumptionToken: their offsets mean something
+// different here (global, not per-shard), so honoring one would skip
+// or repeat records. Per the spec, a harvester receiving
+// badResumptionToken restarts its harvest, which is the correct
+// recovery. Tokens carry a checksum (FNV-1a over the canonical
+// payload) so corrupted or hand-edited tokens are rejected instead
+// of honored; this is tamper-EVIDENCE, not a signature — the code is
+// in the repo, so no secret embedded here could stay secret, and
+// none is claimed.
+//
+// Identify, ListSets, ListMetadataFormats, and GetRecord keep lane A's
+// behavior, except Identify/GetRecord take their datestamp from the
+// SNAPSHOT_DATE constant instead of lane A's meta.json (which does
+// not exist in this design). Identify therefore never fetches
+// anything and cannot fail on a data fetch, as before.
+//
 // Verbs: Identify, ListMetadataFormats, ListSets, ListIdentifiers,
 // ListRecords, GetRecord. Metadata format: oai_dc only. Identifiers:
 // oai:antarctic-labs.com:<artifact_id>. Sets: the catalog's collections
 // (setSpec = lowercase collection name, e.g. "books").
 //
-// DATESTAMP POLICY (also stated in Identify): the catalog carries no
-// per-entry dates, so every record's datestamp is the repository
-// snapshot date — CATALOG_SNAPSHOT_DATE in functions/_lib/tower-hubs.js,
-// the date this endpoint's catalog snapshot was taken. from/until are
-// evaluated against that single date; harvesters should re-harvest
-// ListRecords in full rather than rely on incremental harvesting.
-//
 // Errors follow the spec: badVerb, badArgument, idDoesNotExist,
 // cannotDisseminateFormat, badResumptionToken, noRecordsMatch.
-// Descriptions are deliberately NOT exposed in oai_dc: the catalog's
-// legacy description field is being rewritten library-wide (the entry
-// pages carry the current description), and shipping stale text to
-// harvesters would propagate it. Rights status IS exposed (dc:rights)
-// from each record's own rights_status field.
+// Descriptions are deliberately NOT exposed in oai_dc (same reason as
+// lane A: the catalog's legacy description field is being rewritten
+// library-wide; entry pages carry the current description). Rights
+// status IS exposed (dc:rights) from each record's own field.
 
 import {
   SITE,
@@ -29,10 +95,15 @@ import {
   escapeXml,
   textFileUrl,
 } from "./_lib/tower-catalog.js";
-import { CATALOG_SNAPSHOT_DATE } from "./_lib/tower-hubs.js";
 
 const BASE = `${SITE}/oai`;
-const PAGE = 100;
+const PAGE = 100; // modest, as the old code used; one shard yields many pages
+// Snapshot date: the date of the catalog-shards snapshot this code
+// reads. Bump it in the SAME push as any catalog-shards refresh (the
+// same cadence lane A's meta.json and tower-hubs.js's
+// CATALOG_SNAPSHOT_DATE already follow). Every record's datestamp is
+// this date; from/until are evaluated against it.
+const SNAPSHOT_DATE = "2026-10-24";
 const COLLECTIONS = ["PAPERS", "DECLASSIFIED", "BOOKS", "REFERENCE", "DOCUMENTS", "PODCASTS"];
 const COLLECTION_LABELS = {
   PAPERS: "Papers",
@@ -72,18 +143,36 @@ function okResponse(body) {
   });
 }
 
-// --- resumption tokens: base64url(JSON {o: offset, s: setSpec|null}) ---
-// Payload is ASCII-only JSON, so btoa/atob suffice (no Buffer dependency —
-// Pages Functions do not guarantee Node globals without nodejs_compat).
+// --- resumption tokens v3 (per-shard) ---
+// Canonical payload string for the checksum: fields in fixed order,
+// nulls as empty strings. FNV-1a 32-bit, hex.
+function checksumFor(st) {
+  const s = ["v3", st.i, st.o, st.s || "", st.k, st.f || "", st.u || ""].join("|");
+  let h = 0x811c9dc5;
+  for (let j = 0; j < s.length; j++) {
+    h ^= s.charCodeAt(j);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
 function encodeToken(state) {
-  return btoa(JSON.stringify(state)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const st = { v: 3, i: state.i, o: state.o, s: state.s || null, k: state.k, f: state.f || null, u: state.u || null };
+  st.c = checksumFor(st);
+  return btoa(JSON.stringify(st)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 function decodeToken(token) {
   try {
     const b64 = token.replace(/-/g, "+").replace(/_/g, "/");
     const obj = JSON.parse(atob(b64));
-    if (typeof obj.o !== "number" || obj.o < 0) return null;
-    return { o: Math.floor(obj.o), s: obj.s || null };
+    if (obj.v !== 3) return null;
+    if (!Number.isInteger(obj.i) || obj.i < 0 || obj.i >= SHARD_COUNT) return null;
+    if (!Number.isInteger(obj.o) || obj.o < 0) return null;
+    if (obj.s !== null && (typeof obj.s !== "string" || !COLLECTIONS.some((c) => c.toLowerCase() === obj.s))) return null;
+    if (obj.k !== "records" && obj.k !== "identifiers") return null;
+    if (obj.f !== null && (typeof obj.f !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(obj.f))) return null;
+    if (obj.u !== null && (typeof obj.u !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(obj.u))) return null;
+    if (obj.c !== checksumFor(obj)) return null;
+    return { i: obj.i, o: obj.o, s: obj.s, k: obj.k, f: obj.f, u: obj.u };
   } catch (e) {
     return null;
   }
@@ -95,24 +184,24 @@ function datePart(v) {
   return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
 }
 
-function headerXml(record) {
+function headerXml(record, snapshotDate) {
   return [
     `    <header>`,
     `      <identifier>oai:antarctic-labs.com:${xml(record.artifact_id)}</identifier>`,
-    `      <datestamp>${CATALOG_SNAPSHOT_DATE}</datestamp>`,
+    `      <datestamp>${snapshotDate}</datestamp>`,
     `      <setSpec>${xml(String(record.collection || "").toLowerCase())}</setSpec>`,
     `    </header>`,
   ].join("\n");
 }
 
-function recordXml(record) {
+function recordXml(record, snapshotDate) {
   const entryUrl = `${SITE}/tower-of-babel/library/${record.artifact_id}`;
   const ids = [`      <dc:identifier>${xml(entryUrl)}</dc:identifier>`];
   const txt = textFileUrl(record);
   if (txt) ids.push(`      <dc:identifier>${xml(txt)}</dc:identifier>`);
   const lines = [
     `    <record>`,
-    headerXml(record),
+    headerXml(record, snapshotDate),
     `    <metadata>`,
     `      <oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.openarchives.org/OAI/2.0/oai_dc/ http://www.openarchives.org/OAI/2.0/oai_dc.xsd">`,
     `      <dc:title>${xml(record.title || record.artifact_id)}</dc:title>`,
@@ -131,18 +220,44 @@ function recordXml(record) {
   return lines.join("\n");
 }
 
+// Window check shared by initial and token pages: all records carry
+// SNAPSHOT_DATE, so a window excluding it matches nothing.
+function windowExcludes(from, until) {
+  return (from && from > SNAPSHOT_DATE) || (until && until < SNAPSHOT_DATE);
+}
+
 async function listResponse(params, verbAttrs, withMetadata) {
+  const kind = withMetadata ? "records" : "identifiers";
+  const tag = withMetadata ? "ListRecords" : "ListIdentifiers";
+
   const tokenRaw = params.get("resumptionToken");
+  let shardIdx = 0;
   let offset = 0;
   let setSpec = null;
+  let from = null;
+  let until = null;
   if (tokenRaw) {
     // resumptionToken is exclusive: no other arguments allowed.
     if ([...params.keys()].some((k) => k !== "verb" && k !== "resumptionToken"))
       return errorResponse("badArgument", "resumptionToken must be the only argument besides verb.", verbAttrs);
     const state = decodeToken(tokenRaw);
-    if (!state) return errorResponse("badResumptionToken", "The resumptionToken is invalid or expired.", verbAttrs);
+    if (!state || state.k !== kind) {
+      return errorResponse(
+        "badResumptionToken",
+        "The resumptionToken is invalid or expired. Tokens issued before the 2026-10-25 shard-paging OAI rebuild cannot be honored; restart the harvest.",
+        verbAttrs
+      );
+    }
+    shardIdx = state.i;
     offset = state.o;
     setSpec = state.s;
+    from = state.f;
+    until = state.u;
+    // A token naming an unknown set can only be forged (decodeToken
+    // already rejects those), but stay defensive: never honor one.
+    if (setSpec && !COLLECTIONS.some((c) => c.toLowerCase() === setSpec)) {
+      return errorResponse("badResumptionToken", "The resumptionToken names an unknown set.", verbAttrs);
+    }
   } else {
     const prefix = params.get("metadataPrefix");
     if (withMetadata || prefix !== null) {
@@ -156,50 +271,55 @@ async function listResponse(params, verbAttrs, withMetadata) {
       if (!COLLECTIONS.some((c) => c.toLowerCase() === setSpec))
         return errorResponse("noRecordsMatch", "The set argument names no set in this repository.", verbAttrs);
     }
-    const from = datePart(params.get("from"));
-    const until = datePart(params.get("until"));
+    from = datePart(params.get("from"));
+    until = datePart(params.get("until"));
     if ((params.get("from") && !from) || (params.get("until") && !until))
       return errorResponse("badArgument", "from/until must be YYYY-MM-DD dates.", verbAttrs);
-    // Every record shares the snapshot datestamp: a window that excludes
-    // it matches nothing; any other window matches everything.
-    if ((from && from > CATALOG_SNAPSHOT_DATE) || (until && until < CATALOG_SNAPSHOT_DATE))
-      return errorResponse("noRecordsMatch", "No records fall in the requested datestamp window (all records carry the repository snapshot datestamp).", verbAttrs);
+  }
+  if (windowExcludes(from, until)) {
+    return errorResponse("noRecordsMatch", "No records fall in the requested datestamp window (all records carry the repository snapshot datestamp).", verbAttrs);
   }
 
-  // Stream the shards in catalog order (shard concatenation order),
-  // counting matches and keeping only the requested window — the full
-  // filtered list is never materialized, so memory stays at one shard.
-  let total = 0;
-  const slice = [];
-  try {
-    for (let s = 0; s < SHARD_COUNT; s++) {
-      const records = await getShardRecords(s);
-      if (!records) throw new Error("catalog shard unavailable");
-      for (const r of records) {
-        if (!r || !r.artifact_id) continue;
-        if (setSpec && String(r.collection || "").toLowerCase() !== setSpec) continue;
-        if (total >= offset && slice.length < PAGE) slice.push(r);
-        total++;
-      }
-    }
-  } catch (err) {
+  // THE budget rule: exactly ONE shard fetch per list request. The
+  // shard's records are filtered in memory (references only); the
+  // filtered list is never re-fetched and no second shard is parsed,
+  // even if this page comes back partial or empty.
+  const records = await getShardRecords(shardIdx);
+  if (!records) {
     return errorResponse("noRecordsMatch", "The catalog is temporarily unavailable.", verbAttrs);
   }
-  if (!total)
-    return errorResponse("noRecordsMatch", "No records match the request.", verbAttrs);
-  if (offset >= total)
-    return errorResponse("badResumptionToken", "The resumptionToken points past the end of the list.", verbAttrs);
+  const filtered = setSpec
+    ? records.filter((r) => r && String(r.collection || "").toLowerCase() === setSpec)
+    : records;
+  const lastShard = shardIdx >= SHARD_COUNT - 1;
 
-  const nextOffset = offset + slice.length;
-  const done = nextOffset >= total;
-  const tokenOut = done
-    ? `<resumptionToken completeListSize="${total}" cursor="${offset}"></resumptionToken>`
-    : `<resumptionToken expirationDate="${new Date(Date.now() + 24 * 3600 * 1000).toISOString().replace(/\.\d+Z$/, "Z")}" completeListSize="${total}" cursor="${offset}">${encodeToken({ o: nextOffset, s: setSpec })}</resumptionToken>`;
+  // Catalog-shrink grace: a token offset past this shard's filtered
+  // end (shards regenerated between pages) advances to the next shard
+  // instead of erroring or stalling; on the last shard it ends cleanly.
+  let page;
+  let tokenOut;
+  if (offset > filtered.length) {
+    page = [];
+    tokenOut = lastShard ? `<resumptionToken></resumptionToken>` : `<resumptionToken>${encodeToken({ i: shardIdx + 1, o: 0, s: setSpec, k: kind, f: from, u: until })}</resumptionToken>`;
+  } else {
+    page = filtered.slice(offset, offset + PAGE);
+    const remaining = filtered.length - (offset + page.length);
+    if (remaining > 0) {
+      tokenOut = `<resumptionToken>${encodeToken({ i: shardIdx, o: offset + page.length, s: setSpec, k: kind, f: from, u: until })}</resumptionToken>`;
+    } else if (!lastShard) {
+      // Shard exhausted (page may be partial or empty): token to the
+      // next shard. Partial/empty pages with a token are spec-legal;
+      // the harvester follows the token. No second shard is parsed
+      // here to fill the page.
+      tokenOut = `<resumptionToken>${encodeToken({ i: shardIdx + 1, o: 0, s: setSpec, k: kind, f: from, u: until })}</resumptionToken>`;
+    } else {
+      tokenOut = `<resumptionToken></resumptionToken>`;
+    }
+  }
 
-  const tag = withMetadata ? "ListRecords" : "ListIdentifiers";
   const inner = [
     `  <${tag}>`,
-    ...slice.map((r) => (withMetadata ? recordXml(r) : headerXml(r))),
+    ...page.map((r) => (withMetadata ? recordXml(r, SNAPSHOT_DATE) : headerXml(r, SNAPSHOT_DATE))),
     `    ${tokenOut}`,
     `  </${tag}>`,
   ].join("\n");
@@ -232,7 +352,7 @@ export async function onRequest(context) {
         `    <baseURL>${BASE}</baseURL>`,
         `    <protocolVersion>2.0</protocolVersion>`,
         `    <adminEmail>hello@antarctic-labs.com</adminEmail>`,
-        `    <earliestDatestamp>${CATALOG_SNAPSHOT_DATE}</earliestDatestamp>`,
+        `    <earliestDatestamp>${SNAPSHOT_DATE}</earliestDatestamp>`,
         `    <deletedRecord>no</deletedRecord>`,
         `    <granularity>YYYY-MM-DD</granularity>`,
         `    <description>`,
@@ -244,7 +364,7 @@ export async function onRequest(context) {
         `      </oai-identifier>`,
         `    </description>`,
         `    <description>`,
-        `      <datestampPolicy xmlns="http://antarctic-labs.com/oai/datestamp-policy">All records share one datestamp — the repository snapshot date (${CATALOG_SNAPSHOT_DATE}) — because the catalog carries no per-entry dates. The catalog grows daily; re-harvest ListRecords in full rather than relying on incremental from/until harvesting.</datestampPolicy>`,
+        `      <datestampPolicy xmlns="http://antarctic-labs.com/oai/datestamp-policy">All records share one datestamp — the repository snapshot date (${SNAPSHOT_DATE}) — because the catalog carries no per-entry dates. The catalog grows daily; re-harvest ListRecords in full rather than relying on incremental from/until harvesting.</datestampPolicy>`,
         `    </description>`,
         `  </Identify>`,
       ].join("\n");
@@ -298,7 +418,7 @@ export async function onRequest(context) {
         return errorResponse("idDoesNotExist", "No record exists for that identifier.", verbAttr);
       if (found.state === "error")
         return errorResponse("idDoesNotExist", "The catalog is temporarily unavailable.", verbAttr);
-      const inner = [`  <GetRecord>`, recordXml(found.record), `  </GetRecord>`].join("\n");
+      const inner = [`  <GetRecord>`, recordXml(found.record, SNAPSHOT_DATE), `  </GetRecord>`].join("\n");
       return okResponse(envelope(verbAttr, inner));
     }
     case "ListRecords":
@@ -313,3 +433,14 @@ export async function onRequest(context) {
       return errorResponse("badVerb", `The verb "${verb}" is not supported.`, verbAttr);
   }
 }
+
+// PUSH NOTE (parent): this file reads the live catalog shards directly,
+// so no data generation step is needed — but two things must travel
+// with any catalog-shards refresh, in the same push:
+// 1. SNAPSHOT_DATE above must be bumped to the refresh date (it is
+//    the datestamp every record carries, and the from/until window
+//    reference). A stale date does not break paging, but it makes
+//    from/until windows and Identify's earliestDatestamp wrong.
+// 2. Nothing else: shard counts come from SHARD_COUNT in
+//    functions/_lib/tower-catalog.js, which the existing push rule
+//    already bumps in both places when shards are re-sharded.
