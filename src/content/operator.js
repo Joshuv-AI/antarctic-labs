@@ -1,6 +1,6 @@
 // About — Antarctic Labs. Identity fields are populated from the
 // global site identity; the narrative fields below drive the About page:
-// who we are, our mission, what we do, principles, and the profiles.
+// who we are, what we do, principles, and the profiles.
 // Privacy rule (Joshua, 2026-10-22): partner details are context for
 // the firm, not site copy. The profiles at the bottom of this file are
 // the ONLY place a partner is named or described; every other section
@@ -26,15 +26,6 @@ export const operator = {
     paragraphs: [
       "Antarctic Labs is a proprietary trading and computing firm. It began as a freelance technology studio; that chapter is closed. The firm now does one thing: it trades its own capital on infrastructure it owns and operates, built around one idea — own the hardware, own the systems, and let the results decide what grows.",
       "The work has three parts. Trading systems are developed and run in-house. The hardware is owned: a base in the Philippines — a commercial office and a small data center — is being established around machines the firm owns and operates. And the position is measured, not assumed: the Philippines connects directly toward Hong Kong, and every route is chosen by benchmarking the real endpoints, not by reading maps.",
-    ],
-  },
-
-  mission: {
-    title: "OUR MISSION",
-    statement: "Turn owned infrastructure into durable profit.",
-    paragraphs: [
-      "The trading comes first. Algorithms developed in-house run on our own machines, tested on paper and with limited capital before anything scales. The capital is the firm's own, so protecting it is part of the strategy, not a footnote.",
-      "The same hardware can do more than trade. What it becomes beyond trading will be decided the same way everything here is decided: by what proves real when it is measured.",
     ],
   },
 

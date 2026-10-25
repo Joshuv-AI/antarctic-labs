@@ -3,12 +3,13 @@
 //
 // This file is the exact upstream component with the following documented
 // site adaptations (labels/actions wired to the real site navigation):
-//   1. MODERN_ITEMS carries three routes — Tower of Babel,
-//      Gov Contracts, About — instead of the demo catalogue
-//      items. The About icon (document) is reused verbatim from the
-//      authored modern set; Tower of Babel
-//      (open book) and Gov Contracts (landmark) are new icons drawn in
-//      the same 16px stroke style. There is no separate Home item: the
+//   1. MODERN_ITEMS carries two routes — Tower of Babel, About —
+//      instead of the demo catalogue items. The About icon (document)
+//      is reused verbatim from the authored modern set; Tower of Babel
+//      (open book) is a new icon drawn in the same 16px stroke style.
+//      Gov Contracts was removed from the dock 2026-10-25 (page stays
+//      live at /government-contracting, just not linked from the dock
+//      while it is reworked). There is no separate Home item: the
 //      brand is the home button (navigates to "/", active on "/").
 //   2. The brand wordmark reads "Antarctic Labs", navigates home, and
 //      shows the active pill (data-active) when the route is "/".
@@ -99,18 +100,6 @@ const MODERN_ITEMS: readonly DockItem[] = [
       <>
         <path d="M3.2 2.6c1.6-.5 3.2-.5 4.8 0v10.8c-1.6-.5-3.2-.5-4.8 0z" />
         <path d="M12.8 2.6c-1.6-.5-3.2-.5-4.8 0v10.8c1.6-.5 3.2-.5 4.8 0z" />
-      </>
-    ),
-  },
-  {
-    id: "gov",
-    label: "Gov Contracts",
-    path: "/government-contracting",
-    icon: (
-      <>
-        <path d="M2.4 6.2 8 2.4l5.6 3.8" />
-        <path d="M3.8 6.2v4.6M6.4 6.2v4.6M9.6 6.2v4.6M12.2 6.2v4.6" />
-        <path d="M2.4 13.6h11.2" />
       </>
     ),
   },

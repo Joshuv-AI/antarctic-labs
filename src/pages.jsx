@@ -1989,9 +1989,11 @@ export function DonatePage({ onReady }) {
   const [customMode, setCustomMode] = useState(false);
   const [customValue, setCustomValue] = useState("");
   const [coverFees, setCoverFees] = useState(false);
-  const [donorName, setDonorName] = useState("");
-  const [donorEmail, setDonorEmail] = useState("");
-  // Step 4 is a real selection, not decoration: the chosen method is
+  // Step 3 removed 2026-10-25: Stripe Checkout collects the donor's email
+  // (and cardholder/wallet name) on its own hosted page, and sends the
+  // receipt from there when the Dashboard receipt toggle is on — asking
+  // for name + email on this page first was a redundant step.
+  // The chosen method below is a real selection, not decoration: it is
   // posted to /api/donate and recorded on the session (metadata
   // preferred_method). PayPal was removed 2026-10-24 — it is not
   // offered for this Stripe account — so the tiles are card-family
@@ -2010,14 +2012,10 @@ export function DonatePage({ onReady }) {
     : preset * 100;
   const totalCents = coverFees && baseCents > 0 ? donateGrossUp(baseCents) : baseCents;
   const feeCents = totalCents - baseCents;
-  const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(donorEmail.trim());
-  const infoOk = donorName.trim().length > 0 && emailOk;
 
   async function submit() {
-    if (busy || baseCents < 100 || !infoOk) {
+    if (busy || baseCents < 100) {
       if (baseCents < 100) setError("Enter an amount of $1 or more.");
-      else if (!donorName.trim()) setError("Enter your name.");
-      else if (!emailOk) setError("Enter a valid email address.");
       return;
     }
     setBusy(true);
@@ -2031,8 +2029,6 @@ export function DonatePage({ onReady }) {
           frequency,
           amount_cents: baseCents,
           cover_fees: coverFees,
-          donor_name: donorName.trim(),
-          donor_email: donorEmail.trim(),
           payment_method: method,
         }),
       });
@@ -2174,35 +2170,6 @@ export function DonatePage({ onReady }) {
             </p>
             <div className="donate-step">
               <span className="donate-step-n">3</span>
-              <h3>Your information</h3>
-              <label className="donate-field">
-                <span>Name</span>
-                <input
-                  type="text"
-                  autoComplete="name"
-                  value={donorName}
-                  placeholder="Your full name"
-                  aria-label="Your full name"
-                  onChange={(e) => setDonorName(e.target.value)}
-                />
-              </label>
-              <label className="donate-field">
-                <span>Email</span>
-                <input
-                  type="email"
-                  autoComplete="email"
-                  value={donorEmail}
-                  placeholder="you@example.com"
-                  aria-label="Your email address"
-                  onChange={(e) => setDonorEmail(e.target.value)}
-                />
-              </label>
-              <p className="donate-methods-note">
-                We only use this to send your receipt and to thank you.
-              </p>
-            </div>
-            <div className="donate-step">
-              <span className="donate-step-n">4</span>
               <h3>Choose a payment method</h3>
               <div className="donate-methods">
                 <div className="donate-pay-row">
@@ -2254,16 +2221,14 @@ export function DonatePage({ onReady }) {
             <button
               type="button"
               className="donate-go"
-              disabled={busy || baseCents < 100 || !infoOk}
+              disabled={busy || baseCents < 100}
               onClick={submit}
             >
               {busy ? "Working…" : "DONATE"}
             </button>
-            {!busy && !infoOk ? (
-              <p className="donate-hint">
-                Enter your name and email to continue.
-              </p>
-            ) : null}
+            <p className="donate-methods-note">
+              Stripe collects your email at checkout and sends your receipt from there.
+            </p>
             <p className="donate-go-lock">
               <svg
                 className="donate-lock"
@@ -3590,18 +3555,6 @@ export function About({ go }) {
         </div>
       </section>
 
-      <section className="copy-block section reveal">
-        <span className="section-index">{operator.mission.title}</span>
-        <div>
-          <p className="display-copy">
-            <em>{operator.mission.statement}</em>
-          </p>
-          {operator.mission.paragraphs.map((p, i) => (
-            <p className="body-copy" key={i}>{p}</p>
-          ))}
-        </div>
-      </section>
-
       <section className="section reveal profiles-section">
         <div className="section-index">{operator.team.title}</div>
         <div className="about-grid profiles-grid">
@@ -3677,7 +3630,7 @@ export function PrivacyPage({ go }) {
         <span className="section-index">INFORMATION WE COLLECT</span>
         <div>
           <p className="body-copy">We collect as little as possible. Anonymous analytics: we use PostHog to count page views, library browsing, reading progress, and text downloads. PostHog is configured for anonymous visitors only — no user profiles are created, session recording is disabled, and automatic event capture is off. Only events we deliberately record are sent, tied to an anonymous visitor identifier, not to a name or email address.</p>
-          <p className="body-copy">Information you choose to give us: if you donate, you provide a name and email address, which are passed to our payment processor, Stripe, to create a checkout session and send a receipt. We do not receive or store your card number. If you suggest a work for the library, you provide the title, creator, source link, and any notes you choose to add. Our hosting provider may process basic technical information needed to deliver pages securely, such as IP address and browser type, in its normal server logs.</p>
+          <p className="body-copy">Information you choose to give us: if you donate, Stripe collects your email address at checkout to create a checkout session and, if enabled in Stripe, to send a receipt. We do not receive or store your card number. If you suggest a work for the library, you provide the title, creator, source link, and any notes you choose to add. Our hosting provider may process basic technical information needed to deliver pages securely, such as IP address and browser type, in its normal server logs.</p>
         </div>
       </section>
 

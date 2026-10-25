@@ -90,7 +90,12 @@ function buildSuggestEmail(d) {
 
 // ----- Donations: Stripe Checkout session (POST /api/donate) --------------
 // The Tower donate page posts { frequency, amount_cents, cover_fees,
-// donor_name, donor_email, payment_method } and this creates a Stripe
+// payment_method } and this creates a Stripe
+// NOTE (2026-10-25): donor name/email are NO LONGER collected on the
+// page or required here. Stripe Checkout collects the donor's email
+// (and cardholder/wallet name) on its hosted page; if an older client
+// still sends donor_name/donor_email they are accepted and used only
+// as a Checkout prefill / metadata, never as a requirement.
 // Checkout Session with a server-built price, so the amount a donor is
 // charged is always computed here — never trusted from the client
 // beyond the chosen base amount (validated to a sane range).
@@ -221,7 +226,7 @@ export async function onRequestPost({ request, env, params }) {
     ) {
       return json({ ok: false, error: "invalid amount" }, 400);
     }
-    if (!donorName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(donorEmail)) {
+    if (donorEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(donorEmail)) {
       return json({ ok: false, error: "invalid donor info" }, 400);
     }
     let origin = "https://antarctic-labs.com";
