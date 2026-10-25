@@ -6,7 +6,7 @@ import { siteFaqs } from "./faq.js";
 
 export const site = {
   brand: "ANTARCTIC LABS",
-  operator: "JOSHUA ALMODOVAR",
+  operator: "JOSHUA",
   philosophy: "OUR CAPITAL. OUR HARDWARE. OUR CODE.",
   description:
     "Freelance AI automation, web development, and data systems — working solutions, built and delivered ready to use.",

@@ -37,7 +37,7 @@ export const operator = {
     // described; keep every other section about the work, not the people.
     profiles: [
       {
-        name: "JOSHUA ALMODOVAR",
+        name: "JOSHUA",
         role: "FOUNDER, OPERATIONS, LOGISTICS & ACCOUNTING",
         text: "Founder running Antarctic Labs day to day: the Philippines venture — entity, office, and owned data-center build — and the Tower of Babel library, 392,852 works live toward 500,000. He owns the direction, the business, and the delivery: logistics, operations, and accounting, judged by what proves real when it is run.",
         highlights: [
@@ -47,10 +47,9 @@ export const operator = {
           "Builds automation and data systems: AI workflows, web scraping and data extraction, APIs and webhooks, data cleaning, and B2B lead generation",
           "Previously founded and ran a freelance technology studio — frontend and WordPress work, n8n automation, and lead-research projects",
         ],
-        linkedin: "https://www.linkedin.com/in/joshua-almodovar-a28241433",
       },
       {
-        name: "ANDREW OWENS",
+        name: "ANDREW",
         role: "PARTNER, ENGINEERING & SYSTEMS",
         text: "At Antarctic Labs, Andrew leads engineering: the trading algorithms developed in-house, the server build, and the systems the firm runs on. His work is why the firm trades on infrastructure it owns and operates, tested on paper and with limited capital before anything scales.",
         highlights: [
@@ -60,7 +59,6 @@ export const operator = {
           "Senior Software Engineer at Thales on mission-critical aircraft hardware, and Senior Backend Engineer at FYX Gaming on a blockchain gaming platform handling over 4 million UTXO transactions a day",
           "Projects include Madden NFL 15 and 16, VBS3 training courseware, and the KC-46A Pegasus",
         ],
-        linkedin: "https://www.linkedin.com/in/owensa",
       },
     ],
     facts: [
