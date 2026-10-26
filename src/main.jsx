@@ -515,7 +515,11 @@ function App() {
     const swapDelay = enteringTower ? 150 : 520;
     window.setTimeout(() => {
       window.history.pushState({}, "", canonical);
-      setPath(canonical);
+      // path state is a pathname everywhere else (initial state and the
+      // popstate handler both use window.location.pathname); a target
+      // carrying a query string (e.g. the desk's ?work= prefill) must not
+      // pollute it, or literal-route matching falls through to :id.
+      setPath(canonical.split("?")[0]);
       scrollToTopInstant();
       window.setTimeout(() => {
         setTransitioning(false);
