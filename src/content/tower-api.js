@@ -7,6 +7,12 @@
 // throttling terms — copy uses "where text is present", "predictable URLs",
 // "no published rate limit". No MCP/server-search claims (none exist yet).
 
+// Stripe customer-portal login link for API subscribers. Set this when
+// the portal is activated in the Stripe Dashboard; while it is empty
+// the API page shows the receipt-based billing copy instead of a
+// Manage Billing button. Never invent a value here.
+export const PORTAL_URL = "";
+
 export const libraryFaqs = [
   {
     q: "Where can I read classic books online for free?",
@@ -119,13 +125,52 @@ export const apiPage = {
         "Rights are per record, not per site. Each catalog entry carries rights_status and " +
         "license fields; the readable collection centers on public domain works and documents " +
         "released to the public. Agents building datasets or products on the corpus should read " +
-        "those two fields on every record they use rather than assuming uniform rights. There is " +
-        "no API key, no authentication, and no published rate limit. There is also no query " +
-        "endpoint, no full-text search API, and no MCP server at this time; filtering and search " +
-        "happen client-side after downloading the catalog. The catalog is a snapshot that grows " +
+        "those two fields on every record they use rather than assuming uniform rights. The " +
+        "static catalog surface described above needs no API key, no authentication, and has " +
+        "no published rate limit. Alongside it, a keyed API (v1, below) is rolling out for " +
+        "server-side search, full-text delivery, and bulk snapshots at published daily " +
+        "limits — the key is free at the first tier and the static surface stays keyless " +
+        "either way. The catalog is a snapshot that grows " +
         "as holdings are added, so agents should re-fetch it periodically instead of treating a " +
         "local copy as permanent. No uptime SLA is offered. It is free infrastructure, maintained " +
         "as a public resource.",
+    },
+    {
+      title: "Harvest with OAI-PMH",
+      body:
+        "Libraries and harvesters can take the catalog through the OAI-PMH 2.0 endpoint at " +
+        "https://antarctic-labs.com/oai — it has been live alongside the JSON catalog and is " +
+        "documented here for the first time. It supports the standard verbs: Identify, " +
+        "ListMetadataFormats, ListSets, ListIdentifiers, ListRecords, and GetRecord, with " +
+        "metadata in oai_dc (Dublin Core). Sets are the catalog's collections (setSpec is the " +
+        "lowercase collection name, e.g. \"books\"), and identifiers take the form " +
+        "oai:antarctic-labs.com:<artifact_id>. Descriptions are deliberately not exposed in " +
+        "the OAI records while the library-wide description rewrite is in progress; the " +
+        "entry pages carry the current text. Records carry a single repository snapshot " +
+        "datestamp rather than per-entry dates, so harvesters should re-harvest ListRecords " +
+        "in full rather than rely on incremental from/until harvesting.",
+    },
+    {
+      title: "API v1 — keys, search, and full text",
+      body:
+        "API v1 is the keyed companion to the static surface above, at " +
+        "https://antarctic-labs.com/api/v1. It exists for one reason: convenience at scale — " +
+        "server-side search, full-text delivery, and bulk snapshot packages, at published " +
+        "daily limits, with a commercial-use licence on the paid tiers. The texts themselves " +
+        "stay free on this site either way; a key buys the maintained pipe, the throughput, " +
+        "and someone standing behind it, never access. Authenticate with a Bearer key: " +
+        "Authorization: Bearer twr_live_… — keys are delivered by email and shown only there; " +
+        "only a hash of each key is stored. Endpoints: GET /api/v1/search?q= (catalog search; " +
+        "&mode=fulltext answers from the deep-search index once that index is live, and says " +
+        "so in its response until then), GET /api/v1/text?id= (paid plans: a redirect to the " +
+        "work's .txt, where text is present), GET /api/v1/bulk (snapshot package list), and " +
+        "GET /api/v1/usage (your key's plan and today's count). Daily limits: free key 200, " +
+        "Pro 5,000, Commercial 25,000. Every response carries X-RateLimit-Limit, " +
+        "X-RateLimit-Remaining, and X-RateLimit-Reset headers; going over returns 429 with " +
+        "the reset time. Errors are JSON: { ok: false, error }. No uptime SLA is offered on " +
+        "any tier. Versioning: v1 is stable — breaking changes ship as a new version, never " +
+        "as a silent change to v1, and limit changes are announced on this page and by email " +
+        "to key holders before they take effect. Limits are never tightened silently.",
     },
   ],
   faqs: [
@@ -143,7 +188,7 @@ export const apiPage = {
     },
     {
       q: "Do I need an API key? Are there rate limits?",
-      a: "No key and no account. There is no published rate limit, and the surface is static files on CDN-backed hosting, which tolerates normal programmatic use well. Reasonable behavior still applies: download the catalog once and cache it, fetch only the texts you need, and do not hammer the host with parallel thousands-wide crawls.",
+      a: "Not for the catalog itself: no key, no account, no published rate limit on the static surface, which is static files on CDN-backed hosting and tolerates normal programmatic use well. The keyed API v1 (rolling out — see the tiers on this page) is separate: a free key by email at 200 requests/day, with paid tiers above that. Reasonable behavior still applies on the keyless surface: download the catalog once and cache it, fetch only the texts you need, and do not hammer the host with parallel thousands-wide crawls.",
     },
     {
       q: "Can I use these texts commercially, including for training data?",
@@ -151,7 +196,7 @@ export const apiPage = {
     },
     {
       q: "Is there a search endpoint or an MCP server?",
-      a: "Not at this time. There is no server-side search, no query API, and no MCP server. The intended pattern is to download catalog.json once, filter and search it locally, and fetch texts by URL. An MCP server is the natural next step and the demand for one is real, but no timeline is promised here. This page will be updated if one ships.",
+      a: "A search endpoint is rolling out as API v1 (see \u201CAPI v1 — keys, search, and full text\u201D on this page): keyed, with catalog search now and full-text search answering once the deep-search index is live. The keyless pattern — download catalog.json once, filter and search it locally, fetch texts by URL — remains the primary surface and is unchanged. There is no MCP server at this time; this page will be updated if one ships.",
     },
     {
       q: "How fresh is the catalog? How do I stay current?",
@@ -162,4 +207,54 @@ export const apiPage = {
   metaDescription:
     "Free books API: machine-readable catalog of 375,000+ public works (books, sacred texts, declassified documents, papers, transcripts) with full-text .txt downloads. No key, no sign-up.",
   updated: "October 2026",
+  tiers: [
+    {
+      id: "keyless",
+      name: "Keyless catalog",
+      price: "Free",
+      limit: "No published limit",
+      blurb:
+        "The static surface documented above: the full catalog JSON, shards, and predictable .txt URLs. No key, no sign-up. Unchanged — this is the discovery layer and it stays open.",
+    },
+    {
+      id: "free",
+      name: "Free key",
+      price: "Free",
+      limit: "200 requests/day",
+      blurb:
+        "A key by email for API v1: catalog search and metadata for your own projects. Non-commercial use. The key is shown only in the email that delivers it.",
+    },
+    {
+      id: "pro",
+      name: "Pro",
+      priceMonthly: "$19/mo",
+      priceAnnual: "$190/yr",
+      limit: "5,000 requests/day",
+      blurb:
+        "API v1 with full-text delivery and a commercial-use licence for a single project. For builders, researchers, and small products that need the pipe, not the scrape.",
+    },
+    {
+      id: "commercial",
+      name: "Commercial",
+      priceMonthly: "$149/mo",
+      priceAnnual: "$1,490/yr",
+      limit: "25,000 requests/day",
+      blurb:
+        "Everything in Pro at commercial scale: bulk snapshot packages and a commercial-use licence covering multiple projects.",
+    },
+  ],
+  keyForm: {
+    heading: "GET A FREE KEY",
+    body:
+      "Enter your email and a free key is sent to it — shown only in that email, stored here only as a hash. Asking for a new key revokes the previous free key for that address.",
+    button: "EMAIL ME A KEY",
+    pending:
+      "API keys are being switched on — for now, leave your email through the library's suggest form and a key will be issued by hand when the system opens.",
+    sent:
+      "Your key is on its way to that address — it is shown only in that email, so keep it somewhere safe.",
+  },
+  billingNote:
+    "Billing is managed through Stripe — the receipt for any payment includes a manage-billing link.",
+  subscribePending:
+    "Paid plans are being switched on. When subscriptions open, the subscribe buttons will appear here — no checkout is ever offered before the key system behind it is live.",
 };

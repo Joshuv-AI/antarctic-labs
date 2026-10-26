@@ -27,6 +27,7 @@ import {
 import { site } from "./content/site.js";
 import { operator } from "./content/operator.js";
 import { towerOfBabel } from "./content/tower-of-babel.js";
+import { PORTAL_URL } from "./content/tower-api.js";
 // The artifact catalog is lazy (see ./lib/catalog.js): it is ~2.6MB of
 // source and used to ride in the main bundle, stalling every cold load.
 // Components that need it use useArtifacts() below.
@@ -4066,7 +4067,7 @@ export function PrivacyPage({ go }) {
       <section className="inner-hero section">
         <div className="section-index">PRIVACY</div>
         <h1>Privacy Policy</h1>
-        <p className="display-copy">Last updated: October 25, 2026. Antarctic Labs operates antarctic-labs.com, including the Tower of Babel free library.</p>
+        <p className="display-copy">Last updated: October 26, 2026. Antarctic Labs operates antarctic-labs.com, including the Tower of Babel free library.</p>
       </section>
 
       <section className="copy-block section reveal">
@@ -4081,6 +4082,7 @@ export function PrivacyPage({ go }) {
         <div>
           <p className="body-copy">We collect as little as possible. Anonymous analytics: we use PostHog to count page views, library browsing, reading progress, and text downloads. PostHog is configured for anonymous visitors only — no user profiles are created, session recording is disabled, and automatic event capture is off. Only events we deliberately record are sent, tied to an anonymous visitor identifier, not to a name or email address.</p>
           <p className="body-copy">Information you choose to give us: if you donate, Stripe collects your email address at checkout to create a checkout session and, if enabled in Stripe, to send a receipt. We do not receive or store your card number. If you suggest a work for the library, you provide the title, creator, source link, and any notes you choose to add. Our hosting provider may process basic technical information needed to deliver pages securely, such as IP address and browser type, in its normal server logs.</p>
+          <p className="body-copy">API keys: if you request a Tower of Babel API key, we store the email address you give and a cryptographic hash of the key — never the key itself — in a Cloudflare database, so the API can authenticate your requests and count your daily usage. Payments for API plans are processed by Stripe, and we do not receive or store your card number. The email that delivers your key is sent through Resend.</p>
         </div>
       </section>
 
@@ -4285,6 +4287,91 @@ for (const b of books.slice(0, 5)) {
 
 export function TowerApiPage({ go }) {
   const api = towerOfBabel.apiPage;
+  const subParam =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("sub") || ""
+      : "";
+  // Live gate for paid plans: subscribe buttons render ONLY when the
+  // status endpoint says subscriptions are open (API_LIVE=1 server-side).
+  // Until then the page shows the not-open-yet notice — no dead buttons,
+  // and no checkout a key could not be delivered for.
+  const [apiStatus, setApiStatus] = useState(null);
+  useEffect(() => {
+    let live = true;
+    fetch("/api/status")
+      .then((r) => r.json())
+      .then((d) => {
+        if (live) setApiStatus(d && typeof d === "object" ? d : {});
+      })
+      .catch(() => {
+        if (live) setApiStatus({});
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+  const subscriptionsOpen = !!(apiStatus && apiStatus.subscriptions_open);
+
+  const [billing, setBilling] = useState("monthly");
+  const [subscribing, setSubscribing] = useState("");
+  const [subError, setSubError] = useState("");
+  const subscribe = async (plan) => {
+    if (subscribing) return;
+    setSubscribing(plan);
+    setSubError("");
+    try {
+      const res = await fetch("/api/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan, billing }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 503) {
+        setSubError(api.subscribePending);
+        setSubscribing("");
+        return;
+      }
+      if (!res.ok || !data.url) throw new Error("checkout failed");
+      window.location.href = data.url;
+    } catch {
+      setSubError("Checkout could not be started — please try again.");
+      setSubscribing("");
+    }
+  };
+
+  // Free key mint: POST /api/keys. The key itself is delivered by email
+  // only and never appears in the response or on this page. A 503 means
+  // the key system is not switched on yet — show the graceful notice.
+  const [keyEmail, setKeyEmail] = useState("");
+  const [keyHoneypot, setKeyHoneypot] = useState("");
+  const [keySending, setKeySending] = useState(false);
+  const [keyState, setKeyState] = useState("idle"); // idle | sent | pending | error
+  const onKeySubmit = async (e) => {
+    e.preventDefault();
+    if (keySending) return;
+    setKeySending(true);
+    setKeyState("idle");
+    try {
+      const res = await fetch("/api/keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: keyEmail, website: keyHoneypot }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 503) {
+        setKeyState("pending");
+      } else if (res.ok && data.ok) {
+        setKeyState("sent");
+      } else {
+        setKeyState("error");
+      }
+    } catch {
+      setKeyState("error");
+    }
+    setKeySending(false);
+  };
+
+  const paidTiers = api.tiers.filter((t) => t.priceMonthly);
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
@@ -4292,6 +4379,28 @@ export function TowerApiPage({ go }) {
         <h1>{api.h1}</h1>
         <p className="display-copy">{api.intro}</p>
       </section>
+
+      {subParam === "thanks" && (
+        <section className="section reveal">
+          <div className="suggest-wrap">
+            <p className="body-copy" role="status">
+              Subscription received — thank you. Your API key is on its way to
+              the email address you used at checkout; it is shown only in that
+              email, so keep it somewhere safe.
+            </p>
+          </div>
+        </section>
+      )}
+      {subParam === "canceled" && (
+        <section className="section reveal">
+          <div className="suggest-wrap">
+            <p className="body-copy" role="status">
+              Checkout was canceled — nothing was charged. You can subscribe
+              whenever you are ready.
+            </p>
+          </div>
+        </section>
+      )}
 
       <section className="copy-block section reveal">
         <div className="section-index">THE SHAPE OF IT</div>
@@ -4313,6 +4422,167 @@ export function TowerApiPage({ go }) {
           </div>
         </section>
       ))}
+
+      <section className="section reveal">
+        <div className="section-index">API PLANS</div>
+        <div className="capability-list">
+          {api.tiers.map((t, i) => (
+            <div className="cap-row" key={t.id}>
+              <span>{String(i + 1).padStart(2, "0")}</span>
+              <h3>{t.name}</h3>
+              <p>
+                {(t.price ||
+                  (billing === "annual" ? t.priceAnnual : t.priceMonthly)) +
+                  " · " +
+                  t.limit +
+                  ". " +
+                  t.blurb}
+              </p>
+            </div>
+          ))}
+        </div>
+        {subscriptionsOpen ? (
+          <div className="suggest-wrap">
+            <div
+              className="desk-sample-actions"
+              role="group"
+              aria-label="Billing period"
+            >
+              <button
+                type="button"
+                className="tower-access-btn"
+                aria-pressed={billing === "monthly"}
+                onClick={() => setBilling("monthly")}
+              >
+                MONTHLY
+              </button>
+              <button
+                type="button"
+                className="tower-access-btn"
+                aria-pressed={billing === "annual"}
+                onClick={() => setBilling("annual")}
+              >
+                ANNUAL
+              </button>
+            </div>
+            <div className="desk-sample-actions">
+              {paidTiers.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className="tower-access-btn"
+                  disabled={!!subscribing}
+                  onClick={() => subscribe(t.id)}
+                >
+                  {subscribing === t.id
+                    ? "OPENING CHECKOUT…"
+                    : `SUBSCRIBE — ${t.name.toUpperCase()} ${
+                        billing === "annual" ? t.priceAnnual : t.priceMonthly
+                      }`}{" "}
+                  <span aria-hidden="true">↗</span>
+                </button>
+              ))}
+            </div>
+            {subError && (
+              <p className="suggest-error" role="alert">
+                {subError}
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="suggest-wrap">
+            <p className="body-copy">{api.subscribePending}</p>
+          </div>
+        )}
+        <div className="suggest-wrap">
+          {PORTAL_URL ? (
+            <a className="tower-access-btn" href={PORTAL_URL}>
+              MANAGE BILLING <span aria-hidden="true">↗</span>
+            </a>
+          ) : (
+            <p className="body-copy">{api.billingNote}</p>
+          )}
+        </div>
+      </section>
+
+      <section className="section suggest-section">
+        <div className="suggest-wrap">
+          <div className="section-index">{api.keyForm.heading}</div>
+          <p className="body-copy">{api.keyForm.body}</p>
+          {keyState === "sent" ? (
+            <p className="body-copy" role="status">
+              {api.keyForm.sent}
+            </p>
+          ) : (
+            <form
+              className="suggest-form"
+              onSubmit={onKeySubmit}
+              aria-label="Get a free API key"
+            >
+              <div className="suggest-field">
+                <label htmlFor="api-key-email">
+                  Email{" "}
+                  <span className="req" aria-hidden="true">
+                    *
+                  </span>
+                </label>
+                <input
+                  id="api-key-email"
+                  name="email"
+                  type="email"
+                  required
+                  value={keyEmail}
+                  onChange={(e) => setKeyEmail(e.target.value)}
+                  autoComplete="email"
+                  placeholder="you@example.org"
+                />
+              </div>
+              <div
+                aria-hidden="true"
+                style={{
+                  position: "absolute",
+                  left: "-9999px",
+                  top: "auto",
+                  width: "1px",
+                  height: "1px",
+                  overflow: "hidden",
+                }}
+              >
+                <label htmlFor="api-key-website">Website</label>
+                <input
+                  id="api-key-website"
+                  name="website"
+                  type="text"
+                  value={keyHoneypot}
+                  onChange={(e) => setKeyHoneypot(e.target.value)}
+                  tabIndex={-1}
+                  autoComplete="off"
+                />
+              </div>
+              {keyState === "pending" && (
+                <p className="body-copy" role="status">
+                  {api.keyForm.pending}
+                </p>
+              )}
+              {keyState === "error" && (
+                <p className="suggest-error" role="alert">
+                  Something went wrong sending your key — please try again.
+                </p>
+              )}
+              <div className="suggest-actions">
+                <button
+                  type="submit"
+                  className="tower-access-btn suggest-submit"
+                  disabled={keySending}
+                >
+                  {keySending ? "SENDING…" : api.keyForm.button}{" "}
+                  <span aria-hidden="true">↗</span>
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      </section>
 
       <FaqBlock index="QUESTIONS" faqs={api.faqs} />
 
