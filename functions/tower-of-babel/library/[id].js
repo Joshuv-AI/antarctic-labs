@@ -229,7 +229,7 @@ export async function onRequest(context) {
   const { request, params, next } = context;
   const id = params && params.id ? String(params.id) : "";
   // Literal SPA routes under library/ are not entries.
-  if (!id || id === "suggest") return next();
+  if (!id || id === "suggest" || id === "research") return next();
   // Humans (and anything unrecognized) get the SPA, untouched.
   if (!isCrawler(request)) return next();
 
