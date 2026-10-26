@@ -253,6 +253,7 @@ const lazyPage = (name) =>
 const TowerOfBabel = lazyPage("TowerOfBabel");
 const LibraryArtifact = lazyPage("LibraryArtifact");
 const SuggestEntry = lazyPage("SuggestEntry");
+const CommissionsDesk = lazyPage("CommissionsDesk");
 const DonatePage = lazyPage("DonatePage");
 const Government = lazyPage("Government");
 const About = lazyPage("About");
@@ -644,6 +645,9 @@ function App() {
         )}
         {path === "/tower-of-babel/library/suggest" && (
           <SuggestEntry go={go} />
+        )}
+        {path === "/tower-of-babel/library/research" && (
+          <CommissionsDesk go={go} />
         )}
         {path === "/tower-of-babel/donate" && (
           <DonatePage go={go} onReady={handleTowerReady} />

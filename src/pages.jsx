@@ -1402,6 +1402,13 @@ function TowerLibrarySection({ go, onReady }) {
           >
             DONATE <span aria-hidden="true">♥</span>
           </button>
+          <button
+            type="button"
+            className="tower-access-btn"
+            onClick={() => go("/tower-of-babel/library/research")}
+          >
+            COMMISSIONS <span aria-hidden="true">↗</span>
+          </button>
         </div>
         {artifacts.length === 0 ? (
           <div className="tower-index-empty">
@@ -1912,6 +1919,321 @@ export function SuggestEntry({ go }) {
                   onClick={() => go("/tower-of-babel/library")}
                 >
                   {s.backToLibrary}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+// ----- Tower of Babel / Commissions Desk -----------------------------------
+// One service: commission a sourced research brief, a curated collection
+// of texts, or both. Intake POSTs to /api/commission (Resend to the lab
+// inbox); assessment + written fixed quote are free, work starts on a
+// 50% deposit. Copy + fields live in towerOfBabel.desk. A ?work=<id>
+// query param (linked from entry pages) prefills the subject field.
+async function submitCommission(payload) {
+  const res = await fetch("/api/commission", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.ok) throw new Error(data.error || "send failed");
+  return data;
+}
+
+export function CommissionsDesk({ go }) {
+  const d = towerOfBabel.desk;
+  const fields = d.fields;
+  const workParam =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("work") || ""
+      : "";
+  const initialValues = fields.reduce((acc, f) => {
+    acc[f.name] = f.name === "subject" && workParam ? workParam : "";
+    return acc;
+  }, {});
+  const [values, setValues] = useState(initialValues);
+  const [errors, setErrors] = useState({});
+  const [submitError, setSubmitError] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [honeypot, setHoneypot] = useState("");
+  const validate = (next) => {
+    const errs = {};
+    fields.forEach((f) => {
+      const v = (next[f.name] || "").trim();
+      if (f.required && v.length === 0) errs[f.name] = "Required.";
+    });
+    if (next.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(next.email.trim())) {
+      errs.email = "Enter a valid email — the quote comes back there.";
+    }
+    return errs;
+  };
+  const onChange = (name) => (e) => {
+    const next = { ...values, [name]: e.target.value };
+    setValues(next);
+    if (errors[name]) {
+      const errs = { ...errors };
+      delete errs[name];
+      setErrors(errs);
+    }
+    if (submitError) setSubmitError("");
+  };
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    if (sending) return;
+    const errs = validate(values);
+    setErrors(errs);
+    if (Object.keys(errs).length > 0) {
+      const firstInvalid = fields.find((f) => errs[f.name]);
+      if (firstInvalid && typeof document !== "undefined") {
+        const el = document.getElementById(firstInvalid.id);
+        if (el && typeof el.focus === "function") el.focus();
+      }
+      return;
+    }
+    setSending(true);
+    track("commission_submitted", {});
+    try {
+      await submitCommission({ ...values, website: honeypot });
+    } catch (err) {
+      setSubmitError(d.submitError);
+      setSending(false);
+      return;
+    }
+    setSending(false);
+    setSubmitted(true);
+    if (typeof window !== "undefined") {
+      window.setTimeout(() => {
+        const region = document.getElementById("desk-success");
+        if (region && typeof region.focus === "function") region.focus();
+      }, 50);
+    }
+  };
+  const onReset = () => {
+    setValues(initialValues);
+    setErrors({});
+    setSubmitError("");
+    setSubmitted(false);
+    setHoneypot("");
+  };
+  const scrollToBrief = () => {
+    if (typeof document !== "undefined") {
+      const el = document.getElementById("sample-brief");
+      if (el && typeof el.scrollIntoView === "function") {
+        el.scrollIntoView({ behavior: "smooth" });
+      }
+    }
+  };
+  const r = d.sampleReport;
+  return (
+    <main className="page-shell inner-page tower-light tower-desk" id="main-content" tabIndex={-1}>
+      <section className="inner-hero section">
+        <div className="section-index">{d.sectionIndex}</div>
+        <h1>{d.heading}</h1>
+        <p className="display-copy">{d.intro}</p>
+      </section>
+      <section className="section desk-section">
+        <div className="suggest-wrap">
+          {d.what.map((p, i) => (
+            <p className="body-copy desk-copy" key={i}>{p}</p>
+          ))}
+          <div className="section-index desk-block-title">{d.stepsHeading}</div>
+          <div className="desk-steps">
+            {d.steps.map((s) => (
+              <div className="desk-step" key={s.title}>
+                <h3>{s.title}</h3>
+                <p>{s.body}</p>
+              </div>
+            ))}
+          </div>
+          <div className="section-index desk-block-title">{d.pricingHeading}</div>
+          {d.pricing.map((p, i) => (
+            <p className="body-copy desk-copy" key={i}>{p}</p>
+          ))}
+          <div className="section-index desk-block-title">{d.termsHeading}</div>
+          <ul className="desk-terms">
+            {d.terms.map((t, i) => (
+              <li key={i}>{t}</li>
+            ))}
+          </ul>
+        </div>
+      </section>
+      <section className="section desk-section" id="sample-report">
+        <div className="suggest-wrap">
+          <div className="section-index">{d.sampleHeading}</div>
+          <p className="body-copy desk-copy">{d.sampleIntro}</p>
+          <div className="desk-sample-actions">
+            <a className="tower-access-btn" href={d.sampleCollection.href}>
+              {d.sampleCollection.label} <span aria-hidden="true">↓</span>
+            </a>
+            <a className="tower-access-btn" href={d.sampleCollection.manifestHref}>
+              {d.sampleCollection.manifestLabel} <span aria-hidden="true">↓</span>
+            </a>
+            <button type="button" className="tower-access-btn" onClick={scrollToBrief}>
+              READ THE SAMPLE BRIEF <span aria-hidden="true">↓</span>
+            </button>
+          </div>
+          <p className="desk-note">{d.sampleCollection.note}</p>
+          <article className="desk-brief" id="sample-brief">
+            <div className="section-index">{r.sectionIndex}</div>
+            <h2 className="desk-brief-title">{r.title}</h2>
+            <p className="body-copy desk-copy"><em>{r.question}</em></p>
+            <p className="body-copy desk-copy">{r.verdict}</p>
+            {r.evidence.map((ev, i) => (
+              <div className="desk-evidence" key={i}>
+                <h3>{ev.claim}</h3>
+                <p>{ev.finding}</p>
+                <button
+                  type="button"
+                  className="text-link"
+                  onClick={() => go(ev.sourcePath)}
+                >
+                  {ev.sourceLabel.toUpperCase()} <span aria-hidden="true">↗</span>
+                </button>
+              </div>
+            ))}
+            <p className="body-copy desk-copy">{r.consulted}</p>
+            <p className="body-copy desk-copy">{r.changeMind}</p>
+          </article>
+        </div>
+      </section>
+      <section className="section suggest-section">
+        <div className="suggest-wrap">
+          <div className="section-index desk-block-title">{d.formHeading}</div>
+          {workParam && !submitted && (
+            <p className="desk-note">
+              Re: work <strong>{workParam}</strong> — it is prefilled below;
+              edit freely.
+            </p>
+          )}
+          {!submitted ? (
+            <form
+              className="suggest-form"
+              onSubmit={onSubmit}
+              noValidate={false}
+              aria-label="Request a commission quote"
+            >
+              {fields.map((f) => {
+                const fieldError = errors[f.name];
+                const errorId = `${f.id}-error`;
+                return (
+                  <div className="suggest-field" key={f.id}>
+                    <label htmlFor={f.id}>
+                      {f.label}
+                      {f.required && <span className="req" aria-hidden="true"> *</span>}
+                    </label>
+                    {f.type === "select" ? (
+                      <select
+                        id={f.id}
+                        name={f.name}
+                        required={f.required}
+                        value={values[f.name]}
+                        onChange={onChange(f.name)}
+                        aria-required={f.required || undefined}
+                        aria-invalid={fieldError ? "true" : undefined}
+                        aria-describedby={fieldError ? errorId : undefined}
+                      >
+                        <option value="" disabled>{f.selectPlaceholder || "Select"}</option>
+                        {f.options.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : f.type === "textarea" ? (
+                      <textarea
+                        id={f.id}
+                        name={f.name}
+                        required={f.required}
+                        rows={f.rows || 4}
+                        value={values[f.name]}
+                        onChange={onChange(f.name)}
+                        placeholder={f.placeholder}
+                        aria-required={f.required || undefined}
+                        aria-invalid={fieldError ? "true" : undefined}
+                        aria-describedby={fieldError ? errorId : undefined}
+                      />
+                    ) : (
+                      <input
+                        id={f.id}
+                        name={f.name}
+                        type={f.type}
+                        required={f.required}
+                        value={values[f.name]}
+                        onChange={onChange(f.name)}
+                        autoComplete={f.autoComplete}
+                        placeholder={f.placeholder}
+                        aria-required={f.required || undefined}
+                        aria-invalid={fieldError ? "true" : undefined}
+                        aria-describedby={fieldError ? errorId : undefined}
+                      />
+                    )}
+                    {fieldError && (
+                      <p className="suggest-error" id={errorId} role="alert">
+                        {fieldError}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+              {submitError && (
+                <p className="suggest-error" role="alert">
+                  {submitError}
+                </p>
+              )}
+              <div aria-hidden="true" style={{ position: "absolute", left: "-9999px", top: "auto", width: "1px", height: "1px", overflow: "hidden" }}>
+                <label htmlFor="desk-website">Website</label>
+                <input
+                  id="desk-website"
+                  name="website"
+                  type="text"
+                  value={honeypot}
+                  onChange={(e) => setHoneypot(e.target.value)}
+                  tabIndex={-1}
+                  autoComplete="off"
+                />
+              </div>
+              <div className="suggest-actions">
+                <button
+                  type="submit"
+                  className="tower-access-btn suggest-submit"
+                  disabled={sending}
+                >
+                  {sending ? "SENDING…" : d.submitLabel}{" "}
+                  <span aria-hidden="true">↗</span>
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div
+              className="suggest-success"
+              id="desk-success"
+              tabIndex={-1}
+              aria-live="polite"
+            >
+              <div className="section-index">RECEIVED</div>
+              <h2>{d.success.heading}</h2>
+              <p className="body-copy">{d.success.body}</p>
+              <div className="suggest-success-actions">
+                <button
+                  type="button"
+                  className="tower-access-btn suggest-submit"
+                  onClick={onReset}
+                >
+                  {d.sendAnother}
+                </button>
+                <button
+                  type="button"
+                  className="suggest-ghost-btn"
+                  onClick={() => go("/tower-of-babel/library")}
+                >
+                  {d.backToLibrary}
                 </button>
               </div>
             </div>
@@ -2879,6 +3201,15 @@ export function LibraryArtifact({ go, params, onReady }) {
               Metadata only — no file distribution for this entry.
             </p>
           )}
+          <button
+            type="button"
+            className="tower-source-btn"
+            onClick={() =>
+              go(`/tower-of-babel/library/research?work=${artifact.artifact_id}`)
+            }
+          >
+            COMMISSION RESEARCH ON THIS WORK <span aria-hidden="true">↗</span>
+          </button>
           {status === "RESTRICTED" && (
             <p className="tower-access-note">
               Restricted — not available for distribution.

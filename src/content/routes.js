@@ -83,6 +83,11 @@ export const routeMeta = {
     description:
       "Suggest a book, document, or text for the Tower of Babel free online library. Every suggestion is reviewed; accepted works are preserved in clean text.",
   },
+  "/tower-of-babel/library/research": {
+    title: `Commissions Desk — Research & Curated Collections | Tower of Babel`,
+    description:
+      "Commission work from the Tower of Babel library: a sourced research brief, a curated collection of texts, or both. Free assessment and a written fixed quote; no account needed.",
+  },
   "/tower-of-babel/donate": {
     title: `Donate to the Free Online Library | Tower of Babel`,
     description:
@@ -154,6 +159,10 @@ export const routes = [
   // Literal suggest route must precede the dynamic :id pattern so
   // matchRoute resolves it as its own page, not an artifact id.
   "/tower-of-babel/library/suggest",
+  // Same rule for the Commissions Desk (2026-10-26). The slug was
+  // verified absent from the live catalog before launch so this route
+  // can never shadow a work's entry page.
+  "/tower-of-babel/library/research",
   "/tower-of-babel/donate",
   "/tower-of-babel/library/:id",
   "/government-contracting",
