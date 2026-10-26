@@ -3028,17 +3028,23 @@ function LibraryFullText({ artifact }) {
 
   const [text, setText] = useState(null);
   const [textError, setTextError] = useState(false);
+  // Streaming state (2026-10-25): large texts render progressively —
+  // the first chunk paints once ~60k chars arrive instead of waiting
+  // for the whole file. textDone is false while the stream is in
+  // flight; share-link landing, word stats, and reader analytics all
+  // wait for it so they never act on a partial prefix.
+  const [textDone, setTextDone] = useState(true);
   // Analytics: the full text actually loaded and is on screen — the
   // strongest reading-intent signal the library produces.
   useEffect(() => {
-    if (!text || trackedReaderOpens.has(artifactId)) return;
+    if (!text || !textDone || trackedReaderOpens.has(artifactId)) return;
     trackedReaderOpens.add(artifactId);
     track("reader_opened", {
       artifact_id: artifactId,
       collection: artifact.collection,
       chars: text.length,
     });
-  }, [text, artifactId]);
+  }, [text, textDone, artifactId]);
   // Windowed chunk rendering (2026-10-21): only chunks in [win.start,
   // win.end) are mounted. Rendering used to be a prefix (0..shown), so a
   // Search/Contents jump to the end of a 1.4 MB book mounted the WHOLE
@@ -3116,32 +3122,73 @@ function LibraryFullText({ artifact }) {
     const ctrl = new AbortController();
     setText(null);
     setTextError(false);
+    setTextDone(false);
     setWin({ start: 0, end: 1 });
     chunkElsRef.current = [];
     chunkHeightsRef.current = {};
     heightsModeRef.current = null;
     setActiveMark(null);
     setShareHls([]);
-    if (!canRead) return;
+    if (!canRead) {
+      setTextDone(true);
+      return;
+    }
     // Check LRU cache first — instant on back/forward navigation.
     const cached = getCachedText(url);
     if (cached !== undefined) {
       setText(cached);
+      setTextDone(true);
       return () => { live = false; };
     }
+    // Stream the text and paint progressively: the first ~60k chars
+    // (one reader chunk) render as soon as they arrive, then the text
+    // grows at doubling thresholds until the stream ends. Previously
+    // the reader waited for r.text() — the whole file, up to ~9MB —
+    // before painting anything, which is the delay on large entries.
+    // Only the COMPLETE text enters the LRU cache; partial prefixes
+    // are render-only. Chunking is line-based and prefix-stable, so
+    // the only thing a later publish can change is the tail line of
+    // the last mounted chunk.
     fetch(url, { signal: ctrl.signal })
-      .then((r) => {
+      .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.text();
-      })
-      .then((t) => {
-        if (live) {
-          setCachedText(url, t);
-          setText(t);
+        if (!r.body || typeof r.body.getReader !== "function") {
+          const t = await r.text();
+          if (live) {
+            setCachedText(url, t);
+            setText(t);
+            setTextDone(true);
+          }
+          return;
+        }
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let acc = "";
+        let nextPublish = 60000;
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            acc += decoder.decode(value, { stream: true });
+            if (live && acc.length >= nextPublish) {
+              setText(acc);
+              nextPublish = Math.max(nextPublish * 2, acc.length + 500000);
+            }
+          }
+          acc += decoder.decode();
+          if (live) {
+            setCachedText(url, acc);
+            setText(acc);
+            setTextDone(true);
+          }
+        } catch (e) {
+          if (live && e.name !== "AbortError") setTextError(true);
+          if (live) setTextDone(true);
         }
       })
       .catch((e) => {
         if (live && e.name !== "AbortError") setTextError(true);
+        if (live) setTextDone(true);
       });
     return () => { live = false; ctrl.abort(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3228,7 +3275,7 @@ function LibraryFullText({ artifact }) {
   // not an in-page navigation. The highlight paints after the scroll's rAF
   // so the Range rect is measured against the unmarked text node.
   useEffect(() => {
-    if (!text || !shareLanding || shareLanding.done || chunkStarts.length === 0)
+    if (!text || !textDone || !shareLanding || shareLanding.done || chunkStarts.length === 0)
       return;
     const tlen = text.length;
     const at = Math.min(shareLanding.at, Math.max(0, tlen - 1));
@@ -3278,16 +3325,16 @@ function LibraryFullText({ artifact }) {
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text, win, chunkStarts]);
+  }, [text, textDone, win, chunkStarts]);
 
   const stats = useMemo(() => {
-    if (!text) return null;
+    if (!text || !textDone) return null;
     const words = countWords(text);
     return {
       words,
       minutes: Math.max(1, Math.round(words / 200)),
     };
-  }, [text]);
+  }, [text, textDone]);
 
   // Chunk body renderer: the search fallback <mark> takes precedence; the
   // shared-passage highlight (Apple Books yellow) paints wherever the ?hl=
@@ -3457,6 +3504,9 @@ function LibraryFullText({ artifact }) {
       </div>
       {text === null && !textError && canRead && (
         <p className="tower-reader-status">Loading full text…</p>
+      )}
+      {text !== null && !textDone && !textError && (
+        <p className="tower-reader-status">Loading more of this text…</p>
       )}
       {textError && (
         <div className="tower-reader-empty">
