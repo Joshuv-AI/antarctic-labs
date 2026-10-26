@@ -1,7 +1,7 @@
 // Tower of Babel — lazy artifact catalog.
 //
 // Three-tier loading:
-// - `catalog-bootstrap.json` (first 200 records) loads INSTANTLY.
+// - `catalog-bootstrap.json` (first 20,000 records) loads INSTANTLY.
 //   The list renders immediately, no spinner.
 // - The full index (all records, compact projection) loads as versioned
 //   chunks via /catalog-index2/ (Stage 2), parsed in a Web Worker and
@@ -64,7 +64,7 @@ function loadWithRetry(url, getPending, setPending, getCache, setCache, onReady)
   return getPending();
 }
 
-// Bootstrap: first 200 records, loads instantly.
+// Bootstrap: first 20,000 records, loads instantly.
 export function loadBootstrap() {
   return loadWithRetry(
     "/catalog-bootstrap.json",
