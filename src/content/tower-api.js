@@ -160,14 +160,21 @@ export const apiPage = {
         "stay free on this site either way; a key buys the maintained pipe, the throughput, " +
         "and someone standing behind it, never access. Authenticate with a Bearer key: " +
         "Authorization: Bearer twr_live_… — keys are delivered by email and shown only there; " +
-        "only a hash of each key is stored. Endpoints: GET /api/v1/search?q= (catalog search; " +
-        "&mode=fulltext answers from the deep-search index once that index is live, and says " +
-        "so in its response until then), GET /api/v1/text?id= (paid plans: a redirect to the " +
+        "only a hash of each key is stored. Endpoints: GET /api/v1/search?q= — one " +
+        "endpoint, two modes. With no key it is the free keyless agent search: cursor " +
+        "pagination over the catalog, in catalog order, exactly as documented for the " +
+        "static surface above. With a Bearer key the same call counts against the key's " +
+        "daily quota, returns ranked results, and accepts &mode=fulltext, which answers " +
+        "from the deep-search index once that index is live and says so in its response " +
+        "until then. A key that is presented but invalid is an error (401, or 403 if the " +
+        "key was revoked) — it never silently falls back to the keyless mode. " +
+        "GET /api/v1/text?id= (paid plans: a redirect to the " +
         "work's .txt, where text is present), GET /api/v1/bulk (snapshot package list), and " +
         "GET /api/v1/usage (your key's plan and today's count). Daily limits: free key 200, " +
-        "Pro 5,000, Commercial 25,000. Every response carries X-RateLimit-Limit, " +
-        "X-RateLimit-Remaining, and X-RateLimit-Reset headers; going over returns 429 with " +
-        "the reset time. Errors are JSON: { ok: false, error }. No uptime SLA is offered on " +
+        "Pro 5,000, Commercial 25,000. Every keyed response carries X-RateLimit-Limit, " +
+        "X-RateLimit-Remaining, and X-RateLimit-Reset headers; going over the daily limit " +
+        "returns 429 with the reset time. Keyed errors are JSON: { ok: false, error }; the " +
+        "keyless search keeps its own error shape, { error: { code, message } }. No uptime SLA is offered on " +
         "any tier. Versioning: v1 is stable — breaking changes ship as a new version, never " +
         "as a silent change to v1, and limit changes are announced on this page and by email " +
         "to key holders before they take effect. Limits are never tightened silently.",
