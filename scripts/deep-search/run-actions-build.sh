@@ -75,12 +75,21 @@ checkpoint_object_key() {
   printf '%s/chunk-%03d/%s' "$(checkpoint_prefix)" "$1" "$2"
 }
 r2_put_retry() {
-  local key=$1 file=$2 ctype=${3:-application/octet-stream} attempt
+  local key=$1 file=$2 ctype=${3:-application/octet-stream} attempt err
+  err="$WORK/.r2put.err"
   for attempt in 1 2 3; do
-    if $WRANGLER r2 object put "$BUCKET/$key" --file "$file" --content-type "$ctype" >> "$LOG" 2>&1; then
+    # --remote is REQUIRED: wrangler 4 defaults r2 object commands to the
+    # LOCAL simulator when no config binding says otherwise, so without it
+    # every "upload" writes to throwaway local storage (run 2, 2026-10-27:
+    # chunk 0's checkpoint never reached R2 and the run aborted).
+    if $WRANGLER r2 object put "$BUCKET/$key" --file "$file" --content-type "$ctype" --remote >> "$LOG" 2> "$err"; then
       return 0
     fi
+    cat "$err" >> "$LOG" 2>/dev/null
     log "checkpoint upload attempt $attempt failed: $key"
+    # Surface the real wrangler error in the run log — it used to be
+    # swallowed into $LOG, which never leaves the runner on failure.
+    tail -3 "$err" 2>/dev/null | while IFS= read -r line; do log "  wrangler: $line"; done
     sleep $((attempt * 5))
   done
   return 1
@@ -88,7 +97,7 @@ r2_put_retry() {
 r2_get_once() {
   local key=$1 dest=$2
   mkdir -p "$(dirname "$dest")"
-  $WRANGLER r2 object get "$BUCKET/$key" --file "$dest" >> "$LOG" 2>&1
+  $WRANGLER r2 object get "$BUCKET/$key" --file "$dest" --remote >> "$LOG" 2>&1
 }
 write_checkpoint_manifest() {
   local dir=$1 out=$2 chunk=$3
@@ -329,7 +338,7 @@ for s in $(seq 0 255); do
   SHARD_FILE="$OUT/$BUILD_ID/terms/$s.json"
   BYTES=$(stat -c%s "$SHARD_FILE")
   if [ "$BYTES" -gt "$LARGEST_BYTES" ]; then LARGEST_BYTES=$BYTES; LARGEST_NAME="$s.json"; fi
-  $WRANGLER r2 object put "$BUCKET/$BUILD_ID/terms/$s.json" --file "$SHARD_FILE" --content-type application/json >> "$LOG" 2>&1 \
+  $WRANGLER r2 object put "$BUCKET/$BUILD_ID/terms/$s.json" --file "$SHARD_FILE" --content-type application/json --remote >> "$LOG" 2>&1 \
     || die "R2 upload failed for shard $s"
   UPLOADS=$((UPLOADS + 1))
   rm -f "$SHARD_FILE"
@@ -341,7 +350,7 @@ node "$SCRIPT_DIR/write-manifest.mjs" --tmp "$SHARED_TMP" --out "$OUT" --build-i
 MANIFEST_BYTES=$(stat -c%s "$OUT/manifest.json")
 node -e "const m=require(process.argv[1]); if(!Array.isArray(m.docs)||!m.docs.length) process.exit(1); console.log('manifest OK: docs='+m.docs.length);" "$OUT/manifest.json" \
   || die "manifest validation failed (docs empty)"
-$WRANGLER r2 object put "$BUCKET/manifest.json" --file "$OUT/manifest.json" --content-type application/json >> "$LOG" 2>&1 \
+$WRANGLER r2 object put "$BUCKET/manifest.json" --file "$OUT/manifest.json" --content-type application/json --remote >> "$LOG" 2>&1 \
   || die "R2 upload failed for manifest.json"
 UPLOADS=$((UPLOADS + 1))
 
@@ -349,7 +358,7 @@ DOCS_TOTAL=$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.
 cat > "$WORK/build-log-$BUILD_ID.json" <<EOF
 {"textsHead":"$TEXTS_HEAD","buildId":"$BUILD_ID","siteHead":"$SITE_HEAD","catalogTotal":$TOTAL_N,"chunks":$NCHUNKS,"docs":$DOCS_TOTAL,"terms":$TOTAL_TERMS,"shards":256,"manifestBytes":$MANIFEST_BYTES,"largestShardBytes":$LARGEST_BYTES,"largestShard":"$LARGEST_NAME","uploads":$UPLOADS,"bucket":"$BUCKET","builtAt":"$(date -u +%FT%TZ)"}
 EOF
-$WRANGLER r2 object put "$BUCKET/build-log-$BUILD_ID.json" --file "$WORK/build-log-$BUILD_ID.json" --content-type application/json >> "$LOG" 2>&1 \
+$WRANGLER r2 object put "$BUCKET/build-log-$BUILD_ID.json" --file "$WORK/build-log-$BUILD_ID.json" --content-type application/json --remote >> "$LOG" 2>&1 \
   || die "R2 upload failed for build log"
 cp "$WORK/build-log-$BUILD_ID.json" ./build-log.json
 log "=== BUILD COMPLETE: docs=$DOCS_TOTAL terms=$TOTAL_TERMS manifestBytes=$MANIFEST_BYTES largestShard=$LARGEST_NAME ($LARGEST_BYTES bytes) uploads=$UPLOADS ==="
