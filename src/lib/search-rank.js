@@ -1,3 +1,26 @@
+import { damerauWithin, maxEditsForTerm } from "./search-text.js";
+
+// Did-you-mean candidates for one token against a vocabulary Map
+// (token -> frequency). SPEC-6 gates: prefix_length 1 (first character
+// must match), no fuzz on numbers, edit budget by term length. Sorted by
+// distance, then corpus frequency — the suggestion is only ever SHOWN if
+// the corrected query itself returns results (checked by the caller).
+export function correctionCandidates(token, vocab, limit = 3) {
+  if (!token || /^\d+$/.test(token)) return [];
+  const maxEd = maxEditsForTerm(token);
+  if (!maxEd || !vocab) return [];
+  const out = [];
+  for (const [word, freq] of vocab) {
+    if (word === token) continue;
+    if (word[0] !== token[0]) continue;
+    if (Math.abs(word.length - token.length) > maxEd) continue;
+    const d = damerauWithin(token, word, maxEd);
+    if (d <= maxEd) out.push({ word, d, freq });
+  }
+  out.sort((a, b) => a.d - b.d || b.freq - a.freq);
+  return out.slice(0, limit).map((o) => o.word);
+}
+
 // ---------------------------------------------------------------------------
 // Library search relevance: normalization, token matching, field-weighted
 // scoring, and a curated canon of landmark works pinned to the top.
@@ -12,16 +35,123 @@
 // not present, so the list can never break search.
 // ---------------------------------------------------------------------------
 
-// One normalization for queries, titles, and haystacks: lowercase, drop
-// apostrophes (qur'an -> quran, pilgrim's -> pilgrims), turn every other
-// punctuation mark into a space, collapse whitespace.
+// One normalization for queries, titles, and haystacks (SPEC-6: identical
+// analysis on both sides): NFKC -> lowercase -> NFKD diacritics fold
+// (café -> cafe, ﬁ -> fi), drop apostrophes (qur'an -> quran, pilgrim's ->
+// pilgrims), turn every other punctuation mark into a space, collapse
+// whitespace. Output is plain [a-z0-9 ] so every downstream includes() /
+// split(" ") keeps working exactly as before.
 export function normText(s) {
   return (s || "")
+    .normalize("NFKC")
     .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/['\u2019]/g, "")
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+// --- Blended BM25F ranking (Workstream D, SPEC-6) ---------------------------
+// One score per work across every field, so metadata hits and full-text
+// hits interleave in a single list instead of two stacked sections.
+// Starting-point field weights from the spec (tune only against the judged
+// set): title x8, creator x5, subject (collection + subcategory) x3,
+// description x2, full text x1. BM25 constants are the Lucene defaults.
+export const FIELD_WEIGHTS = {
+  title: 8,
+  creator: 5,
+  subject: 3,
+  description: 2,
+  fulltext: 1,
+};
+export const BM25_K1 = 1.2;
+export const BM25_B = 0.75;
+// Average field lengths in tokens, for per-field length normalization.
+// Measured order-of-magnitude for this catalog's compact index records;
+// the full-text average is computed from the index manifest at runtime.
+export const FIELD_AVG_LEN = { title: 6, creator: 2.5, subject: 4, description: 24 };
+
+export function bm25Idf(df, n) {
+  if (!n) return 0;
+  return Math.log(1 + (n - df + 0.5) / (df + 0.5));
+}
+
+// Saturating, length-normalized BM25 term score for one field.
+export function bm25Term(tf, fieldLen, avgLen, df, n) {
+  if (!tf) return 0;
+  const norm = BM25_K1 * (1 - BM25_B + (BM25_B * (fieldLen || 1)) / (avgLen || 1));
+  return bm25Idf(df, n) * ((tf * (BM25_K1 + 1)) / (tf + norm));
+}
+
+// Occurrences of a token in a normText field (fields are single-space
+// separated, so a split count is exact — no regex on the hot path).
+export function countToken(fieldNorm, token) {
+  if (!fieldNorm || !token) return 0;
+  let c = 0;
+  for (const t of fieldNorm.split(" ")) if (t === token) c++;
+  return c;
+}
+
+// Blended metadata score for one work. fields: {title, creator, subject,
+// description} normText strings; tokens: query tokens; dfOf(token) ->
+// document frequency over the catalog; n: catalog size. Returns the
+// BM25F sum plus which fields matched, so the UI can badge WHY it matched.
+// Bonuses: exact-title-phrase override (a whole-query title match should
+// almost always win), all-terms-in-title bonus, title proximity bonus.
+// The legacy heuristic demotions (secondary literature, volume numbers)
+// are kept as small post-adjustments — the judged set showed they carry
+// real precision for bare-name queries ("bible" vs Bible concordances).
+export function scoreBlended(fields, qNorm, tokens, dfOf, n, secMask, hasVolNum, qMask) {
+  const T = fields.title || "";
+  if (!T) return { score: 0, title: false, creator: false, subject: false, description: false };
+  let score = 0;
+  const matched = { title: false, creator: false, subject: false, description: false };
+  const parts = [
+    ["title", T, FIELD_WEIGHTS.title, FIELD_AVG_LEN.title],
+    ["creator", fields.creator || "", FIELD_WEIGHTS.creator, FIELD_AVG_LEN.creator],
+    ["subject", fields.subject || "", FIELD_WEIGHTS.subject, FIELD_AVG_LEN.subject],
+    ["description", fields.description || "", FIELD_WEIGHTS.description, FIELD_AVG_LEN.description],
+  ];
+  for (const [name, text, w, avg] of parts) {
+    if (!text) continue;
+    const len = text ? text.split(" ").length : 0;
+    for (const t of tokens) {
+      const tf = countToken(text, t);
+      if (tf > 0) {
+        matched[name] = true;
+        score += w * bm25Term(tf, len, avg, dfOf(t), n);
+      }
+    }
+  }
+  // Phrase / identity bonuses on the title.
+  const paddedT = " " + T + " ";
+  if (qNorm && (T === qNorm || T === "the " + qNorm || "the " + T === qNorm)) {
+    score += 40; // exact-title-phrase override
+  } else if (qNorm && tokens.length > 1 && paddedT.includes(" " + qNorm + " ")) {
+    score += 16; // whole query as a title phrase
+  }
+  if (tokens.length > 1 && matched.title) {
+    let hits = 0;
+    for (const t of tokens) if (paddedT.includes(" " + t + " ")) hits++;
+    if (hits === tokens.length) {
+      score += 6; // all terms in the title
+      // Proximity: terms adjacent (in query order) inside the title.
+      if (paddedT.includes(" " + tokens.join(" ") + " ")) score += 4;
+    }
+  }
+  if (secMask !== undefined && qMask !== undefined && (secMask & ~qMask) !== 0) score -= 3;
+  if (hasVolNum && qNorm && !/\b(vol|volume|part|book)\b/.test(qNorm)) score -= 1.5;
+  return { score, ...matched };
+}
+
+// "About N works" count formatting (SPEC-3): exact up to 1,000, then
+// rounded to 2 significant figures — never a fake-precise count.
+export function formatAboutCount(n) {
+  if (n <= 1000) return String(n);
+  const pow = Math.pow(10, Math.floor(Math.log10(n)) - 1);
+  return (Math.round(n / pow) * pow).toLocaleString("en-US");
 }
 
 export function queryTokens(qNorm) {

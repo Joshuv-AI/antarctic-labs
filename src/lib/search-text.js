@@ -135,6 +135,62 @@ export function stem(word) {
   return w;
 }
 
+// --- Unicode folding (Workstream D, SPEC-6) --------------------------------
+// One folding used by BOTH the catalog query pipeline (search-rank normText)
+// and the deep query pipeline below, so a query typed with accents, ligatures
+// or full-width characters matches the same work either way:
+//   NFKC (ﬁ -> fi, full-width -> ASCII) -> case-fold -> NFKD -> strip
+//   combining marks U+0300–U+036F (café -> cafe).
+export function foldText(s) {
+  return (s || "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+// Bounded Damerau–Levenshtein distance (adjacent transposition = 1 edit,
+// the canonical "phnoe -> phone" case). Returns maxDist+1 as soon as the
+// distance provably exceeds maxDist, so vocabulary scans stay cheap.
+export function damerauWithin(a, b, maxDist) {
+  const la = a.length, lb = b.length;
+  if (Math.abs(la - lb) > maxDist) return maxDist + 1;
+  if (la === 0) return lb;
+  if (lb === 0) return la;
+  let prev2 = null;
+  let prev = new Array(lb + 1);
+  let cur = new Array(lb + 1);
+  for (let j = 0; j <= lb; j++) prev[j] = j;
+  for (let i = 1; i <= la; i++) {
+    cur[0] = i;
+    let rowMin = cur[0];
+    for (let j = 1; j <= lb; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (
+        i > 1 && j > 1 &&
+        a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]
+      ) {
+        v = Math.min(v, prev2[j - 2] + 1); // transposition
+      }
+      cur[j] = v;
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > maxDist) return maxDist + 1;
+    prev2 = prev; prev = cur; cur = new Array(lb + 1);
+  }
+  return prev[lb];
+}
+
+// SPEC-6 typo thresholds: 0 edits below 4 chars, 1 edit at 4–7 chars,
+// 2 edits at 8+ chars. Numbers are never fuzzed (caller checks).
+export function maxEditsForTerm(term) {
+  const n = (term || "").length;
+  if (n < 4) return 0;
+  if (n < 8) return 1;
+  return 2;
+}
+
 // Common English words: excluded from the index and from unquoted query terms.
 // They are still honored inside "quoted phrases".
 export const STOPWORDS = new Set(
@@ -179,6 +235,30 @@ export function parseQuery(raw) {
     phrases: phrases.filter((p) => p.indexable.length > 0),
     unsearchable: terms.length === 0 && phrases.length === 0,
   };
+}
+
+// Query analysis v2 (Workstream D, SPEC-6). Wraps parseQuery (unchanged, so
+// the deep index built from analyze() stays in lockstep) and adds:
+//   foldedTerms — stems of the NFKD-folded unquoted tokens (café -> cafe),
+//     unioned into deep search so the ASCII spelling in a text also matches;
+//   exactTokens — the folded, unstemmed unquoted tokens, for exact-field
+//     scoring and typo correction; quoted phrases stay exact-only: they are
+//     never stemmed for correction, never fuzzed, never relaxed.
+export function parseQueryV2(raw) {
+  const base = parseQuery(raw || "");
+  const folded = foldText(raw || "");
+  const noQuotes = folded.replace(/"[^"]*"/g, " ");
+  const exactTokens = [];
+  for (const t of tokenize(noQuotes)) {
+    if (!exactTokens.includes(t)) exactTokens.push(t);
+  }
+  const foldedTerms = [];
+  for (const t of exactTokens) {
+    const s = stem(t);
+    if (STOPWORDS.has(s)) continue;
+    if (!foldedTerms.includes(s)) foldedTerms.push(s);
+  }
+  return { ...base, foldedTerms, exactTokens };
 }
 
 // Count stem occurrences in a text. Returns Map(stem -> count).

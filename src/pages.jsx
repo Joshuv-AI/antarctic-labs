@@ -23,7 +23,12 @@ import {
   scoreArtifactPre,
   secondaryMaskFor,
   querySecondaryMask,
+  scoreBlended,
+  formatAboutCount,
+  correctionCandidates,
+  FIELD_WEIGHTS,
 } from "./lib/search-rank.js";
+import { STOPWORDS as QUERY_STOPWORDS } from "./lib/search-text.js";
 import { site } from "./content/site.js";
 import { operator } from "./content/operator.js";
 import { towerOfBabel } from "./content/tower-of-babel.js";
@@ -362,8 +367,19 @@ async function buildSearchData(artifacts, bucketKeys, isCancelled) {
   const normTitles = new Array(n);
   const normCreators = new Array(n);
   const normColls = new Array(n);
+  const normDescs = new Array(n);
   const secMasks = new Uint32Array(n);
   const volFlags = new Uint8Array(n);
+  // Did-you-mean vocabulary (Workstream D, SPEC-6): token -> frequency over
+  // the SHORT fields only (title/creator/collection). Built once here so a
+  // zero-result query never pays a catalog scan to find corrections.
+  const vocab = new Map();
+  const vocabAdd = (field) => {
+    if (!field) return;
+    for (const t of field.split(" ")) {
+      if (t) vocab.set(t, (vocab.get(t) || 0) + 1);
+    }
+  };
   for (let from = 0; from < n; from += 20000) {
     if (isCancelled()) return null;
     const end = Math.min(from + 20000, n);
@@ -378,12 +394,16 @@ async function buildSearchData(artifacts, bucketKeys, isCancelled) {
       normTitles[i] = T;
       normCreators[i] = normText(a.creator || "");
       normColls[i] = normText((a.collection || "") + " " + subLabel);
+      normDescs[i] = normText(a.description || "");
+      vocabAdd(T);
+      vocabAdd(normCreators[i]);
+      vocabAdd(normColls[i]);
       secMasks[i] = secondaryMaskFor(T);
       volFlags[i] = /\b(vol|volume|part) \d+/.test(T) ? 1 : 0;
     }
     await new Promise((r) => setTimeout(r, 0));
   }
-  return { haystacks, normTitles, normCreators, normColls, secMasks, volFlags };
+  return { haystacks, normTitles, normCreators, normColls, normDescs, secMasks, volFlags, vocab };
 }
 
 // Full derivation for one catalog array identity, in three phases
@@ -443,8 +463,10 @@ async function deriveTowerData(artifacts, isCancelled, onPhase) {
       normTitles: null,
       normCreators: null,
       normColls: null,
+      normDescs: null,
       secMasks: null,
       volFlags: null,
+      vocab: null,
     });
   }
   const search = await buildSearchData(artifacts, bucketKeys, isCancelled);
@@ -494,6 +516,26 @@ async function deriveTowerData(artifacts, isCancelled, onPhase) {
   towerDataFor = artifacts;
   return data;
 }
+
+// Adaptive keystroke debounce (SPEC-5): 150ms on fast 4G, 200ms default,
+// 400ms on slow networks or save-data — via the Network Information API,
+// degrading to the 200ms default where the API does not exist.
+function adaptiveDebounceMs() {
+  try {
+    const c = navigator.connection;
+    if (!c) return 200;
+    if (c.saveData) return 400;
+    if (c.effectiveType === "slow-2g" || c.effectiveType === "2g") return 400;
+    if (c.effectiveType === "4g") return 150;
+    return 200;
+  } catch {
+    return 200;
+  }
+}
+
+// Search results page size (SPEC-4): 25 per page, numbered pages to 10,
+// then cursor-based Load more.
+const SEARCH_PAGE_SIZE = 25;
 
 // Rows per page for library pagination. The user clicks "Load more" for the
 // next page — the full catalog is never mounted at once, so the DOM stays
@@ -986,7 +1028,8 @@ function TowerLibrarySection({ go, onReady }) {
   // ("PAPERS:bio"). Click mechanics are unchanged from the old collection
   // filter: click a chip to filter, click the active chip to clear,
   // pagination resets on change, 50 rows per page with "Load more".
-  const [query, setQuery] = useState("");
+  // (The query state itself lives further down, with the unified-search
+  // pipeline it feeds — see "ONE search".)
   const [bucketFilter, setBucketFilter] = useState("");
   const [sortId, setSortId] = useState("title-asc");
   // Results presentation (revamp 2026-10-21): cover grid by default, list
@@ -1008,14 +1051,58 @@ function TowerLibrarySection({ go, onReady }) {
       /* private mode — the choice just won't persist */
     }
   };
-  // Search mode (2026-10-25): the page visibly offers TWO searches over the
-  // same query — Titles (catalog title/creator/tags, always available) and
-  // Full text (words and quoted phrases inside the texts, via the
-  // /search-index deep index). "both" is the default and preserves the
-  // previous behavior exactly (title list + "Mentions in texts" section);
-  // "titles" / "fulltext" show only that mode. Full-text mode lights up
-  // the moment the index lands; until then it says so instead of hiding.
-  const [searchMode, setSearchMode] = useState("both");
+  // ONE search (Workstream D, 2026-10-27): there is no mode any more.
+  // Every query searches titles/creators AND the full text of every work
+  // together, and the results render as a single interleaved list ranked
+  // by one blended BM25F score (see the search memo below and
+  // lib/search-rank.js scoreBlended). The old Titles / Full text toggle
+  // and its searchMode state are gone by product decision.
+  // The query is reflected in the URL as ?q= (SPEC-1): shareable,
+  // reload-safe, back-button correct. replaceState while typing,
+  // pushState on submit.
+  const [query, setQueryState] = useState(() => {
+    try {
+      return new URLSearchParams(window.location.search).get("q") || "";
+    } catch {
+      return "";
+    }
+  });
+  const setQuery = (v) => setQueryState(v);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        const url = new URL(window.location.href);
+        const cur = url.searchParams.get("q") || "";
+        if (cur === query) return;
+        if (query) url.searchParams.set("q", query);
+        else url.searchParams.delete("q");
+        window.history.replaceState({}, "", url);
+      } catch {
+        /* history unavailable — the search itself is unaffected */
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [query]);
+  // Strict/undo for the relaxation ladder (SPEC-6): when a relaxed stage
+  // produced the results, the banner offers "search exactly instead",
+  // which pins THIS query to its strict form. Reset whenever the query
+  // text changes.
+  const [strictQuery, setStrictQuery] = useState("");
+  // Search-results paging (SPEC-4): 25 per page, numbered pages 1–10,
+  // then cursor-based Load more. Browse paging keeps its own budget.
+  const [searchPage, setSearchPage] = useState(1);
+  const [searchExtra, setSearchExtra] = useState(0); // extra rows past page 10
+  // IME composition guard (SPEC-8): no search fires mid-composition.
+  const composingRef = useRef(false);
+  // Deep-search request bookkeeping (SPEC-5): sequence guard + abort +
+  // LRU result cache (50 entries / 60s), keyed by the normalized query.
+  const deepSeqRef = useRef(0);
+  const deepAbortRef = useRef(null);
+  const deepCacheRef = useRef(new Map());
+  const resultsHeadingRef = useRef(null);
+  const searchInputRef = useRef(null);
+  const [focusResultsPending, setFocusResultsPending] = useState(false);
+  const [showSkeleton, setShowSkeleton] = useState(false);
   // Collections filter (2026-10-24, replaces the deleted hub pages):
   // collGroup is a COLLECTION_GROUPS id (or "" for no group tab), and
   // collKey is the selected collection's key (or "" for none). The
@@ -1151,46 +1238,74 @@ function TowerLibrarySection({ go, onReady }) {
   // the expensive filter/sort and the deep index search run on the deferred
   // value at background priority, which removes the keystroke lag.
   const deferredQuery = useDeferredValue(query);
-  // The catalog list itself updates on a debounced copy of the query, not on
-  // the deferred value directly: at normal typing speed the deferred value
-  // still catches up between keystrokes, which would re-reconcile thousands
-  // of rows mid-burst. Debouncing collapses a burst into ~1 list update, so
-  // the input never competes with row reconciliation. The deep full-text
-  // search above keeps its own 450ms debounce on the deferred value.
+  // The results update on a debounced copy of the query, not on the raw
+  // input value: at normal typing speed a deferred value still catches up
+  // between keystrokes, which would re-reconcile thousands of rows
+  // mid-burst. Debouncing collapses a burst into ~1 list update, so the
+  // input never competes with row reconciliation. The debounce is
+  // adaptive (SPEC-5): 150ms on fast 4G, 200ms default, 400ms on
+  // slow-2g/2g or save-data (Network Information API). No blended search
+  // below 2 characters.
   const [listQuery, setListQuery] = useState("");
   useEffect(() => {
-    const t = setTimeout(() => setListQuery(deferredQuery.trim().toLowerCase()), 280);
+    if (composingRef.current) return;
+    const t = setTimeout(
+      () => setListQuery(deferredQuery.trim().toLowerCase()),
+      adaptiveDebounceMs()
+    );
     return () => clearTimeout(t);
   }, [deferredQuery]);
-  // Whether the top "entries matching" list is expanded past its 2-row
-  // cap (see LibraryResults). Collapses again whenever the query changes.
-  const [matchesExpanded, setMatchesExpanded] = useState(false);
   useEffect(() => {
-    setMatchesExpanded(false);
-    // Reset pagination to first 50 when filters change.
+    // Reset paging (browse + search) whenever the query or filters change;
+    // a relaxed-stage undo pin for a previous query never carries over.
     setRowBudget(TOWER_ROWS_PER_PAGE);
+    setSearchPage(1);
+    setSearchExtra(0);
+    setStrictQuery("");
   }, [listQuery, bucketFilter, sortId, collKey]);
-  // Deep full-text search: same query, second mode. Debounced; searches the
-  // full contents of every staged text via the build-time index. Title
-  // results above are untouched by this.
-  const [deep, setDeep] = useState({ state: "idle" });
+  // Deep full-text search: part of the SAME blended query now, not a
+  // second mode. Runs on the debounced query with an AbortController +
+  // sequence guard (SPEC-5): a stale response can never land over a
+  // newer one, and an aborted run keeps the previous results on screen.
+  // Results are LRU-cached (50 entries / 60s) keyed by normalized query.
+  const [deep, setDeep] = useState({ state: "idle", forQuery: "" });
   useEffect(() => {
-    const raw = deferredQuery.trim();
+    const raw = listQuery;
     if (raw.length < 2) {
-      setDeep({ state: "idle" });
+      setDeep({ state: "idle", forQuery: "" });
       return;
     }
-    let cancelled = false;
-    const t = setTimeout(async () => {
-      setDeep((d) => ({ ...d, state: "loading" }));
-      const res = await searchDeep(raw);
-      if (!cancelled) setDeep(res);
-    }, 450);
+    const cacheKey = normText(raw);
+    const hit = deepCacheRef.current.get(cacheKey);
+    if (hit && Date.now() - hit.ts < 60000) {
+      deepCacheRef.current.delete(cacheKey);
+      deepCacheRef.current.set(cacheKey, hit); // LRU touch
+      setDeep({ ...hit.res, forQuery: raw });
+      return;
+    }
+    const seq = ++deepSeqRef.current;
+    if (deepAbortRef.current) deepAbortRef.current.abort();
+    const ctl = new AbortController();
+    deepAbortRef.current = ctl;
+    setDeep((d) => ({ ...d, state: "loading", forQuery: raw }));
+    searchDeep(raw, { signal: ctl.signal }).then((res) => {
+      if (seq !== deepSeqRef.current) return; // superseded — discard
+      if (res.state === "aborted") return; // keep previous results visible
+      if (res.state === "ready") {
+        deepCacheRef.current.set(cacheKey, { ts: Date.now(), res });
+        if (deepCacheRef.current.size > 50) {
+          deepCacheRef.current.delete(deepCacheRef.current.keys().next().value);
+        }
+      }
+      setDeep({ ...res, forQuery: raw });
+    });
     return () => {
-      cancelled = true;
-      clearTimeout(t);
+      // Superseded by a newer query: abort the in-flight fetch so its
+      // shards stop downloading (the sequence guard above is the
+      // belt-and-braces for fetches that cannot be aborted mid-body).
+      if (seq === deepSeqRef.current) ctl.abort();
     };
-  }, [deferredQuery]);
+  }, [listQuery]);
   const q = listQuery;
   // While the sort orders are still building (phase 1 data only), browse
   // in plain catalog order — the rows and the search work immediately,
@@ -1219,7 +1334,7 @@ function TowerLibrarySection({ go, onReady }) {
   // Active lane for the subcategory row: the lane part of bucketFilter.
   const activeLane = bucketFilter ? bucketFilter.split(":")[0] : "";
   const activeSubs = TOWER_SUBS[activeLane] || [];
-  const { rankMap, matchCount, rankedIndices } = useMemo(() => {
+  const { rankMap, matchCount, rankedIndices, blendedModel } = useMemo(() => {
     const map = new Map();
     if (!artifacts || !towerData)
       return { rankMap: map, matchCount: 0, rankedIndices: null };
@@ -1254,78 +1369,354 @@ function TowerLibrarySection({ go, onReady }) {
         count++;
         if (map.size < rowBudget) map.set(artifacts[i].artifact_id, count);
       }
-      return { rankMap: map, matchCount: count, rankedIndices: null };
+      return { rankMap: map, matchCount: count, rankedIndices: null, blendedModel: null };
     }
-    // Searching (2026-10-20 relevance overhaul, lib/search-rank.js):
-    // token-AND matching over the normalized haystacks, field-weighted
-    // scoring, and curated canon pins first — so the work a searcher
-    // means leads, not whatever sorts first alphabetically. The sort
-    // dropdown governs browsing only; while a query is active the best
-    // answer leads.
+    // Searching (Workstream D, SPEC-6): ONE blended list. Catalog-field
+    // matches (BM25F over title/creator/subject/description) and full-text
+    // matches (BM25 from the deep index, weight x1) merge into a single
+    // score per work, deduped by work, pins first. The sort dropdown
+    // governs browsing only; while a query is active the best answer
+    // leads. Below 2 characters the blended pipeline does not engage and
+    // the query browses in catalog order (previous behavior).
+    if (q.trim().length < 2) {
+      let count = 0;
+      for (let k = 0; k < towerOrder.length; k++) {
+        const i = towerOrder[k];
+        if (!passesBucket(i) || !passesCollection(i)) continue;
+        count++;
+        if (map.size < rowBudget) map.set(artifacts[i].artifact_id, count);
+      }
+      return { rankMap: map, matchCount: count, rankedIndices: null, blendedModel: null };
+    }
     const tokens = queryTokens(qNorm);
-    // Rarest first: longer tokens are usually the most selective, so
-    // checking them first rejects most records on the first includes().
-    const scanTokens =
-      tokens.length > 1
-        ? tokens.slice().sort((a, b) => b.length - a.length)
-        : tokens;
     const qMask = querySecondaryMask(qNorm);
-    const scored = [];
+    // Quoted phrases (SPEC-6): exact phrase only — never stemmed, never
+    // fuzzed, never relaxed. On the catalog side that means the phrase
+    // (normText form) must appear verbatim in the haystack; unquoted
+    // remainder tokens still AND alongside it.
+    const quotedPhrases = [];
+    {
+      const re = /"([^"]+)"/g;
+      let m;
+      while ((m = re.exec(q)) !== null) {
+        const p = normText(m[1]);
+        if (p) quotedPhrases.push(p);
+      }
+    }
+    const isQuoted = quotedPhrases.length > 0;
+    const phraseTokenSet = new Set(quotedPhrases.flatMap((p) => p.split(" ")));
+    const remainderTokens = tokens.filter((t) => !phraseTokenSet.has(t));
     // Bound by the haystacks length, not artifacts.length: during the
     // bootstrap->full catalog upgrade the two can briefly disagree, and
     // the derived arrays are the internally consistent ones.
     const N = Math.min(artifacts.length, towerData.haystacks.length);
     const NT = towerData.normTitles;
+    // One scan: per-token document frequency (for BM25 idf) + the
+    // strict AND candidate set.
+    const df = new Map(tokens.map((t) => [t, 0]));
+    const andSet = [];
     for (let i = 0; i < N; i++) {
       if (!passesBucket(i) || !passesCollection(i)) continue;
       const hay = towerData.haystacks[i];
       let ok = true;
-      for (const t of scanTokens) {
-        if (!hay.includes(t)) { ok = false; break; }
+      for (const t of tokens) {
+        if (hay.includes(t)) df.set(t, df.get(t) + 1);
+        else ok = false;
       }
-      if (!ok) continue;
-      scored.push({
-        i,
-        s: scoreArtifactPre(
-          NT[i],
-          towerData.normCreators[i],
-          towerData.normColls[i],
-          towerData.secMasks[i],
-          towerData.volFlags[i],
-          qNorm,
-          tokens,
-          qMask
-        ),
-      });
+      if (ok && isQuoted) {
+        ok =
+          quotedPhrases.every((p) => hay.includes(p)) &&
+          remainderTokens.every((t) => hay.includes(t));
+      }
+      if (ok) andSet.push(i);
     }
-    scored.sort(
-      (x, y) =>
-        y.s - x.s || (NT[x.i] < NT[y.i] ? -1 : NT[x.i] > NT[y.i] ? 1 : 0)
-    );
-    const seen = new Set();
-    const ordered = [];
+    const dfOf = (t) => df.get(t) || 0;
+    // Canon pins resolve FIRST: an exact-alias query is exact intent, so
+    // a resolved pin suppresses the relaxation ladder entirely and the
+    // pinned works lead the list (injected below even when the strict
+    // AND scan did not surface them — "torah" -> the Tyndale Pentateuch,
+    // whose own title never says "torah").
     const pins = pinsForQuery(qNorm, tokens);
-    if (pins) {
-      for (const id of pins) {
-        const ix = towerData.idIndex.get(id);
-        if (ix !== undefined && !seen.has(ix) && passesBucket(ix) && passesCollection(ix)) {
-          seen.add(ix);
-          ordered.push(ix);
+    const pinIds = pins
+      ? pins.filter((id) => {
+          const ix = towerData.idIndex.get(id);
+          return ix !== undefined && passesBucket(ix) && passesCollection(ix);
+        })
+      : [];
+    // How many strict candidates match a query token as an exact TOKEN
+    // in title/creator? Substring-only matches ("bibl" inside
+    // "biblical") score at the floor — when fewer than 3 candidates have
+    // a real field match, the typo stage is the real answer.
+    let fieldMatchCount = 0;
+    if (andSet.length) {
+      for (const i of andSet) {
+        const padded = " " + NT[i] + " " + towerData.normCreators[i] + " ";
+        if (tokens.some((t) => padded.includes(" " + t + " "))) fieldMatchCount++;
+      }
+    }
+    // --- Relaxation ladder (SPEC-6): stages run in order, stop at the
+    // first with >= 3 results, and whatever produced the list is
+    // LABELLED. strictQuery (the banner's undo) pins the strict form.
+    const strict = strictQuery === q;
+    let effTokens = tokens;
+    let effQNorm = qNorm;
+    let stage = null; // {kind, label, dropped:[], correctedQuery}
+    let candIdx = andSet;
+    if (!strict && !isQuoted && pinIds.length === 0 && (andSet.length < 3 || fieldMatchCount < 3)) {
+      // Stage 2 — typo tolerance (gated by term length in
+      // correctionCandidates; never on numbers or quoted terms — this
+      // pipeline has no quoted terms, quotes live in the deep query).
+      const vocab = towerData.vocab;
+      if (vocab) {
+        // Gate on the token's exact-field frequency (vocab), NOT the
+        // substring df: "bibl" substring-matches 70+ haystacks but is an
+        // exact title/creator token in none of them.
+        const corr = tokens.map((t) =>
+          (vocab.get(t) || 0) < 3 ? correctionCandidates(t, vocab, 1)[0] : null
+        );
+        if (corr.some(Boolean)) {
+          const corrTokens = tokens.map((t, k) => corr[k] || t);
+          const corrQ = corrTokens.join(" ");
+          const corrSet = [];
+          for (let i = 0; i < N; i++) {
+            if (!passesBucket(i) || !passesCollection(i)) continue;
+            const hay = towerData.haystacks[i];
+            let ok = true;
+            for (const t of corrTokens) if (!hay.includes(t)) { ok = false; break; }
+            if (ok) corrSet.push(i);
+          }
+          if (corrSet.length >= 3) {
+            candIdx = corrSet;
+            effTokens = corrTokens;
+            effQNorm = corrQ;
+            stage = { kind: "typo", correctedQuery: corrQ };
+            for (const t of corrTokens) {
+              if (!df.has(t)) {
+                let c = 0;
+                for (let i = 0; i < N; i++) if (towerData.haystacks[i].includes(t)) c++;
+                df.set(t, c);
+              }
+            }
+          } else if (corrSet.length >= 1) {
+            // Not enough to auto-apply — offer as did-you-mean (SPEC-6
+            // stage 5: only ever shown when it returns results).
+            stage = { kind: "didyoumean", correctedQuery: corrQ };
+          }
+        }
+      }
+      // Stage 3 — drop stopwords.
+      if (!stage || stage.kind === "didyoumean") {
+        const kept = tokens.filter((t) => !QUERY_STOPWORDS.has(t));
+        if (kept.length > 0 && kept.length < tokens.length) {
+          const dropSet = [];
+          for (let i = 0; i < N; i++) {
+            if (!passesBucket(i) || !passesCollection(i)) continue;
+            const hay = towerData.haystacks[i];
+            let ok = true;
+            for (const t of kept) if (!hay.includes(t)) { ok = false; break; }
+            if (ok) dropSet.push(i);
+          }
+          if (dropSet.length >= 3) {
+            candIdx = dropSet;
+            stage = {
+              kind: "stopwords",
+              dropped: tokens.filter((t) => QUERY_STOPWORDS.has(t)),
+            };
+            effTokens = kept;
+          }
+        }
+      }
+      // Stage 4 — least-significant terms optional: partial matches,
+      // BM25F-ranked, requiring at least half the terms (rounded up).
+      if ((!stage || stage.kind === "didyoumean") && tokens.length > 1 && candIdx.length < 3) {
+        const need = Math.ceil(tokens.length / 2);
+        const partSet = [];
+        for (let i = 0; i < N; i++) {
+          if (!passesBucket(i) || !passesCollection(i)) continue;
+          const hay = towerData.haystacks[i];
+          let hits = 0;
+          for (const t of tokens) if (hay.includes(t)) hits++;
+          if (hits >= need) partSet.push(i);
+        }
+        if (partSet.length > candIdx.length) {
+          candIdx = partSet;
+          stage = { kind: "optional", dropped: [] };
         }
       }
     }
-    for (const { i } of scored) {
-      if (!seen.has(i)) {
-        seen.add(i);
-        ordered.push(i);
+    // --- Score the candidate set with BM25F field weights.
+    const items = [];
+    const byId = new Map();
+    for (const i of candIdx) {
+      const a = artifacts[i];
+      const r = scoreBlended(
+        {
+          title: NT[i],
+          creator: towerData.normCreators[i],
+          subject: towerData.normColls[i],
+          description: towerData.normDescs ? towerData.normDescs[i] : "",
+        },
+        effQNorm,
+        effTokens,
+        dfOf,
+        N,
+        towerData.secMasks[i],
+        towerData.volFlags[i],
+        qMask
+      );
+      if (r.score <= 0 && stage?.kind !== "optional") {
+        // AND-matched on a peripheral field only (year/tags) — keep it,
+        // BM25F simply ranks it low; a floor keeps it in the list.
+        r.score = Math.max(r.score, 0.01);
+      }
+      const item = {
+        key: a.artifact_id,
+        artifact: a,
+        index: i,
+        score: r.score,
+        meta: r,
+        text: null,
+        doc: null,
+      };
+      items.push(item);
+      byId.set(a.artifact_id, item);
+    }
+    // --- Merge the full-text results into the same list (weight x1).
+    // Exception: when the typo stage applied, the list is the CORRECTED
+    // query's — merging the original query's text matches under the
+    // "spelling corrected" banner would mix two different queries.
+    let deepExtra = 0;
+    if (
+      deep && deep.forQuery === q && deep.state === "ready" && deep.works &&
+      !(stage && stage.kind === "typo")
+    ) {
+      for (const w of deep.works) {
+        const id = w.doc.id;
+        const ix = towerData.idIndex.get(id);
+        if (ix !== undefined && !passesBucket(ix)) continue;
+        if (ix !== undefined && !passesCollection(ix)) continue;
+        const textScore = FIELD_WEIGHTS.fulltext * (w.score || 0);
+        const existing = byId.get(id);
+        if (existing) {
+          existing.score += textScore;
+          existing.text = w;
+          existing.doc = w.doc;
+          existing.parsedQuery = deep.query;
+        } else {
+          const a =
+            ix !== undefined
+              ? artifacts[ix]
+              : {
+                  artifact_id: id,
+                  title: w.doc.title,
+                  creator: w.doc.creator || "",
+                  year: w.doc.year || null,
+                  collection: w.doc.collection || "",
+                  format: "TXT",
+                };
+          const item = {
+            key: id,
+            artifact: a,
+            index: ix !== undefined ? ix : -1,
+            score: textScore,
+            meta: { title: false, creator: false, subject: false, description: false },
+            text: w,
+            doc: w.doc,
+            parsedQuery: deep.query,
+          };
+          items.push(item);
+          byId.set(id, item);
+        }
+      }
+      deepExtra = deep.truncated
+        ? Math.max(0, (deep.totalWorks || 0) - deep.works.length)
+        : 0;
+    }
+    items.sort((x, y) => {
+      if (y.score !== x.score) return y.score - x.score;
+      const tx = (x.index >= 0 && NT[x.index]) || normText(x.artifact.title || "");
+      const ty = (y.index >= 0 && NT[y.index]) || normText(y.artifact.title || "");
+      if (tx !== ty) return tx < ty ? -1 : 1;
+      return x.key < y.key ? -1 : x.key > y.key ? 1 : 0;
+    });
+    // A spelling-corrected query claims the corrected form's canon pins
+    // too ("bibl" -> "bible" -> the King James Bible leads).
+    let effPinIds = pinIds;
+    if (stage && stage.kind === "typo") {
+      const cp = pinsForQuery(effQNorm, effTokens);
+      if (cp) {
+        const resolved = cp.filter((id) => {
+          const ix = towerData.idIndex.get(id);
+          return ix !== undefined && passesBucket(ix) && passesCollection(ix);
+        });
+        if (resolved.length) effPinIds = resolved;
       }
     }
-    // Only the first page of ranks is materialized (the only rows that
-    // can mount); the count is the full ordered length.
-    const cap = Math.min(ordered.length, rowBudget);
-    for (let k = 0; k < cap; k++) map.set(artifacts[ordered[k]].artifact_id, k + 1);
-    return { rankMap: map, matchCount: ordered.length, rankedIndices: ordered };
-  }, [q, bucketFilter, sortId, towerOrder, artifacts, towerData, rowBudget, collSet]);
+    // Canon pins lead (exact alias only) — injected even when the scan
+    // did not surface them, scored with the same BM25F so their relative
+    // order stays honest below the pin group.
+    if (effPinIds.length) {
+      const pinIds = effPinIds;
+      const pinItems = [];
+      for (const id of pinIds) {
+        let it = byId.get(id);
+        if (!it) {
+          const ix = towerData.idIndex.get(id);
+          const a = artifacts[ix];
+          const r = scoreBlended(
+            {
+              title: NT[ix],
+              creator: towerData.normCreators[ix],
+              subject: towerData.normColls[ix],
+              description: towerData.normDescs ? towerData.normDescs[ix] : "",
+            },
+            effQNorm,
+            effTokens,
+            dfOf,
+            N,
+            towerData.secMasks[ix],
+            towerData.volFlags[ix],
+            qMask
+          );
+          it = {
+            key: id,
+            artifact: a,
+            index: ix,
+            score: Math.max(r.score, 0.01),
+            meta: r,
+            text: null,
+            doc: null,
+          };
+          items.push(it);
+          byId.set(id, it);
+        }
+        pinItems.push(it);
+      }
+      const pinSet = new Set(pinItems.map((it) => it.key));
+      items.splice(0, items.length, ...pinItems, ...items.filter((it) => !pinSet.has(it.key)));
+    }
+    const total = items.length + deepExtra;
+    const blendedModel = {
+      items,
+      total,
+      stage,
+      suggestion:
+        stage && stage.kind === "didyoumean" ? stage.correctedQuery : null,
+      appliedCorrection:
+        stage && stage.kind === "typo" ? stage.correctedQuery : null,
+      droppedTerms: stage && stage.dropped ? stage.dropped : [],
+      deepState: deep && deep.forQuery === q ? deep.state : "idle",
+      pending:
+        !deep || deep.forQuery !== q || deep.state === "loading",
+      query: q,
+      tokens: effTokens,
+    };
+    const cap = Math.min(items.length, rowBudget);
+    for (let k = 0; k < cap; k++) {
+      if (items[k].index >= 0) map.set(items[k].key, k + 1);
+    }
+    return { rankMap: map, matchCount: total, rankedIndices: null, blendedModel };
+  }, [q, bucketFilter, sortId, towerOrder, artifacts, towerData, rowBudget, collSet, deep, strictQuery]);
   // Report ready exactly once when the section settles: the first 50 rows
   // have painted, or the error UI is up. The double rAF waits for paint;
   // the timeout fallback covers background tabs (and any dropped frame
@@ -1368,6 +1759,48 @@ function TowerLibrarySection({ go, onReady }) {
     }, 900);
     return () => clearTimeout(t);
   }, [query, matchCount, bucketFilter]);
+  // Explicit submit (SPEC-1/SPEC-8): pushState the ?q= URL, show skeleton
+  // rows only for this initial submitted search (never per keystroke),
+  // and move focus to the results heading once the settled results land.
+  const onSearchSubmit = (e) => {
+    e.preventDefault();
+    try {
+      const url = new URL(window.location.href);
+      if (query) url.searchParams.set("q", query);
+      else url.searchParams.delete("q");
+      window.history.pushState({}, "", url);
+    } catch {
+      /* non-fatal */
+    }
+    if (query.trim().length >= 2) {
+      if (!blendedModel || blendedModel.query !== listQuery) setShowSkeleton(true);
+      setFocusResultsPending(true);
+    }
+  };
+  useEffect(() => {
+    if (!focusResultsPending) return;
+    if (blendedModel && !blendedModel.pending) {
+      setFocusResultsPending(false);
+      setShowSkeleton(false);
+      if (resultsHeadingRef.current) {
+        resultsHeadingRef.current.focus({ preventScroll: false });
+      }
+    }
+  }, [focusResultsPending, blendedModel]);
+  useEffect(() => {
+    if (showSkeleton && blendedModel && !blendedModel.pending) setShowSkeleton(false);
+  }, [showSkeleton, blendedModel]);
+  // Esc in the field (SPEC-8), in stages: first Esc clears the query,
+  // a second Esc (already empty) leaves the field.
+  const onSearchKeyDown = (e) => {
+    if (e.key !== "Escape") return;
+    if (query) {
+      e.preventDefault();
+      setQuery("");
+    } else if (searchInputRef.current) {
+      searchInputRef.current.blur();
+    }
+  };
   // Catalog failed even after the automatic retry: show the error state,
   // never a blank page. While the catalog loads, render the page shell —
   // the Tower boot loader covers the first seconds, but its failsafe can
@@ -1431,45 +1864,69 @@ function TowerLibrarySection({ go, onReady }) {
               <span>No accounts, no paywalls</span>
             </div>
             <div className="tower-controls">
-              <input
-                type="search"
-                className="tower-search tower-search-hero"
-                placeholder="Search titles, creators, tags… — or words inside the texts"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onFocus={() => requestCatalogIndex()}
-                aria-label="Search the library catalog and the full text of every work"
-              />
-              <div
-                className="tower-view-toggle"
-                role="group"
-                aria-label="Search mode"
-              >
-                <button
-                  type="button"
-                  className={searchMode === "both" ? " is-active" : ""}
-                  aria-pressed={searchMode === "both"}
-                  onClick={() => setSearchMode("both")}
+              {/* ONE search bar (Workstream D, SPEC-1): a real search
+                  landmark + form, one input, one submit. There is no
+                  mode switcher — every query always searches titles,
+                  authors and the full text together. */}
+              <search>
+                <form
+                  role="search"
+                  className="tower-search-form"
+                  onSubmit={onSearchSubmit}
                 >
-                  Titles + full text
-                </button>
-                <button
-                  type="button"
-                  className={searchMode === "titles" ? " is-active" : ""}
-                  aria-pressed={searchMode === "titles"}
-                  onClick={() => setSearchMode("titles")}
-                >
-                  Titles
-                </button>
-                <button
-                  type="button"
-                  className={searchMode === "fulltext" ? " is-active" : ""}
-                  aria-pressed={searchMode === "fulltext"}
-                  onClick={() => setSearchMode("fulltext")}
-                >
-                  Full text
-                </button>
-              </div>
+                  <label className="tower-search-label" htmlFor="tower-search-input">
+                    Search the library
+                  </label>
+                  <div className="tower-search-row">
+                    <input
+                      id="tower-search-input"
+                      ref={searchInputRef}
+                      type="search"
+                      name="q"
+                      className="tower-search tower-search-hero"
+                      placeholder="Search titles, creators, tags… — or words inside the texts"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      onFocus={() => requestCatalogIndex()}
+                      onKeyDown={onSearchKeyDown}
+                      onCompositionStart={() => { composingRef.current = true; }}
+                      onCompositionEnd={(e) => {
+                        composingRef.current = false;
+                        setQuery(e.target.value);
+                      }}
+                      enterKeyHint="search"
+                      autoComplete="off"
+                      autoCapitalize="off"
+                      spellCheck="true"
+                      autoFocus={
+                        typeof window !== "undefined" &&
+                        !!window.matchMedia &&
+                        window.matchMedia("(pointer: fine)").matches
+                      }
+                      aria-label="Search the library catalog and the full text of every work"
+                    />
+                    {query && (
+                      <button
+                        type="button"
+                        className="tower-search-clear"
+                        aria-label="Clear search"
+                        onClick={() => {
+                          setQuery("");
+                          if (searchInputRef.current) searchInputRef.current.focus();
+                        }}
+                      >
+                        ×
+                      </button>
+                    )}
+                    <button type="submit" className="tower-search-submit">
+                      Search
+                    </button>
+                  </div>
+                  <p className="tower-search-help">
+                    Searches titles, authors and the full text of every work.
+                  </p>
+                </form>
+              </search>
               {!fullIndexReady && isIndexInFlight() && (
                 <p className="tower-index-status" aria-live="polite">
                   Loading full catalog…
@@ -1674,13 +2131,23 @@ function TowerLibrarySection({ go, onReady }) {
               matchCount={matchCount}
               rowBudget={rowBudget}
               onLoadMore={() => setRowBudget((b) => b + TOWER_ROWS_PER_PAGE)}
-              deep={deep}
+              blendedModel={blendedModel}
+              searchPage={searchPage}
+              searchExtra={searchExtra}
+              onSearchPage={(p) => {
+                setSearchPage(p);
+                setSearchExtra(0);
+              }}
+              onSearchLoadMore={() => setSearchExtra((x) => x + SEARCH_PAGE_SIZE)}
+              onUndoRelax={() => setStrictQuery(listQuery)}
+              onUseSuggestion={(s) => setQuery(s)}
+              onClearQuery={() => setQuery("")}
+              showSkeleton={showSkeleton}
+              headingRef={resultsHeadingRef}
               q={q}
+              rawQuery={query}
               go={go}
-              matchesExpanded={matchesExpanded}
-              onToggleMatches={() => setMatchesExpanded((v) => !v)}
               viewMode={viewMode}
-              searchMode={searchMode}
               searching={!!q && q.trim().length >= 2}
             />
               </div>
@@ -2665,18 +3132,151 @@ export function DonatePage({ onReady }) {
 }
 
 // ----- Tower of Babel / library results -------------------------------------
-// The result count, index rows, and deep-search mentions, isolated behind
-// React.memo so keystrokes in the search box never touch the thousands of
-// catalog rows. TowerLibrary re-renders on every keystroke (the input is
-// bound to the raw query); every prop here derives from the *debounced*
-// list query, filter, sort, or row budget, which only change once typing
-// pauses — so typing stays at input speed while the list updates right
-// after.
-//
-// Only matching rows are mounted (derived from rowBudget + rankMap via
-// useMemo); each row is memoized on (artifact, rank). A filter update
-// therefore mounts exactly the visible slice instead of keeping thousands
-// of rows in the DOM — the mounted-row churn was the 500ms+ hitch mid-typing.
+// Browse mode renders the catalog in the chosen sort order, as before.
+// Search mode (Workstream D) renders ONE interleaved, relevance-ranked
+// list from the blended model: catalog-field matches and full-text
+// matches merged by a single BM25F score, deduped by work, each row
+// badged with WHY it matched and — for text matches — 1–2 highlighted
+// snippets that deep-link to the passage in the reader. There is no
+// separate "Mentions in texts" section any more.
+
+// Wrap query-token matches in <mark> inside a display string. Matching is
+// done on the normText fold of each word, so "café" highlights for "cafe".
+function highlightText(text, tokens) {
+  if (!text || !tokens || tokens.length === 0) return text;
+  const set = new Set(tokens);
+  const parts = text.split(/([A-Za-z0-9À-ÖØ-öø-ÿ'’-]+)/g);
+  return parts.map((part, i) => {
+    if (i % 2 === 1 && set.has(normText(part))) {
+      return <mark key={i}>{part}</mark>;
+    }
+    return part;
+  });
+}
+
+// Passage snippets for one text-matched work. Loads the real text lazily
+// (auto for the first rows, on demand for the rest) and shows at most 2
+// passages, each ≤200 chars, each linking into the reader at the exact
+// passage (?at=<offset>&hl=<start>-<end> — the reader's share-link scheme).
+function SnippetBlock({ item, go, auto }) {
+  const [snips, setSnips] = useState(null);
+  const [wanted, setWanted] = useState(auto);
+  useEffect(() => {
+    if (auto) setWanted(true);
+  }, [auto]);
+  useEffect(() => {
+    if (!wanted || snips || !item.doc || !item.parsedQuery) return;
+    let live = true;
+    getSnippets(item.doc, item.parsedQuery, { initial: 2 }).then((r) => {
+      if (live) setSnips(r);
+    });
+    return () => {
+      live = false;
+    };
+  }, [wanted, snips, item]);
+  if (!item.text) return null;
+  if (!wanted) {
+    return (
+      <button
+        type="button"
+        className="text-link tower-snippets-more"
+        onClick={() => setWanted(true)}
+      >
+        Show passages
+      </button>
+    );
+  }
+  if (!snips) {
+    return <p className="tower-snippets-status">Finding passages…</p>;
+  }
+  if (!snips.snippets.length) return null;
+  const shown = snips.snippets.slice(0, 2);
+  return (
+    <div className="tower-snippets tower-snippets-inline">
+      {shown.map((s, i) => (
+        <Fragment key={i}>
+          {i > 0 && <span className="tower-snippet-sep" aria-hidden="true">…</span>}
+          <button
+            type="button"
+            className="tower-snippet"
+            onClick={() =>
+              go(
+                `/tower-of-babel/library/${item.key}?at=${s.markStart}&hl=${s.markStart}-${s.markEnd}`
+              )
+            }
+            dangerouslySetInnerHTML={{ __html: s.html }}
+            aria-label={`Read this passage in ${item.artifact.title}`}
+          />
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+// One row of the unified search list.
+const UnifiedRow = memo(function UnifiedRow({ item, rank, go, tokens, autoSnippets }) {
+  const a = item.artifact;
+  const entryPath = `/tower-of-babel/library/${item.key}`;
+  const badges = [];
+  if (item.meta.title) badges.push("Title match");
+  else if (item.meta.creator) badges.push("Author match");
+  else if (item.meta.subject) badges.push("Subject match");
+  else if (item.meta.description) badges.push("Description match");
+  if (item.text) badges.push("Matched in the text");
+  if (badges.length === 0) badges.push("Matched in the text");
+  return (
+    <div className="tower-row tower-unified-row">
+      <span className="tower-row-index">{String(rank).padStart(2, "0")}</span>
+      <span className="tower-row-cover" aria-hidden="true">
+        <TowerCover a={a} />
+      </span>
+      <span className="tower-row-main">
+        <button
+          type="button"
+          className="tower-row-title-btn"
+          onClick={() => go(entryPath)}
+        >
+          <span className="tower-row-title">{highlightText(a.title, tokens)}</span>
+        </button>
+        {(a.creator || a.year) && (
+          <span className="tower-row-creator">
+            {highlightText(a.creator || "", tokens)}
+            {a.creator && a.year ? " · " : ""}
+            {a.year || ""}
+          </span>
+        )}
+        <span className="tower-match-badges">
+          {badges.map((b) => (
+            <span key={b} className="tower-tag tower-tag-badge">{b}</span>
+          ))}
+          {item.text && (
+            <span className="tower-tag tower-tag-hits">
+              {item.text.hits} {item.text.hits === 1 ? "mention" : "mentions"}
+            </span>
+          )}
+        </span>
+        {item.text ? (
+          <SnippetBlock item={item} go={go} auto={autoSnippets} />
+        ) : a.description ? (
+          <span className="tower-row-desc">{a.description}</span>
+        ) : null}
+      </span>
+      <span className="tower-row-tags">
+        <span className="tower-tag">{a.collection}</span>
+        {a.format && <span className="tower-tag">{a.format}</span>}
+      </span>
+      <button
+        type="button"
+        className="tower-row-arrow-btn"
+        onClick={() => go(entryPath)}
+        aria-label={`Open ${a.title}`}
+      >
+        <span className="tower-row-arrow" aria-hidden="true">↗</span>
+      </button>
+    </div>
+  );
+});
+
 const LibraryResults = memo(function LibraryResults({
   artifacts,
   towerOrder,
@@ -2685,121 +3285,239 @@ const LibraryResults = memo(function LibraryResults({
   matchCount,
   rowBudget,
   onLoadMore,
-  deep,
+  blendedModel,
+  searchPage,
+  searchExtra,
+  onSearchPage,
+  onSearchLoadMore,
+  onUndoRelax,
+  onUseSuggestion,
+  onClearQuery,
+  showSkeleton,
+  headingRef,
   q,
+  rawQuery,
   go,
-  matchesExpanded,
-  onToggleMatches,
   viewMode,
-  searchMode,
   searching,
 }) {
-  // Render only the matching rows instead of keeping all 3,448 mounted and
-  // flipping `hidden`: a filter update then reconciles dozens of rows
-  // instead of thousands, and the DOM stays small so style recalc and
-  // paint stay cheap. (The previous hidden-flip approach kept input fast
-  // but made every filter/sort update walk all 3,448 rows.)
+  // Browse-mode visible slice. Computed unconditionally (hooks order must
+  // never depend on the mode) and only used by the browse branch below.
   const visibleIndices = useMemo(() => {
-    // Searching: mount the top `rowBudget` by relevance rank — walking
-    // the sort order here would mount an alphabetical slice and the
-    // best answers (ranked first by the search memo) might never mount.
     if (rankedIndices) return rankedIndices.slice(0, rowBudget);
     const out = [];
-    // Walk the full sort order, collecting the first `rowBudget` MATCHING
-    // items — not just the first `rowBudget` in sort order (which breaks
-    // pagination when a collection filter is active).
     for (let k = 0; k < towerOrder.length && out.length < rowBudget; k++) {
       const i = towerOrder[k];
       if (rankMap.has(artifacts[i].artifact_id)) out.push(i);
     }
     return out;
   }, [artifacts, towerOrder, rankMap, rankedIndices, rowBudget]);
-  // While searching, the top "entries matching" list is capped at 2 rows
-  // with a show-more expander — so the "Mentions in texts" section stays
-  // visible on screen instead of being buried under dozens of title hits.
-  // The cap lifts (all title matches show) only when the deep search has
-  // nothing to show: it came back empty, is unavailable, or never runs
-  // (query under 2 chars). While it is idle/loading we keep the cap, so
-  // the list never jumps between capped and full as results stream in.
-  const SEARCH_TOP_N = 2;
-  const deepHasNothing =
-    deep.state === "empty" ||
-    deep.state === "unavailable" ||
-    (deep.state === "ready" && (!deep.works || deep.works.length === 0));
-  // Search-mode split (2026-10-25): "titles" shows only the title list
-  // (uncapped — there is no mentions section to protect), "fulltext"
-  // shows only the mentions section, "both" keeps the previous layout
-  // (title list capped at 2 rows while mentions are present).
-  const titleVisible = searchMode !== "fulltext";
-  const deepVisible = searchMode !== "titles";
-  const showExpander =
-    titleVisible &&
-    searching &&
-    deepVisible &&
-    !deepHasNothing &&
-    matchCount > SEARCH_TOP_N;
-  const shownIndices =
-    titleVisible && searching && deepVisible && !deepHasNothing && !matchesExpanded
-      ? visibleIndices.slice(0, SEARCH_TOP_N)
-      : visibleIndices;
+  // ------------------------- Search mode --------------------------------
+  if (searching && blendedModel) {
+    const model = blendedModel;
+    const items = model.items;
+    const pageCount = Math.max(1, Math.min(10, Math.ceil(items.length / SEARCH_PAGE_SIZE)));
+    const visibleCount =
+      searchPage >= 10
+        ? 10 * SEARCH_PAGE_SIZE + searchExtra
+        : searchPage * SEARCH_PAGE_SIZE;
+    // Cursor for Load more (SPEC-4): the last visible result's
+    // (score, work-id) — the array order is exactly that cursor order.
+    const visible = items.slice(0, visibleCount);
+    const pending = model.pending;
+    return (
+      <section aria-labelledby="tower-results-heading">
+        <h2
+          id="tower-results-heading"
+          className="tower-results-heading"
+          tabIndex={-1}
+          ref={headingRef}
+        >
+          Results
+        </h2>
+        <div
+          className={pending ? "tower-results-pending" : undefined}
+          aria-busy={pending || undefined}
+        >
+          <p className="tower-result-count" role="status" aria-live="polite">
+            {pending && items.length === 0
+              ? `Searching for “${rawQuery}”…`
+              : items.length > 0
+                ? `About ${formatAboutCount(model.total)} ${model.total === 1 ? "work" : "works"} for “${rawQuery}”`
+                : ""}
+          </p>
+          {model.deepState === "unavailable" && (
+            <p className="tower-mentions-status">
+              Full-text search is unavailable right now — the search index
+              is being rebuilt. Title and author results still work.
+            </p>
+          )}
+          {model.appliedCorrection && (
+            <p className="tower-relax-banner">
+              Showing results for “{model.appliedCorrection}” — spelling
+              corrected.{" "}
+              <button type="button" className="text-link" onClick={onUndoRelax}>
+                Search “{rawQuery}” exactly instead
+              </button>
+            </p>
+          )}
+          {model.stage && model.stage.kind === "stopwords" && (
+            <p className="tower-relax-banner">
+              Some very common words were ignored (
+              {model.droppedTerms.join(", ")}).{" "}
+              <button type="button" className="text-link" onClick={onUndoRelax}>
+                Search with all words instead
+              </button>
+            </p>
+          )}
+          {model.stage && model.stage.kind === "optional" && (
+            <p className="tower-relax-banner">
+              No works match all of “{rawQuery}” — showing works matching
+              most of your words.{" "}
+              <button type="button" className="text-link" onClick={onUndoRelax}>
+                Search for all words only
+              </button>
+            </p>
+          )}
+          {!model.appliedCorrection && model.suggestion && items.length > 0 && (
+            <p className="tower-relax-banner">
+              Did you mean{" "}
+              <button
+                type="button"
+                className="text-link"
+                onClick={() => onUseSuggestion(model.suggestion)}
+              >
+                {model.suggestion}
+              </button>
+              ?
+            </p>
+          )}
+          {showSkeleton && pending && items.length === 0 && (
+            <div className="tower-rows" aria-hidden="true">
+              {Array.from({ length: 5 }, (_, i) => (
+                <div key={i} className="tower-skel-row" />
+              ))}
+            </div>
+          )}
+          {items.length > 0 && (
+            <div className="tower-rows">
+              {visible.map((item, k) => (
+                <UnifiedRow
+                  key={item.key}
+                  item={item}
+                  rank={k + 1}
+                  go={go}
+                  tokens={model.tokens}
+                  autoSnippets={k < 10}
+                />
+              ))}
+            </div>
+          )}
+          {items.length === 0 && !pending && (
+            <div className="tower-zero">
+              <p className="tower-empty-results">
+                No works found for “{rawQuery}”.
+              </p>
+              {model.suggestion && (
+                <p>
+                  Did you mean{" "}
+                  <button
+                    type="button"
+                    className="text-link"
+                    onClick={() => onUseSuggestion(model.suggestion)}
+                  >
+                    {model.suggestion}
+                  </button>
+                  ?
+                </p>
+              )}
+              <p>
+                Check the spelling, try fewer or more general words, or
+                remove quotation marks to search for the words separately.
+              </p>
+              <p>
+                <button type="button" className="text-link" onClick={onClearQuery}>
+                  Clear the search and browse the whole library
+                </button>
+              </p>
+            </div>
+          )}
+          {items.length > SEARCH_PAGE_SIZE && (
+            <nav className="tower-pager" aria-label="Search result pages">
+              {Array.from({ length: pageCount }, (_, i) => i + 1).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  className={p === searchPage && searchExtra === 0 ? "is-active" : ""}
+                  aria-current={p === searchPage && searchExtra === 0 ? "page" : undefined}
+                  onClick={() => onSearchPage(p)}
+                >
+                  {p}
+                </button>
+              ))}
+              {(pageCount >= 10 || visibleCount < items.length) &&
+                visibleCount < items.length && (
+                  <button
+                    type="button"
+                    className="tower-pager-more"
+                    onClick={() => {
+                      if (searchPage < 10) onSearchPage(10);
+                      onSearchLoadMore();
+                    }}
+                  >
+                    Load more — showing {Math.min(visibleCount, items.length)} of{" "}
+                    {formatAboutCount(model.total)}
+                  </button>
+                )}
+            </nav>
+          )}
+        </div>
+      </section>
+    );
+  }
+  // ------------------------- Browse mode --------------------------------
   return (
     <>
-      {titleVisible && (
-        <p className="tower-result-count" aria-live="polite">
-          {matchCount} of {artifacts.length}{" "}
-          {artifacts.length === 1 ? "entry" : "entries"}
-          {q ? ` matching “${q}”` : ""}
-        </p>
-      )}
-      {titleVisible && matchCount === 0 && (
+      <p className="tower-result-count" aria-live="polite">
+        {matchCount} of {artifacts.length}{" "}
+        {artifacts.length === 1 ? "entry" : "entries"}
+        {q ? ` matching “${q}”` : ""}
+      </p>
+      {matchCount === 0 && (
         <p className="tower-empty-results">
           No entries match. Clear the search or choose a different collection.
         </p>
       )}
-      {titleVisible &&
-        (viewMode === "grid" ? (
-          <div className="tower-grid">
-            {shownIndices.map((i) => {
-              const a = artifacts[i];
-              return (
-                <TowerBookCard
-                  key={a.artifact_id}
-                  a={a}
-                  go={go}
-                  wide={a.collection === "PODCASTS"}
-                />
-              );
-            })}
-          </div>
-        ) : (
-          <div className="tower-rows">
-            {shownIndices.map((i) => {
-              const a = artifacts[i];
-              return (
-                <TowerRow
-                  key={a.artifact_id}
-                  a={a}
-                  index={rankMap.get(a.artifact_id)}
-                  go={go}
-                />
-              );
-            })}
-          </div>
-        ))}
-      {showExpander && (
-        <button
-          type="button"
-          className="tower-show-more"
-          aria-expanded={matchesExpanded}
-          onClick={onToggleMatches}
-        >
-          {matchesExpanded
-            ? "Show fewer"
-            : `Show all ${matchCount} matching entries`}
-        </button>
+      {viewMode === "grid" ? (
+        <div className="tower-grid">
+          {visibleIndices.map((i) => {
+            const a = artifacts[i];
+            return (
+              <TowerBookCard
+                key={a.artifact_id}
+                a={a}
+                go={go}
+                wide={a.collection === "PODCASTS"}
+              />
+            );
+          })}
+        </div>
+      ) : (
+        <div className="tower-rows">
+          {visibleIndices.map((i) => {
+            const a = artifacts[i];
+            return (
+              <TowerRow
+                key={a.artifact_id}
+                a={a}
+                index={rankMap.get(a.artifact_id)}
+                go={go}
+              />
+            );
+          })}
+        </div>
       )}
-      {/* Pagination: 50 per page, "Load more" for the next 50. */}
-      {titleVisible && !searching && matchCount > rowBudget && (
+      {!searching && matchCount > rowBudget && (
         <button
           type="button"
           className="tower-load-more"
@@ -2808,7 +3526,6 @@ const LibraryResults = memo(function LibraryResults({
           Load more — showing {Math.min(rowBudget, matchCount)} of {matchCount}
         </button>
       )}
-      {deepVisible && <DeepMentions deep={deep} go={go} searching={searching} />}
     </>
   );
 });
@@ -2857,164 +3574,6 @@ const TowerRow = memo(function TowerRow({ a, index, go }) {
     </button>
   );
 });
-
-// ----- Tower of Babel / deep full-text search --------------------------------
-// "Mentions in texts": every work where the query appears in the full text,
-// ranked by mention count, with expandable preview passages cut from the real
-// file. Snippets load lazily per work so a search never downloads the corpus.
-function DeepMentionRow({ work, rank, go, parsedQuery }) {
-  const [open, setOpen] = useState(false);
-  const [snips, setSnips] = useState(null);
-  const [showAll, setShowAll] = useState(false);
-  const doc = work.doc;
-  const toggle = () => {
-    const next = !open;
-    setOpen(next);
-    if (next && !snips) getSnippets(doc, parsedQuery).then(setSnips);
-  };
-  const shown = snips
-    ? showAll
-      ? snips.snippets
-      : snips.snippets.slice(0, snips.initial)
-    : [];
-  return (
-    <div className="tower-mention">
-      <button
-        type="button"
-        className="tower-row"
-        onClick={toggle}
-        aria-expanded={open}
-        aria-label={`${doc.title}, ${work.hits} mentions. ${open ? "Collapse" : "Expand"} passages.`}
-      >
-        <span className="tower-row-index">{String(rank).padStart(2, "0")}</span>
-        <span className="tower-row-main">
-          <span className="tower-row-title">{doc.title}</span>
-          {(doc.creator || doc.year) && (
-            <span className="tower-row-creator">
-              {doc.creator}
-              {doc.creator && doc.year ? " · " : ""}
-              {doc.year || ""}
-            </span>
-          )}
-        </span>
-        <span className="tower-row-tags">
-          <span className="tower-tag">{doc.collection}</span>
-          <span className="tower-tag tower-tag-hits">
-            {work.hits} {work.hits === 1 ? "mention" : "mentions"}
-          </span>
-        </span>
-        <span className="tower-row-arrow" aria-hidden="true">
-          {open ? "▾" : "▸"}
-        </span>
-      </button>
-      <div style={{ padding: "2px 0 10px 48px" }}>
-        <button
-          type="button"
-          className="text-link"
-          onClick={() => go(`/tower-of-babel/library/${doc.id}`)}
-          aria-label={`Open ${doc.title} entry page`}
-        >
-          Open entry ↗
-        </button>
-      </div>
-      {open && (
-        <div className="tower-snippets">
-          {!snips && <p className="tower-snippets-status">Finding passages…</p>}
-          {snips && snips.snippets.length === 0 && (
-            <p className="tower-snippets-status">No passages found in this text.</p>
-          )}
-          {shown.map((s, i) => (
-            <button
-              key={i}
-              type="button"
-              className="tower-snippet"
-              onClick={() => go(`/tower-of-babel/library/${doc.id}`)}
-              dangerouslySetInnerHTML={{ __html: s.html }}
-              aria-label={`Open ${doc.title}`}
-            />
-          ))}
-          {snips && !showAll && snips.total > snips.initial && (
-            <button
-              type="button"
-              className="text-link tower-snippets-more"
-              onClick={() => setShowAll(true)}
-            >
-              Show all {snips.total} passages
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function DeepMentions({ deep, go, searching }) {
-  // Unavailable must be VISIBLE, not silent: with no index (today, until
-  // the first R2 build lands) the section previously rendered nothing,
-  // so a searcher could not tell full-text search from a no-match. The
-  // notice disappears the moment the index answers, with no code change.
-  if (deep.state === "unavailable" && searching) {
-    return (
-      <div className="tower-mentions">
-        <div className="tower-mentions-head">
-          <div className="section-index">Mentions in texts</div>
-        </div>
-        <p className="tower-mentions-status">
-          Full-text search is unavailable right now — the search index is
-          being rebuilt. Title results still work.
-        </p>
-      </div>
-    );
-  }
-  if (deep.state === "idle" || deep.state === "unavailable") return null;
-  const works = deep.works || [];
-  return (
-    <div className="tower-mentions">
-      <div className="tower-mentions-head">
-        <div className="section-index">Mentions in texts</div>
-        {deep.state === "ready" && deep.totalWorks > 0 && (
-          <p className="tower-mentions-sub">
-            {deep.totalWorks} {deep.totalWorks === 1 ? "work" : "works"} ·{" "}
-            {deep.texts.toLocaleString()} texts searched
-          </p>
-        )}
-      </div>
-      {deep.state === "loading" && works.length === 0 && (
-        <p className="tower-mentions-status">Searching inside the texts…</p>
-      )}
-      {deep.state === "empty" && (
-        <p className="tower-mentions-status">
-          That word appears just about everywhere — try something more specific.
-        </p>
-      )}
-      {(deep.state === "ready" || (deep.state === "loading" && works.length > 0)) && (
-        <>
-          {deep.state === "ready" && works.length === 0 ? (
-            <p className="tower-mentions-status">No mentions found in any text.</p>
-          ) : (
-            <div className="tower-rows">
-              {works.map((w, i) => (
-                <DeepMentionRow
-                  key={w.doc.id}
-                  work={w}
-                  rank={i + 1}
-                  go={go}
-                  parsedQuery={deep.query}
-                />
-              ))}
-            </div>
-          )}
-          {deep.state === "ready" && deep.truncated && (
-            <p className="tower-mentions-status">
-              Showing the top {works.length} of {deep.totalWorks} — refine your
-              search to narrow it.
-            </p>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
 export function LibraryArtifact({ go, params, onReady }) {
   const [artifacts, catalogError, , retryArtifacts] = useArtifacts();
   // Warm the tower-files manifest chunk while the entry paints, so the

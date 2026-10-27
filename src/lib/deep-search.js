@@ -8,14 +8,23 @@
 // Everything here degrades gracefully: if the index is missing or a fetch
 // fails, callers get { state: "unavailable" } and the title search is
 // unaffected.
+//
+// Workstream D (SPEC-5/SPEC-6): fetches take an AbortSignal plus an 8s
+// timeout (a hung shard must never wedge the search bar), and works are
+// ranked by BM25 — saturating term frequency, normalized by each work's
+// own word count — instead of raw mention counts, which made the longest
+// book win every common-term query.
 
 import {
-  parseQuery,
+  parseQueryV2,
   shardFor,
   tokenizeWithOffsets,
   stem,
   SHARD_COUNT,
 } from "./search-text.js";
+import { bm25Term } from "./search-rank.js";
+
+const FETCH_TIMEOUT_MS = 8000;
 
 let manifestPromise = null;
 const shardCache = new Map(); // "buildId/idx" -> Promise<postings>
@@ -39,30 +48,56 @@ function stemCached(w) {
   return s;
 }
 
-async function getManifest() {
+// fetch with the caller's signal composed with an 8s timeout. Whichever
+// fires first aborts; AbortError propagates to the caller, which treats
+// a superseded query as "no result" (never as an error state).
+async function fetchTO(url, signal) {
+  const ctl = new AbortController();
+  const onAbort = () => ctl.abort(signal && signal.reason);
+  if (signal) {
+    if (signal.aborted) throw signal.reason || new DOMException("Aborted", "AbortError");
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+  const t = setTimeout(() => ctl.abort(new DOMException("Timeout", "TimeoutError")), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { signal: ctl.signal });
+  } finally {
+    clearTimeout(t);
+    if (signal) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+async function getManifest(signal) {
   if (!manifestPromise) {
-    manifestPromise = fetch("/search-index/manifest.json")
+    manifestPromise = fetchTO("/search-index/manifest.json", signal)
       .then((r) => (r.ok ? r.json() : null))
       .then((m) => (m && Array.isArray(m.docs) && m.docs.length ? m : null))
-      .catch(() => null);
+      .catch((e) => {
+        if (e && e.name === "AbortError") throw e;
+        return null;
+      });
+    // A failed/aborted manifest fetch must not poison later searches.
+    manifestPromise.catch(() => { manifestPromise = null; });
   }
   return manifestPromise;
 }
 
-function getShard(manifest, idx) {
+function getShard(manifest, idx, signal) {
   const key = `${manifest.buildId}/${idx}`;
   if (!shardCache.has(key)) {
-    shardCache.set(
-      key,
-      fetch(`/search-index/${manifest.buildId}/terms/${idx}.json`)
-        .then((r) => (r.ok ? r.json() : {}))
-        .catch(() => ({}))
-    );
+    const p = fetchTO(`/search-index/${manifest.buildId}/terms/${idx}.json`, signal)
+      .then((r) => (r.ok ? r.json() : {}))
+      .catch((e) => {
+        shardCache.delete(key);
+        if (e && (e.name === "AbortError" || e.name === "TimeoutError")) throw e;
+        return {};
+      });
+    shardCache.set(key, p);
   }
   return shardCache.get(key);
 }
 
-async function getAnalyzed(file) {
+async function getAnalyzed(file, signal) {
   if (!textCache.has(file)) {
     if (textCache.size >= MAX_CACHED_TEXTS) {
       textCache.delete(textCache.keys().next().value);
@@ -70,7 +105,7 @@ async function getAnalyzed(file) {
     textCache.set(
       file,
       (async () => {
-        const text = await fetch(file)
+        const text = await fetchTO(file, signal)
           .then((r) => (r.ok ? r.text() : ""))
           .catch(() => "");
         if (!text) return { text: "", tokens: [], stems: [] };
@@ -100,41 +135,60 @@ function findPhraseMatches(stems, phrase) {
 }
 
 // Deep search. Union semantics: a work matches if it contains any query term
-// or any quoted phrase; ranked by total mention count, descending.
+// or any quoted phrase; ranked by BM25 (saturating, length-normalized).
 //
 // Any unexpected failure (stale manifest, corrupt shard, doc index out of
 // range) degrades to { state: "unavailable" } — never an unhandled rejection
-// that would leave the UI stuck in "loading".
-export async function searchDeep(rawQuery, { maxWorks = 60 } = {}) {
-  const q = parseQuery(rawQuery);
+// that would leave the UI stuck in "loading". An aborted/timed-out request
+// is NOT a failure: it returns { state: "aborted" } so the caller can keep
+// showing the previous results.
+export async function searchDeep(rawQuery, { maxWorks = 250, signal = null } = {}) {
+  const q = parseQueryV2(rawQuery);
   if (q.unsearchable) return { state: "empty" };
-  const manifest = await getManifest();
+  let manifest;
+  try {
+    manifest = await getManifest(signal);
+  } catch {
+    return { state: "aborted" };
+  }
   if (!manifest) return { state: "unavailable" };
   try {
-    return await searchDeepInner(q, manifest, maxWorks);
-  } catch {
+    return await searchDeepInner(q, manifest, maxWorks, signal);
+  } catch (e) {
+    if (e && (e.name === "AbortError" || e.name === "TimeoutError")) {
+      return { state: "aborted" };
+    }
     return { state: "unavailable" };
   }
 }
 
-async function searchDeepInner(q, manifest, maxWorks) {
-
+async function searchDeepInner(q, manifest, maxWorks, signal) {
   const shards = manifest.shards || SHARD_COUNT;
-  const termStems = [...new Set(q.terms)];
+  const docs = manifest.docs;
+  const N = docs.length;
+  const avgWords =
+    docs.reduce((s, d) => s + (d.words || 0), 0) / Math.max(1, N) || 1;
+  // Index terms (parseQuery) + folded variants (café -> cafe) as a union:
+  // either spelling in the text is a match.
+  const termStems = [...new Set([...q.terms, ...q.foldedTerms])];
   const phraseStemSets = q.phrases.map((p) => [...new Set(p.indexable)]);
   const allStems = [...new Set([...termStems, ...phraseStemSets.flat()])];
 
   const idxs = [...new Set(allStems.map((s) => shardFor(s, shards)))];
-  const loaded = await Promise.all(idxs.map((i) => getShard(manifest, i)));
+  const loaded = await Promise.all(idxs.map((i) => getShard(manifest, i, signal)));
   const byIdx = new Map(idxs.map((idx, k) => [idx, loaded[k]]));
   const postingsOf = (s) => byIdx.get(shardFor(s, shards))[s] || [];
 
-  // Term scores: docIdx -> { hits, terms }
+  // BM25 per work: docIdx -> { score, hits, terms }
   const scores = new Map();
   for (const s of termStems) {
-    for (const [docIdx, count] of postingsOf(s)) {
+    const postings = postingsOf(s);
+    const df = postings.length;
+    if (!df) continue;
+    for (const [docIdx, count] of postings) {
       let e = scores.get(docIdx);
-      if (!e) { e = { hits: 0, terms: 0 }; scores.set(docIdx, e); }
+      if (!e) { e = { score: 0, hits: 0, terms: 0 }; scores.set(docIdx, e); }
+      e.score += bm25Term(count, docs[docIdx].words || avgWords, avgWords, df, N);
       e.hits += count;
       e.terms += 1;
     }
@@ -145,24 +199,26 @@ async function searchDeepInner(q, manifest, maxWorks) {
   // of entries for common words — this keeps the input responsive while a
   // heavy search resolves.
   await new Promise((r) => setTimeout(r, 0));
+  if (signal && signal.aborted) return { state: "aborted" };
 
   // Phrase matches: verify against the real text (top candidates only).
+  // Quoted phrases are exact-only — no stemming of the phrase pattern
+  // beyond what the index itself does, no fuzz, no relaxation.
   for (const p of q.phrases) {
-    // Candidates must contain every indexable stem of the phrase.
     let candidates = null;
     for (const s of phraseStemSets[q.phrases.indexOf(p)]) {
-      const docs = new Set(postingsOf(s).map(([d]) => d));
-      candidates = candidates === null ? docs : new Set([...candidates].filter((d) => docs.has(d)));
+      const docsWith = new Set(postingsOf(s).map(([d]) => d));
+      candidates = candidates === null ? docsWith : new Set([...candidates].filter((d) => docsWith.has(d)));
       if (candidates.size === 0) break;
     }
     if (!candidates || candidates.size === 0) continue;
     const ordered = [...candidates]
-      .map((d) => [d, (scores.get(d) || { hits: 0 }).hits])
+      .map((d) => [d, (scores.get(d) || { score: 0 }).score])
       .sort((a, b) => b[1] - a[1])
       .slice(0, 15)
       .map(([d]) => d);
     const analyzed = await Promise.all(
-      ordered.map((d) => getAnalyzed(manifest.docs[d].file))
+      ordered.map((d) => getAnalyzed(manifest.docs[d].file, signal))
     );
     ordered.forEach((docIdx, k) => {
       const { tokens, stems } = analyzed[k];
@@ -170,16 +226,23 @@ async function searchDeepInner(q, manifest, maxWorks) {
       const matches = findPhraseMatches(stems, p.full);
       if (matches.length === 0) return;
       let e = scores.get(docIdx);
-      if (!e) { e = { hits: 0, terms: 0 }; scores.set(docIdx, e); }
+      if (!e) { e = { score: 0, hits: 0, terms: 0 }; scores.set(docIdx, e); }
+      // A verified exact phrase is the strongest full-text signal there is.
+      e.score += 10 + matches.length;
       e.hits += matches.length;
       e.terms += 1;
+      e.phrase = true;
     });
   }
 
-  const ranked = [...scores.entries()].sort((a, b) => b[1].hits - a[1].hits);
+  const ranked = [...scores.entries()].sort(
+    (a, b) => b[1].score - a[1].score || b[1].hits - a[1].hits
+  );
   const works = ranked.slice(0, maxWorks).map(([docIdx, s]) => ({
     doc: manifest.docs[docIdx],
     hits: s.hits,
+    score: s.score,
+    phrase: !!s.phrase,
   }));
   return {
     state: "ready",
@@ -197,12 +260,15 @@ function esc(s) {
 }
 
 // Cut highlighted preview windows around every query hit in a work's text.
-// Returns { snippets: [{ html }], total } — snippets capped for sanity.
+// SPEC-3: each snippet is at most 200 characters, and carries the char
+// offsets the reader's ?at=<offset>&hl=<start>-<end> deep link needs.
+// Returns { snippets: [{ html, charStart, charEnd, markStart, markEnd }],
+//           total }.
 export async function getSnippets(doc, q, { initial = 6, hardCap = 120 } = {}) {
-  const { text, tokens, stems } = await getAnalyzed(doc.file);
+  const { text, tokens, stems } = await getAnalyzed(doc.file, null);
   if (tokens.length === 0) return { snippets: [], total: 0 };
 
-  const wanted = new Set(q.terms);
+  const wanted = new Set([...(q.terms || []), ...(q.foldedTerms || [])]);
   const ranges = []; // {start, end} token-index ranges of matches
   const seenAt = new Set();
   for (let i = 0; i < tokens.length; i++) {
@@ -211,7 +277,7 @@ export async function getSnippets(doc, q, { initial = 6, hardCap = 120 } = {}) {
       ranges.push({ start: i, end: i });
     }
   }
-  for (const p of q.phrases) {
+  for (const p of q.phrases || []) {
     for (const r of findPhraseMatches(stems, p.full)) {
       for (let i = r.start; i <= r.end; i++) seenAt.add(i);
       ranges.push(r);
@@ -241,9 +307,10 @@ export async function getSnippets(doc, q, { initial = 6, hardCap = 120 } = {}) {
 
   const total = windows.length;
   const shown = windows.slice(0, hardCap);
+  const MAX_CHARS = 200; // SPEC-3 snippet cap
   const snippets = shown.map((w) => {
-    const charStart = tokens[w.start].start;
-    const charEnd = tokens[w.end].end;
+    const winStart = tokens[w.start].start;
+    const winEnd = tokens[w.end].end;
     // Collect match sub-ranges inside this window (char offsets).
     const marks = [];
     for (const r of merged) {
@@ -253,17 +320,35 @@ export async function getSnippets(doc, q, { initial = 6, hardCap = 120 } = {}) {
       marks.push([tokens[a].start, tokens[b].end]);
     }
     marks.sort((a, b) => a[0] - b[0]);
+    // Trim the window to <=200 chars, centred on the first match.
+    let charStart = winStart;
+    let charEnd = winEnd;
+    if (winEnd - winStart > MAX_CHARS && marks.length) {
+      charStart = Math.max(winStart, marks[0][0] - 90);
+      charEnd = Math.min(winEnd, charStart + MAX_CHARS);
+      if (charEnd - charStart < MAX_CHARS) {
+        charStart = Math.max(winStart, charEnd - MAX_CHARS);
+      }
+    }
     let html = "";
     let pos = charStart;
     for (const [a, b] of marks) {
-      html += esc(text.slice(pos, a));
-      html += `<mark>${esc(text.slice(a, b))}</mark>`;
-      pos = b;
+      const ma = Math.max(a, charStart), mb = Math.min(b, charEnd);
+      if (mb <= ma || ma < pos) continue;
+      html += esc(text.slice(pos, ma));
+      html += `<mark>${esc(text.slice(ma, mb))}</mark>`;
+      pos = mb;
     }
     html += esc(text.slice(pos, charEnd));
-    const prefix = w.start > 0 ? "… " : "";
-    const suffix = w.end < tokens.length - 1 ? " …" : "";
-    return { html: prefix + html + suffix };
+    const prefix = charStart > 0 ? "… " : "";
+    const suffix = charEnd < text.length ? " …" : "";
+    return {
+      html: prefix + html + suffix,
+      charStart,
+      charEnd,
+      markStart: marks.length ? marks[0][0] : charStart,
+      markEnd: marks.length ? marks[0][1] : charEnd,
+    };
   });
 
   return { snippets, total, initial };
