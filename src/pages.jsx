@@ -2397,6 +2397,313 @@ export function SuggestEntry({ go }) {
   );
 }
 
+// ----- Tower API access (Workstream E: merged onto the Commissions Desk) --
+// The complete API acquisition experience — live status, plans +
+// subscribe, and the free-key form — rendered at the TOP of the
+// Commissions Desk page (/tower-of-babel/library/research), above the
+// desk content, which is unchanged below it. The long-form
+// documentation stays on /tower-of-babel/api (prominent link at the
+// bottom of this block); that page is NOT changed by this merge.
+// The logic below is copied 1:1 from TowerApiPage in this file: the
+// same GET /api/status fetch, the same gating (the free-key form
+// renders ONLY when the status endpoint reports keys_configured;
+// subscribe buttons render ONLY when it reports subscriptions_open),
+// the same POST /api/subscribe -> Stripe Checkout redirect, and the
+// same POST /api/keys mint (the key is delivered by email only and
+// never appears in a response or on the page). All copy comes from
+// towerOfBabel.apiPage (src/content/tower-api.js) — the same source the
+// API page renders — so the two surfaces cannot drift in wording.
+export function TowerApiAccess({ go }) {
+  const api = towerOfBabel.apiPage;
+  // Live gate for paid plans: subscribe buttons render ONLY when the
+  // status endpoint says subscriptions are open (API_LIVE=1 server-side).
+  // Until then the block shows the not-open-yet notice — no dead buttons,
+  // and no checkout a key could not be delivered for.
+  const [apiStatus, setApiStatus] = useState(null);
+  useEffect(() => {
+    let live = true;
+    fetch("/api/status")
+      .then((r) => r.json())
+      .then((d) => {
+        if (live) setApiStatus(d && typeof d === "object" ? d : {});
+      })
+      .catch(() => {
+        if (live) setApiStatus({});
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+  const subscriptionsOpen = !!(apiStatus && apiStatus.subscriptions_open);
+  // The free-key form renders ONLY when the status endpoint confirms
+  // the key system is configured — until then the block shows the
+  // switched-on-soon notice instead of a form that can only 503.
+  const keysConfigured = !!(apiStatus && apiStatus.keys_configured);
+  const webhookConfigured = !!(apiStatus && apiStatus.webhook_configured);
+
+  const [billing, setBilling] = useState("monthly");
+  const [subscribing, setSubscribing] = useState("");
+  const [subError, setSubError] = useState("");
+  const subscribe = async (plan) => {
+    if (subscribing) return;
+    setSubscribing(plan);
+    setSubError("");
+    try {
+      const res = await fetch("/api/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan, billing }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 503) {
+        setSubError(api.subscribePending);
+        setSubscribing("");
+        return;
+      }
+      if (!res.ok || !data.url) throw new Error("checkout failed");
+      window.location.href = data.url;
+    } catch {
+      setSubError("Checkout could not be started — please try again.");
+      setSubscribing("");
+    }
+  };
+
+  // Free key mint: POST /api/keys. The key itself is delivered by email
+  // only and never appears in the response or on this page. A 503 means
+  // the key system is not switched on yet — show the graceful notice.
+  const [keyEmail, setKeyEmail] = useState("");
+  const [keyHoneypot, setKeyHoneypot] = useState("");
+  const [keySending, setKeySending] = useState(false);
+  const [keyState, setKeyState] = useState("idle"); // idle | sent | pending | error
+  const onKeySubmit = async (e) => {
+    e.preventDefault();
+    if (keySending) return;
+    setKeySending(true);
+    setKeyState("idle");
+    try {
+      const res = await fetch("/api/keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: keyEmail, website: keyHoneypot }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 503) {
+        setKeyState("pending");
+      } else if (res.ok && data.ok) {
+        setKeyState("sent");
+      } else {
+        setKeyState("error");
+      }
+    } catch {
+      setKeyState("error");
+    }
+    setKeySending(false);
+  };
+
+  const paidTiers = api.tiers.filter((t) => t.priceMonthly);
+  return (
+    <section className="section desk-section desk-api" aria-label="Tower API access">
+      <div className="suggest-wrap">
+        <div className="section-index">TOWER API — PROGRAMMATIC ACCESS</div>
+        <p className="body-copy desk-copy">
+          Prefer a machine to do the fetching? API v1 gives programs
+          server-side search, full-text delivery, and bulk snapshots of
+          this same library — a free key by email, paid tiers above it.
+          The texts themselves stay free to read here either way; a key
+          buys the maintained pipe, the throughput, and someone standing
+          behind it.
+        </p>
+        <ul className="desk-api-status" aria-label="Live API status">
+          {apiStatus === null ? (
+            <li>Live status — checking…</li>
+          ) : (
+            <>
+              <li>Keys — {keysConfigured ? "available" : "not yet open"}</li>
+              <li>
+                Subscriptions — {subscriptionsOpen ? "open" : "not yet open"}
+              </li>
+              <li>
+                Webhook — {webhookConfigured ? "configured" : "not configured"}
+              </li>
+            </>
+          )}
+        </ul>
+        <div className="section-index desk-block-title">API PLANS</div>
+        <div className="capability-list desk-api-tiers">
+          {api.tiers.map((t, i) => (
+            <div className="cap-row" key={t.id}>
+              <span>{String(i + 1).padStart(2, "0")}</span>
+              <h3>{t.name}</h3>
+              <p>
+                {(t.price ||
+                  (billing === "annual" ? t.priceAnnual : t.priceMonthly)) +
+                  " · " +
+                  t.limit +
+                  ". " +
+                  t.blurb}
+              </p>
+            </div>
+          ))}
+        </div>
+        {subscriptionsOpen ? (
+          <>
+            <div
+              className="desk-sample-actions"
+              role="group"
+              aria-label="Billing period"
+            >
+              <button
+                type="button"
+                className="tower-access-btn"
+                aria-pressed={billing === "monthly"}
+                onClick={() => setBilling("monthly")}
+              >
+                MONTHLY
+              </button>
+              <button
+                type="button"
+                className="tower-access-btn"
+                aria-pressed={billing === "annual"}
+                onClick={() => setBilling("annual")}
+              >
+                ANNUAL
+              </button>
+            </div>
+            <div className="desk-sample-actions">
+              {paidTiers.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className="tower-access-btn"
+                  disabled={!!subscribing}
+                  onClick={() => subscribe(t.id)}
+                >
+                  {subscribing === t.id
+                    ? "OPENING CHECKOUT…"
+                    : `SUBSCRIBE — ${t.name.toUpperCase()} ${
+                        billing === "annual" ? t.priceAnnual : t.priceMonthly
+                      }`}{" "}
+                  <span aria-hidden="true">↗</span>
+                </button>
+              ))}
+            </div>
+            {subError && (
+              <p className="suggest-error" role="alert">
+                {subError}
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="body-copy desk-copy">{api.subscribePending}</p>
+        )}
+        <div className="desk-sample-actions">
+          {PORTAL_URL ? (
+            <a className="tower-access-btn" href={PORTAL_URL}>
+              MANAGE BILLING <span aria-hidden="true">↗</span>
+            </a>
+          ) : (
+            <p className="body-copy">{api.billingNote}</p>
+          )}
+        </div>
+        <p className="body-copy desk-copy">{api.refundNote}</p>
+        <div className="section-index desk-block-title">{api.keyForm.heading}</div>
+        <p className="body-copy desk-copy">{api.keyForm.body}</p>
+        {!keysConfigured ? (
+          <p className="body-copy" role="status">
+            {api.keyForm.pending}
+          </p>
+        ) : keyState === "sent" ? (
+          <p className="body-copy" role="status">
+            {api.keyForm.sent}
+          </p>
+        ) : (
+          <form
+            className="suggest-form"
+            onSubmit={onKeySubmit}
+            aria-label="Get a free API key"
+          >
+            <div className="suggest-field">
+              <label htmlFor="api-key-email">
+                Email{" "}
+                <span className="req" aria-hidden="true">
+                  *
+                </span>
+              </label>
+              <input
+                id="api-key-email"
+                name="email"
+                type="email"
+                required
+                value={keyEmail}
+                onChange={(e) => setKeyEmail(e.target.value)}
+                autoComplete="email"
+                placeholder="you@example.org"
+              />
+            </div>
+            <div
+              aria-hidden="true"
+              style={{
+                position: "absolute",
+                left: "-9999px",
+                top: "auto",
+                width: "1px",
+                height: "1px",
+                overflow: "hidden",
+              }}
+            >
+              <label htmlFor="api-key-website">Website</label>
+              <input
+                id="api-key-website"
+                name="website"
+                type="text"
+                value={keyHoneypot}
+                onChange={(e) => setKeyHoneypot(e.target.value)}
+                tabIndex={-1}
+                autoComplete="off"
+              />
+            </div>
+            {keyState === "pending" && (
+              <p className="body-copy" role="status">
+                {api.keyForm.pending}
+              </p>
+            )}
+            {keyState === "error" && (
+              <p className="suggest-error" role="alert">
+                Something went wrong sending your key — please try again.
+              </p>
+            )}
+            <div className="suggest-actions">
+              <button
+                type="submit"
+                className="tower-access-btn suggest-submit"
+                disabled={keySending}
+              >
+                {keySending ? "SENDING…" : api.keyForm.button}{" "}
+                <span aria-hidden="true">↗</span>
+              </button>
+            </div>
+          </form>
+        )}
+        <div className="desk-sample-actions">
+          <button
+            type="button"
+            className="tower-access-btn"
+            onClick={() => go("/tower-of-babel/api")}
+          >
+            READ THE FULL API DOCUMENTATION{" "}
+            <span aria-hidden="true">↗</span>
+          </button>
+        </div>
+        <p className="desk-note">
+          Endpoints, request limits, versioning, licensing, and the keyless
+          catalog surface — everything a person or an agent needs to use
+          the API is documented on the API page.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 // ----- Tower of Babel / Commissions Desk -----------------------------------
 // One service: commission a sourced research brief, a curated collection
 // of texts, or both. Intake POSTs to /api/commission (Resend to the lab
@@ -2506,6 +2813,7 @@ export function CommissionsDesk({ go }) {
         <h1>{d.heading}</h1>
         <p className="display-copy">{d.intro}</p>
       </section>
+      <TowerApiAccess go={go} />
       <section className="section desk-section">
         <div className="suggest-wrap">
           {d.what.map((p, i) => (
