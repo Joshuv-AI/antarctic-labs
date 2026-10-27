@@ -29,11 +29,7 @@ import {
   usageStats,
   rateHeaders,
 } from "../../_lib/api-auth.js";
-import {
-  getShardRecords,
-  SHARD_COUNT,
-  getRecordById,
-} from "../../_lib/tower-catalog.js";
+import { getRecordById } from "../../_lib/tower-catalog.js";
 import { shardFor, stem } from "../../_lib/search-text-lite.js";
 
 // ---------------------------------------------------------------------
@@ -100,15 +96,22 @@ async function legacySearch(context) {
 }
 
 // ---------------------------------------------------------------------
-// Keyed path — the Phase 2 keyed search handler, verbatim behavior.
+// Keyed path — the Phase 2 keyed search handler.
 // Default mode searches the catalog (title + creator substring,
 // case-insensitive; title matches rank before creator matches, then
-// title A–Z) using the same shard access as the entry pages
-// (functions/_lib/tower-catalog.js). mode=fulltext additionally
-// consults the deep-search index manifest; while that index is not
-// live, the answer is the catalog result set plus a note saying so —
-// never an error. Auth: Bearer key (any plan). Consumes one unit of
-// daily quota.
+// title A–Z) on the SAME bounded compact-index scan the keyless path
+// uses (searchWorks in _lib/tower-api.js): at most a couple of compact
+// index shards are parsed per step and the opaque cursor is walked
+// internally until the page fills or the index is exhausted. Only the
+// capped result page is hydrated to full records (getRecordById).
+// The previous implementation parsed all 25 FULL catalog shards
+// (descriptions included) per request and was killed by the Workers
+// CPU limit in production (503 "error code: 1102" on every call).
+// mode=fulltext additionally consults the deep-search index manifest;
+// while that index is not live, the answer is the catalog result set
+// plus a note saying so — never an error. Auth: Bearer key (any plan).
+// Quota is charged ONLY after results are computed successfully: a
+// search that fails upstream never bills the key.
 // ---------------------------------------------------------------------
 const SITE = "https://antarctic-labs.com";
 
@@ -124,29 +127,66 @@ function recordOut(r) {
   };
 }
 
+// Catalog search on the bounded compact-index scan. Returns
+// { total, results, truncated } or null when the catalog data cannot
+// be read at all (the caller then answers 502 and charges no quota).
 async function catalogSearch(q, limit) {
-  const ql = q.toLowerCase();
-  const found = [];
-  for (let i = 0; i < SHARD_COUNT; i++) {
-    const records = await getShardRecords(i).catch(() => null);
-    if (!records) continue;
-    for (const r of records) {
-      if (!r || !r.title) continue;
-      const t = r.title.toLowerCase();
-      const c = (r.creator || "").toLowerCase();
-      if (t.includes(ql)) found.push({ r, score: 0 });
-      else if (c.includes(ql)) found.push({ r, score: 1 });
-    }
-    if (found.length >= 1000) break;
+  const collected = [];
+  let cursor = null;
+  let exhausted = false;
+  // 10 compact shards / ≤2 parsed per searchWorks step ⇒ ≤5 steps to
+  // cover the index; the step cap is a hard bound, not an expectation.
+  for (let step = 0; step < 10 && collected.length < limit; step++) {
+    const out = await searchWorks({
+      query: q,
+      field: "any",
+      limit: limit - collected.length,
+      cursor,
+    });
+    if (!out) return null;
+    if (out.error) break; // degenerate query (no terms): no matches
+    collected.push(...out.results);
+    exhausted = !!out.exhausted;
+    if (!out.next_cursor) break;
+    cursor = decodeCursor(out.next_cursor);
+    if (!cursor) break;
   }
-  found.sort(
+  // Hydrate only the capped page into the keyed result shape; a
+  // record that cannot be hydrated still answers from the compact
+  // projection (rights/download unknown rather than invented).
+  const ql = q.toLowerCase();
+  const ranked = [];
+  for (const item of collected) {
+    let rec = null;
+    const got = await getRecordById(item.id).catch(() => null);
+    if (got && got.state === "ok") rec = got.record;
+    const out = recordOut(
+      rec || {
+        artifact_id: item.id,
+        title: item.title,
+        creator: item.creator,
+        year: item.year,
+        collection: item.collection,
+        rights_status: null,
+        download_url: null,
+      }
+    );
+    const score = String(out.title || "").toLowerCase().includes(ql)
+      ? 0
+      : String(out.creator || "").toLowerCase().includes(ql)
+        ? 1
+        : 2;
+    ranked.push({ out, score });
+  }
+  ranked.sort(
     (a, b) =>
       a.score - b.score ||
-      String(a.r.title).localeCompare(String(b.r.title))
+      String(a.out.title).localeCompare(String(b.out.title))
   );
   return {
-    total: found.length,
-    results: found.slice(0, limit).map((f) => recordOut(f.r)),
+    total: ranked.length,
+    results: ranked.map((f) => f.out),
+    truncated: collected.length >= limit && !exhausted,
   };
 }
 
@@ -238,12 +278,65 @@ async function keyedSearch(context) {
     const stats = await usageStats(env, a.key);
     return json({ ok: false, error: "q is required" }, 400, rateHeaders(stats));
   }
+  if (q.length > MAX_QUERY_LENGTH) {
+    const stats = await usageStats(env, a.key);
+    return json(
+      { ok: false, error: `q must be at most ${MAX_QUERY_LENGTH} characters` },
+      400,
+      rateHeaders(stats)
+    );
+  }
   let limit = Number(url.searchParams.get("limit") || 20);
   if (!Number.isFinite(limit) || limit < 1) limit = 20;
   limit = Math.min(100, Math.floor(limit));
   const mode = url.searchParams.get("mode") || "";
 
+  // Compute FIRST, charge after success. The old order consumed quota
+  // before the scan ran, so searches the platform killed mid-flight
+  // (the 1102s) still billed the key. A failed search now costs
+  // nothing; a successful one is charged exactly once, below.
+  let payload;
+  try {
+    if (mode === "fulltext") {
+      const ft = await fulltextSearch(q, limit).catch(() => null);
+      if (ft) {
+        payload = { ok: true, mode: "fulltext", count: ft.total, results: ft.results };
+      } else {
+        const cat = await catalogSearch(q, limit);
+        if (!cat) {
+          return json({ ok: false, error: "catalog data temporarily unavailable" }, 502);
+        }
+        payload = {
+          ok: true,
+          mode: "catalog",
+          count: cat.total,
+          results: cat.results,
+          note: "full-text search activates when the deep-search index is live; returning catalog matches",
+          ...(cat.truncated ? { truncated: true } : {}),
+        };
+      }
+    } else {
+      const cat = await catalogSearch(q, limit);
+      if (!cat) {
+        return json({ ok: false, error: "catalog data temporarily unavailable" }, 502);
+      }
+      payload = {
+        ok: true,
+        mode: "catalog",
+        count: cat.total,
+        results: cat.results,
+        ...(cat.truncated ? { truncated: true } : {}),
+      };
+    }
+  } catch (err) {
+    console.error("keyed search failed", err);
+    return json({ ok: false, error: "search failed" }, 502);
+  }
+
   const quota = await consumeQuota(env, a.key);
+  if (quota.error) {
+    return json({ ok: false, error: "usage counter unavailable" }, 500);
+  }
   if (!quota.ok) {
     return json(
       { ok: false, error: "daily limit exceeded", limit: quota.stats.limit, reset: quota.stats.reset },
@@ -251,33 +344,7 @@ async function keyedSearch(context) {
       rateHeaders(quota.stats)
     );
   }
-  const headers = rateHeaders(quota.stats);
-
-  if (mode === "fulltext") {
-    const ft = await fulltextSearch(q, limit).catch(() => null);
-    if (ft) {
-      return json({ ok: true, mode: "fulltext", count: ft.total, results: ft.results }, 200, headers);
-    }
-    const cat = await catalogSearch(q, limit);
-    return json(
-      {
-        ok: true,
-        mode: "catalog",
-        count: cat.total,
-        results: cat.results,
-        note: "full-text search activates when the deep-search index is live; returning catalog matches",
-      },
-      200,
-      headers
-    );
-  }
-
-  const cat = await catalogSearch(q, limit);
-  return json(
-    { ok: true, mode: "catalog", count: cat.total, results: cat.results },
-    200,
-    headers
-  );
+  return json(payload, 200, rateHeaders(quota.stats));
 }
 
 // Dispatch: the mere presence of an Authorization header selects the

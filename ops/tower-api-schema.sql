@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   daily_limit INTEGER,
   revoked INTEGER DEFAULT 0,
   past_due INTEGER DEFAULT 0,
+  sub_deleted INTEGER DEFAULT 0,
   created_at TEXT,
   updated_at TEXT
 );
@@ -34,7 +35,11 @@ CREATE TABLE IF NOT EXISTS usage_daily (
   PRIMARY KEY (key_hash, day)
 );
 
+-- status: 'received' when first seen, 'processed' only after the
+-- handler succeeds, so a crashed handling is retried by Stripe
+-- redelivery instead of being swallowed as a duplicate (audit B1).
 CREATE TABLE IF NOT EXISTS processed_events (
   event_id TEXT PRIMARY KEY,
-  processed_at TEXT
+  processed_at TEXT,
+  status TEXT DEFAULT 'processed'
 );

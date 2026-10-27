@@ -4311,6 +4311,10 @@ export function TowerApiPage({ go }) {
     };
   }, []);
   const subscriptionsOpen = !!(apiStatus && apiStatus.subscriptions_open);
+  // The free-key form renders ONLY when the status endpoint confirms
+  // the key system is configured — until then the section shows the
+  // switched-on-soon notice instead of a form that can only 503.
+  const keysConfigured = !!(apiStatus && apiStatus.keys_configured);
 
   const [billing, setBilling] = useState("monthly");
   const [subscribing, setSubscribing] = useState("");
@@ -4502,6 +4506,7 @@ export function TowerApiPage({ go }) {
           ) : (
             <p className="body-copy">{api.billingNote}</p>
           )}
+          <p className="body-copy">{api.refundNote}</p>
         </div>
       </section>
 
@@ -4509,7 +4514,11 @@ export function TowerApiPage({ go }) {
         <div className="suggest-wrap">
           <div className="section-index">{api.keyForm.heading}</div>
           <p className="body-copy">{api.keyForm.body}</p>
-          {keyState === "sent" ? (
+          {!keysConfigured ? (
+            <p className="body-copy" role="status">
+              {api.keyForm.pending}
+            </p>
+          ) : keyState === "sent" ? (
             <p className="body-copy" role="status">
               {api.keyForm.sent}
             </p>

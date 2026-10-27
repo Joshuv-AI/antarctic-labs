@@ -11,7 +11,8 @@
 // dead file.
 //
 // Auth: Bearer key (pro / commercial). Consumes one unit of daily
-// quota for paid plans.
+// quota for paid plans — charged only after the id is confirmed to
+// exist, so a 404 never costs the caller quota.
 
 import {
   json,
@@ -44,7 +45,17 @@ export async function onRequestGet({ request, env }) {
     );
   }
 
+  // Existence first: an unknown id is a 404 and costs no quota.
+  const rec = await getRecordById(id).catch(() => null);
+  if (!rec || rec.state !== "ok" || !rec.record.download_url) {
+    const stats = await usageStats(env, a.key);
+    return json({ ok: false, error: "unknown artifact id" }, 404, rateHeaders(stats));
+  }
+
   const quota = await consumeQuota(env, a.key);
+  if (quota.error) {
+    return json({ ok: false, error: "usage counter unavailable" }, 500);
+  }
   if (!quota.ok) {
     return json(
       { ok: false, error: "daily limit exceeded", limit: quota.stats.limit, reset: quota.stats.reset },
@@ -54,10 +65,6 @@ export async function onRequestGet({ request, env }) {
   }
   const headers = rateHeaders(quota.stats);
 
-  const rec = await getRecordById(id).catch(() => null);
-  if (!rec || rec.state !== "ok" || !rec.record.download_url) {
-    return json({ ok: false, error: "unknown artifact id" }, 404, headers);
-  }
   const target = rec.record.download_url.startsWith("http")
     ? rec.record.download_url
     : `${SITE}${rec.record.download_url}`;

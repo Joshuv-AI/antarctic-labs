@@ -14,8 +14,10 @@
 //
 // Every /api/v1 response carries X-RateLimit-Limit / -Remaining /
 // -Reset headers once a key is authenticated. Limits are enforced from
-// the D1 usage_daily counter (exact accounting), never silently: when
-// the counter is at the limit the answer is 429 with the reset time.
+// the D1 usage_daily counter: consumption is a single atomic upsert
+// whose RETURNING count is the allow/deny decision (no check-then-act
+// race), and a counter read/write failure denies the request (429/500)
+// rather than letting it through uncounted.
 
 export const PLAN_LIMITS = { free: 200, pro: 5000, commercial: 25000 };
 export const KEY_PREFIX = "twr_live_";
@@ -66,42 +68,69 @@ export function rateHeaders(stats) {
   };
 }
 
-// Current usage for a key (no increment). Returns a stats object.
+// The key's daily limit (row value wins, plan table is the fallback).
+export function keyLimit(keyRow) {
+  return typeof keyRow.daily_limit === "number"
+    ? keyRow.daily_limit
+    : PLAN_LIMITS[keyRow.plan] || PLAN_LIMITS.free;
+}
+
+// Current usage for a key (no increment). Returns a stats object, or
+// null when the counter cannot be read — callers must treat null as
+// "unknown", never as zero.
 export async function usageStats(env, keyRow) {
   const day = utcDay();
-  let count = 0;
+  let row;
   try {
-    const row = await env.TOWER_DB.prepare(
+    row = await env.TOWER_DB.prepare(
       "SELECT count FROM usage_daily WHERE key_hash = ? AND day = ?"
     )
       .bind(keyRow.key_hash, day)
       .first();
-    count = row && typeof row.count === "number" ? row.count : 0;
-  } catch {
-    count = 0;
+  } catch (err) {
+    console.error("usageStats read failed", err);
+    return null;
   }
-  const limit =
-    typeof keyRow.daily_limit === "number"
-      ? keyRow.daily_limit
-      : PLAN_LIMITS[keyRow.plan] || PLAN_LIMITS.free;
+  const count = row && typeof row.count === "number" ? row.count : 0;
+  const limit = keyLimit(keyRow);
   return { count, limit, remaining: limit - count, reset: resetEpoch() };
 }
 
-// Consume one request against the key's daily quota. Returns
-// { ok: true, stats } or { ok: false, stats } when already at the limit
-// (nothing is consumed in that case).
+// Consume one request against the key's daily quota. The increment is
+// a single atomic upsert and the RETURNING count is the decision: if
+// it lands above the limit the request is denied with 429 (the unit
+// stays counted — over-limit probes are not free). A D1 failure denies
+// the request with 500 rather than letting it through uncounted.
+// Returns { ok: true, stats } | { ok: false, stats } (at limit) |
+// { error: true } (counter unavailable).
 export async function consumeQuota(env, keyRow) {
-  const stats = await usageStats(env, keyRow);
-  if (stats.count >= stats.limit) return { ok: false, stats };
+  const limit = keyLimit(keyRow);
   const day = utcDay();
-  await env.TOWER_DB.prepare(
-    "INSERT INTO usage_daily (key_hash, day, count) VALUES (?, ?, 1) " +
-      "ON CONFLICT(key_hash, day) DO UPDATE SET count = count + 1"
-  )
-    .bind(keyRow.key_hash, day)
-    .run();
-  const after = { ...stats, count: stats.count + 1, remaining: stats.limit - stats.count - 1 };
-  return { ok: true, stats: after };
+  let row;
+  try {
+    row = await env.TOWER_DB.prepare(
+      "INSERT INTO usage_daily (key_hash, day, count) VALUES (?, ?, 1) " +
+        "ON CONFLICT(key_hash, day) DO UPDATE SET count = count + 1 " +
+        "RETURNING count"
+    )
+      .bind(keyRow.key_hash, day)
+      .first();
+  } catch (err) {
+    console.error("consumeQuota upsert failed", err);
+    return { error: true };
+  }
+  if (!row || typeof row.count !== "number") {
+    console.error("consumeQuota returned no count");
+    return { error: true };
+  }
+  const stats = {
+    count: row.count,
+    limit,
+    remaining: limit - row.count,
+    reset: resetEpoch(),
+  };
+  if (row.count > limit) return { ok: false, stats };
+  return { ok: true, stats };
 }
 
 // Authenticate a request. Returns { key } on success or { response }
@@ -136,6 +165,14 @@ export async function authenticate(request, env) {
   if (row.revoked) {
     return { response: json({ ok: false, error: "api key revoked" }, 403) };
   }
+  if (row.past_due) {
+    return {
+      response: json(
+        { ok: false, error: "subscription payment past due — update billing to restore access" },
+        402
+      ),
+    };
+  }
   return { key: row };
 }
 
@@ -145,6 +182,11 @@ export async function gateWithQuota(request, env) {
   const a = await authenticate(request, env);
   if (a.response) return a;
   const q = await consumeQuota(env, a.key);
+  if (q.error) {
+    return {
+      response: json({ ok: false, error: "usage counter unavailable" }, 500),
+    };
+  }
   if (!q.ok) {
     return {
       response: json(
@@ -161,7 +203,7 @@ export async function gateWithQuota(request, env) {
 
 const FROM = "Antarctic Labs <noreply@antarctic-labs.com>";
 
-export async function sendApiKeyEmail(env, { to, plaintext, plan }) {
+export async function sendApiKeyEmail(env, { to, plaintext, plan, keyHash }) {
   const key = env.RESEND_API_KEY;
   if (!key) return { ok: false, notConfigured: true };
   const paid = plan && plan !== "free";
@@ -194,6 +236,9 @@ export async function sendApiKeyEmail(env, { to, plaintext, plan }) {
       headers: {
         Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
+        // One delivery per minted key: a retried send with the same key
+        // hash returns the original send instead of emailing twice.
+        ...(keyHash ? { "Idempotency-Key": `api-key-${keyHash}` } : {}),
       },
       body: JSON.stringify({
         from: FROM,
@@ -202,7 +247,8 @@ export async function sendApiKeyEmail(env, { to, plaintext, plan }) {
         text: lines.join("\n"),
       }),
     });
-  } catch {
+  } catch (err) {
+    console.error("api key email send failed", err);
     return { ok: false, error: "email provider unreachable" };
   }
   if (!res.ok) return { ok: false, error: `resend ${res.status}` };
@@ -210,9 +256,13 @@ export async function sendApiKeyEmail(env, { to, plaintext, plan }) {
 }
 
 // Insert a fresh key row for (email, plan) and email the plaintext once.
-// Returns { ok } — the plaintext never leaves this function except via
-// the delivery email.
+// Emails are stored lowercased everywhere so the mint endpoint, Stripe
+// Checkout and the webhook all agree on one identity per address.
+// Returns { ok, emailed, keyHash } — the plaintext never leaves this
+// function except via the delivery email. Callers that require delivery
+// (the webhook) check `emailed` and can roll the row back via keyHash.
 export async function mintKey(env, { email, plan, stripeCustomerId }) {
+  const normalizedEmail = String(email || "").trim().toLowerCase();
   const plaintext = generateKey();
   const hash = await sha256Hex(plaintext);
   const now = new Date().toISOString();
@@ -223,7 +273,7 @@ export async function mintKey(env, { email, plan, stripeCustomerId }) {
       hash,
       KEY_PREFIX,
       plaintext.slice(-4),
-      email,
+      normalizedEmail,
       stripeCustomerId || null,
       plan,
       PLAN_LIMITS[plan] || PLAN_LIMITS.free,
@@ -231,6 +281,14 @@ export async function mintKey(env, { email, plan, stripeCustomerId }) {
       now
     )
     .run();
-  const sent = await sendApiKeyEmail(env, { to: email, plaintext, plan });
-  return { ok: true, emailed: sent.ok };
+  const sent = await sendApiKeyEmail(env, {
+    to: normalizedEmail,
+    plaintext,
+    plan,
+    keyHash: hash,
+  });
+  if (!sent.ok) {
+    console.error("api key minted but delivery email failed", sent.error || "");
+  }
+  return { ok: true, emailed: sent.ok, keyHash: hash };
 }

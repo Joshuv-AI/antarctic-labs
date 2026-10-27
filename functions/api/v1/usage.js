@@ -11,6 +11,9 @@ export async function onRequestGet({ request, env }) {
   const a = await authenticate(request, env);
   if (a.response) return a.response;
   const stats = await usageStats(env, a.key);
+  if (!stats) {
+    return json({ ok: false, error: "usage counter unavailable" }, 500);
+  }
   return json(
     {
       ok: true,

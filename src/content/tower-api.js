@@ -7,11 +7,11 @@
 // throttling terms — copy uses "where text is present", "predictable URLs",
 // "no published rate limit". No MCP/server-search claims (none exist yet).
 
-// Stripe customer-portal login link for API subscribers. Set this when
-// the portal is activated in the Stripe Dashboard; while it is empty
-// the API page shows the receipt-based billing copy instead of a
-// Manage Billing button. Never invent a value here.
-export const PORTAL_URL = "";
+// Stripe customer-portal login link for API subscribers (portal
+// configuration bpc_1UUyO1CfFceH9gk0LqPa0tDU, login page enabled
+// 2026-10-26). While empty the API page shows the receipt-based
+// billing copy instead of a Manage Billing button.
+export const PORTAL_URL = "https://billing.stripe.com/p/login/14A14m9pBfOA2VI7UG4gg00";
 
 export const libraryFaqs = [
   {
@@ -262,6 +262,8 @@ export const apiPage = {
   },
   billingNote:
     "Billing is managed through Stripe — the receipt for any payment includes a manage-billing link.",
+  refundNote:
+    "Refunds: cancel within 7 days of a charge and that charge is refunded in full — email us from the address on the subscription and we will process it; the API key stays active until the end of the paid period unless you ask us to revoke it sooner.",
   subscribePending:
     "Paid plans are being switched on. When subscriptions open, the subscribe buttons will appear here — no checkout is ever offered before the key system behind it is live.",
 };

@@ -207,6 +207,15 @@ async function createDonateCheckout(env, { frequency, baseCents, coverFees, dono
   return { ok: true, url: data.url };
 }
 
+// Constant-time string compare for secret checks (operator key).
+function timingSafeEqualStr(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
 // ----- Commissions Desk: operator deposit checkout -------------------------
 // POST /api/commission-session — issued by the operator after a quote is
 // accepted, never linked from the public site. Guarded by the OPERATOR_KEY
@@ -287,12 +296,12 @@ export async function onRequestPost({ request, env, params }) {
     if (!operatorKey) {
       return json({ ok: false, error: "operator checkout not configured" }, 503);
     }
-    if (request.headers.get("x-operator-key") !== operatorKey) {
+    if (!timingSafeEqualStr(request.headers.get("x-operator-key") || "", operatorKey)) {
       return json({ ok: false, error: "forbidden" }, 403);
     }
     const amountCents = Number(data.amount_cents);
     const orderRef = str(data.order_ref).slice(0, 100);
-    const customerEmail = str(data.customer_email).slice(0, 254);
+    const customerEmail = str(data.customer_email).slice(0, 254).toLowerCase();
     const description = str(data.description).slice(0, 300);
     if (
       !Number.isInteger(amountCents) ||

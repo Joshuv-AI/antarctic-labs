@@ -51,7 +51,8 @@ async function sendNotice(env, { to, subject, text }) {
       }),
     });
     return { ok: res.ok };
-  } catch {
+  } catch (err) {
+    console.error("keys notice email failed", err);
     return { ok: false };
   }
 }
@@ -79,7 +80,9 @@ export async function onRequestPost({ request, env }) {
   // Honeypot: bots fill it, humans never see it. Swallow silently.
   if (str(data.website).length > 0) return json({ ok: true });
 
-  const email = str(data.email).slice(0, 254);
+  // Lowercased so one address is one identity across mint, Checkout
+  // and webhook (the stored form is always lowercase).
+  const email = str(data.email).slice(0, 254).toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return json({ ok: false, error: "invalid email" }, 400);
   }
@@ -93,7 +96,8 @@ export async function onRequestPost({ request, env }) {
       .bind(email)
       .all();
     existing = (res && res.results) || [];
-  } catch {
+  } catch (err) {
+    console.error("keys lookup failed", err);
     return json({ ok: false, error: "api lookup failed" }, 500);
   }
 
