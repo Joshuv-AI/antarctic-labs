@@ -348,6 +348,16 @@ let hubsMemo = null;
 let hubsMemoAt = 0;
 const HUBS_MEMO_TTL_MS = 3600 * 1000;
 
+// Precomputed summary for GET /api/v1/collections (public/api-collections.json,
+// a few KB, built by scripts/build-api-collections.mjs from the hubs index).
+// The endpoint needs counts and group keys only; it must not parse the
+// ~14.5 MB hubs index (full work lists) per isolate — that parse is one of
+// the request-path costs behind the 2026-10-27 /api/v1 1102s.
+const apiCollectionsUrl = `${RAW}/api-collections.json`;
+export async function getApiCollections() {
+  return fetchJsonCached(apiCollectionsUrl, 3600);
+}
+
 export async function getHubsIndex() {
   if (hubsMemo && Date.now() - hubsMemoAt < HUBS_MEMO_TTL_MS) return hubsMemo;
   const data = await fetchJsonCached(hubsIndexUrl, 3600);

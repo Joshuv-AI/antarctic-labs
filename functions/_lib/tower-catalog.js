@@ -29,6 +29,15 @@ export const shardUrl = (i) =>
   `${RAW}/catalog-shards/catalog-${String(i).padStart(2, "0")}.json`;
 export const manifestUrl = `${RAW}/catalog-shard-manifest.json`;
 
+// Work-locate buckets (2026-10-27): the manifest split into per-bucket
+// files by scripts/build-work-locate.mjs, keyed by descShardKey. A record
+// lookup fetches one small bucket instead of parsing the full ~16 MB
+// manifest into a 556k-entry map (a request-path cost behind the
+// 2026-10-27 /api/v1 1102s). Every possible bucket file exists (empty
+// object when unused), so an unknown id reads an empty bucket.
+export const locateUrl = (artifactId) =>
+  `${RAW}/work-locate/${descShardKey(artifactId)}.json`;
+
 // Description sidecar (2026-10-18 revamp): /tower-descriptions/<xx>.json,
 // keyed by the LAST 2 chars of the artifact id — mirrors descShardKey in
 // src/lib/catalog.js exactly.
@@ -97,9 +106,9 @@ export async function getShardRecords(i) {
 }
 
 export async function getRecordById(artifactId) {
-  const manifest = await getShardManifest();
-  if (!manifest || typeof manifest !== "object") return { state: "error" };
-  const shardIdx = manifest[artifactId];
+  const bucket = await fetchJsonCached(locateUrl(artifactId), 3600);
+  if (!bucket || typeof bucket !== "object") return { state: "error" };
+  const shardIdx = bucket[artifactId];
   if (shardIdx === undefined) return { state: "missing" };
   const records = await getShardRecords(shardIdx);
   if (!records) return { state: "error" };
