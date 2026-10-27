@@ -44,6 +44,7 @@ export const TOWER_COLLECTIONS = [
   "PAPERS",
   "ARCHIVES",
   "DECLASSIFIED",
+  "LAW",
   "REFERENCE",
   "PODCASTS",
   "MEDIA",

@@ -104,10 +104,11 @@ const PAGE = 100; // modest, as the old code used; one shard yields many pages
 // CATALOG_SNAPSHOT_DATE already follow). Every record's datestamp is
 // this date; from/until are evaluated against it.
 const SNAPSHOT_DATE = "2026-10-24";
-const COLLECTIONS = ["PAPERS", "DECLASSIFIED", "BOOKS", "REFERENCE", "DOCUMENTS", "PODCASTS"];
+const COLLECTIONS = ["PAPERS", "DECLASSIFIED", "LAW", "BOOKS", "REFERENCE", "DOCUMENTS", "PODCASTS"];
 const COLLECTION_LABELS = {
   PAPERS: "Papers",
   DECLASSIFIED: "Declassified documents",
+  LAW: "US law",
   BOOKS: "Books",
   REFERENCE: "Reference",
   DOCUMENTS: "Documents",

@@ -76,6 +76,7 @@ export const towerOfBabel = {
         options: [
           { value: "BOOKS", label: "Books" },
           { value: "DECLASSIFIED", label: "Declassified" },
+          { value: "LAW", label: "Law" },
           { value: "DOCUMENTS", label: "Documents" },
           { value: "PAPERS", label: "Papers" },
           { value: "PODCASTS", label: "Podcasts" },

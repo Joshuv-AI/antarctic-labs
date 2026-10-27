@@ -50,10 +50,11 @@ import {
 export const API_VERSION = "1.0.0";
 export const API_NAME = "tower-of-babel";
 
-// The six collections the catalog actually uses (OAI's list, uppercase).
+// The collections the catalog actually uses (OAI's list, uppercase).
 export const COLLECTIONS = [
   "PAPERS",
   "DECLASSIFIED",
+  "LAW",
   "BOOKS",
   "REFERENCE",
   "DOCUMENTS",
