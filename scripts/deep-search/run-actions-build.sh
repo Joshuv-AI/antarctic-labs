@@ -12,6 +12,12 @@
 #      ~8 GiB final index at once, so each finished shard is uploaded to R2
 #      and deleted locally immediately; the runner never holds the full
 #      final index on disk.
+#  (d) Verified chunk outputs are checkpointed to R2 as they complete.
+#      Final shards cannot be computed until compute-bases has seen every
+#      chunk, so a six-hour timeout otherwise discards all indexing work.
+#      A later dispatch for the same texts HEAD + catalog fingerprint
+#      restores and hash-verifies checkpointed chunks, then reuses the
+#      existing DONE skip. The manifest is uploaded last for each chunk.
 #
 # Load-bearing invariants carried over unchanged:
 #  I1. Per-chunk catalog isolation: stream-index.mjs writes DONE for every
@@ -34,7 +40,7 @@ CATALOG="${CATALOG_DIR:-$PWD/public/catalog-shards}"
 BUCKET="${R2_BUCKET:-tower-search-index}"
 BASE="https://raw.githubusercontent.com/Joshuv-AI/antarctic-labs-texts/main/public/tower-of-babel"
 CHUNK_SIZE=10000
-WRANGLER="npx -y wrangler@4.152.0"
+WRANGLER="${WRANGLER:-npx -y wrangler@4.152.0}"
 mkdir -p "$WORK"
 LOG="$WORK/build.log"
 SHARED_TMP="$WORK/index-tmp"
@@ -53,7 +59,130 @@ TEXTS_HEAD="$(git ls-remote https://github.com/Joshuv-AI/antarctic-labs-texts.gi
 BUILD_ID="${TEXTS_HEAD:0:12}"
 [[ "$BUILD_ID" =~ ^[0-9a-f]{12}$ ]] || die "buildId '$BUILD_ID' is not 12 lowercase hex"
 SITE_HEAD="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
-log "=== ACTIONS BUILD START: textsHead=$TEXTS_HEAD buildId=$BUILD_ID siteHead=$SITE_HEAD bucket=$BUCKET ==="
+CATALOG_ID="$(cd "$CATALOG" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')" \
+  || die "could not fingerprint catalog shards under $CATALOG"
+[[ "$CATALOG_ID" =~ ^[0-9a-f]{64}$ ]] || die "catalog fingerprint '$CATALOG_ID' is not a sha256 hex digest"
+log "=== ACTIONS BUILD START: textsHead=$TEXTS_HEAD buildId=$BUILD_ID siteHead=$SITE_HEAD catalogFingerprint=$CATALOG_ID bucket=$BUCKET ==="
+
+# ---- R2 checkpoints for verified chunk outputs ----
+checkpoint_prefix() {
+  printf '%s/checkpoints/%s' "$BUILD_ID" "$CATALOG_ID"
+}
+checkpoint_manifest_key() {
+  printf '%s/chunk-%03d/checkpoint.json' "$(checkpoint_prefix)" "$1"
+}
+checkpoint_object_key() {
+  printf '%s/chunk-%03d/%s' "$(checkpoint_prefix)" "$1" "$2"
+}
+r2_put_retry() {
+  local key=$1 file=$2 ctype=${3:-application/octet-stream} attempt
+  for attempt in 1 2 3; do
+    if $WRANGLER r2 object put "$BUCKET/$key" --file "$file" --content-type "$ctype" >> "$LOG" 2>&1; then
+      return 0
+    fi
+    log "checkpoint upload attempt $attempt failed: $key"
+    sleep $((attempt * 5))
+  done
+  return 1
+}
+r2_get_once() {
+  local key=$1 dest=$2
+  mkdir -p "$(dirname "$dest")"
+  $WRANGLER r2 object get "$BUCKET/$key" --file "$dest" >> "$LOG" 2>&1
+}
+write_checkpoint_manifest() {
+  local dir=$1 out=$2 chunk=$3
+  node - "$dir" "$out" "$BUILD_ID" "$CATALOG_ID" "$chunk" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const [dir, out, buildId, catalogId, chunk] = process.argv.slice(2);
+const files = [];
+(function walk(cur, base = '') {
+  const entries = fs.readdirSync(cur, { withFileTypes: true })
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const ent of entries) {
+    const rel = base ? `${base}/${ent.name}` : ent.name;
+    const full = path.join(cur, ent.name);
+    if (ent.isDirectory()) walk(full, rel);
+    else if (ent.isFile()) {
+      const data = fs.readFileSync(full);
+      files.push({
+        path: rel,
+        size: data.length,
+        sha256: crypto.createHash('sha256').update(data).digest('hex'),
+      });
+    }
+  }
+})(dir);
+fs.writeFileSync(out, JSON.stringify({
+  buildId,
+  catalogId,
+  chunk: Number(chunk),
+  files,
+}, null, 2) + '\n');
+NODE
+}
+upload_chunk_checkpoint() {
+  local chunk=$1 nnn dir manifest rel count
+  nnn=$(printf "%03d" "$chunk")
+  dir="$SHARED_TMP/chunk-$nnn"
+  [ -f "$dir/DONE" ] || return 1
+  manifest="$WORK/checkpoint-$nnn.json"
+  write_checkpoint_manifest "$dir" "$manifest" "$chunk" || return 1
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    r2_put_retry "$(checkpoint_object_key "$chunk" "$rel")" "$dir/$rel" application/octet-stream || return 1
+  done < <(node -e "const m=require(process.argv[1]); for (const f of m.files) console.log(f.path)" "$manifest")
+  # The manifest is the commit point: it is uploaded only after every file.
+  r2_put_retry "$(checkpoint_manifest_key "$chunk")" "$manifest" application/json || return 1
+  count=$(node -e "console.log(require(process.argv[1]).files.length)" "$manifest")
+  log "chunk $chunk ($nnn): checkpoint uploaded ($count files)"
+}
+restore_chunk_checkpoint() {
+  local chunk=$1 nnn dir manifest tsv rel size sha dest actual_size actual_sha
+  nnn=$(printf "%03d" "$chunk")
+  dir="$SHARED_TMP/chunk-$nnn"
+  [ -f "$dir/DONE" ] && return 0
+  manifest="$WORK/restore-checkpoint-$nnn.json"
+  tsv="$WORK/restore-checkpoint-$nnn.tsv"
+  rm -f "$manifest" "$tsv"
+  r2_get_once "$(checkpoint_manifest_key "$chunk")" "$manifest" || return 1
+  if ! node - "$manifest" "$tsv" "$BUILD_ID" "$CATALOG_ID" "$chunk" <<'NODE'; then
+const fs = require('fs');
+const [manifest, tsv, buildId, catalogId, chunk] = process.argv.slice(2);
+const m = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+if (m.buildId !== buildId || m.catalogId !== catalogId ||
+    Number(m.chunk) !== Number(chunk) || !Array.isArray(m.files)) {
+  process.exit(1);
+}
+const lines = m.files.map(f => `${f.path}\t${f.size}\t${f.sha256}`);
+fs.writeFileSync(tsv, lines.join('\n') + (lines.length ? '\n' : ''));
+NODE
+    return 1
+  fi
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  while IFS=$'\t' read -r rel size sha; do
+    [ -n "$rel" ] || continue
+    dest="$dir/$rel"
+    if ! r2_get_once "$(checkpoint_object_key "$chunk" "$rel")" "$dest"; then
+      rm -rf "$dir"
+      return 1
+    fi
+    actual_size=$(stat -c%s "$dest")
+    actual_sha=$(sha256sum "$dest" | awk '{print $1}')
+    if [ "$actual_size" != "$size" ] || [ "$actual_sha" != "$sha" ]; then
+      rm -rf "$dir"
+      return 1
+    fi
+  done < "$tsv"
+  if [ ! -f "$dir/DONE" ]; then
+    rm -rf "$dir"
+    return 1
+  fi
+  log "chunk $chunk ($nnn): checkpoint restored and hash-verified"
+}
 
 # ---- fetch one chunk (8 streams, batched curl -K; globals FETCH_LEGIT/FAILED) ----
 fetch_chunk() {
@@ -142,6 +271,9 @@ log "=== catalog=$TOTAL_N entries, chunks=$NCHUNKS, chunk-size=$CHUNK_SIZE, disk
 for c in $(seq 0 $((NCHUNKS - 1))); do
   NNN=$(printf "%03d" $c)
   T0=$(date +%s)
+  if [ ! -f "$SHARED_TMP/chunk-$NNN/DONE" ]; then
+    restore_chunk_checkpoint "$c" || true
+  fi
   if [ -f "$SHARED_TMP/chunk-$NNN/DONE" ]; then
     log "chunk $c ($NNN): already DONE — skipped"
     continue
@@ -170,6 +302,9 @@ for c in $(seq 0 $((NCHUNKS - 1))); do
   # Runner-disk change (c): gzip temps now; merge-shard reads .jsonl.gz.
   gzip -f "$CTMP/chunk-000/"*-w0.jsonl
   mv "$CTMP/chunk-000" "$SHARED_TMP/chunk-$NNN"
+  if ! upload_chunk_checkpoint "$c"; then
+    die "chunk $c ABORT: verified chunk is preserved in the checkpoint design, but its R2 checkpoint upload failed; stopping early so a later dispatch can resume from prior checkpoints"
+  fi
   STAGING_BYTES=$(du -sb "$STAGING" | cut -f1)
   rm -rf "$STAGING" "$CCAT" "$CTMP" "$WORK/chunk-fetch.txt"
   ELAPSED=$(( $(date +%s) - T0 ))
