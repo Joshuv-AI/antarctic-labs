@@ -161,47 +161,46 @@ export const towerOfBabel = {
     sectionIndex: "COMMISSIONS DESK",
     heading: "COMMISSIONS DESK",
     intro:
-      "Commission work from the library itself. Tell us what you are trying to answer or build, and we do the work inside the Tower's own collection — the searching, verifying, assembling, and writing — and hand you the finished result.",
+      "Commission work from the library itself. Tell us the question or the project — we search, verify, assemble, and write inside the Tower's collection. You get the finished result.",
     what: [
-      "Every commission ends in one or both of two deliverables. A sourced research brief: a written answer to a defined question, with every claim traced to its primary source in the library and the passages cited. Or a curated collection: a clean, rights-checked set of texts on your subject, delivered as plain-text files with a metadata manifest and checksums, ready to read, quote, or build on. Many projects want both — the collection, and the brief that explains what is in it, what was left out, and why.",
-      "Examples, not products: verify a famous quote or attribution to its earliest source; assemble the primary sources behind a claim or an episode; compare editions or translations of one work; build a corpus on a tradition, a period, or a theme for a book, a course, a podcast, or a small AI project. If it can be done from the library's holdings, it can be commissioned here.",
-      "One honest note: everything in this library is already free to read, and the catalog is machine-readable — a patient person with their own tools can do this work themselves. What a commission buys is the time, the judgment, and a name standing behind the result: sources verified, rights checked, exclusions documented, and corrections issued if we get something wrong.",
+      "Two deliverables, alone or together. A research brief: a written answer to a defined question, every claim traced to its primary source, passages cited. A curated collection: a rights-checked set of texts on your subject — plain-text files with a metadata manifest and checksums. Work ranges from tracing a quote to its earliest source, comparing editions or translations, or assembling the primary sources behind an episode, to building a corpus on a tradition or theme for a book, course, podcast, or AI project. Many clients take both: the collection, plus the brief on what is in it and what was left out.",
+      "One honest note: everything here is already free, and the catalog is machine-readable — with time and tools, you could do this yourself. A commission buys time, judgment, and a name behind the result: sources verified, rights checked, exclusions documented, corrections issued if we're wrong.",
     ],
     stepsHeading: "HOW IT WORKS",
     steps: [
       {
         title: "1 — SEND THE INTAKE FORM",
-        body: "Describe the project below: the question or the subject, any works you already know belong in it, and your deadline. The more specific the request, the sharper the quote.",
+        body: "Describe the project below: question or subject, works that belong, deadline.",
       },
       {
         title: "2 — FREE ASSESSMENT + WRITTEN QUOTE",
-        body: "We assess the request against the library's holdings and reply within 1 business day with a written, fixed quote — scope, deliverables, price, and turnaround. The quote is valid for 14 days. Assessment and quoting are always free; there is no fee for asking.",
+        body: "We reply within 1 business day with a fixed written quote — scope, deliverables, price, turnaround — valid 14 days. Always free.",
       },
       {
         title: "3 — ACCEPT + 50% DEPOSIT",
-        body: "If you accept, we send a secure Stripe payment link for a 50% deposit. Work starts when the deposit lands — the turnaround clock runs from that moment, not from your first email.",
+        body: "We send a Stripe payment link for the 50% deposit. Work starts when it lands.",
       },
       {
         title: "4 — DELIVERY + BALANCE",
-        body: "You receive the finished brief and/or collection, with one round of factual corrections included. The balance is invoiced through Stripe on delivery.",
+        body: "The finished brief and/or collection, one round of factual corrections included. Balance invoiced on delivery.",
       },
     ],
     pricingHeading: "PRICING",
     pricing: [
-      "There is no price list, because no two commissions are the same size. Guideposts: the minimum commission is $150. Most engagements land between $300 and $2,500. Large collection builds are quoted individually. Assessment and the written quote are free, and the quote is fixed — the price you accept is the price you pay.",
+      "No price list — no two commissions are the same size. Guideposts: $150 minimum, most $300–$2,500, large builds quoted individually. The quote is fixed: the price you accept is the price you pay.",
     ],
     termsHeading: "TERMS",
     terms: [
-      "The fee buys a documented search, including a negative result: if the library does not hold what a question needs, the brief says so and shows the sources consulted. There are no refunds for unsuccessful searches once work has begun.",
-      "If we decline a commission after assessment, no charge is made; if a deposit was taken and we later decline, it is refunded in full.",
-      "One revision round is included, for factual corrections. New scope is quoted before any extra work begins.",
-      "Commissioned work is for your own use — research, writing, teaching, production — not for coursework submission.",
-      "Deliverables are private by default. We publish nothing about your commission without your permission.",
-      "For collections: the licence covers our compilation — the selection, cleaning, and provenance work. The texts themselves are public domain or openly licensed, as each record states. You may use the collection internally and commercially, including AI training; you may not redistribute the raw collection or publicly re-host it. The licence is perpetual for what was delivered. If a work is ever reclassified, we send an updated manifest and a deletions list.",
+      "The fee buys a documented search, including a negative result — if the library lacks what a question needs, the brief says so and shows the sources consulted. No refunds once work has begun.",
+      "If we decline a commission, there is no charge — and if a deposit was taken, it is refunded in full.",
+      "One revision round, for factual corrections. New scope is quoted before extra work begins.",
+      "For your own use — research, writing, teaching, production — not coursework submission.",
+      "Private by default: we publish nothing about your commission without permission.",
+      "Collections: the licence covers our compilation (selection, cleaning, provenance), not the texts — public domain or openly licensed, as each record states. Use internally and commercially, including AI training; never redistribute the raw collection or re-host it. Perpetual. On reclassification we send an updated manifest and deletions list.",
     ],
     sampleHeading: "A SAMPLE, BEFORE YOU ASK",
     sampleIntro:
-      "Two proofs, made the way real commissions are made. A sample research brief — a famous attribution checked against the library's own texts — and a free sample collection built by the same pipeline that builds paid ones: 100 short public-domain documents with a full checksum manifest.",
+      "Two proofs, made the way real commissions are made: a sample brief (a famous attribution checked against the library's own texts) and a free sample collection — 100 short public-domain documents with a full checksum manifest, built by the paid pipeline.",
     sampleCollection: {
       label: "DOWNLOAD THE SAMPLE COLLECTION (ZIP)",
       href: "/commissions/sample-collection.zip",
@@ -213,36 +212,36 @@ export const towerOfBabel = {
       sectionIndex: "SAMPLE RESEARCH BRIEF",
       title: "Did Marie Antoinette say “Let them eat cake”?",
       question:
-        "The commission: verify the attribution of the phrase “Let them eat cake” to Marie Antoinette, against the earliest source held in this library.",
+        "The commission: verify the attribution of “Let them eat cake” to Marie Antoinette, against the earliest source in this library.",
       verdict:
-        "Verdict: No. The saying appears in print decades before Marie Antoinette could have said it, attributed to an unnamed “great princess.” In Jean-Jacques Rousseau's Confessions — written in the 1760s and published in 1782 — the line reads, in this library's English text: \"Then let them eat pastry!\" Rousseau names no one, and the episode he is recalling belongs to his youth in the early 1730s, more than twenty years before Marie Antoinette was born.",
+        "Verdict: No. The saying was in print decades before Antoinette could have said it, credited to an unnamed “great princess.” In Rousseau's Confessions (written in the 1760s, published in 1782) it reads, in this library's English text: \"Then let them eat pastry!\" The episode belongs to Rousseau's youth, in the early 1730s — over twenty years before Antoinette was born.",
       evidence: [
         {
           claim: "The saying is in Rousseau's Confessions, in the library's own text.",
           finding:
-            "Passage located in Book VI of The Confessions of Jean-Jacques Rousseau (this library's complete English edition): \"At length I recollected the thoughtless saying of a great princess, who, on being informed that the country people had no bread, replied, \\\"Then let them eat pastry!\\\"\" The French original's word is brioche — an enriched bread, not “cake”; the cake wording belongs to the later Antoinette version of the story.",
+            "Book VI (this library's complete English edition): \"At length I recollected the thoughtless saying of a great princess, who, on being informed that the country people had no bread, replied, \\\"Then let them eat pastry!\\\"\" The French word is brioche — enriched bread, not “cake”; “cake” is the later Antoinette version.",
           sourceLabel: "The Confessions of Jean-Jacques Rousseau — read the entry",
           sourcePath: "/tower-of-babel/library/rousseau-confessions-1903",
         },
         {
           claim: "Rousseau does not name Marie Antoinette — or anyone.",
           finding:
-            "The speaker in the passage is only “a great princess.” No queen is named anywhere in the episode, and the phrase “let them eat cake” never appears in the Confessions text (full text searched).",
+            "The speaker is only “a great princess.” No queen is named in the episode, and “let them eat cake” never appears in the Confessions text (full text searched).",
           sourceLabel: "Same entry, full text",
           sourcePath: "/tower-of-babel/library/rousseau-confessions-1903",
         },
         {
           claim: "The timeline excludes Antoinette.",
           finding:
-            "Rousseau places the episode in his youth (the Confessions' Book VI covers 1730–31) and wrote the passage in the 1760s. Marie Antoinette was born in 1755 and did not arrive in France until 1770. The first printed link between the saying and Antoinette that scholarship commonly cites dates to 1843 — fifty years after her death.",
+            "Rousseau sets the episode in his youth (Book VI: 1730–31) and wrote it in the 1760s. Antoinette was born in 1755, reached France in 1770. The first printed link to her that scholarship commonly cites: 1843, fifty years after her death.",
           sourceLabel: "Confessions, Book VI (same entry)",
           sourcePath: "/tower-of-babel/library/rousseau-confessions-1903",
         },
       ],
       consulted:
-        "Sources consulted: the library's complete Confessions text (searched for “brioche”, “pastry”, and “eat cake” — only the pastry passage is present); the catalog record for the work. Secondary chronology (Rousseau's writing and publication dates, Antoinette's birth and arrival in France, the 1843 attribution) is standard reference material and is flagged as such wherever the brief relies on it.",
+        "Sources consulted: the library's complete Confessions text (searched for “brioche”, “pastry”, “eat cake” — only the pastry passage is present) and the work's catalog record. The chronology (publication dates, Antoinette's birth and arrival, the 1843 attribution) is standard reference material, flagged as such in the brief.",
       changeMind:
-        "What would change the verdict: a source from Antoinette's lifetime (before 1793) that names her as the speaker. None is present in the holdings consulted; the earliest attributions are all posthumous and unsourced.",
+        "What would change the verdict: a source from Antoinette's lifetime (before 1793) naming her as the speaker. None is in the holdings consulted; earliest attributions are posthumous, unsourced.",
     },
     formHeading: "START A COMMISSION",
     submitLabel: "REQUEST A FREE QUOTE",
@@ -251,7 +250,7 @@ export const towerOfBabel = {
     success: {
       heading: "REQUEST RECEIVED.",
       body:
-        "Thanks — your commission request is with the desk. We reply within 1 business day with an assessment and a written fixed quote. Asking costs nothing.",
+        "Thanks — your request is with the desk. We reply within 1 business day with an assessment and a written fixed quote. Asking costs nothing.",
     },
     submitError:
       "Something went wrong sending your request. Please try again.",
@@ -296,7 +295,7 @@ export const towerOfBabel = {
         required: true,
         rows: 5,
         placeholder:
-          "The question you want answered, or the collection you want built — subject, scope, and what the result is for.",
+          "The question to answer, or the collection to build — subject, scope, what the result is for.",
       },
       {
         id: "desk-subject",
@@ -305,7 +304,7 @@ export const towerOfBabel = {
         type: "text",
         required: false,
         autoComplete: "off",
-        placeholder: "Titles, authors, artifact ids, or a subject line — optional",
+        placeholder: "Titles, authors, artifact ids — optional",
       },
       {
         id: "desk-deadline",
