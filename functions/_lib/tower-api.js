@@ -224,12 +224,46 @@ export async function getIndexShard(i) {
 
 // --- Search / list-by-collection (bounded shard-sequential scan) ----------
 
-function matches(record, terms, field) {
+// Query parsing (2026-10-27, keyless 1102 fix): a double-quoted span
+// is a PHRASE — its normalized text must appear as one contiguous
+// substring of the field haystack. Text outside quotes keeps the
+// original per-term substring semantics exactly. Before this, a quoted
+// query was split on whitespace WITH the quote characters attached,
+// so a phrase term could never match any record: the scan still
+// walked its shard budget, and in production the request died on the
+// Workers resource limit (503 "error code: 1102", live-probed 3/3 on
+// "survival of the fittest") instead of answering. Phrases make the
+// predicate SELECTIVE, so the same bounded scan now answers them.
+// Only balanced quotes with non-empty content form a phrase; anything
+// else (unbalanced quote, empty span) falls back to the legacy term
+// split verbatim, so every non-phrase query behaves byte-identically.
+function parseSearchQuery(query) {
+  const norm = normText(query);
+  const phrases = [];
+  const rest = norm.replace(/"([^"]*)"/g, (whole, inner) => {
+    const p = inner.trim().replace(/\s+/g, " ");
+    if (p) phrases.push(p);
+    return " ";
+  });
+  const terms = rest.split(/\s+/).filter(Boolean);
+  if (terms.length === 0 && phrases.length === 0) {
+    // Degenerate input (e.g. q='""'): preserve the legacy derivation
+    // so behavior (an empty 200 page) is unchanged.
+    return { terms: norm.split(/\s+/).filter(Boolean), phrases: [] };
+  }
+  return { terms, phrases };
+}
+
+function matches(record, terms, phrases, field) {
   const hayTitle = normText(record.title);
   const hayCreator = normText(record.creator);
-  if (field === "title") return terms.every((t) => hayTitle.includes(t));
-  if (field === "author") return terms.every((t) => hayCreator.includes(t));
-  return terms.every((t) => hayTitle.includes(t) || hayCreator.includes(t));
+  const inField = (needle) =>
+    field === "title"
+      ? hayTitle.includes(needle)
+      : field === "author"
+        ? hayCreator.includes(needle)
+        : hayTitle.includes(needle) || hayCreator.includes(needle);
+  return terms.every(inField) && phrases.every(inField);
 }
 
 // predicate: (record) => boolean. Returns page + opaque next cursor, or
@@ -283,10 +317,12 @@ export async function scanIndex(predicate, limit, cursor) {
 }
 
 export async function searchWorks({ query, field, limit, cursor }) {
-  const terms = normText(query).split(/\s+/).filter(Boolean);
-  if (terms.length === 0) return { error: "empty_query" };
+  const { terms, phrases } = parseSearchQuery(query);
+  if (terms.length === 0 && phrases.length === 0) {
+    return { error: "empty_query" };
+  }
   const f = field === "title" || field === "author" ? field : "any";
-  return scanIndex((r) => matches(r, terms, f), limit, cursor);
+  return scanIndex((r) => matches(r, terms, phrases, f), limit, cursor);
 }
 
 export async function listCollection(collection, limit, cursor) {
