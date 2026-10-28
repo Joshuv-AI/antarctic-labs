@@ -4,13 +4,6 @@
 //                           year, source, notes, website? }
 //   POST /api/donate   -> { frequency, amount_cents, cover_fees, website? }
 //                         creates a Stripe Checkout Session (see below).
-//   POST /api/commission -> { name, email, deliverable, description,
-//                           subject, deadline, budget, website? }
-//                         Commissions Desk intake, emailed like suggest.
-//   POST /api/commission-session -> OPERATOR ONLY (x-operator-key header
-//                         must equal the OPERATOR_KEY secret): creates a
-//                         Stripe Checkout Session for a commission deposit.
-//                         Never linked from the public site.
 //
 // Validates the payload, drops bot submissions via the `website` honeypot
 // field, applies a light per-IP rate limit, and forwards the submission to
@@ -91,25 +84,6 @@ function buildSuggestEmail(d) {
   return {
     replyTo: null,
     subject: `[Library Suggestion] ${d.title}`,
-    text: lines.join("\n"),
-  };
-}
-
-function buildCommissionEmail(d) {
-  const row = (k, v) => (v ? `${k}: ${v}` : null);
-  const lines = [
-    row("Name", d.name),
-    row("Email", d.email),
-    row("Deliverable", d.deliverable),
-    row("Works / subject", d.subject),
-    row("Deadline", d.deadline),
-    row("Budget range", d.budget),
-    "",
-    d.description ? `Project:\n${d.description}` : null,
-  ].filter((l) => l !== null);
-  return {
-    replyTo: d.email || null,
-    subject: `[Commission] ${d.name}`,
     text: lines.join("\n"),
   };
 }
@@ -207,66 +181,11 @@ async function createDonateCheckout(env, { frequency, baseCents, coverFees, dono
   return { ok: true, url: data.url };
 }
 
-// Constant-time string compare for secret checks (operator key).
-function timingSafeEqualStr(a, b) {
-  if (typeof a !== "string" || typeof b !== "string") return false;
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
-
-// ----- Commissions Desk: operator deposit checkout -------------------------
-// POST /api/commission-session — issued by the operator after a quote is
-// accepted, never linked from the public site. Guarded by the OPERATOR_KEY
-// secret (x-operator-key header); without the secret set, the endpoint is
-// dormant (503), same pattern as the Stripe/Resend keys above. The amount
-// is server-built into the session exactly like donations: the client
-// supplies only the agreed deposit amount + order reference.
-async function createCommissionCheckout(env, { amountCents, orderRef, customerEmail, description, origin }) {
-  const key = env.STRIPE_SECRET_KEY;
-  if (!key) return { ok: false, notConfigured: true };
-  const p = new URLSearchParams();
-  p.set("mode", "payment");
-  if (customerEmail) p.set("customer_email", customerEmail);
-  p.set("success_url", `${origin}/tower-of-babel/library/research?deposit=paid`);
-  p.set("cancel_url", `${origin}/tower-of-babel/library/research?deposit=canceled`);
-  p.set("line_items[0][quantity]", "1");
-  p.set("line_items[0][price_data][currency]", "usd");
-  p.set("line_items[0][price_data][unit_amount]", String(amountCents));
-  p.set(
-    "line_items[0][price_data][product_data][name]",
-    description || `Tower of Babel Commissions Desk — deposit (${orderRef})`
-  );
-  p.set("metadata[source]", "tower-commission");
-  p.set("metadata[order_ref]", orderRef);
-  p.set("metadata[kind]", "deposit");
-  let res;
-  try {
-    res = await fetch("https://api.stripe.com/v1/checkout/sessions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: p.toString(),
-    });
-  } catch {
-    return { ok: false };
-  }
-  if (!res.ok) return { ok: false };
-  const data = await res.json().catch(() => null);
-  if (!data || typeof data.url !== "string" || !data.url) return { ok: false };
-  return { ok: true, url: data.url };
-}
-
 export async function onRequestPost({ request, env, params }) {
   const kind = params.form;
   if (
     kind !== "suggest" &&
-    kind !== "donate" &&
-    kind !== "commission" &&
-    kind !== "commission-session"
+    kind !== "donate"
   ) {
     return json({ ok: false, error: "unknown form" }, 404);
   }
@@ -287,51 +206,6 @@ export async function onRequestPost({ request, env, params }) {
   }
   if (!data || typeof data !== "object") {
     return json({ ok: false, error: "invalid payload" }, 400);
-  }
-
-  // Operator-only deposit checkout: no honeypot, no public path to it.
-  // Dormant (503) until OPERATOR_KEY is set as a Pages secret.
-  if (kind === "commission-session") {
-    const operatorKey = env.OPERATOR_KEY;
-    if (!operatorKey) {
-      return json({ ok: false, error: "operator checkout not configured" }, 503);
-    }
-    if (!timingSafeEqualStr(request.headers.get("x-operator-key") || "", operatorKey)) {
-      return json({ ok: false, error: "forbidden" }, 403);
-    }
-    const amountCents = Number(data.amount_cents);
-    const orderRef = str(data.order_ref).slice(0, 100);
-    const customerEmail = str(data.customer_email).slice(0, 254).toLowerCase();
-    const description = str(data.description).slice(0, 300);
-    if (
-      !Number.isInteger(amountCents) ||
-      amountCents < 15000 ||
-      amountCents > 2500000 ||
-      !orderRef ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail)
-    ) {
-      return json({ ok: false, error: "invalid session request" }, 400);
-    }
-    let origin = "https://antarctic-labs.com";
-    try {
-      origin = new URL(request.url).origin;
-    } catch {
-      /* keep the production origin */
-    }
-    const session = await createCommissionCheckout(env, {
-      amountCents,
-      orderRef,
-      customerEmail,
-      description,
-      origin,
-    });
-    if (!session.ok) {
-      if (session.notConfigured) {
-        return json({ ok: false, error: "payments not configured" }, 503);
-      }
-      return json({ ok: false, error: "checkout failed" }, 502);
-    }
-    return json({ ok: true, url: session.url });
   }
 
   // Honeypot: bots fill it, humans never see it. Swallow silently.
@@ -380,38 +254,6 @@ export async function onRequestPost({ request, env, params }) {
       return json({ ok: false, error: "checkout failed" }, 502);
     }
     return json({ ok: true, url: session.url });
-  }
-
-  if (kind === "commission") {
-    const d = {
-      name: str(data.name),
-      email: str(data.email),
-      deliverable: str(data.deliverable),
-      description: str(data.description),
-      subject: str(data.subject),
-      deadline: str(data.deadline),
-      budget: str(data.budget),
-    };
-    if (
-      !d.name ||
-      !d.deliverable ||
-      !d.description ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(d.email)
-    ) {
-      return json({ ok: false, error: "missing or invalid fields" }, 400);
-    }
-    const email = buildCommissionEmail(d);
-    const sent = await sendEmail(env, {
-      to: env.FORMS_TO || DEFAULT_TO,
-      ...email,
-    });
-    if (!sent.ok) {
-      if (sent.notConfigured) {
-        return json({ ok: false, error: "email service not configured" }, 503);
-      }
-      return json({ ok: false, error: "send failed" }, 502);
-    }
-    return json({ ok: true });
   }
 
   const d = {
