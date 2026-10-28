@@ -14,12 +14,11 @@
 // use, so [CF-Pages-Skip] data pushes are reflected without a rebuild.
 //
 // SHARD_COUNT must match the number of catalog-index shards in the repo
-// (the Tower pipeline ships the index as 25 shards since the 2026-10-27
-// re-shard at 600,320 entries — the Pages 25 MiB per-file cap forced the
-// split finer; merge_catalog_v2.py divmod split). Keep in sync with functions/catalog-index.json.js and
+// (the Tower pipeline ships the index as 10 shards — merge_catalog_v2.py
+// divmod split). Keep in sync with functions/catalog-index.json.js and
 // functions/catalog-index2/[version]/[index].js.
 
-const SHARD_COUNT = 25;
+const SHARD_COUNT = 10;
 const RAW =
   "https://raw.githubusercontent.com/Joshuv-AI/antarctic-labs/main/public/catalog-index-shards";
 const shardUrl = (i) =>
