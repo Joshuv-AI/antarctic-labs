@@ -11,7 +11,7 @@
 // Keep in sync with functions/catalog-index.json.js and
 // functions/catalog-index2/manifest.json.js.
 
-const SHARD_COUNT = 10;
+const SHARD_COUNT = 25;
 const RAW =
   "https://raw.githubusercontent.com/Joshuv-AI/antarctic-labs/main/public/catalog-index-shards";
 

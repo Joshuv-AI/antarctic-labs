@@ -11,7 +11,7 @@
 // NOTE: SHARD_COUNT must match the number of shard files in the repo. If a
 // future batch adds another shard, bump this constant in the same commit.
 
-const SHARD_COUNT = 10;
+const SHARD_COUNT = 25;
 const shardUrl = (i) =>
   `https://raw.githubusercontent.com/Joshuv-AI/antarctic-labs/main/public/catalog-index-shards/catalog-index-${String(
     i
