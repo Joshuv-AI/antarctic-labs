@@ -7,7 +7,7 @@
 // Visual language is intentionally not redesigned here — these shells
 // use the same classes the existing Home page already uses, so the
 // destinations already share the home-page visual grammar.
-import { useState, useEffect, useMemo, useDeferredValue, useRef, useCallback, memo, Fragment } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useDeferredValue, useRef, useCallback, memo, Fragment } from "react";
 import { searchDeep, getSnippets } from "./lib/deep-search.js";
 import { track } from "./lib/analytics.js";
 
@@ -1141,6 +1141,8 @@ function TowerLibrarySection({ go, onReady }) {
   const [collLoading, setCollLoading] = useState(false);
   const [collFailed, setCollFailed] = useState(false);
   const collSectionRef = useRef(null);
+  const [filtersOpen, setFiltersOpen] = useState(true);
+  const filterPanelRef = useRef(null);
   const ensureCollections = useCallback(() => {
     if (collData || collFailed || collLoading) return;
     setCollLoading(true);
@@ -1180,29 +1182,53 @@ function TowerLibrarySection({ go, onReady }) {
     return null;
   }, [collData, collKey]);
   const collSet = activeCollection ? activeCollection.ids : null;
-  // Unified filter revamp (2026-10-25, visual only): a Collections tap
-  // mounts/unmounts the whole discovery zone above the results, which
-  // used to leave the viewport stranded on stacks / Featured / FAQ.
-  // After a tap, land deterministically on the Collections block itself
-  // (instant, not smooth — smooth scrolling fights the height change
-  // on iOS). Filter logic, counts and click-to-clear are unchanged.
-  const collScrollPending = useRef(false);
+  // Filter scroll stability (2026-10-28 revamp): the 2026-10-25 approach
+  // scrolled the Collections block into view after every tap. On mobile
+  // that read as a bounce — the tap target jumped away mid-interaction,
+  // worst when a subchip row mounted under the visitor's finger. Filter
+  // taps now never scroll the page. A handler records the scroll position
+  // and the filter panel's viewport offset; the layout effect restores
+  // that same offset after the re-render, so rows mounting or unmounting
+  // inside the panel never move what the visitor is looking at. Filter
+  // logic, counts and click-to-clear are unchanged.
+  const filterAnchor = useRef(null);
+  const noteFilterAnchor = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const el = filterPanelRef.current;
+    filterAnchor.current = {
+      y: window.scrollY || 0,
+      top: el ? el.getBoundingClientRect().top : null,
+    };
+  }, []);
+  useLayoutEffect(() => {
+    const anchor = filterAnchor.current;
+    if (!anchor) return;
+    filterAnchor.current = null;
+    const el = filterPanelRef.current;
+    if (!el || anchor.top === null || typeof window === "undefined") return;
+    const delta = el.getBoundingClientRect().top - anchor.top;
+    if (delta) window.scrollTo(0, Math.max(0, window.scrollY + delta));
+  }, [collGroup, collKey, bucketFilter, filtersOpen]);
   const selectCollGroup = (g) => {
-    collScrollPending.current = true;
+    noteFilterAnchor();
     setCollGroup(g);
     setCollKey("");
     if (g) ensureCollections();
   };
   const selectCollection = (key) => {
-    collScrollPending.current = true;
+    noteFilterAnchor();
     setCollKey((prev) => (prev === key ? "" : key));
   };
-  useEffect(() => {
-    if (!collScrollPending.current) return;
-    collScrollPending.current = false;
-    const el = collSectionRef.current;
-    if (el) el.scrollIntoView({ behavior: "auto", block: "start" });
-  }, [collGroup, collKey]);
+  const selectLane = (key) => {
+    noteFilterAnchor();
+    setBucketFilter(key);
+  };
+  const clearFilters = () => {
+    noteFilterAnchor();
+    setCollGroup("");
+    setCollKey("");
+    setBucketFilter("");
+  };
   // Stack-card "See all" / subcategory jumps: apply the existing bucket
   // filter, then bring the results into view (the discovery zone hands
   // the page over to the results in the filtered state).
@@ -1381,6 +1407,17 @@ function TowerLibrarySection({ go, onReady }) {
   // Active lane for the subcategory row: the lane part of bucketFilter.
   const activeLane = bucketFilter ? bucketFilter.split(":")[0] : "";
   const activeSubs = TOWER_SUBS[activeLane] || [];
+  const activeBucketLabel = bucketFilter
+    ? bucketFilter.indexOf(":") > -1
+      ? towerSubLabel(activeLane, bucketFilter.split(":")[1]) ||
+        TOWER_TOP_LABELS[activeLane] ||
+        activeLane
+      : TOWER_TOP_LABELS[activeLane] || activeLane
+    : "";
+  const activeFilterSummary =
+    [activeCollection ? activeCollection.label : "", activeBucketLabel]
+      .filter(Boolean)
+      .join(" · ") || "All entries";
   const { rankMap, matchCount, rankedIndices, blendedModel } = useMemo(() => {
     const map = new Map();
     if (!artifacts || !towerData)
@@ -2040,6 +2077,38 @@ function TowerLibrarySection({ go, onReady }) {
                     </button>
                   </div>
                 </div>
+            <div
+              ref={filterPanelRef}
+              className={`tower-filter-panel${filtersOpen ? " is-open" : ""}`}
+            >
+              <div className="tower-filter-head">
+                <button
+                  type="button"
+                  className="tower-filter-toggle"
+                  aria-expanded={filtersOpen}
+                  aria-controls="tower-filter-body"
+                  onClick={() => setFiltersOpen((open) => !open)}
+                >
+                  <span className="section-index">FILTERS</span>
+                  <span className="tower-filter-summary">
+                    {activeFilterSummary}
+                  </span>
+                  <span className="tower-filter-chevron" aria-hidden="true">
+                    ▾
+                  </span>
+                </button>
+                {(collKey || bucketFilter) && (
+                  <button
+                    type="button"
+                    className="tower-filter-clear"
+                    onClick={clearFilters}
+                  >
+                    Clear all
+                  </button>
+                )}
+              </div>
+              {filtersOpen && (
+                <div className="tower-filter-body" id="tower-filter-body">
             {/* Collections browser (2026-10-24, unified 2026-10-25):
                 the deleted hub pages, folded into this section as a
                 filter on the same entry list. Group tabs, then — in
@@ -2052,7 +2121,7 @@ function TowerLibrarySection({ go, onReady }) {
                 category browse carries on — no error panel. */}
             {!collFailed && (
               <div ref={collSectionRef} className="tower-collections">
-                <div className="section-index">COLLECTIONS</div>
+                <div className="section-index tower-filter-axis-label">COLLECTIONS <span>subject</span></div>
                 <div
                   className="tower-chips"
                   role="group"
@@ -2113,12 +2182,12 @@ function TowerLibrarySection({ go, onReady }) {
                 )}
               </div>
             )}
-            <div className="section-index">ZOOM IN</div>
+            <div className="section-index tower-filter-axis-label">FORMAT <span>form</span></div>
             <div className="tower-chips" role="group" aria-label="Filter by format">
               <button
                 type="button"
                 className={`tower-chip${bucketFilter === "" ? " is-active" : ""}`}
-                onClick={() => setBucketFilter("")}
+                onClick={() => selectLane("")}
               >
                 All entries <span>{artifacts.length}</span>
               </button>
@@ -2131,9 +2200,7 @@ function TowerLibrarySection({ go, onReady }) {
                     <button
                       type="button"
                       className={`tower-chip${laneActive ? " is-active" : ""}`}
-                      onClick={() =>
-                        setBucketFilter(bucketFilter === c ? "" : c)
-                      }
+                      onClick={() => selectLane(bucketFilter === c ? "" : c)}
                       aria-pressed={laneActive}
                       aria-expanded={isOpenLane}
                     >
@@ -2155,9 +2222,7 @@ function TowerLibrarySection({ go, onReady }) {
                               type="button"
                               key={s.id}
                               className={`tower-subchip${subActive ? " is-active" : ""}`}
-                              onClick={() =>
-                                setBucketFilter(subActive ? activeLane : key)
-                              }
+                              onClick={() => selectLane(subActive ? activeLane : key)}
                               aria-pressed={subActive}
                             >
                               {s.label} <span>{count}</span>
@@ -2169,6 +2234,9 @@ function TowerLibrarySection({ go, onReady }) {
                   </Fragment>
                 );
               })}
+            </div>
+                </div>
+              )}
             </div>
             <LibraryResults
               artifacts={artifacts}
