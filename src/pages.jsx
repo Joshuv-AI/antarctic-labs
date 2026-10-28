@@ -306,6 +306,25 @@ function towerHaystack(a, subLabel) {
 let towerDataCache = null;
 let towerDataFor = null;
 
+// Memory discipline (stability, 2026-10-28 — Joshua's phone crash video):
+// the catalog's derived search data roughly doubles the parsed catalog's
+// footprint, and on iOS that total crosses the tab's jetsam limit — the
+// page loads fully, then the system kills it and it reloads, in a loop.
+// Devices with a hard memory ceiling (iPhones/iPads, low deviceMemory)
+// skip the did-you-mean vocabulary entirely (it is read only by the typo
+// stage, which already guards on null); everywhere else the vocabulary
+// is capped so its size is bounded no matter how large the catalog gets.
+const LOW_MEMORY_ENV = (() => {
+  try {
+    const ua = navigator.userAgent || "";
+    if (/iPhone|iPad|iPod/.test(ua)) return true;
+    if (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1) return true;
+    if (navigator.deviceMemory && navigator.deviceMemory <= 4) return true;
+  } catch {}
+  return false;
+})();
+const VOCAB_CAP = 500000;
+
 // One shared collator for every catalog sort. Intl.Collator.compare is
 // measurably faster than String.localeCompare per call (notably on
 // JavaScriptCore), and an explicit "en-US" locale makes the order
@@ -370,11 +389,17 @@ async function buildSearchData(artifacts, bucketKeys, isCancelled) {
   // Did-you-mean vocabulary (Workstream D, SPEC-6): token -> frequency over
   // the SHORT fields only (title/creator/collection). Built once here so a
   // zero-result query never pays a catalog scan to find corrections.
-  const vocab = new Map();
+  // Skipped on low-memory devices and capped elsewhere (see
+  // LOW_MEMORY_ENV above): at 600k works the uncapped map held millions
+  // of distinct tokens and was a first-order share of the crash footprint.
+  const vocab = LOW_MEMORY_ENV ? null : new Map();
   const vocabAdd = (field) => {
-    if (!field) return;
+    if (!vocab || !field) return;
     for (const t of field.split(" ")) {
-      if (t) vocab.set(t, (vocab.get(t) || 0) + 1);
+      if (!t) continue;
+      const c = vocab.get(t);
+      if (c !== undefined) vocab.set(t, c + 1);
+      else if (vocab.size < VOCAB_CAP) vocab.set(t, 1);
     }
   };
   for (let from = 0; from < n; from += 20000) {
@@ -414,7 +439,7 @@ async function buildSearchData(artifacts, bucketKeys, isCancelled) {
 // when a 300k+ record derivation had to finish before the first
 // keystroke could be answered. Resolves to the final towerData object,
 // or null if cancelled/superseded before finishing.
-async function deriveTowerData(artifacts, isCancelled, onPhase) {
+async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
   if (towerDataCache && towerDataFor === artifacts) return towerDataCache;
   const counts = {};
   for (let i = 0; i < artifacts.length; i++) {
@@ -448,23 +473,30 @@ async function deriveTowerData(artifacts, isCancelled, onPhase) {
   // off this alone; the expensive search-data build below no longer
   // gates first paint. Search activates when phase 1 lands (the results
   // memo treats a query as browsing while haystacks is null).
-  if (onPhase) {
-    onPhase({
-      counts,
-      subCounts,
-      bucketKeys,
-      collections,
-      idIndex,
-      order: null,
-      haystacks: null,
-      normTitles: null,
-      normCreators: null,
-      normColls: null,
-      normDescs: null,
-      secMasks: null,
-      volFlags: null,
-      vocab: null,
-    });
+  const phase0 = {
+    counts,
+    subCounts,
+    bucketKeys,
+    collections,
+    idIndex,
+    order: null,
+    haystacks: null,
+    normTitles: null,
+    normCreators: null,
+    normColls: null,
+    normDescs: null,
+    secMasks: null,
+    volFlags: null,
+    vocab: null,
+  };
+  if (onPhase) onPhase(phase0);
+  if (opts.browseOnly) {
+    // Partial (progressive) publish: phase 0 is all a partial array gets.
+    // The expensive phases (search data, sort orders) run exactly once,
+    // on the complete array — restarting them per chunk publish churned
+    // memory (aborted half-built structures + garbage peaks) and was a
+    // direct contributor to the mobile crash-reload loop (2026-10-28).
+    return phase0;
   }
   const search = await buildSearchData(artifacts, bucketKeys, isCancelled);
   if (!search || isCancelled()) return null;
@@ -990,7 +1022,8 @@ function TowerLibrarySection({ go, onReady }) {
         // orders still building in the background must not hold search
         // hostage.
         if (!cancelled) setTowerData(phase);
-      }
+      },
+      { browseOnly: !fullIndexReady }
     ).then(
       (data) => {
         if (cancelled) return;
@@ -1004,7 +1037,7 @@ function TowerLibrarySection({ go, onReady }) {
     return () => {
       cancelled = true;
     };
-  }, [artifacts, deriveSeq]);
+  }, [artifacts, deriveSeq, fullIndexReady]);
   const retryCatalog = () => {
     setDeriveError(false);
     retryArtifacts();

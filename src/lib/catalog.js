@@ -157,12 +157,43 @@ async function loadIndexV2() {
   const parts = new Array(chunks).fill(null);
   let published = 0;
   let acc = [];
+  // Publish coalescing (stability, 2026-10-28): partial publishes are
+  // throttled to one per 2.5s (the final, complete publish always fires
+  // immediately). Every publish swaps the artifacts array identity, which
+  // restarts the page's catalog derivations and re-renders — at ten
+  // chunks that churn (aborted builds + garbage) stacked on top of the
+  // parsed catalog and pushed mobile tabs over their memory budget.
+  let lastPubAt = 0;
+  let pubTimer = null;
+  const publishNow = (complete) => {
+    lastPubAt = Date.now();
+    publishIndex(acc, complete);
+  };
   const publishContiguous = () => {
+    let grew = false;
     while (published < chunks && parts[published]) {
       acc = acc.concat(parts[published]);
       parts[published] = undefined;
       published++;
-      publishIndex(acc, published === chunks);
+      grew = true;
+    }
+    if (!grew) return;
+    if (published === chunks) {
+      if (pubTimer) { clearTimeout(pubTimer); pubTimer = null; }
+      publishNow(true);
+      return;
+    }
+    const wait = 2500 - (Date.now() - lastPubAt);
+    if (lastPubAt === 0 || wait <= 0) {
+      publishNow(false);
+      return;
+    }
+    if (!pubTimer) {
+      pubTimer = setTimeout(() => {
+        pubTimer = null;
+        lastPubAt = Date.now();
+        publishIndex(acc, published === chunks);
+      }, wait);
     }
   };
   const workerFailed = await streamChunksViaWorker(version, chunks, (i, records) => {
