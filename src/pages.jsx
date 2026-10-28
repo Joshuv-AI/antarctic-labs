@@ -39,7 +39,6 @@ import { PORTAL_URL } from "./content/tower-api.js";
 import {
   loadBootstrap,
   requestCatalogIndex,
-  scheduleCatalogIndex,
   isIndexInFlight,
   getCachedArtifacts,
   getFullArtifact,
@@ -47,7 +46,6 @@ import {
   getCover,
   onIndexReady,
   isIndexLoading,
-  warmShardManifest,
 } from "./lib/catalog.js";
 // Two-level browse taxonomy for the library filter (revamp 2026-10-17):
 // top-level lanes + subcategories derived from the artifact_id prefix.
@@ -960,16 +958,9 @@ function TowerDiscovery({ artifacts, towerData, go, onBrowse, onShelfChange }) {
 }
 
 function TowerLibrarySection({ go, onReady }) {
-  // Warm the shard manifest in the background for entry pages — deferred
-  // well past first paint (2026-10-21 load fix): the manifest fetch
-  // competed with the catalog on the critical path, and nothing on THIS
-  // page needs it. Entry pages fetch it on demand if they arrive first.
-  useEffect(() => {
-    const t = setTimeout(() => {
-      warmShardManifest();
-    }, 6000);
-    return () => clearTimeout(t);
-  }, []);
+  // Stability (2026-10-27): the +6s shard-manifest warm that used to live
+  // here is REMOVED — it parsed a ~16MB manifest on every landing-page
+  // visit for data this page never uses. Entry pages fetch it on demand.
   // The catalog loads asynchronously (see ./lib/catalog.js). While it is
   // null the Tower boot loader covers the screen, so rendering nothing is
   // correct — never a half-built page.
@@ -1208,32 +1199,14 @@ function TowerLibrarySection({ go, onReady }) {
     }
     requestCatalogIndex();
   }, [query, bucketFilter, sortId, rowBudget, collKey]);
-  // Approach trigger: start the index when the results area comes within
-  // ~800px of the viewport, so it is usually ready before the visitor
-  // arrives at it. Re-armed on every data phase (bootstrap, phase 0/1,
-  // full index): the results node is replaced as phases render, and an
-  // observer left on a detached node would never fire (QA catch).
-  useEffect(() => {
-    if (!artifacts) return;
-    const el = document.getElementById("tower-results");
-    if (!el || typeof IntersectionObserver === "undefined") return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) {
-          requestCatalogIndex();
-          io.disconnect();
-        }
-      },
-      { rootMargin: "800px" }
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [artifacts, towerData]);
-  // Idle schedule: if the visitor just reads, the index still arrives —
-  // 12s after mount, long after first paint has settled.
-  useEffect(() => {
-    scheduleCatalogIndex();
-  }, []);
+  // Stability (2026-10-27): the approach trigger and the 12s idle
+  // schedule that used to live here are REMOVED. Both loaded the full
+  // ~186MB catalog index without any explicit visitor intent — on mobile
+  // Safari the parse + progressive re-derivation exhausted the tab's
+  // memory budget and iOS jetsam-killed the page into a reload loop
+  // (open the library, scroll, crash). The index now starts ONLY from
+  // explicit intent: the browse-controls effect above or the search
+  // field's onFocus. Do not re-add passive triggers.
   // The input stays bound to the raw query so typing never waits on work;
   // the expensive filter/sort and the deep index search run on the deferred
   // value at background priority, which removes the keystroke lag.
