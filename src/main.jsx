@@ -258,7 +258,6 @@ const DonatePage = lazyPage("DonatePage");
 const Government = lazyPage("Government");
 const About = lazyPage("About");
 const PrivacyPage = lazyPage("PrivacyPage");
-const ServiceDetail = lazyPage("ServiceDetail");
 const TowerApiPage = lazyPage("TowerApiPage");
 // FaqBlock stays available from the shared lazy pages chunk for the
 // pages that still render one; the homepage no longer renders an FAQ.
@@ -308,8 +307,6 @@ function dockActiveId(path) {
     return "tower";
   if (path === "/government-contracting") return "gov";
   if (path === "/about") return "about";
-  // Service pages: a sentinel no dock item matches, so nothing highlights.
-  if (path.startsWith("/services/")) return "services";
   return undefined;
 }
 function App() {
@@ -659,9 +656,6 @@ function App() {
         {path === "/tower-of-babel/api" && (
           <TowerApiPage go={go} />
         )}
-        {path.startsWith("/services/") && (
-          <ServiceDetail go={go} path={path} />
-        )}
         {/* Typography vortex environment — the agent-resources and
             suggest pages only. The Tower landing/library page itself no
             longer carries it (2026-10-21 revamp): the page is a paper
@@ -713,11 +707,10 @@ function App() {
             </Suspense>
           </div>
         )}
-        {/* Services / About share the homepage's resting
+        {/* About shares the homepage's resting
             environment: the iceberg video parked at its final position,
             with no scroll choreography (that belongs to the homepage). */}
-        {(path.startsWith("/services/") ||
-          path === "/about") && <NewBackgroundVideo rest />}
+        {path === "/about" && <NewBackgroundVideo rest />}
         {path === "/government-contracting" && (
           <Government go={go} />
         )}

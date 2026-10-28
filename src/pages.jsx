@@ -97,7 +97,6 @@ function getTowerFiles() {
 import ReaderAssist, { SUPPORTS_HIGHLIGHTS } from "./components/ReaderAssist.jsx";
 import { applyMeta } from "./seo.js";
 import { government } from "./content/government.js";
-import { services } from "./content/services.js";
 // Module-level LRU cache for entry full texts (2026-10-18): avoids re-downloading
 // up to 9MB on back/forward or prev/next navigation. Cap 5 entries.
 const textCache = new Map();
@@ -4718,131 +4717,6 @@ export function FaqBlock({ index = "QUESTIONS", faqs = [], id }) {
         ))}
       </div>
     </section>
-  );
-}
-
-// ----- Services -----------------------------------------------------------------
-// One component serves all six service detail pages. Content comes from
-// src/content/services.js (slug, h1, intro, definition, included, process,
-// comparison, pricing, use cases, FAQs). Rendered with the site's existing
-// inner-page primitives — no new visual language.
-export function ServiceDetail({ go, path }) {
-  const slug = String(path || "").replace("/services/", "").split("/")[0];
-  const svc = services.find((s) => s.slug === slug);
-  if (!svc) {
-    return (
-      <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
-        <section className="inner-hero section">
-          <div className="section-index">404</div>
-          <h1>SERVICE NOT FOUND.</h1>
-          <p className="display-copy">
-            That service page does not exist — but the work does.
-          </p>
-          <button type="button" className="text-link" onClick={() => go("/")}>
-            BACK TO THE HOMEPAGE <span aria-hidden="true">↗</span>
-          </button>
-        </section>
-      </main>
-    );
-  }
-  return (
-    <main className="page-shell inner-page" id="main-content" tabIndex={-1}>
-      <section className="inner-hero section">
-        <div className="section-index">{svc.kicker}</div>
-        <h1>{svc.h1}</h1>
-        <p className="display-copy">{svc.intro}</p>
-      </section>
-
-      <section className="copy-block section reveal">
-        <div className="section-index">WHAT IT IS</div>
-        <div>
-          <p className="body-copy">{svc.definition}</p>
-        </div>
-      </section>
-
-      <section className="section reveal">
-        <div className="section-index">WHAT'S INCLUDED</div>
-        <div className="capability-list">
-          {svc.included.map((item, i) => (
-            <div className="cap-row" key={item.title}>
-              <span>{String(i + 1).padStart(2, "0")}</span>
-              <h3>{item.title}</h3>
-              <p>{item.text}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="section reveal">
-        <div className="section-index">HOW IT WORKS</div>
-        <div className="capability-list">
-          {svc.process.map((step) => (
-            <div className="cap-row" key={step.num}>
-              <span>{step.num}</span>
-              <h3>{step.title}</h3>
-              <p>{step.text}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="section reveal">
-        <div className="section-index">COMPARISON</div>
-        <h2 className="svc-h2">{svc.comparison.title}</h2>
-        <div className="svc-table-wrap">
-          <table className="svc-table">
-            <thead>
-              <tr>
-                {svc.comparison.headers.map((h, i) => (
-                  <th key={i} scope="col">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {svc.comparison.rows.map((row, i) => (
-                <tr key={i}>
-                  {row.map((cell, j) =>
-                    j === 0 ? (
-                      <th key={j} scope="row">{cell}</th>
-                    ) : (
-                      <td key={j}>{cell}</td>
-                    )
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="copy-block section reveal">
-        <div className="section-index">PRICING</div>
-        <div>
-          <h2 className="svc-h2">{svc.pricing.title}</h2>
-          <p className="body-copy">{svc.pricing.body}</p>
-          <p className="body-copy svc-note">{svc.pricing.note}</p>
-        </div>
-      </section>
-
-      <section className="section reveal">
-        <div className="section-index">USE CASES</div>
-        <div className="capability-list">
-          {svc.useCases.map((u, i) => (
-            <div className="cap-row" key={u.title}>
-              <span>{String(i + 1).padStart(2, "0")}</span>
-              <h3>{u.title}</h3>
-              <p>{u.text}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <FaqBlock index="QUESTIONS" faqs={svc.faqs} />
-
-      <section className="section">
-        <p className="svc-updated">Updated {svc.updated}.</p>
-      </section>
-    </main>
   );
 }
 

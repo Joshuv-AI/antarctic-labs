@@ -21,13 +21,6 @@ const today = new Date().toISOString().slice(0, 10);
 // Per-page priority.
 const PRIORITY = {
   "/": "1.0",
-  "/projects": "0.9",
-  "/services/ai-automation": "0.8",
-  "/services/n8n-workflows": "0.8",
-  "/services/ai-agents": "0.8",
-  "/services/web-development": "0.8",
-  "/services/web-scraping": "0.8",
-  "/services/lead-generation": "0.8",
   "/about": "0.8",
   "/government-contracting": "0.8",
   "/tower-of-babel": "0.7",

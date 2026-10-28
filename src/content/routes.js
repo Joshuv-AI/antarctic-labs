@@ -33,36 +33,6 @@ export const routeMeta = {
     description:
       "Antarctic Labs is a proprietary trading and computing firm building its own data center in the Philippines. Our capital, our hardware, our systems. Not for hire.",
   },
-  "/services/ai-automation": {
-    title: `AI Automation Services for Small Business | Antarctic Labs`,
-    description:
-      "AI automation services for small business: n8n workflows, AI agents, and data pipelines built by a freelance developer. Free quote within 24 hours.",
-  },
-  "/services/n8n-workflows": {
-    title: `n8n Workflow Automation Developer | Antarctic Labs`,
-    description:
-      "Hire an n8n developer: custom n8n workflow automation, API integrations, AI steps, debugging, and self-hosted setup. Free quote within 24 hours.",
-  },
-  "/services/ai-agents": {
-    title: `AI Agent Development for Business | Antarctic Labs`,
-    description:
-      "Custom AI agent development: support agents, RAG knowledge bases, and workflow agents built by a freelance developer. Free quote within 24 hours.",
-  },
-  "/services/web-development": {
-    title: `Freelance Web Developer for Hire | Antarctic Labs`,
-    description:
-      "Freelance web developer: fast custom websites, landing pages, redesigns, and web apps. Direct communication, fixed quotes. Free quote within 24 hours.",
-  },
-  "/services/web-scraping": {
-    title: `Web Scraping Services | Data Extraction | Antarctic Labs`,
-    description:
-      "Web scraping services: clean structured data from public websites, delivered in Excel or CSV. Anti-bot handling, scheduled runs. Free quote in 24 hours.",
-  },
-  "/services/lead-generation": {
-    title: `Lead Generation Automation Systems | Antarctic Labs`,
-    description:
-      "Lead generation automation: systems that source, enrich, and qualify B2B prospects on autopilot. Built by a freelance developer. Free quote in 24 hours.",
-  },
   "/tower-of-babel": {
     title: `Free Online Library | Tower of Babel`,
     description:
@@ -147,12 +117,6 @@ export const routeMetaLegacy = {
 //
 export const routes = [
   "/",
-  "/services/ai-automation",
-  "/services/n8n-workflows",
-  "/services/ai-agents",
-  "/services/web-development",
-  "/services/web-scraping",
-  "/services/lead-generation",
   "/tower-of-babel",
   "/tower-of-babel/api",
   "/tower-of-babel/library",

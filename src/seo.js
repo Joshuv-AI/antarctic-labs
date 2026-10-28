@@ -14,7 +14,6 @@ import { site } from "./content/site.js";
 import { operator } from "./content/operator.js";
 import { government } from "./content/government.js";
 import { towerOfBabel } from "./content/tower-of-babel.js";
-import { services } from "./content/services.js";
 // Entry JSON-LD uses the cached catalog when available (see
 // ./lib/catalog.js); falls back to a generic entry node until it arrives.
 import { getCachedArtifacts } from "./lib/catalog.js";
@@ -129,10 +128,6 @@ function faqsForPath(path) {
   if (path === "/government-contracting") return government.faqs;
   if (path === "/tower-of-babel/library") return towerOfBabel.library.faqs;
   if (path === "/tower-of-babel/api") return towerOfBabel.agentFaqs;
-  if (path.startsWith("/services/")) {
-    const svc = services.find((s) => `/services/${s.slug}` === path);
-    return svc ? svc.faqs : undefined;
-  }
   return undefined;
 }
 
@@ -167,27 +162,6 @@ function buildJsonLdForPath(path, canonicalHref) {
 function buildBaseJsonLd(path, canonicalHref) {
   if (path === "/") return homeJsonLd(canonicalHref);
   if (path === "/about") return personJsonLd(canonicalHref);
-  if (path.startsWith("/services/")) {
-    const svc = services.find((s) => `/services/${s.slug}` === path);
-    if (!svc) return null;
-    // Service pages emit a Service node (machine-readable service catalog)
-    // plus breadcrumbs. Description mirrors the visible intro — no mismatch.
-    const crumb = breadcrumbJsonLd([
-      { name: "HOME", url: SITE_URL + "/" },
-      { name: "SERVICES", url: SITE_URL + "/" },
-      { name: svc.h1.toUpperCase().slice(0, 60), url: canonicalHref },
-    ]);
-    const service = {
-      "@type": "Service",
-      name: svc.h1,
-      description: svc.intro,
-      url: canonicalHref,
-      provider: { "@id": SITE_URL + "/#organization" },
-      areaServed: "Worldwide",
-      serviceType: svc.h1,
-    };
-    return { "@context": "https://schema.org", "@graph": [crumb, service] };
-  }
   if (path === "/tower-of-babel/library") {
     return breadcrumbJsonLd([
       { name: "HOME", url: SITE_URL + "/" },
