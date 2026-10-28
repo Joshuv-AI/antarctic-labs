@@ -18,6 +18,13 @@
 //   /search-index/manifest.json             -> functions/search-index/manifest.json.js
 //   /search-index/<buildId>/terms/<n>.json  -> functions/search-index/[buildId]/terms/[shard].js
 //
+// The API search shards (public/api-search-shards/, 10 JSON files) are read
+// at request time from raw.githubusercontent.com by functions/_lib/tower-api.js
+// and are never served from dist/. After the 600,320-entry regeneration,
+// search-07.json reached 26.5 MiB and failed Pages' 25 MiB per-file asset
+// validation, failing every deployment whose tree contained it (first seen
+// 2026-10-28). The whole directory is held out like the other payloads.
+//
 // (Both functions pin to the DEPLOYED commit (CF_PAGES_COMMIT_SHA) so the
 // manifest's buildId always matches the term shards shipped in the same
 // deploy.)
@@ -33,7 +40,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const HOLD = join(ROOT, ".deploy-payload");
-const ITEMS = ["tower-of-babel", "catalog.json", "catalog-index.json", "search-index"];
+const ITEMS = ["tower-of-babel", "catalog.json", "catalog-index.json", "search-index", "api-search-shards"];
 
 const mode = process.argv[2];
 if (mode !== "out" && mode !== "in") {
