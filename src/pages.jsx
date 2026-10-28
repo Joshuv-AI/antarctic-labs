@@ -2409,6 +2409,7 @@ export function TowerApiAccess({ go }) {
   const webhookConfigured = !!(apiStatus && apiStatus.webhook_configured);
 
   const [billing, setBilling] = useState("monthly");
+  const [planSel, setPlanSel] = useState("pro");
   const [subscribing, setSubscribing] = useState("");
   const [subError, setSubError] = useState("");
   const subscribe = async (plan) => {
@@ -2468,6 +2469,7 @@ export function TowerApiAccess({ go }) {
   };
 
   const paidTiers = api.tiers.filter((t) => t.priceMonthly);
+  const selTier = paidTiers.find((t) => t.id === planSel) || paidTiers[0];
   return (
     <section className="section desk-section desk-api" aria-label="Tower API access">
       <div className="suggest-wrap">
@@ -2514,45 +2516,57 @@ export function TowerApiAccess({ go }) {
         </div>
         {subscriptionsOpen ? (
           <>
-            <div
-              className="desk-sample-actions"
-              role="group"
-              aria-label="Billing period"
-            >
+            <div className="api-toggle" role="group" aria-label="Billing period">
               <button
                 type="button"
-                className="tower-access-btn"
+                className={billing === "monthly" ? "is-on" : ""}
                 aria-pressed={billing === "monthly"}
                 onClick={() => setBilling("monthly")}
               >
-                MONTHLY
+                Monthly
               </button>
               <button
                 type="button"
-                className="tower-access-btn"
+                className={billing === "annual" ? "is-on" : ""}
                 aria-pressed={billing === "annual"}
                 onClick={() => setBilling("annual")}
               >
-                ANNUAL
+                Annual — two months free
               </button>
             </div>
-            <div className="desk-sample-actions">
+            <div className="api-plans" role="group" aria-label="Choose a plan">
               {paidTiers.map((t) => (
                 <button
                   key={t.id}
                   type="button"
-                  className="tower-access-btn"
-                  disabled={!!subscribing}
-                  onClick={() => subscribe(t.id)}
+                  className={planSel === t.id ? "is-on" : ""}
+                  aria-pressed={planSel === t.id}
+                  onClick={() => setPlanSel(t.id)}
                 >
-                  {subscribing === t.id
-                    ? "OPENING CHECKOUT…"
-                    : `SUBSCRIBE — ${t.name.toUpperCase()} ${
-                        billing === "annual" ? t.priceAnnual : t.priceMonthly
-                      }`}{" "}
-                  <span aria-hidden="true">↗</span>
+                  <span className="api-plan-name">{t.name}</span>
+                  <span className="api-plan-price">
+                    {billing === "annual" ? t.priceAnnual : t.priceMonthly}
+                  </span>
+                  <span className="api-plan-limit">{t.limit}</span>
                 </button>
               ))}
+            </div>
+            <div className="desk-sample-actions">
+              <button
+                type="button"
+                className="tower-access-btn api-cta"
+                disabled={!!subscribing}
+                onClick={() => subscribe(planSel)}
+              >
+                {subscribing
+                  ? "OPENING CHECKOUT…"
+                  : `SUBSCRIBE — ${selTier.name.toUpperCase()} ${
+                      billing === "annual"
+                        ? selTier.priceAnnual
+                        : selTier.priceMonthly
+                    }`}{" "}
+                <span aria-hidden="true">↗</span>
+              </button>
             </div>
             {subError && (
               <p className="suggest-error" role="alert">
@@ -2565,7 +2579,7 @@ export function TowerApiAccess({ go }) {
         )}
         <div className="desk-sample-actions">
           {PORTAL_URL ? (
-            <a className="tower-access-btn" href={PORTAL_URL}>
+            <a className="api-quiet" href={PORTAL_URL}>
               MANAGE BILLING <span aria-hidden="true">↗</span>
             </a>
           ) : (
@@ -2642,7 +2656,7 @@ export function TowerApiAccess({ go }) {
             <div className="suggest-actions">
               <button
                 type="submit"
-                className="tower-access-btn suggest-submit"
+                className="tower-access-btn api-cta suggest-submit"
                 disabled={keySending}
               >
                 {keySending ? "SENDING…" : api.keyForm.button}{" "}
@@ -2654,7 +2668,7 @@ export function TowerApiAccess({ go }) {
         <div className="desk-sample-actions">
           <button
             type="button"
-            className="tower-access-btn"
+            className="api-quiet"
             onClick={() => go("/tower-of-babel/api")}
           >
             READ THE FULL API DOCUMENTATION{" "}
@@ -4839,6 +4853,7 @@ export function TowerApiPage({ go }) {
   const keysConfigured = !!(apiStatus && apiStatus.keys_configured);
 
   const [billing, setBilling] = useState("monthly");
+  const [planSel, setPlanSel] = useState("pro");
   const [subscribing, setSubscribing] = useState("");
   const [subError, setSubError] = useState("");
   const subscribe = async (plan) => {
@@ -4898,6 +4913,7 @@ export function TowerApiPage({ go }) {
   };
 
   const paidTiers = api.tiers.filter((t) => t.priceMonthly);
+  const selTier = paidTiers.find((t) => t.id === planSel) || paidTiers[0];
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
@@ -4968,46 +4984,58 @@ export function TowerApiPage({ go }) {
           ))}
         </div>
         {subscriptionsOpen ? (
-          <div className="suggest-wrap">
-            <div
-              className="desk-sample-actions"
-              role="group"
-              aria-label="Billing period"
-            >
+          <div className="suggest-wrap api-buy">
+            <div className="api-toggle" role="group" aria-label="Billing period">
               <button
                 type="button"
-                className="tower-access-btn"
+                className={billing === "monthly" ? "is-on" : ""}
                 aria-pressed={billing === "monthly"}
                 onClick={() => setBilling("monthly")}
               >
-                MONTHLY
+                Monthly
               </button>
               <button
                 type="button"
-                className="tower-access-btn"
+                className={billing === "annual" ? "is-on" : ""}
                 aria-pressed={billing === "annual"}
                 onClick={() => setBilling("annual")}
               >
-                ANNUAL
+                Annual — two months free
               </button>
             </div>
-            <div className="desk-sample-actions">
+            <div className="api-plans" role="group" aria-label="Choose a plan">
               {paidTiers.map((t) => (
                 <button
                   key={t.id}
                   type="button"
-                  className="tower-access-btn"
-                  disabled={!!subscribing}
-                  onClick={() => subscribe(t.id)}
+                  className={planSel === t.id ? "is-on" : ""}
+                  aria-pressed={planSel === t.id}
+                  onClick={() => setPlanSel(t.id)}
                 >
-                  {subscribing === t.id
-                    ? "OPENING CHECKOUT…"
-                    : `SUBSCRIBE — ${t.name.toUpperCase()} ${
-                        billing === "annual" ? t.priceAnnual : t.priceMonthly
-                      }`}{" "}
-                  <span aria-hidden="true">↗</span>
+                  <span className="api-plan-name">{t.name}</span>
+                  <span className="api-plan-price">
+                    {billing === "annual" ? t.priceAnnual : t.priceMonthly}
+                  </span>
+                  <span className="api-plan-limit">{t.limit}</span>
                 </button>
               ))}
+            </div>
+            <div className="desk-sample-actions">
+              <button
+                type="button"
+                className="tower-access-btn api-cta"
+                disabled={!!subscribing}
+                onClick={() => subscribe(planSel)}
+              >
+                {subscribing
+                  ? "OPENING CHECKOUT…"
+                  : `SUBSCRIBE — ${selTier.name.toUpperCase()} ${
+                      billing === "annual"
+                        ? selTier.priceAnnual
+                        : selTier.priceMonthly
+                    }`}{" "}
+                <span aria-hidden="true">↗</span>
+              </button>
             </div>
             {subError && (
               <p className="suggest-error" role="alert">
@@ -5022,7 +5050,7 @@ export function TowerApiPage({ go }) {
         )}
         <div className="suggest-wrap">
           {PORTAL_URL ? (
-            <a className="tower-access-btn" href={PORTAL_URL}>
+            <a className="api-quiet" href={PORTAL_URL}>
               MANAGE BILLING <span aria-hidden="true">↗</span>
             </a>
           ) : (
@@ -5103,7 +5131,7 @@ export function TowerApiPage({ go }) {
               <div className="suggest-actions">
                 <button
                   type="submit"
-                  className="tower-access-btn suggest-submit"
+                  className="tower-access-btn api-cta suggest-submit"
                   disabled={keySending}
                 >
                   {keySending ? "SENDING…" : api.keyForm.button}{" "}
