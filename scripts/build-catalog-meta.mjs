@@ -84,6 +84,16 @@ const postAdd = (field, mode, term, id) => {
   if (arr[arr.length - 1] !== id) arr.push(id);
 };
 
+// idmap: artifact_id -> global index, bucketed by shardFor(artifact_id),
+// so a caller can resolve a handful of known ids (e.g. canon pins) with
+// one small fetch instead of scanning record blocks.
+const idmap = new Map();
+const idmapAdd = (artifactId, id) => {
+  const b = shardFor(artifactId);
+  if (!idmap.has(b)) idmap.set(b, {});
+  idmap.get(b)[artifactId] = id;
+};
+
 let total = 0;
 let block = [];
 let blockIdx = 0;
@@ -100,6 +110,7 @@ for (const name of shardFiles) {
   const records = JSON.parse(raw);
   for (const r of records) {
     const id = total++;
+    if (r.artifact_id) idmapAdd(r.artifact_id, id);
     facetAdd("collection", r.collection, id);
     facetAdd("bucket", towerBucketKey(r), id);
     facetAdd("format", r.format, id);
@@ -147,6 +158,12 @@ for (const [field, modes] of Object.entries(postings)) {
   }
 }
 
+// idmap buckets
+mkdirSync(`${outDir}/idmap`, { recursive: true });
+for (const [b, obj] of idmap) {
+  writeFileSync(`${outDir}/idmap/bkt-${String(b).padStart(3, "0")}.json`, JSON.stringify(obj));
+}
+
 // manifest LAST (commit point)
 const fingerprint = hash.digest("hex");
 const manifest = {
@@ -157,7 +174,7 @@ const manifest = {
   record_blocks: blockIdx,
   block_size: BLOCK,
   distinct_terms: termTotal,
-  files: { counts: "counts.json", facets: "facets/<kind>.json", records: "records/records-NNNNN.json", postings: "postings/<field>-<exact|stem>/bkt-NNN.json" },
+  files: { counts: "counts.json", facets: "facets/<kind>.json", records: "records/records-NNNNN.json", postings: "postings/<field>-<exact|stem>/bkt-NNN.json", idmap: "idmap/bkt-NNN.json" },
   generated_at: new Date().toISOString(),
 };
 writeFileSync(`${outDir}/manifest.json`, JSON.stringify(manifest, null, 1));
