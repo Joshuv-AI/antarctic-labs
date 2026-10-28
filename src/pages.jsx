@@ -1199,14 +1199,56 @@ function TowerLibrarySection({ go, onReady }) {
     }
     requestCatalogIndex();
   }, [query, bucketFilter, sortId, rowBudget, collKey]);
+  // Automatic start (2026-10-28, Joshua's direct order): the explicit-
+  // intent-only rule below left the library presenting as a 20,000-work
+  // library — plain scrolling never started the index, the header count
+  // sat at the bootstrap size, and on mobile the rest of the library
+  // effectively never arrived. The index now starts on its own once
+  // this section is on screen: the visitor's first scroll, or a short
+  // delay while the tab is visible, whichever comes first. This is a
+  // SINGLE one-shot trigger on the library page only, armed after the
+  // bootstrap paints — not the three stacked passive loads (approach
+  // trigger + 12s idle + landing manifest warm) whose combination
+  // jetsam-killed mobile Safari tabs in the 2026-10-27 crash loop.
+  // Chunks publish progressively, so the header count climbs visibly
+  // from 20,000 to the full catalog instead of sitting on a wrong
+  // number with no sign anything is loading.
+  useEffect(() => {
+    let done = false;
+    let timer = null;
+    const start = () => {
+      if (done) return;
+      done = true;
+      window.removeEventListener("scroll", onScroll);
+      if (timer) clearTimeout(timer);
+      requestCatalogIndex();
+    };
+    const onScroll = () => {
+      if (window.scrollY > 240) start();
+    };
+    const armTimer = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (document.visibilityState === "visible") start();
+        else armTimer();
+      }, 2500);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    armTimer();
+    return () => {
+      done = true;
+      window.removeEventListener("scroll", onScroll);
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
   // Stability (2026-10-27): the approach trigger and the 12s idle
-  // schedule that used to live here are REMOVED. Both loaded the full
+  // schedule that used to live here were REMOVED. Both loaded the full
   // ~186MB catalog index without any explicit visitor intent — on mobile
   // Safari the parse + progressive re-derivation exhausted the tab's
   // memory budget and iOS jetsam-killed the page into a reload loop
-  // (open the library, scroll, crash). The index now starts ONLY from
-  // explicit intent: the browse-controls effect above or the search
-  // field's onFocus. Do not re-add passive triggers.
+  // (open the library, scroll, crash). Superseded in part by the
+  // automatic start above (2026-10-28): one bounded trigger, library
+  // page only. Do not re-add the approach/idle stack.
   // The input stays bound to the raw query so typing never waits on work;
   // the expensive filter/sort and the deep index search run on the deferred
   // value at background priority, which removes the keystroke lag.
