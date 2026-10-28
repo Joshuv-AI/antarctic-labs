@@ -1909,6 +1909,13 @@ function TowerLibrarySection({ go, onReady }) {
           <button
             type="button"
             className="tower-access-btn"
+            onClick={() => go("/tower-of-babel/library/research")}
+          >
+            API ACCESS <span aria-hidden="true">↗</span>
+          </button>
+          <button
+            type="button"
+            className="tower-access-btn"
             onClick={() => go("/tower-of-babel/library/suggest")}
           >
             SUGGEST AN ENTRY <span aria-hidden="true">↗</span>
@@ -1919,13 +1926,6 @@ function TowerLibrarySection({ go, onReady }) {
             onClick={() => go("/tower-of-babel/donate")}
           >
             DONATE <span aria-hidden="true">♥</span>
-          </button>
-          <button
-            type="button"
-            className="tower-access-btn"
-            onClick={() => go("/tower-of-babel/library/research")}
-          >
-            API ACCESS <span aria-hidden="true">↗</span>
           </button>
         </div>
         {artifacts.length === 0 ? (
@@ -1970,13 +1970,21 @@ function TowerLibrarySection({ go, onReady }) {
                       className="tower-search tower-search-hero"
                       placeholder="Search titles, creators, tags… — or words inside the texts"
                       value={query}
-                      onChange={(e) => setQuery(e.target.value)}
+                      onChange={(e) => {
+                        setQuery(e.target.value);
+                        // Typing gives the results the screen: the
+                        // filter panel collapses by default while a
+                        // search is being typed (the chevron reopens
+                        // it). (Joshua, 2026-10-28.)
+                        if (e.target.value) setFiltersOpen(false);
+                      }}
                       onFocus={() => requestCatalogIndex()}
                       onKeyDown={onSearchKeyDown}
                       onCompositionStart={() => { composingRef.current = true; }}
                       onCompositionEnd={(e) => {
                         composingRef.current = false;
                         setQuery(e.target.value);
+                        if (e.target.value) setFiltersOpen(false);
                       }}
                       enterKeyHint="search"
                       autoComplete="off"
@@ -2444,7 +2452,7 @@ export function SuggestEntry({ go, onReady }) {
     );
   };
   return (
-    <main className="page-shell inner-page tower-light tower-suggest" id="main-content" tabIndex={-1}>
+    <main className="page-shell inner-page tower-suggest" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">{s.sectionIndex}</div>
         <h1>{s.heading}</h1>
@@ -3495,12 +3503,6 @@ const LibraryResults = memo(function LibraryResults({
                 ? `About ${formatAboutCount(model.total)} ${model.total === 1 ? "work" : "works"} for “${rawQuery}”`
                 : ""}
           </p>
-          {model.deepState === "unavailable" && (
-            <p className="tower-mentions-status">
-              Full-text search is unavailable right now — the search index
-              is being rebuilt. Title and author results still work.
-            </p>
-          )}
           {model.appliedCorrection && (
             <p className="tower-relax-banner">
               Showing results for “{model.appliedCorrection}” — spelling
