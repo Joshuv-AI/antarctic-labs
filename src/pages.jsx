@@ -2223,11 +2223,15 @@ async function submitSuggestion(payload) {
   return data;
 }
 
-export function SuggestEntry({ go }) {
+export function SuggestEntry({ go, onReady }) {
   const s = towerOfBabel.suggest;
   const fields = s.fields;
+  // /api/suggest requires type, title AND format. The slim form only asks
+  // type + title up front, so format starts at "single" (a standalone
+  // work) and can be changed inside the optional details below — the
+  // submission contract is unchanged.
   const initialValues = fields.reduce((acc, f) => {
-    acc[f.name] = "";
+    acc[f.name] = f.name === "format" ? "single" : "";
     return acc;
   }, {});
   const [values, setValues] = useState(initialValues);
@@ -2239,6 +2243,12 @@ export function SuggestEntry({ go }) {
   const [sending, setSending] = useState(false);
   // Honeypot: invisible to humans, bots fill it. The API drops those silently.
   const [honeypot, setHoneypot] = useState("");
+  // Report ready on mount so the Tower boot loader (the standard Tower
+  // loading ceremony) dismisses on its normal beat instead of sitting
+  // until the failsafe — the same contract DonatePage uses.
+  useEffect(() => {
+    if (onReady) onReady();
+  }, [onReady]);
   const validate = (next) => {
     const errs = {};
     fields.forEach((f) => {
@@ -2302,8 +2312,71 @@ export function SuggestEntry({ go }) {
     setSubmitted(false);
     setHoneypot("");
   };
+  const renderField = (f) => {
+    const fieldError = errors[f.name];
+    const errorId = `${f.id}-error`;
+    return (
+      <div className="suggest-field" key={f.id}>
+        <label htmlFor={f.id}>
+          {f.label}
+          {f.required && <span className="req" aria-hidden="true"> *</span>}
+        </label>
+        {f.type === "select" ? (
+          <select
+            id={f.id}
+            name={f.name}
+            required={f.required}
+            value={values[f.name]}
+            onChange={onChange(f.name)}
+            aria-required={f.required || undefined}
+            aria-invalid={fieldError ? "true" : undefined}
+            aria-describedby={fieldError ? errorId : undefined}
+          >
+            <option value="" disabled>{f.selectPlaceholder || "Select"}</option>
+            {f.options.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        ) : f.type === "textarea" ? (
+          <textarea
+            id={f.id}
+            name={f.name}
+            required={f.required}
+            rows={f.rows || 4}
+            value={values[f.name]}
+            onChange={onChange(f.name)}
+            placeholder={f.placeholder}
+            aria-required={f.required || undefined}
+            aria-invalid={fieldError ? "true" : undefined}
+            aria-describedby={fieldError ? errorId : undefined}
+          />
+        ) : (
+          <input
+            id={f.id}
+            name={f.name}
+            type={f.type}
+            required={f.required}
+            value={values[f.name]}
+            onChange={onChange(f.name)}
+            autoComplete={f.autoComplete}
+            placeholder={f.placeholder}
+            aria-required={f.required || undefined}
+            aria-invalid={fieldError ? "true" : undefined}
+            aria-describedby={fieldError ? errorId : undefined}
+          />
+        )}
+        {fieldError && (
+          <p className="suggest-error" id={errorId} role="alert">
+            {fieldError}
+          </p>
+        )}
+      </div>
+    );
+  };
   return (
-    <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
+    <main className="page-shell inner-page tower-light tower-suggest" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">{s.sectionIndex}</div>
         <h1>{s.heading}</h1>
@@ -2318,69 +2391,17 @@ export function SuggestEntry({ go }) {
               noValidate={false}
               aria-label="Suggest a library entry"
             >
-              {fields.map((f) => {
-                const fieldError = errors[f.name];
-                const errorId = `${f.id}-error`;
-                return (
-                  <div className="suggest-field" key={f.id}>
-                    <label htmlFor={f.id}>
-                      {f.label}
-                      {f.required && <span className="req" aria-hidden="true"> *</span>}
-                    </label>
-                    {f.type === "select" ? (
-                      <select
-                        id={f.id}
-                        name={f.name}
-                        required={f.required}
-                        value={values[f.name]}
-                        onChange={onChange(f.name)}
-                        aria-required={f.required || undefined}
-                        aria-invalid={fieldError ? "true" : undefined}
-                        aria-describedby={fieldError ? errorId : undefined}
-                      >
-                        <option value="" disabled>{f.selectPlaceholder || "Select"}</option>
-                        {f.options.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                    ) : f.type === "textarea" ? (
-                      <textarea
-                        id={f.id}
-                        name={f.name}
-                        required={f.required}
-                        rows={f.rows || 4}
-                        value={values[f.name]}
-                        onChange={onChange(f.name)}
-                        placeholder={f.placeholder}
-                        aria-required={f.required || undefined}
-                        aria-invalid={fieldError ? "true" : undefined}
-                        aria-describedby={fieldError ? errorId : undefined}
-                      />
-                    ) : (
-                      <input
-                        id={f.id}
-                        name={f.name}
-                        type={f.type}
-                        required={f.required}
-                        value={values[f.name]}
-                        onChange={onChange(f.name)}
-                        autoComplete={f.autoComplete}
-                        placeholder={f.placeholder}
-                        aria-required={f.required || undefined}
-                        aria-invalid={fieldError ? "true" : undefined}
-                        aria-describedby={fieldError ? errorId : undefined}
-                      />
-                    )}
-                    {fieldError && (
-                      <p className="suggest-error" id={errorId} role="alert">
-                        {fieldError}
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
+              {fields.slice(0, 2).map(renderField)}
+              <details className="suggest-details">
+                <summary>
+                  <span className="section-index">ADD DETAILS</span>
+                  <span className="suggest-details-note">OPTIONAL</span>
+                  <span className="tower-about-chevron" aria-hidden="true">▾</span>
+                </summary>
+                <div className="suggest-details-body">
+                  {fields.slice(2).map(renderField)}
+                </div>
+              </details>
               {submitError && (
                 <p className="suggest-error" role="alert">
                   {submitError}

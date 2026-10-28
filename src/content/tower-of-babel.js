@@ -97,7 +97,7 @@ export const towerOfBabel = {
         name: "format",
         label: "SERIES OR EDITIONS?",
         type: "select",
-        required: true,
+        required: false,
         selectPlaceholder: "Select one",
         options: [
           { value: "single", label: "Single standalone work" },

@@ -431,8 +431,7 @@ function App() {
     const isTowerDest =
       p === "/tower-of-babel/library" ||
       p === "/tower-of-babel/donate" ||
-      (p.startsWith("/tower-of-babel/library/") &&
-        p !== "/tower-of-babel/library/suggest");
+      p.startsWith("/tower-of-babel/library/");
     if (isTowerDest) raiseTowerBoot();
     // Mount only: this is the cold-load path; in-app navigation goes
     // through go().
@@ -486,17 +485,13 @@ function App() {
     // Entering the Tower of Babel (landing, library, donate, or any entry
     // page) from inside the app: raise the Tower loader so the transition
     // gets the same branded beat as the initial page load and the ENTER THE
-    // LIBRARY button. The suggest-an-entry form is excluded: it is a
-    // lightweight form, not a destination, and it never reports ready — so
-    // the boot overlay would sit on it until the 4s failsafe. It uses the
-    // standard fast swap instead. Donate reports ready on mount, so it is
-    // safe to include.
+    // LIBRARY button. Donate and the suggest-an-entry form both report
+    // ready on mount, so they are safe to include.
     const enteringTower =
       (canonical === "/tower-of-babel" ||
         canonical === "/tower-of-babel/library" ||
         canonical === "/tower-of-babel/donate" ||
-        (canonical.startsWith("/tower-of-babel/library/") &&
-          canonical !== "/tower-of-babel/library/suggest")) &&
+        canonical.startsWith("/tower-of-babel/library/")) &&
       path !== canonical;
     if (enteringTower) {
       dismissBrandBoot();
@@ -645,7 +640,7 @@ function App() {
           />
         )}
         {path === "/tower-of-babel/library/suggest" && (
-          <SuggestEntry go={go} />
+          <SuggestEntry go={go} onReady={handleTowerReady} />
         )}
         {path === "/tower-of-babel/library/research" && (
           <TowerApiAccessPage go={go} />
@@ -656,8 +651,8 @@ function App() {
         {path === "/tower-of-babel/api" && (
           <TowerApiPage go={go} />
         )}
-        {/* Typography vortex environment — the agent-resources and
-            suggest pages only. The Tower landing/library page itself no
+        {/* Typography vortex environment — the agent-resources page
+            only. The Tower landing/library page itself no
             longer carries it (2026-10-21 revamp): the page is a paper
             library surface now, and the canvas's init cost was part of
             that page's load time. Exact ThreeUI source, configured usage
@@ -665,8 +660,7 @@ function App() {
             dissolveRadius 1.50, particleAmount 1.00, suctionDuration
             1100) with a site phrase. Fixed behind the page content;
             pointer interactivity is parked because the page sits above. */}
-        {(path === "/tower-of-babel/api" ||
-          path === "/tower-of-babel/library/suggest") && (
+        {path === "/tower-of-babel/api" && (
           <div className="tower-vortex-layer" aria-hidden="true">
             <Suspense fallback={null}>
               <WebGLShield>
