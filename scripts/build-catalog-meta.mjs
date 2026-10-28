@@ -158,6 +158,29 @@ for (const [field, modes] of Object.entries(postings)) {
   }
 }
 
+// vocabulary for did-you-mean: term -> document frequency over the
+// title/creator exact maps, bucketed by first character (the correction
+// gate requires a matching first letter). Fetched only on the fallback
+// path when a query token has no postings at all.
+{
+  const vocab = new Map();
+  for (const map of [postings.title.exact, postings.creator.exact]) {
+    // posting maps are bucketed: Map<bucket, Map<term, deltaIds>>
+    for (const bucketMap of map.values()) {
+      for (const [term, ids] of bucketMap) vocab.set(term, (vocab.get(term) || 0) + ids.length);
+    }
+  }
+  const byChar = new Map();
+  for (const [term, df] of vocab) {
+    const c = /^[a-z0-9]$/.test(term[0]) ? term[0] : "_";
+    if (!byChar.has(c)) byChar.set(c, {});
+    byChar.get(c)[term] = df;
+  }
+  mkdirSync(`${outDir}/vocab`, { recursive: true });
+  for (const [c, obj] of byChar) writeFileSync(`${outDir}/vocab/${c}.json`, JSON.stringify(obj));
+  console.log(`vocab terms=${vocab.size} buckets=${byChar.size}`);
+}
+
 // idmap buckets
 mkdirSync(`${outDir}/idmap`, { recursive: true });
 for (const [b, obj] of idmap) {
@@ -174,7 +197,7 @@ const manifest = {
   record_blocks: blockIdx,
   block_size: BLOCK,
   distinct_terms: termTotal,
-  files: { counts: "counts.json", facets: "facets/<kind>.json", records: "records/records-NNNNN.json", postings: "postings/<field>-<exact|stem>/bkt-NNN.json", idmap: "idmap/bkt-NNN.json" },
+  files: { counts: "counts.json", facets: "facets/<kind>.json", records: "records/records-NNNNN.json", postings: "postings/<field>-<exact|stem>/bkt-NNN.json", idmap: "idmap/bkt-NNN.json", vocab: "vocab/<first-char>.json" },
   generated_at: new Date().toISOString(),
 };
 writeFileSync(`${outDir}/manifest.json`, JSON.stringify(manifest, null, 1));
