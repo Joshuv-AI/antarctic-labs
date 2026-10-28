@@ -119,17 +119,18 @@ for (const name of shardFiles) {
 }
 if (block.length) { writeFileSync(`${outDir}/records/records-${String(blockIdx).padStart(5, "0")}.json`, JSON.stringify(block)); blockIdx++; }
 
-// facets + counts
+// facets (split per kind, so a cold isolate fetches only the kinds a
+// request actually filters by) + counts
 const counts = { total, collection: {}, bucket: {}, format: {}, rights: {}, era: {} };
-const facetOut = {};
+mkdirSync(`${outDir}/facets`, { recursive: true });
 for (const [kind, m] of Object.entries(facets)) {
-  facetOut[kind] = {};
+  const facetOut = {};
   for (const [key, ids] of [...m.entries()].sort((a, b) => b[1].length - a[1].length)) {
     counts[kind][key] = ids.length;
-    facetOut[kind][key] = delta(ids);
+    facetOut[key] = delta(ids);
   }
+  writeFileSync(`${outDir}/facets/${kind}.json`, JSON.stringify(facetOut));
 }
-writeFileSync(`${outDir}/facets.json`, JSON.stringify(facetOut));
 writeFileSync(`${outDir}/counts.json`, JSON.stringify(counts, null, 1));
 
 // postings buckets
@@ -156,7 +157,7 @@ const manifest = {
   record_blocks: blockIdx,
   block_size: BLOCK,
   distinct_terms: termTotal,
-  files: { counts: "counts.json", facets: "facets.json", records: "records/records-NNNNN.json", postings: "postings/<field>-<exact|stem>/bkt-NNN.json" },
+  files: { counts: "counts.json", facets: "facets/<kind>.json", records: "records/records-NNNNN.json", postings: "postings/<field>-<exact|stem>/bkt-NNN.json" },
   generated_at: new Date().toISOString(),
 };
 writeFileSync(`${outDir}/manifest.json`, JSON.stringify(manifest, null, 1));
