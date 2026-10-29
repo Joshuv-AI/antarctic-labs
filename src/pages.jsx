@@ -719,11 +719,12 @@ function TraditionsGrid({ byId, go }) {
                 key={w.id}
                 type="button"
                 className="trad-tile"
-                style={{ background: g.tone }}
+                style={{ "--tone": g.tone }}
                 onClick={() => go(`/tower-of-babel/library/${w.id}`)}
               >
                 <span className="trad-tile-name">{w.label}</span>
                 <span className="trad-tile-sub">{w.sub}</span>
+                <span className="trad-tile-cta" aria-hidden="true">Read ›</span>
               </button>
             ))}
           </div>
@@ -800,11 +801,12 @@ function CategoryGroups({ stack, byId, artifacts, go }) {
                 key={a.artifact_id}
                 type="button"
                 className="trad-tile"
-                style={{ background: g.tone }}
+                style={{ "--tone": g.tone }}
                 onClick={() => go(`/tower-of-babel/library/${a.artifact_id}`)}
               >
                 <span className="trad-tile-name">{label}</span>
                 {sub && <span className="trad-tile-sub">{sub}</span>}
+                <span className="trad-tile-cta" aria-hidden="true">Read ›</span>
               </button>
             ))}
           </div>
