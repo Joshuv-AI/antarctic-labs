@@ -1,22 +1,36 @@
 # Build the Tower of Babel deep-search (full-text) index and upload it to R2.
 #
-# WHY THIS EXISTS: the index must be built from the full ~393k-text corpus,
+# WHY THIS EXISTS: the index must be built from the full ~600k-text corpus,
 # which cannot be downloaded through the VM's egress proxy in reasonable
-# time (measured 21-34 days). A GitHub Actions runner has direct internet,
-# so the same proven chunked fetch -> index -> delete loop runs here in
-# hours instead of weeks, and the finished shards go to R2 (no git size
-# limits, no 100 MiB per-file cap) instead of back into a repo.
+# time. GitHub Actions runners have direct internet, so the chunked
+# fetch -> index -> checkpoint loop runs there, and the finished shards go
+# to R2 (no git size limits, no 100 MiB per-file cap).
 #
-# TRIGGER: manual dispatch ONLY (workflow_dispatch). No push, schedule, or
-# pull-request trigger: a rebuild is a deliberate act, and every run
-# re-indexes the whole corpus at the texts-repo HEAD it records in its log.
+# V2 (2026-10-29) — WHY THE OLD SINGLE JOB NEVER LANDED: runs #1 and #4
+# (2026-10-27) each hit GitHub's 6-hour job cap mid-build; the manifest is
+# written last, so no complete build ever published. And because the build
+# keyed itself to the texts repo's live HEAD, every texts push orphaned
+# the previous run's R2 checkpoints. V2 fixes both:
+#   pin    — resolves the texts HEAD ONCE (or takes the texts_ref input)
+#            and hands the exact commit to every job; the build script
+#            fetches texts from that commit, never from moving main.
+#   chunks — a matrix of parallel legs, each indexing a stride of chunks
+#            and checkpointing verified chunk outputs to R2. Legs are
+#            disjoint; a re-dispatch resumes from checkpoints.
+#   finish — restores every chunk checkpoint (fails loudly naming any
+#            missing chunk), merges the 256 term shards, and uploads the
+#            manifest LAST.
+#
+# TRIGGER: manual dispatch ONLY (workflow_dispatch). A rebuild is a
+# deliberate act; it indexes the corpus at the pinned texts commit against
+# the catalog shards of the site commit the workflow runs from.
 #
 # REQUIRED REPO SECRETS (Settings -> Secrets and variables -> Actions):
 #   CLOUDFLARE_API_TOKEN  - Cloudflare API token with R2 edit scope.
 #   CLOUDFLARE_ACCOUNT_ID - Cloudflare account ID.
 # The R2 bucket (tower-search-index) must already exist and be publicly
-# readable (managed r2.dev domain or a custom domain on the site zone);
-# the site's /search-index functions read from that public URL.
+# readable (custom domain search-index.antarctic-labs.com); the site's
+# /search-index functions read the manifest from that public URL.
 #
 # LAYOUT: the indexer scripts live in scripts/deep-search/ in this repo.
 # stream-index.mjs / merge-shard.mjs import ./build-tree/src/lib/search-text.js
@@ -30,18 +44,69 @@ name: Build deep-search index (R2)
 
 on:
   workflow_dispatch:
+    inputs:
+      texts_ref:
+        description: "Texts repo commit to pin (default: current HEAD)"
+        required: false
+        type: string
+      legs:
+        description: "Parallel chunk legs (1-20)"
+        required: false
+        default: "10"
+        type: string
 
 permissions:
   contents: read
 
 jobs:
-  build:
+  pin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      texts_head: ${{ steps.pin.outputs.texts_head }}
+      build_id: ${{ steps.pin.outputs.build_id }}
+      legs_array: ${{ steps.pin.outputs.legs_array }}
+      legs_count: ${{ steps.pin.outputs.legs_count }}
+    steps:
+      - name: Resolve and pin the texts snapshot
+        id: pin
+        env:
+          TEXTS_REF: ${{ inputs.texts_ref }}
+          LEGS: ${{ inputs.legs }}
+        run: |
+          set -euo pipefail
+          if [ -n "$TEXTS_REF" ]; then
+            HEAD="$TEXTS_REF"
+          else
+            HEAD="$(git ls-remote https://github.com/Joshuv-AI/antarctic-labs-texts.git HEAD | awk '{print $1}')"
+          fi
+          [[ "$HEAD" =~ ^[0-9a-f]{40}$ ]] || { echo "texts head '$HEAD' is not a full commit SHA"; exit 1; }
+          [[ "$LEGS" =~ ^[0-9]+$ ]] && [ "$LEGS" -ge 1 ] && [ "$LEGS" -le 20 ] || { echo "legs must be 1-20"; exit 1; }
+          ARR="$(seq 0 $((LEGS - 1)) | paste -sd, -)"
+          {
+            echo "texts_head=$HEAD"
+            echo "build_id=${HEAD:0:12}"
+            echo "legs_array=[$ARR]"
+            echo "legs_count=$LEGS"
+          } >> "$GITHUB_OUTPUT"
+          echo "pinned texts_head=$HEAD build_id=${HEAD:0:12} legs=$LEGS"
+
+  chunks:
+    needs: pin
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: ${{ fromJSON(needs.pin.outputs.legs_array) }}
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       R2_BUCKET: tower-search-index
+      TEXTS_HEAD: ${{ needs.pin.outputs.texts_head }}
+      MODE: chunks
+      CHUNK_OFFSET: ${{ matrix.leg }}
+      CHUNK_STRIDE: ${{ needs.pin.outputs.legs_count }}
     steps:
       - name: Check out site repo (catalog shards + indexer bundle only)
         uses: actions/checkout@v4
@@ -63,13 +128,55 @@ jobs:
           bash -n scripts/deep-search/run-actions-build.sh
           echo "all indexer scripts parse"
 
-      - name: Build index and upload to R2
+      - name: Build this leg's chunks and checkpoint to R2
         run: bash scripts/deep-search/run-actions-build.sh
 
       - name: Upload build log as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: search-index-build-log
+          name: search-index-build-log-chunk-${{ matrix.leg }}
+          path: .search-build/build.log
+          if-no-files-found: warn
+
+  finish:
+    needs: [pin, chunks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_BUCKET: tower-search-index
+      TEXTS_HEAD: ${{ needs.pin.outputs.texts_head }}
+      MODE: finish
+    steps:
+      - name: Check out site repo (catalog shards + indexer bundle only)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            public/catalog-shards
+            scripts/deep-search
+            .github/workflows
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Syntax-check indexer scripts
+        run: |
+          for f in scripts/deep-search/*.mjs; do node --check "$f"; done
+          bash -n scripts/deep-search/run-actions-build.sh
+          echo "all indexer scripts parse"
+
+      - name: Restore all chunk checkpoints, merge shards, publish manifest
+        run: bash scripts/deep-search/run-actions-build.sh
+
+      - name: Upload build log as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: search-index-build-log-finish
           path: .search-build/build.log
           if-no-files-found: warn

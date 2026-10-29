@@ -18,6 +18,15 @@
 #      A later dispatch for the same texts HEAD + catalog fingerprint
 #      restores and hash-verifies checkpointed chunks, then reuses the
 #      existing DONE skip. The manifest is uploaded last for each chunk.
+#  (e) 2026-10-29 parallel + pinned operation (workflow v2): TEXTS_HEAD may
+#      be pinned by the caller (the workflow's pin job resolves it once);
+#      texts are then fetched from that exact commit, never from the
+#      moving main branch, so a mid-build texts push cannot drift the
+#      corpus or orphan checkpoints. MODE=chunks runs only this leg's
+#      stride of chunks (CHUNK_OFFSET/CHUNK_STRIDE) and exits after
+#      checkpointing; MODE=finish restores every chunk checkpoint (dying
+#      loudly on any missing chunk) and runs the merge + manifest
+#      publish; MODE=all (default) keeps the original single-job flow.
 #
 # Load-bearing invariants carried over unchanged:
 #  I1. Per-chunk catalog isolation: stream-index.mjs writes DONE for every
@@ -38,8 +47,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORK="${WORK:-$PWD/.search-build}"
 CATALOG="${CATALOG_DIR:-$PWD/public/catalog-shards}"
 BUCKET="${R2_BUCKET:-tower-search-index}"
-BASE="https://raw.githubusercontent.com/Joshuv-AI/antarctic-labs-texts/main/public/tower-of-babel"
+# BASE is defined after TEXTS_HEAD is resolved below: texts are fetched
+# from the pinned commit, never from the moving main branch.
 CHUNK_SIZE=10000
+MODE="${MODE:-all}"
+case "$MODE" in all|chunks|finish) ;; *) echo "MODE must be all|chunks|finish" >&2; exit 1;; esac
+CHUNK_OFFSET="${CHUNK_OFFSET:-0}"
+CHUNK_STRIDE="${CHUNK_STRIDE:-1}"
 WRANGLER="${WRANGLER:-npx -y wrangler@4.152.0}"
 mkdir -p "$WORK"
 LOG="$WORK/build.log"
@@ -54,10 +68,13 @@ die() { log "FATAL: $*"; exit 1; }
 [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || die "CLOUDFLARE_ACCOUNT_ID is not set"
 export CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID
 
-TEXTS_HEAD="$(git ls-remote https://github.com/Joshuv-AI/antarctic-labs-texts.git HEAD | awk '{print $1}')"
+if [ -z "${TEXTS_HEAD:-}" ]; then
+  TEXTS_HEAD="$(git ls-remote https://github.com/Joshuv-AI/antarctic-labs-texts.git HEAD | awk '{print $1}')"
+fi
 [ -n "$TEXTS_HEAD" ] || die "could not resolve texts repo HEAD"
 BUILD_ID="${TEXTS_HEAD:0:12}"
 [[ "$BUILD_ID" =~ ^[0-9a-f]{12}$ ]] || die "buildId '$BUILD_ID' is not 12 lowercase hex"
+BASE="https://raw.githubusercontent.com/Joshuv-AI/antarctic-labs-texts/$TEXTS_HEAD/public/tower-of-babel"
 SITE_HEAD="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 CATALOG_ID="$(cd "$CATALOG" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')" \
   || die "could not fingerprint catalog shards under $CATALOG"
@@ -277,7 +294,7 @@ fi
 NCHUNKS=$(( (TOTAL_N + CHUNK_SIZE - 1) / CHUNK_SIZE ))
 log "=== catalog=$TOTAL_N entries, chunks=$NCHUNKS, chunk-size=$CHUNK_SIZE, disk free=$(free_gb_int) GiB ==="
 
-for c in $(seq 0 $((NCHUNKS - 1))); do
+for c in $(seq "$CHUNK_OFFSET" "$CHUNK_STRIDE" $((NCHUNKS - 1))); do
   NNN=$(printf "%03d" $c)
   T0=$(date +%s)
   if [ ! -f "$SHARED_TMP/chunk-$NNN/DONE" ]; then
@@ -286,6 +303,9 @@ for c in $(seq 0 $((NCHUNKS - 1))); do
   if [ -f "$SHARED_TMP/chunk-$NNN/DONE" ]; then
     log "chunk $c ($NNN): already DONE — skipped"
     continue
+  fi
+  if [ "$MODE" = "finish" ]; then
+    die "finish mode: chunk $c has no verified checkpoint in R2 — run the chunks jobs for this build first"
   fi
   if [ "$(free_gb_int)" -lt 4 ]; then
     die "chunk $c: disk free below 4 GiB — aborting rather than filling the runner disk"
@@ -319,6 +339,10 @@ for c in $(seq 0 $((NCHUNKS - 1))); do
   ELAPSED=$(( $(date +%s) - T0 ))
   log "chunk $c ($NNN) DONE in ${ELAPSED}s: deleted ${STAGING_BYTES} bytes of staging, shared-tmp now $(du -sb "$SHARED_TMP" | cut -f1) bytes"
 done
+if [ "$MODE" = "chunks" ]; then
+  log "=== CHUNKS MODE COMPLETE (offset=$CHUNK_OFFSET stride=$CHUNK_STRIDE): checkpoints in R2 under $BUILD_ID ==="
+  exit 0
+fi
 log "=== ALL CHUNKS DONE, merging per shard with upload-and-delete ==="
 
 # Bases (one metas scan) — written into shared tmp for both merge scripts.
