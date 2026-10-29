@@ -1842,6 +1842,191 @@ function TowerLibrarySection({ go, onReady }) {
     }
     return { rankMap: map, matchCount: total, rankedIndices: null, blendedModel };
   }, [q, bucketFilter, sortId, towerOrder, artifacts, towerData, rowBudget, collSet, deep, strictQuery]);
+  // ---- Phase B: server-side catalog search behind a flag ---------------
+  // ?server=1 (persisted to localStorage) routes the SEARCH path to
+  // /api/catalog-search and adapts its pages into the blendedModel shape
+  // LibraryResults already renders, so the results UI is untouched.
+  // Default off: production behavior is unchanged. Boundaries (v1): a hub
+  // collection filter (collSet) has no server equivalent and keeps the
+  // client pipeline, as does the strict/undo path (strictQuery === q) —
+  // the server has no exact-search parameter, and the client honors
+  // strict. Browse mode is unchanged in v1; the client pipeline keeps
+  // running underneath as the fallback (retired at cutover, not here).
+  const [serverFlag] = useState(() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      if (p.get("server") === "1") {
+        localStorage.setItem("tower-server-search", "1");
+        return true;
+      }
+      if (p.get("server") === "0") {
+        localStorage.removeItem("tower-server-search");
+        return false;
+      }
+      return localStorage.getItem("tower-server-search") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [serverModel, setServerModel] = useState(null);
+  const serverSeqRef = useRef(0);
+  const serverAbortRef = useRef(null);
+  const serverCursorRef = useRef(null);
+  const serverBusyRef = useRef(false);
+  const serverActive =
+    serverFlag && !!q && q.trim().length >= 2 && !collSet && strictQuery !== q;
+  const adaptServerItem = (r, tokens) => {
+    const nt = normText(r.title || "");
+    const nc = normText(r.creator || "");
+    const meta = { title: false, creator: false, subject: false, description: false };
+    if (tokens.some((t) => nt.includes(t))) meta.title = true;
+    else if (tokens.some((t) => nc.includes(t))) meta.creator = true;
+    else meta.subject = true;
+    return { key: r.artifact_id, artifact: r, index: -1, score: 0, meta, text: null, doc: null };
+  };
+  const fetchServerPage = async (cursor, ctl) => {
+    const params = new URLSearchParams();
+    params.set("q", q);
+    if (bucketFilter) {
+      if (bucketFilter.includes(":")) params.set("bucket", bucketFilter);
+      else params.set("collection", bucketFilter);
+    }
+    if (cursor) params.set("cursor", String(cursor));
+    const res = await fetch(`/api/catalog-search?${params.toString()}`, {
+      signal: ctl.signal,
+    });
+    if (!res.ok) throw new Error(`catalog-search ${res.status}`);
+    return res.json();
+  };
+  useEffect(() => {
+    if (!serverActive) return;
+    const seq = ++serverSeqRef.current;
+    if (serverAbortRef.current) serverAbortRef.current.abort();
+    const ctl = new AbortController();
+    serverAbortRef.current = ctl;
+    serverBusyRef.current = true;
+    const tokens = queryTokens(normText(q));
+    setServerModel((prev) =>
+      prev && prev.query === q
+        ? { ...prev, pending: true }
+        : {
+            items: [],
+            total: 0,
+            stage: null,
+            suggestion: null,
+            appliedCorrection: null,
+            droppedTerms: [],
+            deepState: "ready",
+            pending: true,
+            query: q,
+            tokens,
+            hasMore: false,
+          }
+    );
+    (async () => {
+      try {
+        let cursor = 0;
+        let first = true;
+        let loaded = 0;
+        while (true) {
+          const body = await fetchServerPage(cursor, ctl);
+          if (seq !== serverSeqRef.current) return;
+          const items = (body.results || [])
+            .filter(Boolean)
+            .map((r) => adaptServerItem(r, tokens));
+          loaded += items.length;
+          serverCursorRef.current = body.next_cursor;
+          if (first) {
+            first = false;
+            setServerModel({
+              items,
+              total: body.total || 0,
+              stage: null,
+              suggestion: null,
+              appliedCorrection:
+                body.corrected_query && body.corrected_query !== q
+                  ? body.corrected_query
+                  : null,
+              droppedTerms: [],
+              deepState: "ready",
+              pending: false,
+              query: q,
+              tokens,
+              hasMore: body.next_cursor != null,
+            });
+          } else {
+            setServerModel((prev) => {
+              if (!prev || prev.query !== q) return prev;
+              const seen = new Set(prev.items.map((it) => it.key));
+              const fresh = items.filter((it) => !seen.has(it.key));
+              return {
+                ...prev,
+                items: [...prev.items, ...fresh],
+                hasMore: body.next_cursor != null,
+              };
+            });
+          }
+          // Prefetch up to 250 results (the pager's 10 pages) so page
+          // jumps behave exactly like the client model's; Load more
+          // fetches further pages on demand beyond that.
+          if (body.next_cursor == null || loaded >= 250) break;
+          cursor = body.next_cursor;
+        }
+      } catch (err) {
+        if (seq !== serverSeqRef.current || (err && err.name === "AbortError"))
+          return;
+        setServerModel(null); // graceful fallback to the client model
+      } finally {
+        if (seq === serverSeqRef.current) serverBusyRef.current = false;
+      }
+    })();
+    return () => {
+      if (seq === serverSeqRef.current) ctl.abort();
+    };
+  }, [serverActive, q, bucketFilter]);
+  const serverLoadMore = () => {
+    if (
+      !serverActive ||
+      serverBusyRef.current ||
+      serverCursorRef.current == null
+    )
+      return;
+    const seq = serverSeqRef.current;
+    const ctl = serverAbortRef.current;
+    if (!ctl) return;
+    serverBusyRef.current = true;
+    const tokens = queryTokens(normText(q));
+    (async () => {
+      try {
+        let cursor = serverCursorRef.current;
+        let loaded = 0;
+        while (cursor != null && loaded < 250) {
+          const body = await fetchServerPage(cursor, ctl);
+          if (seq !== serverSeqRef.current) return;
+          const items = (body.results || [])
+            .filter(Boolean)
+            .map((r) => adaptServerItem(r, tokens));
+          loaded += items.length;
+          serverCursorRef.current = body.next_cursor;
+          cursor = body.next_cursor;
+          setServerModel((prev) => {
+            if (!prev || prev.query !== q) return prev;
+            const seen = new Set(prev.items.map((it) => it.key));
+            const fresh = items.filter((it) => !seen.has(it.key));
+            return {
+              ...prev,
+              items: [...prev.items, ...fresh],
+              hasMore: body.next_cursor != null,
+            };
+          });
+        }
+      } catch {
+        // Keep what is loaded; the button can retry.
+      } finally {
+        if (seq === serverSeqRef.current) serverBusyRef.current = false;
+      }
+    })();
+  };
   // Report ready exactly once when the section settles: the first 50 rows
   // have painted, or the error UI is up. The double rAF waits for paint;
   // the timeout fallback covers background tabs (and any dropped frame
@@ -2295,14 +2480,17 @@ function TowerLibrarySection({ go, onReady }) {
               matchCount={matchCount}
               rowBudget={rowBudget}
               onLoadMore={() => setRowBudget((b) => b + TOWER_ROWS_PER_PAGE)}
-              blendedModel={blendedModel}
+              blendedModel={serverActive && serverModel ? serverModel : blendedModel}
               searchPage={searchPage}
               searchExtra={searchExtra}
               onSearchPage={(p) => {
                 setSearchPage(p);
                 setSearchExtra(0);
               }}
-              onSearchLoadMore={() => setSearchExtra((x) => x + SEARCH_PAGE_SIZE)}
+              onSearchLoadMore={() => {
+                setSearchExtra((x) => x + SEARCH_PAGE_SIZE);
+                serverLoadMore();
+              }}
               onUndoRelax={() => setStrictQuery(listQuery)}
               onUseSuggestion={(s) => setQuery(s)}
               onClearQuery={() => setQuery("")}
@@ -3647,8 +3835,7 @@ const LibraryResults = memo(function LibraryResults({
                   {p}
                 </button>
               ))}
-              {(pageCount >= 10 || visibleCount < items.length) &&
-                visibleCount < items.length && (
+              {(visibleCount < items.length || model.hasMore) && (
                   <button
                     type="button"
                     className="tower-pager-more"
