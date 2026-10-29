@@ -74,7 +74,6 @@ import {
   STACK_GROUPS,
   TRADITIONS,
   RAIL_ESSENTIAL,
-  RAIL_RECORDS,
   STACKS_POOL,
 } from "./lib/tower-shelves.js";
 // The build-time manifest of hosted tower texts (2.4MB at current scale)
@@ -1016,11 +1015,6 @@ function TowerDiscovery({ artifacts, towerData, go, onBrowse, onShelfChange }) {
             <h2 className="tower-block-title">Featured</h2>
           </div>
           <CoverRail title="Essential texts" items={RAIL_ESSENTIAL.map(byId)} go={go} />
-          <CoverRail
-            title="Declassified & founding documents"
-            items={RAIL_RECORDS.map(byId)}
-            go={go}
-          />
           <CoverRail
             title="Podcasts — read the conversation"
             items={(STACKS.find((s) => s.bucket === "PODCASTS") || { rail: [] }).rail.map(byId)}

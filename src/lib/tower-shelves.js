@@ -296,17 +296,6 @@ export const RAIL_ESSENTIAL = [
   "tob-0214",
 ];
 
-export const RAIL_RECORDS = [
-  "govdocs-archive_org-mkultra-the-hidden-record-14pt-complete-",
-  "pentagon-papers-vol-2",
-  "us-declaration-of-independence",
-  "us-constitution-bill-of-rights",
-  "gettysburg-address",
-  "emancipation-proclamation-1863",
-  "udhr-1948",
-  "frus-1964-68v01-d258",
-];
-
 export const STACKS_POOL = [
   "tob-10233",
   "i-ching-legge-1882",
