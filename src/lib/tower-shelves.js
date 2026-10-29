@@ -475,6 +475,7 @@ export const STACK_GROUPS = {
           "uslaw-usc-t1-s8",
           "uslaw-usc-t1-s101",
         ],
+        prefix: "uslaw-usc-t1-s",
       },
       {
         label: "U.S. Code — Title 2: The Congress",

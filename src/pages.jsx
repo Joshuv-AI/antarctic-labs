@@ -806,7 +806,7 @@ function CategoryGroups({ stack, byId, artifacts, go }) {
   for (const g of data.groups) {
     const works = [];
     const take = (a) => {
-      if (!a || used.has(a.artifact_id) || works.length >= 4) return;
+      if (!a || used.has(a.artifact_id) || works.length >= 10) return;
       used.add(a.artifact_id);
       works.push({
         a,
@@ -823,7 +823,7 @@ function CategoryGroups({ stack, byId, artifacts, go }) {
     const prefs = g.prefix ? [g.prefix] : g.prefixes || null;
     if (prefs) {
       for (const a of artifacts) {
-        if (works.length >= 4) break;
+        if (works.length >= 10) break;
         if (prefs.some((p) => a.artifact_id.startsWith(p))) take(a);
       }
     }
