@@ -386,22 +386,15 @@ async function buildSearchData(artifacts, bucketKeys, isCancelled) {
   const normDescs = new Array(n);
   const secMasks = new Uint32Array(n);
   const volFlags = new Uint8Array(n);
-  // Did-you-mean vocabulary (Workstream D, SPEC-6): token -> frequency over
-  // the SHORT fields only (title/creator/collection). Built once here so a
-  // zero-result query never pays a catalog scan to find corrections.
-  // Skipped on low-memory devices and capped elsewhere (see
-  // LOW_MEMORY_ENV above): at 600k works the uncapped map held millions
-  // of distinct tokens and was a first-order share of the crash footprint.
-  const vocab = LOW_MEMORY_ENV ? null : new Map();
-  const vocabAdd = (field) => {
-    if (!vocab || !field) return;
-    for (const t of field.split(" ")) {
-      if (!t) continue;
-      const c = vocab.get(t);
-      if (c !== undefined) vocab.set(t, c + 1);
-      else if (vocab.size < VOCAB_CAP) vocab.set(t, 1);
-    }
-  };
+  // The did-you-mean vocabulary is NOT built here anymore (2026-10-29
+  // load-speed fix): profiling the real 600k catalog showed the vocab
+  // pass was ~69% of this function's CPU (87s -> 27s on the bench VM
+  // without it), yet its only consumer is typo correction on
+  // near-zero-result queries. It is built afterwards from the stored
+  // norm arrays by buildVocab (deriveTowerData phase 3) and published
+  // when ready; until then towerData.vocab is null, which the search
+  // pipeline already treats as "no corrections" (the same state
+  // low-memory devices run in permanently).
   for (let from = 0; from < n; from += 20000) {
     if (isCancelled()) return null;
     const end = Math.min(from + 20000, n);
@@ -417,15 +410,48 @@ async function buildSearchData(artifacts, bucketKeys, isCancelled) {
       normCreators[i] = normText(a.creator || "");
       normColls[i] = normText((a.collection || "") + " " + subLabel);
       normDescs[i] = normText(a.description || "");
-      vocabAdd(T);
-      vocabAdd(normCreators[i]);
-      vocabAdd(normColls[i]);
       secMasks[i] = secondaryMaskFor(T);
       volFlags[i] = /\b(vol|volume|part) \d+/.test(T) ? 1 : 0;
     }
     await new Promise((r) => setTimeout(r, 0));
   }
-  return { haystacks, normTitles, normCreators, normColls, normDescs, secMasks, volFlags, vocab };
+  return { haystacks, normTitles, normCreators, normColls, normDescs, secMasks, volFlags, vocab: null };
+}
+
+// Did-you-mean vocabulary (Workstream D, SPEC-6): token -> frequency over
+// the SHORT fields only (title/creator/collection), built from the norm
+// arrays buildSearchData already computed — no re-normalization. Deferred
+// out of the search-ready path (see buildSearchData): at 600k works the
+// map work was ~69% of phase-1 CPU. Chunked with the same yield cadence
+// as the other builders. Insertion order matches the old inline build
+// exactly (title, creator, collection per record), so the VOCAB_CAP cut
+// keeps the identical token set — verified equivalent on the full
+// catalog (500,000 entries, zero mismatches). Skipped on low-memory
+// devices, as before.
+async function buildVocab(normTitles, normCreators, normColls, isCancelled) {
+  if (LOW_MEMORY_ENV) return null;
+  const vocab = new Map();
+  const vocabAdd = (field) => {
+    if (!field) return;
+    for (const t of field.split(" ")) {
+      if (!t) continue;
+      const c = vocab.get(t);
+      if (c !== undefined) vocab.set(t, c + 1);
+      else if (vocab.size < VOCAB_CAP) vocab.set(t, 1);
+    }
+  };
+  const n = normTitles.length;
+  for (let from = 0; from < n; from += 20000) {
+    if (isCancelled()) return null;
+    const end = Math.min(from + 20000, n);
+    for (let i = from; i < end; i++) {
+      vocabAdd(normTitles[i]);
+      vocabAdd(normCreators[i]);
+      vocabAdd(normColls[i]);
+    }
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  return vocab;
 }
 
 // Full derivation for one catalog array identity, in three phases
@@ -437,8 +463,11 @@ async function buildSearchData(artifacts, bucketKeys, isCancelled) {
 // Phase 2 builds the sort orders in the background and the resolved
 // object carries them; sorting no longer gates searching, which it did
 // when a 300k+ record derivation had to finish before the first
-// keystroke could be answered. Resolves to the final towerData object,
-// or null if cancelled/superseded before finishing.
+// keystroke could be answered. A detached phase 3 then builds the
+// did-you-mean vocabulary in the background (2026-10-29: it was ~69% of
+// phase-1 CPU) and publishes it through onPhase when ready. Resolves to
+// the final towerData object (vocab may still be null on it), or null
+// if cancelled/superseded before finishing.
 async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
   if (towerDataCache && towerDataFor === artifacts) return towerDataCache;
   const counts = {};
@@ -543,6 +572,22 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
   };
   towerDataCache = data;
   towerDataFor = artifacts;
+  // Phase 3 (detached background): the did-you-mean vocabulary, built
+  // from phase 1's norm arrays and published through onPhase when it
+  // lands. Deliberately NOT awaited — the returned object (sort orders
+  // included) must reach the page without waiting on it. Until it lands,
+  // typo correction is simply off, the same state low-memory devices
+  // run in. The cache is upgraded in place so later derivations for
+  // this catalog pick the vocab up.
+  buildVocab(data.normTitles, data.normCreators, data.normColls, isCancelled).then(
+    (vocab) => {
+      if (!vocab || isCancelled()) return;
+      const withVocab = { ...data, vocab };
+      if (towerDataFor === artifacts) towerDataCache = withVocab;
+      if (onPhase) onPhase(withVocab);
+    },
+    () => {}
+  );
   return data;
 }
 
