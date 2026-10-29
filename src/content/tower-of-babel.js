@@ -165,15 +165,15 @@ export const towerOfBabel = {
       title: "A Message From the Team Behind the Tower of Babel",
       greeting: "Dear Tower of Babel Patron,",
       paragraphs: [
-        "As a project of Antarctic Labs — an independent library dedicated to preserving the written record of humankind — the Tower of Babel is working to make the essential texts of every culture, religion, and era available to everyone, everywhere, free. The library already holds more than 390,000 works — books, sacred texts, declassified documents, papers, and transcripts — and it grows every day on the road to 500,000.",
-        "Our goal is simple to say and enormous to do: every published work that matters, within everyone's reach. Achieving it will take servers, storage, bandwidth, and years of steady preservation work — and, most importantly, readers like you.",
+        "The Tower of Babel, a project of Antarctic Labs, preserves the written record of humankind and makes essential texts from every culture, religion, and era free to everyone, everywhere. It already holds more than 600,000 works — books, sacred texts, declassified documents, papers, and transcripts — and grows every day.",
+        "The goal is simple to say and enormous to do: every work that matters, within everyone's reach. It takes servers, storage, bandwidth, years of steady preservation work — and readers like you.",
         "The Tower is free to read, and reader support is what keeps it that way.",
-        "If you enjoy wandering our virtual stacks, please consider supporting the Tower today. A little goes a long way — most readers never give, so every contribution, one-time or monthly, carries real weight.",
+        "If you enjoy wandering our virtual stacks, please consider supporting the Tower today. Most readers never give, so every one-time or monthly contribution carries real weight.",
       ],
       signoff: "Thank you for reading with us.",
       signature: { name: "Joshua Almodovar", role: "Founder, Antarctic Labs" },
       fineprint:
-        "You will receive an email receipt from our payment processor for your records. One honest note: Antarctic Labs is an independent project, not a registered charity, so contributions are not tax-deductible. Every dollar goes directly to the servers, storage, and preservation work that keep the library online and growing.",
+        "You'll receive an email receipt for your records. One honest note: Antarctic Labs is not a registered charity, so contributions are not tax-deductible. Every dollar goes directly to the servers, storage, and preservation work that keep the library online and growing.",
     },
     amounts: [5, 10, 25, 50, 100, 500, 1000],
     crypto: [
