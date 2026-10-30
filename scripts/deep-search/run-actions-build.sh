@@ -189,10 +189,25 @@ NODE
   fi
   rm -rf "$dir"
   mkdir -p "$dir"
+  # Parallel download, 8 at a time (2026-10-29): the serial per-file
+  # wrangler loop costs ~7 min per chunk, which puts a 61-chunk restore
+  # past the 6-hour job cap. Downloads are independent; integrity is
+  # enforced by the verify pass below, so a failed or partial download
+  # still fails the restore exactly as before.
+  local inflight=0
   while IFS=$'\t' read -r rel size sha; do
     [ -n "$rel" ] || continue
     dest="$dir/$rel"
-    if ! r2_get_once "$(checkpoint_object_key "$chunk" "$rel")" "$dest"; then
+    mkdir -p "$(dirname "$dest")"
+    ( r2_get_once "$(checkpoint_object_key "$chunk" "$rel")" "$dest" ) &
+    inflight=$((inflight + 1))
+    if [ "$inflight" -ge 8 ]; then wait; inflight=0; fi
+  done < "$tsv"
+  wait
+  while IFS=$'\t' read -r rel size sha; do
+    [ -n "$rel" ] || continue
+    dest="$dir/$rel"
+    if [ ! -f "$dest" ]; then
       rm -rf "$dir"
       return 1
     fi
