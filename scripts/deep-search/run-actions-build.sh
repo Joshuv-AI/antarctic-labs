@@ -116,6 +116,24 @@ r2_get_once() {
   mkdir -p "$(dirname "$dest")"
   $WRANGLER r2 object get "$BUCKET/$key" --file "$dest" --remote >> "$LOG" 2>&1
 }
+# Downloads get the same retry discipline as uploads (2026-10-30): run #6's
+# finish died at chunk 16 on a single transient get — the checkpoint was
+# byte-perfect in R2 (verified via the API afterwards: sizes and sha256 all
+# match), but one of the 8 parallel one-shot gets hiccuped, the verify pass
+# failed the chunk, and finish mode aborted the whole publish. A failed get
+# must retry, never fail a build whose data is intact.
+r2_get_retry() {
+  local key=$1 dest=$2 attempt
+  mkdir -p "$(dirname "$dest")"
+  for attempt in 1 2 3 4 5; do
+    if r2_get_once "$key" "$dest" && [ -s "$dest" ]; then
+      return 0
+    fi
+    log "download attempt $attempt failed: $key"
+    sleep $((attempt * 5))
+  done
+  return 1
+}
 write_checkpoint_manifest() {
   local dir=$1 out=$2 chunk=$3
   node - "$dir" "$out" "$BUILD_ID" "$CATALOG_ID" "$chunk" <<'NODE'
@@ -173,7 +191,7 @@ restore_chunk_checkpoint() {
   manifest="$WORK/restore-checkpoint-$nnn.json"
   tsv="$WORK/restore-checkpoint-$nnn.tsv"
   rm -f "$manifest" "$tsv"
-  r2_get_once "$(checkpoint_manifest_key "$chunk")" "$manifest" || return 1
+  r2_get_retry "$(checkpoint_manifest_key "$chunk")" "$manifest" || return 1
   if ! node - "$manifest" "$tsv" "$BUILD_ID" "$CATALOG_ID" "$chunk" <<'NODE'; then
 const fs = require('fs');
 const [manifest, tsv, buildId, catalogId, chunk] = process.argv.slice(2);
@@ -199,7 +217,7 @@ NODE
     [ -n "$rel" ] || continue
     dest="$dir/$rel"
     mkdir -p "$(dirname "$dest")"
-    ( r2_get_once "$(checkpoint_object_key "$chunk" "$rel")" "$dest" ) &
+    ( r2_get_retry "$(checkpoint_object_key "$chunk" "$rel")" "$dest" ) &
     inflight=$((inflight + 1))
     if [ "$inflight" -ge 8 ]; then wait; inflight=0; fi
   done < "$tsv"
@@ -313,7 +331,15 @@ for c in $(seq "$CHUNK_OFFSET" "$CHUNK_STRIDE" $((NCHUNKS - 1))); do
   NNN=$(printf "%03d" $c)
   T0=$(date +%s)
   if [ ! -f "$SHARED_TMP/chunk-$NNN/DONE" ]; then
-    restore_chunk_checkpoint "$c" || true
+    # Retry the whole restore before treating a chunk as unverifiable:
+    # per-file retries (r2_get_retry) absorb most transients, this loop is
+    # the second line of defense (run #6, 2026-10-29: finish aborted at
+    # chunk 16 on one transient get against an intact checkpoint).
+    for attempt in 1 2 3; do
+      restore_chunk_checkpoint "$c" && break
+      log "chunk $c ($NNN): restore attempt $attempt failed — retrying"
+      sleep $((attempt * 10))
+    done
   fi
   if [ -f "$SHARED_TMP/chunk-$NNN/DONE" ]; then
     log "chunk $c ($NNN): already DONE — skipped"
