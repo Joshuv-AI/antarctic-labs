@@ -79,6 +79,14 @@ SITE_HEAD="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 CATALOG_ID="$(cd "$CATALOG" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')" \
   || die "could not fingerprint catalog shards under $CATALOG"
 [[ "$CATALOG_ID" =~ ^[0-9a-f]{64}$ ]] || die "catalog fingerprint '$CATALOG_ID' is not a sha256 hex digest"
+# Fail fast on catalog drift (2026-10-30): when the dispatcher states the
+# expected fingerprint (workflow catalog_id input), a mismatch stops the
+# run here instead of mid-publish — checkpoints keyed to another catalog
+# can never verify. (Run #7: the catalog moved 600,320 -> 660,389 between
+# the chunk build and the finish dispatch.)
+if [ -n "${EXPECTED_CATALOG_ID:-}" ] && [ "$EXPECTED_CATALOG_ID" != "$CATALOG_ID" ]; then
+  die "catalog fingerprint mismatch: expected $EXPECTED_CATALOG_ID, this checkout has $CATALOG_ID — dispatch from the snapshot ref for these checkpoints, or rebuild the chunks for this catalog"
+fi
 log "=== ACTIONS BUILD START: textsHead=$TEXTS_HEAD buildId=$BUILD_ID siteHead=$SITE_HEAD catalogFingerprint=$CATALOG_ID bucket=$BUCKET ==="
 
 # ---- R2 checkpoints for verified chunk outputs ----
