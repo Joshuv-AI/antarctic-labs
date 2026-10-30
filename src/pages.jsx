@@ -1285,17 +1285,42 @@ function TowerLibrarySection({ go, onReady }) {
   // paint stay cheap, and the loader releases after the first 50 paint.
   const [rowBudget, setRowBudget] = useState(TOWER_ROWS_PER_PAGE);
   const [shelfActive, setShelfActive] = useState(false);
+  // Cutover (2026-10-29): opening a stack shelf is browse intent — the
+  // shelf's groups and tiles are built from the full catalog, so the
+  // index starts when a shelf opens (in server mode it no longer
+  // auto-starts). Idempotent; a no-op once the index is in or loading.
+  useEffect(() => {
+    if (shelfActive) requestCatalogIndex();
+  }, [shelfActive]);
   // Stage 1 ungating (2026-10-23): the full catalog index no longer loads
   // automatically with the page. It starts when the visitor shows intent —
   // the first change to any browse control (search text, filter, sort,
   // Load more) — or from the approach/idle triggers below. The bootstrap
   // slice stays fully browsable in the meantime.
   const indexIntentSeen = useRef(false);
+  const prevIntentDeps = useRef(null);
   useEffect(() => {
+    const prev = prevIntentDeps.current;
+    prevIntentDeps.current = { query, bucketFilter, sortId, rowBudget, collKey };
     if (!indexIntentSeen.current) {
       indexIntentSeen.current = true;
       return;
     }
+    // Cutover (2026-10-29): with server search the default, a query-only
+    // change is answered by /api/catalog-search and must not pull the
+    // ~193MB client index. The index still loads on browse-control
+    // changes, and for hub filters (collSet) and the strict path — the
+    // boundaries serverActive observes. serverFlag is read inside the
+    // callback only (post-render), never in the deps array.
+    const queryOnly =
+      prev &&
+      prev.query !== query &&
+      prev.bucketFilter === bucketFilter &&
+      prev.sortId === sortId &&
+      prev.rowBudget === rowBudget &&
+      prev.collKey === collKey;
+    if (queryOnly && serverFlag && !collSet && strictQuery !== query)
+      return;
     requestCatalogIndex();
   }, [query, bucketFilter, sortId, rowBudget, collKey]);
   // Automatic start (2026-10-28, Joshua's direct order): the explicit-
@@ -1313,6 +1338,12 @@ function TowerLibrarySection({ go, onReady }) {
   // from 20,000 to the full catalog instead of sitting on a wrong
   // number with no sign anything is loading.
   useEffect(() => {
+    // Cutover (2026-10-29): in server mode the index is NOT auto-started.
+    // Header and stack counts come from the hubs index instead (Phase B
+    // block below), and the index loads on browse intent or as the
+    // server-search fallback only. ?server=0 restores the behavior
+    // below unchanged.
+    if (serverFlag) return;
     let done = false;
     let timer = null;
     const start = () => {
@@ -1842,30 +1873,34 @@ function TowerLibrarySection({ go, onReady }) {
     }
     return { rankMap: map, matchCount: total, rankedIndices: null, blendedModel };
   }, [q, bucketFilter, sortId, towerOrder, artifacts, towerData, rowBudget, collSet, deep, strictQuery]);
-  // ---- Phase B: server-side catalog search behind a flag ---------------
-  // ?server=1 (persisted to localStorage) routes the SEARCH path to
+  // ---- Phase B: server-side catalog search (CUTOVER, 2026-10-29) -------
+  // Server search is the DEFAULT: the SEARCH path routes to
   // /api/catalog-search and adapts its pages into the blendedModel shape
   // LibraryResults already renders, so the results UI is untouched.
-  // Default off: production behavior is unchanged. Boundaries (v1): a hub
-  // collection filter (collSet) has no server equivalent and keeps the
-  // client pipeline, as does the strict/undo path (strictQuery === q) —
-  // the server has no exact-search parameter, and the client honors
-  // strict. Browse mode is unchanged in v1; the client pipeline keeps
-  // running underneath as the fallback (retired at cutover, not here).
+  // ?server=0 opts out (persisted to localStorage) and restores the full
+  // client pipeline; ?server=1 clears the opt-out. Boundaries (unchanged
+  // from the flag phase): a hub collection filter (collSet) has no server
+  // equivalent and keeps the client pipeline, as does the strict/undo
+  // path (strictQuery === q). Browse mode renders from the bootstrap and
+  // loads the client index on browse intent only; if a server fetch
+  // fails, the client model takes over and the index loads then. Header
+  // and stack counts come from the hubs index (fetched below) until the
+  // full index is in, so the page never presents as a 20,000-work
+  // library (Joshua's 2026-10-28 order).
   const [serverFlag] = useState(() => {
     try {
       const p = new URLSearchParams(window.location.search);
-      if (p.get("server") === "1") {
-        localStorage.setItem("tower-server-search", "1");
-        return true;
-      }
       if (p.get("server") === "0") {
-        localStorage.removeItem("tower-server-search");
+        localStorage.setItem("tower-server-search", "0");
         return false;
       }
-      return localStorage.getItem("tower-server-search") === "1";
+      if (p.get("server") === "1") {
+        localStorage.removeItem("tower-server-search");
+        return true;
+      }
+      return localStorage.getItem("tower-server-search") !== "0";
     } catch {
-      return false;
+      return true;
     }
   });
   const [serverModel, setServerModel] = useState(null);
@@ -1875,6 +1910,43 @@ function TowerLibrarySection({ go, onReady }) {
   const serverBusyRef = useRef(false);
   const serverActive =
     serverFlag && !!q && q.trim().length >= 2 && !collSet && strictQuery !== q;
+  // Catalog total + per-collection counts from the hubs index (a small
+  // derived file the publish lane regenerates), so counts are truthful
+  // in server mode before — or without — the client index arriving.
+  const [serverCounts, setServerCounts] = useState(null);
+  const [serverTotal, setServerTotal] = useState(null);
+  useEffect(() => {
+    if (!serverFlag || serverTotal != null) return;
+    let live = true;
+    fetch("/tower-hubs-index.json")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b) => {
+        if (!live || !b) return;
+        if (typeof b.total === "number") setServerTotal(b.total);
+        if (b.collections && typeof b.collections === "object")
+          setServerCounts(b.collections);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [serverFlag, serverTotal]);
+  const displayCount =
+    serverFlag && serverTotal != null
+      ? Math.max(artifacts ? artifacts.length : 0, serverTotal)
+      : artifacts
+        ? artifacts.length
+        : 0;
+  // Stack counts in server mode: hubs counts override the bootstrap's
+  // partial collection counts until the full index is in (after which
+  // towerData.counts is complete and authoritative).
+  const discoveryData = useMemo(() => {
+    if (!towerData || !serverCounts || fullIndexReady) return towerData;
+    return {
+      ...towerData,
+      counts: { ...towerData.counts, ...serverCounts },
+    };
+  }, [towerData, serverCounts, fullIndexReady]);
   const adaptServerItem = (r, tokens) => {
     const nt = normText(r.title || "");
     const nc = normText(r.creator || "");
@@ -1976,6 +2048,9 @@ function TowerLibrarySection({ go, onReady }) {
         if (seq !== serverSeqRef.current || (err && err.name === "AbortError"))
           return;
         setServerModel(null); // graceful fallback to the client model
+        // Cutover: the fallback model needs the full index behind it,
+        // not just the bootstrap — start it now (idempotent).
+        requestCatalogIndex();
       } finally {
         if (seq === serverSeqRef.current) serverBusyRef.current = false;
       }
@@ -2163,7 +2238,7 @@ function TowerLibrarySection({ go, onReady }) {
           <>
             <div className="tower-stats" aria-label="The library at a glance">
               <span>
-                <strong>{artifacts.length.toLocaleString()}</strong> works
+                <strong>{displayCount.toLocaleString()}</strong> works
               </span>
               <span>
                 <strong>{collectionsCount}</strong> collections
@@ -2204,7 +2279,9 @@ function TowerLibrarySection({ go, onReady }) {
                         // it). (Joshua, 2026-10-28.)
                         if (e.target.value) setFiltersOpen(false);
                       }}
-                      onFocus={() => requestCatalogIndex()}
+                      onFocus={() => {
+                        if (!serverFlag) requestCatalogIndex();
+                      }}
                       onKeyDown={onSearchKeyDown}
                       onCompositionStart={() => { composingRef.current = true; }}
                       onCompositionEnd={(e) => {
@@ -2259,7 +2336,7 @@ function TowerLibrarySection({ go, onReady }) {
             {!q && !bucketFilter && !collKey && (
               <TowerDiscovery
                 artifacts={artifacts}
-                towerData={towerData}
+                towerData={discoveryData}
                 go={go}
                 onBrowse={browseTo}
                 onShelfChange={setShelfActive}
@@ -2423,7 +2500,7 @@ function TowerLibrarySection({ go, onReady }) {
                 className={`tower-chip${bucketFilter === "" ? " is-active" : ""}`}
                 onClick={() => selectLane("")}
               >
-                All entries <span>{artifacts.length}</span>
+                All entries <span>{displayCount}</span>
               </button>
               {towerData.collections.map((c) => {
                 const laneActive =
