@@ -4030,6 +4030,187 @@ const TowerRow = memo(function TowerRow({ a, index, go }) {
     </button>
   );
 });
+
+// ----- Entry header essentials (2026-10-30, Joshua's pick) -------------------
+// Cover plate, share row, citation block and the relocated download card for
+// the entry page's top section. Everything derives from fields the catalog
+// record already carries — no invented metadata.
+
+function towerEntryUrl(artifact) {
+  return `https://antarctic-labs.com/tower-of-babel/library/${artifact.artifact_id}`;
+}
+
+// file_size is a raw byte count on some records ("180377") and already
+// formatted on others ("25 KB") — normalize for display.
+function towerFileSize(v) {
+  if (v === undefined || v === null || v === "") return null;
+  const s = String(v).trim();
+  if (!/^\d+$/.test(s)) return s;
+  const n = Number(s);
+  if (n >= 1048576) return `${(n / 1048576).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(n / 1024))} KB`;
+}
+
+// A Project Gutenberg number, when the record carries one: numeric-prefix
+// artifact ids ("3694-every-man-in-his-humour") or a gutenberg.org source
+// URL. Gutenberg serves a cover image for most of those numbers; where one
+// exists it replaces the typographic plate.
+function towerPgNumber(artifact) {
+  const m = /^(\d{2,7})[-_]/.exec(artifact.artifact_id || "");
+  if (m) return m[1];
+  const urls = [artifact.source_url, artifact.download_url]
+    .filter(Boolean)
+    .join(" ");
+  const g = /gutenberg\.org\/(?:ebooks|files|cache\/epub)\/(\d{2,7})/.exec(urls);
+  return g ? g[1] : null;
+}
+
+function EntryCover({ artifact }) {
+  const pg = towerPgNumber(artifact);
+  // The full record (which carries source_url) lands after first paint —
+  // track only the failure, never gate mounting on the initial pg value.
+  const [imgFailed, setImgFailed] = useState(false);
+  return (
+    <div className="tower-cover">
+      <div className="tower-cover-plate" aria-hidden="true">
+        <span className="tower-cover-coll">{artifact.collection}</span>
+        <span className="tower-cover-title">{artifact.title}</span>
+        <span className="tower-cover-rule" />
+        {artifact.creator ? (
+          <span className="tower-cover-creator">{artifact.creator}</span>
+        ) : null}
+        <span className="tower-cover-brand">TOWER OF BABEL</span>
+      </div>
+      {pg && !imgFailed ? (
+        <img
+          className="tower-cover-img"
+          src={`https://www.gutenberg.org/cache/epub/${pg}/pg${pg}.cover.medium.jpg`}
+          alt={`Cover of ${artifact.title}`}
+          loading="lazy"
+          onError={() => setImgFailed(true)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+const SHARE_ICON_PATHS = {
+  Mastodon: "M23.268 5.313c-.35-2.578-2.617-4.61-5.304-5.004C17.51.242 15.792 0 11.813 0h-.03c-3.98 0-4.835.242-5.288.309C3.882.692 1.496 2.518.917 5.127.64 6.412.61 7.837.661 9.143c.074 1.874.088 3.745.26 5.611.118 1.24.325 2.47.62 3.68.55 2.237 2.777 4.098 4.96 4.857 2.336.792 4.849.923 7.256.38.265-.061.527-.132.786-.213.585-.184 1.27-.39 1.774-.753a.057.057 0 0 0 .023-.043v-1.809a.052.052 0 0 0-.02-.041.053.053 0 0 0-.046-.01 20.282 20.282 0 0 1-4.709.545c-2.73 0-3.463-1.284-3.674-1.818a5.593 5.593 0 0 1-.319-1.433.053.053 0 0 1 .066-.054c1.517.363 3.072.546 4.632.546.376 0 .75 0 1.125-.01 1.57-.044 3.224-.124 4.768-.422.038-.008.077-.015.11-.024 2.435-.464 4.753-1.92 4.989-5.604.008-.145.03-1.52.03-1.67.002-.512.167-3.63-.024-5.545zm-3.748 9.195h-2.561V8.29c0-1.309-.55-1.976-1.67-1.976-1.23 0-1.846.79-1.846 2.35v3.403h-2.546V8.663c0-1.56-.617-2.35-1.848-2.35-1.112 0-1.668.668-1.67 1.977v6.218H4.822V8.102c0-1.31.337-2.35 1.011-3.12.696-.77 1.608-1.164 2.74-1.164 1.311 0 2.302.5 2.962 1.498l.638 1.06.638-1.06c.66-.999 1.65-1.498 2.96-1.498 1.13 0 2.043.395 2.74 1.164.675.77 1.012 1.81 1.012 3.12z",
+  Twitter: "M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723c-.951.555-2.005.959-3.127 1.184a4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z",
+  Facebook: "M9.101 23.691v-7.98H6.627v-3.667h2.474v-1.58c0-4.085 1.848-5.978 5.858-5.978.401 0 .955.042 1.468.103a8.68 8.68 0 0 1 1.141.195v3.325a8.623 8.623 0 0 0-.653-.036 26.805 26.805 0 0 0-.733-.009c-.707 0-1.259.096-1.675.309a1.686 1.686 0 0 0-.679.622c-.258.42-.374.995-.374 1.752v1.297h3.919l-.386 2.103-.287 1.564h-3.246v8.245C19.396 23.238 24 18.179 24 12.044c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.628 3.874 10.35 9.101 11.647Z",
+  Bluesky: "M12 10.8c-1.087-2.114-4.046-6.053-6.798-7.995C2.566.944 1.561 1.266.902 1.565.139 1.908 0 3.08 0 3.768c0 .69.378 5.65.624 6.479.815 2.736 3.713 3.66 6.383 3.364.136-.02.275-.039.415-.056-.138.022-.276.04-.415.056-3.912.58-7.387 2.005-2.83 7.078 5.013 5.19 6.87-1.113 7.823-4.308.953 3.195 2.05 9.271 7.733 4.308 4.267-4.308 1.172-6.498-2.74-7.078a8.741 8.741 0 0 1-.415-.056c.14.017.279.036.415.056 2.67.297 5.568-.628 6.383-3.364.246-.828.624-5.79.624-6.478 0-.69-.139-1.861-.902-2.206-.659-.298-1.664-.62-4.3 1.24C16.046 4.748 13.087 8.687 12 10.8Z",
+};
+
+// Share row (Joshua 2026-10-30): sits directly under the byline, above the
+// description — Email first, then the same services Gutenberg shows
+// (Mastodon, Twitter, Facebook, Bluesky) plus Print.
+function EntryShare({ artifact }) {
+  const url = towerEntryUrl(artifact);
+  const text = `${artifact.title}${artifact.creator ? ` by ${artifact.creator}` : ""} — Tower of Babel, Antarctic Labs`;
+  const e = encodeURIComponent;
+  const links = [
+    ["Email", `mailto:?subject=${e(artifact.title)}&body=${e(text + "\n" + url)}`, "M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"],
+    ["Mastodon", `https://mastodon.social/share?text=${e(text + " " + url)}`, SHARE_ICON_PATHS.Mastodon],
+    ["Twitter", `https://twitter.com/intent/tweet?text=${e(text)}&url=${e(url)}`, SHARE_ICON_PATHS.Twitter],
+    ["Facebook", `https://www.facebook.com/sharer/sharer.php?u=${e(url)}`, SHARE_ICON_PATHS.Facebook],
+    ["Bluesky", `https://bsky.app/intent/compose?text=${e(text + " " + url)}`, SHARE_ICON_PATHS.Bluesky],
+  ];
+  return (
+    <div className="tower-share" aria-label="Share this work">
+      {links.map(([name, href, d]) => (
+        <a
+          key={name}
+          className="tower-share-btn"
+          href={href}
+          target={name === "Email" ? undefined : "_blank"}
+          rel="noopener noreferrer"
+          aria-label={`Share via ${name}`}
+          title={`Share via ${name}`}
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+            <path d={d} />
+          </svg>
+        </a>
+      ))}
+      <button
+        type="button"
+        className="tower-share-btn"
+        onClick={() => window.print()}
+        aria-label="Print this page"
+        title="Print"
+      >
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+          <path d="M19 8H5c-1.66 0-3 1.34-3 3v6h4v4h12v-4h4v-6c0-1.66-1.34-3-3-3zm-3 11H8v-5h8v5zm3-7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-1-9H6v4h12V3z" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
+function CiteRow({ label, text }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    } catch {
+      /* clipboard unavailable — the text is on screen to copy by hand */
+    }
+  };
+  return (
+    <div className="tower-cite-row">
+      <span className="tower-cite-label">{label}</span>
+      <span className="tower-cite-text">{text}</span>
+      <button type="button" className="tower-cite-copy" onClick={copy}>
+        {copied ? "COPIED" : "COPY"}
+      </button>
+    </div>
+  );
+}
+
+// Bluebook short form, derived mechanically from the artifact id — the id
+// literally encodes the citation (uslaw-usc-t2-s1513 = 2 U.S.C. § 1513).
+function bluebookCite(artifact) {
+  const id = artifact.artifact_id || "";
+  let m = /^uslaw-usc-t(\d+)-s(\d+)(?:-(\d+))?/.exec(id);
+  if (m) return `${m[1]} U.S.C. § ${m[2]}${m[3] ? `(${m[3]})` : ""}`;
+  m = /^uslaw-cfr-t(\d+)-s(.+)$/.exec(id);
+  if (m) return `${m[1]} C.F.R. § ${m[2].replace(/-/g, ".")}`;
+  m = /^plaw-(\d+)-(\d+)-(\d{4})/.exec(id);
+  if (m) return `Pub. L. No. ${m[1]}-${m[2]}`;
+  return null;
+}
+
+function EntryCite({ artifact }) {
+  const url = towerEntryUrl(artifact);
+  const creator = artifact.creator || "Antarctic Labs";
+  const year = artifact.year || "n.d.";
+  const title = artifact.title;
+  const bibKey = `tower-${(artifact.artifact_id || "work").replace(/[^a-zA-Z0-9-]/g, "")}`;
+  const rows = [
+    ["CHICAGO", `${creator}. "${title}." Tower of Babel, Antarctic Labs, ${year}. ${url}.`],
+    ["MLA", `${creator}. "${title}." Tower of Babel, Antarctic Labs, ${year}, ${url}.`],
+    ["APA", `${creator}. (${year}). ${title}. Antarctic Labs. ${url}`],
+    ["BIBTEX", `@misc{${bibKey}, author = {${creator}}, title = {${title}}, year = {${year}}, url = {${url}}, note = {Tower of Babel, Antarctic Labs}}`],
+  ];
+  const bb = artifact.collection === "LAW" ? bluebookCite(artifact) : null;
+  if (bb) rows.splice(3, 0, ["BLUEBOOK", `${bb}, Tower of Babel, Antarctic Labs, ${url}.`]);
+  return (
+    <details className="tower-desc tower-cite">
+      <summary>
+        <span className="section-index">CITE THIS WORK</span>
+        <span className="tower-about-chevron" aria-hidden="true">▾</span>
+      </summary>
+      <div className="tower-cite-body">
+        {rows.map(([label, text]) => (
+          <CiteRow key={label} label={label} text={text} />
+        ))}
+      </div>
+    </details>
+  );
+}
+
 export function LibraryArtifact({ go, params, onReady }) {
   const [artifacts, catalogError, , retryArtifacts] = useArtifacts();
   // Warm the tower-files manifest chunk while the entry paints, so the
@@ -4175,15 +4356,21 @@ export function LibraryArtifact({ go, params, onReady }) {
   return (
     <main className="page-shell inner-page tower-light tower-entry" id="main-content" tabIndex={-1}>
       <section className="tower-entry-hero section">
-        <div className="section-index">LIBRARY / {artifact.collection}</div>
-        <h1>{artifact.title}</h1>
-        {(artifact.creator || artifact.year) && (
-          <p className="tower-entry-byline">
-            {artifact.creator}
-            {artifact.creator && artifact.year ? " · " : ""}
-            {artifact.year || ""}
-          </p>
-        )}
+        <div className="tower-entry-head">
+          <div className="tower-entry-head-main">
+            <div className="section-index">LIBRARY / {artifact.collection}</div>
+            <h1>{artifact.title}</h1>
+            {(artifact.creator || artifact.year) && (
+              <p className="tower-entry-byline">
+                {artifact.creator}
+                {artifact.creator && artifact.year ? " · " : ""}
+                {artifact.year || ""}
+              </p>
+            )}
+          </div>
+          <EntryCover artifact={artifact} />
+        </div>
+        <EntryShare artifact={artifact} />
         {(descOverride || artifact.description) && (
           <details className="tower-desc">
             <summary>
@@ -4243,6 +4430,22 @@ export function LibraryArtifact({ go, params, onReady }) {
             ))}
           </ul>
         )}
+        {status === "AVAILABLE" && artifact.download_url && (
+          <div className="tower-download-card">
+            <span className="tower-download-label">DOWNLOAD FOR FREE</span>
+            <span className="tower-download-note">
+              For your e-reader or reading app — the complete full text.
+            </span>
+            <a className="tower-download-btn" href={artifact.download_url} download>
+              <span className="tower-download-fmt">TXT — PLAIN TEXT</span>
+              {towerFileSize(artifact.file_size) ? (
+                <span className="tower-download-size">{towerFileSize(artifact.file_size)}</span>
+              ) : null}
+              <span className="tower-download-arrow" aria-hidden="true">↓</span>
+            </a>
+          </div>
+        )}
+        <EntryCite artifact={artifact} />
       </section>
       <LibraryFullText artifact={artifact} />
       {artifacts.length > 1 ? (
@@ -4816,11 +5019,6 @@ function LibraryFullText({ artifact }) {
     <section className="tower-fulltext section" aria-label="Full text" data-textmode={textMode}>
       <div className="section-index">FULL TEXT</div>
       <div className="tower-reader-meta">
-        {isLocalTowerFile && localFileExists && (
-          <a className="tower-reader-download" href={url} download>
-            DOWNLOAD .TXT
-          </a>
-        )}
         {stats && (
           <span className="tower-reader-stats">
             {stats.words.toLocaleString()} WORDS · ~{stats.minutes} MIN READ

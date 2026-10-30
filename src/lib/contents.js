@@ -28,6 +28,17 @@
 //      Selection keeps weak (ALL-CAPS) structure unless strong headings
 //      dominate; a picked set huddled in the first 5% is front matter,
 //      not navigation, and yields to the fallback.
+//   2026-10-30 finalization (plays + papers audit): Latin Folio headings
+//      (Actus/Scena/Scoena) are rank-0; split headings (numeral line +
+//      title line, incl. IEEE "II-A") merge into one candidate; stacked
+//      divisions (ACT over SCENE I) and stacked pairs escape MIN_GAP;
+//      numbered SENTENCES (Folio dialogue, list items, plate captions)
+//      never classify; dotted-number runs that restart are dialogue;
+//      captions, ordinal speaker cues (any rank), journal page heads,
+//      cast-list copies inside the widened ToC span, and bare romans
+//      echoing a pair's numeral are apparatus, not sections; LaTeX '$'
+//      residue trims at line edges; short credible pools beat the
+//      fallback. Full record: reader-fix/FIXES.md in the ops workspace.
 //   3. Repeated structural delimiters (* * *, long rules) splitting the text.
 //   4. Fallback: equal character ranges with honest "Part N of M" labels.
 //
@@ -79,6 +90,22 @@ const BOOKHDR_RE = /^book\s+\d{1,3}\s+[a-z]/i;
 const VERSE3_RE = /^(\d{1,3}):(\d{1,3}):001\b/; // BB:CCC:001 — verse 1 of chapter CCC
 const PSALM_RE = /^(\d{1,3}):001\b(?!:\d)/; // two-group form; not a prefix of BB:CCC:VVV
 const NUMSEC_RE = /^(\d{1,3}(?:\.\d{1,3}){0,3})(\.?)\s+[A-Z0-9"'(\[]/;
+// Latin play structure (First Folio transcriptions): "Actus Primus.
+// Scoena Prima.", "Actus primus.", "Scena Prima." — no English headword
+// ever fires on these, so Folio plays used to lose all structure.
+const LATIN_HEAD_RE =
+  /^(actus|acta|scena|scoena)\s+(primus|secundus|tertius|quartus|quintus|sextus|septimus|prima|secunda|tertia|quarta|quinta|sexta|septima|octava|nona|decima|undecima|duodecima)\b/i;
+// Table/figure captions are apparatus, never sections ("TABLE I:").
+const CAPTION_RE =
+  /^(table|figure|fig\.?|plate|chart|diagram)\s+([0-9]{1,3}|[ivx]{1,5})\b/i;
+// Ordinal-led ALL-CAPS speaker cues ("FIRST PLAYER.", "FIRST SENATOR.").
+const CUE_RE = /^(first|second|third|fourth|fifth)\s+[A-Z][A-Z'’\- ]{1,26}\.$/i;
+// Division keywords that legitimately STACK (an act line directly above
+// its first scene line, a part above its first chapter): a stacked pair
+// of different divisions is two sections, not a title + subtitle.
+const STACK_HEADS = new Set(
+  'act scene chapter part book section article canto actus scena scoena'.split(' ')
+);
 const ROMAN_RE = /^(?=[MDCLXVI])M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$/;
 const TOCNUM_RE = /^([0-9]{1,4}|[IVXLC]{1,8}|[A-Z])[\).\:\-–—]\s+\S/;
 const TOCDOTS_RE = /^.{2,60}?\.{3,}\s*\d{1,4}\s*$/; // title ...... 42
@@ -108,7 +135,9 @@ function trimLine(text, s, e) {
   let b = e;
   while (b > a) {
     const c = text.charCodeAt(b - 1);
-    if (c !== 32 && c !== 9) break;
+    // Trailing '$' is LaTeX residue in converted papers ("Related
+    // Work$"), never content — trim it like whitespace at line edges.
+    if (c !== 32 && c !== 9 && c !== 36) break;
     b--;
   }
   return a < b ? text.slice(a, b) : '';
@@ -117,6 +146,9 @@ function trimLine(text, s, e) {
 function cleanLabel(s) {
   if (typeof s !== 'string') return '';
   let t = s.replace(/\s+/g, ' ').trim();
+  // Printed-ToC residue: dotted leaders + page number ("… docility
+  // ...... 37") are list furniture, not part of the heading.
+  t = t.replace(/\s*\.{3,}\s*\d{0,4}\s*$/, '');
   if (t.length > MAX_LABEL) t = t.slice(0, MAX_LABEL).trimEnd();
   return t;
 }
@@ -246,6 +278,14 @@ function headwordRank(t, w) {
   let m = /^(\d{1,4}|[IVXLCDM]{1,8})\b/.exec(after);
   if (m) {
     const r2 = after.slice(m[0].length);
+    // A parenthetical right after the number must hold a Title, not
+    // prose: "Section 3 (Definitions)" is a heading; "section 26
+    // (freedom of movement) or Division 4 …" is a cross-reference.
+    const pm = /^[\s.\):–—-]*\(/.exec(r2);
+    if (pm) {
+      const pc = r2.charAt(pm[0].length);
+      if (!/[A-Z0-9"'(§]/.test(pc)) return -1;
+    }
     return /^[\s.\):–—-]*($|[A-Z0-9"'(§])/.test(r2) ? 0 : -1;
   }
   // Lowercase roman only when nothing follows: "chapter ii",
@@ -498,8 +538,13 @@ function tocKind(line) {
   const c = line.charCodeAt(0);
   if (c === 35) return MD_RE.test(line) ? 2 : 0;
   if (c === 167) return SECSYM_RE.test(line) ? 2 : 0;
-  if (c >= 48 && c <= 57)
+  if (c >= 48 && c <= 57) {
+    // Numbered SENTENCES are dialogue, not list entries ("1. When shall
+    // we three meet againe?" — the Folio witches once formed a false
+    // ToC anchor that swallowed Macbeth's real first heading).
+    if (line.split(/\s+/).length >= 6 && /[.!?,;]$/.test(line)) return 0;
     return TOCNUM_RE.test(line) || NUMSEC_RE.test(line) ? 2 : 0;
+  }
   if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) {
     const w = firstWordLower(line);
     if (w === 'the')
@@ -508,6 +553,8 @@ function tocKind(line) {
         ? 2
         : 0;
     if (HEADWORDS.has(w)) return headwordRank(line, w) >= 0 ? 2 : 0;
+    if (w === 'actus' || w === 'acta' || w === 'scena' || w === 'scoena')
+      return LATIN_HEAD_RE.test(line) ? 2 : 0;
     if (ORDINAL_WORDS.has(w) && ORDINAL_NOUNS.has(secondWordLower(line, w.length))) return 2;
     if (w === 'book' && BOOKHDR_RE.test(line)) return 2;
     if (TOCDOTS_RE.test(line)) return 2;
@@ -586,28 +633,6 @@ function findToc(text) {
     }
     if (set.size >= 6000) break;
   }
-  // Widen (2026-10-21): every short line inside the merged ToC span is an
-  // entry, including ones tocKind can't rate on their own ("Ezra",
-  // "Ecclesiastes", "The Proverbs") — without them those books could never
-  // be mapped to their body headings.
-  const spanFirst = runs[ai].firstIdx;
-  const spanLast = runs[ei].lastIdx;
-  scanLines(text, (s, e, idx) => {
-    if (idx < spanFirst) return;
-    if (idx > spanLast || set.size >= 6000) return false;
-    if (e - s > 0 && e - s <= 64) {
-      const line = trimLine(text, s, e);
-      if (line) {
-        const k1 = cheapKey(line);
-        if (k1.length >= 4 && !set.has(k1)) {
-          set.add(k1);
-          hashes.add(keyHash(line));
-          const ft = firstTokenLower(k1);
-          if (ft) toks.add(ft);
-        }
-      }
-    }
-  });
   // The skip rule (accept) is position-aware: only occurrences INSIDE the
   // anchor run's char span count as "the ToC line itself". A label can
   // occur three times (title page, ToC, body) — occurrences outside the
@@ -626,12 +651,52 @@ function findToc(text) {
     if (g > maxGapSoFar) maxGapSoFar = g;
     spanEndItem = anchorItems[i2];
   }
+  // Widen (2026-10-21): every short line inside the merged ToC span is an
+  // entry, including ones tocKind can't rate on their own ("Ezra",
+  // "Ecclesiastes", "The Proverbs") — without them those books could never
+  // be mapped to their body headings.
+  // CAP (2026-10-30): the widened span ends 400 lines past the anchor's
+  // dense core. Uncapped, the run-merging chains through any document
+  // dense in ToC-like lines (a constitution is wall-to-wall numbered
+  // lines) and keys thousands of body fragments, which then "map" as
+  // sections deep in the text. 400 lines covers every real apparatus
+  // glued to a contents list (cast blocks, scene lists, book lists).
+  const wideCapIdx = spanEndItem.idx + 400;
+  const spanFirst = runs[ai].firstIdx;
+  const spanLast = Math.min(runs[ei].lastIdx, wideCapIdx);
+  scanLines(text, (s, e, idx) => {
+    if (idx < spanFirst) return;
+    if (idx > spanLast || set.size >= 6000) return false;
+    if (e - s > 0 && e - s <= 64) {
+      const line = trimLine(text, s, e);
+      if (line) {
+        const k1 = cheapKey(line);
+        if (k1.length >= 4 && !set.has(k1)) {
+          set.add(k1);
+          hashes.add(keyHash(line));
+          const ft = firstTokenLower(k1);
+          if (ft) toks.add(ft);
+        }
+      }
+    }
+  });
+  // Char end of the widened span (last merged-run item inside the cap).
+  let wideEndOff = spanEndItem.e;
+  for (let i = ai; i <= ei; i++) {
+    for (const t of runs[i].items) {
+      if (t.idx <= wideCapIdx && t.e > wideEndOff) wideEndOff = t.e;
+    }
+  }
   return {
     set,
     hashes,
     toks,
     startOff: anchorItems[0].s,
     endOff: spanEndItem.e,
+    // End of the (capped) widened span: the widened key set reaches
+    // this far, so list-copy occurrences (cast lists glued to a
+    // contents list, scene lists) can hide anywhere up to here.
+    wideEndOff,
   };
 }
 
@@ -651,6 +716,63 @@ function scanBookNames(text) {
     }
   }
   return names;
+}
+
+// Split-heading pair probe: given the offset just past a bare-numeral
+// line, find the following line and judge whether it is the heading's
+// title ("3" / "Metrics", "I" / "Introduction" in PDF-converted papers).
+// Returns { title, end } (end = raw end offset of the title line) or null.
+// The title must be short, capitalized, unpunctuated, and followed by a
+// blank line — running heads and page furniture fail the blank-after
+// test, and the pair post-filter kills any title that repeats.
+function trySplitPair(text, eolOff) {
+  const n = text.length;
+  let s = eolOff + 1;
+  let blanks = 0;
+  while (s < n) {
+    let e = text.indexOf('\n', s);
+    if (e < 0) e = n;
+    let a = s;
+    let b = e;
+    if (b > a && text.charCodeAt(b - 1) === 13) b--;
+    while (a < b) {
+      const c = text.charCodeAt(a);
+      if (c !== 32 && c !== 9) break;
+      a++;
+    }
+    while (b > a) {
+      const c = text.charCodeAt(b - 1);
+      if (c !== 32 && c !== 9 && c !== 36) break;
+      b--;
+    }
+    if (a >= b) {
+      if (++blanks > 2) return null;
+      s = e + 1;
+      continue;
+    }
+    const len = b - a;
+    if (len < 3 || len > 56) return null;
+    const t = text.slice(a, b);
+    const c0 = t.charCodeAt(0);
+    if (c0 < 65 || c0 > 90) return null; // must start with a capital letter
+    if (DELIM_RE.test(t) || MD_RE.test(t)) return null;
+    if (t.split(/\s+/).length > 6) return null;
+    if (/[.!?,;]$/.test(t)) return null; // sentence fragment, not a title
+    const fw = firstWordLower(t);
+    if (HEADWORDS.has(fw) && /\d/.test(t)) return null; // a heading itself
+    if (CAPTION_RE.test(t)) return null;
+    // Blank line (or end of text) after the title. A lone-'$' residue
+    // line counts as blank (it trims to nothing in the body pass).
+    let j = e + 1;
+    while (j < n) {
+      const c = text.charCodeAt(j);
+      if (c !== 32 && c !== 9 && c !== 13 && c !== 36) break;
+      j++;
+    }
+    if (j < n && text.charCodeAt(j) !== 10) return null;
+    return { title: t, end: e };
+  }
+  return null;
 }
 
 // True when the next non-blank line starts with a lowercase letter — i.e.
@@ -712,8 +834,26 @@ function classify(t, s, e, text, ctx) {
       nm &&
       (nm[1].indexOf('.') !== -1 || nm[2] === '.') &&
       !nextLineStartsLower(text, e)
-    )
+    ) {
+      // Sentence guard: a "numbered heading" that is really a numbered
+      // SENTENCE — dialogue lines in Folio plays ("1. When shall we
+      // three meet againe?"), numbered list items, plate captions in old
+      // journal papers ("2. Side view of the cranium…") — is prose, not
+      // structure. Real numbered headings are short and title-like.
+      // ALL-CAPS lines are exempt: PMC-style papers run long caps
+      // headings ("4. OCCURRENCE OF MYCOTOXINS IN EUROPEAN FEED…").
+      const words = t.split(/\s+/).length;
+      if (
+        !isAllCapsLine(t) &&
+        ((words >= 6 && /[.!?,;]$/.test(t)) || words >= 9)
+      )
+        return null;
+      // A decimal number followed by a parenthesis is a data row
+      // ("8.9 (Ada Lovelace)"), not a heading. (nm[0] ends with the
+      // first content char the pattern consumed.)
+      if (/^\d+\.\d+$/.test(nm[1]) && nm[0].endsWith('(')) return null;
       return { rank: 1, label: t, ns: true };
+    }
     return null;
   }
   const up = c >= 65 && c <= 90;
@@ -737,6 +877,15 @@ function classify(t, s, e, text, ctx) {
       // ("THE PX SUBMISSION TOOL") still reach the caps checks below.
     }
     if (HEADWORDS.has(w)) {
+      // A long "SCENE: …" / "ACT: …" line is a front-matter NOTE about
+      // the setting, not a heading (Othello's scene description ran to
+      // 80+ chars; real scene headings are short) — and a heading never
+      // contains a semicolon.
+      if (
+        (w === 'scene' || w === 'act') &&
+        (t.length > 70 || t.indexOf(';') !== -1)
+      )
+        return null;
       const r = headwordRank(t, w);
       if (r >= 0) return { rank: 0, label: t };
       return null;
@@ -756,6 +905,12 @@ function classify(t, s, e, text, ctx) {
       return null;
     }
     if (w === 'book' && BOOKHDR_RE.test(t)) return { rank: 0, label: t };
+    if (w === 'actus' || w === 'acta' || w === 'scena' || w === 'scoena') {
+      // Folio Latin: "Actus Primus. Scoena Prima." (one line, one
+      // section), "Actus primus.", "Scena Prima." — major structure.
+      if (LATIN_HEAD_RE.test(t)) return { rank: 0, label: t };
+      return null;
+    }
     if (up) {
       if (isAllCapsHeading(t)) {
         // Ordinal-led short caps lines are real divisions in scripture and
@@ -885,6 +1040,15 @@ export function extractContents(text, title) {
   if (n < TINY_CHARS) return [{ label: headLabel, offset: 0, percent: 0 }];
 
   const toc = findToc(text);
+  // Project Gutenberg license tail: everything from the "*** END OF
+  // THE PROJECT GUTENBERG EBOOK ***" marker on is license apparatus,
+  // not the work ("Section 1. General Terms of Use…" is not a section
+  // of Jonson). Only trusted in the latter half of the text.
+  let endCut = -1;
+  {
+    const m = /\*\*\*\s*END OF (?:THE|THIS) PROJECT GUTENBERG/i.exec(text);
+    if (m && m.index > n * 0.5) endCut = m.index;
+  }
   const bookNames = scanBookNames(text);
   const ctx = {
     // Verse-level chapters only make sense in a single-book scripture; in a
@@ -899,9 +1063,49 @@ export function extractContents(text, title) {
   let lastLabel = '';
   const seenTocKeys = new Set();
 
-  const accept = (rank, off, label, force, ns) => {
+  // Stacked divisions: "ACT I" printed directly above "SCENE I. …" sits
+  // ~7 chars apart — inside MIN_GAP — yet is a real second section. A
+  // stacked pair of DIFFERENT division keywords is exempt from the gap
+  // rule; a title + subtitle stack (different shapes) is not.
+  const stackPairOk = (label) => {
+    if (!lastLabel) return false;
+    const a = firstWordLower(lastLabel);
+    const b = firstWordLower(label);
+    return a !== b && STACK_HEADS.has(a) && STACK_HEADS.has(b);
+  };
+
+  // Two split pairs back to back (a section heading immediately
+  // followed by its first subsection, "II" / "Related Work" then
+  // "II-A" / "Energy Cost…") are two numbered headings, not a title +
+  // subtitle stack — numbered headings are self-contained.
+  const pairPairOk = (pair) =>
+    !!pair &&
+    cands.length > 0 &&
+    !!cands[cands.length - 1].pair &&
+    cands[cands.length - 1].off === lastOff;
+
+  const accept = (rank, off, label, force, ns, viaToc, pair) => {
+    if (endCut >= 0 && off >= endCut) return false; // license tail
+    // A split pair landing within MIN_GAP of a just-accepted WEAK
+    // candidate replaces it: in converted papers the real heading's
+    // numeral can sit a few chars after a stranded roadmap numeral
+    // ("…in Section / VI / . / II / Related Work") — the junk single
+    // must not block the real pair.
+    if (
+      pair &&
+      lastOff >= 0 &&
+      off - lastOff < MIN_GAP &&
+      cands.length > 0 &&
+      cands[cands.length - 1].rank === 2 &&
+      cands[cands.length - 1].off === lastOff
+    ) {
+      cands.pop();
+      lastOff = cands.length > 0 ? cands[cands.length - 1].off : -1;
+      lastLabel = cands.length > 0 ? cands[cands.length - 1].label : '';
+    }
     // Cheapest rejection first: proximity.
-    if (!force && lastOff >= 0 && off - lastOff < MIN_GAP) return false;
+    if (!force && lastOff >= 0 && off - lastOff < MIN_GAP && !stackPairOk(label) && !pairPairOk(pair))
+      return false;
     label = cleanLabel(label);
     if (!label) return false;
     // Tier-1 rule: a ToC entry's occurrence INSIDE the ToC span is the ToC
@@ -912,17 +1116,34 @@ export function extractContents(text, title) {
     if (toc && off >= toc.startOff && off <= toc.endOff && toc.toks.has(firstTokenLower(label))) {
       if (toc.hashes.has(keyHash(label))) {
         const k1 = cheapKey(label);
-        if (toc.set.has(k1) && !seenTocKeys.has(k1)) {
-          seenTocKeys.add(k1);
-          return false;
-        }
+        // Skip EVERY in-span occurrence, not just the first per key:
+        // play scene lists repeat labels ("Scene I. A room in the
+        // Castle" serves two acts), and the once-per-key rule let the
+        // second list copy through as a fake body section. The span
+        // end is gap-guarded, so a glued body heading stays outside.
+        if (toc.set.has(k1)) return false;
       }
     }
-    if (!force && lastOff >= 0 && off - lastOff < MIN_GAP) return false;
+    // Widened-span rule (mapToc candidates only): the widened key set is
+    // harvested from every merged run, and front apparatus glued to a
+    // contents list — a play's Dramatis Personæ cast block is the classic
+    // case — enters the set without being in the anchor span. A mapped
+    // occurrence inside the widened span is a list copy, not a body
+    // heading: skip it (once per key). Classify-sourced headings are
+    // exempt — a real body heading can stand inside the widened span.
+    if (viaToc && toc && off <= toc.wideEndOff && toc.hashes.has(keyHash(label))) {
+      const k1 = cheapKey(label);
+      if (toc.set.has(k1) && !seenTocKeys.has(k1)) {
+        seenTocKeys.add(k1);
+        return false;
+      }
+    }
+    if (!force && lastOff >= 0 && off - lastOff < MIN_GAP && !stackPairOk(label) && !pairPairOk(pair))
+      return false;
     if (label === lastLabel && lastOff >= 0 && off - lastOff < 5000) return false;
     lastOff = off;
     lastLabel = label;
-    cands.push({ off, label, rank, ns: !!ns });
+    cands.push({ off, label, rank, ns: !!ns, pair: !!pair });
     return true;
   };
 
@@ -936,16 +1157,31 @@ export function extractContents(text, title) {
     // punctuation; real bare-name headings don't.
     const lastC = text.charCodeAt(b - 1);
     if (lastC === 46 || lastC === 44 || lastC === 59 || lastC === 58) return;
+    // A mapped heading starts with a capital (or a digit/§/#): lines
+    // starting lowercase are prose cross-references and fragments
+    // ("section 26 (freedom of movement) or Division 4 …", "no-one
+    // shall–") that happen to stand alone and match a set key.
+    const c0 = text.charCodeAt(a);
+    if (c0 >= 97 && c0 <= 122) return;
     const ft = firstTokenLowerRange(text, a, b);
     if (!ft || !toc.toks.has(ft)) return;
     if (!toc.hashes.has(keyHashRange(text, a, b))) return;
     const line = text.slice(a, b);
+    // A mapped entry is a heading, not a sentence: long lines and
+    // semicolon-bearing prose (a front-matter "SCENE: …" note ran to
+    // 150 chars) never qualify.
+    if (line.length > 64 || line.indexOf(';') !== -1) return;
+    // Sentence-shaped rows (a constitution's cross-reference schedule:
+    // "section 26 (freedom of movement) or Division 4 … .") are prose
+    // that happens to stand alone — headings don't end a 5+ word
+    // lowercase-majority sentence with a period.
+    if (/[.!?]$/.test(line) && line.split(/\s+/).length >= 5) return;
     if (!toc.set.has(cheapKey(line))) return;
     // The matched line must stand in the body like a heading (caps, title
     // case, or blank-surrounded) — a wrapped prose line that merely
     // equals a set entry is not a section.
     if (!isAllCapsLine(line) && !isTitleCaseLine(line) && !isIsolated(text, s, e)) return;
-    accept(0, s, line);
+    accept(0, s, line, false, false, true);
   };
 
   const stripQuotes = (t) => {
@@ -961,9 +1197,14 @@ export function extractContents(text, title) {
   // Main body pass: inlined line loop, range-based triage — line strings are
   // materialized only for rare promising lines.
   let s = 0;
+  let skipUntil = -1; // split-pair title lines are consumed by their numeral
   while (s < n) {
     let e = text.indexOf('\n', s);
     if (e < 0) e = n;
+    if (s < skipUntil) {
+      s = e + 1;
+      continue;
+    }
     let a = s;
     let b = e;
     if (b > a && text.charCodeAt(b - 1) === 13) b--;
@@ -974,12 +1215,37 @@ export function extractContents(text, title) {
     }
     while (b > a) {
       const c = text.charCodeAt(b - 1);
-      if (c !== 32 && c !== 9) break;
+      if (c !== 32 && c !== 9 && c !== 36) break;
       b--;
     }
     if (a < b) {
       const tlen = b - a;
       const c = text.charCodeAt(a);
+      // Split-heading pair: a bare numeral line whose next line is its
+      // title. Merged into ONE candidate — left separate, the numeral is
+      // accepted as a weak roman/number and the title line then dies on
+      // the MIN_GAP proximity rule (the arXiv split-heading failure).
+      if (tlen <= 5) {
+        const t0 = text.slice(a, b);
+        if (
+          /^\d{1,3}$/.test(t0) ||
+          (isRomanChars(t0) && ROMAN_RE.test(t0)) ||
+          /^[IVX]{1,4}-[A-Z]$/.test(t0) || // IEEE subsection style: "II-A"
+          /^\d{1,3}-[A-Z]$/.test(t0)
+        ) {
+          const pair = trySplitPair(text, e);
+          if (
+            pair &&
+            accept(1, s, t0 + '. ' + pair.title, false, false, false, true)
+          ) {
+            // Only consume the title line when the pair was accepted —
+            // a rejected pair leaves both lines to normal processing.
+            skipUntil = pair.end;
+            s = e + 1;
+            continue;
+          }
+        }
+      }
       if (tlen > MAX_LINE) {
         if (tlen <= 400 && ctx.verseChapters && c >= 48 && c <= 57) {
           const vm = VERSE3_RE.exec(text.slice(a, Math.min(b, a + 16)));
@@ -1009,7 +1275,15 @@ export function extractContents(text, title) {
         }
       } else if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122)) {
         const w = firstWordLowerRange(text, a, b);
-        if (HEADWORDS.has(w) || ORDINAL_WORDS.has(w) || w === 'book' || w === 'the') {
+        if (
+          HEADWORDS.has(w) ||
+          ORDINAL_WORDS.has(w) ||
+          w === 'book' ||
+          w === 'the' ||
+          w === 'actus' ||
+          w === 'scena' ||
+          w === 'scoena'
+        ) {
           const t = stripQuotes(text.slice(a, b));
           if (t) {
             const r = classify(t, s, e, text, ctx);
@@ -1040,7 +1314,133 @@ export function extractContents(text, title) {
     s = e + 1;
   }
 
-  const kept = purgePrinted(cands, n);
+  let kept = purgePrinted(cands, n);
+
+  // Apparatus purges (2026-10-30): candidates that are print furniture,
+  // not body structure — captions, speaker cues, dialogue numbering.
+  const hasCueFamily = kept.some((x) => CUE_RE.test(x.label));
+  const CUE_BARE_RE = /^(first|second|third|fourth|fifth)\s+[A-Z][A-Z'’\- ]{1,26}$/i;
+  kept = kept.filter((x) => {
+    // Captions: "TABLE I:", "Figure 3" — never sections.
+    if (CAPTION_RE.test(x.label)) return false;
+    // Speaker cues: ordinal-led ALL-CAPS lines are dialogue cues in
+    // plays ("FIRST PLAYER.", "SECOND SENATOR"), whether or not this
+    // edition prints the trailing period. They classify as minor
+    // ordinal divisions (rank 1), so the test reaches rank 1; the
+    // period-less form needs a punctuated sibling as family evidence.
+    if (
+      x.rank <= 1 &&
+      isAllCapsLine(x.label) &&
+      (CUE_RE.test(x.label) || (hasCueFamily && CUE_BARE_RE.test(x.label)))
+    )
+      return false;
+    return true;
+  });
+  // Wrapped headings: a heading that wraps mid-title yields two
+  // adjacent weak caps candidates ("DIVISION 3. PROTECTION OF THE
+  // FUNDAMENTAL" / "RIGHTS AND FREEDOMS", ~40 chars apart). Merge
+  // adjacent rank-2 caps fragments back into one heading.
+  {
+    const merged = [];
+    for (const x of kept) {
+      const prev = merged[merged.length - 1];
+      if (
+        prev &&
+        prev.rank === 2 &&
+        x.rank === 2 &&
+        x.off - prev.off < 80 &&
+        isAllCapsLine(prev.label) &&
+        isAllCapsLine(x.label)
+      ) {
+        prev.label = cleanLabel(prev.label + ' ' + x.label);
+        continue;
+      }
+      merged.push(x);
+    }
+    kept = merged;
+  }
+  {
+    // Numbered-dialogue runs: dotted-number candidates whose values
+    // RESTART (1,2,3,1,2,3…) in dense succession are numbered speech
+    // prefixes (Folio witches) or renumbering lists, not sections.
+    // Real numbered sections never restart.
+    const nsIdx = [];
+    kept.forEach((x, i) => {
+      if (x.ns) nsIdx.push(i);
+    });
+    if (nsIdx.length >= 3) {
+      const dropNs = new Set();
+      let runStart = 0;
+      const flushRun = (end) => {
+        let resets = 0;
+        let prev = null;
+        let abbrev = false;
+        for (let k = runStart; k <= end; k++) {
+          const v = parseInt(kept[nsIdx[k]].label, 10);
+          if (prev !== null && v < prev) resets++;
+          prev = v;
+          // Quarto speech prefixes carry abbreviated speaker names
+          // ("1. Capu. …") — a post-number token ending in a period.
+          const rest = kept[nsIdx[k]].label.replace(
+            /^\d+(?:\.\d+)*\.?\s+/,
+            ''
+          );
+          if ((rest.split(/\s+/)[0] || '').endsWith('.')) abbrev = true;
+        }
+        if (
+          (end - runStart + 1 >= 6 && resets >= 2) ||
+          (end - runStart + 1 >= 3 && resets >= 1 && abbrev)
+        )
+          for (let k = runStart; k <= end; k++) dropNs.add(nsIdx[k]);
+      };
+      for (let k = 1; k < nsIdx.length; k++) {
+        if (kept[nsIdx[k]].off - kept[nsIdx[k - 1]].off > 4000) {
+          flushRun(k - 1);
+          runStart = k;
+        }
+      }
+      flushRun(nsIdx.length - 1);
+      if (dropNs.size) kept = kept.filter((_, i) => !dropNs.has(i));
+    }
+    // Journal page heads: "196. NATURE", "198. NATURE" — a big number
+    // (≥100) whose tail repeats verbatim is page furniture, not a
+    // section (real 100+ section schemes have distinct titles). The
+    // pair form (page number on its own line, journal name on the
+    // next) is the same furniture in split dress.
+    {
+      const tailCount = new Map();
+      for (const x of kept) {
+        if (!x.ns && !x.pair) continue;
+        const m = /^(\d+)\.?\s+(.*)$/.exec(x.label);
+        if (m && parseInt(m[1], 10) >= 100)
+          tailCount.set(m[2], (tailCount.get(m[2]) || 0) + 1);
+      }
+      if ([...tailCount.values()].some((v) => v >= 2))
+        kept = kept.filter((x) => {
+          if (!x.ns && !x.pair) return true;
+          const m = /^(\d+)\.?\s+(.*)$/.exec(x.label);
+          return !(
+            m &&
+            parseInt(m[1], 10) >= 100 &&
+            tailCount.get(m[2]) >= 2
+          );
+        });
+    }
+    // Running-head pairs: a split-pair title that pairs with 3+
+    // different numerals is a page running head, not section titles.
+    const pairTitles = new Map();
+    for (const x of kept) {
+      if (!x.pair) continue;
+      const tp = x.label.replace(/^\S+\.\s+/, '');
+      pairTitles.set(tp, (pairTitles.get(tp) || 0) + 1);
+    }
+    let pairFlood = false;
+    for (const v of pairTitles.values()) if (v >= 3) pairFlood = true;
+    if (pairFlood)
+      kept = kept.filter(
+        (x) => !x.pair || pairTitles.get(x.label.replace(/^\S+\.\s+/, '')) < 3
+      );
+  }
 
   // Bare roman-numeral candidates are chapter markers only in sequence
   // (I, II, III, …): a chain of 3+ consecutive values is structure.
@@ -1095,12 +1495,29 @@ export function extractContents(text, title) {
     return s && s.count >= 3 && s.last - s.first > n * 0.1;
   };
 
+  // Split pairs already carry their numerals ("II. Related Work"): a
+  // bare roman candidate with the same value is the roadmap/echo copy
+  // (a paper's intro lists its section numerals on consecutive lines).
+  const pairNums = new Set();
+  for (const x of kept) {
+    if (!x.pair) continue;
+    const p = x.label.split(/[\s.]/)[0].split('-')[0]; // "II-A" -> "II"
+    pairNums.add(/^\d+$/.test(p) ? parseInt(p, 10) : romanVal(p));
+  }
   const kept2 = kept.filter(
-    (x) => !isRecurringWeak(x) && (!isBareRoman(x) || romanKeep.has(x))
+    (x) =>
+      !isRecurringWeak(x) &&
+      (!isBareRoman(x) || romanKeep.has(x)) &&
+      !(
+        isBareRoman(x) &&
+        pairNums.size >= 2 &&
+        pairNums.has(romanVal(x.label))
+      )
   );
   let picked = null;
   let rank0 = 0;
   let numsec = 0;
+  let pairCount = 0;
   let weakCount = 0;
   let weakReal = 0; // weak with a real-word label (≥4 chars) — single-char
   // roman/symbol junk ("C", "L", "X" in a science paper) doesn't count
@@ -1112,6 +1529,7 @@ export function extractContents(text, title) {
       if (x.label.length >= 4) weakReal++;
     }
     if (x.ns) numsec++;
+    if (x.pair) pairCount++;
   }
   // A flood of dotted-numbered lines is a numbered list (dictionary senses,
   // memo paragraphs), not chapters — drop them all.
@@ -1122,20 +1540,40 @@ export function extractContents(text, title) {
   // FLOOD (>60) alongside a solid strong skeleton (≥10) is granularity
   // noise (chapter subheads, running heads) — drop it.
   if (
-    rank0 >= 2 &&
-    (rank0 >= weakReal || (weakReal > 60 && rank0 >= 10))
+    (rank0 >= 2 &&
+      (rank0 >= weakReal || (weakReal > 60 && rank0 >= 10))) ||
+    // A handful of stray caps lines (≤4) amid rich numbered/paired
+    // structure is noise (figure labels, log lines in a paper's
+    // appendix) — the numbered skeleton is the structure. (Many caps
+    // lines would mean the caps ARE the structure; protected above.)
+    (rank0 + numsec + pairCount >= 8 && weakReal > 0 && weakReal <= 4)
   )
     picked = prune(pool.filter((x) => x.rank !== 2));
   // Weak-only floods (>60) are noise (OCR fragments, form labels), not
   // structure — fall back instead of emitting hundreds of junk rows.
   else if (rank0 === 0 && weakCount > 60) picked = null;
+  // Short but credible structure (a brief paper's 3–5 real sections)
+  // beats the equal-parts fallback.
+  else if (pool.length >= 3 && (rank0 >= 1 || pairCount >= 2 || numsec >= 3))
+    picked = prune(pool);
+  // Even a single real heading (an early-quarto play's lone "Actus
+  // Primus") is truer navigation than invented equal parts.
+  else if (pool.length >= 1 && (rank0 >= 1 || pairCount >= 1 || numsec >= 2))
+    picked = prune(pool);
   else if (pool.length >= 6) picked = prune(pool);
 
   // Coverage rule: a handful of "sections" huddled in the first 5% is
   // front matter that matched heading forms, not navigation (a one-tale
   // volume whose only matches are its title lines). The delimiter /
-  // equal-parts fallback below serves such texts better.
-  if (picked && picked.length <= 5 && picked[picked.length - 1].off < n * 0.05)
+  // equal-parts fallback below serves such texts better. A strict
+  // rank-0 heading (headword/Latin) is exempt: an early-quarto play's
+  // lone "Actus Primus" at 3% is real structure, not front matter.
+  if (
+    picked &&
+    rank0 === 0 &&
+    picked.length <= 5 &&
+    picked[picked.length - 1].off < n * 0.05
+  )
     picked = null;
 
   if (!picked || picked.length === 0) {

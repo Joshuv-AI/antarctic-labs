@@ -531,15 +531,11 @@ const KOKORO_POSSIBLE =
   typeof Worker !== "undefined" &&
   typeof WebAssembly !== "undefined";
 
-// Phones get the q4 model (~half the download and memory of q8): iOS
-// Safari's per-tab memory ceiling and its small Cache Storage quota are
-// the two ways the full-size load dies on mobile while desktop sails
-// through. Voice quality difference at q4 is negligible for speech.
-const KOKORO_MOBILE =
-  typeof window !== "undefined" &&
-  ((typeof window.matchMedia === "function" &&
-    window.matchMedia("(pointer: coarse)").matches) ||
-    /iPhone|iPad|iPod|Android/i.test(window.navigator.userAgent || ""));
+// Every device loads the q8 model (model_quantized.onnx, ~92 MB). The
+// q4 file in this model repo is NOT smaller — it is ~305 MB — so the
+// old mobile-q4 switch tripled the phone download and the load died
+// on iOS (memory/quota) every time. Verified against the Hugging Face
+// file listing 2026-10-30.
 
 // A 0.25s silent WAV — played (and instantly paused) inside the Listen tap
 // so iOS/Chrome unlock the audio element for later programmatic playback.
@@ -690,6 +686,27 @@ function useReadAloudKokoro({
   const ensureWorker = useCallback(() => {
     const E = getEng();
     if (E.worker) return E.worker;
+    if (!E.persistAsked) {
+      E.persistAsked = true;
+      // Keep the downloaded voice across visits: ask the browser for
+      // persistent storage, and drop the old ~305 MB q4 model file if
+      // an earlier version managed to cache it.
+      try {
+        if (navigator.storage && navigator.storage.persist)
+          navigator.storage.persist();
+        if (typeof caches !== "undefined")
+          caches
+            .open("transformers-cache")
+            .then((c) =>
+              c.delete(
+                "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model_q4.onnx"
+              )
+            )
+            .catch(() => {});
+      } catch {
+        /* best effort only */
+      }
+    }
     let w;
     try {
       w = new Worker(new URL("../lib/kokoro-worker.js", import.meta.url), {
@@ -798,11 +815,12 @@ function useReadAloudKokoro({
     };
     w.postMessage({
       type: "init",
-      dtype: KOKORO_MOBILE ? "q4" : "q8",
-      // The one retry runs cache-free: if the browser cache write is
-      // what killed the first load (iOS quota), the retry must not die
-      // the same way.
-      noCache: (E.loadAttempts || 0) > 0,
+      dtype: "q8",
+      // The retry keeps the cache ON: transformers.js tolerates a
+      // failed cache write (it warns and continues in-memory), while a
+      // cache-free retry both re-downloads everything AND leaves
+      // nothing cached for the next visit.
+      noCache: false,
     });
     return w;
     // eslint-disable-next-line react-hooks/exhaustive-deps
