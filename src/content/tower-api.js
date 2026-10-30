@@ -1,8 +1,8 @@
 // Copy for the Tower of Babel agent-resource surface.
 // Page: /tower-of-babel/library  (libraryFaqs)
 // Page: /tower-of-babel/api      (apiPage)
-// Scale figures verified 2026-10-23 (375,605 entries live 2026-10-22;
-// stated as "more than 375,000" so the copy stays true as the catalog grows).
+// Scale figures verified 2026-10-30 (660,389 entries live 2026-10-30;
+// stated as "more than 660,000" so the copy stays true as the catalog grows).
 // Guardrails: never claim every record has full text, an uptime SLA, or
 // throttling terms — copy uses "where text is present", "predictable URLs",
 // "no published rate limit". No MCP/server-search claims (none exist yet).
@@ -16,7 +16,7 @@ export const PORTAL_URL = "https://billing.stripe.com/p/login/14A14m9pBfOA2VI7UG
 export const libraryFaqs = [
   {
     q: "Where can I read classic books online for free?",
-    a: "The Tower of Babel library catalogues more than 375,000 works, and every work with available text opens as a full, clean text you can read in the browser. There is no sign-up, no paywall, and no app to install. The collection covers public domain classics, sacred texts from every tradition, foundational documents, scientific papers, and historical records. The access button appears only where the text file exists.",
+    a: "The Tower of Babel library catalogues more than 660,000 works, and every work with available text opens as a full, clean text you can read in the browser. There is no sign-up, no paywall, and no app to install. The collection covers public domain classics, sacred texts from every tradition, foundational documents, scientific papers, and historical records. The access button appears only where the text file exists.",
   },
   {
     q: "Is the Tower of Babel a good Project Gutenberg alternative?",
@@ -32,7 +32,7 @@ export const libraryFaqs = [
   },
   {
     q: "What is actually in the catalog?",
-    a: "More than 375,000 works and growing daily: books of classic literature, philosophy, and the sacred texts of every religion and tradition; declassified government documents released to the public; scientific papers; reference works; foundational political documents; and long-form podcast transcripts. Every work is preserved as clean, searchable plain text where the text is present.",
+    a: "More than 660,000 works and growing daily: books of classic literature, philosophy, and the sacred texts of every religion and tradition; declassified government documents released to the public; scientific papers; reference works; foundational political documents; and long-form podcast transcripts. Every work is preserved as clean, searchable plain text where the text is present.",
   },
   {
     q: "Can I download the books, or only read them in the browser?",
@@ -47,7 +47,7 @@ export const libraryFaqs = [
 export const apiPage = {
   h1: "Free books API for AI agents",
   intro:
-    "A free books API that gives AI agents machine-readable access to more than 375,000 public " +
+    "A free books API that gives AI agents machine-readable access to more than 660,000 public " +
     "works: books, the sacred texts of every tradition, declassified documents, scientific " +
     "papers, reference works, and transcripts. A machine-readable catalog, predictable text " +
     "URLs, no key, no sign-up. Fetch the catalog, filter the records, pull the full text of " +
@@ -108,7 +108,7 @@ export const apiPage = {
     {
       title: "Corpus composition",
       body:
-        "The catalog holds more than 375,000 works. The book collection covers classic " +
+        "The catalog holds more than 660,000 works. The book collection covers classic " +
         "literature, philosophy, and foundational political documents: the public domain " +
         "canon, preserved as clean text. The sacred collection holds the scriptures and " +
         "sacred writings of every religion and tradition, without favoritism. Declassified " +
@@ -183,7 +183,7 @@ export const apiPage = {
   faqs: [
     {
       q: "Is there a free API for Project Gutenberg texts?",
-      a: "Project Gutenberg itself has no official API; that gap is why third-party services like Gutendex exist, and Gutendex serves metadata only. The Tower of Babel takes the other approach: a free, keyless catalog over more than 375,000 works that includes Gutenberg-sourced public domain works and serves the full text of each work whose text is present as a plain .txt file, not just metadata. Where a work's text is present, one GET returns the entire book. Confirm with a request before assuming text exists.",
+      a: "Project Gutenberg itself has no official API; that gap is why third-party services like Gutendex exist, and Gutendex serves metadata only. The Tower of Babel takes the other approach: a free, keyless catalog over more than 660,000 works that includes Gutenberg-sourced public domain works and serves the full text of each work whose text is present as a plain .txt file, not just metadata. Where a work's text is present, one GET returns the entire book. Confirm with a request before assuming text exists.",
     },
     {
       q: "How can my AI agent access public domain books?",
@@ -212,7 +212,7 @@ export const apiPage = {
   ],
   metaTitle: "Free Books API for AI Agents | Tower of Babel",
   metaDescription:
-    "Free books API: machine-readable catalog of 375,000+ public works (books, sacred texts, declassified documents, papers, transcripts) with full-text .txt downloads. No key, no sign-up.",
+    "Free books API: machine-readable catalog of 660,000+ public works (books, sacred texts, declassified documents, papers, transcripts) with full-text .txt downloads. No key, no sign-up.",
   updated: "October 2026",
   tiers: [
     {

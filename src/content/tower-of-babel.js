@@ -14,7 +14,7 @@ import { libraryFaqs, apiPage } from "./tower-api.js";
 export const towerOfBabel = {
   heading: "TOWER OF BABEL",
   intro: [
-    "Tower of Babel is a library and archival project from Antarctic Labs — more than 375,000 books, documents, transcripts, and texts in one organized, searchable collection. Individual resources appear here once finalized.",
+    "Tower of Babel is a library and archival project from Antarctic Labs — more than 660,000 books, documents, transcripts, and texts in one organized, searchable collection. Individual resources appear here once finalized.",
   ],
   project: [
     "Tower of Babel began as one person's reaction to a headline: Anthropic was scanning books and destroying them afterward. If the organizations building the future of knowledge are comfortable destroying books, someone should be preserving them. It started with old texts, then the sacred texts of every culture and tradition — no favoritism, no picking sides — preserved as unchangeable copies nobody could rewrite or take away.",
@@ -165,7 +165,7 @@ export const towerOfBabel = {
       title: "A Message From the Team Behind the Tower of Babel",
       greeting: "Dear Tower of Babel Patron,",
       paragraphs: [
-        "The Tower of Babel, a project of Antarctic Labs, preserves the written record of humankind and makes essential texts from every culture, religion, and era free to everyone, everywhere. It already holds more than 600,000 works — books, sacred texts, declassified documents, papers, and transcripts — and grows every day.",
+        "The Tower of Babel, a project of Antarctic Labs, preserves the written record of humankind and makes essential texts from every culture, religion, and era free to everyone, everywhere. It already holds more than 660,000 works — books, sacred texts, declassified documents, papers, and transcripts — and grows every day.",
         "The goal is simple to say and enormous to do: every work that matters, within everyone's reach. It takes servers, storage, bandwidth, years of steady preservation work — and readers like you.",
         "The Tower is free to read, and reader support is what keeps it that way.",
         "If you enjoy wandering our virtual stacks, please consider supporting the Tower today. Most readers never give, so every one-time or monthly contribution carries real weight.",
