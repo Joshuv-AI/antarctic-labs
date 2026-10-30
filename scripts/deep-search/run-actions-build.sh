@@ -111,6 +111,26 @@ r2_put_retry() {
   done
   return 1
 }
+# Publish uploads (merge shards, manifest, build log) get retry discipline
+# too (2026-10-30): run #8 restored all 61 chunks and merged happily, then
+# died at shard 53 on a single one-shot put — 2h45m of work lost to one
+# transient, the same failure class as runs #5/#6 on the download side.
+# Five attempts: the term shards run 26-33 MB, the most failure-exposed
+# puts in the build.
+r2_put_publish() {
+  local key=$1 file=$2 ctype=${3:-application/octet-stream} attempt err
+  err="$WORK/.r2put-publish.err"
+  for attempt in 1 2 3 4 5; do
+    if $WRANGLER r2 object put "$BUCKET/$key" --file "$file" --content-type "$ctype" --remote >> "$LOG" 2> "$err"; then
+      return 0
+    fi
+    cat "$err" >> "$LOG" 2>/dev/null
+    log "publish upload attempt $attempt failed: $key"
+    tail -3 "$err" 2>/dev/null | while IFS= read -r line; do log "  wrangler: $line"; done
+    sleep $((attempt * 5))
+  done
+  return 1
+}
 r2_get_once() {
   local key=$1 dest=$2
   mkdir -p "$(dirname "$dest")"
@@ -403,7 +423,7 @@ for s in $(seq 0 255); do
   SHARD_FILE="$OUT/$BUILD_ID/terms/$s.json"
   BYTES=$(stat -c%s "$SHARD_FILE")
   if [ "$BYTES" -gt "$LARGEST_BYTES" ]; then LARGEST_BYTES=$BYTES; LARGEST_NAME="$s.json"; fi
-  $WRANGLER r2 object put "$BUCKET/$BUILD_ID/terms/$s.json" --file "$SHARD_FILE" --content-type application/json --remote >> "$LOG" 2>&1 \
+  r2_put_publish "$BUILD_ID/terms/$s.json" "$SHARD_FILE" application/json \
     || die "R2 upload failed for shard $s"
   UPLOADS=$((UPLOADS + 1))
   rm -f "$SHARD_FILE"
@@ -415,7 +435,7 @@ node "$SCRIPT_DIR/write-manifest.mjs" --tmp "$SHARED_TMP" --out "$OUT" --build-i
 MANIFEST_BYTES=$(stat -c%s "$OUT/manifest.json")
 node -e "const m=require(process.argv[1]); if(!Array.isArray(m.docs)||!m.docs.length) process.exit(1); console.log('manifest OK: docs='+m.docs.length);" "$OUT/manifest.json" \
   || die "manifest validation failed (docs empty)"
-$WRANGLER r2 object put "$BUCKET/manifest.json" --file "$OUT/manifest.json" --content-type application/json --remote >> "$LOG" 2>&1 \
+r2_put_publish "manifest.json" "$OUT/manifest.json" application/json \
   || die "R2 upload failed for manifest.json"
 UPLOADS=$((UPLOADS + 1))
 
@@ -423,7 +443,7 @@ DOCS_TOTAL=$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.
 cat > "$WORK/build-log-$BUILD_ID.json" <<EOF
 {"textsHead":"$TEXTS_HEAD","buildId":"$BUILD_ID","siteHead":"$SITE_HEAD","catalogTotal":$TOTAL_N,"chunks":$NCHUNKS,"docs":$DOCS_TOTAL,"terms":$TOTAL_TERMS,"shards":256,"manifestBytes":$MANIFEST_BYTES,"largestShardBytes":$LARGEST_BYTES,"largestShard":"$LARGEST_NAME","uploads":$UPLOADS,"bucket":"$BUCKET","builtAt":"$(date -u +%FT%TZ)"}
 EOF
-$WRANGLER r2 object put "$BUCKET/build-log-$BUILD_ID.json" --file "$WORK/build-log-$BUILD_ID.json" --content-type application/json --remote >> "$LOG" 2>&1 \
+r2_put_publish "build-log-$BUILD_ID.json" "$WORK/build-log-$BUILD_ID.json" application/json \
   || die "R2 upload failed for build log"
 cp "$WORK/build-log-$BUILD_ID.json" ./build-log.json
 log "=== BUILD COMPLETE: docs=$DOCS_TOTAL terms=$TOTAL_TERMS manifestBytes=$MANIFEST_BYTES largestShard=$LARGEST_NAME ($LARGEST_BYTES bytes) uploads=$UPLOADS ==="
