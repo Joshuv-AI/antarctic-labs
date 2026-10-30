@@ -7,11 +7,30 @@
 // so new pushes show up within minutes. A missing shard is skipped — a
 // partial catalog beats a 500.
 //
-// NOTE: SHARD_COUNT must match the number of shard files in the repo. If a
-// future batch adds another shard, bump this constant in the same commit.
-// (35 since the 2026-10-30 re-shard; was 25.)
+// NOTE: the live shard count comes from public/catalog-shards/count.json,
+// rewritten by the publish pipeline in the same commit as the shards
+// (reshard auto-sizes N since 2026-10-30). SHARD_COUNT below is only the
+// fallback when that fetch fails; a missing shard is skipped either way,
+// so an overshooting count costs a few 404 fetches, never correctness.
+// (Fallback 72 since 2026-10-30; was the exact count 35 before.)
 
-const SHARD_COUNT = 35;
+const SHARD_COUNT = 72;
+const COUNT_URL =
+  "https://raw.githubusercontent.com/Joshuv-AI/antarctic-labs/main/public/catalog-shards/count.json";
+
+async function liveShardCount() {
+  try {
+    const r = await fetch(COUNT_URL, {
+      cf: { cacheTtl: 300, cacheEverything: true },
+    });
+    if (!r.ok) return SHARD_COUNT;
+    const data = await r.json();
+    const n = data && data.catalog_shards;
+    return Number.isInteger(n) && n >= 1 && n <= 1000 ? n : SHARD_COUNT;
+  } catch {
+    return SHARD_COUNT;
+  }
+}
 const shardUrl = (i) =>
   `https://raw.githubusercontent.com/Joshuv-AI/antarctic-labs/main/public/catalog-shards/catalog-${String(
     i
@@ -33,8 +52,9 @@ export async function onRequest(context) {
     if (hit) return hit;
   }
 
+  const shardCount = await liveShardCount();
   const settled = await Promise.all(
-    Array.from({ length: SHARD_COUNT }, (_, i) =>
+    Array.from({ length: shardCount }, (_, i) =>
       fetch(shardUrl(i), { cf: { cacheTtl: 300, cacheEverything: true } })
         .then((r) => (r.ok ? r : null))
         .catch(() => null)

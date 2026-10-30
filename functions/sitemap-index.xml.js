@@ -22,7 +22,7 @@
 // <lastmod> at all (per-entry dates are not in the catalog, and a made-up
 // date is worse than none).
 
-import { SITE, SHARD_COUNT, escapeXml } from "./_lib/tower-catalog.js";
+import { SITE, getShardCount, escapeXml } from "./_lib/tower-catalog.js";
 
 const CACHE_TTL_SECONDS = 24 * 3600;
 
@@ -37,6 +37,7 @@ export async function onRequest(context) {
   // (Previously this derived a positional slice count from a record
   // total; the per-shard scheme keeps each sitemap request to a single
   // shard parse, inside the Workers CPU limit.)
+  const shardCount = await getShardCount();
   const today = new Date().toISOString().slice(0, 10);
 
   const lines = [
@@ -46,7 +47,7 @@ export async function onRequest(context) {
     `    <loc>${SITE}/sitemap.xml</loc>`,
     `  </sitemap>`,
   ];
-  for (let n = 0; n < SHARD_COUNT; n++) {
+  for (let n = 0; n < shardCount; n++) {
     lines.push(
       `  <sitemap>`,
       `    <loc>${SITE}/sitemap-entries/${n}.xml</loc>`,

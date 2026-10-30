@@ -25,6 +25,15 @@
 // validation, failing every deployment whose tree contained it (first seen
 // 2026-10-28). The whole directory is held out like the other payloads.
 //
+// The catalog-index shards (public/catalog-index-shards/) and the shard
+// manifest (public/catalog-shard-manifest.json) crossed the same 25 MiB
+// per-file line with the ~1.18M-entry catalog (index shards ~36 MiB
+// average, manifest ~31.5 MiB), so they are held out too (2026-10-30).
+// Both are read at request time from raw.githubusercontent.com: the index
+// shards by functions/catalog-index.json.js and functions/catalog-index2/*,
+// the manifest by functions/catalog-shard-manifest.json.js (which serves
+// the SPA's /catalog-shard-manifest.json fetches).
+//
 // (Both functions pin to the DEPLOYED commit (CF_PAGES_COMMIT_SHA) so the
 // manifest's buildId always matches the term shards shipped in the same
 // deploy.)
@@ -40,7 +49,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const HOLD = join(ROOT, ".deploy-payload");
-const ITEMS = ["tower-of-babel", "catalog.json", "catalog-index.json", "search-index", "api-search-shards"];
+const ITEMS = ["tower-of-babel", "catalog.json", "catalog-index.json", "search-index", "api-search-shards", "catalog-index-shards", "catalog-shard-manifest.json"];
 
 const mode = process.argv[2];
 if (mode !== "out" && mode !== "in") {

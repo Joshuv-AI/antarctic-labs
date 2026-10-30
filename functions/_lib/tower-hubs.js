@@ -46,7 +46,7 @@
 
 import {
   SITE,
-  SHARD_COUNT,
+  getShardCount,
   getShardRecords,
   entryPath,
   textFileUrl,
@@ -340,6 +340,7 @@ const byTitle = (a, b) =>
 // NEVER call this per-request (CPU limit). getRecords defaults to the
 // live shard fetcher; the generator injects a local-file reader.
 export async function buildHubIndexData(getRecords = getShardRecords) {
+  const shardCount = await getShardCount();
   const total = { n: 0 };
   const collections = new Map();
   const creatorCounts = new Map();
@@ -377,7 +378,7 @@ export async function buildHubIndexData(getRecords = getShardRecords) {
   }
   const programmes = new Map(PROGRAMME_DEFS.map((d) => [d.id, []]));
 
-  for (let s = 0; s < SHARD_COUNT; s++) {
+  for (let s = 0; s < shardCount; s++) {
     const records = await getRecords(s);
     if (!records) throw new Error("catalog shard unavailable");
     for (const r of records) {
@@ -438,7 +439,7 @@ export async function buildHubIndexData(getRecords = getShardRecords) {
   const authorBySlug = new Map(topAuthors.map((a) => [a.slug, a]));
   const topNames = new Set(topAuthors.map((a) => a.name));
   const authorWorks = new Map(topAuthors.map((a) => [a.name, []]));
-  for (let s = 0; s < SHARD_COUNT; s++) {
+  for (let s = 0; s < shardCount; s++) {
     const records = await getRecords(s);
     if (!records) continue;
     for (const r of records) {

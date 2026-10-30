@@ -10,15 +10,18 @@
 // catalog function already accepts for this read-only display data. It is
 // never used as a write/merge input.)
 //
-// SHARD_COUNT must match the number of shard files in the repo — the same
-// constant functions/catalog.json.js carries. If a future batch adds a
-// shard, bump it in BOTH places in the same commit. (35 since the
-// 2026-10-30 re-shard; was 25. A stale value silently drops most of the
-// catalog from every consumer that loops `i < SHARD_COUNT` — diagnosed
-// 2026-10-24 on the hub pages, /catalog.json, OAI and the sitemap.)
+// The live shard count comes from public/catalog-shards/count.json,
+// which the publish pipeline rewrites in the same commit as the shards
+// (reshard auto-sizes N since 2026-10-30) — getShardCount() below reads
+// it. SHARD_COUNT here is only the fallback for when that fetch fails,
+// and it must stay >= the live count: a stale-low value silently drops
+// most of the catalog from every consumer that loops `i < SHARD_COUNT`
+// — diagnosed 2026-10-24 on the hub pages, /catalog.json, OAI and the
+// sitemap. (Fallback 72 since 2026-10-30; count.json said 71 for the
+// ~1.18M-entry catalog. Was 35 as an exact count before auto-sizing.)
 
 export const SITE = "https://antarctic-labs.com";
-export const SHARD_COUNT = 35;
+export const SHARD_COUNT = 72;
 
 export const RAW =
   "https://raw.githubusercontent.com/Joshuv-AI/antarctic-labs/main/public";
@@ -28,6 +31,7 @@ export const hubsIndexUrl = `${RAW}/tower-hubs-index.json`;
 export const shardUrl = (i) =>
   `${RAW}/catalog-shards/catalog-${String(i).padStart(2, "0")}.json`;
 export const manifestUrl = `${RAW}/catalog-shard-manifest.json`;
+export const shardCountUrl = `${RAW}/catalog-shards/count.json`;
 
 // Work-locate buckets (2026-10-27): the manifest split into per-bucket
 // files by scripts/build-work-locate.mjs, keyed by descShardKey. A record
@@ -85,6 +89,27 @@ export async function getShardManifest() {
     manifestMemoAt = Date.now();
   }
   return data;
+}
+
+// Live catalog shard count from count.json, memoized per isolate like
+// the manifest below. Only a successfully parsed count is memoized; on
+// any failure the SHARD_COUNT fallback is returned for that call.
+let shardCountMemo = null;
+let shardCountMemoAt = 0;
+const SHARD_COUNT_MEMO_TTL_MS = 3600 * 1000;
+
+export async function getShardCount() {
+  if (shardCountMemo && Date.now() - shardCountMemoAt < SHARD_COUNT_MEMO_TTL_MS) {
+    return shardCountMemo;
+  }
+  const data = await fetchJsonCached(shardCountUrl, 300);
+  const n = data && data.catalog_shards;
+  if (Number.isInteger(n) && n >= 1 && n <= 1000) {
+    shardCountMemo = n;
+    shardCountMemoAt = Date.now();
+    return n;
+  }
+  return SHARD_COUNT;
 }
 
 // One catalog shard as a parsed array of records (catalog order).

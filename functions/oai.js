@@ -89,7 +89,7 @@
 
 import {
   SITE,
-  SHARD_COUNT,
+  getShardCount,
   getRecordById,
   getShardRecords,
   escapeXml,
@@ -161,12 +161,12 @@ function encodeToken(state) {
   st.c = checksumFor(st);
   return btoa(JSON.stringify(st)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
-function decodeToken(token) {
+function decodeToken(token, shardCount) {
   try {
     const b64 = token.replace(/-/g, "+").replace(/_/g, "/");
     const obj = JSON.parse(atob(b64));
     if (obj.v !== 3) return null;
-    if (!Number.isInteger(obj.i) || obj.i < 0 || obj.i >= SHARD_COUNT) return null;
+    if (!Number.isInteger(obj.i) || obj.i < 0 || obj.i >= shardCount) return null;
     if (!Number.isInteger(obj.o) || obj.o < 0) return null;
     if (obj.s !== null && (typeof obj.s !== "string" || !COLLECTIONS.some((c) => c.toLowerCase() === obj.s))) return null;
     if (obj.k !== "records" && obj.k !== "identifiers") return null;
@@ -230,6 +230,7 @@ function windowExcludes(from, until) {
 async function listResponse(params, verbAttrs, withMetadata) {
   const kind = withMetadata ? "records" : "identifiers";
   const tag = withMetadata ? "ListRecords" : "ListIdentifiers";
+  const shardCount = await getShardCount();
 
   const tokenRaw = params.get("resumptionToken");
   let shardIdx = 0;
@@ -241,7 +242,7 @@ async function listResponse(params, verbAttrs, withMetadata) {
     // resumptionToken is exclusive: no other arguments allowed.
     if ([...params.keys()].some((k) => k !== "verb" && k !== "resumptionToken"))
       return errorResponse("badArgument", "resumptionToken must be the only argument besides verb.", verbAttrs);
-    const state = decodeToken(tokenRaw);
+    const state = decodeToken(tokenRaw, shardCount);
     if (!state || state.k !== kind) {
       return errorResponse(
         "badResumptionToken",
@@ -292,7 +293,7 @@ async function listResponse(params, verbAttrs, withMetadata) {
   const filtered = setSpec
     ? records.filter((r) => r && String(r.collection || "").toLowerCase() === setSpec)
     : records;
-  const lastShard = shardIdx >= SHARD_COUNT - 1;
+  const lastShard = shardIdx >= shardCount - 1;
 
   // Catalog-shrink grace: a token offset past this shard's filtered
   // end (shards regenerated between pages) advances to the next shard
@@ -442,6 +443,6 @@ export async function onRequest(context) {
 //    the datestamp every record carries, and the from/until window
 //    reference). A stale date does not break paging, but it makes
 //    from/until windows and Identify's earliestDatestamp wrong.
-// 2. Nothing else: shard counts come from SHARD_COUNT in
-//    functions/_lib/tower-catalog.js, which the existing push rule
-//    already bumps in both places when shards are re-sharded.
+// 2. Nothing else: shard counts come from getShardCount() in
+//    functions/_lib/tower-catalog.js, which reads the live count from
+//    catalog-shards/count.json (auto-sized by reshard since 2026-10-30).

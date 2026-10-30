@@ -7,13 +7,14 @@
 // windows) so each request fetches and parses exactly one shard. The
 // positional walk parsed up to all 25 shards per request and exceeded the
 // Workers CPU time limit at live scale (diagnosed 2026-10-24 alongside the
-// hub pages). The sitemap index lists shards 0..SHARD_COUNT-1; crawlers
+// hub pages). The sitemap index lists shards 0..count-1 (live count from
+// catalog-shards/count.json via getShardCount); crawlers
 // discover the scheme from the index, so the numbering is an internal
 // detail. No <lastmod> is emitted: the catalog carries no per-entry dates,
 // and an invented date would be worse than none.
 
 import {
-  SHARD_COUNT,
+  getShardCount,
   entryUrl,
   escapeXml,
   getShardRecords,
@@ -24,7 +25,8 @@ const CACHE_TTL_SECONDS = 24 * 3600;
 export async function onRequest(context) {
   const { request, params } = context;
   const n = parseInt(String(params && params.n ? params.n : ""), 10);
-  if (!Number.isFinite(n) || n < 0 || n >= SHARD_COUNT) {
+  const shardCount = await getShardCount();
+  if (!Number.isFinite(n) || n < 0 || n >= shardCount) {
     return new Response("Not found", { status: 404 });
   }
 
