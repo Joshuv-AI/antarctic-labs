@@ -13,8 +13,9 @@
 // first rows appear from the bootstrap while the full index streams in
 // behind them.
 //
-// Failure semantics: every tier fetches with a 30s abort timeout and one
-// automatic retry. A failed fetch leaves the module cache untouched (pending
+// Failure semantics: every tier fetches with an abort timeout and one
+// automatic retry — 30s for the small tiers, 240s for index transfers
+// (see INDEX_FETCH_TIMEOUT_MS below). A failed fetch leaves the module cache untouched (pending
 // is reset, cache stays null), so re-calling the loader is always a fresh
 // attempt — fetch failures are not cached anywhere. Callers surface an
 // error UI with an in-place retry; the one-shot page-reload path for a
@@ -29,10 +30,17 @@ let fullPending = null;
 const indexReadyListeners = new Set();
 
 const FETCH_TIMEOUT_MS = 30000;
+// Index transfers (manifest, chunks, legacy monolith) move ~20 MB per
+// file: the 30 s cap silently killed the load on phone connections,
+// where a chunk routinely needs 40-60 s — the library then sat on the
+// 20,000-record bootstrap forever with no error shown (Joshua's
+// report, 2026-10-30). 240 s only fails a transfer that truly stalls.
+// Small fetches (bootstrap, full records) keep the 30 s cap.
+const INDEX_FETCH_TIMEOUT_MS = 240000;
 
-function fetchJsonOnce(url) {
+function fetchJsonOnce(url, timeoutMs = FETCH_TIMEOUT_MS) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   return fetch(url, { signal: ctrl.signal })
     .then((r) => {
       if (!r.ok) throw new Error(`fetch failed: ${url} ${r.status}`);
@@ -94,7 +102,9 @@ function publishIndex(data, complete) {
 }
 
 function fetchJsonWithRetry(url) {
-  return fetchJsonOnce(url).catch(() => fetchJsonOnce(url));
+  return fetchJsonOnce(url, INDEX_FETCH_TIMEOUT_MS).catch(() =>
+    fetchJsonOnce(url, INDEX_FETCH_TIMEOUT_MS)
+  );
 }
 
 function loadLegacyIndex() {

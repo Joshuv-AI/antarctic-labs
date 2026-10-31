@@ -11,7 +11,13 @@
 //                                      remaining chunks / falls back)
 // Each chunk fetch gets one retry, mirroring the main-thread loaders'
 // failure semantics. Concurrency window: 4.
-const FETCH_TIMEOUT_MS = 30000;
+// Per-chunk deadline. Chunks are ~20 MB each: the original 30 s cap
+// silently killed the whole index load on phone connections, where a
+// chunk routinely needs 40-60 s (four chunks share the link) — the
+// library then sat on the 20,000-record bootstrap forever with no
+// error shown (Joshua's report, 2026-10-30). 240 s only fails a chunk
+// that has truly stalled.
+const FETCH_TIMEOUT_MS = 240000;
 let started = false;
 
 self.onmessage = (e) => {
