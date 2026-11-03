@@ -10,6 +10,17 @@
 const ORIGIN =
   "https://raw.githubusercontent.com/Joshuv-AI/antarctic-labs-texts/main/public/tower-of-babel/";
 
+// Texts added from 2026-11 live in hash buckets <first char>/<sha1[:2]>/
+// because the flat directory's git tree object passed GitHub's 50 MiB
+// non-blob object size limit. Try the bucket path first, then flat.
+async function bucketPrefix(file) {
+  const digest = await crypto.subtle.digest(
+    "SHA-1", new TextEncoder().encode(file));
+  const hex = [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, "0")).join("");
+  return file[0] + "/" + hex.slice(0, 2) + "/";
+}
+
 export async function onRequest(context) {
   let file = context.params.file || "";
   try {
@@ -39,9 +50,13 @@ export async function onRequest(context) {
     if (hit) return hit;
   }
 
-  const upstream = await fetch(ORIGIN + encodeURIComponent(file), {
-    cf: { cacheTtl: 86400, cacheEverything: true },
-  });
+  const fetchOpts = { cf: { cacheTtl: 86400, cacheEverything: true } };
+  let upstream = await fetch(
+    ORIGIN + (await bucketPrefix(file)) + encodeURIComponent(file),
+    fetchOpts);
+  if (!upstream.ok) {
+    upstream = await fetch(ORIGIN + encodeURIComponent(file), fetchOpts);
+  }
   if (!upstream.ok) {
     return new Response("Not found", { status: 404 });
   }
