@@ -66,7 +66,7 @@ export const MAX_PAGES = 50; // stated cap: 50 pages x 200 = 10,000 works per hu
 // every record shares this one repository snapshot datestamp (the date
 // this endpoint's catalog snapshot was taken). The catalog grows daily;
 // harvesters should re-harvest in full rather than rely on from/until.
-export const CATALOG_SNAPSHOT_DATE = "2026-10-24";
+export const CATALOG_SNAPSHOT_DATE = "2026-11-03";
 
 // ---------------------------------------------------------------------
 // Small helpers
@@ -449,6 +449,17 @@ export async function buildHubIndexData(getRecords = getShardRecords) {
     }
   }
   for (const list of authorWorks.values()) list.sort(byTitle);
+
+  // Storage cap (2026-11-03): the generated JSON is also a deployed
+  // Pages asset with a 25 MiB per-file cap, and mega-authors (55k works
+  // for the largest) pushed the 1.18M-catalog regeneration to 75 MiB.
+  // Each author's stored work list is capped at 500 (title order); the
+  // author's `count` field keeps the true total, and API consumers get
+  // { works: sample, total: count }. Traditions/programmes lists are
+  // orders of magnitude smaller and stay complete.
+  for (const [name, list] of authorWorks) {
+    if (list.length > 500) authorWorks.set(name, list.slice(0, 500));
+  }
 
   // Traditions: curated key works first (resolved via the wanted map),
   // then derived matches in title order.
