@@ -61,7 +61,7 @@ export const routeMeta = {
   "/tower-of-babel/donate": {
     title: `Donate to the Free Online Library | Tower of Babel`,
     description:
-      "Support the Tower of Babel free online library: one-time or monthly contributions keep more than 390,000 books and texts free for everyone — no paywalls.",
+      "Support the Tower of Babel free online library: one-time or monthly contributions keep more than 660,000 books and texts free for everyone — no paywalls.",
   },
   "/government-contracting": {
     title: `Small Business Government Contracting | ${SITE_NAME}`,

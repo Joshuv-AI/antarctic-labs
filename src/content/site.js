@@ -9,7 +9,7 @@ export const site = {
   operator: "JOSHUA",
   philosophy: "OUR CAPITAL. OUR HARDWARE. OUR CODE.",
   description:
-    "Freelance AI automation, web development, and data systems — working solutions, built and delivered ready to use.",
+    "Antarctic Labs is a proprietary trading and computing firm building its own data center in the Philippines. Our capital, our hardware, our systems. Not for hire.",
   location: "SANFORD, FLORIDA / WORLDWIDE",
   footer: "BUILT FOR THE UNKNOWN.",
   email: "hello@antarctic-labs.com",
@@ -45,7 +45,7 @@ export const site = {
     ],
   ],
 
-  // Homepage FAQ — rendered at the foot of the home page and emitted as
-  // FAQPage JSON-LD. Targets "AI automation developer" discovery.
+  // Firm FAQ — kept in sync with the firm's current positioning
+  // (proprietary trading and computing; no client work).
   faqs: siteFaqs,
 };

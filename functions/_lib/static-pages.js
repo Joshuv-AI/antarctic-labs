@@ -1,0 +1,355 @@
+// Server-rendered static pages for the site's main routes.
+//
+// Served by functions/_middleware.js to crawler and reviewer user
+// agents only (the same BOT_UA gate as the entry pages in
+// functions/tower-of-babel/library/[id].js); human visitors always get
+// the React SPA untouched.
+//
+// Why this exists (2026-11-03, AdSense fix): on 2026-11-02 Google
+// rejected antarctic-labs.com for AdSense with "Google-served ads on
+// screens without publisher-content" and "Low value content". Every
+// route served the same 11 KB app shell — a branded loading screen and
+// 39 words — to any reader that does not run the app, and the ad
+// review crawlers (AdsBot, Mediapartners-Google) were not on the
+// entry pages' crawler list at all. These pages mirror the app pages'
+// real copy (sources: src/content/site.js, operator.js, government.js,
+// tower-of-babel.js, tower-api.js, faq.js, and the Privacy page in
+// src/pages.jsx) so a non-JS reader sees the same substance a visitor
+// gets. Keep the copy in sync when the sources change.
+
+const SITE = "https://antarctic-labs.com";
+const ADS_SCRIPT =
+  '<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9404729840269984" crossorigin="anonymous"></script>';
+
+const NAV = `<header>
+<nav>
+<a href="/">Antarctic Labs</a> ·
+<a href="/tower-of-babel">Tower of Babel</a> ·
+<a href="/tower-of-babel/library">Library</a> ·
+<a href="/about">About</a> ·
+<a href="/privacy">Privacy Policy</a>
+</nav>
+</header>`;
+
+const FOOT = `<footer>
+<p><a href="/">Antarctic Labs</a> · <a href="/tower-of-babel">Tower of Babel</a> · <a href="/tower-of-babel/library">Library</a> · <a href="/about">About</a> · <a href="/government-contracting">Government Contracting</a> · <a href="/tower-of-babel/donate">Donate</a> · <a href="/privacy">Privacy Policy</a></p>
+<p>Contact: <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a></p>
+<p>© 2026 Antarctic Labs. All rights reserved.</p>
+</footer>`;
+
+function doc({ path, title, description, body }) {
+  const canonical = SITE + (path === "/" ? "/" : path);
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>${title}</title>
+<meta name="description" content="${description}" />
+<meta name="robots" content="index, follow, max-image-preview:large" />
+<link rel="canonical" href="${canonical}" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="${title}" />
+<meta property="og:description" content="${description}" />
+<meta property="og:url" content="${canonical}" />
+<meta name="twitter:title" content="${title}" />
+<meta name="twitter:description" content="${description}" />
+${ADS_SCRIPT}
+<style>
+body { font-family: Georgia, "Times New Roman", serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.65; color: #191919; }
+h1 { line-height: 1.15; } h2 { margin-top: 2rem; }
+nav a, footer a { color: #0f5d75; }
+table { border-collapse: collapse; } th, td { text-align: left; padding: .3rem .8rem .3rem 0; vertical-align: top; }
+</style>
+</head>
+<body>
+${NAV}
+<main>
+${body}
+</main>
+${FOOT}
+</body>
+</html>
+`;
+}
+
+const PAGES = {
+  "/": {
+    path: "/",
+    title: "Proprietary Trading & Computing | ANTARCTIC LABS",
+    description:
+      "Antarctic Labs is a proprietary trading and computing firm building its own data center in the Philippines. Our capital, our hardware, our systems. Not for hire.",
+    body: `<h1>We trade our own capital.</h1>
+<p>A proprietary trading and computing firm. We trade our own capital on infrastructure we own.</p>
+<p>Antarctic Labs is a proprietary trading and computing firm. We build our own infrastructure, run our own systems, and trade our own capital. Nothing here is a service, and nothing is built for clients.</p>
+<p>Our capital. Our hardware. Our code.</p>
+<h2>Proprietary trading</h2>
+<p>Trading algorithms developed in-house, run on our own infrastructure. Strategies are tested on paper and with limited capital before they are trusted with more.</p>
+<h2>Owned infrastructure</h2>
+<p>A small data center of our own in the Philippines, built around hardware we own and operate. Power, cooling, and backup are designed in from the start.</p>
+<h2>Network position</h2>
+<p>A Philippine base with a direct connection toward Hong Kong. Routes are benchmarked against the actual exchanges and endpoints we use, never assumed from a cable map.</p>
+<h2>Research and systems</h2>
+<p>Strategy research, execution, monitoring, and risk controls are kept separate, so a problem in one is visible in the others.</p>
+<h2>The Tower of Babel</h2>
+<p>Antarctic Labs also runs the <a href="/tower-of-babel">Tower of Babel</a>, a free online library and archival project: more than 660,000 books, sacred texts, declassified documents, papers, and transcripts preserved in clean, searchable text. No accounts, no paywalls.</p>`,
+  },
+
+  "/about": {
+    path: "/about",
+    title: "The Firm | ANTARCTIC LABS",
+    description:
+      "About Antarctic Labs: a proprietary trading and computing firm. Operations in the United States, infrastructure in the Philippines. No client work.",
+    body: `<h1>The Firm.</h1>
+<p>Antarctic Labs is a proprietary trading and computing firm. We trade our own capital on infrastructure we own. We do not build for clients, and we do not sell services.</p>
+<h2>Who we are</h2>
+<p>Antarctic Labs is a proprietary trading and computing firm. It began as a freelance technology studio; that chapter is closed. The firm now does one thing: it trades its own capital on infrastructure it owns and operates, built around one idea — own the hardware, own the systems, and let the results decide what grows.</p>
+<p>The work has three parts. Trading systems are developed and run in-house. The hardware is owned: a base in the Philippines — a commercial office and a small data center — is being established around machines the firm owns and operates. And the position is measured, not assumed: the Philippines connects directly toward Hong Kong, and every route is chosen by benchmarking the real endpoints, not by reading maps.</p>
+<h2>The partners</h2>
+<h3>Joshua — Founder, Operations, Logistics &amp; Accounting</h3>
+<p>Founder running Antarctic Labs day to day: the Philippines venture — entity, office, and owned data-center build — and the Tower of Babel library, more than 660,000 works live. He owns the direction, the business, and the delivery: logistics, operations, and accounting, judged by what proves real when it is run.</p>
+<h3>Andrew — Partner, Engineering &amp; Systems</h3>
+<p>At Antarctic Labs, Andrew leads engineering: the trading algorithms developed in-house, the server build, and the systems the firm runs on. His work is why the firm trades on infrastructure it owns and operates, tested on paper and with limited capital before anything scales.</p>
+<table>
+<tr><th scope="row">Structure</th><td>Private partnership</td></tr>
+<tr><th scope="row">Bases</th><td>United States · Philippines</td></tr>
+<tr><th scope="row">Client work</th><td>None</td></tr>
+<tr><th scope="row">Status</th><td>In formation, Philippines</td></tr>
+</table>`,
+  },
+
+  "/government-contracting": {
+    path: "/government-contracting",
+    title: "Small Business Government Contracting | ANTARCTIC LABS",
+    description:
+      "Antarctic Labs is developing toward public-sector work: AI analyst workflows, data systems, and automation for primes — pilots, SBIR/STTR, and teaming.",
+    body: `<h1>Where we're heading.</h1>
+<p>Antarctic Labs is an independent technology lab building operational AI, automation, and data systems for commercial clients today. Government contracting is where this practice is heading — subcontract partnerships, phased R&amp;D programs, and competitive prototypes with defense and public-sector teams.</p>
+<h2>A technical specialist developing toward public service.</h2>
+<p>Primes don't need another generalist. They need small technical specialists who can prove a capability against a real operational problem — analyst workflows, data at scale, geospatial fusion, automation that removes real bottlenecks. That is what Antarctic Labs builds.</p>
+<p>This practice is emerging. The technical foundation is being laid now through commercial delivery — working systems, documented methods, demonstrated prototypes. Registrations, phased R&amp;D programs, and prime partnerships are the next phase, pursued deliberately and stated honestly.</p>
+<h2>Where we fit today</h2>
+<p>Narrow technical lanes, each grounded in systems already built and operating for commercial clients — the expansions from here are prototypes, not promises.</p>
+<h3>Analyst workflows</h3>
+<p>AI systems that work through operational problems: triage, extraction, and summarization that cut hours of manual review.</p>
+<h3>Data at scale</h3>
+<p>Ingestion, cleaning, and structuring that turn scattered or unstructured material into usable datasets and archives.</p>
+<h3>Geospatial fusion</h3>
+<p>Live data fusion and visualization for a clear operational picture — built and running today.</p>
+<h3>Workflow automation</h3>
+<p>Browser automation and operational pipelines that remove repetitive work from real processes.</p>
+<h3>Secure software</h3>
+<p>Web applications and internal tools — designed, built, tested, and documented.</p>
+<h3>Rapid prototypes</h3>
+<p>Small, sharply-scoped unclassified builds that prove a capability before anyone commits to more.</p>
+<h2>How we'll engage</h2>
+<h3>Prototype pilots</h3>
+<p>Sharply-scoped demonstrations against a real operational problem — the fastest way to prove fit.</p>
+<h3>SBIR / STTR &amp; OTA</h3>
+<p>Phased R&amp;D topics and rapid-prototype programs built for nontraditional vendors — the designed on-ramp for an emerging practice.</p>
+<h3>Subcontract teaming</h3>
+<p>Technical execution under an experienced prime: a specialist partner for AI, automation, and data systems.</p>
+<p>Status note: Antarctic Labs does not currently hold government contracts, registrations, certifications, security clearances, or past performance as a government vendor. The technical work described on this page is real; the public-sector practice is under active development.</p>`,
+  },
+};
+
+PAGES["/privacy"] = {
+  path: "/privacy",
+  title: "Privacy Policy | ANTARCTIC LABS",
+  description:
+    "Privacy Policy for antarctic-labs.com: what Antarctic Labs collects, how cookies and Google AdSense advertising work, and how to opt out of personalized advertising.",
+  body: `<h1>Privacy Policy</h1>
+<p>Last updated: October 26, 2026. Antarctic Labs operates antarctic-labs.com, including the Tower of Babel free library.</p>
+<h2>Reading without an account</h2>
+<p>You do not need an account, a sign-in, or any personal information to read the Tower of Babel library. The texts in the library are public-domain and openly licensed works, hosted on this site in plain text.</p>
+<h2>Information we collect</h2>
+<p>We collect as little as possible. Anonymous analytics: we use PostHog to count page views, library browsing, reading progress, and text downloads. PostHog is configured for anonymous visitors only — no user profiles are created, session recording is disabled, and automatic event capture is off. Only events we deliberately record are sent, tied to an anonymous visitor identifier, not to a name or email address.</p>
+<p>Information you choose to give us: if you donate, Stripe collects your email address at checkout to create a checkout session and, if enabled in Stripe, to send a receipt. We do not receive or store your card number. If you suggest a work for the library, you provide the title, creator, source link, and any notes you choose to add. Our hosting provider may process basic technical information needed to deliver pages securely, such as IP address and browser type, in its normal server logs.</p>
+<p>API keys: if you request a Tower of Babel API key, we store the email address you give and a cryptographic hash of the key — never the key itself — in a Cloudflare database, so the API can authenticate your requests and count your daily usage. Payments for API plans are processed by Stripe, and we do not receive or store your card number. The email that delivers your key is sent through Resend.</p>
+<h2>Cookies and advertising</h2>
+<p>We use Google AdSense to show advertising on the Tower of Babel library pages. No advertising is shown on the donation page.</p>
+<p>Third-party vendors, including Google, use cookies to serve ads based on a user's prior visits to this website or other websites. Google's use of advertising cookies enables it and its partners to serve ads to users based on their visit to this site and other sites on the internet.</p>
+<p>You may opt out of personalized advertising by visiting <a href="https://adssettings.google.com">Google Ads Settings</a> and <a href="https://www.aboutads.info">aboutads.info</a>. You can also set your browser to refuse cookies, though some site features may work less well without them. PostHog also uses cookies and local storage to keep its anonymous visitor identifier between visits.</p>
+<h2>How information is used and shared</h2>
+<p>Information is used to operate the site and the library, to understand which works readers use, to process donations, and to show advertising. It is shared only with the service providers needed for those purposes — analytics, payment processing, and advertising — and as required by law. We do not publish or display information you provide through donation or suggestion forms.</p>
+<h2>Changes and contact</h2>
+<p>This policy may be updated as the site changes; the date at the top of this page will change with it. Questions about this policy can be sent to <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a>, or through the suggestion form on the Tower of Babel library pages.</p>`,
+};
+
+PAGES["/tower-of-babel"] = {
+  path: "/tower-of-babel",
+  title: "Free Online Library | Tower of Babel",
+  description:
+    "A free, searchable online library: more than 660,000 books, sacred texts, declassified documents, papers, and transcripts preserved in clean, readable text.",
+  body: `<h1>Tower of Babel</h1>
+<p>Tower of Babel is a library and archival project from Antarctic Labs — more than 660,000 books, documents, transcripts, and texts in one organized, searchable collection. Individual resources appear here once finalized.</p>
+<h2>About the project</h2>
+<p>Tower of Babel began as one person's reaction to a headline: Anthropic was scanning books and destroying them afterward. If the organizations building the future of knowledge are comfortable destroying books, someone should be preserving them. It started with old texts, then the sacred texts of every culture and tradition — no favoritism, no picking sides — preserved as unchangeable copies nobody could rewrite or take away.</p>
+<p>From there it grew toward everything else that gets lost — suppressed, deleted, quietly rewritten: secret societies, folklore passed down through generations, firsthand accounts of the unexplained. The long conversations joined too — hours-long podcasts with experts and researchers, kept searchable instead of vanishing into a feed. Today it holds more than 600,000 full texts: sacred and religious texts from every tradition, philosophy, history, science, law, and literature, declassified government documents, the unexplained, folklore and mythology, and full podcast transcripts — every entry verified against its source and preserved as clean, searchable text.</p>
+<p>Named for the old story of the gathering place where the works of the world were meant to be open and shared — no suppression, no hiding. And with hundreds of thousands of texts side by side, a deeper purpose emerges: patterns surface. A story in one tradition echoes a declassified document in another; a folktale rhymes with a witness account. Anyone can read, anyone can research — and maybe unravel a greater story than any single book could tell. Something like the Akashic records: the whole of human knowledge, unlocked.</p>
+<h2>About the catalog</h2>
+<p>The catalog holds more than 600,000 texts and keeps growing daily: books, declassified documents, podcast transcripts, reference works, and papers. No accounts, no paywalls — full texts for anyone who wants them, and clean, citable source material for researchers and AI agents. Every record carries its own rights status, and the entire catalog is published as machine-readable files with API access, so the collection can be searched, filtered, and retrieved programmatically.</p>
+<h2>The collections</h2>
+<ul>
+<li>Books — classic literature, philosophy, and foundational documents</li>
+<li>Sacred Texts — the scriptures and sacred writings of every tradition</li>
+<li>Papers — scientific and scholarly papers</li>
+<li>Declassified — government documents released into the public record</li>
+<li>Law — statutes, codes, and legal texts</li>
+<li>Reference — encyclopedias, dictionaries, and reference works</li>
+<li>Documents — foundational and historical documents</li>
+<li>Podcasts — long-form conversation transcripts</li>
+</ul>
+<p><a href="/tower-of-babel/library">Browse the library</a> · <a href="/tower-of-babel/library/suggest">Suggest an entry</a> · <a href="/tower-of-babel/api">API for agents</a> · <a href="/tower-of-babel/donate">Support the Tower</a></p>`,
+};
+
+PAGES["/tower-of-babel/library"] = {
+  path: "/tower-of-babel/library",
+  title: "Free Classic Books Online | Tower of Babel Library",
+  description:
+    "Read free classic books online: search more than 660,000 books, documents, and texts in the Tower of Babel's free library catalog. No sign-up.",
+  body: `<h1>The Library</h1>
+<p>The catalog of collected books, documents, research, references, and other material. Individual resources appear here once finalized.</p>
+<p>The catalog holds more than 660,000 works and grows daily: books of classic literature, philosophy, and the sacred texts of every religion and tradition; declassified government documents released to the public; scientific papers; reference works; foundational political documents; and long-form podcast transcripts. Every work is preserved as clean, searchable plain text where the text is present, and every record carries its own rights status and license.</p>
+<h2>Start reading</h2>
+<ul>
+<li><a href="/tower-of-babel/library/shakespeare-hamlet-1603">Hamlet — William Shakespeare</a></li>
+<li><a href="/tower-of-babel/library/holy-bible-king-james-version">The Holy Bible — King James Version</a></li>
+<li><a href="/tower-of-babel/library/darwin-origin-of-species-1st-ed-1859">On the Origin of Species — Charles Darwin</a></li>
+</ul>
+<h2>Questions</h2>
+<h3>Where can I read classic books online for free?</h3>
+<p>The Tower of Babel library catalogues more than 660,000 works, and every work with available text opens as a full, clean text you can read in the browser. There is no sign-up, no paywall, and no app to install. The collection covers public domain classics, sacred texts from every tradition, foundational documents, scientific papers, and historical records. The access button appears only where the text file exists.</p>
+<h3>Is the Tower of Babel a good Project Gutenberg alternative?</h3>
+<p>It serves the same purpose with a different scope. Project Gutenberg is the largest archive of public domain ebooks. The Tower of Babel also carries material Gutenberg does not: declassified government documents, scientific papers, reference works, and long-form podcast transcripts alongside the book collection, all in one catalog with per-record rights status. If a work is in the catalog, you can read the full text directly where the text is present.</p>
+<h3>Do I need to sign up or pay to use the library?</h3>
+<p>No. Everything readable in the library is free with no account required. There are no trials, no tiers, and no checkout process. If a work shows an access button, the full text is available to read immediately.</p>
+<h3>Is it legal to read these books for free?</h3>
+<p>Yes. Each catalog record carries a rights_status and license field, and the readable collection is built around public domain works whose copyright has expired, plus documents released into the public record. The catalog tells you the rights status of each work, so you can verify it yourself.</p>
+<h3>What is actually in the catalog?</h3>
+<p>More than 660,000 works and growing daily: books of classic literature, philosophy, and the sacred texts of every religion and tradition; declassified government documents released to the public; scientific papers; reference works; foundational political documents; and long-form podcast transcripts. Every work is preserved as clean, searchable plain text where the text is present.</p>
+<h3>Can I download the books, or only read them in the browser?</h3>
+<p>Works with available text can be opened and read in full in the browser, and the underlying plain-text file can be downloaded directly. There is no bulk download for the whole catalog; the machine-readable catalog files are the way to work with the collection at scale.</p>
+<h3>Can AI agents use the Tower of Babel as a reference source?</h3>
+<p>Yes. The catalog is published as machine-readable JSON with a documented schema, and texts are served as plain .txt files at predictable URLs where the text exists. The <a href="/tower-of-babel/api">API page</a> documents the fetch pattern, the record fields, licensing, and the limits of what is available.</p>
+<p><a href="/tower-of-babel/library/suggest">Suggest an entry</a> · <a href="/tower-of-babel/library/research">API access and keys</a></p>`,
+};
+
+PAGES["/tower-of-babel/api"] = {
+  path: "/tower-of-babel/api",
+  title: "Free Books API for AI Agents | Tower of Babel",
+  description:
+    "Free books API for AI agents: machine-readable catalog of more than 660,000 works (books, sacred texts, declassified documents, papers, transcripts) with plain-text .txt downloads where text is present. No key, no sign-up.",
+  body: `<h1>Free books API for AI agents</h1>
+<p>A free books API that gives AI agents machine-readable access to more than 660,000 public works: books, the sacred texts of every tradition, declassified documents, scientific papers, reference works, and transcripts. A machine-readable catalog, predictable text URLs, no key, no sign-up. Fetch the catalog, filter the records, pull the full text of whichever works have text available, confirmed with a plain HTTP request.</p>
+<p>The Tower of Babel API is a static, keyless data surface: a JSON catalog of every holding plus direct plain-text downloads at predictable URLs. It is not a query service. There is no search endpoint, no authentication, and no published rate limit. An agent downloads the catalog once, filters it locally by title, collection, creator, or rights status, then fetches only the texts it needs. The full text is served where present, not just metadata, which is what separates it from metadata-only book APIs.</p>
+<h2>What you get</h2>
+<p>Two things. First, the catalog: a complete JSON record for every holding — title, creator, year, collection, description, source, rights status, license, and the download URL where text is present — served merged at /catalog.json and in shards under /catalog-shards/ for incremental fetching, with a lightweight index at /catalog-index.json for fast listing. Second, the texts themselves: clean UTF-8 .txt files served from predictable URLs under /tower-of-babel/. Together they form a complete static API. Download the catalog, filter it, fetch texts. No key to request, no account to create, no usage tier to watch. No uptime SLA is offered; it is free infrastructure, maintained as a public resource.</p>
+<h2>Catalog record schema</h2>
+<p>Every record carries the same fields. artifact_id is the identifier, used in the text URL and in the work's library page at /tower-of-babel/library/&lt;artifact_id&gt;. title, creator, and year identify the work. collection names the part of the library it belongs to — books, sacred texts, declassified documents, papers, reference, documents, or podcasts. description is a short summary. source names where the text came from, and source_url links to the origin when one exists. rights_status and license state the usage rights per record; most readable works are public domain. download_status is AVAILABLE or unavailable, and download_url gives the text path, following the pattern /tower-of-babel/&lt;artifact_id&gt;.txt. format is TXT and file_size reports the text size. Important: download_status is not perfectly current, so agents should treat download_url as a candidate and confirm with an HTTP request: a 200 response means the text is there. The site itself only renders access buttons for records whose files exist, so a 200 on download_url is the reliable signal.</p>
+<h2>How an agent uses it</h2>
+<p>The fetch pattern is three steps. One: GET https://antarctic-labs.com/catalog.json (or the shards under /catalog-shards/) and parse the records. Two: filter locally. Find works by title substring, collection, creator, year range, or rights_status. There is no server-side search, so filtering happens in the agent's own code after the download. Three: GET the download_url for each selected record and read the plain text. For retrieval-augmented generation, the practical setup is to ingest the catalog once, embed or index the texts the agent needs, and re-fetch the catalog on a schedule to pick up new holdings — the library grows daily. Because text URLs are addressed by artifact_id, a URL that returns 200 keeps returning the same text, so cached texts stay valid. Agents should handle non-200 responses gracefully rather than assuming every catalogued work has a downloadable file.</p>
+<h2>Corpus composition</h2>
+<p>The catalog holds more than 660,000 works. The book collection covers classic literature, philosophy, and foundational political documents: the public domain canon, preserved as clean text. The sacred collection holds the scriptures and sacred writings of every religion and tradition, without favoritism. Declassified holds government documents released into the public record. Papers and reference hold scientific papers and reference works at scale, and podcasts holds long-form conversation transcripts, useful as contemporary spoken-language corpora. The mix is the point: most free book APIs serve fiction and poetry metadata. This corpus adds primary-source government documents, the world's sacred texts, and a large research literature, in full text, in one schema, at one base URL.</p>
+<h2>Licensing and limits</h2>
+<p>Rights are per record, not per site. Each catalog entry carries rights_status and license fields; the readable collection centers on public domain works and documents released to the public. Agents building datasets or products on the corpus should read those two fields on every record they use rather than assuming uniform rights. The static catalog surface described above needs no API key, no authentication, and has no published rate limit. Alongside it, a keyed API (v1, below) is rolling out for server-side search, full-text delivery, and bulk snapshots at published daily limits — the key is free at the first tier and the static surface stays keyless either way. The catalog is a snapshot that grows as holdings are added, so agents should re-fetch it periodically instead of treating a local copy as permanent. No uptime SLA is offered. It is free infrastructure, maintained as a public resource.</p>
+<h2>Harvest with OAI-PMH</h2>
+<p>Libraries and harvesters can take the catalog through the OAI-PMH 2.0 endpoint at https://antarctic-labs.com/oai — it supports the standard verbs: Identify, ListMetadataFormats, ListSets, ListIdentifiers, ListRecords, and GetRecord, with metadata in oai_dc (Dublin Core). Sets are the catalog's collections, and identifiers take the form oai:antarctic-labs.com:&lt;artifact_id&gt;.</p>
+<h2>API v1 — keys, search, and full text</h2>
+<p>API v1 is the keyed companion to the static surface above, at https://antarctic-labs.com/api/v1. It exists for one reason: convenience at scale — server-side search, full-text delivery, and bulk snapshot packages, at published daily limits, with a commercial-use licence on the paid tiers. The texts themselves stay free on this site either way; a key buys the maintained pipe, the throughput, and someone standing behind it, never access. Daily limits: free key 200 requests/day, Pro 5,000, Commercial 25,000. Keys are delivered by email and shown only there; only a hash of each key is stored. See <a href="/tower-of-babel/library/research">API access</a> for the tiers and to request a free key. No uptime SLA is offered on any tier.</p>`,
+};
+
+PAGES["/tower-of-babel/library/research"] = {
+  path: "/tower-of-babel/library/research",
+  title: "API Access | Tower of Babel",
+  description:
+    "Get a Tower of Babel API key: a free key by email, paid tiers above it — server-side search, full-text delivery, and bulk snapshots of the library.",
+  body: `<h1>API access</h1>
+<p>Get a Tower of Babel API key: a free key by email, paid tiers above it — server-side search, full-text delivery, and bulk snapshots of the library of more than 660,000 works. The texts themselves stay free on this site either way; a key buys the maintained pipe, the throughput, and someone standing behind it, never access.</p>
+<h2>Tiers</h2>
+<h3>Keyless catalog — Free</h3>
+<p>No published limit. The static surface documented on the <a href="/tower-of-babel/api">API page</a>: the full catalog JSON, shards, and predictable .txt URLs. No key, no sign-up. Unchanged — this is the discovery layer and it stays open.</p>
+<h3>Free key — Free</h3>
+<p>200 requests/day. A key by email for API v1: catalog search and metadata for your own projects. Non-commercial use. The key is shown only in the email that delivers it.</p>
+<h3>Pro — $19/mo ($190/yr)</h3>
+<p>5,000 requests/day. API v1 with full-text delivery and a commercial-use licence for a single project. For builders, researchers, and small products that need the pipe, not the scrape.</p>
+<h3>Commercial — $149/mo ($1,490/yr)</h3>
+<p>25,000 requests/day. Everything in Pro at commercial scale: bulk snapshot packages and a commercial-use licence covering multiple projects.</p>
+<h2>Get a free key</h2>
+<p>Enter your email on this page in the app and a free key is sent to it — shown only in that email, stored here only as a hash. Asking for a new key revokes the previous free key for that address.</p>
+<p>Billing is managed through Stripe — the receipt for any payment includes a manage-billing link. Refunds: cancel within 7 days of a charge and that charge is refunded in full — email us from the address on the subscription and we will process it; the API key stays active until the end of the paid period unless you ask us to revoke it sooner.</p>`,
+};
+
+PAGES["/tower-of-babel/library/suggest"] = {
+  path: "/tower-of-babel/library/suggest",
+  title: "Suggest a Book for the Free Online Library | Tower of Babel",
+  description:
+    "Suggest a book, document, or text for the Tower of Babel free online library. Every suggestion is reviewed; accepted works are preserved in clean text.",
+  body: `<h1>Suggest an entry</h1>
+<p>Know something that belongs in the Tower? Send it our way — a title and a type are all it takes. Every suggestion gets reviewed for the catalog.</p>
+<p>The form asks for: the type of media (books, declassified, law, documents, papers, podcasts, or reference), the title of the work, whether it is a single work, part of a series, or has multiple editions, the author or creator if known, the date published if known, where to find it, and anything else that explains why it belongs in the Tower.</p>
+<p>Suggestions are reviewed against the library's rules: the work must be public domain or openly licensed, and a clean full text must be obtainable — a catalog entry is only published once its text is hosted. Accepted works are preserved in clean, searchable text and join the catalog of more than 660,000 works.</p>
+<p><a href="/tower-of-babel/library">Back to the library</a></p>`,
+};
+
+PAGES["/tower-of-babel/donate"] = {
+  path: "/tower-of-babel/donate",
+  title: "Donate to the Free Online Library | Tower of Babel",
+  description:
+    "Support the Tower of Babel free online library: one-time or monthly contributions keep more than 660,000 books and texts free for everyone — no paywalls.",
+  body: `<h1>A Message From the Team Behind the Tower of Babel</h1>
+<p>The Tower is free to read, forever. It stays that way because readers who can afford to help, do.</p>
+<p>Dear Tower of Babel Patron,</p>
+<p>The Tower of Babel, a project of Antarctic Labs, preserves the written record of humankind and makes essential texts from every culture, religion, and era free to everyone, everywhere. It already holds more than 660,000 works — books, sacred texts, declassified documents, papers, and transcripts — and grows every day.</p>
+<p>The goal is simple to say and enormous to do: every work that matters, within everyone's reach. It takes servers, storage, bandwidth, years of steady preservation work — and readers like you.</p>
+<p>The Tower is free to read, and reader support is what keeps it that way.</p>
+<p>If you enjoy wandering our virtual stacks, please consider supporting the Tower today. Most readers never give, so every one-time or monthly contribution carries real weight.</p>
+<p>Thank you for reading with us.</p>
+<p>Joshua Almodovar<br />Founder, Antarctic Labs</p>
+<p>One-time or monthly contributions of $5, $10, $25, $50, $100, $500, $1,000, or a custom amount are accepted through Stripe; Bitcoin and Ethereum options are shown on this page in the app.</p>
+<p>You'll receive an email receipt for your records. One honest note: Antarctic Labs is not a registered charity, so contributions are not tax-deductible. Every dollar goes directly to the servers, storage, and preservation work that keep the library online and growing.</p>
+<p>No advertising is shown on this page.</p>`,
+};
+
+// Full HTML document for a main route, or null when the path is not a
+// server-rendered main route.
+export function staticPageFor(path) {
+  const page = PAGES[path];
+  return page ? doc(page) : null;
+}
+
+// Content-bearing 404 for paths that match nothing — a real error page
+// with real navigation, never an empty screen, and no ad code.
+function esc(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+export function notFoundPage(path) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Page Not Found | ANTARCTIC LABS</title>
+<meta name="robots" content="noindex, follow" />
+<style>
+body { font-family: Georgia, "Times New Roman", serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.65; color: #191919; }
+nav a, footer a { color: #0f5d75; }
+</style>
+</head>
+<body>
+${NAV}
+<main>
+<h1>Page not found</h1>
+<p>The page at ${SITE}${esc(path)} does not exist. It may have been moved, or the address may be mistyped.</p>
+<p>From here you can go to the <a href="/">Antarctic Labs home page</a>, browse the <a href="/tower-of-babel/library">Tower of Babel library</a> of more than 660,000 free works, read <a href="/about">about the firm</a>, or email <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a> if you were expecting something here.</p>
+</main>
+${FOOT}
+</body>
+</html>
+`;
+}

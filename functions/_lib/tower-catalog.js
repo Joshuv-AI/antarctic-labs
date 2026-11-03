@@ -156,7 +156,7 @@ export async function getDescriptionOverride(artifactId) {
 // every real browser — passes straight through to the SPA untouched.
 // Keep this list aligned with the explicit allows in public/robots.txt.
 const BOT_UA =
-  /(googlebot|google-inspectiontool|bingbot|msnbot|oai-searchbot|gptbot|chatgpt-user|claudebot|claude-searchbot|claude-user|anthropic-ai|perplexitybot|perplexity-user|meta-externalagent|meta-webindexer|facebookexternalhit|ccbot|applebot|bravebot|duckduckbot|yandexbot|slurp|ia_archiver|twitterbot|linkedinbot|discordbot|telegrambot|whatsapp|petalbot|bytespider|amazonbot|mistralai-user|cohere-ai|youbot)/i;
+  /(googlebot|google-inspectiontool|adsbot|mediapartners-google|bingbot|msnbot|oai-searchbot|gptbot|chatgpt-user|claudebot|claude-searchbot|claude-user|anthropic-ai|perplexitybot|perplexity-user|meta-externalagent|meta-webindexer|facebookexternalhit|ccbot|applebot|bravebot|duckduckbot|yandexbot|slurp|ia_archiver|twitterbot|linkedinbot|discordbot|telegrambot|whatsapp|petalbot|bytespider|amazonbot|mistralai-user|cohere-ai|youbot)/i;
 
 export function isCrawler(request) {
   const ua = request.headers.get("user-agent") || "";

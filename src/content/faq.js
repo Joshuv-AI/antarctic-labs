@@ -3,30 +3,26 @@
 // Short sentences. No emojis. No em-dashes. No hype. No invented credentials,
 // prices, or stats. Market figures are cited to their observed sources.
 
+// Firm FAQ — rewritten 2026-11-03 (AdSense fix): the previous set pitched
+// the closed freelance chapter (hire intent, quotes, pricing). Antarctic
+// Labs is a proprietary trading and computing firm now; it does not take
+// clients. This set states the current facts.
 export const siteFaqs = [
   {
-    q: "What does an AI automation developer do?",
-    a: "An AI automation developer designs and builds software that takes repetitive work off a business's plate. At Antarctic Labs that means n8n workflow automation, AI agents that operate tools and APIs, data pipelines, and integrations between the apps a business already uses. The output is working systems, delivered ready to run. The engagement model is simple: scope the work, build it, test it, deliver it ready to run, with documentation of what was built.",
+    q: "What does Antarctic Labs do?",
+    a: "Antarctic Labs is a proprietary trading and computing firm. It trades its own capital on infrastructure it owns and operates: trading systems developed in-house, and a small data center of its own being established in the Philippines. The firm also runs the Tower of Babel, a free preservation library of more than 660,000 works.",
   },
   {
-    q: "Who can build AI automations for my small business?",
-    a: "Antarctic Labs builds AI automations for small businesses: lead capture workflows, follow-up sequences, data entry elimination, report generation, and custom AI agents. It is a one-person freelance studio, so clients talk directly to the developer who builds the work. There is no account manager layer between the problem and the person solving it. Every engagement starts with a free quote, answered within 24 hours, that states exactly what gets built and what it costs.",
+    q: "Does Antarctic Labs take on clients or freelance work?",
+    a: "No. Antarctic Labs began as a freelance technology studio; that chapter is closed. The firm does not sell services, does not take client projects, and is not for hire. Its work is its own trading, its own infrastructure, and the Tower of Babel library, which is free for everyone to read.",
   },
   {
-    q: "How much does AI automation cost for a small business?",
-    a: "Costs depend on scope. Published industry guides put agency automation projects in the $5K to $50K band, while n8n community rate cards show individual workflows in the $200 to $700 range. Antarctic Labs prices per project after a free quote, and every quote is answered within 24 hours. The quote states exactly what gets built and what it costs before any work starts, so the decision is always made with full information.",
+    q: "What is the Tower of Babel?",
+    a: "The Tower of Babel is Antarctic Labs' free online library and archival project: more than 660,000 books, sacred texts, declassified documents, scientific papers, reference works, and transcripts, preserved as clean, searchable plain text. There are no accounts and no paywalls. Every record carries its own rights status; the readable collection is built on public-domain and openly licensed works.",
   },
   {
-    q: "Should I hire an AI automation agency or a freelancer?",
-    a: "Agencies bring teams and overhead, which shows up in the price. A freelancer brings direct access to the person doing the work, which shows up in speed and clarity. For a single workflow, an AI agent, or a data pipeline, one experienced developer is usually faster than a five-person team. For enterprise-scale programs with compliance requirements, an agency is the safer fit. The deciding question is scope: one system with one owner, or a program that needs a team.",
-  },
-  {
-    q: "What business processes should I automate first with AI?",
-    a: "Start with work that is repetitive, rule-based, and eats hours every week: copying data between apps, lead follow-up, invoice handling, scheduling, and report building. These are the processes where automation pays for itself in weeks, because the time savings are immediate and measurable. Creative judgment, relationship work, and anything requiring human discretion should stay human. The best first project is the task everyone dreads doing.",
-  },
-  {
-    q: "How do engagements with Antarctic Labs start?",
-    a: "Send the project details by email to hello@antarctic-labs.com. Every inquiry gets an honest quote within 24 hours, even if the advice is to not hire anyone. Once scope and price are agreed, the build starts, and the client gets a working system, tested and documented, delivered ready to use.",
+    q: "How do I contact Antarctic Labs?",
+    a: "By email at hello@antarctic-labs.com. For the library, works can also be proposed through the suggestion form on the Tower of Babel library pages; every suggestion is reviewed for the catalog.",
   },
 ];
 

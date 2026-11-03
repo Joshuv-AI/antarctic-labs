@@ -230,8 +230,23 @@ export async function onRequest(context) {
   const id = params && params.id ? String(params.id) : "";
   // Literal SPA routes under library/ are not entries.
   if (!id || id === "suggest" || id === "research") return next();
-  // Humans (and anything unrecognized) get the SPA, untouched.
-  if (!isCrawler(request)) return next();
+  // Humans (and anything unrecognized) get the SPA, untouched — with one
+  // exception (2026-11-03, AdSense fix): an id verified absent from the
+  // catalog is a real 404 for everyone, not an error screen served at
+  // 200. Any data failure still falls back to the SPA, never an error.
+  if (!isCrawler(request)) {
+    const foundHuman = await getRecordById(id);
+    if (foundHuman.state === "missing") {
+      return new Response(notFoundHtml(id), {
+        status: 404,
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "public, max-age=3600",
+        },
+      });
+    }
+    return next();
+  }
 
   const canonical = entryUrl(id);
   const cache = caches.default;
