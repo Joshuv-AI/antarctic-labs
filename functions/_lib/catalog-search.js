@@ -52,10 +52,30 @@ export async function catalogSearch(env, { q = "", filters = {}, cursor = 0, pag
   const { root, fp } = await resolveBase(env);
   if (!fp) return { notBuilt: true };
   const base = `${root}/meta/${fp}`;
+  // Subrequest budget (2026-10-30): this account has no Workers Paid,
+  // so one invocation may make at most 50 subrequests — and every
+  // scoring bucket, vocab file, correction candidate and record block
+  // below is a separate fetch. Long exact-title queries needed 50-70
+  // fetches and died on the limit, surfacing as a generic 500 (the
+  // route's catch) even when every word existed in the index. Cap the
+  // invocation at 46 fresh fetches (the pointer read in resolveBase
+  // uses one more); past the cap, get() answers null — the same shape
+  // as a missing file, which every consumer already tolerates — so a
+  // heavy query returns slightly thinner results instead of an error.
+  // Cache hits stay free and uncapped. A failed fetch is cached as
+  // null rather than a rejected promise, for the same reason.
+  let fetchesLeft = 46;
   const get = (path) => {
     const key = `${base}/${path}`;
     if (!fileCache.has(key)) {
-      fileCache.set(key, fetch(key).then((r) => (r.ok ? r.json() : null)));
+      if (fetchesLeft <= 0) return Promise.resolve(null);
+      fetchesLeft -= 1;
+      fileCache.set(
+        key,
+        fetch(key)
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null)
+      );
     }
     return fileCache.get(key);
   };
@@ -93,9 +113,12 @@ export async function catalogSearch(env, { q = "", filters = {}, cursor = 0, pag
   };
   const page = async (ranked, total) => {
     const pageIds = ranked.slice(cursor, cursor + pageSize);
+    // Drop unhydrated entries (record block unreachable or beyond the
+    // subrequest budget) rather than returning nulls to the client.
+    const results = (await hydrate(pageIds)).filter(Boolean);
     return {
       total,
-      results: await hydrate(pageIds),
+      results,
       next_cursor: cursor + pageIds.length < total ? cursor + pageIds.length : null,
       fingerprint: fp,
     };
@@ -199,7 +222,7 @@ export async function catalogSearch(env, { q = "", filters = {}, cursor = 0, pag
   for (let id = cursor; id < Math.min(cursor + pageSize, N); id++) pageIds.push(id);
   return {
     total: N,
-    results: await hydrate(pageIds),
+    results: (await hydrate(pageIds)).filter(Boolean),
     next_cursor: cursor + pageIds.length < N ? cursor + pageIds.length : null,
     fingerprint: fp,
   };
