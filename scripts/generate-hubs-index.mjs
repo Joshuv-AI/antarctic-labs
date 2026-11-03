@@ -17,6 +17,14 @@
 //   node scripts/generate-hubs-index.mjs <live-shards-dir> public/tower-hubs-index.json
 // The 2026-10-24 regeneration from live shards gave 419,322 records.
 //
+// SIZE GUARD (2026-11-03): the output is also a deployed Pages asset
+// (25 MiB per-file cap) that the SPA fetches for landing counts. The
+// 1,180,033-record regeneration hit 75 MiB uncapped; buildHubIndexData
+// now caps each author's stored work list at 500 (the count field keeps
+// the true total), which brought it to 10.71 MiB. The snapshot date
+// stamped into the file is CATALOG_SNAPSHOT_DATE in
+// functions/_lib/tower-hubs.js — bump it in the same push.
+//
 // Why precomputed: the hub walk (two full passes over ~400k catalog records
 // with per-record regex matching) exceeds the Cloudflare Workers CPU time
 // limit when run per-request (diagnosed 2026-10-24: ExceededCpu on
