@@ -481,10 +481,61 @@ export function isCatalogPending() {
 }
 
 // Find a full record by artifact_id, loading the full catalog on demand.
-// Uses the sharded catalog (2026-10-18): manifest maps ID -> shard number,
-// then we fetch just that shard (~9MB) instead of the whole catalog.
-let shardManifest = null;
-let shardManifestPending = null;
+// Uses the sharded catalog (2026-10-18): a placement map gives the ID's
+// shard number, then we fetch just that shard instead of the whole
+// catalog.
+//
+// Placement buckets (2026-11-10): the placement map no longer ships as
+// one file. At 2,557,918 entries the single manifest is ~66 MB, served
+// only through a streaming function, and an entry lookup had to
+// download all of it inside the 30 s fetch budget before it could
+// locate one record. When that fetch failed or timed out, the old
+// loader cached an EMPTY map for the session, so every lookup fell
+// through to the legacy catalog — which predates the LAW collection —
+// and live LAW entries rendered as UNKNOWN ARTIFACT. The map is now
+// split into 256 bucket files (public/catalog-shard-manifest/<NNN>.json,
+// ~260 KB each, ordinary static assets) keyed by the djb2 hash below;
+// a lookup downloads only its own bucket, a bucket failure REJECTS
+// (and is never cached), and only a cleanly loaded bucket that lacks
+// the id falls back to the legacy catalog.
+const PLACEMENT_BUCKETS = 256;
+function placementBucketFor(artifactId) {
+  // djb2 — must match src/lib/search-text.js shardFor(id, 256) and
+  // ops/split_shard_manifest.py, which generates the bucket files.
+  let h = 5381;
+  const s = String(artifactId);
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h % PLACEMENT_BUCKETS;
+}
+const placementCache = {};
+const placementPending = {};
+function loadShardBucket(b) {
+  const key = `bucket-${b}`;
+  if (placementCache[key]) return Promise.resolve(placementCache[key]);
+  if (!placementPending[key]) {
+    const url = `/catalog-shard-manifest/${String(b).padStart(3, "0")}.json`;
+    const attempt = (retried) =>
+      fetchJsonOnce(url, 60000).then(
+        (data) => {
+          placementCache[key] = data || {};
+          delete placementPending[key];
+          return placementCache[key];
+        },
+        (err) => {
+          if (!retried) return attempt(true);
+          delete placementPending[key];
+          throw err;
+        }
+      );
+    placementPending[key] = attempt(false);
+  }
+  return placementPending[key];
+}
+function loadShardPlacement(artifactId) {
+  return loadShardBucket(placementBucketFor(artifactId)).then(
+    (bucket) => bucket[artifactId]
+  );
+}
 const shardCache = {};
 const shardPending = {};
 // LRU cap for shardCache (2026-10-18): browsing across shards could retain ~90MB.
@@ -495,37 +546,20 @@ function touchShardCache(key) {
     delete shardCache[keys.shift()];
   }
 }
-function loadShardManifest() {
-  if (shardManifest) return Promise.resolve(shardManifest);
-  if (!shardManifestPending) {
-    shardManifestPending = fetchJsonOnce("/catalog-shard-manifest.json").then(
-      (data) => {
-        shardManifest = data || {};
-        shardManifestPending = null;
-        return shardManifest;
-      },
-      () => {
-        shardManifest = {};
-        shardManifestPending = null;
-        return shardManifest;
-      }
-    );
-  }
-  return shardManifestPending;
-}
-// Warm the manifest from the library list page (2026-10-18): fire-and-forget
-// so entry visits usually hit the in-memory cache instead of a 3.9MB download.
-export function warmShardManifest() {
-  loadShardManifest();
-}
+// Kept for API compatibility (the library page used to warm the
+// single-file manifest, 2026-10-18). Placement buckets are per-id and
+// ~260 KB, so there is nothing useful to pre-warm; entry lookups fetch
+// their bucket on demand.
+export function warmShardManifest() {}
 function loadCatalogShard(n) {
   const key = `shard-${n}`;
   if (shardCache[key]) return Promise.resolve(shardCache[key]);
   if (shardPending[key]) return shardPending[key];
   const url = `/catalog-shards/catalog-${String(n).padStart(2, "0")}.json`;
-  // Retry once on failure (mirrors loadWithRetry semantics).
+  // Retry once on failure (mirrors loadWithRetry semantics). Shards run
+  // 9-19 MB, so the fetch gets a longer budget than the 30 s default.
   const attempt = (retried) =>
-    fetchJsonOnce(url).then(
+    fetchJsonOnce(url, 120000).then(
       (data) => {
         const items = Array.isArray(data) ? data : data?.artifacts || data?.items || [];
         shardCache[key] = items;
@@ -546,11 +580,14 @@ export function getFullArtifact(artifactId) {
   if (fullCache) {
     return Promise.resolve(fullCache.find((a) => a.artifact_id === artifactId) || null);
   }
-  // Try the sharded catalog first (has all 133k+ entries).
-  return loadShardManifest().then((manifest) => {
-    const shardNum = manifest[artifactId];
+  // Try the sharded catalog first (has all 2.56M entries). A placement
+  // FETCH failure rejects out of getFullArtifact: the caller retries
+  // rather than mistaking an infrastructure failure for a missing
+  // entry. Only a placement that loaded cleanly and has no entry for
+  // the id falls back to the legacy catalog.
+  return loadShardPlacement(artifactId).then((shardNum) => {
     if (shardNum === undefined) {
-      // Not in manifest — fall back to legacy catalog.json.
+      // Not in the placement map — fall back to legacy catalog.json.
       return loadFullCatalog().then(
         (full) => full.find((a) => a.artifact_id === artifactId) || null
       );

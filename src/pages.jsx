@@ -4358,10 +4358,23 @@ export function LibraryArtifact({ go, params, onReady }) {
     let live = true;
     setFullArtifact(null);
     setFullSettled(false);
-    getFullArtifact(params.id).then(
-      (a) => { if (live) { setFullArtifact(a); setFullSettled(true); } },
-      () => { if (live) { setFullArtifact(null); setFullSettled(true); } }
-    );
+    const attempt = (isRetry) => {
+      getFullArtifact(params.id).then(
+        (a) => { if (live) { setFullArtifact(a); setFullSettled(true); } },
+        () => {
+          if (!live) return;
+          // A FAILED lookup (network, a slow shard) is not a missing
+          // entry: retry once before settling, so a transient failure
+          // never renders as UNKNOWN ARTIFACT. Only a lookup that
+          // resolves without the record — or fails twice — settles.
+          // (2026-11-10: the LAW entries rendered UNKNOWN whenever the
+          // old 66 MB placement fetch lost its race.)
+          if (!isRetry) setTimeout(() => { if (live) attempt(true); }, 1500);
+          else { setFullArtifact(null); setFullSettled(true); }
+        }
+      );
+    };
+    attempt(false);
     return () => { live = false; };
   }, [params.id]);
   // Analytics: one work_viewed per work per session, fired when any
