@@ -287,30 +287,32 @@ export function isIndexInFlight() {
 // streaming starts at cursor = resident length and continues in order.
 // Publishes are coalesced to one per 2.5s (same stability rule as the
 // chunk loader: every publish restarts the page's derivations). The
-// automatic stream stops at BROWSE_AUTO_CAP resident records — a
-// memory level a phone holds comfortably; Load more resumes it on
-// demand in bounded runs (resumeCatalogBrowse). If the endpoint fails,
+// automatic stream runs until the FULL catalog is resident — it used
+// to stop at a 150,000-record cap (a memory level a phone holds
+// comfortably), but Joshua's 2026-11-10 call was explicit: stopping
+// early reads as "not loading everything" when there are 2.5M
+// entries, so the stream now continues to exhaustion. If it stops
+// early on a failure, Load more resumes it to the end of the catalog
+// (resumeCatalogBrowse). If the endpoint fails,
 // the stream stops quietly and keeps what arrived — the bootstrap and
 // server search still serve the page, and the client index is never
 // pulled as a browse fallback (that fallback was the crash).
 //
 // Pipelined fetch (2026-11-10, load-speed fix): the sequential loop
-// above cost one round trip plus a 300 ms tick per 500 records —
-// ~2 minutes to the 150k cap, which read as "the library loads very
-// slowly" even though the counter climbed honestly. The browse
+// above cost one round trip plus a 300 ms tick per 500 records,
+// which read as "the library loads very slowly" even though the
+// counter climbed honestly. The browse
 // endpoint's paging is pure offset arithmetic (next_cursor is always
 // cursor + page length; see functions/_lib/catalog-search.js), so
 // page cursors are computable in advance: the streamer now keeps
 // BROWSE_PIPELINE page requests in flight at BROWSE_PAGE_SIZE
 // records each and appends pages strictly in cursor order (dedupe by
-// id still guards any divergence). Failure, cap, visibility and
+// id still guards any divergence). Failure, visibility and
 // publish semantics are unchanged: a page that fails twice stops the
 // stream with everything before it kept, publishes stay coalesced to
 // one per 2.5s, and a hidden tab launches and appends nothing.
 const BROWSE_PAGE_SIZE = 2000;
 const BROWSE_PIPELINE = 3;
-const BROWSE_AUTO_CAP = 150000;
-const BROWSE_RESUME_RUN = 25000;
 let browseState = null;
 
 function browsePublishNow(complete) {
@@ -421,8 +423,7 @@ function browseAppend(st) {
       browseStop(st, st.total != null && st.acc.length >= st.total);
       return;
     }
-    const limit = st.onDemand ? st.stopAt : BROWSE_AUTO_CAP;
-    if (st.acc.length >= limit) {
+    if (st.onDemand && st.acc.length >= st.stopAt) {
       browseStop(st, false);
       return;
     }
@@ -492,8 +493,8 @@ export function startCatalogBrowse() {
   else loadBootstrap().then(begin, () => {});
 }
 
-// Resume a stream that stopped (at the automatic cap or on failure)
-// for one bounded on-demand run — wired to Load more in server mode.
+// Resume a stream that stopped early (on failure) and run it to the
+// end of the catalog — wired to Load more in server mode.
 export function resumeCatalogBrowse() {
   if (indexComplete || indexPending) return;
   if (!browseState) { startCatalogBrowse(); return; }
@@ -502,7 +503,7 @@ export function resumeCatalogBrowse() {
   if (st.total != null && st.cursor >= st.total) return; // exhausted
   st.stopped = false;
   st.onDemand = true;
-  st.stopAt = (st.acc ? st.acc.length : st.cursor) + BROWSE_RESUME_RUN;
+  st.stopAt = st.total != null ? st.total : Number.POSITIVE_INFINITY;
   // Fresh run: abandon any pages still in flight or buffered from
   // the stopped run and re-enter at the append frontier.
   st.runId++;
