@@ -49,6 +49,9 @@ import {
   getCover,
   onIndexReady,
   isIndexLoading,
+  getBrowseOrders,
+  browseOrdersPending,
+  onBrowseOrdersSettled,
 } from "./lib/catalog.js";
 // Two-level browse taxonomy for the library filter (revamp 2026-10-17):
 // top-level lanes + subcategories derived from the artifact_id prefix.
@@ -554,11 +557,23 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
   // A cached object for this exact array is final — unless it is a
   // deferred-search object (below) and this call wants the search
   // layer built onto it (the upgrade path).
-  if (
-    towerDataCache && towerDataFor === artifacts &&
-    (towerDataCache.haystacks || opts.browseOnly || opts.deferSearch)
-  ) {
-    return towerDataCache;
+  if (towerDataCache && towerDataFor === artifacts) {
+    const cached = towerDataCache;
+    if (cached.haystacks || opts.browseOnly) return cached;
+    if (opts.deferSearch) {
+      if (cached.order) return cached;
+      // Deferred object still waiting on its sort orders: attach the
+      // baked orders when they have landed; keep waiting while they
+      // are in flight; otherwise fall through and build them locally
+      // in the deferred branch below (older catalog / failed fetch).
+      const baked = getBrowseOrders();
+      if (baked) {
+        const data = { ...cached, order: baked };
+        towerDataCache = data;
+        return data;
+      }
+      if (browseOrdersPending()) return cached;
+    }
   }
   // Phase 0, incremental when the array extends the cached prefix
   // (see phase0Cache above): the count maps are copied (small), the
@@ -651,16 +666,39 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
   // tabs right at the finish — measured at full scale in desktop
   // Chrome: ~2.05 GB heap when the counter completed, a ~2.67 GB
   // peak during the indexing phase, ~2.0 GB steady afterwards.
-  // Server mode therefore builds only the sort orders at completion
-  // (typed arrays, modest memory); phase 1 and the vocabulary build
-  // later, on the first hub-filter/strict need, through the upgrade
-  // path below. Client mode (and the search-failure fallback, which
-  // flips server mode off) never defers — the layer is its search.
+  // Server mode therefore attaches the publish-time baked sort
+  // orders at completion (or publishes without them while they are
+  // still downloading — building them on-device was the completion
+  // spike measured in the stub isolation run); phase 1 and the
+  // vocabulary build later, on the first hub-filter/strict need,
+  // through the upgrade path below. Client mode (and the
+  // search-failure fallback, which flips server mode off) never
+  // defers — the layer is its search.
   const cachedFull = towerDataCache && towerDataFor === artifacts ? towerDataCache : null;
-  if (opts.deferSearch && !cachedFull) {
+  if (opts.deferSearch && (!cachedFull || !cachedFull.order)) {
+    // Sort orders (2026-11-10 completion-spike fix): baked at publish
+    // time and fetched in parallel with the stream — attach them.
+    // While they are still in flight, publish phase 0 with no order
+    // (the list browses in catalog order; the orders-ready tick
+    // re-runs this derivation and the sort snaps in). Only a catalog
+    // whose metadata predates the baked orders, or a failed orders
+    // fetch, builds them on-device as before.
+    const baked = getBrowseOrders();
+    if (baked) {
+      const data = { ...(cachedFull || phase0), order: baked };
+      towerDataCache = data;
+      towerDataFor = artifacts;
+      return data;
+    }
+    if (browseOrdersPending()) {
+      const data = { ...(cachedFull || phase0), order: null };
+      towerDataCache = data;
+      towerDataFor = artifacts;
+      return data;
+    }
     const order = await buildSortOrders(artifacts, isCancelled);
     if (!order || isCancelled()) return null;
-    const data = { ...phase0, order };
+    const data = { ...(cachedFull || phase0), order };
     towerDataCache = data;
     towerDataFor = artifacts;
     return data;
@@ -681,6 +719,10 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
     order: up ? up.order : null,
   };
   if (onPhase) onPhase(base);
+  if (!base.order) {
+    // Baked orders serve the upgrade path too when they are on hand.
+    base.order = getBrowseOrders();
+  }
   if (!base.order) {
     const order = await buildSortOrders(artifacts, isCancelled);
     if (!order || isCancelled()) return null;
@@ -1186,6 +1228,15 @@ function TowerLibrarySection({ go, onReady }) {
   // first time a hub filter or strict query needs the local search
   // layer in server mode; the derivation then upgrades in place.
   const [needSearchData, setNeedSearchData] = useState(false);
+  // Baked sort orders settle asynchronously (they download in
+  // parallel with the browse stream); the tick re-runs the derivation
+  // so a deferred object that published before they landed picks
+  // them up the moment they do.
+  const [ordersTick, setOrdersTick] = useState(0);
+  useEffect(
+    () => onBrowseOrdersSettled(() => setOrdersTick((t) => t + 1)),
+    []
+  );
   useEffect(() => {
     if (!artifacts) {
       setTowerData(null);
@@ -1224,7 +1275,7 @@ function TowerLibrarySection({ go, onReady }) {
     return () => {
       cancelled = true;
     };
-  }, [artifacts, deriveSeq, fullIndexReady, needSearchData]);
+  }, [artifacts, deriveSeq, fullIndexReady, needSearchData, ordersTick]);
   const retryCatalog = () => {
     setDeriveError(false);
     retryArtifacts();

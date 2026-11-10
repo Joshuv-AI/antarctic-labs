@@ -375,13 +375,95 @@ function browseMeta() {
           m && typeof m.total === "number" && typeof m.fingerprint === "string" &&
           Number.isFinite(m.browse_page_size) && Number.isFinite(m.browse_pages)
         ) {
-          return { fp: m.fingerprint, total: m.total, pageSize: m.browse_page_size };
+          return { fp: m.fingerprint, total: m.total, pageSize: m.browse_page_size, orders: !!m.orders };
         }
         return null;
       })
       .catch(() => null);
   }
   return browseMetaPromise;
+}
+
+// Baked sort orders (2026-11-10 completion-spike fix): the metadata
+// generator bakes the five sort permutations into orders.bin beside
+// the browse pages (see scripts/build-catalog-meta.mjs). The streamer
+// fetches the file in parallel with the page stream — 51 MB of binary
+// against the catalog's ~675 MB of pages, so it lands long before the
+// stream completes — and the library derivation attaches the views
+// instead of building the orders on-device at completion (the build
+// was a sustained ~1.24 GB heap plateau that killed phone tabs
+// seconds after the load finished). Any failure (older fingerprint
+// without the file, size mismatch, network) settles as "failed" and
+// the derivation falls back to the on-device build, unchanged.
+let browseOrders = null; // {fp, total, order}
+let browseOrdersStatus = "absent"; // absent | pending | ready | failed
+const browseOrdersSettleCbs = new Set();
+function settleBrowseOrders() {
+  for (const cb of [...browseOrdersSettleCbs]) {
+    try { cb(); } catch { /* a listener must never break the loader */ }
+  }
+}
+export function onBrowseOrdersSettled(cb) {
+  if (browseOrdersStatus === "ready" || browseOrdersStatus === "failed") {
+    const t = setTimeout(cb, 0);
+    return () => clearTimeout(t);
+  }
+  browseOrdersSettleCbs.add(cb);
+  return () => browseOrdersSettleCbs.delete(cb);
+}
+export function getBrowseOrders() {
+  if (browseOrdersStatus !== "ready" || !browseOrders) return null;
+  if (!browseState || browseState.fp !== browseOrders.fp) return null;
+  return browseOrders.order;
+}
+export function browseOrdersPending() {
+  return browseOrdersStatus === "pending";
+}
+function loadBrowseOrders(fp, total) {
+  if (!fp || !total) {
+    browseOrdersStatus = "absent";
+    browseOrders = null;
+    return;
+  }
+  if (
+    browseOrders && browseOrders.fp === fp &&
+    (browseOrdersStatus === "ready" || browseOrdersStatus === "pending")
+  ) {
+    return;
+  }
+  browseOrdersStatus = "pending";
+  browseOrders = null;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 180000);
+  fetch(`/browse-pages/${fp}/orders.bin`, { signal: ctrl.signal })
+    .then((r) => {
+      if (!r.ok) throw new Error(`orders fetch ${r.status}`);
+      return r.arrayBuffer();
+    })
+    .then((buf) => {
+      clearTimeout(timer);
+      if (buf.byteLength !== total * 5 * 4) throw new Error("orders size mismatch");
+      const all = new Uint32Array(buf);
+      browseOrders = {
+        fp,
+        total,
+        order: {
+          "title-asc": all.subarray(0, total),
+          "title-desc": all.subarray(total, total * 2),
+          "creator-asc": all.subarray(total * 2, total * 3),
+          "year-desc": all.subarray(total * 3, total * 4),
+          "year-asc": all.subarray(total * 4, total * 5),
+        },
+      };
+      browseOrdersStatus = "ready";
+      settleBrowseOrders();
+    })
+    .catch(() => {
+      clearTimeout(timer);
+      browseOrders = null;
+      browseOrdersStatus = "failed";
+      settleBrowseOrders();
+    });
 }
 
 function browsePublishNow(complete) {
@@ -599,6 +681,12 @@ export function startCatalogBrowse() {
         pubTimer: null,
         lastPubAt: 0,
       };
+      // Baked sort orders ride in parallel with the stream (above).
+      if (meta && meta.orders) loadBrowseOrders(meta.fp, meta.total);
+      else {
+        browseOrdersStatus = "absent";
+        browseOrders = null;
+      }
       browseLaunch(browseState);
     });
   };

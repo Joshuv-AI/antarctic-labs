@@ -75,6 +75,7 @@ export async function catalogManifest(env) {
     total: manifest.total,
     browse_page_size: manifest.browse_page_size ?? null,
     browse_pages: manifest.browse_pages ?? null,
+    orders: manifest.orders ?? null,
   };
 }
 

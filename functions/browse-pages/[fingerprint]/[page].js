@@ -16,15 +16,20 @@ const BASE = "https://search-index.antarctic-labs.com";
 export async function onRequestGet({ params }) {
   const fp = String(params.fingerprint || "");
   const page = String(params.page || "");
-  if (!/^[a-f0-9]{64}$/.test(fp) || !/^page-\d{4}\.json$/.test(page)) {
+  // orders.bin (2026-11-10): the baked sort-order permutations live
+  // beside the browse pages under the same fingerprint and ride this
+  // proxy — same immutability contract, binary content type.
+  const isOrders = page === "orders.bin";
+  if (!/^[a-f0-9]{64}$/.test(fp) || (!isOrders && !/^page-\d{4}\.json$/.test(page))) {
     return new Response(JSON.stringify({ error: "bad browse page address" }), {
       status: 400,
       headers: { "content-type": "application/json", "cache-control": "no-store" },
     });
   }
-  const upstream = await fetch(`${BASE}/meta/${fp}/browse/${page}`, {
-    cf: { cacheTtl: 31536000, cacheEverything: true },
-  }).catch(() => null);
+  const upstream = await fetch(
+    isOrders ? `${BASE}/meta/${fp}/orders.bin` : `${BASE}/meta/${fp}/browse/${page}`,
+    { cf: { cacheTtl: 31536000, cacheEverything: true } }
+  ).catch(() => null);
   if (!upstream || !upstream.ok) {
     return new Response(JSON.stringify({ error: "no such browse page" }), {
       status: 404,
@@ -34,7 +39,7 @@ export async function onRequestGet({ params }) {
   return new Response(upstream.body, {
     status: 200,
     headers: {
-      "content-type": "application/json",
+      "content-type": isOrders ? "application/octet-stream" : "application/json",
       "cache-control": "public, max-age=31536000, immutable",
     },
   });

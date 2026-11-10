@@ -222,6 +222,56 @@ for (let start = 0; start < total; start += BROWSE_PAGE_SIZE) {
 }
 console.log(`browse pages=${browsePages} page_size=${BROWSE_PAGE_SIZE}`);
 
+// Sort orders (2026-11-10 completion-spike fix): the client used to
+// build all five sort orders on-device the moment the browse stream
+// completed — four merge sorts over the whole catalog, a sustained
+// memory plateau (~1.24 GB in the desktop harness vs an ~0.88 GB
+// settled set) that jetsam-killed phone tabs seconds after the load
+// finished. The orders are a pure function of the catalog, so they
+// are baked here instead: orders.bin is the five index permutations
+// (Uint32 each, in buildSortOrders' key order: title-asc, title-desc,
+// creator-asc, year-desc, year-asc) over the same ordinal record
+// sequence as the browse pages. The sort keys and comparator mirror
+// the client's exactly (title/creator via Intl.Collator "en-US",
+// year numeric with || 0), and a stable sort's output is unique, so
+// the baked permutations equal the on-device ones. The client fetches
+// the file in parallel with the stream and attaches the views at
+// completion — no on-device sort, no spike. Keys are re-read from the
+// record blocks so the main loop's memory profile is unchanged.
+{
+  const collator = new Intl.Collator("en-US");
+  const titles = new Array(total);
+  const creators = new Array(total);
+  const years = new Array(total);
+  let oi = 0;
+  for (let b = 0; b < blockIdx; b++) {
+    const blockRecs = JSON.parse(readFileSync(`${outDir}/records/records-${String(b).padStart(5, "0")}.json`, "utf8"));
+    for (const r of blockRecs) {
+      titles[oi] = r.title || "";
+      creators[oi] = r.creator || "";
+      years[oi] = r.year || 0;
+      oi++;
+    }
+  }
+  const sortIdx = (keys, cmp) => {
+    const idx = Array.from({ length: total }, (_, i) => i);
+    idx.sort((a, b) => cmp(keys[a], keys[b]));
+    return idx;
+  };
+  const titleAsc = sortIdx(titles, (x, y) => collator.compare(x, y));
+  const creatorAsc = sortIdx(creators, (x, y) => collator.compare(x, y));
+  const yearAsc = sortIdx(years, (x, y) => x - y);
+  const yearDesc = sortIdx(years, (x, y) => y - x);
+  const ordersBuf = new Uint32Array(total * 5);
+  ordersBuf.set(titleAsc, 0);
+  ordersBuf.set(titleAsc.slice().reverse(), total);
+  ordersBuf.set(creatorAsc, total * 2);
+  ordersBuf.set(yearDesc, total * 3);
+  ordersBuf.set(yearAsc, total * 4);
+  writeFileSync(`${outDir}/orders.bin`, Buffer.from(ordersBuf.buffer, ordersBuf.byteOffset, ordersBuf.byteLength));
+  console.log(`sort orders baked: orders.bin ${ordersBuf.byteLength} bytes`);
+}
+
 // manifest LAST (commit point)
 const fingerprint = hash.digest("hex");
 const manifest = {
@@ -233,8 +283,9 @@ const manifest = {
   block_size: BLOCK,
   browse_page_size: BROWSE_PAGE_SIZE,
   browse_pages: browsePages,
+  orders: 1,
   distinct_terms: termTotal,
-  files: { counts: "counts.json", facets: "facets/<kind>.json", records: "records/records-NNNNN.json", browse: "browse/page-NNNN.json", postings: "postings/<field>-<exact|stem>/bkt-NNN.json", idmap: "idmap/bkt-NNN.json", vocab: "vocab/<first-char>.json" },
+  files: { counts: "counts.json", facets: "facets/<kind>.json", records: "records/records-NNNNN.json", browse: "browse/page-NNNN.json", orders: "orders.bin", postings: "postings/<field>-<exact|stem>/bkt-NNN.json", idmap: "idmap/bkt-NNN.json", vocab: "vocab/<first-char>.json" },
   generated_at: new Date().toISOString(),
 };
 writeFileSync(`${outDir}/manifest.json`, JSON.stringify(manifest, null, 1));
