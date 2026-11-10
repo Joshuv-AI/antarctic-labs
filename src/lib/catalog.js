@@ -273,6 +273,170 @@ export function isIndexInFlight() {
   return indexPending !== null;
 }
 
+// Server browse streaming (2026-11-09, Joshua's server-backed call): in
+// server mode the client index is NOT downloaded to the device at all —
+// at 2.56M records the compact index is ~880 MB and jetsam-kills phone
+// tabs no matter how its loading is scheduled. Instead the catalog
+// streams in from /api/catalog-search browse pages (server-side,
+// cursor-paged, catalog order) and is appended to the same progressive
+// prefix cache the index publishes used, so every consumer — the list,
+// the shelves, the filters, the header counter — upgrades exactly as it
+// did when index chunks landed. The header counter counts what has
+// actually arrived; nothing about the total is borrowed or implied.
+// The bootstrap is a verified exact prefix of the browse order, so
+// streaming starts at cursor = resident length and continues in order.
+// Publishes are coalesced to one per 2.5s (same stability rule as the
+// chunk loader: every publish restarts the page's derivations). The
+// automatic stream stops at BROWSE_AUTO_CAP resident records — a
+// memory level a phone holds comfortably; Load more resumes it on
+// demand in bounded runs (resumeCatalogBrowse). If the endpoint fails,
+// the stream stops quietly and keeps what arrived — the bootstrap and
+// server search still serve the page, and the client index is never
+// pulled as a browse fallback (that fallback was the crash).
+const BROWSE_PAGE_SIZE = 500;
+const BROWSE_AUTO_CAP = 150000;
+const BROWSE_TICK_MS = 300;
+const BROWSE_RESUME_RUN = 25000;
+let browseState = null;
+
+function browsePublishNow(complete) {
+  const st = browseState;
+  if (!st || !st.acc) return;
+  st.lastPubAt = Date.now();
+  // Publish a copy: the page's derivations key off array identity, and
+  // the working array keeps mutating between publishes.
+  publishIndex(st.acc.slice(), complete);
+}
+function browsePublish(complete) {
+  const st = browseState;
+  if (!st) return;
+  if (complete) {
+    if (st.pubTimer) { clearTimeout(st.pubTimer); st.pubTimer = null; }
+    browsePublishNow(true);
+    return;
+  }
+  const wait = 2500 - (Date.now() - (st.lastPubAt || 0));
+  if (!st.lastPubAt || wait <= 0) { browsePublishNow(false); return; }
+  if (!st.pubTimer) {
+    st.pubTimer = setTimeout(() => {
+      st.pubTimer = null;
+      browsePublishNow(false);
+    }, wait);
+  }
+}
+
+async function browseStep() {
+  const st = browseState;
+  if (!st || st.stopped) return;
+  if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+    st.timer = setTimeout(browseStep, 1500);
+    return;
+  }
+  const url = `/api/catalog-search?cursor=${st.cursor}&pagesize=${BROWSE_PAGE_SIZE}`;
+  let body;
+  try {
+    body = await fetchJsonOnce(url);
+  } catch {
+    try {
+      body = await fetchJsonOnce(url);
+    } catch {
+      st.stopped = true; // endpoint down — keep what has arrived
+      browsePublish(false);
+      return;
+    }
+  }
+  if (browseState !== st || st.stopped) return; // superseded meanwhile
+  if (!body || !Array.isArray(body.results)) {
+    st.stopped = true;
+    browsePublish(false);
+    return;
+  }
+  if (!st.acc) {
+    st.acc = (indexCache || bootstrapCache || []).slice();
+    st.seen = new Set(st.acc.map((a) => a.artifact_id));
+    st.cursor = st.acc.length;
+  }
+  if (typeof body.total === "number") st.total = body.total;
+  // The cursor addresses the server-side catalog order; the resident
+  // prefix follows the same order. If a page would start behind the
+  // resident prefix (orders diverged), trust the page's own cursor
+  // arithmetic below and dedupe by id instead of double-adding.
+  for (const r of body.results) {
+    if (r && r.artifact_id && !st.seen.has(r.artifact_id)) {
+      st.seen.add(r.artifact_id);
+      st.acc.push(r);
+    }
+  }
+  st.cursor = body.next_cursor != null
+    ? body.next_cursor
+    : (st.total != null ? st.total : st.cursor + body.results.length);
+  const exhausted = body.next_cursor == null || body.results.length === 0;
+  if (exhausted) {
+    st.stopped = true;
+    // Everything the server has is now resident: that IS the full
+    // catalog for this page, so the final publish may say complete.
+    browsePublish(st.total != null && st.acc.length >= st.total);
+    return;
+  }
+  const limit = st.onDemand ? st.stopAt : BROWSE_AUTO_CAP;
+  if (st.acc.length >= limit) {
+    st.stopped = true;
+    st.onDemand = false;
+    browsePublish(false);
+    return;
+  }
+  browsePublish(false);
+  st.timer = setTimeout(browseStep, BROWSE_TICK_MS);
+}
+
+// Start (or restart a stopped) automatic browse stream. Idempotent;
+// a no-op while the client index owns the cache (non-server mode or
+// the search-failure fallback), so the two loaders never fight.
+export function startCatalogBrowse() {
+  if (indexComplete || indexPending) return;
+  if (browseState && !browseState.stopped) return;
+  const begin = () => {
+    if (indexComplete || indexPending) return;
+    if (browseState && !browseState.stopped) return;
+    const base = indexCache || bootstrapCache;
+    browseState = {
+      acc: null, // lazily copied from the resident prefix on first page
+      seen: null,
+      cursor: base ? base.length : 0,
+      total: null,
+      stopped: false,
+      onDemand: false,
+      stopAt: 0,
+      timer: null,
+      pubTimer: null,
+      lastPubAt: 0,
+    };
+    browseStep();
+  };
+  if (indexCache || bootstrapCache) begin();
+  else loadBootstrap().then(begin, () => {});
+}
+
+// Resume a stream that stopped (at the automatic cap or on failure)
+// for one bounded on-demand run — wired to Load more in server mode.
+export function resumeCatalogBrowse() {
+  if (indexComplete || indexPending) return;
+  if (!browseState) { startCatalogBrowse(); return; }
+  const st = browseState;
+  if (!st.stopped) return;
+  if (st.total != null && st.cursor >= st.total) return; // exhausted
+  st.stopped = false;
+  st.onDemand = true;
+  st.stopAt = (st.acc ? st.acc.length : st.cursor) + BROWSE_RESUME_RUN;
+  browseStep();
+}
+
+// True while the browse stream is actively bringing the catalog in
+// (the library status line keys off this alongside isIndexInFlight).
+export function isBrowseStreaming() {
+  return !!(browseState && !browseState.stopped);
+}
+
 // Full records for detail pages — loaded on demand.
 export function loadFullCatalog() {
   return loadWithRetry(

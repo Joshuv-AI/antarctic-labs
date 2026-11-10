@@ -39,6 +39,9 @@ import { PORTAL_URL } from "./content/tower-api.js";
 import {
   loadBootstrap,
   requestCatalogIndex,
+  startCatalogBrowse,
+  resumeCatalogBrowse,
+  isBrowseStreaming,
   isIndexInFlight,
   getCachedArtifacts,
   getFullArtifact,
@@ -1289,8 +1292,15 @@ function TowerLibrarySection({ go, onReady }) {
   // shelf's groups and tiles are built from the full catalog, so the
   // index starts when a shelf opens (in server mode it no longer
   // auto-starts). Idempotent; a no-op once the index is in or loading.
+  // Server mode (2026-11-09): a shelf NEVER starts the client index —
+  // that ~880 MB download on a shelf tap is what jetsam-killed phone
+  // tabs. Shelves resolve their curated ids against the resident
+  // catalog, which the automatic browse stream keeps growing, so a
+  // shelf fills in as the catalog arrives instead of demanding it all.
   useEffect(() => {
-    if (shelfActive) requestCatalogIndex();
+    if (!shelfActive) return;
+    if (serverFlag) return;
+    requestCatalogIndex();
   }, [shelfActive]);
   // Stage 1 ungating (2026-10-23): the full catalog index no longer loads
   // automatically with the page. It starts when the visitor shows intent —
@@ -1321,6 +1331,17 @@ function TowerLibrarySection({ go, onReady }) {
       prev.collKey === collKey;
     if (queryOnly && serverFlag && !collSet && strictQuery !== query)
       return;
+    // Server mode (2026-11-09): every other browse control is answered
+    // by the server too — queries by server search, lanes/filters/sorts
+    // over the progressively streamed resident catalog — so none of
+    // them may pull the client index (the phone crash). A Load more
+    // past the resident set resumes the browse stream on demand. The
+    // client pipeline still owns hub filters (collSet) and the strict
+    // path, exactly the boundaries serverActive observes.
+    if (serverFlag && !collSet && strictQuery !== query) {
+      if (prev && prev.rowBudget !== rowBudget) resumeCatalogBrowse();
+      return;
+    }
     requestCatalogIndex();
   }, [query, bucketFilter, sortId, rowBudget, collKey]);
   // Automatic start (2026-10-28, Joshua's direct order): the explicit-
@@ -1338,12 +1359,43 @@ function TowerLibrarySection({ go, onReady }) {
   // from 20,000 to the full catalog instead of sitting on a wrong
   // number with no sign anything is loading.
   useEffect(() => {
-    // Cutover (2026-10-29): in server mode the index is NOT auto-started.
-    // Header and stack counts come from the hubs index instead (Phase B
-    // block below), and the index loads on browse intent or as the
-    // server-search fallback only. ?server=0 restores the behavior
-    // below unchanged.
-    if (serverFlag) return;
+    // Server mode (2026-11-09, Joshua's server-backed call): the
+    // catalog DOES auto-load — as server browse pages streamed in by
+    // startCatalogBrowse(), on the same single one-shot triggers as
+    // the client path below (first scroll, or a short visible-tab
+    // delay). The client index itself is never auto-started here: at
+    // 2.56M records it is ~880 MB and kills phone tabs. The stream is
+    // memory-capped and progressive, so the header count climbs from
+    // the bootstrap's 20,000 on its own, with no visitor interaction.
+    // ?server=0 restores the client behavior below unchanged.
+    if (serverFlag) {
+      let doneS = false;
+      let timerS = null;
+      const startS = () => {
+        if (doneS) return;
+        doneS = true;
+        window.removeEventListener("scroll", onScrollS);
+        if (timerS) clearTimeout(timerS);
+        startCatalogBrowse();
+      };
+      const onScrollS = () => {
+        if (window.scrollY > 240) startS();
+      };
+      const armTimerS = () => {
+        if (timerS) clearTimeout(timerS);
+        timerS = setTimeout(() => {
+          if (document.visibilityState === "visible") startS();
+          else armTimerS();
+        }, 2500);
+      };
+      window.addEventListener("scroll", onScrollS, { passive: true });
+      armTimerS();
+      return () => {
+        doneS = true;
+        window.removeEventListener("scroll", onScrollS);
+        if (timerS) clearTimeout(timerS);
+      };
+    }
     let done = false;
     let timer = null;
     const start = () => {
@@ -1881,12 +1933,13 @@ function TowerLibrarySection({ go, onReady }) {
   // client pipeline; ?server=1 clears the opt-out. Boundaries (unchanged
   // from the flag phase): a hub collection filter (collSet) has no server
   // equivalent and keeps the client pipeline, as does the strict/undo
-  // path (strictQuery === q). Browse mode renders from the bootstrap and
-  // loads the client index on browse intent only; if a server fetch
-  // fails, the client model takes over and the index loads then. Header
-  // and stack counts come from the hubs index (fetched below) until the
-  // full index is in, so the page never presents as a 20,000-work
-  // library (Joshua's 2026-10-28 order).
+  // path (strictQuery === q). Browse mode (2026-11-09): the catalog
+  // streams in automatically as server browse pages (startCatalogBrowse)
+  // — the client index is never downloaded in server mode; if a server
+  // SEARCH fetch fails, the client model takes over and the index loads
+  // then. The header count is always the actually-loaded count; stack
+  // counts come from the hubs index (fetched below) until the full
+  // catalog is resident.
   const [serverFlag] = useState(() => {
     try {
       const p = new URLSearchParams(window.location.search);
@@ -1931,12 +1984,15 @@ function TowerLibrarySection({ go, onReady }) {
       live = false;
     };
   }, [serverFlag, serverTotal]);
-  const displayCount =
-    serverFlag && serverTotal != null
-      ? Math.max(artifacts ? artifacts.length : 0, serverTotal)
-      : artifacts
-        ? artifacts.length
-        : 0;
+  // Honest header count (2026-11-09, Joshua's order): the number is
+  // what has actually loaded onto the page — the bootstrap first, then
+  // the catalog as it streams in (server browse pages in server mode,
+  // index chunks in client mode). It never borrows the catalog total:
+  // presenting the total as if it were loaded is what made the page
+  // claim ~600,000 works while 20,000 were on it. The full total still
+  // drives the stack counts (serverCounts override below) and the
+  // search result totals, where it is labeled as a total.
+  const displayCount = artifacts ? artifacts.length : 0;
   // Stack counts in server mode: hubs counts override the bootstrap's
   // partial collection counts until the full index is in (after which
   // towerData.counts is complete and authoritative).
@@ -2322,7 +2378,7 @@ function TowerLibrarySection({ go, onReady }) {
                   </p>
                 </form>
               </search>
-              {!fullIndexReady && isIndexInFlight() && (
+              {!fullIndexReady && (isIndexInFlight() || isBrowseStreaming()) && (
                 <p className="tower-index-status" aria-live="polite">
                   Loading full catalog…
                 </p>

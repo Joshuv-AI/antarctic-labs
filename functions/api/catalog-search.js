@@ -21,8 +21,16 @@ export async function onRequestGet({ request, env }) {
     bucket: url.searchParams.get("bucket") || "",
     format: url.searchParams.get("format") || "",
   };
+  // Page size: search keeps the long-standing 25. Browse streaming
+  // (2026-11-09) passes pagesize to pull the catalog in 500-record
+  // pages — consecutive ids hydrate from a single record block, so a
+  // big page costs the function no extra subrequests.
+  const pageSizeRaw = Number.parseInt(url.searchParams.get("pagesize") || "25", 10);
+  const pageSize = Number.isFinite(pageSizeRaw)
+    ? Math.min(500, Math.max(25, pageSizeRaw))
+    : 25;
   try {
-    const out = await catalogSearch(env, { q, filters, cursor, pageSize: 25 });
+    const out = await catalogSearch(env, { q, filters, cursor, pageSize });
     if (out.notBuilt) {
       return json({ error: "catalog search index not built yet" }, 503, "no-store");
     }
