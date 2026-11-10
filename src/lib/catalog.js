@@ -329,6 +329,39 @@ export function isIndexInFlight() {
 const BROWSE_API_PAGE = 2000;
 const BROWSE_PIPELINE = 8;
 let browseState = null;
+
+// String interning for streamed records (2026-11-10 mobile crash
+// fix): JSON.parse mints a fresh string object for every field of
+// every record, so the resident catalog pins millions of copies of a
+// handful of values ("LAW", "TXT", "PUBLIC_DOMAIN", agency and
+// publisher names repeated across whole collections). Canonicalizing
+// the low-cardinality fields — and creators while their distinct
+// count stays bounded — as pages append cuts several hundred MB at
+// full catalog. Values are compared by content everywhere downstream
+// (object keys, Set membership, equality), so sharing instances is
+// behavior-neutral.
+const internMaps = {
+  collection: new Map(),
+  format: new Map(),
+  rights_status: new Map(),
+  download_status: new Map(),
+  creator: new Map(),
+};
+function internValue(map, v, cap) {
+  if (typeof v !== "string" || v === "") return v;
+  const hit = map.get(v);
+  if (hit !== undefined) return hit;
+  if (map.size < cap) map.set(v, v);
+  return v;
+}
+function internBrowseRecord(r) {
+  r.collection = internValue(internMaps.collection, r.collection, 512);
+  r.format = internValue(internMaps.format, r.format, 512);
+  r.rights_status = internValue(internMaps.rights_status, r.rights_status, 512);
+  r.download_status = internValue(internMaps.download_status, r.download_status, 512);
+  r.creator = internValue(internMaps.creator, r.creator, 300000);
+  return r;
+}
 let browseMetaPromise = null;
 
 // One discovery read per page load: {fp, total, pageSize} when the
@@ -476,7 +509,7 @@ function browseAppend(st) {
     for (const r of body.results) {
       if (r && r.artifact_id && !st.seen.has(r.artifact_id)) {
         st.seen.add(r.artifact_id);
-        st.acc.push(r);
+        st.acc.push(internBrowseRecord(r));
       }
     }
     st.cursor = body.next_cursor != null

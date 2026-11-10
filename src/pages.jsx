@@ -344,6 +344,14 @@ let towerDataFor = null;
 // to the full build. The id index Map is shared and only ever gains
 // entries, which its consumers (read-only lookups) tolerate.
 let phase0Cache = null;
+// Canonical bucket-key strings for phase 0 (see deriveTowerData).
+const bucketKeyCanon = new Map();
+function canonBucketKey(bk) {
+  const hit = bucketKeyCanon.get(bk);
+  if (hit !== undefined) return hit;
+  bucketKeyCanon.set(bk, bk);
+  return bk;
+}
 
 // Memory discipline (stability, 2026-10-28 — Joshua's phone crash video):
 // the catalog's derived search data roughly doubles the parsed catalog's
@@ -457,6 +465,41 @@ async function buildSearchData(artifacts, bucketKeys, isCancelled) {
   return { haystacks, normTitles, normCreators, normColls, normDescs, secMasks, volFlags, vocab: null };
 }
 
+// Phase 2 as a standalone step (extracted 2026-11-10): the four sort
+// orders go through the same chunked merge sort, so none of them is a
+// single blocking task (the creator sort used to be one synchronous
+// Array.sort over the whole catalog). Their memory is modest (typed
+// index arrays), unlike phase 1's string arrays — which is why the
+// deferred-search path below can build orders at stream completion
+// while postponing the search data itself.
+async function buildSortOrders(artifacts, isCancelled) {
+  const byCollator = (x, y) => TITLE_COLLATOR.compare(x, y);
+  const titleOrder = await buildOrder(
+    artifacts.map((a) => a.title || ""),
+    byCollator,
+    isCancelled
+  );
+  if (!titleOrder || isCancelled()) return null;
+  const creatorOrder = await buildOrder(
+    artifacts.map((a) => a.creator || ""),
+    byCollator,
+    isCancelled
+  );
+  if (!creatorOrder || isCancelled()) return null;
+  const years = artifacts.map((a) => a.year || 0);
+  const yearAsc = await buildOrder(years, (x, y) => x - y, isCancelled);
+  if (!yearAsc || isCancelled()) return null;
+  const yearDesc = await buildOrder(years, (x, y) => y - x, isCancelled);
+  if (!yearDesc || isCancelled()) return null;
+  return {
+    "title-asc": titleOrder,
+    "title-desc": titleOrder.slice().reverse(),
+    "creator-asc": creatorOrder,
+    "year-desc": yearDesc,
+    "year-asc": yearAsc,
+  };
+}
+
 // Did-you-mean vocabulary (Workstream D, SPEC-6): token -> frequency over
 // the SHORT fields only (title/creator/collection), built from the norm
 // arrays buildSearchData already computed — no re-normalization. Deferred
@@ -508,7 +551,15 @@ async function buildVocab(normTitles, normCreators, normColls, isCancelled) {
 // the final towerData object (vocab may still be null on it), or null
 // if cancelled/superseded before finishing.
 async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
-  if (towerDataCache && towerDataFor === artifacts) return towerDataCache;
+  // A cached object for this exact array is final — unless it is a
+  // deferred-search object (below) and this call wants the search
+  // layer built onto it (the upgrade path).
+  if (
+    towerDataCache && towerDataFor === artifacts &&
+    (towerDataCache.haystacks || opts.browseOnly || opts.deferSearch)
+  ) {
+    return towerDataCache;
+  }
   // Phase 0, incremental when the array extends the cached prefix
   // (see phase0Cache above): the count maps are copied (small), the
   // bucket-key array is copied and extended, the id index is shared
@@ -525,6 +576,9 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
   bucketKeys.length = artifacts.length;
   const idIndex = extendsPrev ? prev0.idIndex : new Map();
   const phase0From = extendsPrev ? prev0.len : 0;
+  // Bucket keys repeat massively (a few hundred distinct values over
+  // millions of records) — canonical instances keep the array at
+  // pointer width instead of pinning a separate string per record.
   for (let i = phase0From; i < artifacts.length; i++) {
     const key = artifacts[i].collection || "OTHER";
     counts[key] = (counts[key] || 0) + 1;
@@ -535,7 +589,7 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
   // sub-buckets is the lane itself — so the top-level filter result set is
   // identical to the old collection filter (see parity-test.mjs).
   for (let i = phase0From; i < artifacts.length; i++) {
-    const bk = towerBucketKey(artifacts[i]) || artifacts[i].collection || "OTHER";
+    const bk = canonBucketKey(towerBucketKey(artifacts[i]) || artifacts[i].collection || "OTHER");
     bucketKeys[i] = bk;
     subCounts[bk] = (subCounts[bk] || 0) + 1;
   }
@@ -588,49 +642,51 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
     // direct contributor to the mobile crash-reload loop (2026-10-28).
     return phase0;
   }
+  // Deferred search layer (2026-11-10 mobile crash fix): in server
+  // mode the local search data (phase 1 — five full-length string
+  // arrays) is only ever used by hub filters and the strict path;
+  // plain queries are answered by the server. Building it the moment
+  // the browse stream completed stacked the load's largest memory
+  // spike on top of the peak resident set and jetsam-killed phone
+  // tabs right at the finish — measured at full scale in desktop
+  // Chrome: ~2.05 GB heap when the counter completed, a ~2.67 GB
+  // peak during the indexing phase, ~2.0 GB steady afterwards.
+  // Server mode therefore builds only the sort orders at completion
+  // (typed arrays, modest memory); phase 1 and the vocabulary build
+  // later, on the first hub-filter/strict need, through the upgrade
+  // path below. Client mode (and the search-failure fallback, which
+  // flips server mode off) never defers — the layer is its search.
+  const cachedFull = towerDataCache && towerDataFor === artifacts ? towerDataCache : null;
+  if (opts.deferSearch && !cachedFull) {
+    const order = await buildSortOrders(artifacts, isCancelled);
+    if (!order || isCancelled()) return null;
+    const data = { ...phase0, order };
+    towerDataCache = data;
+    towerDataFor = artifacts;
+    return data;
+  }
   const search = await buildSearchData(artifacts, bucketKeys, isCancelled);
   if (!search || isCancelled()) return null;
+  // Upgrade path: a deferred object cached for this same array
+  // already carries phase 0 and the sort orders — reuse them (its id
+  // index in particular must not be rebuilt alongside the old one).
+  const up = cachedFull && !cachedFull.haystacks ? cachedFull : null;
   const base = {
     ...search,
-    idIndex,
-    counts,
-    subCounts,
-    bucketKeys,
-    collections,
-    order: null,
+    idIndex: up ? up.idIndex : idIndex,
+    counts: up ? up.counts : counts,
+    subCounts: up ? up.subCounts : subCounts,
+    bucketKeys: up ? up.bucketKeys : bucketKeys,
+    collections: up ? up.collections : collections,
+    order: up ? up.order : null,
   };
   if (onPhase) onPhase(base);
-  // Phase 2: the sort orders. All four go through the same chunked merge
-  // sort, so none of them is a single blocking task (the creator sort
-  // used to be one synchronous Array.sort over the whole catalog).
-  const byCollator = (x, y) => TITLE_COLLATOR.compare(x, y);
-  const titleOrder = await buildOrder(
-    artifacts.map((a) => a.title || ""),
-    byCollator,
-    isCancelled
-  );
-  if (!titleOrder || isCancelled()) return null;
-  const creatorOrder = await buildOrder(
-    artifacts.map((a) => a.creator || ""),
-    byCollator,
-    isCancelled
-  );
-  if (!creatorOrder || isCancelled()) return null;
-  const years = artifacts.map((a) => a.year || 0);
-  const yearAsc = await buildOrder(years, (x, y) => x - y, isCancelled);
-  if (!yearAsc || isCancelled()) return null;
-  const yearDesc = await buildOrder(years, (x, y) => y - x, isCancelled);
-  if (!yearDesc || isCancelled()) return null;
-  const data = {
-    ...base,
-    order: {
-      "title-asc": titleOrder,
-      "title-desc": titleOrder.slice().reverse(),
-      "creator-asc": creatorOrder,
-      "year-desc": yearDesc,
-      "year-asc": yearAsc,
-    },
-  };
+  if (!base.order) {
+    const order = await buildSortOrders(artifacts, isCancelled);
+    if (!order || isCancelled()) return null;
+    base.order = order;
+  }
+  const data = { ...base };
   towerDataCache = data;
   towerDataFor = artifacts;
   // Phase 3 (detached background): the did-you-mean vocabulary, built
@@ -923,16 +979,31 @@ function CategoryGroups({ stack, byId, artifacts, go }) {
 }
 
 function TowerDiscovery({ artifacts, towerData, go, onBrowse, onShelfChange }) {
-  // Resolve curated ids against the artifacts array directly — NOT the
-  // derivation's idIndex. The derivation phases in over seconds on a big
-  // catalog; the shelves should be whole the moment the catalog itself
-  // lands, so they key off the catalog identity alone.
+  // Resolve curated ids through the derivation's phase-0 id index
+  // (published with the first partial, so shelves are whole the
+  // moment the catalog itself lands — the earlier objection was to
+  // waiting on phases 1-2, not phase 0). A local id->record Map is
+  // built only until the first derivation lands.
+  // Resolve through the derivation's id index when it exists: phase 0
+  // publishes it with the first partial, so shelves lose nothing —
+  // while a second id->record Map here duplicated ~200 MB at full
+  // catalog AND was rebuilt from scratch on every progressive publish
+  // (a steady source of garbage peaks during the stream). The local
+  // map remains only as the brief pre-derivation fallback.
   const byIdMap = useMemo(() => {
+    if (towerData && towerData.idIndex) return null;
     const m = new Map();
     for (const a of artifacts) m.set(a.artifact_id, a);
     return m;
-  }, [artifacts]);
-  const byId = useCallback((id) => byIdMap.get(id) || null, [byIdMap]);
+  }, [artifacts, towerData]);
+  const byId = useCallback(
+    (id) => {
+      if (byIdMap) return byIdMap.get(id) || null;
+      const ix = towerData.idIndex.get(id);
+      return ix !== undefined ? artifacts[ix] || null : null;
+    },
+    [byIdMap, towerData, artifacts]
+  );
   // Most Popular (2026-10-23, Joshua's call — sits on top of Featured,
   // the curated rails stay below it): the real reader ranking, counted
   // from PostHog `work_viewed` events by the /tower-popular.json Pages
@@ -1111,6 +1182,10 @@ function TowerLibrarySection({ go, onReady }) {
   // loader failsafe guarantees the overlay dismisses either way.
   const [deriveError, setDeriveError] = useState(false);
   const [deriveSeq, setDeriveSeq] = useState(0);
+  // Deferred-search trigger (2026-11-10 crash fix): flips true the
+  // first time a hub filter or strict query needs the local search
+  // layer in server mode; the derivation then upgrades in place.
+  const [needSearchData, setNeedSearchData] = useState(false);
   useEffect(() => {
     if (!artifacts) {
       setTowerData(null);
@@ -1126,7 +1201,16 @@ function TowerLibrarySection({ go, onReady }) {
         // hostage.
         if (!cancelled) setTowerData(phase);
       },
-      { browseOnly: !fullIndexReady }
+      {
+        browseOnly: !fullIndexReady,
+        // Server mode defers the local search layer until a hub
+        // filter or strict query actually needs it (see
+        // deriveTowerData's crash-fix note and the trigger effect
+        // below). towerServerMode() is read fresh here on purpose:
+        // a server-search failure flips it off, and the fallback's
+        // derivation must then build the layer immediately.
+        deferSearch: towerServerMode() && !needSearchData,
+      }
     ).then(
       (data) => {
         if (cancelled) return;
@@ -1140,7 +1224,7 @@ function TowerLibrarySection({ go, onReady }) {
     return () => {
       cancelled = true;
     };
-  }, [artifacts, deriveSeq, fullIndexReady]);
+  }, [artifacts, deriveSeq, fullIndexReady, needSearchData]);
   const retryCatalog = () => {
     setDeriveError(false);
     retryArtifacts();
@@ -2007,6 +2091,17 @@ function TowerLibrarySection({ go, onReady }) {
   const serverBusyRef = useRef(false);
   const serverActive =
     serverFlag && !!q && q.trim().length >= 2 && !collSet && strictQuery !== q;
+  // Deferred-search trigger: the two paths the client pipeline owns
+  // in server mode — a hub filter (collSet) and the strict path
+  // (strictQuery === q) — are exactly the ones that need the local
+  // search layer. The first time either engages, ask the derivation
+  // to build it (it upgrades the deferred object in place; the
+  // "Indexing…" status shows while it builds). Plain queries never
+  // set this: the server answers them.
+  useEffect(() => {
+    if (needSearchData || !serverFlag) return;
+    if (collSet || (strictQuery && strictQuery === q)) setNeedSearchData(true);
+  }, [needSearchData, serverFlag, collSet, strictQuery, q]);
   // Catalog total + per-collection counts from the hubs index (a small
   // derived file the publish lane regenerates), so counts are truthful
   // in server mode before — or without — the client index arriving.
@@ -2427,7 +2522,7 @@ function TowerLibrarySection({ go, onReady }) {
                   Loading full catalog…
                 </p>
               )}
-              {fullIndexReady && towerData && !towerData.haystacks && (
+              {fullIndexReady && towerData && !towerData.haystacks && (!serverFlag || needSearchData) && (
                 <p className="tower-index-status" aria-live="polite">
                   Indexing the catalog for search…
                 </p>
