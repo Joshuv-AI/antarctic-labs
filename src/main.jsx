@@ -315,12 +315,7 @@ function dockActiveId(path) {
 // the cache), so starting it while the visitor is still on a Tower
 // page — or watching the Tower boot animation — means the catalog
 // is part or all resident by the time the library itself opens.
-// Skipped on save-data connections; the library's own start (user
-// intent) is never gated.
 function warmCatalogBrowse() {
-  try {
-    if (navigator.connection && navigator.connection.saveData) return;
-  } catch { /* fall through and warm */ }
   startCatalogBrowse();
 }
 
