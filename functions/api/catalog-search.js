@@ -22,12 +22,14 @@ export async function onRequestGet({ request, env }) {
     format: url.searchParams.get("format") || "",
   };
   // Page size: search keeps the long-standing 25. Browse streaming
-  // (2026-11-09) passes pagesize to pull the catalog in 500-record
-  // pages — consecutive ids hydrate from a single record block, so a
-  // big page costs the function no extra subrequests.
+  // (2026-11-09) passes pagesize to pull the catalog in big pages —
+  // consecutive ids hydrate from a single record block, so a big page
+  // costs the function no extra subrequests. Raised 500 -> 2000 on
+  // 2026-11-10 (load-speed fix): the pipelined streamer pulls
+  // 2000-record pages, 4x fewer requests to stream the catalog.
   const pageSizeRaw = Number.parseInt(url.searchParams.get("pagesize") || "25", 10);
   const pageSize = Number.isFinite(pageSizeRaw)
-    ? Math.min(500, Math.max(25, pageSizeRaw))
+    ? Math.min(2000, Math.max(25, pageSizeRaw))
     : 25;
   try {
     const out = await catalogSearch(env, { q, filters, cursor, pageSize });

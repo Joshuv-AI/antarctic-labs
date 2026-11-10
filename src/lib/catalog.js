@@ -293,9 +293,23 @@ export function isIndexInFlight() {
 // the stream stops quietly and keeps what arrived — the bootstrap and
 // server search still serve the page, and the client index is never
 // pulled as a browse fallback (that fallback was the crash).
-const BROWSE_PAGE_SIZE = 500;
+//
+// Pipelined fetch (2026-11-10, load-speed fix): the sequential loop
+// above cost one round trip plus a 300 ms tick per 500 records —
+// ~2 minutes to the 150k cap, which read as "the library loads very
+// slowly" even though the counter climbed honestly. The browse
+// endpoint's paging is pure offset arithmetic (next_cursor is always
+// cursor + page length; see functions/_lib/catalog-search.js), so
+// page cursors are computable in advance: the streamer now keeps
+// BROWSE_PIPELINE page requests in flight at BROWSE_PAGE_SIZE
+// records each and appends pages strictly in cursor order (dedupe by
+// id still guards any divergence). Failure, cap, visibility and
+// publish semantics are unchanged: a page that fails twice stops the
+// stream with everything before it kept, publishes stay coalesced to
+// one per 2.5s, and a hidden tab launches and appends nothing.
+const BROWSE_PAGE_SIZE = 2000;
+const BROWSE_PIPELINE = 3;
 const BROWSE_AUTO_CAP = 150000;
-const BROWSE_TICK_MS = 300;
 const BROWSE_RESUME_RUN = 25000;
 let browseState = null;
 
@@ -325,68 +339,124 @@ function browsePublish(complete) {
   }
 }
 
-async function browseStep() {
-  const st = browseState;
-  if (!st || st.stopped) return;
-  if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-    st.timer = setTimeout(browseStep, 1500);
-    return;
-  }
-  const url = `/api/catalog-search?cursor=${st.cursor}&pagesize=${BROWSE_PAGE_SIZE}`;
-  let body;
-  try {
-    body = await fetchJsonOnce(url);
-  } catch {
+// One page fetch with the stream's long-standing retry rule: try
+// twice, then report failure (null) — the caller stops the stream and
+// keeps what has arrived. A malformed body counts as a failure.
+async function browseFetchPage(cursor) {
+  const url = `/api/catalog-search?cursor=${cursor}&pagesize=${BROWSE_PAGE_SIZE}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      body = await fetchJsonOnce(url);
+      const body = await fetchJsonOnce(url);
+      if (body && Array.isArray(body.results)) return body;
     } catch {
-      st.stopped = true; // endpoint down — keep what has arrived
-      browsePublish(false);
-      return;
+      // fall through to the retry / failure return
     }
   }
-  if (browseState !== st || st.stopped) return; // superseded meanwhile
-  if (!body || !Array.isArray(body.results)) {
-    st.stopped = true;
-    browsePublish(false);
-    return;
-  }
+  return null;
+}
+
+function browseIsHidden() {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
+function browseWaitAndLaunch(st) {
+  if (st.timer) return;
+  st.timer = setTimeout(() => {
+    st.timer = null;
+    if (browseState === st && !st.stopped) browseLaunch(st);
+  }, 1500);
+}
+
+function browseStop(st, complete) {
+  st.stopped = true;
+  st.onDemand = false;
+  st.buffer.clear();
+  if (st.timer) { clearTimeout(st.timer); st.timer = null; }
+  browsePublish(!!complete);
+}
+
+// Append every buffered page that continues the resident prefix, in
+// cursor order. st.cursor is always the append frontier (the next
+// cursor the prefix needs), never the fetch frontier, so a resume
+// re-enters exactly where appending stopped.
+function browseAppend(st) {
   if (!st.acc) {
+    // First append: base the working array on the resident prefix
+    // (the bootstrap, a verified exact prefix of the browse order).
+    // Start/resume set the frontier from the same base, so the
+    // frontier and the prefix length agree.
     st.acc = (indexCache || bootstrapCache || []).slice();
     st.seen = new Set(st.acc.map((a) => a.artifact_id));
     st.cursor = st.acc.length;
   }
-  if (typeof body.total === "number") st.total = body.total;
-  // The cursor addresses the server-side catalog order; the resident
-  // prefix follows the same order. If a page would start behind the
-  // resident prefix (orders diverged), trust the page's own cursor
-  // arithmetic below and dedupe by id instead of double-adding.
-  for (const r of body.results) {
-    if (r && r.artifact_id && !st.seen.has(r.artifact_id)) {
-      st.seen.add(r.artifact_id);
-      st.acc.push(r);
+  while (!st.stopped) {
+    if (st.failedAt != null && st.cursor >= st.failedAt) {
+      // The page at the frontier failed twice: stop, keeping
+      // everything appended before it (the sequential semantics).
+      browseStop(st, false);
+      return;
     }
-  }
-  st.cursor = body.next_cursor != null
-    ? body.next_cursor
-    : (st.total != null ? st.total : st.cursor + body.results.length);
-  const exhausted = body.next_cursor == null || body.results.length === 0;
-  if (exhausted) {
-    st.stopped = true;
-    // Everything the server has is now resident: that IS the full
-    // catalog for this page, so the final publish may say complete.
-    browsePublish(st.total != null && st.acc.length >= st.total);
-    return;
-  }
-  const limit = st.onDemand ? st.stopAt : BROWSE_AUTO_CAP;
-  if (st.acc.length >= limit) {
-    st.stopped = true;
-    st.onDemand = false;
+    const body = st.buffer.get(st.cursor);
+    if (!body) return;
+    if (browseIsHidden()) { browseWaitAndLaunch(st); return; }
+    st.buffer.delete(st.cursor);
+    if (typeof body.total === "number") st.total = body.total;
+    // The cursor addresses the server-side catalog order; the resident
+    // prefix follows the same order. If a page would start behind the
+    // resident prefix (orders diverged), trust the page's own cursor
+    // arithmetic below and dedupe by id instead of double-adding.
+    for (const r of body.results) {
+      if (r && r.artifact_id && !st.seen.has(r.artifact_id)) {
+        st.seen.add(r.artifact_id);
+        st.acc.push(r);
+      }
+    }
+    st.cursor = body.next_cursor != null
+      ? body.next_cursor
+      : (st.total != null ? st.total : st.cursor + body.results.length);
+    const exhausted = body.next_cursor == null || body.results.length === 0;
+    if (exhausted) {
+      // Everything the server has is now resident: that IS the full
+      // catalog for this page, so the final publish may say complete.
+      browseStop(st, st.total != null && st.acc.length >= st.total);
+      return;
+    }
+    const limit = st.onDemand ? st.stopAt : BROWSE_AUTO_CAP;
+    if (st.acc.length >= limit) {
+      browseStop(st, false);
+      return;
+    }
     browsePublish(false);
-    return;
   }
-  browsePublish(false);
-  st.timer = setTimeout(browseStep, BROWSE_TICK_MS);
+}
+
+// Keep up to BROWSE_PIPELINE page requests in flight, at precomputed
+// cursors (valid because browse paging is pure offset arithmetic).
+// Handlers from a superseded run (start/resume bumped runId) return
+// without touching the counters.
+function browseLaunch(st) {
+  if (browseState !== st || st.stopped) return;
+  if (browseIsHidden()) { browseWaitAndLaunch(st); return; }
+  while (st.inflight < BROWSE_PIPELINE) {
+    if (st.failedAt != null && st.fetchCursor >= st.failedAt) return;
+    if (st.total != null && st.fetchCursor >= st.total) return;
+    const cursor = st.fetchCursor;
+    st.fetchCursor += BROWSE_PAGE_SIZE;
+    st.inflight++;
+    const runId = st.runId;
+    browseFetchPage(cursor).then((body) => {
+      if (browseState !== st || st.runId !== runId) return;
+      st.inflight--;
+      if (st.stopped) return;
+      if (body == null) {
+        if (st.failedAt == null || cursor < st.failedAt) st.failedAt = cursor;
+      } else {
+        st.buffer.set(cursor, body);
+      }
+      browseAppend(st);
+      browseLaunch(st);
+    });
+  }
 }
 
 // Start (or restart a stopped) automatic browse stream. Idempotent;
@@ -402,7 +472,12 @@ export function startCatalogBrowse() {
     browseState = {
       acc: null, // lazily copied from the resident prefix on first page
       seen: null,
-      cursor: base ? base.length : 0,
+      cursor: base ? base.length : 0, // append frontier
+      fetchCursor: base ? base.length : 0, // next cursor to request
+      buffer: new Map(), // cursor -> fetched page awaiting its turn
+      inflight: 0,
+      failedAt: null,
+      runId: browseState ? browseState.runId + 1 : 1,
       total: null,
       stopped: false,
       onDemand: false,
@@ -411,7 +486,7 @@ export function startCatalogBrowse() {
       pubTimer: null,
       lastPubAt: 0,
     };
-    browseStep();
+    browseLaunch(browseState);
   };
   if (indexCache || bootstrapCache) begin();
   else loadBootstrap().then(begin, () => {});
@@ -428,7 +503,14 @@ export function resumeCatalogBrowse() {
   st.stopped = false;
   st.onDemand = true;
   st.stopAt = (st.acc ? st.acc.length : st.cursor) + BROWSE_RESUME_RUN;
-  browseStep();
+  // Fresh run: abandon any pages still in flight or buffered from
+  // the stopped run and re-enter at the append frontier.
+  st.runId++;
+  st.inflight = 0;
+  st.failedAt = null;
+  st.buffer.clear();
+  st.fetchCursor = st.cursor;
+  browseLaunch(st);
 }
 
 // True while the browse stream is actively bringing the catalog in
