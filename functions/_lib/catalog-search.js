@@ -48,6 +48,36 @@ async function resolveBase(env) {
   return { root, fp };
 }
 
+// Browse-manifest helper for /api/browse-manifest (2026-11-10 load-
+// speed pack): the small discovery document the client's browse
+// streamer needs before it can pull the static browse pages — which
+// fingerprint is current, the catalog total, and the baked page
+// layout (absent on manifests generated before the pack, which the
+// client reads as "static pages not built — use the function").
+// The manifest is immutable per fingerprint, so it is cached for the
+// isolate's life once read.
+const manifestCache = new Map(); // fp -> manifest json
+export async function catalogManifest(env) {
+  const { root, fp } = await resolveBase(env);
+  if (!fp) return null;
+  if (!manifestCache.has(fp)) {
+    manifestCache.set(
+      fp,
+      fetch(`${root}/meta/${fp}/manifest.json`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
+    );
+  }
+  const manifest = await manifestCache.get(fp);
+  if (!manifest) return null;
+  return {
+    fingerprint: fp,
+    total: manifest.total,
+    browse_page_size: manifest.browse_page_size ?? null,
+    browse_pages: manifest.browse_pages ?? null,
+  };
+}
+
 export async function catalogSearch(env, { q = "", filters = {}, cursor = 0, pageSize = 25 } = {}) {
   const { root, fp } = await resolveBase(env);
   if (!fp) return { notBuilt: true };

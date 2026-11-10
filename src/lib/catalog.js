@@ -305,15 +305,51 @@ export function isIndexInFlight() {
 // endpoint's paging is pure offset arithmetic (next_cursor is always
 // cursor + page length; see functions/_lib/catalog-search.js), so
 // page cursors are computable in advance: the streamer now keeps
-// BROWSE_PIPELINE page requests in flight at BROWSE_PAGE_SIZE
-// records each and appends pages strictly in cursor order (dedupe by
+// BROWSE_PIPELINE page requests in flight at the run's page size
+// each and appends pages strictly in cursor order (dedupe by
 // id still guards any divergence). Failure, visibility and
 // publish semantics are unchanged: a page that fails twice stops the
 // stream with everything before it kept, publishes stay coalesced to
 // one per 2.5s, and a hidden tab launches and appends nothing.
-const BROWSE_PAGE_SIZE = 2000;
-const BROWSE_PIPELINE = 3;
+//
+// Static pages (2026-11-10 load-speed pack, steps 1-2): the function
+// path above cost ~1.7 s of server time before the first byte of
+// EVERY page — the metadata generator now also bakes the identical
+// ordinal sequence into static 20,000-record pages (browse/ in the
+// metadata products), and the streamer pulls those through the
+// immutable /browse-pages/<fingerprint>/ proxy instead: ~128 edge-
+// served requests for the whole catalog. Discovery is one small
+// /api/browse-manifest read per page load. Any static-page failure
+// falls back to assembling that page from the function endpoint at
+// BROWSE_API_PAGE per subrequest, and a fingerprint whose manifest
+// predates the pack (no browse layout) runs function-only at
+// BROWSE_API_PAGE — in both cases behaviour is exactly the pre-pack
+// stream, never worse. Search and filtered browsing still use the
+// function; only this plain browse stream reads static pages.
+const BROWSE_API_PAGE = 2000;
+const BROWSE_PIPELINE = 8;
 let browseState = null;
+let browseMetaPromise = null;
+
+// One discovery read per page load: {fp, total, pageSize} when the
+// current metadata build carries baked browse pages, else null
+// (function-only mode). Never rejects.
+function browseMeta() {
+  if (!browseMetaPromise) {
+    browseMetaPromise = fetchJsonOnce("/api/browse-manifest")
+      .then((m) => {
+        if (
+          m && typeof m.total === "number" && typeof m.fingerprint === "string" &&
+          Number.isFinite(m.browse_page_size) && Number.isFinite(m.browse_pages)
+        ) {
+          return { fp: m.fingerprint, total: m.total, pageSize: m.browse_page_size };
+        }
+        return null;
+      })
+      .catch(() => null);
+  }
+  return browseMetaPromise;
+}
 
 function browsePublishNow(complete) {
   const st = browseState;
@@ -343,16 +379,46 @@ function browsePublish(complete) {
 
 // One page fetch with the stream's long-standing retry rule: try
 // twice, then report failure (null) — the caller stops the stream and
-// keeps what has arrived. A malformed body counts as a failure.
-async function browseFetchPage(cursor) {
-  const url = `/api/catalog-search?cursor=${cursor}&pagesize=${BROWSE_PAGE_SIZE}`;
-  for (let attempt = 0; attempt < 2; attempt++) {
+// keeps what has arrived. A malformed body counts as a failure. One
+// attempt = the static page when this run has a fingerprint, else
+// (and on any static failure) the function endpoint; in static mode a
+// function page is assembled from BROWSE_API_PAGE-sized subrequests
+// so the returned body always spans the run's full page size and the
+// cursor arithmetic never has to care which source served it.
+async function browseFetchPageOnce(cursor, st) {
+  if (st.fp) {
     try {
-      const body = await fetchJsonOnce(url);
+      const idx = Math.floor(cursor / st.pageSize);
+      const body = await fetchJsonOnce(
+        `/browse-pages/${st.fp}/page-${String(idx).padStart(4, "0")}.json`
+      );
       if (body && Array.isArray(body.results)) return body;
     } catch {
-      // fall through to the retry / failure return
+      // fall through to the function assembly
     }
+  }
+  try {
+    const subs = [];
+    for (let c = cursor; c < cursor + st.pageSize; c += BROWSE_API_PAGE) subs.push(c);
+    const bodies = await Promise.all(
+      subs.map((c) =>
+        fetchJsonOnce(`/api/catalog-search?cursor=${c}&pagesize=${BROWSE_API_PAGE}`).catch(() => null)
+      )
+    );
+    if (bodies.some((b) => !b || !Array.isArray(b.results))) return null;
+    const results = [];
+    for (const b of bodies) for (const r of b.results) results.push(r);
+    const last = bodies[bodies.length - 1];
+    return { total: last.total, results, next_cursor: last.next_cursor };
+  } catch {
+    return null;
+  }
+}
+
+async function browseFetchPage(cursor, st) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const body = await browseFetchPageOnce(cursor, st);
+    if (body) return body;
   }
   return null;
 }
@@ -442,10 +508,10 @@ function browseLaunch(st) {
     if (st.failedAt != null && st.fetchCursor >= st.failedAt) return;
     if (st.total != null && st.fetchCursor >= st.total) return;
     const cursor = st.fetchCursor;
-    st.fetchCursor += BROWSE_PAGE_SIZE;
+    st.fetchCursor += st.pageSize;
     st.inflight++;
     const runId = st.runId;
-    browseFetchPage(cursor).then((body) => {
+    browseFetchPage(cursor, st).then((body) => {
       if (browseState !== st || st.runId !== runId) return;
       st.inflight--;
       if (st.stopped) return;
@@ -463,31 +529,45 @@ function browseLaunch(st) {
 // Start (or restart a stopped) automatic browse stream. Idempotent;
 // a no-op while the client index owns the cache (non-server mode or
 // the search-failure fallback), so the two loaders never fight.
+let browseBeginPending = false;
 export function startCatalogBrowse() {
   if (indexComplete || indexPending) return;
   if (browseState && !browseState.stopped) return;
   const begin = () => {
     if (indexComplete || indexPending) return;
     if (browseState && !browseState.stopped) return;
-    const base = indexCache || bootstrapCache;
-    browseState = {
-      acc: null, // lazily copied from the resident prefix on first page
-      seen: null,
-      cursor: base ? base.length : 0, // append frontier
-      fetchCursor: base ? base.length : 0, // next cursor to request
-      buffer: new Map(), // cursor -> fetched page awaiting its turn
-      inflight: 0,
-      failedAt: null,
-      runId: browseState ? browseState.runId + 1 : 1,
-      total: null,
-      stopped: false,
-      onDemand: false,
-      stopAt: 0,
-      timer: null,
-      pubTimer: null,
-      lastPubAt: 0,
-    };
-    browseLaunch(browseState);
+    if (browseBeginPending) return;
+    browseBeginPending = true;
+    // The run's page size and source are fixed by the discovery read
+    // before the first launch, so cursor arithmetic never changes
+    // mid-run: static mode (fingerprint + baked page size) when the
+    // metadata build carries browse pages, function mode otherwise.
+    browseMeta().then((meta) => {
+      browseBeginPending = false;
+      if (indexComplete || indexPending) return;
+      if (browseState && !browseState.stopped) return;
+      const base = indexCache || bootstrapCache;
+      browseState = {
+        acc: null, // lazily copied from the resident prefix on first page
+        seen: null,
+        cursor: base ? base.length : 0, // append frontier
+        fetchCursor: base ? base.length : 0, // next cursor to request
+        buffer: new Map(), // cursor -> fetched page awaiting its turn
+        inflight: 0,
+        failedAt: null,
+        runId: browseState ? browseState.runId + 1 : 1,
+        total: meta ? meta.total : null,
+        pageSize: meta ? meta.pageSize : BROWSE_API_PAGE,
+        fp: meta ? meta.fp : null,
+        stopped: false,
+        onDemand: false,
+        stopAt: 0,
+        timer: null,
+        pubTimer: null,
+        lastPubAt: 0,
+      };
+      browseLaunch(browseState);
+    });
   };
   if (indexCache || bootstrapCache) begin();
   else loadBootstrap().then(begin, () => {});

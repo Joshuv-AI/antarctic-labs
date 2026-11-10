@@ -330,6 +330,20 @@ function towerHaystack(a, subLabel) {
 // rebuilds exactly once and remounts resolve instantly.)
 let towerDataCache = null;
 let towerDataFor = null;
+// Phase-0 incremental cache (2026-11-10 load-speed pack, step 3):
+// the browse stream publishes a growing prefix of one catalog order
+// every ~2.5 s, and deriveTowerData's phase 0 (collection counts,
+// bucket keys, id index) used to rescan the whole resident array on
+// every publish — quadratic total work across a full load (~150M
+// record visits at 2.5M records). When the incoming array provably
+// extends the cached one (same length-1 boundary record, checked
+// below), phase 0 now only processes the new tail. Both progressive
+// publishers (the server browse stream and the client-index chunk
+// loader) emit growing prefixes of the same catalog order, so the
+// extension case is the norm while loading; anything else falls back
+// to the full build. The id index Map is shared and only ever gains
+// entries, which its consumers (read-only lookups) tolerate.
+let phase0Cache = null;
 
 // Memory discipline (stability, 2026-10-28 — Joshua's phone crash video):
 // the catalog's derived search data roughly doubles the parsed catalog's
@@ -495,8 +509,23 @@ async function buildVocab(normTitles, normCreators, normColls, isCancelled) {
 // if cancelled/superseded before finishing.
 async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
   if (towerDataCache && towerDataFor === artifacts) return towerDataCache;
-  const counts = {};
-  for (let i = 0; i < artifacts.length; i++) {
+  // Phase 0, incremental when the array extends the cached prefix
+  // (see phase0Cache above): the count maps are copied (small), the
+  // bucket-key array is copied and extended, the id index is shared
+  // and gains only the tail's entries; the loops below then run over
+  // [phase0From, artifacts.length) instead of the whole array.
+  const prev0 = phase0Cache;
+  const extendsPrev =
+    prev0 && prev0.len > 0 && artifacts.length > prev0.len &&
+    artifacts[prev0.len - 1] &&
+    artifacts[prev0.len - 1].artifact_id === prev0.lastId;
+  const counts = extendsPrev ? { ...prev0.counts } : {};
+  const subCounts = extendsPrev ? { ...prev0.subCounts } : {};
+  const bucketKeys = extendsPrev ? prev0.bucketKeys.slice() : new Array(artifacts.length);
+  bucketKeys.length = artifacts.length;
+  const idIndex = extendsPrev ? prev0.idIndex : new Map();
+  const phase0From = extendsPrev ? prev0.len : 0;
+  for (let i = phase0From; i < artifacts.length; i++) {
     const key = artifacts[i].collection || "OTHER";
     counts[key] = (counts[key] || 0) + 1;
   }
@@ -505,18 +534,25 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
   // haystacks. Subcategory partitions are exact — the union of a lane's
   // sub-buckets is the lane itself — so the top-level filter result set is
   // identical to the old collection filter (see parity-test.mjs).
-  const bucketKeys = new Array(artifacts.length);
-  const subCounts = {};
-  for (let i = 0; i < artifacts.length; i++) {
+  for (let i = phase0From; i < artifacts.length; i++) {
     const bk = towerBucketKey(artifacts[i]) || artifacts[i].collection || "OTHER";
     bucketKeys[i] = bk;
     subCounts[bk] = (subCounts[bk] || 0) + 1;
   }
   // artifact_id -> index, for resolving curated search pins (built once
   // here so a keystroke never pays for it).
-  const idIndex = new Map();
-  for (let i = 0; i < artifacts.length; i++) {
+  for (let i = phase0From; i < artifacts.length; i++) {
     idIndex.set(artifacts[i].artifact_id, i);
+  }
+  if (artifacts.length) {
+    phase0Cache = {
+      len: artifacts.length,
+      lastId: artifacts[artifacts.length - 1].artifact_id,
+      counts,
+      subCounts,
+      bucketKeys,
+      idIndex,
+    };
   }
   const collections = Object.keys(counts).sort(
     (a, b) => counts[b] - counts[a] || (a < b ? -1 : a > b ? 1 : 0)

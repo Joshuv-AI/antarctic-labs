@@ -6,6 +6,8 @@
 //   2. facet postings + counts: collection, bucket (COLLECTION:sub),
 //      format, rights, era band
 //   3. record blocks: compact records re-blocked 1,000 per file, in id order
+//   4. browse pages: the same records as static 20,000-record pages in
+//      the search endpoint's response shape (2026-11-10 speed pack)
 // Manifest is written LAST — it is the commit point (design: phaseB-design.md).
 //
 // Token pipeline is the site's own: foldText() + tokenizeWithOffsets() +
@@ -187,6 +189,39 @@ for (const [b, obj] of idmap) {
   writeFileSync(`${outDir}/idmap/bkt-${String(b).padStart(3, "0")}.json`, JSON.stringify(obj));
 }
 
+// Browse pages (2026-11-10 load-speed pack): the client's browse
+// stream used to page through the catalog-search function at 2,000
+// records per invocation — ~1,280 sequential function calls, each
+// paying a ~1.7 s time-to-first-byte, for a ~5-minute full load.
+// The same ordinal record sequence is now ALSO baked into static
+// 20,000-record pages in the exact response shape the function
+// returns ({total, results, next_cursor}), generated here from the
+// record blocks above so the two can never diverge. The site serves
+// them through a thin immutable-cache proxy; the function endpoint
+// remains the client's per-page fallback and still owns search.
+// Built AFTER total is known, by reading the block files back in
+// groups of BROWSE_PAGE_BLOCKS — no second pass over the shards.
+const BROWSE_PAGE_SIZE = 20000;
+const BROWSE_PAGE_BLOCKS = BROWSE_PAGE_SIZE / BLOCK;
+mkdirSync(`${outDir}/browse`, { recursive: true });
+let browsePages = 0;
+for (let start = 0; start < total; start += BROWSE_PAGE_SIZE) {
+  const results = [];
+  const lastBlock = Math.min(blockIdx, Math.ceil((start + BROWSE_PAGE_SIZE) / BLOCK));
+  for (let b = Math.floor(start / BLOCK); b < lastBlock; b++) {
+    const blockRecs = JSON.parse(readFileSync(`${outDir}/records/records-${String(b).padStart(5, "0")}.json`, "utf8"));
+    for (const r of blockRecs) results.push(r);
+  }
+  results.length = Math.min(results.length, BROWSE_PAGE_SIZE);
+  const next = start + results.length;
+  writeFileSync(
+    `${outDir}/browse/page-${String(browsePages).padStart(4, "0")}.json`,
+    JSON.stringify({ total, results, next_cursor: next < total ? next : null })
+  );
+  browsePages++;
+}
+console.log(`browse pages=${browsePages} page_size=${BROWSE_PAGE_SIZE}`);
+
 // manifest LAST (commit point)
 const fingerprint = hash.digest("hex");
 const manifest = {
@@ -196,8 +231,10 @@ const manifest = {
   total,
   record_blocks: blockIdx,
   block_size: BLOCK,
+  browse_page_size: BROWSE_PAGE_SIZE,
+  browse_pages: browsePages,
   distinct_terms: termTotal,
-  files: { counts: "counts.json", facets: "facets/<kind>.json", records: "records/records-NNNNN.json", postings: "postings/<field>-<exact|stem>/bkt-NNN.json", idmap: "idmap/bkt-NNN.json", vocab: "vocab/<first-char>.json" },
+  files: { counts: "counts.json", facets: "facets/<kind>.json", records: "records/records-NNNNN.json", browse: "browse/page-NNNN.json", postings: "postings/<field>-<exact|stem>/bkt-NNN.json", idmap: "idmap/bkt-NNN.json", vocab: "vocab/<first-char>.json" },
   generated_at: new Date().toISOString(),
 };
 writeFileSync(`${outDir}/manifest.json`, JSON.stringify(manifest, null, 1));
