@@ -220,7 +220,7 @@ import { matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
 // Lazy Tower catalog (see ./lib/catalog.js): prefetched on Tower navigation
 // so the chunk usually arrives before the route needs it.
-import { loadBootstrap, isCatalogPending } from "./lib/catalog.js";
+import { loadBootstrap, isCatalogPending, startCatalogBrowse } from "./lib/catalog.js";
 // Route-level code-splitting (2026-10-14): every destination page lives in
 // ./pages.jsx, which also pulls the 256KB tower-files manifest, the deep
 // search libs, and the reader UI. Importing it eagerly put all of that in
@@ -309,6 +309,21 @@ function dockActiveId(path) {
   if (path === "/about") return "about";
   return undefined;
 }
+// Warm the server browse stream ahead of the library (2026-11-10,
+// Joshua's head-start call): the stream is the light server-mode
+// loader (idempotent, deduped, a no-op when the client index owns
+// the cache), so starting it while the visitor is still on a Tower
+// page — or watching the Tower boot animation — means the catalog
+// is part or all resident by the time the library itself opens.
+// Skipped on save-data connections; the library's own start (user
+// intent) is never gated.
+function warmCatalogBrowse() {
+  try {
+    if (navigator.connection && navigator.connection.saveData) return;
+  } catch { /* fall through and warm */ }
+  startCatalogBrowse();
+}
+
 function App() {
   const [path, setPath] = useState(window.location.pathname);
   const [transitioning, setTransitioning] = useState(false);
@@ -350,10 +365,12 @@ function App() {
     towerBootStarted.current = Date.now();
     // Prefetch the bootstrap chunk now (43KB, instant) — the route awaits
     // the same cached promise, so this head start is usually the whole fetch.
-    // The full index is NOT started here anymore (Stage 1 ungating,
-    // 2026-10-23): it begins on visitor intent or the idle schedule —
-    // see requestCatalogIndex/scheduleCatalogIndex in lib/catalog.js.
+    // The old client index is still NOT started here (Stage 1 ungating,
+    // 2026-10-23) — but the light server browse stream is (2026-11-10
+    // head start): it streams in behind this animation, so the library
+    // opens with the catalog already moving or resident.
     loadBootstrap().catch(() => {});
+    warmCatalogBrowse();
     const t = setTimeout(() => {
       if (isCatalogPending()) {
         const t2 = setTimeout(dismissTowerBoot, 4000);
@@ -401,6 +418,16 @@ function App() {
       setPath(target);
     }
   }, []);
+  // Tower-route warm-up: any Tower page (landing, entry, library)
+  // starts the browse stream shortly after mount, behind whatever
+  // the visitor is reading — the library then opens warm. The delay
+  // keeps first paint uncontested; entry pages and the library start
+  // the stream themselves too (all starts dedupe to one stream).
+  useEffect(() => {
+    if (!path.startsWith("/tower-of-babel")) return;
+    const t = setTimeout(warmCatalogBrowse, 900);
+    return () => clearTimeout(t);
+  }, [path]);
   useEffect(() => {
     const onPop = () => {
       const raw = window.location.pathname;
