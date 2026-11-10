@@ -799,7 +799,21 @@ export function getFullArtifact(artifactId) {
 // each a {artifact_id: description} map. Loaded lazily per entry view and
 // cached per shard; a failed shard fetch resolves null (callers fall back
 // to the catalog record's own description).
-const descShardCache = {};
+// Shard caches are LRU-capped (2026-11-10 scroll-crash fix): the
+// cover/description sidecars shard by id suffix, and a long scroll
+// session touches shard after shard — uncapped, every parsed shard
+// stayed resident for the life of the tab (hundreds of MB across a
+// deep session) on top of the catalog itself. Evicted shards simply
+// refetch on next use.
+const SHARD_CACHE_CAP = 40;
+function shardCacheSet(cache, key, data) {
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, data);
+  while (cache.size > SHARD_CACHE_CAP) {
+    cache.delete(cache.keys().next().value);
+  }
+}
+const descShardCache = new Map();
 const descShardPending = {};
 function descShardKey(artifactId) {
   // LAST 2 chars: id prefixes concentrate (pmc-, arxiv-, tob-) but suffixes
@@ -814,25 +828,29 @@ function descShardKey(artifactId) {
 // real cover that served an image when checked. Loaded lazily per shard
 // and cached; a failed shard resolves {} and callers fall back to the
 // client-side derivation chain.
-const coverShardCache = {};
+const coverShardCache = new Map();
 const coverShardPending = {};
 export function getCover(artifactId) {
   const key = descShardKey(artifactId);
-  if (coverShardCache[key]) {
-    return Promise.resolve(coverShardCache[key][artifactId] || null);
+  const hit = coverShardCache.get(key);
+  if (hit) {
+    // Refresh LRU position on use.
+    coverShardCache.delete(key);
+    coverShardCache.set(key, hit);
+    return Promise.resolve(hit[artifactId] || null);
   }
   if (!coverShardPending[key]) {
     coverShardPending[key] = fetchJsonOnce(`/tower-covers/${key}.json`)
       .then(
         (data) => {
-          coverShardCache[key] = data || {};
+          shardCacheSet(coverShardCache, key, data || {});
           coverShardPending[key] = null;
-          return coverShardCache[key];
+          return coverShardCache.get(key);
         },
         () => {
-          coverShardCache[key] = {};
+          shardCacheSet(coverShardCache, key, {});
           coverShardPending[key] = null;
-          return coverShardCache[key];
+          return coverShardCache.get(key);
         }
       );
   }
@@ -841,21 +859,24 @@ export function getCover(artifactId) {
 
 export function getDescription(artifactId) {
   const key = descShardKey(artifactId);
-  if (descShardCache[key]) {
-    return Promise.resolve(descShardCache[key][artifactId] || null);
+  const hit = descShardCache.get(key);
+  if (hit) {
+    descShardCache.delete(key);
+    descShardCache.set(key, hit);
+    return Promise.resolve(hit[artifactId] || null);
   }
   if (!descShardPending[key]) {
     descShardPending[key] = fetchJsonOnce(`/tower-descriptions/${key}.json`)
       .then(
         (data) => {
-          descShardCache[key] = data || {};
+          shardCacheSet(descShardCache, key, data || {});
           descShardPending[key] = null;
-          return descShardCache[key];
+          return descShardCache.get(key);
         },
         () => {
-          descShardCache[key] = {};
+          shardCacheSet(descShardCache, key, {});
           descShardPending[key] = null;
-          return descShardCache[key];
+          return descShardCache.get(key);
         }
       );
   }

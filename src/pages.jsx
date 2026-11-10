@@ -3970,6 +3970,108 @@ const LibraryResults = memo(function LibraryResults({
     }
     return out;
   }, [artifacts, towerOrder, rankMap, rankedIndices, rowBudget]);
+  // --------------------- Browse windowing (2026-11-10) -------------------
+  // The load-more model used to keep EVERY loaded card mounted: DOM
+  // nodes, decoded cover bitmaps and compositor layers grew linearly
+  // with scroll depth (~500 DOM nodes and ~9,500 px of document per
+  // 50 cards in the full-scale harness), and on phones the tab was
+  // jetsam-killed mid-scroll once the resident catalog (~0.9 GB) plus
+  // that growth crossed the ceiling — Joshua's "loads fully, crashes
+  // when I start scrolling" report. The browse branch now mounts only
+  // a window of cards around the viewport; spacers preserve the full
+  // scroll height. Item pitch is measured from the real DOM and
+  // refined after every render, and any measurement failure falls
+  // back to mounting everything, exactly as before.
+  const WIN_SIZE = 240;
+  const WIN_OVER = 80;
+  const wrapRef = useRef(null);
+  const [winStart, setWinStart] = useState(0);
+  const [pitch, setPitch] = useState(0);
+  const browseCount = visibleIndices.length;
+  const countRef = useRef(browseCount);
+  countRef.current = browseCount;
+  const pitchRef = useRef(0);
+  pitchRef.current = pitch;
+  const winStartRef = useRef(0);
+  winStartRef.current = winStart;
+  // A new query or a view switch restarts the window at the top.
+  useEffect(() => {
+    setWinStart(0);
+    setPitch(0);
+  }, [q, viewMode]);
+  const windowed = pitch > 0 && browseCount > WIN_SIZE;
+  const winEffStart = windowed
+    ? Math.max(0, Math.min(winStart, browseCount - WIN_SIZE))
+    : 0;
+  const winSlice = windowed
+    ? visibleIndices.slice(winEffStart, winEffStart + WIN_SIZE)
+    : visibleIndices;
+  const topSpacer = windowed ? winEffStart * pitch : 0;
+  const bottomSpacer = windowed
+    ? (browseCount - winEffStart - winSlice.length) * pitch
+    : 0;
+  // Measure/refine the per-item pitch from the mounted slice.
+  useLayoutEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const content = wrap.firstElementChild;
+    if (!content) return;
+    let spacerPx = 0;
+    let items = 0;
+    for (const child of content.children) {
+      if (child.classList && child.classList.contains("tower-win-spacer")) {
+        spacerPx += child.offsetHeight;
+      } else {
+        items++;
+      }
+    }
+    if (!items) return;
+    const p = (content.offsetHeight - spacerPx) / items;
+    if (p > 4 && (pitchRef.current === 0 || Math.abs(p - pitchRef.current) / pitchRef.current > 0.02)) {
+      setPitch(p);
+    }
+  });
+  // Follow the viewport: shift the window when the scroll position
+  // leaves the mounted slice's neighborhood.
+  useEffect(() => {
+    let raf = 0;
+    const update = () => {
+      raf = 0;
+      const wrap = wrapRef.current;
+      const p = pitchRef.current;
+      const count = countRef.current;
+      if (!wrap || !p || count <= WIN_SIZE) return;
+      const top = wrap.getBoundingClientRect().top + window.scrollY;
+      const center = window.scrollY + window.innerHeight * 0.5;
+      const idx = Math.floor((center - top) / p);
+      const want = Math.max(0, Math.min(count - WIN_SIZE, idx - WIN_OVER));
+      if (Math.abs(want - winStartRef.current) > WIN_OVER / 2) {
+        setWinStart(want);
+      }
+    };
+    const onScroll = () => {
+      if (!raf) raf = requestAnimationFrame(update);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, []);
+  // Load-more while stationary at the bottom: re-center the window so
+  // the freshly loaded chunk mounts without waiting for a scroll.
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    const p = pitchRef.current;
+    if (!wrap || !p || browseCount <= WIN_SIZE) return;
+    const top = wrap.getBoundingClientRect().top + window.scrollY;
+    const center = window.scrollY + window.innerHeight * 0.5;
+    const idx = Math.floor((center - top) / p);
+    const want = Math.max(0, Math.min(browseCount - WIN_SIZE, idx - WIN_OVER));
+    if (Math.abs(want - winStartRef.current) > WIN_OVER / 2) {
+      setWinStart(want);
+    }
+  }, [browseCount]);
   // ------------------------- Search mode --------------------------------
   if (searching && blendedModel) {
     const model = blendedModel;
@@ -4139,35 +4241,65 @@ const LibraryResults = memo(function LibraryResults({
           No entries match. Clear the search or choose a different collection.
         </p>
       )}
-      {viewMode === "grid" ? (
-        <div className="tower-grid">
-          {visibleIndices.map((i) => {
-            const a = artifacts[i];
-            return (
-              <TowerBookCard
-                key={a.artifact_id}
-                a={a}
-                go={go}
-                wide={a.collection === "PODCASTS"}
+      <div ref={wrapRef}>
+        {viewMode === "grid" ? (
+          <div className="tower-grid">
+            {windowed && topSpacer > 0 && (
+              <div
+                className="tower-win-spacer"
+                aria-hidden="true"
+                style={{ height: topSpacer, gridColumn: "1 / -1" }}
               />
-            );
-          })}
-        </div>
-      ) : (
-        <div className="tower-rows">
-          {visibleIndices.map((i) => {
-            const a = artifacts[i];
-            return (
-              <TowerRow
-                key={a.artifact_id}
-                a={a}
-                index={rankMap.get(a.artifact_id)}
-                go={go}
+            )}
+            {winSlice.map((i) => {
+              const a = artifacts[i];
+              return (
+                <TowerBookCard
+                  key={a.artifact_id}
+                  a={a}
+                  go={go}
+                  wide={a.collection === "PODCASTS"}
+                />
+              );
+            })}
+            {windowed && bottomSpacer > 0 && (
+              <div
+                className="tower-win-spacer"
+                aria-hidden="true"
+                style={{ height: bottomSpacer, gridColumn: "1 / -1" }}
               />
-            );
-          })}
-        </div>
-      )}
+            )}
+          </div>
+        ) : (
+          <div className="tower-rows">
+            {windowed && topSpacer > 0 && (
+              <div
+                className="tower-win-spacer"
+                aria-hidden="true"
+                style={{ height: topSpacer }}
+              />
+            )}
+            {winSlice.map((i) => {
+              const a = artifacts[i];
+              return (
+                <TowerRow
+                  key={a.artifact_id}
+                  a={a}
+                  index={rankMap.get(a.artifact_id)}
+                  go={go}
+                />
+              );
+            })}
+            {windowed && bottomSpacer > 0 && (
+              <div
+                className="tower-win-spacer"
+                aria-hidden="true"
+                style={{ height: bottomSpacer }}
+              />
+            )}
+          </div>
+        )}
+      </div>
       {!searching && matchCount > rowBudget && (
         <button
           type="button"
