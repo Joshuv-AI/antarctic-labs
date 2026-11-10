@@ -82,6 +82,29 @@ import {
 // The build-time manifest of hosted tower texts (2.4MB at current scale)
 // is NOT statically imported: it would ride inside the lazy pages chunk and
 // make every page pay for it. It loads as its own chunk, on demand, only on
+// Server-search mode flag (Phase B): ?server=0 opts out (persisted to
+// localStorage) and restores the full client pipeline; ?server=1 clears
+// the opt-out. Shared by the library section and the entry pages, which
+// must agree on which pipeline owns the catalog. Reading it applies the
+// URL param's persistence side effects, exactly as the original inline
+// initializer did.
+function towerServerMode() {
+  try {
+    const p = new URLSearchParams(window.location.search);
+    if (p.get("server") === "0") {
+      localStorage.setItem("tower-server-search", "0");
+      return false;
+    }
+    if (p.get("server") === "1") {
+      localStorage.removeItem("tower-server-search");
+      return true;
+    }
+    return localStorage.getItem("tower-server-search") !== "0";
+  } catch {
+    return true;
+  }
+}
+
 // entry pages (see LibraryFullText) — preloaded while the entry paints
 // so the inline full-text section usually has it cached. Module-level promise:
 // one fetch per session; a failed load resolves null and callers treat
@@ -1940,22 +1963,7 @@ function TowerLibrarySection({ go, onReady }) {
   // then. The header count is always the actually-loaded count; stack
   // counts come from the hubs index (fetched below) until the full
   // catalog is resident.
-  const [serverFlag] = useState(() => {
-    try {
-      const p = new URLSearchParams(window.location.search);
-      if (p.get("server") === "0") {
-        localStorage.setItem("tower-server-search", "0");
-        return false;
-      }
-      if (p.get("server") === "1") {
-        localStorage.removeItem("tower-server-search");
-        return true;
-      }
-      return localStorage.getItem("tower-server-search") !== "0";
-    } catch {
-      return true;
-    }
-  });
+  const [serverFlag] = useState(() => towerServerMode());
   const [serverModel, setServerModel] = useState(null);
   const serverSeqRef = useRef(0);
   const serverAbortRef = useRef(null);
@@ -4267,16 +4275,61 @@ function EntryCite({ artifact }) {
   );
 }
 
+// Render-safety normalization (2026-11-10): a full record whose fields
+// hold shapes the entry render does not expect — an object where a
+// string belongs, a string where the tag list belongs — throws inside
+// React and lands the reader on the route error panel ("THIS PAGE
+// DIDN'T LOAD"), which is what Joshua hit on seemingly random entries:
+// the bad shapes cluster in particular source families. Coerce once,
+// at the one place every entry consumer (record table, cover, share,
+// cite, full text) reads from: scalar fields keep string/number
+// values and drop anything else; the description keeps strings only;
+// tags keep arrays only. A dropped field simply renders as absent —
+// the same as a record that never carried it.
+const ARTIFACT_SCALAR_FIELDS = [
+  "title", "creator", "collection", "year", "format", "file_size",
+  "version", "license", "checksum", "rights_status", "source_url",
+  "download_url", "download_status",
+];
+function normalizeArtifact(rec) {
+  if (!rec || typeof rec !== "object") return rec;
+  let out = rec;
+  const fix = (fn) => {
+    if (out === rec) out = { ...rec };
+    fn(out);
+  };
+  for (const f of ARTIFACT_SCALAR_FIELDS) {
+    const v = rec[f];
+    if (v !== undefined && v !== null && typeof v !== "string" && typeof v !== "number") {
+      fix((o) => { delete o[f]; });
+    }
+  }
+  if (rec.description !== undefined && rec.description !== null && typeof rec.description !== "string") {
+    fix((o) => { delete o.description; });
+  }
+  if (rec.tags !== undefined && rec.tags !== null && !Array.isArray(rec.tags)) {
+    fix((o) => { delete o.tags; });
+  }
+  return out;
+}
+
 export function LibraryArtifact({ go, params, onReady }) {
   const [artifacts, catalogError, , retryArtifacts] = useArtifacts();
-  // Warm the tower-files manifest chunk while the entry paints, so the
-  // inline full-text section usually has it cached (see getTowerFiles above).
-  // Fire-and-forget: it never blocks rendering and never changes the UI.
   useEffect(() => {
-    getTowerFiles();
-    // Entry pages keep the pre-ungating behavior: arriving at an entry IS
-    // the intent, so the full index starts here for neighbor/related data.
-    requestCatalogIndex();
+    // Entry pages (2026-11-10): arriving at an entry no longer starts
+    // the full client index, and the tower-files manifest is no longer
+    // warmed here. The index at 2.56M records is an ~880 MB download —
+    // starting it on every entry is what jetsam-killed phone tabs
+    // (Joshua's report: clicking any entry crashes the page and it
+    // won't stay up). In server mode the catalog streams in as server
+    // browse pages instead, so prev/next neighbors resolve
+    // progressively exactly as they did while index chunks landed.
+    // The manifest loads lazily inside LibraryFullText, deferred until
+    // after the text has started (its existence check is optimistic
+    // while it is out). Client mode (?server=0) keeps the old
+    // behavior — that pipeline is the one the visitor opted into.
+    if (towerServerMode()) startCatalogBrowse();
+    else requestCatalogIndex();
   }, [params.id]);
   // Analytics: reader scroll-depth milestones (25/50/75/100%), once each
   // per work per session. Passive listener, no layout reads beyond the
@@ -4373,7 +4426,7 @@ export function LibraryArtifact({ go, params, onReady }) {
   const indexRecord = artifacts[index];
   // Prefer the full record (has description, download_url, etc.); fall back
   // to the index record for basic fields while the full catalog loads.
-  const artifact = fullArtifact || indexRecord;
+  const artifact = normalizeArtifact(fullArtifact || indexRecord);
   // While the full record is still in flight and the index has no entry
   // either, render nothing rather than a false UNKNOWN ARTIFACT — after
   // an iOS crash-reload that state latched on screen for a record that
@@ -4409,6 +4462,12 @@ export function LibraryArtifact({ go, params, onReady }) {
     ["CHECKSUM", artifact.checksum],
   ].filter(([, v]) => v !== undefined && v !== null && v !== "");
   const status = artifact.download_status;
+  // The description override comes from a sidecar file; only a string
+  // may reach the paragraph split below (see normalizeArtifact).
+  const descText =
+    typeof descOverride === "string" && descOverride
+      ? descOverride
+      : artifact.description;
   return (
     <main className="page-shell inner-page tower-light tower-entry" id="main-content" tabIndex={-1}>
       <section className="tower-entry-hero section">
@@ -4427,14 +4486,14 @@ export function LibraryArtifact({ go, params, onReady }) {
           <EntryCover artifact={artifact} />
         </div>
         <EntryShare artifact={artifact} />
-        {(descOverride || artifact.description) && (
+        {descText && (
           <details className="tower-desc">
             <summary>
               <span className="section-index">DESCRIPTION</span>
               <span className="tower-about-chevron" aria-hidden="true">▾</span>
             </summary>
             <div className="tower-desc-body">
-              {(descOverride || artifact.description)
+              {descText
                 .split(/\n\s*\n/)
                 .map((p) => p.trim())
                 .filter(Boolean)
@@ -4605,10 +4664,20 @@ function LibraryFullText({ artifact }) {
   const [towerFiles, setTowerFiles] = useState(null);
   useEffect(() => {
     let live = true;
-    getTowerFiles().then((s) => {
-      if (live) setTowerFiles(s);
-    });
-    return () => { live = false; };
+    // Deferred (2026-11-10): the manifest is ~52 MB of chunks that
+    // parse into a 2.5M-entry Set. Loading it the moment an entry
+    // opens made the text fetch compete with that parse for CPU and
+    // memory — part of why entries felt slow and fragile on phones.
+    // The existence check below is optimistic while the manifest is
+    // out (local files are treated as present; a truly missing file
+    // 404s into the same fallback), so the manifest now lands a few
+    // seconds after the text has started instead of before it.
+    const t = setTimeout(() => {
+      getTowerFiles().then((s) => {
+        if (live) setTowerFiles(s);
+      });
+    }, 3000);
+    return () => { live = false; clearTimeout(t); };
   }, [artifactId]);
   const isLocalTowerFile =
     typeof url === "string" && url.startsWith("/tower-of-babel/");
@@ -4737,11 +4806,11 @@ function LibraryFullText({ artifact }) {
       setTextDone(true);
       return () => { live = false; };
     }
-    // Stream the text and paint progressively: the first ~60k chars
-    // (one reader chunk) render as soon as they arrive, then the text
-    // grows at doubling thresholds until the stream ends. Previously
-    // the reader waited for r.text() — the whole file, up to ~9MB —
-    // before painting anything, which is the delay on large entries.
+    // Stream the text and paint progressively: the first ~12k chars
+    // render as soon as they arrive (lowered from 60k on 2026-11-10 —
+    // most texts are smaller than 60k, so the old threshold made the
+    // reader wait for the whole file before painting anything), then
+    // the text grows at doubling thresholds until the stream ends.
     // Only the COMPLETE text enters the LRU cache; partial prefixes
     // are render-only. Chunking is line-based and prefix-stable, so
     // the only thing a later publish can change is the tail line of
@@ -4761,7 +4830,7 @@ function LibraryFullText({ artifact }) {
         const reader = r.body.getReader();
         const decoder = new TextDecoder("utf-8");
         let acc = "";
-        let nextPublish = 60000;
+        let nextPublish = 12000;
         try {
           for (;;) {
             const { done, value } = await reader.read();

@@ -51,13 +51,21 @@ export async function onRequest(context) {
   }
 
   const fetchOpts = { cf: { cacheTtl: 86400, cacheEverything: true } };
-  let upstream = await fetch(
-    ORIGIN + (await bucketPrefix(file)) + encodeURIComponent(file),
-    fetchOpts);
-  if (!upstream.ok) {
-    upstream = await fetch(ORIGIN + encodeURIComponent(file), fetchOpts);
-  }
-  if (!upstream.ok) {
+  // Bucket and flat layouts in parallel (2026-11-10): the sequential
+  // order paid two GitHub round trips for every flat-layout text on a
+  // cold edge cache — and flat is most of the catalog (everything
+  // before the 2026-11 bucket move). Both fetches now start together;
+  // the bucket copy wins when it exists (it is the canonical layout
+  // for new texts), otherwise the already-in-flight flat response is
+  // used, so a cold text costs one round trip of latency, not two.
+  const encoded = encodeURIComponent(file);
+  const tryFetch = (u) =>
+    fetch(u, fetchOpts).then((r) => (r.ok ? r : null)).catch(() => null);
+  const bucketP = tryFetch(ORIGIN + (await bucketPrefix(file)) + encoded);
+  const flatP = tryFetch(ORIGIN + encoded);
+  let upstream = await bucketP;
+  if (!upstream) upstream = await flatP;
+  if (!upstream) {
     return new Response("Not found", { status: 404 });
   }
 
