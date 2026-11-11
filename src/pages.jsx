@@ -111,6 +111,85 @@ function towerServerMode() {
   }
 }
 
+// Hub seed (2026-11-11 phone load fix): the header counts need only
+// two fields from tower-hubs-index.json — `total` and the
+// per-collection counts — and the file opens with exactly those. The
+// full document is ~14 MB of hub data (wanted works, traditions,
+// author hubs); fetching and JSON-parsing all of it on a phone whose
+// main thread is already saturated by the catalog stream delayed the
+// seed past the point where the stacks had shown partial counts
+// (Joshua's video: "Law: 0 works" for ~11 s). Read the response
+// stream only until the collections object closes, parse just that
+// prefix, and cancel the rest; any failure falls back to the full
+// parse, so the seed is exactly the file's own truth either way.
+function extractHubSeed(text) {
+  const ci = text.indexOf('"collections"');
+  if (ci < 0) return null;
+  const open = text.indexOf("{", ci);
+  if (open < 0) return null;
+  let depth = 0;
+  let end = -1;
+  for (let i = open; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) { end = i; break; }
+    }
+  }
+  if (end < 0) return null;
+  let collections;
+  try {
+    collections = JSON.parse(text.slice(open, end + 1));
+  } catch {
+    return null;
+  }
+  if (!collections || typeof collections !== "object") return null;
+  for (const k of Object.keys(collections)) {
+    if (typeof collections[k] !== "number") return null;
+  }
+  const tm = /"total"\s*:\s*(\d+)/.exec(text.slice(0, ci));
+  return { total: tm ? Number(tm[1]) : null, collections };
+}
+
+async function fetchHubSeed() {
+  const res = await fetch("/tower-hubs-index.json");
+  if (!res.ok) return null;
+  const fromDoc = (b) =>
+    b && typeof b === "object"
+      ? {
+          total: typeof b.total === "number" ? b.total : null,
+          collections:
+            b.collections && typeof b.collections === "object"
+              ? b.collections
+              : null,
+        }
+      : null;
+  if (res.body && typeof res.body.getReader === "function") {
+    const fallback = res.clone();
+    try {
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let text = "";
+      for (let n = 0; n < 128 && text.length < 1048576; n++) {
+        const { done, value } = await reader.read();
+        if (value) text += dec.decode(value, { stream: !done });
+        const seed = extractHubSeed(text);
+        if (seed) {
+          try { reader.cancel(); } catch {}
+          try { fallback.body.cancel(); } catch {}
+          return seed;
+        }
+        if (done) break;
+      }
+    } catch {
+      // fall through to the full parse
+    }
+    return fromDoc(await fallback.json().catch(() => null));
+  }
+  return fromDoc(await res.json().catch(() => null));
+}
+
 // entry pages (see LibraryFullText) — preloaded while the entry paints
 // so the inline full-text section usually has it cached. Module-level promise:
 // one fetch per session; a failed load resolves null and callers treat
@@ -601,51 +680,104 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
     typeof artifacts.__columnBytesAt === "function"
       ? artifacts.__columnBytesAt
       : null;
-  const idIndex = extendsPrev
+  let idIndex = extendsPrev
     ? prev0.idIndex
     : new CatalogIdIndex(
         null,
         getBrowseTotalHint() || artifacts.length * 4,
         columnBytesAt
       );
-  const phase0From = extendsPrev ? prev0.len : 0;
-  // Bucket keys repeat massively (a few hundred distinct values over
-  // millions of records) — canonical instances keep the array at
-  // pointer width instead of pinning a separate string per record.
-  for (let i = phase0From; i < artifacts.length; i++) {
-    const key = artifacts[i].collection || "OTHER";
-    counts[key] = (counts[key] || 0) + 1;
+  // Mode upgrade (2026-11-11 phone load fix): the phase-0 cache is
+  // seeded by the bootstrap-era derivation, whose artifacts are a
+  // plain array — so the inherited id index is in STRING mode and
+  // every tail sync decodes each record's id (and every consumer
+  // probe decodes per step). When the resident artifacts are the
+  // columnar view, swap in a byte-mode index over the same store:
+  // the sliced sync below rebuilds it from the stored id bytes
+  // (builtLen restarts at 0) with no decodes, and all later tail
+  // syncs and probes stay on the byte path. One swap per stream,
+  // at the first streamed publish, when the prefix is still small.
+  if (
+    extendsPrev &&
+    !idIndex._byteMode &&
+    artifacts &&
+    typeof artifacts.__columnBytesAt === "function"
+  ) {
+    idIndex = new CatalogIdIndex(
+      null,
+      getBrowseTotalHint() || artifacts.length * 4,
+      artifacts.__columnBytesAt
+    );
   }
+  const phase0From = extendsPrev ? prev0.len : 0;
   // Two-level browse taxonomy (filter revamp 2026-10-17): one bucket key per
   // record ("COLLECTION" or "COLLECTION:sub"), aligned with artifacts like
   // haystacks. Subcategory partitions are exact — the union of a lane's
   // sub-buckets is the lane itself — so the top-level filter result set is
   // identical to the old collection filter (see parity-test.mjs).
-  // Columnar fast path: classify from the id prefix read off the
+  // Columnar fast paths: classify from the id prefix read off the
   // stored bytes (the view's hook) instead of decoding every tail
   // record's id for towerBucketKey's prefix regex — same rule table
-  // (towerBucketKeyForParts delegates to it), same fallback chain.
+  // (towerBucketKeyForParts delegates to it), same fallback chain —
+  // and read the collection straight from the store's dictionary via
+  // the view's __columnCollectionAt hook, so a tail record is never
+  // materialized just to count and classify it.
   const idPrefixAt =
     artifacts && typeof artifacts.__columnIdPrefixAt === "function"
       ? artifacts.__columnIdPrefixAt
       : null;
-  for (let i = phase0From; i < artifacts.length; i++) {
-    const rec = artifacts[i];
-    const col = rec.collection || "OTHER";
-    const bk = canonBucketKey(
-      (idPrefixAt
-        ? towerBucketKeyForParts(col, idPrefixAt(i))
-        : towerBucketKey(rec)) || col
-    );
-    bucketKeys[i] = bk;
-    subCounts[bk] = (subCounts[bk] || 0) + 1;
+  const collAt =
+    artifacts && typeof artifacts.__columnCollectionAt === "function"
+      ? artifacts.__columnCollectionAt
+      : null;
+  // Time-sliced (2026-11-11 phone load fix): this tail pass used to
+  // run synchronously to completion on every publish — at phone speed
+  // a >50 ms main-thread task per publish, stacked on the stream's own
+  // appends, and a direct contributor to the scroll tearing in
+  // Joshua's video. The pass now works in ~6 ms slices with a
+  // macrotask yield between them (cancellation checked per slice);
+  // counts, subCounts and bucketKeys come out identical, just spread
+  // across frames. Bucket keys repeat massively (a few hundred
+  // distinct values over millions of records) — canonical instances
+  // keep the array at pointer width instead of pinning a separate
+  // string per record.
+  const PHASE0_SLICE_MS = 6;
+  let pi = phase0From;
+  while (pi < artifacts.length) {
+    const t0 = performance.now();
+    for (; pi < artifacts.length; pi++) {
+      const col = (collAt ? collAt(pi) : artifacts[pi].collection) || "OTHER";
+      counts[col] = (counts[col] || 0) + 1;
+      const bk = canonBucketKey(
+        (idPrefixAt
+          ? towerBucketKeyForParts(col, idPrefixAt(pi))
+          : towerBucketKey(artifacts[pi])) || col
+      );
+      bucketKeys[pi] = bk;
+      subCounts[bk] = (subCounts[bk] || 0) + 1;
+      if ((pi & 1023) === 1023 && performance.now() - t0 >= PHASE0_SLICE_MS) {
+        pi++;
+        break;
+      }
+    }
+    if (pi < artifacts.length) {
+      if (isCancelled()) return null;
+      await new Promise((r) => setTimeout(r, 0));
+    }
   }
   // artifact_id -> index, for resolving curated search pins (built once
   // here so a keystroke never pays for it). syncSmart extends the table
   // over [builtLen, artifacts.length) — the same tail the phase-0
-  // loops above process on an extension — from stored bytes in byte
-  // mode (no record materializes), by id string otherwise.
-  idIndex.syncSmart(artifacts);
+  // pass above processes on an extension — from stored bytes in byte
+  // mode (no record materializes), by id string otherwise. Sliced
+  // like the pass above: at most 8192 new entries per task.
+  while (idIndex.builtLen < artifacts.length) {
+    idIndex.syncSmart(artifacts, 8192);
+    if (idIndex.builtLen < artifacts.length) {
+      if (isCancelled()) return null;
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
   if (artifacts.length) {
     phase0Cache = {
       len: artifacts.length,
@@ -1754,16 +1886,34 @@ function TowerLibrarySection({ go, onReady }) {
   // While the sort orders are still building (phase 1 data only), browse
   // in plain catalog order — the rows and the search work immediately,
   // and the chosen sort snaps in when its order lands.
-  const identityOrder = useMemo(
-    () => (artifacts ? Array.from({ length: artifacts.length }, (_, i) => i) : []),
-    [artifacts]
-  );
-  // Stats-strip collection count, straight from the catalog (the
-  // derivation's lane list phases in later and must not gate it).
-  const collectionsCount = useMemo(
-    () => (artifacts ? new Set(artifacts.map((a) => a.collection)).size : 0),
-    [artifacts]
-  );
+  const identityCacheRef = useRef([]);
+  const identityOrder = useMemo(() => {
+    // Identity order is prefix-stable: extend the cached array to
+    // the new length instead of rebuilding it per publish (the old
+    // Array.from ran a 2.5M-callback pass on every stream publish).
+    const len = artifacts ? artifacts.length : 0;
+    const cache = identityCacheRef.current;
+    for (let k = cache.length; k < len; k++) cache.push(k);
+    return cache.length === len ? cache : cache.slice(0, len);
+  }, [artifacts]);
+  // Hub-seeded catalog counts (state declared here, populated by the
+  // hubs-index effect below): the stats strip and the stacks read
+  // these, so they show the library's real totals from first paint.
+  const [serverCounts, setServerCounts] = useState(null);
+  const [serverTotal, setServerTotal] = useState(null);
+  // Stats-strip collection count: the hubs seed's collection count
+  // (the library's real seven) while the catalog streams, the
+  // derivation's lane list once the full index is in. The scan this
+  // replaces ran over EVERY published prefix — at 2.5M records
+  // through the column view it materialized a record per entry on
+  // every publish, a multi-hundred-ms task repeating all stream
+  // long on a phone. The scan remains only as the pre-derivation
+  // fallback, where it runs at bootstrap scale (20,000 records).
+  const collectionsCount = useMemo(() => {
+    if (serverCounts && !fullIndexReady) return Object.keys(serverCounts).length;
+    if (towerData) return towerData.collections.length;
+    return artifacts ? new Set(artifacts.map((a) => a.collection)).size : 0;
+  }, [artifacts, towerData, serverCounts, fullIndexReady]);
   const towerOrder = towerData
     ? towerData.order
       ? towerData.order[sortId] || towerData.order["title-asc"]
@@ -2206,21 +2356,21 @@ function TowerLibrarySection({ go, onReady }) {
     if (needSearchData || !serverFlag) return;
     if (collSet || (strictQuery && strictQuery === q)) setNeedSearchData(true);
   }, [needSearchData, serverFlag, collSet, strictQuery, q]);
-  // Catalog total + per-collection counts from the hubs index (a small
+  // Catalog total + per-collection counts from the hubs index (a
   // derived file the publish lane regenerates), so counts are truthful
   // in server mode before — or without — the client index arriving.
-  const [serverCounts, setServerCounts] = useState(null);
-  const [serverTotal, setServerTotal] = useState(null);
+  // Seeded from the file's HEAD (fetchHubSeed): the full document is
+  // ~14 MB of hub data, and waiting on its download + parse behind
+  // the browse stream is exactly why the stacks showed partial counts
+  // for the first stretch of Joshua's 2026-11-11 phone video.
   useEffect(() => {
     if (!serverFlag || serverTotal != null) return;
     let live = true;
-    fetch("/tower-hubs-index.json")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((b) => {
-        if (!live || !b) return;
-        if (typeof b.total === "number") setServerTotal(b.total);
-        if (b.collections && typeof b.collections === "object")
-          setServerCounts(b.collections);
+    fetchHubSeed()
+      .then((seed) => {
+        if (!live || !seed) return;
+        if (typeof seed.total === "number") setServerTotal(seed.total);
+        if (seed.collections) setServerCounts(seed.collections);
       })
       .catch(() => {});
     return () => {

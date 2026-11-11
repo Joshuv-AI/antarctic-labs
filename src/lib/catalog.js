@@ -20,6 +20,16 @@
 // attempt — fetch failures are not cached anywhere. Callers surface an
 // error UI with an in-place retry; the one-shot page-reload path for a
 // poisoned deploy lives in main.jsx (SHELL-owned).
+import {
+  CatalogIdIndex,
+  textEncoder,
+  utf8ByteLength,
+} from "./catalog-core.js";
+
+// Re-exported for pages.jsx, whose phase-0 derivation builds its
+// own CatalogIdIndex over the published catalog view.
+export { CatalogIdIndex };
+
 let bootstrapCache = null;
 let indexCache = null;
 let fullCache = null;
@@ -335,7 +345,7 @@ const BROWSE_PIPELINE = 8;
 // the cadence exists just to keep derives from chasing every page —
 // 1000 ms keeps increments visibly frequent (~1 s) without returning
 // to per-page derives. The client-index path keeps its own 2500 ms.
-const BROWSE_PUBLISH_MS = 1000;
+const BROWSE_PUBLISH_MS = 2000;
 // Pages transposed per browseAppend task (the base prefix counts as
 // one). Arrivals used to be transposed in unbounded bursts — while
 // the main thread was busy, up to 8 pipeline pages buffered and then
@@ -376,197 +386,7 @@ let browseState = null;
 // filtering, shelves and search all consume records the same way;
 // only the resident bytes change. The client-index path
 // (loadIndexV2) still publishes plain arrays, untouched.
-function fnv1a(str) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
-}
 
-// Same hash over the UTF-8 bytes of a string. Identical to fnv1a for
-// ASCII text (byte == char code), which covers artifact ids in
-// practice; a byte-mode table only ever probes against itself, so the
-// two variants never mix inside one table.
-function fnv1aBytes(bytes) {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < bytes.length; i++) {
-    h ^= bytes[i];
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
-}
-
-// Exact UTF-8 byte length of a string, matching TextEncoder semantics
-// (unpaired surrogates encode as the 3-byte U+FFFD replacement). Lets
-// the transpose size its buffers exactly and fill them with
-// encodeInto in one pass — no per-string Uint8Array allocations and
-// no copy loop (2026-11-11 smoothness: the encode+copy text half of
-// the transpose measured ~2x this walk+encodeInto pass, and the old
-// parts arrays were pure GC churn). Byte-identical output vs the
-// encode() path, verified over adversarial + fuzz inputs.
-function utf8ByteLength(str) {
-  let n = 0;
-  for (let i = 0; i < str.length; i++) {
-    const c = str.charCodeAt(i);
-    if (c < 0x80) n += 1;
-    else if (c < 0x800) n += 2;
-    else if (c >= 0xd800 && c <= 0xdbff) {
-      const d = i + 1 < str.length ? str.charCodeAt(i + 1) : 0;
-      if (d >= 0xdc00 && d <= 0xdfff) {
-        n += 4;
-        i++;
-      } else n += 3;
-    } else n += 3;
-  }
-  return n;
-}
-
-// Open-addressing id -> index table. Probes are verified by content,
-// so hash collisions can never produce a wrong answer. Duplicate ids
-// keep the LAST index, matching Map.set semantics. Also exported for
-// the page derivation's phase-0 id index (pages.jsx), which attaches
-// the current artifacts array and syncs incrementally as it grows.
-//
-// Two probe modes, fixed at construction:
-//  - string mode: `keyAt(i)` returns the id of resident index i (or an
-//    attached artifacts array supplies it). Used for plain arrays.
-//  - byte mode (`bytesAt(i)` -> [buffer, start, end] of the id's UTF-8
-//    bytes): probes hash and compare BYTES and never decode. The
-//    2026-11-11 CPU profile found decode-per-probe (idAt) was ~46% of
-//    all main-thread time during the catalog stream — millions of
-//    TextDecoder calls, one per probe step, each allocating a string.
-//    Byte equality is exactly decoded-string equality (both paths
-//    normalize unpaired surrogates to U+FFFD), and the lookup id is
-//    encoded once per operation instead of decoded per probe step.
-// `expectedCount` pre-sizes the table (load factor <= 0.5) so a
-// stream whose total is known never pays a rehash pass; the final
-// table size is the same one repeated growth would reach.
-export class CatalogIdIndex {
-  constructor(keyAt, expectedCount = 0, bytesAt = null) {
-    this._keyAt = keyAt || null;
-    this._bytesAt = bytesAt || null;
-    this._byteMode = !!bytesAt;
-    this._arts = null;
-    let cap = 1024;
-    while (cap < (expectedCount + 1) * 2) cap *= 2;
-    this.cap = cap;
-    this.table = new Uint32Array(this.cap);
-    this.count = 0;
-    this.builtLen = 0;
-  }
-  attach(artifacts) {
-    this._arts = artifacts;
-  }
-  _key(i) {
-    return this._arts ? this._arts[i].artifact_id : this._keyAt(i);
-  }
-  // True when resident index i holds exactly these id bytes.
-  _bytesMatch(i, idBytes) {
-    const b = this._bytesAt(i);
-    if (!b) return false;
-    const buf = b[0];
-    const s = b[1];
-    if (b[2] - s !== idBytes.length) return false;
-    for (let k = 0; k < idBytes.length; k++) {
-      if (buf[s + k] !== idBytes[k]) return false;
-    }
-    return true;
-  }
-  _probe(id, idBytes) {
-    let slot =
-      (idBytes ? fnv1aBytes(idBytes) : fnv1a(id)) & (this.cap - 1);
-    for (;;) {
-      const v = this.table[slot];
-      if (
-        v === 0 ||
-        (idBytes
-          ? this._bytesMatch(v - 1, idBytes)
-          : this._key(v - 1) === id)
-      )
-        return slot;
-      slot = (slot + 1) & (this.cap - 1);
-    }
-  }
-  _grow() {
-    const old = this.table;
-    this.cap *= 2;
-    this.table = new Uint32Array(this.cap);
-    this.count = 0;
-    for (let i = 0; i < old.length; i++) {
-      const v = old[i];
-      if (v !== 0) {
-        // Byte mode reinserts from the stored bytes (no decode, no
-        // string needed); string mode re-keys from keyAt/attached.
-        const slot = this._byteMode
-          ? this._probeBytesAt(v - 1)
-          : this._probe(this._key(v - 1), null);
-        this.table[slot] = v;
-        this.count++;
-      }
-    }
-  }
-  // Probe for the id whose bytes are bytesAt(i) of some resident
-  // index — used by _grow and by syncToBytes, where no id string
-  // exists yet and none should be materialized.
-  _probeBytesAt(i) {
-    const b = this._bytesAt(i);
-    const bytes =
-      b[1] === 0 && b[2] === b[0].length
-        ? b[0]
-        : b[0].subarray(b[1], b[2]);
-    return this._probe(null, bytes);
-  }
-  // Insert index for id, or overwrite the existing entry (last wins).
-  add(idx, id) {
-    if ((this.count + 1) * 2 > this.cap) this._grow();
-    const slot = this._byteMode
-      ? this._probe(id, textEncoder.encode(id))
-      : this._probe(id, null);
-    if (this.table[slot] === 0) this.count++;
-    this.table[slot] = idx + 1;
-  }
-  get(id) {
-    if (typeof id !== "string") return undefined;
-    const slot = this._byteMode
-      ? this._probe(id, textEncoder.encode(id))
-      : this._probe(id, null);
-    const v = this.table[slot];
-    return v === 0 ? undefined : v - 1;
-  }
-  // Extend the index over an artifacts array-like (growing-prefix
-  // incremental, exactly like the Map fill loop it replaces).
-  syncTo(artifacts) {
-    this.attach(artifacts);
-    while (this.builtLen < artifacts.length) {
-      const i = this.builtLen;
-      this.add(i, artifacts[i].artifact_id);
-      this.builtLen = i + 1;
-    }
-  }
-  // Byte-mode twin of syncTo: index `length` residents straight from
-  // their stored bytes — no record is materialized and no id is
-  // decoded. Same last-wins, growing-prefix semantics.
-  syncToBytes(length) {
-    while (this.builtLen < length) {
-      const i = this.builtLen;
-      if ((this.count + 1) * 2 > this.cap) this._grow();
-      const slot = this._probeBytesAt(i);
-      if (this.table[slot] === 0) this.count++;
-      this.table[slot] = i + 1;
-      this.builtLen = i + 1;
-    }
-  }
-  // Mode-aware sync for callers holding an array-like whose length is
-  // the resident count (the catalog view pins it at publish).
-  syncSmart(artifacts) {
-    if (this._byteMode) this.syncToBytes(artifacts.length);
-    else this.syncTo(artifacts);
-  }
-}
-
-const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
 function makeCol(ctor) {
@@ -591,7 +411,7 @@ function dictCode(store, mapKey, dictKey, v) {
   return code;
 }
 
-function createColumnStore(expectedTotal = 0) {
+export function createColumnStore(expectedTotal = 0) {
   const store = {
     count: 0,
     // Stream total when known (browse manifest): pre-sizes the id
@@ -656,6 +476,9 @@ function createColumnStore(expectedTotal = 0) {
       for (let k = b[1]; k < p; k++) out += String.fromCharCode(buf[k]);
       return out;
     },
+    collAt(i) {
+      return this.collDict[this.collCode.a[i]];
+    },
     titleAt(i) {
       const c = this.chunks[this.chunkIdx.a[i]];
       const local = i - c.start;
@@ -688,7 +511,7 @@ function ensureStoreIndex(store) {
 // through a catalog view) into the columns as a single chunk. The
 // dedupe contract is the old streamer's: first occurrence of an
 // artifact_id wins, records without an id are skipped.
-function appendRecordsToStore(store, records) {
+export function appendRecordsToStore(store, records) {
   const total = records ? records.length : 0;
   if (!total) return;
   const index = ensureStoreIndex(store);
@@ -813,6 +636,11 @@ export function createCatalogView(store, length) {
             // probes compare stored id bytes instead of decoding an
             // id per probe step (2026-11-11 smoothness profile).
             return (i) => store.idBytesAt(i);
+          case "__columnCollectionAt":
+            // Internal hook for pages.jsx's phase-0 count loops: the
+            // record's collection string from the dictionary, so
+            // counting a record never materializes it.
+            return (i) => store.collAt(i);
           case "__columnIdPrefixAt":
             // Internal hook for pages.jsx's phase-0 bucket loop: the
             // record's taxonomy id prefix from its stored bytes, so
@@ -979,6 +807,96 @@ function loadBrowseOrders(fp, total) {
     });
 }
 
+// ---------------------------------------------------------------------
+// Browse worker (2026-11-11 phone load fix): the stream's fetch +
+// JSON.parse + transpose + dedupe move into a Web Worker
+// (browse-worker.js), because on a real phone the main-thread version
+// saturated the UI thread — the counter froze for seconds at a time
+// and the page tore while scrolling (Joshua's 2026-11-11 video: 19 s
+// before the first page landed, ~7.3k records/s, ghosting header).
+// The worker posts back transposed page payloads (catalog-core.js
+// transpose sessions); the main thread only COMMITS them into the
+// column store: extend the global dictionaries with the page's fresh
+// values, remap the page's session-local codes through them, and bulk
+// write the columns. A commit is a few ms of typed-array work per
+// page — no parse, no per-record object touches. If the worker cannot
+// start or dies, the stream falls back to the main-thread pipeline
+// below with identical semantics (browseWorkerFallback).
+const COMMIT_COLUMNS = [
+  ["creator", "creatorMap", "creatorDict", "creatorCode"],
+  ["year", "yearMap", "yearDict", "yearCode"],
+  ["coll", "collMap", "collDict", "collCode"],
+  ["fmt", "fmtMap", "fmtDict", "fmtCode"],
+  ["rights", "rightsMap", "rightsDict", "rightsCode"],
+  ["dl", "dlMap", "dlDict", "dlCode"],
+];
+
+export function createCodeRemap() {
+  const remap = { len: {} };
+  for (const [key] of COMMIT_COLUMNS) {
+    remap[key] = new Uint32Array(1024);
+    remap.len[key] = 0;
+  }
+  return remap;
+}
+
+function colEnsure(col, extra) {
+  const need = col.n + extra;
+  if (col.a.length >= need) return;
+  let cap = col.a.length * 2;
+  while (cap < need) cap *= 2;
+  const na = new col.a.constructor(cap);
+  na.set(col.a);
+  col.a = na;
+}
+
+// Commit one worker-transposed chunk into the store. Byte-for-byte
+// the same columns appendRecordsToStore would have built from the
+// same records (the transpose session mirrors its dedupe and text
+// passes; the parity gate in test-transpose-parity.mjs proves the
+// equivalence over adversarial batches).
+export function commitTransposedChunk(store, remap, payload) {
+  const n = payload.n;
+  const start = store.count;
+  const chunkIndex = store.chunks.length;
+  store.chunks.push({
+    start,
+    idBytes: payload.idBytes,
+    idOff: payload.idOff,
+    titleBytes: payload.titleBytes,
+    titleOff: payload.titleOff,
+  });
+  if (!n) return;
+  colEnsure(store.chunkIdx, n);
+  for (let j = 0; j < n; j++) store.chunkIdx.a[store.chunkIdx.n + j] = chunkIndex;
+  store.chunkIdx.n += n;
+  for (const [key, mapKey, dictKey, colKey] of COMMIT_COLUMNS) {
+    let rm = remap[key];
+    const fresh = payload.fresh[key] || [];
+    const base = remap.len[key];
+    if (rm.length < base + fresh.length) {
+      let cap = Math.max(1024, rm.length * 2);
+      while (cap < base + fresh.length) cap *= 2;
+      const nr = new Uint32Array(cap);
+      nr.set(rm);
+      rm = nr;
+      remap[key] = nr;
+    }
+    for (let k = 0; k < fresh.length; k++) {
+      rm[base + k] = dictCode(store, mapKey, dictKey, fresh[k]);
+    }
+    remap.len[key] = base + fresh.length;
+    const col = store[colKey];
+    colEnsure(col, n);
+    const codes = payload.codes[key];
+    const out = col.a;
+    const from = col.n;
+    for (let j = 0; j < n; j++) out[from + j] = rm[codes[j]];
+    col.n += n;
+  }
+  store.count += n;
+}
+
 function browsePublishNow(complete) {
   const st = browseState;
   if (!st || !st.store) return;
@@ -1004,6 +922,113 @@ function browsePublish(complete) {
       browsePublishNow(false);
     }, wait);
   }
+}
+
+// Start the browse worker for a fresh stream state. Returns false
+// when no worker could be created (the caller then runs the
+// main-thread pipeline, unchanged). The worker fetches the bootstrap
+// itself (a second, cache-hit read of the same immutable file the
+// page already loaded for first paint), transposes it as the store's
+// base, then pipelines the browse pages — its first page fetch fires
+// the moment it starts, never waiting on the base transpose the way
+// the old begin() pre-transpose blocked browseLaunch.
+function browseWorkerBegin(st, meta) {
+  let worker;
+  try {
+    worker = new Worker(new URL("./browse-worker.js", import.meta.url), {
+      type: "module",
+    });
+  } catch {
+    return false;
+  }
+  st.workerMode = true;
+  st.worker = worker;
+  st.baseDone = false;
+  st.remap = createCodeRemap();
+  st.store = createColumnStore(meta ? meta.total : 0);
+  const onVis = () => {
+    if (browseState !== st) return;
+    if (browseIsHidden()) {
+      try { worker.postMessage({ type: "pause" }); } catch {}
+    } else {
+      try { worker.postMessage({ type: "resume" }); } catch {}
+      if (!st.stopped) browseAppend(st);
+    }
+  };
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", onVis);
+  }
+  st.visCleanup = () => {
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", onVis);
+    }
+  };
+  worker.onmessage = (e) => {
+    if (browseState !== st || st.worker !== worker) return;
+    const m = e.data || {};
+    if (m.type === "base") {
+      st.buffer.set(-1, {
+        transposed: m.payload,
+        total: m.total,
+        next_cursor: m.nextCursor,
+      });
+      browseAppend(st);
+    } else if (m.type === "page") {
+      st.buffer.set(m.cursor, {
+        transposed: m.payload,
+        rawCount: m.rawCount,
+        total: m.total,
+        next_cursor: m.nextCursor,
+      });
+      browseAppend(st);
+    } else if (m.type === "failed") {
+      if (st.failedAt == null || m.cursor < st.failedAt) st.failedAt = m.cursor;
+      browseAppend(st);
+    } else if (m.type === "error") {
+      browseWorkerFallback(st);
+    }
+  };
+  worker.onerror = () => browseWorkerFallback(st);
+  try {
+    worker.postMessage({
+      type: "begin",
+      fp: meta ? meta.fp : null,
+      pageSize: st.pageSize,
+      total: meta ? meta.total : null,
+      apiPage: BROWSE_API_PAGE,
+      startCursor: st.cursor,
+    });
+  } catch {
+    browseWorkerFallback(st);
+  }
+  return true;
+}
+
+// The worker failed (could not start, crashed, or its bootstrap read
+// failed): hand the stream to the main-thread pipeline with the
+// failure semantics the stream has always had. Committed chunks stay
+// committed — the main-thread appends continue from the append
+// frontier, and ensureStoreIndex backfills the dedupe index over the
+// committed residents on the first append. If nothing was committed
+// yet, the store re-bases on the resident prefix exactly as the
+// main-thread path would have.
+function browseWorkerFallback(st) {
+  if (!st.workerMode) return;
+  st.workerMode = false;
+  if (st.visCleanup) { st.visCleanup(); st.visCleanup = null; }
+  if (st.worker) {
+    try { st.worker.terminate(); } catch {}
+    st.worker = null;
+  }
+  st.buffer.clear();
+  st.inflight = 0;
+  st.failedAt = null;
+  if (!st.store || (st.store.count === 0 && !st.baseDone)) {
+    st.store = null;
+    st.baseDone = false;
+  }
+  st.fetchCursor = st.cursor;
+  if (!st.stopped && browseState === st) browseLaunch(st);
 }
 
 // One page fetch with the stream's long-standing retry rule: try
@@ -1070,6 +1095,18 @@ function browseStop(st, complete) {
   st.buffer.clear();
   if (st.timer) { clearTimeout(st.timer); st.timer = null; }
   if (st.appendTimer) { clearTimeout(st.appendTimer); st.appendTimer = null; }
+  if (st.workerMode && st.worker) {
+    if (complete) {
+      // A completed stream never appends again: retire the worker.
+      if (st.visCleanup) { st.visCleanup(); st.visCleanup = null; }
+      try { st.worker.terminate(); } catch {}
+      st.worker = null;
+    } else {
+      // Stopped early (a page failed): keep the worker for the
+      // resume reset, but stop it fetching ahead into the void.
+      try { st.worker.postMessage({ type: "pause" }); } catch {}
+    }
+  }
   // A completed stream never appends again: drop the dedupe hash
   // table (~33 MB at full scale). A stopped-early stream keeps it —
   // resume appends against it.
@@ -1106,7 +1143,21 @@ function browseEnsureStore(st) {
 // where appending stopped.
 function browseAppend(st) {
   let burst = 0;
-  if (!st.store) {
+  if (st.workerMode && !st.baseDone) {
+    // Worker mode: the worker's bootstrap chunk is the store's base
+    // and must commit before any page (its dedupe and chunk order
+    // assume the prefix). It lands in the buffer under the -1 key.
+    // Until it arrives there is nothing to append — pages the worker
+    // already transposed wait in the buffer behind it.
+    const base = st.buffer.get(-1);
+    if (!base) return;
+    if (browseIsHidden()) { browseWaitAndLaunch(st); return; }
+    st.buffer.delete(-1);
+    commitTransposedChunk(st.store, st.remap, base.transposed);
+    st.baseDone = true;
+    st.cursor = base.next_cursor != null ? base.next_cursor : st.store.count;
+    burst = 1;
+  } else if (!st.store) {
     browseEnsureStore(st);
     burst = 1;
   }
@@ -1128,11 +1179,15 @@ function browseAppend(st) {
     // prefix follows the same order. If a page would start behind the
     // resident prefix (orders diverged), trust the page's own cursor
     // arithmetic below and dedupe by id instead of double-adding.
-    appendRecordsToStore(st.store, body.results);
+    // Worker-mode bodies arrive pre-transposed: committing one is a
+    // dictionary remap + bulk column writes, no parse or transpose.
+    if (body.transposed) commitTransposedChunk(st.store, st.remap, body.transposed);
+    else appendRecordsToStore(st.store, body.results);
+    const rawLen = body.transposed ? body.rawCount : body.results.length;
     st.cursor = body.next_cursor != null
       ? body.next_cursor
-      : (st.total != null ? st.total : st.cursor + body.results.length);
-    const exhausted = body.next_cursor == null || body.results.length === 0;
+      : (st.total != null ? st.total : st.cursor + rawLen);
+    const exhausted = body.next_cursor == null || rawLen === 0;
     if (exhausted) {
       // Everything the server has is now resident: that IS the full
       // catalog for this page, so the final publish may say complete.
@@ -1153,6 +1208,9 @@ function browseAppend(st) {
 // without touching the counters.
 function browseLaunch(st) {
   if (browseState !== st || st.stopped) return;
+  // Worker mode owns its fetch pipeline; the main-thread launcher is
+  // only for the fallback path (which clears workerMode first).
+  if (st.workerMode) return;
   if (browseIsHidden()) { browseWaitAndLaunch(st); return; }
   while (st.inflight < BROWSE_PIPELINE) {
     if (st.failedAt != null && st.fetchCursor >= st.failedAt) return;
@@ -1197,8 +1255,18 @@ export function startCatalogBrowse() {
       if (indexComplete || indexPending) return;
       if (browseState && !browseState.stopped) return;
       const base = indexCache || bootstrapCache;
+      if (browseState && browseState.worker) {
+        // A superseded stream's worker never outlives its state.
+        if (browseState.visCleanup) browseState.visCleanup();
+        try { browseState.worker.terminate(); } catch {}
+      }
       browseState = {
         store: null, // column store, lazily based on the resident prefix
+        workerMode: false, // browse worker owns fetch+parse+transpose
+        worker: null,
+        baseDone: false, // worker bootstrap chunk committed
+        remap: null, // worker->global dictionary code remap tables
+        visCleanup: null,
         cursor: base ? base.length : 0, // append frontier
         fetchCursor: base ? base.length : 0, // next cursor to request
         buffer: new Map(), // cursor -> fetched page awaiting its turn
@@ -1221,15 +1289,23 @@ export function startCatalogBrowse() {
         browseOrdersStatus = "absent";
         browseOrders = null;
       }
-      // Smoothness (2026-11-11): transpose the resident prefix into
-      // the column store NOW, while the first pages are still in
-      // flight — otherwise the first append pays base + first page
-      // back-to-back after the response lands, and the counter's
-      // first move waits for both. Only the bootstrap-sized prefix
-      // is pre-transposed; a full client index (fallback mode) still
-      // bases lazily in browseAppend.
-      if (bootstrapCache && !indexCache) browseEnsureStore(browseState);
-      browseLaunch(browseState);
+      // Worker path (2026-11-11 phone fix): fetch + parse + transpose
+      // run off the main thread. The worker fires its first page
+      // fetch immediately and delivers the bootstrap base as a
+      // transposed chunk, so nothing on the start path waits for a
+      // main-thread transpose. Only the bootstrap-sized prefix takes
+      // this path; a full client index (fallback mode) keeps the
+      // main-thread pipeline below, which still pre-transposes the
+      // prefix while the first pages are in flight (2026-11-11
+      // smoothness) and bases lazily in browseAppend otherwise.
+      let workerStarted = false;
+      if (bootstrapCache && !indexCache) {
+        workerStarted = browseWorkerBegin(browseState, meta);
+      }
+      if (!workerStarted) {
+        if (bootstrapCache && !indexCache) browseEnsureStore(browseState);
+        browseLaunch(browseState);
+      }
     });
   };
   if (indexCache || bootstrapCache) begin();
@@ -1254,6 +1330,18 @@ export function resumeCatalogBrowse() {
   st.failedAt = null;
   st.buffer.clear();
   st.fetchCursor = st.cursor;
+  if (st.workerMode && st.worker) {
+    // Worker resume: pages it transposed past the append frontier
+    // were dropped with the buffer above, so its dedupe session
+    // resets to the frontier (it re-accepts exactly what the store
+    // is missing) and its pipeline restarts there.
+    try {
+      st.worker.postMessage({ type: "reset", cursor: st.cursor });
+    } catch {
+      browseWorkerFallback(st);
+    }
+    return;
+  }
   browseLaunch(st);
 }
 
