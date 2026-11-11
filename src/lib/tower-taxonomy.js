@@ -111,11 +111,12 @@ const DOCS_TRIALS = new Set(
 );
 
 // --- the classifier --------------------------------------------------------
-// Returns the subcategory id for an artifact (collection-scoped). Always
-// returns a valid id — unknown prefixes fall into the "other" catch-all.
-export function towerSubId(a) {
-  const col = a.collection || "OTHER";
-  const p = idPrefix(a.artifact_id);
+// The rule table, keyed by (collection, id-prefix): the single source
+// of truth for subcategory classification. towerSubId derives the
+// pair from a record; the columnar fast path in pages.jsx phase 0
+// supplies the prefix from the catalog view's byte hook instead —
+// both classify identically by construction.
+export function towerSubIdForPrefix(col, p) {
   switch (col) {
     case "PAPERS":
       if (/^(europmc-|pmc-)/.test(p)) return "bio";
@@ -154,6 +155,21 @@ export function towerSubId(a) {
     default:
       return "";
   }
+}
+
+// Returns the subcategory id for an artifact (collection-scoped). Always
+// returns a valid id — unknown prefixes fall into the "other" catch-all.
+export function towerSubId(a) {
+  return towerSubIdForPrefix(a.collection || "OTHER", idPrefix(a.artifact_id));
+}
+
+// "COLLECTION:sub" compound key from precomputed parts (the columnar
+// phase-0 path), identical to towerBucketKey on a record with this
+// collection and id prefix.
+export function towerBucketKeyForParts(collection, prefix) {
+  const col = collection || "OTHER";
+  const sub = towerSubIdForPrefix(col, prefix);
+  return sub ? `${col}:${sub}` : "";
 }
 
 // "COLLECTION:sub" compound key used in filter state, or "" for no filter.

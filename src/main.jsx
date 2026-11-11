@@ -430,9 +430,18 @@ function App() {
   // the visitor is reading — the library then opens warm. The delay
   // keeps first paint uncontested; entry pages and the library start
   // the stream themselves too (all starts dedupe to one stream).
+  // Exception (2026-11-11 smoothness): on the standalone library the
+  // stream IS the page's content and the section auto-starts it
+  // anyway — the 900 ms was pure dead air on a refresh (Joshua's
+  // "stayed at 20,000 for five or six seconds" report). Effects run
+  // after first paint and the index.html boot prefetch already holds
+  // the network head start, so the library route warms at mount.
+  // Landing and entry routes keep the 900 ms guard (and the landing
+  // still never auto-starts the section's own loading).
   useEffect(() => {
     if (!path.startsWith("/tower-of-babel")) return;
-    const t = setTimeout(warmCatalogBrowse, 900);
+    const delay = path === "/tower-of-babel/library" ? 0 : 900;
+    const t = setTimeout(warmCatalogBrowse, delay);
     return () => clearTimeout(t);
   }, [path]);
   useEffect(() => {

@@ -52,6 +52,7 @@ import {
   getBrowseOrders,
   browseOrdersPending,
   onBrowseOrdersSettled,
+  getBrowseTotalHint,
   CatalogIdIndex,
 } from "./lib/catalog.js";
 // Two-level browse taxonomy for the library filter (revamp 2026-10-17):
@@ -61,6 +62,7 @@ import {
   TOWER_TOP_LABELS,
   TOWER_SUBS,
   towerBucketKey,
+  towerBucketKeyForParts,
   towerSubLabel,
 } from "./lib/tower-taxonomy.js";
 // Collections browser (2026-10-24): the old hub pages were deleted and
@@ -596,7 +598,28 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
   // every consumer (shelves, pins, deep-merge), same last-wins
   // duplicate semantics, extended incrementally over the growing
   // prefix exactly like the Map fill it replaces.
-  const idIndex = extendsPrev ? prev0.idIndex : new CatalogIdIndex();
+  // Byte mode when the artifacts are the columnar catalog view: the
+  // index's probes compare the stored id bytes instead of decoding an
+  // id per probe step (the 2026-11-11 smoothness profile put
+  // decode-per-probe at ~46% of the stream's main-thread time). Plain
+  // arrays (the client-index fallback) keep string mode. Sized from
+  // the browse stream's known total when there is one, so the table
+  // reaches its final size in one allocation and never rehashes
+  // mid-stream; the fallback sizing still bounds growth to a few
+  // doublings from the current prefix.
+  const columnBytesAt =
+    !extendsPrev &&
+    artifacts &&
+    typeof artifacts.__columnBytesAt === "function"
+      ? artifacts.__columnBytesAt
+      : null;
+  const idIndex = extendsPrev
+    ? prev0.idIndex
+    : new CatalogIdIndex(
+        null,
+        getBrowseTotalHint() || artifacts.length * 4,
+        columnBytesAt
+      );
   const phase0From = extendsPrev ? prev0.len : 0;
   // Bucket keys repeat massively (a few hundred distinct values over
   // millions of records) — canonical instances keep the array at
@@ -610,16 +633,31 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
   // haystacks. Subcategory partitions are exact — the union of a lane's
   // sub-buckets is the lane itself — so the top-level filter result set is
   // identical to the old collection filter (see parity-test.mjs).
+  // Columnar fast path: classify from the id prefix read off the
+  // stored bytes (the view's hook) instead of decoding every tail
+  // record's id for towerBucketKey's prefix regex — same rule table
+  // (towerBucketKeyForParts delegates to it), same fallback chain.
+  const idPrefixAt =
+    artifacts && typeof artifacts.__columnIdPrefixAt === "function"
+      ? artifacts.__columnIdPrefixAt
+      : null;
   for (let i = phase0From; i < artifacts.length; i++) {
-    const bk = canonBucketKey(towerBucketKey(artifacts[i]) || artifacts[i].collection || "OTHER");
+    const rec = artifacts[i];
+    const col = rec.collection || "OTHER";
+    const bk = canonBucketKey(
+      (idPrefixAt
+        ? towerBucketKeyForParts(col, idPrefixAt(i))
+        : towerBucketKey(rec)) || col
+    );
     bucketKeys[i] = bk;
     subCounts[bk] = (subCounts[bk] || 0) + 1;
   }
   // artifact_id -> index, for resolving curated search pins (built once
-  // here so a keystroke never pays for it). syncTo extends the table
+  // here so a keystroke never pays for it). syncSmart extends the table
   // over [builtLen, artifacts.length) — the same tail the phase-0
-  // loops above process on an extension.
-  idIndex.syncTo(artifacts);
+  // loops above process on an extension — from stored bytes in byte
+  // mode (no record materializes), by id string otherwise.
+  idIndex.syncSmart(artifacts);
   if (artifacts.length) {
     phase0Cache = {
       len: artifacts.length,

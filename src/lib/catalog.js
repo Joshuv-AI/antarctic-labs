@@ -328,6 +328,22 @@ export function isIndexInFlight() {
 // function; only this plain browse stream reads static pages.
 const BROWSE_API_PAGE = 2000;
 const BROWSE_PIPELINE = 8;
+// Publish cadence for the browse stream (2026-11-11 smoothness).
+// Was 2500 ms (2026-10-28): back then every publish restarted the
+// full derivation and stacked half-built structures into jetsam
+// peaks. Partial publishes now run the incremental phase 0 only, so
+// the cadence exists just to keep derives from chasing every page —
+// 1000 ms keeps increments visibly frequent (~1 s) without returning
+// to per-page derives. The client-index path keeps its own 2500 ms.
+const BROWSE_PUBLISH_MS = 1000;
+// Pages transposed per browseAppend task (the base prefix counts as
+// one). Arrivals used to be transposed in unbounded bursts — while
+// the main thread was busy, up to 8 pipeline pages buffered and then
+// transposed in a single multi-second task, whose oversized derive
+// tail made the NEXT burst bigger (counter jumps of +160k, stalls of
+// 3–28 s in the timing harness). A burst cap plus a 0 ms continuation
+// keeps each task small and the counter moving.
+const APPEND_BURST_PAGES = 2;
 let browseState = null;
 
 // ---------------------------------------------------------------------
@@ -369,17 +385,73 @@ function fnv1a(str) {
   return h >>> 0;
 }
 
-// Open-addressing id -> index table. `keyAt(i)` must return the id of
-// resident index i (used to verify hash probes by content, so hash
-// collisions can never produce a wrong answer). Duplicate ids keep
-// the LAST index, matching Map.set semantics. Also exported for the
-// page derivation's phase-0 id index (pages.jsx), which attaches the
-// current artifacts array and syncs incrementally as it grows.
+// Same hash over the UTF-8 bytes of a string. Identical to fnv1a for
+// ASCII text (byte == char code), which covers artifact ids in
+// practice; a byte-mode table only ever probes against itself, so the
+// two variants never mix inside one table.
+function fnv1aBytes(bytes) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < bytes.length; i++) {
+    h ^= bytes[i];
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+// Exact UTF-8 byte length of a string, matching TextEncoder semantics
+// (unpaired surrogates encode as the 3-byte U+FFFD replacement). Lets
+// the transpose size its buffers exactly and fill them with
+// encodeInto in one pass — no per-string Uint8Array allocations and
+// no copy loop (2026-11-11 smoothness: the encode+copy text half of
+// the transpose measured ~2x this walk+encodeInto pass, and the old
+// parts arrays were pure GC churn). Byte-identical output vs the
+// encode() path, verified over adversarial + fuzz inputs.
+function utf8ByteLength(str) {
+  let n = 0;
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    if (c < 0x80) n += 1;
+    else if (c < 0x800) n += 2;
+    else if (c >= 0xd800 && c <= 0xdbff) {
+      const d = i + 1 < str.length ? str.charCodeAt(i + 1) : 0;
+      if (d >= 0xdc00 && d <= 0xdfff) {
+        n += 4;
+        i++;
+      } else n += 3;
+    } else n += 3;
+  }
+  return n;
+}
+
+// Open-addressing id -> index table. Probes are verified by content,
+// so hash collisions can never produce a wrong answer. Duplicate ids
+// keep the LAST index, matching Map.set semantics. Also exported for
+// the page derivation's phase-0 id index (pages.jsx), which attaches
+// the current artifacts array and syncs incrementally as it grows.
+//
+// Two probe modes, fixed at construction:
+//  - string mode: `keyAt(i)` returns the id of resident index i (or an
+//    attached artifacts array supplies it). Used for plain arrays.
+//  - byte mode (`bytesAt(i)` -> [buffer, start, end] of the id's UTF-8
+//    bytes): probes hash and compare BYTES and never decode. The
+//    2026-11-11 CPU profile found decode-per-probe (idAt) was ~46% of
+//    all main-thread time during the catalog stream — millions of
+//    TextDecoder calls, one per probe step, each allocating a string.
+//    Byte equality is exactly decoded-string equality (both paths
+//    normalize unpaired surrogates to U+FFFD), and the lookup id is
+//    encoded once per operation instead of decoded per probe step.
+// `expectedCount` pre-sizes the table (load factor <= 0.5) so a
+// stream whose total is known never pays a rehash pass; the final
+// table size is the same one repeated growth would reach.
 export class CatalogIdIndex {
-  constructor(keyAt) {
+  constructor(keyAt, expectedCount = 0, bytesAt = null) {
     this._keyAt = keyAt || null;
+    this._bytesAt = bytesAt || null;
+    this._byteMode = !!bytesAt;
     this._arts = null;
-    this.cap = 1024;
+    let cap = 1024;
+    while (cap < (expectedCount + 1) * 2) cap *= 2;
+    this.cap = cap;
     this.table = new Uint32Array(this.cap);
     this.count = 0;
     this.builtLen = 0;
@@ -390,11 +462,30 @@ export class CatalogIdIndex {
   _key(i) {
     return this._arts ? this._arts[i].artifact_id : this._keyAt(i);
   }
-  _probe(id) {
-    let slot = fnv1a(id) & (this.cap - 1);
+  // True when resident index i holds exactly these id bytes.
+  _bytesMatch(i, idBytes) {
+    const b = this._bytesAt(i);
+    if (!b) return false;
+    const buf = b[0];
+    const s = b[1];
+    if (b[2] - s !== idBytes.length) return false;
+    for (let k = 0; k < idBytes.length; k++) {
+      if (buf[s + k] !== idBytes[k]) return false;
+    }
+    return true;
+  }
+  _probe(id, idBytes) {
+    let slot =
+      (idBytes ? fnv1aBytes(idBytes) : fnv1a(id)) & (this.cap - 1);
     for (;;) {
       const v = this.table[slot];
-      if (v === 0 || this._key(v - 1) === id) return slot;
+      if (
+        v === 0 ||
+        (idBytes
+          ? this._bytesMatch(v - 1, idBytes)
+          : this._key(v - 1) === id)
+      )
+        return slot;
       slot = (slot + 1) & (this.cap - 1);
     }
   }
@@ -406,22 +497,42 @@ export class CatalogIdIndex {
     for (let i = 0; i < old.length; i++) {
       const v = old[i];
       if (v !== 0) {
-        const slot = this._probe(this._key(v - 1));
+        // Byte mode reinserts from the stored bytes (no decode, no
+        // string needed); string mode re-keys from keyAt/attached.
+        const slot = this._byteMode
+          ? this._probeBytesAt(v - 1)
+          : this._probe(this._key(v - 1), null);
         this.table[slot] = v;
         this.count++;
       }
     }
   }
+  // Probe for the id whose bytes are bytesAt(i) of some resident
+  // index — used by _grow and by syncToBytes, where no id string
+  // exists yet and none should be materialized.
+  _probeBytesAt(i) {
+    const b = this._bytesAt(i);
+    const bytes =
+      b[1] === 0 && b[2] === b[0].length
+        ? b[0]
+        : b[0].subarray(b[1], b[2]);
+    return this._probe(null, bytes);
+  }
   // Insert index for id, or overwrite the existing entry (last wins).
   add(idx, id) {
     if ((this.count + 1) * 2 > this.cap) this._grow();
-    const slot = this._probe(id);
+    const slot = this._byteMode
+      ? this._probe(id, textEncoder.encode(id))
+      : this._probe(id, null);
     if (this.table[slot] === 0) this.count++;
     this.table[slot] = idx + 1;
   }
   get(id) {
     if (typeof id !== "string") return undefined;
-    const v = this.table[this._probe(id)];
+    const slot = this._byteMode
+      ? this._probe(id, textEncoder.encode(id))
+      : this._probe(id, null);
+    const v = this.table[slot];
     return v === 0 ? undefined : v - 1;
   }
   // Extend the index over an artifacts array-like (growing-prefix
@@ -433,6 +544,25 @@ export class CatalogIdIndex {
       this.add(i, artifacts[i].artifact_id);
       this.builtLen = i + 1;
     }
+  }
+  // Byte-mode twin of syncTo: index `length` residents straight from
+  // their stored bytes — no record is materialized and no id is
+  // decoded. Same last-wins, growing-prefix semantics.
+  syncToBytes(length) {
+    while (this.builtLen < length) {
+      const i = this.builtLen;
+      if ((this.count + 1) * 2 > this.cap) this._grow();
+      const slot = this._probeBytesAt(i);
+      if (this.table[slot] === 0) this.count++;
+      this.table[slot] = i + 1;
+      this.builtLen = i + 1;
+    }
+  }
+  // Mode-aware sync for callers holding an array-like whose length is
+  // the resident count (the catalog view pins it at publish).
+  syncSmart(artifacts) {
+    if (this._byteMode) this.syncToBytes(artifacts.length);
+    else this.syncTo(artifacts);
   }
 }
 
@@ -461,9 +591,12 @@ function dictCode(store, mapKey, dictKey, v) {
   return code;
 }
 
-function createColumnStore() {
+function createColumnStore(expectedTotal = 0) {
   const store = {
     count: 0,
+    // Stream total when known (browse manifest): pre-sizes the id
+    // index so it never rehashes mid-stream. 0 = unknown.
+    expectedTotal: expectedTotal || 0,
     chunks: [], // {start, idBytes, idOff, titleBytes, titleOff}
     chunkIdx: makeCol(Uint16Array),
     creatorCode: makeCol(Uint32Array),
@@ -492,6 +625,37 @@ function createColumnStore() {
         c.idBytes.subarray(c.idOff[local], c.idOff[local + 1])
       );
     },
+    // The id's stored UTF-8 bytes as [buffer, start, end] — the
+    // byte-mode probe accessor for CatalogIdIndex (no decode).
+    idBytesAt(i) {
+      const c = this.chunks[this.chunkIdx.a[i]];
+      const local = i - c.start;
+      return [c.idBytes, c.idOff[local], c.idOff[local + 1]];
+    },
+    // The id's taxonomy prefix — the leading [a-z0-9]+(-[a-z0-9]+)?
+    // run, exactly the match idPrefix() in tower-taxonomy.js would
+    // take from the decoded id — computed on the raw bytes: every
+    // byte >= 0x80 belongs to a multibyte character, which the
+    // ASCII-only character class rejects just the same, so the walk
+    // stops identically. Lets the phase-0 bucket loop classify a
+    // record without decoding its whole id (2026-11-11 smoothness).
+    idPrefixAt(i) {
+      const b = this.idBytesAt(i);
+      const buf = b[0];
+      const end = b[2];
+      let p = b[1];
+      const isPre = (x) =>
+        (x >= 0x30 && x <= 0x39) || (x >= 0x61 && x <= 0x7a);
+      while (p < end && isPre(buf[p])) p++;
+      if (p > b[1] && p < end && buf[p] === 0x2d) {
+        let q = p + 1;
+        while (q < end && isPre(buf[q])) q++;
+        if (q > p + 1) p = q; // dash counts only with a segment after it
+      }
+      let out = "";
+      for (let k = b[1]; k < p; k++) out += String.fromCharCode(buf[k]);
+      return out;
+    },
     titleAt(i) {
       const c = this.chunks[this.chunkIdx.a[i]];
       const local = i - c.start;
@@ -505,9 +669,17 @@ function createColumnStore() {
 
 function ensureStoreIndex(store) {
   if (store.idIndex) return store.idIndex;
-  const ix = new CatalogIdIndex((i) => store.idAt(i));
-  for (let i = 0; i < store.count; i++) ix.add(i, store.idAt(i));
-  ix.builtLen = store.count;
+  // Byte mode: probes compare the stored id bytes directly, so the
+  // keyAt decoder is never on a hot path (it stays only as the
+  // _key fallback the class requires a function for — byte mode never
+  // calls it). Backfill inserts from stored bytes too (syncToBytes
+  // semantics over the residents already present).
+  const ix = new CatalogIdIndex(
+    (i) => store.idAt(i),
+    store.expectedTotal || store.count,
+    (i) => store.idBytesAt(i)
+  );
+  ix.syncToBytes(store.count);
   store.idIndex = ix;
   return ix;
 }
@@ -536,28 +708,27 @@ function appendRecordsToStore(store, records) {
   const start = store.count;
   const idOff = new Uint32Array(n + 1);
   const titleOff = new Uint32Array(n + 1);
-  const idParts = new Array(n);
-  const titleParts = new Array(n);
+  const idStrs = new Array(n);
+  const titleStrs = new Array(n);
   let idLen = 0;
   let titleLen = 0;
   for (let j = 0; j < n; j++) {
     const r = accepted[j];
-    const idBytes = textEncoder.encode(String(r.artifact_id));
-    const titleBytes = textEncoder.encode(
-      r.title == null ? "" : String(r.title)
-    );
-    idParts[j] = idBytes;
-    titleParts[j] = titleBytes;
-    idLen += idBytes.length;
-    titleLen += titleBytes.length;
-    idOff[j + 1] = idLen;
-    titleOff[j + 1] = titleLen;
+    const idStr = String(r.artifact_id);
+    const titleStr = r.title == null ? "" : String(r.title);
+    idStrs[j] = idStr;
+    titleStrs[j] = titleStr;
+    idOff[j + 1] = (idLen += utf8ByteLength(idStr));
+    titleOff[j + 1] = (titleLen += utf8ByteLength(titleStr));
   }
+  // Exact-sized buffers filled in a single encodeInto pass (the
+  // length walk above guarantees `written` fills each slot exactly;
+  // byte-identical to the old encode()+copy path).
   const idBytes = new Uint8Array(idLen);
   const titleBytes = new Uint8Array(titleLen);
   for (let j = 0; j < n; j++) {
-    idBytes.set(idParts[j], idOff[j]);
-    titleBytes.set(titleParts[j], titleOff[j]);
+    textEncoder.encodeInto(idStrs[j], idBytes.subarray(idOff[j]));
+    textEncoder.encodeInto(titleStrs[j], titleBytes.subarray(titleOff[j]));
   }
   const chunkIndex = store.chunks.length;
   store.chunks.push({ start, idBytes, idOff, titleBytes, titleOff });
@@ -573,7 +744,8 @@ function appendRecordsToStore(store, records) {
   }
   store.count += n;
   // Index the new residents only now that their ids are readable
-  // through the store (probe verification reads keyAt).
+  // through the store (byte-mode probe verification reads the stored
+  // bytes from the chunk pushed above).
   for (let j = 0; j < n; j++) index.add(start + j, accepted[j].artifact_id);
   index.builtLen = store.count;
 }
@@ -635,6 +807,17 @@ export function createCatalogView(store, length) {
           return i < length ? recAt(i) : undefined;
         }
         switch (prop) {
+          case "__columnBytesAt":
+            // Internal hook for pages.jsx's phase-0 id index: run a
+            // byte-mode CatalogIdIndex over this view's store, so its
+            // probes compare stored id bytes instead of decoding an
+            // id per probe step (2026-11-11 smoothness profile).
+            return (i) => store.idBytesAt(i);
+          case "__columnIdPrefixAt":
+            // Internal hook for pages.jsx's phase-0 bucket loop: the
+            // record's taxonomy id prefix from its stored bytes, so
+            // classifying a record never decodes its whole id.
+            return (i) => store.idPrefixAt(i);
           case "map":
             return (cb, thisArg) => {
               const out = new Array(length);
@@ -813,7 +996,7 @@ function browsePublish(complete) {
     browsePublishNow(true);
     return;
   }
-  const wait = 2500 - (Date.now() - (st.lastPubAt || 0));
+  const wait = BROWSE_PUBLISH_MS - (Date.now() - (st.lastPubAt || 0));
   if (!st.lastPubAt || wait <= 0) { browsePublishNow(false); return; }
   if (!st.pubTimer) {
     st.pubTimer = setTimeout(() => {
@@ -886,6 +1069,7 @@ function browseStop(st, complete) {
   st.onDemand = false;
   st.buffer.clear();
   if (st.timer) { clearTimeout(st.timer); st.timer = null; }
+  if (st.appendTimer) { clearTimeout(st.appendTimer); st.appendTimer = null; }
   // A completed stream never appends again: drop the dedupe hash
   // table (~33 MB at full scale). A stopped-early stream keeps it —
   // resume appends against it.
@@ -893,19 +1077,38 @@ function browseStop(st, complete) {
   browsePublish(!!complete);
 }
 
-// Append every buffered page that continues the resident prefix, in
-// cursor order. st.cursor is always the append frontier (the next
-// cursor the prefix needs), never the fetch frontier, so a resume
-// re-enters exactly where appending stopped.
+// Defer the rest of a burst to a fresh task: buffered pages remain
+// in st.buffer and the frontier has not moved, so re-entry continues
+// exactly where this task stopped.
+function browseContinueAppend(st) {
+  if (st.appendTimer) return;
+  st.appendTimer = setTimeout(() => {
+    st.appendTimer = null;
+    if (browseState === st && !st.stopped) browseAppend(st);
+  }, 0);
+}
+
+// Base the column store on the resident prefix (the bootstrap, a
+// verified exact prefix of the browse order), once. begin() calls
+// this eagerly so the transpose overlaps the first pages' flight;
+// browseAppend calls it lazily on the paths begin() skipped.
+function browseEnsureStore(st) {
+  if (st.store) return;
+  st.store = createColumnStore(st.total || 0);
+  appendRecordsToStore(st.store, indexCache || bootstrapCache || []);
+  st.cursor = st.store.count;
+}
+
+// Append buffered pages that continue the resident prefix, in cursor
+// order — at most APPEND_BURST_PAGES per task (see the constant).
+// st.cursor is always the append frontier (the next cursor the prefix
+// needs), never the fetch frontier, so a resume re-enters exactly
+// where appending stopped.
 function browseAppend(st) {
+  let burst = 0;
   if (!st.store) {
-    // First append: base the columns on the resident prefix
-    // (the bootstrap, a verified exact prefix of the browse order).
-    // Start/resume set the frontier from the same base, so the
-    // frontier and the prefix length agree.
-    st.store = createColumnStore();
-    appendRecordsToStore(st.store, indexCache || bootstrapCache || []);
-    st.cursor = st.store.count;
+    browseEnsureStore(st);
+    burst = 1;
   }
   while (!st.stopped) {
     if (st.failedAt != null && st.cursor >= st.failedAt) {
@@ -917,6 +1120,8 @@ function browseAppend(st) {
     const body = st.buffer.get(st.cursor);
     if (!body) return;
     if (browseIsHidden()) { browseWaitAndLaunch(st); return; }
+    if (burst >= APPEND_BURST_PAGES) { browseContinueAppend(st); return; }
+    burst++;
     st.buffer.delete(st.cursor);
     if (typeof body.total === "number") st.total = body.total;
     // The cursor addresses the server-side catalog order; the resident
@@ -1016,6 +1221,14 @@ export function startCatalogBrowse() {
         browseOrdersStatus = "absent";
         browseOrders = null;
       }
+      // Smoothness (2026-11-11): transpose the resident prefix into
+      // the column store NOW, while the first pages are still in
+      // flight — otherwise the first append pays base + first page
+      // back-to-back after the response lands, and the counter's
+      // first move waits for both. Only the bootstrap-sized prefix
+      // is pre-transposed; a full client index (fallback mode) still
+      // bases lazily in browseAppend.
+      if (bootstrapCache && !indexCache) browseEnsureStore(browseState);
       browseLaunch(browseState);
     });
   };
@@ -1048,6 +1261,14 @@ export function resumeCatalogBrowse() {
 // (the library status line keys off this alongside isIndexInFlight).
 export function isBrowseStreaming() {
   return !!(browseState && !browseState.stopped);
+}
+
+// The browse stream's known catalog total (from the manifest), or 0
+// when no stream has read it. pages.jsx uses it to pre-size the
+// phase-0 id index to its final size in one allocation instead of
+// rehashing at every doubling (2026-11-11 smoothness).
+export function getBrowseTotalHint() {
+  return browseState && browseState.total ? browseState.total : 0;
 }
 
 // Full records for detail pages — loaded on demand.
