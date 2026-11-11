@@ -52,6 +52,7 @@ import {
   getBrowseOrders,
   browseOrdersPending,
   onBrowseOrdersSettled,
+  CatalogIdIndex,
 } from "./lib/catalog.js";
 // Two-level browse taxonomy for the library filter (revamp 2026-10-17):
 // top-level lanes + subcategories derived from the artifact_id prefix.
@@ -589,7 +590,13 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
   const subCounts = extendsPrev ? { ...prev0.subCounts } : {};
   const bucketKeys = extendsPrev ? prev0.bucketKeys.slice() : new Array(artifacts.length);
   bucketKeys.length = artifacts.length;
-  const idIndex = extendsPrev ? prev0.idIndex : new Map();
+  // Id index (2026-11-10 columnar pass): an open-addressing hash table
+  // over Uint32 slots (~33 MB at full catalog) replaces the 2.56M-entry
+  // Map (~150-250 MB with its key table) — same .get(id) contract for
+  // every consumer (shelves, pins, deep-merge), same last-wins
+  // duplicate semantics, extended incrementally over the growing
+  // prefix exactly like the Map fill it replaces.
+  const idIndex = extendsPrev ? prev0.idIndex : new CatalogIdIndex();
   const phase0From = extendsPrev ? prev0.len : 0;
   // Bucket keys repeat massively (a few hundred distinct values over
   // millions of records) — canonical instances keep the array at
@@ -609,10 +616,10 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
     subCounts[bk] = (subCounts[bk] || 0) + 1;
   }
   // artifact_id -> index, for resolving curated search pins (built once
-  // here so a keystroke never pays for it).
-  for (let i = phase0From; i < artifacts.length; i++) {
-    idIndex.set(artifacts[i].artifact_id, i);
-  }
+  // here so a keystroke never pays for it). syncTo extends the table
+  // over [builtLen, artifacts.length) — the same tail the phase-0
+  // loops above process on an extension.
+  idIndex.syncTo(artifacts);
   if (artifacts.length) {
     phase0Cache = {
       len: artifacts.length,
@@ -1730,7 +1737,7 @@ function TowerLibrarySection({ go, onReady }) {
   // in plain catalog order — the rows and the search work immediately,
   // and the chosen sort snaps in when its order lands.
   const identityOrder = useMemo(
-    () => (artifacts ? artifacts.map((_, i) => i) : []),
+    () => (artifacts ? Array.from({ length: artifacts.length }, (_, i) => i) : []),
     [artifacts]
   );
   // Stats-strip collection count, straight from the catalog (the

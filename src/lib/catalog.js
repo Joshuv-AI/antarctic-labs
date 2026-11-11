@@ -330,37 +330,367 @@ const BROWSE_API_PAGE = 2000;
 const BROWSE_PIPELINE = 8;
 let browseState = null;
 
-// String interning for streamed records (2026-11-10 mobile crash
-// fix): JSON.parse mints a fresh string object for every field of
-// every record, so the resident catalog pins millions of copies of a
-// handful of values ("LAW", "TXT", "PUBLIC_DOMAIN", agency and
-// publisher names repeated across whole collections). Canonicalizing
-// the low-cardinality fields — and creators while their distinct
-// count stays bounded — as pages append cuts several hundred MB at
-// full catalog. Values are compared by content everywhere downstream
-// (object keys, Set membership, equality), so sharing instances is
-// behavior-neutral.
-const internMaps = {
-  collection: new Map(),
-  format: new Map(),
-  rights_status: new Map(),
-  download_status: new Map(),
-  creator: new Map(),
-};
-function internValue(map, v, cap) {
-  if (typeof v !== "string" || v === "") return v;
-  const hit = map.get(v);
-  if (hit !== undefined) return hit;
-  if (map.size < cap) map.set(v, v);
-  return v;
+// ---------------------------------------------------------------------
+// Columnar resident catalog (2026-11-10 speed pack, step 6).
+//
+// The object catalog measured ~0.9 GB parsed at full scale — 2.56M
+// small objects, each pinning its own id/title strings with full JS
+// string-object overhead, plus a 2.56M-entry dedupe Set in this
+// streamer and a 2.56M-entry Map in the page derivation. That is the
+// iOS jetsam wall behind the phone crash loop. The browse stream now
+// transposes every page into columns on arrival and discards the
+// parsed objects:
+//   - artifact_id / title text lives as UTF-8 BYTES in per-batch
+//     chunks (byte arrays + Uint32 offset tables). Byte storage costs
+//     the information content of the text (~1 byte/char for the
+//     mostly-Latin-1 catalog) instead of a JS string object per
+//     record (~2 bytes/char for non-Latin-1 titles, plus header).
+//   - creator and year are dictionary-coded (Uint32 codes into a
+//     distinct-value table that stores the RAW values, types intact);
+//     collection / format / rights_status / download_status are
+//     dictionary-coded as Uint8.
+//   - id dedupe (the old `seen` Set of every id string) is an
+//     open-addressing hash table over Uint32 slots (~33 MB at full
+//     scale instead of ~150 MB+), dropped when the stream completes.
+// Consumers never see the columns: publishes hand out a catalog VIEW
+// (see createCatalogView) — an array-like whose numeric reads
+// materialize a lightweight record (prototype getters over the
+// columns) and whose map/find/findIndex/filter/forEach/slice and
+// iterator behave exactly like the plain array they replace. Sorting,
+// filtering, shelves and search all consume records the same way;
+// only the resident bytes change. The client-index path
+// (loadIndexV2) still publishes plain arrays, untouched.
+function fnv1a(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
 }
-function internBrowseRecord(r) {
-  r.collection = internValue(internMaps.collection, r.collection, 512);
-  r.format = internValue(internMaps.format, r.format, 512);
-  r.rights_status = internValue(internMaps.rights_status, r.rights_status, 512);
-  r.download_status = internValue(internMaps.download_status, r.download_status, 512);
-  r.creator = internValue(internMaps.creator, r.creator, 300000);
-  return r;
+
+// Open-addressing id -> index table. `keyAt(i)` must return the id of
+// resident index i (used to verify hash probes by content, so hash
+// collisions can never produce a wrong answer). Duplicate ids keep
+// the LAST index, matching Map.set semantics. Also exported for the
+// page derivation's phase-0 id index (pages.jsx), which attaches the
+// current artifacts array and syncs incrementally as it grows.
+export class CatalogIdIndex {
+  constructor(keyAt) {
+    this._keyAt = keyAt || null;
+    this._arts = null;
+    this.cap = 1024;
+    this.table = new Uint32Array(this.cap);
+    this.count = 0;
+    this.builtLen = 0;
+  }
+  attach(artifacts) {
+    this._arts = artifacts;
+  }
+  _key(i) {
+    return this._arts ? this._arts[i].artifact_id : this._keyAt(i);
+  }
+  _probe(id) {
+    let slot = fnv1a(id) & (this.cap - 1);
+    for (;;) {
+      const v = this.table[slot];
+      if (v === 0 || this._key(v - 1) === id) return slot;
+      slot = (slot + 1) & (this.cap - 1);
+    }
+  }
+  _grow() {
+    const old = this.table;
+    this.cap *= 2;
+    this.table = new Uint32Array(this.cap);
+    this.count = 0;
+    for (let i = 0; i < old.length; i++) {
+      const v = old[i];
+      if (v !== 0) {
+        const slot = this._probe(this._key(v - 1));
+        this.table[slot] = v;
+        this.count++;
+      }
+    }
+  }
+  // Insert index for id, or overwrite the existing entry (last wins).
+  add(idx, id) {
+    if ((this.count + 1) * 2 > this.cap) this._grow();
+    const slot = this._probe(id);
+    if (this.table[slot] === 0) this.count++;
+    this.table[slot] = idx + 1;
+  }
+  get(id) {
+    if (typeof id !== "string") return undefined;
+    const v = this.table[this._probe(id)];
+    return v === 0 ? undefined : v - 1;
+  }
+  // Extend the index over an artifacts array-like (growing-prefix
+  // incremental, exactly like the Map fill loop it replaces).
+  syncTo(artifacts) {
+    this.attach(artifacts);
+    while (this.builtLen < artifacts.length) {
+      const i = this.builtLen;
+      this.add(i, artifacts[i].artifact_id);
+      this.builtLen = i + 1;
+    }
+  }
+}
+
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+
+function makeCol(ctor) {
+  return { a: new ctor(32768), n: 0 };
+}
+function colPush(col, v) {
+  if (col.n === col.a.length) {
+    const na = new col.a.constructor(col.a.length * 2);
+    na.set(col.a);
+    col.a = na;
+  }
+  col.a[col.n++] = v;
+}
+function dictCode(store, mapKey, dictKey, v) {
+  const map = store[mapKey];
+  let code = map.get(v);
+  if (code === undefined) {
+    code = store[dictKey].length;
+    map.set(v, code);
+    store[dictKey].push(v);
+  }
+  return code;
+}
+
+function createColumnStore() {
+  const store = {
+    count: 0,
+    chunks: [], // {start, idBytes, idOff, titleBytes, titleOff}
+    chunkIdx: makeCol(Uint16Array),
+    creatorCode: makeCol(Uint32Array),
+    yearCode: makeCol(Uint32Array),
+    collCode: makeCol(Uint8Array),
+    fmtCode: makeCol(Uint8Array),
+    rightsCode: makeCol(Uint8Array),
+    dlCode: makeCol(Uint8Array),
+    creatorDict: [],
+    creatorMap: new Map(),
+    yearDict: [],
+    yearMap: new Map(),
+    collDict: [],
+    collMap: new Map(),
+    fmtDict: [],
+    fmtMap: new Map(),
+    rightsDict: [],
+    rightsMap: new Map(),
+    dlDict: [],
+    dlMap: new Map(),
+    idIndex: null, // CatalogIdIndex, built on first append, dropped at completion
+    idAt(i) {
+      const c = this.chunks[this.chunkIdx.a[i]];
+      const local = i - c.start;
+      return textDecoder.decode(
+        c.idBytes.subarray(c.idOff[local], c.idOff[local + 1])
+      );
+    },
+    titleAt(i) {
+      const c = this.chunks[this.chunkIdx.a[i]];
+      const local = i - c.start;
+      return textDecoder.decode(
+        c.titleBytes.subarray(c.titleOff[local], c.titleOff[local + 1])
+      );
+    },
+  };
+  return store;
+}
+
+function ensureStoreIndex(store) {
+  if (store.idIndex) return store.idIndex;
+  const ix = new CatalogIdIndex((i) => store.idAt(i));
+  for (let i = 0; i < store.count; i++) ix.add(i, store.idAt(i));
+  ix.builtLen = store.count;
+  store.idIndex = ix;
+  return ix;
+}
+
+// Transpose one batch of records (plain objects, or records read back
+// through a catalog view) into the columns as a single chunk. The
+// dedupe contract is the old streamer's: first occurrence of an
+// artifact_id wins, records without an id are skipped.
+function appendRecordsToStore(store, records) {
+  const total = records ? records.length : 0;
+  if (!total) return;
+  const index = ensureStoreIndex(store);
+  const seenLocal = new Set();
+  const accepted = [];
+  for (let j = 0; j < total; j++) {
+    const r = records[j];
+    if (!r || !r.artifact_id) continue;
+    const id = r.artifact_id;
+    if (seenLocal.has(id)) continue;
+    if (index.get(id) !== undefined) continue;
+    seenLocal.add(id);
+    accepted.push(r);
+  }
+  if (!accepted.length) return;
+  const n = accepted.length;
+  const start = store.count;
+  const idOff = new Uint32Array(n + 1);
+  const titleOff = new Uint32Array(n + 1);
+  const idParts = new Array(n);
+  const titleParts = new Array(n);
+  let idLen = 0;
+  let titleLen = 0;
+  for (let j = 0; j < n; j++) {
+    const r = accepted[j];
+    const idBytes = textEncoder.encode(String(r.artifact_id));
+    const titleBytes = textEncoder.encode(
+      r.title == null ? "" : String(r.title)
+    );
+    idParts[j] = idBytes;
+    titleParts[j] = titleBytes;
+    idLen += idBytes.length;
+    titleLen += titleBytes.length;
+    idOff[j + 1] = idLen;
+    titleOff[j + 1] = titleLen;
+  }
+  const idBytes = new Uint8Array(idLen);
+  const titleBytes = new Uint8Array(titleLen);
+  for (let j = 0; j < n; j++) {
+    idBytes.set(idParts[j], idOff[j]);
+    titleBytes.set(titleParts[j], titleOff[j]);
+  }
+  const chunkIndex = store.chunks.length;
+  store.chunks.push({ start, idBytes, idOff, titleBytes, titleOff });
+  for (let j = 0; j < n; j++) {
+    const r = accepted[j];
+    colPush(store.chunkIdx, chunkIndex);
+    colPush(store.creatorCode, dictCode(store, "creatorMap", "creatorDict", r.creator));
+    colPush(store.yearCode, dictCode(store, "yearMap", "yearDict", r.year));
+    colPush(store.collCode, dictCode(store, "collMap", "collDict", r.collection));
+    colPush(store.fmtCode, dictCode(store, "fmtMap", "fmtDict", r.format));
+    colPush(store.rightsCode, dictCode(store, "rightsMap", "rightsDict", r.rights_status));
+    colPush(store.dlCode, dictCode(store, "dlMap", "dlDict", r.download_status));
+  }
+  store.count += n;
+  // Index the new residents only now that their ids are readable
+  // through the store (probe verification reads keyAt).
+  for (let j = 0; j < n; j++) index.add(start + j, accepted[j].artifact_id);
+  index.builtLen = store.count;
+}
+
+// A record materialized from the columns: a two-field object whose
+// field reads are prototype getters, so a consumer that only reads
+// .collection never pays for the title decode, and nothing per-record
+// is retained beyond the columns themselves.
+class ColumnRecord {
+  constructor(store, i) {
+    this._s = store;
+    this._i = i;
+  }
+  get artifact_id() {
+    return this._s.idAt(this._i);
+  }
+  get title() {
+    return this._s.titleAt(this._i);
+  }
+  get creator() {
+    return this._s.creatorDict[this._s.creatorCode.a[this._i]];
+  }
+  get year() {
+    return this._s.yearDict[this._s.yearCode.a[this._i]];
+  }
+  get collection() {
+    return this._s.collDict[this._s.collCode.a[this._i]];
+  }
+  get format() {
+    return this._s.fmtDict[this._s.fmtCode.a[this._i]];
+  }
+  get rights_status() {
+    return this._s.rightsDict[this._s.rightsCode.a[this._i]];
+  }
+  get download_status() {
+    return this._s.dlDict[this._s.dlCode.a[this._i]];
+  }
+}
+
+const CANONICAL_INDEX = /^(0|[1-9]\d*)$/;
+// The published face of the column store: an array-like snapshot with
+// the length the store had at publish time (publishes replace the
+// view identity, exactly as the old array-slice publishes did, so
+// identity-keyed derivations downstream behave unchanged).
+export function createCatalogView(store, length) {
+  const recAt = (i) => new ColumnRecord(store, i);
+  const view = new Proxy(
+    {},
+    {
+      get(_t, prop) {
+        if (prop === "length") return length;
+        if (prop === Symbol.iterator) {
+          return function* () {
+            for (let i = 0; i < length; i++) yield recAt(i);
+          };
+        }
+        if (typeof prop === "string" && CANONICAL_INDEX.test(prop)) {
+          const i = Number(prop);
+          return i < length ? recAt(i) : undefined;
+        }
+        switch (prop) {
+          case "map":
+            return (cb, thisArg) => {
+              const out = new Array(length);
+              for (let i = 0; i < length; i++) out[i] = cb.call(thisArg, recAt(i), i, view);
+              return out;
+            };
+          case "forEach":
+            return (cb, thisArg) => {
+              for (let i = 0; i < length; i++) cb.call(thisArg, recAt(i), i, view);
+            };
+          case "find":
+            return (cb, thisArg) => {
+              for (let i = 0; i < length; i++) {
+                const r = recAt(i);
+                if (cb.call(thisArg, r, i, view)) return r;
+              }
+              return undefined;
+            };
+          case "findIndex":
+            return (cb, thisArg) => {
+              for (let i = 0; i < length; i++) {
+                if (cb.call(thisArg, recAt(i), i, view)) return i;
+              }
+              return -1;
+            };
+          case "filter":
+            return (cb, thisArg) => {
+              const out = [];
+              for (let i = 0; i < length; i++) {
+                const r = recAt(i);
+                if (cb.call(thisArg, r, i, view)) out.push(r);
+              }
+              return out;
+            };
+          case "slice":
+            return (start = 0, end = length) => {
+              const s = start < 0 ? Math.max(length + start, 0) : Math.min(start, length);
+              const e = end < 0 ? Math.max(length + end, 0) : Math.min(end, length);
+              const out = [];
+              for (let i = s; i < e; i++) out.push(recAt(i));
+              return out;
+            };
+          default:
+            return undefined;
+        }
+      },
+      has(_t, prop) {
+        if (prop === "length") return true;
+        if (typeof prop === "string" && CANONICAL_INDEX.test(prop)) {
+          return Number(prop) < length;
+        }
+        return false;
+      },
+    }
+  );
+  return view;
 }
 let browseMetaPromise = null;
 
@@ -468,11 +798,12 @@ function loadBrowseOrders(fp, total) {
 
 function browsePublishNow(complete) {
   const st = browseState;
-  if (!st || !st.acc) return;
+  if (!st || !st.store) return;
   st.lastPubAt = Date.now();
-  // Publish a copy: the page's derivations key off array identity, and
-  // the working array keeps mutating between publishes.
-  publishIndex(st.acc.slice(), complete);
+  // Publish a view snapshot: the page's derivations key off identity,
+  // and the columns keep growing between publishes — the view pins
+  // the length it was published with, like the old array slice did.
+  publishIndex(createCatalogView(st.store, st.store.count), complete);
 }
 function browsePublish(complete) {
   const st = browseState;
@@ -555,6 +886,10 @@ function browseStop(st, complete) {
   st.onDemand = false;
   st.buffer.clear();
   if (st.timer) { clearTimeout(st.timer); st.timer = null; }
+  // A completed stream never appends again: drop the dedupe hash
+  // table (~33 MB at full scale). A stopped-early stream keeps it —
+  // resume appends against it.
+  if (complete && st.store) st.store.idIndex = null;
   browsePublish(!!complete);
 }
 
@@ -563,14 +898,14 @@ function browseStop(st, complete) {
 // cursor the prefix needs), never the fetch frontier, so a resume
 // re-enters exactly where appending stopped.
 function browseAppend(st) {
-  if (!st.acc) {
-    // First append: base the working array on the resident prefix
+  if (!st.store) {
+    // First append: base the columns on the resident prefix
     // (the bootstrap, a verified exact prefix of the browse order).
     // Start/resume set the frontier from the same base, so the
     // frontier and the prefix length agree.
-    st.acc = (indexCache || bootstrapCache || []).slice();
-    st.seen = new Set(st.acc.map((a) => a.artifact_id));
-    st.cursor = st.acc.length;
+    st.store = createColumnStore();
+    appendRecordsToStore(st.store, indexCache || bootstrapCache || []);
+    st.cursor = st.store.count;
   }
   while (!st.stopped) {
     if (st.failedAt != null && st.cursor >= st.failedAt) {
@@ -588,12 +923,7 @@ function browseAppend(st) {
     // prefix follows the same order. If a page would start behind the
     // resident prefix (orders diverged), trust the page's own cursor
     // arithmetic below and dedupe by id instead of double-adding.
-    for (const r of body.results) {
-      if (r && r.artifact_id && !st.seen.has(r.artifact_id)) {
-        st.seen.add(r.artifact_id);
-        st.acc.push(internBrowseRecord(r));
-      }
-    }
+    appendRecordsToStore(st.store, body.results);
     st.cursor = body.next_cursor != null
       ? body.next_cursor
       : (st.total != null ? st.total : st.cursor + body.results.length);
@@ -601,10 +931,10 @@ function browseAppend(st) {
     if (exhausted) {
       // Everything the server has is now resident: that IS the full
       // catalog for this page, so the final publish may say complete.
-      browseStop(st, st.total != null && st.acc.length >= st.total);
+      browseStop(st, st.total != null && st.store.count >= st.total);
       return;
     }
-    if (st.onDemand && st.acc.length >= st.stopAt) {
+    if (st.onDemand && st.store.count >= st.stopAt) {
       browseStop(st, false);
       return;
     }
@@ -663,8 +993,7 @@ export function startCatalogBrowse() {
       if (browseState && !browseState.stopped) return;
       const base = indexCache || bootstrapCache;
       browseState = {
-        acc: null, // lazily copied from the resident prefix on first page
-        seen: null,
+        store: null, // column store, lazily based on the resident prefix
         cursor: base ? base.length : 0, // append frontier
         fetchCursor: base ? base.length : 0, // next cursor to request
         buffer: new Map(), // cursor -> fetched page awaiting its turn
