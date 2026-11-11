@@ -320,8 +320,14 @@ function warmCatalogBrowse() {
   // themselves once their record settles, and warming it here made the
   // entry's own bucket/shard/text fetches compete with ~675 MB of
   // browse pages — on phones the text lost that fight and never
-  // loaded. The library and Tower landing still warm as before.
+  // loaded.
   if (/^\/tower-of-babel\/library\/.+/.test(window.location.pathname)) return;
+  // The Tower landing is the second exception (2026-11-10, landing-
+  // lazy): the combined landing page no longer warms the stream at
+  // all — its library section starts it when the visitor arrives at
+  // the section or shows intent. Warming here is what pulled the
+  // full catalog into a just-opened landing tab and got it killed.
+  if (window.location.pathname === "/tower-of-babel") return;
   startCatalogBrowse();
 }
 

@@ -1563,6 +1563,18 @@ function TowerLibrarySection({ go, onReady }) {
     // the bootstrap's 20,000 on its own, with no visitor interaction.
     // ?server=0 restores the client behavior below unchanged.
     if (serverFlag) {
+      // Landing-lazy (2026-11-10, Joshua's call after his crash
+      // recording): this section also renders on the combined Tower
+      // landing (/tower-of-babel), where the 2.5 s timer pulled the
+      // full streamed catalog (~0.9 GB resident) into a page the
+      // visitor had only just opened — iOS killed the tab before he
+      // ever reached the library. The automatic start was always
+      // meant to be library-page-only (see the stability note below);
+      // on the landing the stream now starts when the visitor
+      // actually arrives at the library section (its top nearing the
+      // viewport), or on explicit intent (search focus, controls).
+      // No timer on the landing — opening the page loads nothing.
+      const onLandingS = window.location.pathname === "/tower-of-babel";
       let doneS = false;
       let timerS = null;
       const startS = () => {
@@ -1573,7 +1585,13 @@ function TowerLibrarySection({ go, onReady }) {
         startCatalogBrowse();
       };
       const onScrollS = () => {
-        if (window.scrollY > 240) startS();
+        if (!onLandingS) {
+          if (window.scrollY > 240) startS();
+          return;
+        }
+        const el = document.getElementById("tower-results");
+        if (el && el.getBoundingClientRect().top < window.innerHeight + 800)
+          startS();
       };
       const armTimerS = () => {
         if (timerS) clearTimeout(timerS);
@@ -1583,7 +1601,7 @@ function TowerLibrarySection({ go, onReady }) {
         }, 2500);
       };
       window.addEventListener("scroll", onScrollS, { passive: true });
-      armTimerS();
+      if (!onLandingS) armTimerS();
       return () => {
         doneS = true;
         window.removeEventListener("scroll", onScrollS);
@@ -1599,8 +1617,18 @@ function TowerLibrarySection({ go, onReady }) {
       if (timer) clearTimeout(timer);
       requestCatalogIndex();
     };
+    // Same landing-lazy gate as the server branch above: on the
+    // combined landing the client index also waits for the visitor
+    // to arrive at the library section; no timer there.
+    const onLandingC = window.location.pathname === "/tower-of-babel";
     const onScroll = () => {
-      if (window.scrollY > 240) start();
+      if (!onLandingC) {
+        if (window.scrollY > 240) start();
+        return;
+      }
+      const el = document.getElementById("tower-results");
+      if (el && el.getBoundingClientRect().top < window.innerHeight + 800)
+        start();
     };
     const armTimer = () => {
       if (timer) clearTimeout(timer);
@@ -1610,7 +1638,7 @@ function TowerLibrarySection({ go, onReady }) {
       }, 2500);
     };
     window.addEventListener("scroll", onScroll, { passive: true });
-    armTimer();
+    if (!onLandingC) armTimer();
     return () => {
       done = true;
       window.removeEventListener("scroll", onScroll);
@@ -2526,7 +2554,11 @@ function TowerLibrarySection({ go, onReady }) {
                         if (e.target.value) setFiltersOpen(false);
                       }}
                       onFocus={() => {
-                        if (!serverFlag) requestCatalogIndex();
+                        // Search focus is explicit intent on every
+                        // route — on the lazy landing it is also what
+                        // starts the browse stream in server mode.
+                        if (serverFlag) startCatalogBrowse();
+                        else requestCatalogIndex();
                       }}
                       onKeyDown={onSearchKeyDown}
                       onCompositionStart={() => { composingRef.current = true; }}
@@ -2542,7 +2574,15 @@ function TowerLibrarySection({ go, onReady }) {
                       autoFocus={
                         typeof window !== "undefined" &&
                         !!window.matchMedia &&
-                        window.matchMedia("(pointer: fine)").matches
+                        window.matchMedia("(pointer: fine)").matches &&
+                        // Landing-lazy (2026-11-10): no autofocus on
+                        // the combined landing — it fires the search
+                        // focus handler (which starts the catalog
+                        // stream in server mode) and yanks the page
+                        // down to the search box on desktop, pulling
+                        // the full catalog into a just-opened tab.
+                        // The standalone library keeps autofocus.
+                        window.location.pathname !== "/tower-of-babel"
                       }
                       aria-label="Search the library catalog and the full text of every work"
                     />
