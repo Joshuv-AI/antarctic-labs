@@ -322,12 +322,11 @@ function warmCatalogBrowse() {
   // browse pages — on phones the text lost that fight and never
   // loaded.
   if (/^\/tower-of-babel\/library\/.+/.test(window.location.pathname)) return;
-  // The Tower landing is the second exception (2026-11-10, landing-
-  // lazy): the combined landing page no longer warms the stream at
-  // all — its library section starts it when the visitor arrives at
-  // the section or shows intent. Warming here is what pulled the
-  // full catalog into a just-opened landing tab and got it killed.
-  if (window.location.pathname === "/tower-of-babel") return;
+  // The Tower landing is NOT an exception (2026-11-11, Joshua's
+  // explicit reversal of the 2026-11-10 landing-lazy gate): the
+  // landing warms the stream at open, from the top of the page,
+  // exactly like the library route — his call after watching the
+  // landing sit at the 20,000-record bootstrap on his phone.
   startCatalogBrowse();
 }
 
@@ -436,11 +435,17 @@ function App() {
   // "stayed at 20,000 for five or six seconds" report). Effects run
   // after first paint and the index.html boot prefetch already holds
   // the network head start, so the library route warms at mount.
-  // Landing and entry routes keep the 900 ms guard (and the landing
-  // still never auto-starts the section's own loading).
+  // Entry routes keep the 900 ms guard. The landing joins the
+  // library at delay 0 (2026-11-11, Joshua's landing-lazy reversal):
+  // the landing loads the library from the top of the page, the
+  // second it opens — the warm-up is the head start behind the boot
+  // animation on both routes now.
   useEffect(() => {
     if (!path.startsWith("/tower-of-babel")) return;
-    const delay = path === "/tower-of-babel/library" ? 0 : 900;
+    const delay =
+      path === "/tower-of-babel/library" || path === "/tower-of-babel"
+        ? 0
+        : 900;
     const t = setTimeout(warmCatalogBrowse, delay);
     return () => clearTimeout(t);
   }, [path]);
