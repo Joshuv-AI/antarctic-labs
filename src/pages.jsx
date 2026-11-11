@@ -5154,16 +5154,22 @@ function LibraryFullText({ artifact }) {
     heightsModeRef.current = null;
     setActiveMark(null);
     setShareHls([]);
-    if (!canRead) {
-      setTextDone(true);
-      return;
-    }
-    // Check LRU cache first — instant on back/forward navigation.
+    // Check the LRU cache BEFORE the canRead gate (2026-11-10, later):
+    // a completed load is proof the file exists. The files manifest
+    // lands a few seconds after the text starts and can disagree —
+    // the library-wide audit found 154 entries (all arXiv 2602-*)
+    // whose texts serve fine but which the manifest never picked up;
+    // without this ordering, the manifest's late negative verdict
+    // would wipe a text that had already loaded cleanly.
     const cached = getCachedText(url);
     if (cached !== undefined) {
       setText(cached);
       setTextDone(true);
       return () => { live = false; };
+    }
+    if (!canRead) {
+      setTextDone(true);
+      return;
     }
     // Stream the text and paint progressively: the first ~12k chars
     // render as soon as they arrive (lowered from 60k on 2026-11-10 —
