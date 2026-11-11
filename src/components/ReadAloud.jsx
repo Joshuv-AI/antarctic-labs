@@ -147,10 +147,9 @@ function chunkWords(words, per = 180) {
 const WPM = 150; // baseline words-per-minute at 1x for the timer fallback
 
 // ---------------------------------------------------------------------------
-// useReadAloudLegacy — the original Web Speech engine. Kept as the automatic
-// fallback: if the Kokoro model can't load (offline first run, very old
-// browser, synthesis failures), the dispatcher hands control to this engine
-// and listening continues with the system voice.
+// useReadAloudLegacy — the Web Speech engine, and since 2026-11-10 THE
+// Listen engine (see the dispatcher below). The device voice needs no
+// download, no model and no network, so the first tap on Listen speaks.
 // ---------------------------------------------------------------------------
 function useReadAloudLegacy({ text, getStartOffset, chunkElsRef, chunkStarts, onWord }) {
   const [status, setStatus] = useState("idle"); // idle | playing | paused
@@ -197,7 +196,14 @@ function useReadAloudLegacy({ text, getStartOffset, chunkElsRef, chunkStarts, on
       const slice = E.words.slice(ch.from, ch.to);
       const chunkText = text.slice(E.words[ch.from].s, E.words[ch.to - 1].e);
       const utter = new SpeechSynthesisUtterance(chunkText);
-      if (E.voice) utter.voice = E.voice;
+      if (E.voice) {
+        try {
+          utter.voice = E.voice;
+        } catch {
+          /* a voice the utterance rejects must never cost the reader
+             playback — fall back to the default voice */
+        }
+      }
       utter.rate = rateRef.current;
       utter.pitch = 1;
       E.chunkChar0 = E.words[ch.from].s;
@@ -209,6 +215,7 @@ function useReadAloudLegacy({ text, getStartOffset, chunkElsRef, chunkStarts, on
         const E2 = eng.current;
         if (!E2 || E2.utter !== utter) return;
         E2.boundarySeen = true;
+        E2.errStreak = 0;
         // charIndex is relative to this utterance's text.
         const gChar = E2.chunkChar0 + ev.charIndex;
         // Words advance monotonically: scan forward from the last word.
@@ -223,6 +230,7 @@ function useReadAloudLegacy({ text, getStartOffset, chunkElsRef, chunkStarts, on
         const E2 = eng.current;
         if (!E2 || E2.utter !== utter) return;
         if (statusRef.current !== "playing") return;
+        E2.errStreak = 0;
         const nextWi = E2.chunks[E2.chunkIdx].to;
         E2.lastWi = nextWi;
         setWordIdx(nextWi);
@@ -233,36 +241,72 @@ function useReadAloudLegacy({ text, getStartOffset, chunkElsRef, chunkStarts, on
         if (!E2 || E2.utter !== utter) return;
         // "interrupted" / "canceled" are our own doing (pause/seek/stop).
         if (ev && (ev.error === "interrupted" || ev.error === "canceled")) return;
-        setStatusBoth("idle");
-        if (onWord) onWord(null);
+        if (statusRef.current !== "playing") return;
+        // A chunk that fails to speak is skipped, never surfaced: the
+        // reader sees no error, playback just moves on. Only a run of
+        // consecutive failures (a fundamentally broken synth) stops.
+        E2.errStreak = (E2.errStreak || 0) + 1;
+        if (E2.errStreak >= 3 || E2.chunkIdx + 1 >= E2.chunks.length) {
+          setStatusBoth("idle");
+          if (onWord) onWord(null);
+          return;
+        }
+        const nextWi = E2.chunks[E2.chunkIdx].to;
+        E2.lastWi = nextWi;
+        setWordIdx(nextWi);
+        speakChunk(E2.chunkIdx + 1);
       };
       synth.speak(utter);
 
-      // iOS Safari often never fires boundary events: if none arrive soon,
-      // fall back to timer-estimated word advancement for this utterance.
+      // One watchdog interval per utterance:
+      //  - iOS Safari often never fires boundary events: until one
+      //    arrives, advance the highlight on a timer (150 WPM).
+      //  - Chrome stalls long utterances (~15 s, remote voices): a
+      //    periodic resume() keeps the speech going.
+      //  - If the browser silently dropped the utterance (nothing
+      //    speaking, nothing pending, no events), restart this chunk
+      //    once — silently, never with an error.
       clearTimer();
+      E.chunkT0 = Date.now();
+      E.lastResume = Date.now();
+      E.dropped = false;
       E.timer = setInterval(() => {
         const E2 = eng.current;
         if (!E2 || E2.utter !== utter || statusRef.current !== "playing") return;
-        if (E2.boundarySeen) {
-          clearTimer();
-          return;
+        const now = Date.now();
+        if (!E2.boundarySeen) {
+          const elapsed = now - E2.chunkT0;
+          const wordsIn = Math.floor(
+            (elapsed / 60000) * WPM * rateRef.current
+          );
+          const wi = Math.min(
+            E2.chunks[E2.chunkIdx].from + wordsIn,
+            E2.chunks[E2.chunkIdx].to - 1
+          );
+          if (wi !== E2.lastWi) {
+            E2.lastWi = wi;
+            setWordIdx(wi);
+            if (onWord) onWord(E2.words[wi].s, E2.words[wi].e, wi);
+          }
         }
-        const elapsed = Date.now() - E2.chunkT0;
-        const wordsIn = Math.floor(
-          (elapsed / 60000) * WPM * rateRef.current
-        );
-        const wi = Math.min(
-          E2.chunks[E2.chunkIdx].from + wordsIn,
-          E2.chunks[E2.chunkIdx].to - 1
-        );
-        if (wi !== E2.lastWi) {
-          E2.lastWi = wi;
-          setWordIdx(wi);
-          if (onWord) onWord(E2.words[wi].s, E2.words[wi].e, wi);
+        if (now - E2.lastResume >= 10000) {
+          E2.lastResume = now;
+          try {
+            synth.resume();
+          } catch {
+            /* noop */
+          }
+        }
+        if (
+          !E2.dropped &&
+          now - E2.chunkT0 > 4000 &&
+          !synth.speaking &&
+          !synth.pending
+        ) {
+          E2.dropped = true;
+          speakChunk(E2.chunkIdx);
         }
       }, 120);
-      E.chunkT0 = Date.now();
     },
     [text, onWord]
   );
@@ -449,7 +493,8 @@ function useReadAloudLegacy({ text, getStartOffset, chunkElsRef, chunkStarts, on
 }
 
 // ---------------------------------------------------------------------------
-// Kokoro engine (2026-10-21) — the primary Listen voice.
+// Kokoro engine (2026-10-21) — RETIRED from the playback path 2026-11-10
+// (see the dispatcher below); kept unused for reference.
 //
 // Kokoro-82M (open source, Apache-2.0) synthesizes speech on-device in a
 // Web Worker (src/lib/kokoro-worker.js), lazily loaded on the first Listen
@@ -1142,51 +1187,25 @@ function useReadAloudKokoro({
 }
 
 // ---------------------------------------------------------------------------
-// useReadAloud — dispatcher: Kokoro first, legacy Web Speech on any fatal
-// failure. If a Listen tap was in flight when Kokoro failed, the legacy
-// engine starts automatically so the tap still results in speech.
+// useReadAloud — the Listen dispatcher (2026-11-10): the device voice
+// (Web Speech) is THE engine. It is built into the browser and OS, so the
+// first tap on Listen speaks immediately — no model download, no
+// "preparing voice" step, nothing to fail. The Kokoro on-device model
+// was retired from the playback path: its one-time ~90 MB download was
+// the step that kept failing for readers (Joshua, 2026-11-04), and Listen
+// must simply work on the first press, with no download UI and no error
+// text ever shown. The Kokoro engine above stays in the file, unused,
+// for reference. Failures inside the device-voice engine are recovered
+// silently (skip the chunk, restart a dropped utterance) — the reader
+// never sees an error message.
 // ---------------------------------------------------------------------------
 export function useReadAloud(args) {
-  const [mode, setMode] = useState(KOKORO_POSSIBLE ? "kokoro" : "legacy");
-  const [kokoroError, setKokoroError] = useState(null);
-  const autoStartRef = useRef(false);
-  const onFatalError = useCallback((reason) => {
-    // Keep the failure reason: the player bar shows it when the device
-    // voice takes over, so a fallback is never silent or mysterious.
-    if (reason) setKokoroError(String(reason).slice(0, 150));
-    setMode((m) => (m === "kokoro" ? "legacy" : m));
-  }, []);
-  const kokoro = useReadAloudKokoro({ ...args, onFatalError });
   const legacy = useReadAloudLegacy(args);
-
-  const startFromCurrent = useCallback(() => {
-    autoStartRef.current = true;
-    const active = mode === "kokoro" ? kokoro : legacy;
-    return active.startFromCurrent();
-  }, [mode, kokoro, legacy]);
-
-  useEffect(() => {
-    if (mode === "legacy" && autoStartRef.current) {
-      autoStartRef.current = false;
-      legacy.startFromCurrent();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode]);
-
-  if (mode === "legacy") {
-    return {
-      ...legacy,
-      startFromCurrent,
-      voiceState: "fallback",
-      voiceProgress: 100,
-      kokoroError,
-    };
-  }
   return {
-    ...kokoro,
-    startFromCurrent,
-    supported: kokoro.supported || legacy.supported,
-    kokoroError,
+    ...legacy,
+    voiceState: "ready",
+    voiceProgress: 100,
+    kokoroError: null,
   };
 }
 

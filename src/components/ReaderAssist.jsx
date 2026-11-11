@@ -51,7 +51,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { extractContents } from "../lib/contents.js";
-import { useReadAloud, ReadAloudBar, ReadAloudLoadingBar, ListenIcon } from "./ReadAloud.jsx";
+import { useReadAloud, ReadAloudBar, ListenIcon } from "./ReadAloud.jsx";
 
 export const SUPPORTS_HIGHLIGHTS =
   typeof CSS !== "undefined" &&
@@ -2266,19 +2266,6 @@ export default function ReaderAssist({
           }}
           onSkip={readAloud.skip}
           onRate={readAloud.setRate}
-          notice={
-            readAloud.kokoroError
-              ? `Neural voice unavailable — using device voice (${readAloud.kokoroError})`
-              : null
-          }
-        />
-      )}
-
-      {/* One-time voice download (Kokoro model) progress. */}
-      {!listening && readAloud.voiceState === "loading" && (
-        <ReadAloudLoadingBar
-          progress={readAloud.voiceProgress}
-          onCancel={() => readAloud.stop()}
         />
       )}
     </div>,
