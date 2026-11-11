@@ -316,6 +316,12 @@ function dockActiveId(path) {
 // page — or watching the Tower boot animation — means the catalog
 // is part or all resident by the time the library itself opens.
 function warmCatalogBrowse() {
+  // Entry pages are the exception (2026-11-10): they start the stream
+  // themselves once their record settles, and warming it here made the
+  // entry's own bucket/shard/text fetches compete with ~675 MB of
+  // browse pages — on phones the text lost that fight and never
+  // loaded. The library and Tower landing still warm as before.
+  if (/^\/tower-of-babel\/library\/.+/.test(window.location.pathname)) return;
   startCatalogBrowse();
 }
 

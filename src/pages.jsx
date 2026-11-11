@@ -4642,8 +4642,14 @@ export function LibraryArtifact({ go, params, onReady }) {
     // after the text has started (its existence check is optimistic
     // while it is out). Client mode (?server=0) keeps the old
     // behavior — that pipeline is the one the visitor opted into.
-    if (towerServerMode()) startCatalogBrowse();
-    else requestCatalogIndex();
+    // Server mode no longer starts the browse stream here (2026-11-10,
+    // later): it starts once this entry's full record has settled
+    // (see the effect below), so the placement bucket, the catalog
+    // shard, and the text fetch own the connection during the seconds
+    // that decide whether the text appears at all. The stream's jobs
+    // on an entry page — the fallback index record and prev/next
+    // neighbors — lose nothing by starting a few seconds later.
+    if (!towerServerMode()) requestCatalogIndex();
   }, [params.id]);
   // Analytics: reader scroll-depth milestones (25/50/75/100%), once each
   // per work per session. Passive listener, no layout reads beyond the
@@ -4691,6 +4697,11 @@ export function LibraryArtifact({ go, params, onReady }) {
     attempt(false);
     return () => { live = false; };
   }, [params.id]);
+  // Deferred browse stream (2026-11-10): starts when the full record
+  // settles — see the mount effect above for why.
+  useEffect(() => {
+    if (fullSettled && towerServerMode()) startCatalogBrowse();
+  }, [params.id, fullSettled]);
   // Analytics: one work_viewed per work per session, fired when any
   // usable record for the entry is in hand.
   useEffect(() => {
@@ -4974,7 +4985,28 @@ function countWords(t) {
 function LibraryFullText({ artifact }) {
   const artifactId = artifact.artifact_id;
   const status = artifact.download_status;
-  const url = artifact.download_url;
+  const recordUrl = artifact.download_url;
+  // Derived text URL (2026-11-10, Joshua's report: a random PAPERS
+  // entry sat on "still being prepared" forever on his phone). The
+  // compact record the entry page paints from carries download_status
+  // but no download_url; the URL used to arrive only with the full
+  // record, which sits inside a 9–19 MB catalog shard — on a phone
+  // that fetch IS the wait, and when it loses to its abort budget the
+  // text never starts at all. For local AVAILABLE entries the URL is
+  // a pure function of the id (verified against ~68k full records
+  // across four shards: every AVAILABLE record's download_url is
+  // /tower-of-babel/<id>.txt, except families whose files carry a
+  // title-suffixed name, e.g. podcast-*). Those exceptions are safe:
+  // the existence check below rejects a derived name the manifest
+  // doesn't hold, and a derived fetch that 404s is swallowed by the
+  // fetch effect — the full record's real URL takes over when it
+  // lands. The record's own URL, when present, always wins.
+  const url =
+    recordUrl ||
+    (status === "AVAILABLE" && artifactId
+      ? `/tower-of-babel/${artifactId}.txt`
+      : undefined);
+  const urlIsDerived = !recordUrl && !!url;
   // Text background mode: cycles transparent -> light -> dark (2026-10-18).
   // Only affects the .tower-fulltext section below the divider.
   const [textMode, setTextMode] = useState("transparent");
@@ -5142,6 +5174,17 @@ function LibraryFullText({ artifact }) {
     // are render-only. Chunking is line-based and prefix-stable, so
     // the only thing a later publish can change is the tail line of
     // the last mounted chunk.
+    // A failed DERIVED attempt (URL derived from the id) is not an
+    // error state when nothing has painted yet: the full record is
+    // already loading and carries the real URL, whose arrival re-runs
+    // this effect. Stay on "Loading full text…" until then instead of
+    // flashing "couldn't be loaded" for an address nobody promised.
+    const failFetch = (e, anyPainted) => {
+      if (!live || (e && e.name === "AbortError")) return;
+      if (!(urlIsDerived && !anyPainted)) setTextError(true);
+      setTextDone(true);
+    };
+    let painted = false;
     fetch(url, { signal: ctrl.signal })
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -5164,6 +5207,7 @@ function LibraryFullText({ artifact }) {
             if (done) break;
             acc += decoder.decode(value, { stream: true });
             if (live && acc.length >= nextPublish) {
+              painted = true;
               setText(acc);
               nextPublish = Math.max(nextPublish * 2, acc.length + 500000);
             }
@@ -5175,17 +5219,20 @@ function LibraryFullText({ artifact }) {
             setTextDone(true);
           }
         } catch (e) {
-          if (live && e.name !== "AbortError") setTextError(true);
-          if (live) setTextDone(true);
+          failFetch(e, painted);
         }
       })
       .catch((e) => {
-        if (live && e.name !== "AbortError") setTextError(true);
-        if (live) setTextDone(true);
+        failFetch(e, painted);
       });
     return () => { live = false; ctrl.abort(); };
+    // urlIsDerived is a dep on purpose: when the full record lands
+    // carrying the same URL string as a real (non-derived) URL, the
+    // effect re-runs — a cache hit in the success case, and in the
+    // rare missing-file case the retry surfaces the proper error
+    // state instead of sitting on "Loading…" forever.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url, canRead]);
+  }, [url, canRead, urlIsDerived]);
 
   const chunks = useMemo(() => (text ? chunkReaderText(text) : []), [text]);
   // Cumulative character offsets per chunk — maps global match offsets to
