@@ -20,28 +20,31 @@ export const site = {
     eyebrow: "PROPRIETARY TRADING & COMPUTING",
     title: ["WE TRADE", "OUR OWN", "CAPITAL."],
     sub: "A proprietary trading and computing firm. We trade our own capital on infrastructure we own.",
-    body: "Antarctic Labs is a proprietary trading and computing firm. We build our own infrastructure, run our own systems, and trade our own capital. Nothing here is a service, and nothing is built for clients.",
-    method: "Our capital. Our hardware. Our code.",
+    body: "Antarctic Labs is an independent laboratory. We build AI and computing systems to solve hard problems — and we judge the lab by the work it puts into the world.",
+    method: "Our systems. Our infrastructure. Our work.",
   },
 
-  // Territory list rendered on the homepage below the stats —
-  // what the firm itself does. No services, no client links.
+  // Capability list rendered on the homepage below the featured
+  // project — what the lab does, as background. No services, no
+  // client links. (2026-11-11 revamp: the homepage leads with the
+  // lab and the Tower of Babel; trading is background experience,
+  // one capability among several.)
   territory: [
     [
-      "PROPRIETARY TRADING",
-      "Trading algorithms developed in-house, run on our own infrastructure. Strategies are tested on paper and with limited capital before they are trusted with more.",
+      "APPLIED AI SYSTEMS",
+      "We build AI systems that do real work — research, analysis, and automation — and point them at hard problems in any field where they give the lab an opening.",
+    ],
+    [
+      "DATA AT SCALE",
+      "Pipelines that collect, clean, and structure information by the million documents, turning scattered and fragile material into archives and datasets that hold up.",
+    ],
+    [
+      "TRADING SYSTEMS & CRYPTO",
+      "Algorithmic trading systems developed and run in-house, across traditional and crypto markets. Every strategy is tested on paper and with limited capital before it is trusted with more.",
     ],
     [
       "OWNED INFRASTRUCTURE",
-      "A small data center of our own in the Philippines, built around hardware we own and operate. Power, cooling, and backup are designed in from the start.",
-    ],
-    [
-      "NETWORK POSITION",
-      "A Philippine base with a direct connection toward Hong Kong. Routes are benchmarked against the actual exchanges and endpoints we use, never assumed from a cable map.",
-    ],
-    [
-      "RESEARCH AND SYSTEMS",
-      "Strategy research, execution, monitoring, and risk controls are kept separate, so a problem in one is visible in the others.",
+      "Everything runs on hardware we own and operate — including a small data center of our own in the Philippines, with power, cooling, and backup designed in from the start.",
     ],
   ],
 

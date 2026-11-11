@@ -226,7 +226,7 @@ function homeJsonLd(url) {
       {
         ...organizationJsonLd(url),
         description:
-          "Antarctic Labs is a proprietary trading and computing firm building its own data center in the Philippines. Our capital, our hardware, our systems. Not for hire.",
+          "Antarctic Labs is an independent lab building AI systems for hard problems. Home of the Tower of Babel, a free library of 2,557,923 works.",
       },
       {
         "@type": "WebSite",

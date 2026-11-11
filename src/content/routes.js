@@ -29,9 +29,9 @@ const SITE_NAME = site.brand;
 // Titles stay near ~60 chars, descriptions near ~155, keyword up front.
 export const routeMeta = {
   "/": {
-    title: `Proprietary Trading & Computing | ${SITE_NAME}`,
+    title: `Applied AI Lab & Tower of Babel Library | ${SITE_NAME}`,
     description:
-      "Antarctic Labs is a proprietary trading and computing firm building its own data center in the Philippines. Our capital, our hardware, our systems. Not for hire.",
+      "Antarctic Labs is an independent lab building AI systems for hard problems. Home of the Tower of Babel, a free library of 2,557,923 works.",
   },
   "/tower-of-babel": {
     title: `Free Online Library | Tower of Babel`,

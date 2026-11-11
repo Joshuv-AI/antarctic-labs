@@ -1025,7 +1025,7 @@ function HomeStat({ value, label, started }) {
   const display = useCountUp(value, started);
   return (
     <div className="home-stat">
-      <b>{display}</b>
+      <b>{display.toLocaleString("en-US")}</b>
       <span>{label}</span>
     </div>
   );
@@ -1057,15 +1057,16 @@ function HomeStats() {
     io.observe(el);
     return () => io.disconnect();
   }, []);
-  // Static figures for the firm as it stands: one owned data center
-  // (in formation in the Philippines), two countries, zero clients.
-  // The firm takes no client work. (2026-10-22: the old "3 PARTNERS"
-  // figure came out with the partner details — the stats describe
-  // what the firm does, not who is in it.)
+  // Static figures, led by the Tower of Babel — the lab's featured
+  // project: 2,557,923 works preserved across seven collections,
+  // with zero paywalls. (2026-11-11 homepage revamp: the stats
+  // describe the work, led by the library. The stats describe what
+  // the lab does, not who is in it — see the 2026-10-22 note that
+  // removed the partner figure.)
   const stats = [
-    [1, "DATA CENTER"],
-    [2, "COUNTRIES"],
-    [0, "CLIENTS"],
+    [2557923, "WORKS PRESERVED"],
+    [7, "COLLECTIONS"],
+    [0, "PAYWALLS"],
   ];
   return (
     <section
@@ -1399,6 +1400,43 @@ function Home({ go }) {
         </div>
       </section>
       <HomeStats />
+      <section id="tower" className="copy-block section reveal">
+        <span className="section-index">FEATURED PROJECT</span>
+        <div>
+          <p className="display-copy">
+            Every work that matters, within everyone's reach.
+          </p>
+          <p className="body-copy">
+            Tower of Babel began with a conviction: the written record of humanity should be preserved, not lost — deleted, quietly rewritten, or locked away. So the lab built a library that keeps it: sacred texts from every tradition, the classics, philosophy, science, and law, declassified government documents, folklore, and long-form conversations — each work verified against its source and preserved as clean, searchable text.
+          </p>
+          <p className="body-copy">
+            It now holds 2,557,923 works, and it is free for anyone. Read in the browser, search the full text where present, listen to works read aloud, or build on the collection through a public API — free keys for anyone, with paid tiers for heavier use. No accounts, no paywalls: a working library for readers, students, researchers, and AI systems.
+          </p>
+          <p className="home-tower-collections">
+            PAPERS 1,130,210 · LAW 1,277,197 · BOOKS 81,631 · REFERENCE 41,137 · DECLASSIFIED 26,294 · PODCASTS 1,091 · DOCUMENTS 363
+          </p>
+          <div className="home-tower-ctas">
+            <button type="button"
+              className="text-link"
+              onClick={() => go("/tower-of-babel")}
+            >
+              ENTER THE TOWER
+              <span aria-hidden="true">
+                ↗
+              </span>
+            </button>
+            <button type="button"
+              className="text-link"
+              onClick={() => go("/tower-of-babel/library")}
+            >
+              BROWSE THE LIBRARY
+              <span aria-hidden="true">
+                ↗
+              </span>
+            </button>
+          </div>
+        </div>
+      </section>
       <section id="territory" className="territory section reveal">
         <div className="territory-list">
           {content.territory.map(([title, desc, link]) => (
@@ -1427,20 +1465,17 @@ function Home({ go }) {
           ))}
         </div>
       </section>
-      <section id="firm" className="copy-block section reveal">
-        <span className="section-index">THE FIRM</span>
+      <section id="lab" className="copy-block section reveal">
+        <span className="section-index">THE LAB</span>
         <div>
           <p className="display-copy">
             Small, private, and deliberate.
           </p>
           <p className="body-copy">
-            The work is proprietary trading, the infrastructure it runs on, and the research and systems behind both. Algorithms are developed in-house and run on machines the firm owns and operates. Strategy research, execution, monitoring, and risk controls are kept separate, so a problem in one is visible in the others.
+            Antarctic Labs takes on few things and finishes them properly. We would rather point to a working library of 2,557,923 works than a page of promises — the projects are the argument.
           </p>
           <p className="body-copy">
-            Where things stand: the Philippine company is being registered, the office is selected, and the hardware build runs in phases. Trading starts on paper, then with limited capital.
-          </p>
-          <p className="body-copy">
-            We are not hiring and we do not take clients.
+            If a problem is hard, important, and unsolved, it is the kind of problem this lab exists for.
           </p>
         </div>
       </section>

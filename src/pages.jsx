@@ -160,23 +160,11 @@ export function TowerOfBabel({ go, onReady }) {
         ))}
       </section>
 
-      {/* About the project — collapsed by default so the landing stays tight;
-          the copy pops open on tap instead of sitting in the way. */}
-      <section className="section tower-about-section">
-        <details className="tower-about">
-          <summary>
-            <span className="section-index">ABOUT THE PROJECT</span>
-            <span className="tower-about-chevron" aria-hidden="true">▾</span>
-          </summary>
-          <div className="tower-about-body">
-            {towerOfBabel.project.map((p, i) => (
-              <p className="body-copy" key={i}>{p}</p>
-            ))}
-            <div className="tower-about-subhead">ABOUT THE CATALOG</div>
-            <p className="body-copy">{towerOfBabel.catalogNote}</p>
-          </div>
-        </details>
-      </section>
+      {/* About the project — removed 2026-11-11 (Joshua): the project
+          story now lives on the homepage as the featured-project
+          section; the landing goes straight from the intro to the
+          library. The towerOfBabel.project / catalogNote copy is
+          retired with it. */}
 
       {/* The full library, poured directly below the landing content.
           Collections live inside the library browse section below as a

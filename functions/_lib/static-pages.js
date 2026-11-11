@@ -79,23 +79,29 @@ ${FOOT}
 const PAGES = {
   "/": {
     path: "/",
-    title: "Proprietary Trading & Computing | ANTARCTIC LABS",
+    title: "Applied AI Lab & Tower of Babel Library | ANTARCTIC LABS",
     description:
-      "Antarctic Labs is a proprietary trading and computing firm building its own data center in the Philippines. Our capital, our hardware, our systems. Not for hire.",
+      "Antarctic Labs is an independent lab building AI systems for hard problems. Home of the Tower of Babel, a free library of 2,557,923 works.",
     body: `<h1>We trade our own capital.</h1>
 <p>A proprietary trading and computing firm. We trade our own capital on infrastructure we own.</p>
-<p>Antarctic Labs is a proprietary trading and computing firm. We build our own infrastructure, run our own systems, and trade our own capital. Nothing here is a service, and nothing is built for clients.</p>
-<p>Our capital. Our hardware. Our code.</p>
-<h2>Proprietary trading</h2>
-<p>Trading algorithms developed in-house, run on our own infrastructure. Strategies are tested on paper and with limited capital before they are trusted with more.</p>
-<h2>Owned infrastructure</h2>
-<p>A small data center of our own in the Philippines, built around hardware we own and operate. Power, cooling, and backup are designed in from the start.</p>
-<h2>Network position</h2>
-<p>A Philippine base with a direct connection toward Hong Kong. Routes are benchmarked against the actual exchanges and endpoints we use, never assumed from a cable map.</p>
-<h2>Research and systems</h2>
-<p>Strategy research, execution, monitoring, and risk controls are kept separate, so a problem in one is visible in the others.</p>
+<p>Antarctic Labs is an independent laboratory. We build AI and computing systems to solve hard problems — and we judge the lab by the work it puts into the world.</p>
+<p>Our systems. Our infrastructure. Our work.</p>
 <h2>The Tower of Babel</h2>
-<p>Antarctic Labs also runs the <a href="/tower-of-babel">Tower of Babel</a>, a free online library and archival project: 2,557,923 books, sacred texts, declassified documents, papers, and transcripts preserved in clean, searchable text. No accounts, no paywalls.</p>`,
+<p>Every work that matters, within everyone's reach. Tower of Babel began with a conviction: the written record of humanity should be preserved, not lost — deleted, quietly rewritten, or locked away. So the lab built a library that keeps it: sacred texts from every tradition, the classics, philosophy, science, and law, declassified government documents, folklore, and long-form conversations — each work verified against its source and preserved as clean, searchable text.</p>
+<p>It now holds 2,557,923 works, and it is free for anyone. Read in the browser, search the full text where present, listen to works read aloud, or build on the collection through a public API — free keys for anyone, with paid tiers for heavier use. No accounts, no paywalls: a working library for readers, students, researchers, and AI systems.</p>
+<p>Papers 1,130,210 · Law 1,277,197 · Books 81,631 · Reference 41,137 · Declassified 26,294 · Podcasts 1,091 · Documents 363.</p>
+<p><a href="/tower-of-babel">Enter the Tower</a> · <a href="/tower-of-babel/library">Browse the library</a></p>
+<h2>Applied AI systems</h2>
+<p>We build AI systems that do real work — research, analysis, and automation — and point them at hard problems in any field where they give the lab an opening.</p>
+<h2>Data at scale</h2>
+<p>Pipelines that collect, clean, and structure information by the million documents, turning scattered and fragile material into archives and datasets that hold up.</p>
+<h2>Trading systems &amp; crypto</h2>
+<p>Algorithmic trading systems developed and run in-house, across traditional and crypto markets. Every strategy is tested on paper and with limited capital before it is trusted with more.</p>
+<h2>Owned infrastructure</h2>
+<p>Everything runs on hardware we own and operate — including a small data center of our own in the Philippines, with power, cooling, and backup designed in from the start.</p>
+<h2>The lab</h2>
+<p>Small, private, and deliberate. Antarctic Labs takes on few things and finishes them properly. We would rather point to a working library of 2,557,923 works than a page of promises — the projects are the argument.</p>
+<p>If a problem is hard, important, and unsolved, it is the kind of problem this lab exists for.</p>`,
   },
 
   "/about": {
@@ -186,12 +192,6 @@ PAGES["/tower-of-babel"] = {
     "A free, searchable online library: 2,557,923 books, sacred texts, declassified documents, papers, and transcripts preserved in clean, readable text.",
   body: `<h1>Tower of Babel</h1>
 <p>Tower of Babel is a library and archival project from Antarctic Labs — 2,557,923 books, documents, transcripts, and texts in one organized, searchable collection. Individual resources appear here once finalized.</p>
-<h2>About the project</h2>
-<p>Tower of Babel began as one person's reaction to a headline: Anthropic was scanning books and destroying them afterward. If the organizations building the future of knowledge are comfortable destroying books, someone should be preserving them. It started with old texts, then the sacred texts of every culture and tradition — no favoritism, no picking sides — preserved as unchangeable copies nobody could rewrite or take away.</p>
-<p>From there it grew toward everything else that gets lost — suppressed, deleted, quietly rewritten: secret societies, folklore passed down through generations, firsthand accounts of the unexplained. The long conversations joined too — hours-long podcasts with experts and researchers, kept searchable instead of vanishing into a feed. Today it holds 2,557,923 full texts: sacred and religious texts from every tradition, philosophy, history, science, law, and literature, declassified government documents, the unexplained, folklore and mythology, and full podcast transcripts — every entry verified against its source and preserved as clean, searchable text.</p>
-<p>Named for the old story of the gathering place where the works of the world were meant to be open and shared — no suppression, no hiding. And with hundreds of thousands of texts side by side, a deeper purpose emerges: patterns surface. A story in one tradition echoes a declassified document in another; a folktale rhymes with a witness account. Anyone can read, anyone can research — and maybe unravel a greater story than any single book could tell. Something like the Akashic records: the whole of human knowledge, unlocked.</p>
-<h2>About the catalog</h2>
-<p>The catalog holds 2,557,923 texts and keeps growing daily: books, declassified documents, podcast transcripts, reference works, and papers. No accounts, no paywalls — full texts for anyone who wants them, and clean, citable source material for researchers and AI agents. Every record carries its own rights status, and the entire catalog is published as machine-readable files with API access, so the collection can be searched, filtered, and retrieved programmatically.</p>
 <h2>The collections</h2>
 <ul>
 <li>Books — classic literature, philosophy, and foundational documents</li>
