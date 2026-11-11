@@ -82,9 +82,9 @@ const PAGES = {
     title: "Applied AI Lab & Tower of Babel Library | ANTARCTIC LABS",
     description:
       "Antarctic Labs is an independent lab building AI systems for hard problems. Home of the Tower of Babel, a free library of 2,557,923 works.",
-    body: `<h1>We trade our own capital.</h1>
-<p>A proprietary trading and computing firm. We trade our own capital on infrastructure we own.</p>
-<p>Antarctic Labs is an independent laboratory. We build AI and computing systems to solve hard problems — and we judge the lab by the work it puts into the world.</p>
+    body: `<h1>We solve hard problems.</h1>
+<p>An independent laboratory for AI and computing — judged by the work it puts into the world.</p>
+<p>We build AI and computing systems and point them at hard problems — in any field where they appear, and we stay with them until they are solved.</p>
 <p>Our systems. Our infrastructure. Our work.</p>
 <h2>The Tower of Babel</h2>
 <p>Every work that matters, within everyone's reach. Tower of Babel began with a conviction: the written record of humanity should be preserved, not lost — deleted, quietly rewritten, or locked away. So the lab built a library that keeps it: sacred texts from every tradition, the classics, philosophy, science, and law, declassified government documents, folklore, and long-form conversations — each work verified against its source and preserved as clean, searchable text.</p>

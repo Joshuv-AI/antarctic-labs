@@ -1058,15 +1058,15 @@ function HomeStats() {
     return () => io.disconnect();
   }, []);
   // Static figures, led by the Tower of Babel — the lab's featured
-  // project: 2,557,923 works preserved across seven collections,
-  // with zero paywalls. (2026-11-11 homepage revamp: the stats
-  // describe the work, led by the library. The stats describe what
-  // the lab does, not who is in it — see the 2026-10-22 note that
-  // removed the partner figure.)
+  // project: 2,557,923 works preserved across seven collections.
+  // (2026-11-11 homepage revamp: the stats describe the work, led by
+  // the library. The stats describe what the lab does, not who is in
+  // it — see the 2026-10-22 note that removed the partner figure.
+  // The 0 PAYWALLS stat was removed later the same day, Joshua's
+  // call — the strip is exactly the two Tower figures.)
   const stats = [
     [2557923, "WORKS PRESERVED"],
     [7, "COLLECTIONS"],
-    [0, "PAYWALLS"],
   ];
   return (
     <section

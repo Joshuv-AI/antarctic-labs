@@ -18,9 +18,9 @@ export const site = {
   // Home / arrival copy.
   hero: {
     eyebrow: "PROPRIETARY TRADING & COMPUTING",
-    title: ["WE TRADE", "OUR OWN", "CAPITAL."],
-    sub: "A proprietary trading and computing firm. We trade our own capital on infrastructure we own.",
-    body: "Antarctic Labs is an independent laboratory. We build AI and computing systems to solve hard problems — and we judge the lab by the work it puts into the world.",
+    title: ["WE SOLVE", "HARD", "PROBLEMS."],
+    sub: "An independent laboratory for AI and computing — judged by the work it puts into the world.",
+    body: "We build AI and computing systems and point them at hard problems — in any field where they appear, and we stay with them until they are solved.",
     method: "Our systems. Our infrastructure. Our work.",
   },
 
