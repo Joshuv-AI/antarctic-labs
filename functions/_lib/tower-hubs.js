@@ -66,7 +66,7 @@ export const MAX_PAGES = 50; // stated cap: 50 pages x 200 = 10,000 works per hu
 // every record shares this one repository snapshot datestamp (the date
 // this endpoint's catalog snapshot was taken). The catalog grows daily;
 // harvesters should re-harvest in full rather than rely on from/until.
-export const CATALOG_SNAPSHOT_DATE = "2026-11-03";
+export const CATALOG_SNAPSHOT_DATE = "2026-11-10";
 
 // ---------------------------------------------------------------------
 // Small helpers

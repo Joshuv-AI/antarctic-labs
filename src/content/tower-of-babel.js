@@ -14,17 +14,17 @@ import { libraryFaqs, apiPage } from "./tower-api.js";
 export const towerOfBabel = {
   heading: "TOWER OF BABEL",
   intro: [
-    "Tower of Babel is a library and archival project from Antarctic Labs — more than 660,000 books, documents, transcripts, and texts in one organized, searchable collection. Individual resources appear here once finalized.",
+    "Tower of Babel is a library and archival project from Antarctic Labs — 2,557,923 books, documents, transcripts, and texts in one organized, searchable collection. Individual resources appear here once finalized.",
   ],
   project: [
     "Tower of Babel began as one person's reaction to a headline: Anthropic was scanning books and destroying them afterward. If the organizations building the future of knowledge are comfortable destroying books, someone should be preserving them. It started with old texts, then the sacred texts of every culture and tradition — no favoritism, no picking sides — preserved as unchangeable copies nobody could rewrite or take away.",
-    "From there it grew toward everything else that gets lost — suppressed, deleted, quietly rewritten: secret societies, folklore passed down through generations, firsthand accounts of the unexplained. The long conversations joined too — hours-long podcasts with experts and researchers, kept searchable instead of vanishing into a feed. Today it holds more than 600,000 full texts: sacred and religious texts from every tradition, philosophy, history, science, law, and literature, declassified government documents, the unexplained, folklore and mythology, and full podcast transcripts — every entry verified against its source and preserved as clean, searchable text.",
+    "From there it grew toward everything else that gets lost — suppressed, deleted, quietly rewritten: secret societies, folklore passed down through generations, firsthand accounts of the unexplained. The long conversations joined too — hours-long podcasts with experts and researchers, kept searchable instead of vanishing into a feed. Today it holds 2,557,923 full texts: sacred and religious texts from every tradition, philosophy, history, science, law, and literature, declassified government documents, the unexplained, folklore and mythology, and full podcast transcripts — every entry verified against its source and preserved as clean, searchable text.",
     "Named for the old story of the gathering place where the works of the world were meant to be open and shared — no suppression, no hiding. And with hundreds of thousands of texts side by side, a deeper purpose emerges: patterns surface. A story in one tradition echoes a declassified document in another; a folktale rhymes with a witness account. Anyone can read, anyone can research — and maybe unravel a greater story than any single book could tell. Something like the Akashic records: the whole of human knowledge, unlocked.",
   ],
   // About the catalog — rendered inside the ABOUT THE PROJECT dropdown,
   // condensed from the old bottom-of-page section.
   catalogNote:
-    "The catalog holds more than 600,000 texts and keeps growing daily: books, declassified documents, podcast transcripts, reference works, and papers. No accounts, no paywalls — full texts for anyone who wants them, and clean, citable source material for researchers and AI agents. Every record carries its own rights status, and the entire catalog is published as machine-readable files with API access, so the collection can be searched, filtered, and retrieved programmatically.",
+    "The catalog holds 2,557,923 texts and keeps growing daily: books, declassified documents, podcast transcripts, reference works, and papers. No accounts, no paywalls — full texts for anyone who wants them, and clean, citable source material for researchers and AI agents. Every record carries its own rights status, and the entire catalog is published as machine-readable files with API access, so the collection can be searched, filtered, and retrieved programmatically.",
   // Library landing — separate destination at /tower-of-babel/library.
   library: {
     heading: "THE LIBRARY",
@@ -165,7 +165,7 @@ export const towerOfBabel = {
       title: "A Message From the Team Behind the Tower of Babel",
       greeting: "Dear Tower of Babel Patron,",
       paragraphs: [
-        "The Tower of Babel, a project of Antarctic Labs, preserves the written record of humankind and makes essential texts from every culture, religion, and era free to everyone, everywhere. It already holds more than 660,000 works — books, sacred texts, declassified documents, papers, and transcripts — and grows every day.",
+        "The Tower of Babel, a project of Antarctic Labs, preserves the written record of humankind and makes essential texts from every culture, religion, and era free to everyone, everywhere. It already holds 2,557,923 works — books, sacred texts, declassified documents, papers, and transcripts — and grows every day.",
         "The goal is simple to say and enormous to do: every work that matters, within everyone's reach. It takes servers, storage, bandwidth, years of steady preservation work — and readers like you.",
         "The Tower is free to read, and reader support is what keeps it that way.",
         "If you enjoy wandering our virtual stacks, please consider supporting the Tower today. Most readers never give, so every one-time or monthly contribution carries real weight.",

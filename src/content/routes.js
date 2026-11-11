@@ -36,17 +36,17 @@ export const routeMeta = {
   "/tower-of-babel": {
     title: `Free Online Library | Tower of Babel`,
     description:
-      "A free, searchable online library: more than 660,000 books, sacred texts, declassified documents, papers, and transcripts preserved in clean, readable text.",
+      "A free, searchable online library: 2,557,923 books, sacred texts, declassified documents, papers, and transcripts preserved in clean, readable text.",
   },
   "/tower-of-babel/library": {
     title: `Free Classic Books Online | Tower of Babel Library`,
     description:
-      "Read free classic books online: search more than 660,000 books, documents, and texts in the Tower of Babel's free library catalog. No sign-up.",
+      "Read free classic books online: search 2,557,923 books, documents, and texts in the Tower of Babel's free library catalog. No sign-up.",
   },
   "/tower-of-babel/api": {
     title: `Free Books API for AI Agents | Tower of Babel`,
     description:
-      "Free books API for AI agents: machine-readable catalog of more than 660,000 works (books, sacred texts, declassified documents, papers, transcripts) with plain-text .txt downloads where text is present. No key, no sign-up.",
+      "Free books API for AI agents: machine-readable catalog of 2,557,923 works (books, sacred texts, declassified documents, papers, transcripts) with plain-text .txt downloads where text is present. No key, no sign-up.",
   },
   "/tower-of-babel/library/suggest": {
     title: `Suggest a Book for the Free Online Library | Tower of Babel`,
@@ -61,7 +61,7 @@ export const routeMeta = {
   "/tower-of-babel/donate": {
     title: `Donate to the Free Online Library | Tower of Babel`,
     description:
-      "Support the Tower of Babel free online library: one-time or monthly contributions keep more than 660,000 books and texts free for everyone — no paywalls.",
+      "Support the Tower of Babel free online library: one-time or monthly contributions keep 2,557,923 books and texts free for everyone — no paywalls.",
   },
   "/government-contracting": {
     title: `Small Business Government Contracting | ${SITE_NAME}`,

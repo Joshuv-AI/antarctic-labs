@@ -752,6 +752,9 @@ function App() {
           AdSense review. No CTA, no redirect block, no dock change. */}
       <footer className="site-footer">
         <span>ANTARCTIC LABS</span>
+        <a href="mailto:hello@antarctic-labs.com">
+          hello@antarctic-labs.com
+        </a>
         <a
           href="/privacy"
           onClick={(e) => { e.preventDefault(); go("/privacy"); }}

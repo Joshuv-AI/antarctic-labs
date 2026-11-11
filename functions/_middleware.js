@@ -46,6 +46,11 @@ const PASS_PREFIXES = [
 const PASS_EXACT = new Set([
   "/oai",
   "/mcp",
+  // Google Search Console verification file: Pages 308-redirects the
+  // .html form to this extensionless path, which must reach the asset —
+  // without the exemption the 404 rule below answers instead and file
+  // verification fails (found 2026-11-10).
+  "/googled4282c0396493fc7",
   "/robots.txt",
   "/ads.txt",
   "/llms.txt",
@@ -72,6 +77,20 @@ export async function onRequest(context) {
       LEGACY_REDIRECTS[path]
     ) {
       return Response.redirect(url.origin + LEGACY_REDIRECTS[path], 301);
+    }
+
+    // Hyphen-form sitemap URLs (a common guess) redirect to the real
+    // slash-form entry sitemaps instead of falling through to the SPA
+    // shell at 200 (found 2026-11-10).
+    const smHyphen = path.match(/^\/sitemap-entries-(\d+)\.xml$/);
+    if (
+      smHyphen &&
+      (request.method === "GET" || request.method === "HEAD")
+    ) {
+      return Response.redirect(
+        url.origin + "/sitemap-entries/" + smHyphen[1] + ".xml",
+        301
+      );
     }
 
     // 1. Crawler renderings of the main routes.

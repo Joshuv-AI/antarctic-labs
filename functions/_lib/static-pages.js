@@ -54,6 +54,9 @@ function doc({ path, title, description, body }) {
 <meta property="og:url" content="${canonical}" />
 <meta name="twitter:title" content="${title}" />
 <meta name="twitter:description" content="${description}" />
+<script type="application/ld+json">
+{"@context":"https://schema.org","@graph":[{"@type":"Organization","name":"Antarctic Labs","url":"https://antarctic-labs.com/","email":"hello@antarctic-labs.com"},{"@type":"WebSite","name":"Antarctic Labs","url":"https://antarctic-labs.com/","potentialAction":{"@type":"SearchAction","target":{"@type":"EntryPoint","urlTemplate":"https://antarctic-labs.com/tower-of-babel/library?q={search_term_string}"},"query-input":"required name=search_term_string"}}]}
+</script>
 ${ADS_SCRIPT}
 <style>
 body { font-family: Georgia, "Times New Roman", serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.65; color: #191919; }
@@ -92,7 +95,7 @@ const PAGES = {
 <h2>Research and systems</h2>
 <p>Strategy research, execution, monitoring, and risk controls are kept separate, so a problem in one is visible in the others.</p>
 <h2>The Tower of Babel</h2>
-<p>Antarctic Labs also runs the <a href="/tower-of-babel">Tower of Babel</a>, a free online library and archival project: more than 660,000 books, sacred texts, declassified documents, papers, and transcripts preserved in clean, searchable text. No accounts, no paywalls.</p>`,
+<p>Antarctic Labs also runs the <a href="/tower-of-babel">Tower of Babel</a>, a free online library and archival project: 2,557,923 books, sacred texts, declassified documents, papers, and transcripts preserved in clean, searchable text. No accounts, no paywalls.</p>`,
   },
 
   "/about": {
@@ -107,7 +110,7 @@ const PAGES = {
 <p>The work has three parts. Trading systems are developed and run in-house. The hardware is owned: a base in the Philippines — a commercial office and a small data center — is being established around machines the firm owns and operates. And the position is measured, not assumed: the Philippines connects directly toward Hong Kong, and every route is chosen by benchmarking the real endpoints, not by reading maps.</p>
 <h2>The partners</h2>
 <h3>Joshua — Founder, Operations, Logistics &amp; Accounting</h3>
-<p>Founder running Antarctic Labs day to day: the Philippines venture — entity, office, and owned data-center build — and the Tower of Babel library, more than 660,000 works live. He owns the direction, the business, and the delivery: logistics, operations, and accounting, judged by what proves real when it is run.</p>
+<p>Founder running Antarctic Labs day to day: the Philippines venture — entity, office, and owned data-center build — and the Tower of Babel library, 2,557,923 works live. He owns the direction, the business, and the delivery: logistics, operations, and accounting, judged by what proves real when it is run.</p>
 <h3>Andrew — Partner, Engineering &amp; Systems</h3>
 <p>At Antarctic Labs, Andrew leads engineering: the trading algorithms developed in-house, the server build, and the systems the firm runs on. His work is why the firm trades on infrastructure it owns and operates, tested on paper and with limited capital before anything scales.</p>
 <table>
@@ -180,15 +183,15 @@ PAGES["/tower-of-babel"] = {
   path: "/tower-of-babel",
   title: "Free Online Library | Tower of Babel",
   description:
-    "A free, searchable online library: more than 660,000 books, sacred texts, declassified documents, papers, and transcripts preserved in clean, readable text.",
+    "A free, searchable online library: 2,557,923 books, sacred texts, declassified documents, papers, and transcripts preserved in clean, readable text.",
   body: `<h1>Tower of Babel</h1>
-<p>Tower of Babel is a library and archival project from Antarctic Labs — more than 660,000 books, documents, transcripts, and texts in one organized, searchable collection. Individual resources appear here once finalized.</p>
+<p>Tower of Babel is a library and archival project from Antarctic Labs — 2,557,923 books, documents, transcripts, and texts in one organized, searchable collection. Individual resources appear here once finalized.</p>
 <h2>About the project</h2>
 <p>Tower of Babel began as one person's reaction to a headline: Anthropic was scanning books and destroying them afterward. If the organizations building the future of knowledge are comfortable destroying books, someone should be preserving them. It started with old texts, then the sacred texts of every culture and tradition — no favoritism, no picking sides — preserved as unchangeable copies nobody could rewrite or take away.</p>
-<p>From there it grew toward everything else that gets lost — suppressed, deleted, quietly rewritten: secret societies, folklore passed down through generations, firsthand accounts of the unexplained. The long conversations joined too — hours-long podcasts with experts and researchers, kept searchable instead of vanishing into a feed. Today it holds more than 600,000 full texts: sacred and religious texts from every tradition, philosophy, history, science, law, and literature, declassified government documents, the unexplained, folklore and mythology, and full podcast transcripts — every entry verified against its source and preserved as clean, searchable text.</p>
+<p>From there it grew toward everything else that gets lost — suppressed, deleted, quietly rewritten: secret societies, folklore passed down through generations, firsthand accounts of the unexplained. The long conversations joined too — hours-long podcasts with experts and researchers, kept searchable instead of vanishing into a feed. Today it holds 2,557,923 full texts: sacred and religious texts from every tradition, philosophy, history, science, law, and literature, declassified government documents, the unexplained, folklore and mythology, and full podcast transcripts — every entry verified against its source and preserved as clean, searchable text.</p>
 <p>Named for the old story of the gathering place where the works of the world were meant to be open and shared — no suppression, no hiding. And with hundreds of thousands of texts side by side, a deeper purpose emerges: patterns surface. A story in one tradition echoes a declassified document in another; a folktale rhymes with a witness account. Anyone can read, anyone can research — and maybe unravel a greater story than any single book could tell. Something like the Akashic records: the whole of human knowledge, unlocked.</p>
 <h2>About the catalog</h2>
-<p>The catalog holds more than 600,000 texts and keeps growing daily: books, declassified documents, podcast transcripts, reference works, and papers. No accounts, no paywalls — full texts for anyone who wants them, and clean, citable source material for researchers and AI agents. Every record carries its own rights status, and the entire catalog is published as machine-readable files with API access, so the collection can be searched, filtered, and retrieved programmatically.</p>
+<p>The catalog holds 2,557,923 texts and keeps growing daily: books, declassified documents, podcast transcripts, reference works, and papers. No accounts, no paywalls — full texts for anyone who wants them, and clean, citable source material for researchers and AI agents. Every record carries its own rights status, and the entire catalog is published as machine-readable files with API access, so the collection can be searched, filtered, and retrieved programmatically.</p>
 <h2>The collections</h2>
 <ul>
 <li>Books — classic literature, philosophy, and foundational documents</li>
@@ -207,10 +210,10 @@ PAGES["/tower-of-babel/library"] = {
   path: "/tower-of-babel/library",
   title: "Free Classic Books Online | Tower of Babel Library",
   description:
-    "Read free classic books online: search more than 660,000 books, documents, and texts in the Tower of Babel's free library catalog. No sign-up.",
+    "Read free classic books online: search 2,557,923 books, documents, and texts in the Tower of Babel's free library catalog. No sign-up.",
   body: `<h1>The Library</h1>
 <p>The catalog of collected books, documents, research, references, and other material. Individual resources appear here once finalized.</p>
-<p>The catalog holds more than 660,000 works and grows daily: books of classic literature, philosophy, and the sacred texts of every religion and tradition; declassified government documents released to the public; scientific papers; reference works; foundational political documents; and long-form podcast transcripts. Every work is preserved as clean, searchable plain text where the text is present, and every record carries its own rights status and license.</p>
+<p>The catalog holds 2,557,923 works and grows daily: books of classic literature, philosophy, and the sacred texts of every religion and tradition; declassified government documents released to the public; scientific papers; reference works; foundational political documents; and long-form podcast transcripts. Every work is preserved as clean, searchable plain text where the text is present, and every record carries its own rights status and license.</p>
 <h2>Start reading</h2>
 <ul>
 <li><a href="/tower-of-babel/library/shakespeare-hamlet-1603">Hamlet — William Shakespeare</a></li>
@@ -219,7 +222,7 @@ PAGES["/tower-of-babel/library"] = {
 </ul>
 <h2>Questions</h2>
 <h3>Where can I read classic books online for free?</h3>
-<p>The Tower of Babel library catalogues more than 660,000 works, and every work with available text opens as a full, clean text you can read in the browser. There is no sign-up, no paywall, and no app to install. The collection covers public domain classics, sacred texts from every tradition, foundational documents, scientific papers, and historical records. The access button appears only where the text file exists.</p>
+<p>The Tower of Babel library catalogues 2,557,923 works, and every work with available text opens as a full, clean text you can read in the browser. There is no sign-up, no paywall, and no app to install. The collection covers public domain classics, sacred texts from every tradition, foundational documents, scientific papers, and historical records. The access button appears only where the text file exists.</p>
 <h3>Is the Tower of Babel a good Project Gutenberg alternative?</h3>
 <p>It serves the same purpose with a different scope. Project Gutenberg is the largest archive of public domain ebooks. The Tower of Babel also carries material Gutenberg does not: declassified government documents, scientific papers, reference works, and long-form podcast transcripts alongside the book collection, all in one catalog with per-record rights status. If a work is in the catalog, you can read the full text directly where the text is present.</p>
 <h3>Do I need to sign up or pay to use the library?</h3>
@@ -227,7 +230,7 @@ PAGES["/tower-of-babel/library"] = {
 <h3>Is it legal to read these books for free?</h3>
 <p>Yes. Each catalog record carries a rights_status and license field, and the readable collection is built around public domain works whose copyright has expired, plus documents released into the public record. The catalog tells you the rights status of each work, so you can verify it yourself.</p>
 <h3>What is actually in the catalog?</h3>
-<p>More than 660,000 works and growing daily: books of classic literature, philosophy, and the sacred texts of every religion and tradition; declassified government documents released to the public; scientific papers; reference works; foundational political documents; and long-form podcast transcripts. Every work is preserved as clean, searchable plain text where the text is present.</p>
+<p>More than 2,557,923 works and growing daily: books of classic literature, philosophy, and the sacred texts of every religion and tradition; declassified government documents released to the public; scientific papers; reference works; foundational political documents; and long-form podcast transcripts. Every work is preserved as clean, searchable plain text where the text is present.</p>
 <h3>Can I download the books, or only read them in the browser?</h3>
 <p>Works with available text can be opened and read in full in the browser, and the underlying plain-text file can be downloaded directly. There is no bulk download for the whole catalog; the machine-readable catalog files are the way to work with the collection at scale.</p>
 <h3>Can AI agents use the Tower of Babel as a reference source?</h3>
@@ -239,9 +242,9 @@ PAGES["/tower-of-babel/api"] = {
   path: "/tower-of-babel/api",
   title: "Free Books API for AI Agents | Tower of Babel",
   description:
-    "Free books API for AI agents: machine-readable catalog of more than 660,000 works (books, sacred texts, declassified documents, papers, transcripts) with plain-text .txt downloads where text is present. No key, no sign-up.",
+    "Free books API for AI agents: machine-readable catalog of 2,557,923 works (books, sacred texts, declassified documents, papers, transcripts) with plain-text .txt downloads where text is present. No key, no sign-up.",
   body: `<h1>Free books API for AI agents</h1>
-<p>A free books API that gives AI agents machine-readable access to more than 660,000 public works: books, the sacred texts of every tradition, declassified documents, scientific papers, reference works, and transcripts. A machine-readable catalog, predictable text URLs, no key, no sign-up. Fetch the catalog, filter the records, pull the full text of whichever works have text available, confirmed with a plain HTTP request.</p>
+<p>A free books API that gives AI agents machine-readable access to 2,557,923 public works: books, the sacred texts of every tradition, declassified documents, scientific papers, reference works, and transcripts. A machine-readable catalog, predictable text URLs, no key, no sign-up. Fetch the catalog, filter the records, pull the full text of whichever works have text available, confirmed with a plain HTTP request.</p>
 <p>The Tower of Babel API is a static, keyless data surface: a JSON catalog of every holding plus direct plain-text downloads at predictable URLs. It is not a query service. There is no search endpoint, no authentication, and no published rate limit. An agent downloads the catalog once, filters it locally by title, collection, creator, or rights status, then fetches only the texts it needs. The full text is served where present, not just metadata, which is what separates it from metadata-only book APIs.</p>
 <h2>What you get</h2>
 <p>Two things. First, the catalog: a complete JSON record for every holding — title, creator, year, collection, description, source, rights status, license, and the download URL where text is present — served merged at /catalog.json and in shards under /catalog-shards/ for incremental fetching, with a lightweight index at /catalog-index.json for fast listing. Second, the texts themselves: clean UTF-8 .txt files served from predictable URLs under /tower-of-babel/. Together they form a complete static API. Download the catalog, filter it, fetch texts. No key to request, no account to create, no usage tier to watch. No uptime SLA is offered; it is free infrastructure, maintained as a public resource.</p>
@@ -250,7 +253,7 @@ PAGES["/tower-of-babel/api"] = {
 <h2>How an agent uses it</h2>
 <p>The fetch pattern is three steps. One: GET https://antarctic-labs.com/catalog.json (or the shards under /catalog-shards/) and parse the records. Two: filter locally. Find works by title substring, collection, creator, year range, or rights_status. There is no server-side search, so filtering happens in the agent's own code after the download. Three: GET the download_url for each selected record and read the plain text. For retrieval-augmented generation, the practical setup is to ingest the catalog once, embed or index the texts the agent needs, and re-fetch the catalog on a schedule to pick up new holdings — the library grows daily. Because text URLs are addressed by artifact_id, a URL that returns 200 keeps returning the same text, so cached texts stay valid. Agents should handle non-200 responses gracefully rather than assuming every catalogued work has a downloadable file.</p>
 <h2>Corpus composition</h2>
-<p>The catalog holds more than 660,000 works. The book collection covers classic literature, philosophy, and foundational political documents: the public domain canon, preserved as clean text. The sacred collection holds the scriptures and sacred writings of every religion and tradition, without favoritism. Declassified holds government documents released into the public record. Papers and reference hold scientific papers and reference works at scale, and podcasts holds long-form conversation transcripts, useful as contemporary spoken-language corpora. The mix is the point: most free book APIs serve fiction and poetry metadata. This corpus adds primary-source government documents, the world's sacred texts, and a large research literature, in full text, in one schema, at one base URL.</p>
+<p>The catalog holds 2,557,923 works. The book collection covers classic literature, philosophy, and foundational political documents: the public domain canon, preserved as clean text. The sacred collection holds the scriptures and sacred writings of every religion and tradition, without favoritism. Declassified holds government documents released into the public record. Papers and reference hold scientific papers and reference works at scale, and podcasts holds long-form conversation transcripts, useful as contemporary spoken-language corpora. The mix is the point: most free book APIs serve fiction and poetry metadata. This corpus adds primary-source government documents, the world's sacred texts, and a large research literature, in full text, in one schema, at one base URL.</p>
 <h2>Licensing and limits</h2>
 <p>Rights are per record, not per site. Each catalog entry carries rights_status and license fields; the readable collection centers on public domain works and documents released to the public. Agents building datasets or products on the corpus should read those two fields on every record they use rather than assuming uniform rights. The static catalog surface described above needs no API key, no authentication, and has no published rate limit. Alongside it, a keyed API (v1, below) is rolling out for server-side search, full-text delivery, and bulk snapshots at published daily limits — the key is free at the first tier and the static surface stays keyless either way. The catalog is a snapshot that grows as holdings are added, so agents should re-fetch it periodically instead of treating a local copy as permanent. No uptime SLA is offered. It is free infrastructure, maintained as a public resource.</p>
 <h2>Harvest with OAI-PMH</h2>
@@ -265,7 +268,7 @@ PAGES["/tower-of-babel/library/research"] = {
   description:
     "Get a Tower of Babel API key: a free key by email, paid tiers above it — server-side search, full-text delivery, and bulk snapshots of the library.",
   body: `<h1>API access</h1>
-<p>Get a Tower of Babel API key: a free key by email, paid tiers above it — server-side search, full-text delivery, and bulk snapshots of the library of more than 660,000 works. The texts themselves stay free on this site either way; a key buys the maintained pipe, the throughput, and someone standing behind it, never access.</p>
+<p>Get a Tower of Babel API key: a free key by email, paid tiers above it — server-side search, full-text delivery, and bulk snapshots of the library of 2,557,923 works. The texts themselves stay free on this site either way; a key buys the maintained pipe, the throughput, and someone standing behind it, never access.</p>
 <h2>Tiers</h2>
 <h3>Keyless catalog — Free</h3>
 <p>No published limit. The static surface documented on the <a href="/tower-of-babel/api">API page</a>: the full catalog JSON, shards, and predictable .txt URLs. No key, no sign-up. Unchanged — this is the discovery layer and it stays open.</p>
@@ -288,7 +291,7 @@ PAGES["/tower-of-babel/library/suggest"] = {
   body: `<h1>Suggest an entry</h1>
 <p>Know something that belongs in the Tower? Send it our way — a title and a type are all it takes. Every suggestion gets reviewed for the catalog.</p>
 <p>The form asks for: the type of media (books, declassified, law, documents, papers, podcasts, or reference), the title of the work, whether it is a single work, part of a series, or has multiple editions, the author or creator if known, the date published if known, where to find it, and anything else that explains why it belongs in the Tower.</p>
-<p>Suggestions are reviewed against the library's rules: the work must be public domain or openly licensed, and a clean full text must be obtainable — a catalog entry is only published once its text is hosted. Accepted works are preserved in clean, searchable text and join the catalog of more than 660,000 works.</p>
+<p>Suggestions are reviewed against the library's rules: the work must be public domain or openly licensed, and a clean full text must be obtainable — a catalog entry is only published once its text is hosted. Accepted works are preserved in clean, searchable text and join the catalog of 2,557,923 works.</p>
 <p><a href="/tower-of-babel/library">Back to the library</a></p>`,
 };
 
@@ -296,11 +299,11 @@ PAGES["/tower-of-babel/donate"] = {
   path: "/tower-of-babel/donate",
   title: "Donate to the Free Online Library | Tower of Babel",
   description:
-    "Support the Tower of Babel free online library: one-time or monthly contributions keep more than 660,000 books and texts free for everyone — no paywalls.",
+    "Support the Tower of Babel free online library: one-time or monthly contributions keep 2,557,923 books and texts free for everyone — no paywalls.",
   body: `<h1>A Message From the Team Behind the Tower of Babel</h1>
 <p>The Tower is free to read, forever. It stays that way because readers who can afford to help, do.</p>
 <p>Dear Tower of Babel Patron,</p>
-<p>The Tower of Babel, a project of Antarctic Labs, preserves the written record of humankind and makes essential texts from every culture, religion, and era free to everyone, everywhere. It already holds more than 660,000 works — books, sacred texts, declassified documents, papers, and transcripts — and grows every day.</p>
+<p>The Tower of Babel, a project of Antarctic Labs, preserves the written record of humankind and makes essential texts from every culture, religion, and era free to everyone, everywhere. It already holds 2,557,923 works — books, sacred texts, declassified documents, papers, and transcripts — and grows every day.</p>
 <p>The goal is simple to say and enormous to do: every work that matters, within everyone's reach. It takes servers, storage, bandwidth, years of steady preservation work — and readers like you.</p>
 <p>The Tower is free to read, and reader support is what keeps it that way.</p>
 <p>If you enjoy wandering our virtual stacks, please consider supporting the Tower today. Most readers never give, so every one-time or monthly contribution carries real weight.</p>
@@ -346,7 +349,7 @@ ${NAV}
 <main>
 <h1>Page not found</h1>
 <p>The page at ${SITE}${esc(path)} does not exist. It may have been moved, or the address may be mistyped.</p>
-<p>From here you can go to the <a href="/">Antarctic Labs home page</a>, browse the <a href="/tower-of-babel/library">Tower of Babel library</a> of more than 660,000 free works, read <a href="/about">about the firm</a>, or email <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a> if you were expecting something here.</p>
+<p>From here you can go to the <a href="/">Antarctic Labs home page</a>, browse the <a href="/tower-of-babel/library">Tower of Babel library</a> of 2,557,923 free works, read <a href="/about">about the firm</a>, or email <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a> if you were expecting something here.</p>
 </main>
 ${FOOT}
 </body>

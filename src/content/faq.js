@@ -10,7 +10,7 @@
 export const siteFaqs = [
   {
     q: "What does Antarctic Labs do?",
-    a: "Antarctic Labs is a proprietary trading and computing firm. It trades its own capital on infrastructure it owns and operates: trading systems developed in-house, and a small data center of its own being established in the Philippines. The firm also runs the Tower of Babel, a free preservation library of more than 660,000 works.",
+    a: "Antarctic Labs is a proprietary trading and computing firm. It trades its own capital on infrastructure it owns and operates: trading systems developed in-house, and a small data center of its own being established in the Philippines. The firm also runs the Tower of Babel, a free preservation library of 2,557,923 works.",
   },
   {
     q: "Does Antarctic Labs take on clients or freelance work?",
@@ -18,7 +18,7 @@ export const siteFaqs = [
   },
   {
     q: "What is the Tower of Babel?",
-    a: "The Tower of Babel is Antarctic Labs' free online library and archival project: more than 660,000 books, sacred texts, declassified documents, scientific papers, reference works, and transcripts, preserved as clean, searchable plain text. There are no accounts and no paywalls. Every record carries its own rights status; the readable collection is built on public-domain and openly licensed works.",
+    a: "The Tower of Babel is Antarctic Labs' free online library and archival project: 2,557,923 books, sacred texts, declassified documents, scientific papers, reference works, and transcripts, preserved as clean, searchable plain text. There are no accounts and no paywalls. Every record carries its own rights status; the readable collection is built on public-domain and openly licensed works.",
   },
   {
     q: "How do I contact Antarctic Labs?",
