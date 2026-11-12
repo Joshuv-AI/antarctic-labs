@@ -8,10 +8,13 @@
 // Bands are the real top-level collections, one contiguous segment of
 // the coil each with bare-wire gaps between, panel counts mapped from
 // the REAL collection sizes by sqrt compression (LAW and PAPERS use
-// the true live totals). The smallest collection (FOLKLORE) hangs as
-// small clusters on red wire strands above the stack, like the reel's
-// small countries. Floating HTML labels in the reel's style (big thin
-// caps name, true count beneath) ride beside their bands.
+// the true live totals). EVERY collection lives inside the spiral —
+// the smallest (FOLKLORE) is a short partial-turn band segment at the
+// top of the stack (Joshua 2026-11-12: no library pieces may float
+// outside the spiral; the earlier wire-cluster satellites read as
+// random debris on his phone and were removed). Floating HTML labels
+// in the reel's style (big thin caps name, true count beneath) ride
+// beside their bands.
 // Tube rebuild (2026-11-12, bench: helix-bench RESULTS.md "TUBE
 // REBUILD" — Joshua's morning verdict on the shipped flat disc: the
 // reel is tubes, not rings in a plane; plan Amendment C).
@@ -52,9 +55,9 @@ const BANDS = [
   { name: "SCIENCE", count: 15000 },
   { name: "PHILOSOPHY", count: 9500 },
   { name: "PODCASTS", count: 8000 },
+  { name: "FOLKLORE", count: 5016 },
 ];
-const SATELLITE_COLLECTION = { name: "FOLKLORE", count: 5016 };
-const BAND_PANEL_TARGET = 14934; // band panels; + 72 satellite = 15,006
+const BAND_PANEL_TARGET = 15006; // all panels live in band segments
 
 // ------------------------------------------------------------------ rng
 function mulberry32(seed) {
@@ -133,8 +136,9 @@ function surfacePoint(theta, phi, out) {
 //   onError  — called if the WebGL context cannot be created at all
 //   labelsEl — optional overlay element (inside the hero band) the
 //              scene fills with the floating band labels; positions
-//              are computed in the canvas's own box, clamped to it
-//   getAvoidRects — optional () => [{x, y, w, h}] in canvas coords:
+//              are computed in the layer's own box (document space),
+//              clamped to it, so the labels scroll with the hero
+//   getAvoidRects — optional () => [{x, y, w, h}] in DOCUMENT coords:
 //              hero content blocks (title/intro) a band label must
 //              not sit under; refreshed on layout
 // Returns a controller { start, stop, renderStill, dispose, isDegraded }
@@ -206,8 +210,6 @@ export function createHelixScene(canvas, opts = {}) {
   // ---- placements (baked instance matrices; runs once at init)
   const placements = []; // {matrix, cell:[c,r], group, phase}
   const gapRanges = [];  // [theta0, theta1] bare-wire gaps between bands
-  const clusterAnchors = []; // {pos: Vector3 (structure-local)} satellite clusters
-  const satStrands = [];
   {
     const rnd = mulberry32(987123);
     const m = new THREE.Matrix4();
@@ -265,55 +267,9 @@ export function createHelixScene(canvas, opts = {}) {
       }
     });
 
-    // ---- satellite field: FOLKLORE clusters on wavy red strands
-    // above the stack (the reel's small countries on wire). Strand
-    // shapes are kept for the wire drawing below.
-    const strandPoint = (i, x) => {
-      const baseY = Y_TOP + 4.4 + i * 1.9;
-      const baseZ = -7 + (i % 3) * 6.5;
-      return new THREE.Vector3(
-        x,
-        baseY + Math.sin(x * 0.20 + i * 2.1) * 0.6,
-        baseZ + Math.cos(x * 0.16 + i * 1.3) * 0.9
-      );
-    };
-    const clusterXs = [[-9, 4.5], [-3, 11], [-13, 7]];
-    for (let i = 0; i < 3; i++) {
-      const pts = [];
-      for (let x = -18; x <= 18; x += 1.2) pts.push(strandPoint(i, x));
-      satStrands.push(pts);
-      for (const cx of clusterXs[i]) {
-        const center = strandPoint(i, cx);
-        clusterAnchors.push({ pos: center.clone(), tag: clusterAnchors.length % 2 === 0 });
-        const yaw = (rnd() - 0.5) * 0.7;
-        const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, yaw, 0));
-        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
-        const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
-        const basis = new THREE.Matrix4().makeBasis(
-          right,
-          new THREE.Vector3(0, 1, 0),
-          fwd
-        );
-        for (let k = 0; k < 12; k++) {
-          const col = k % 4, row = (k / 4) | 0;
-          const pos = center.clone()
-            .addScaledVector(right, (col - 1.5) * 0.82)
-            .add(new THREE.Vector3(0, (row - 1) * 0.97, 0))
-            .addScaledVector(fwd, (rnd() - 0.5) * 0.05);
-          e.set((rnd() - 0.5) * 0.10, 0, (rnd() - 0.5) * 0.10);
-          qj.setFromEuler(e);
-          m.copy(basis)
-            .multiply(new THREE.Matrix4().makeRotationFromQuaternion(qj))
-            .setPosition(pos);
-          placements.push({
-            matrix: m.clone(),
-            cell: [(rnd() * ATLAS_COLS) | 0, (rnd() * ATLAS_ROWS) | 0],
-            group: BANDS.length, // satellite group index
-            phase: rnd(),
-          });
-        }
-      }
-    }
+    // No satellite field (removed 2026-11-12, Joshua): FOLKLORE is
+    // placed above as an ordinary band segment of the coil — every
+    // library panel in the scene sits on the tube, inside the spiral.
   }
   const panelCount = placements.length;
 
@@ -429,9 +385,9 @@ export function createHelixScene(canvas, opts = {}) {
 
   // ---- wire + threads: two red strands spiralling around the tube
   // along the whole coil, bare strands through the inter-band gaps
-  // with faint grey stitch threads, satellite strands with barb
-  // ticks, and sparse long threads across the structure (the reel's
-  // web between bands).
+  // with faint grey stitch threads, and sparse long threads across
+  // the structure (the reel's web between bands). All of it follows
+  // the coil — nothing floats free of the spiral.
   {
     const red = [];
     const grey = [];
@@ -469,28 +425,10 @@ export function createHelixScene(canvas, opts = {}) {
         pushG(a, b);
       }
     }
-    const fieldStrands = satStrands.slice();
-    for (let i = 3; i < 5; i++) {
-      const pts = [];
-      for (let x = -19; x <= 19; x += 1.2) {
-        pts.push(new THREE.Vector3(
-          x,
-          Y_TOP + 9.5 + i * 1.6 + Math.sin(x * 0.18 + i * 1.7) * 0.7,
-          -4 + (i % 2) * 9 + Math.cos(x * 0.15 + i) * 1.0
-        ));
-      }
-      fieldStrands.push(pts);
-    }
-    for (const pts of fieldStrands) {
-      for (let s = 1; s < pts.length; s++) pushR(pts[s - 1], pts[s]);
-      for (let s = 2; s < pts.length; s += 2) {
-        const C = pts[s];
-        pushR(
-          C.clone().add(new THREE.Vector3(-0.18, -0.42, 0)),
-          C.clone().add(new THREE.Vector3(0.18, 0.42, 0))
-        );
-      }
-    }
+    // No free-floating field strands above the stack (removed with
+    // the satellites, 2026-11-12): the only wire in the scene follows
+    // the coil — the two spiral strands along the tube and the bare
+    // strands through the inter-band gaps above.
     {
       const rndW = mulberry32(31337);
       const posOf = (i) => {
@@ -519,9 +457,10 @@ export function createHelixScene(canvas, opts = {}) {
     mkLines(grey, 0x9aa0a8, 0.07);
   }
 
-  // ---- dust: a faint particle field for depth
+  // ---- dust: a faint particle field for depth (atmosphere only —
+  // kept very faint and star-like so it can never read as debris)
   {
-    const N = 550;
+    const N = 420;
     const dp = new Float32Array(N * 3);
     const rnd = mulberry32(777);
     for (let i = 0; i < N; i++) {
@@ -535,7 +474,7 @@ export function createHelixScene(canvas, opts = {}) {
     dg.setAttribute("position", new THREE.BufferAttribute(dp, 3));
     const dust = new THREE.Points(
       dg,
-      new THREE.PointsMaterial({ color: 0x93a3b8, size: 0.09, transparent: true, opacity: 0.16, depthWrite: false })
+      new THREE.PointsMaterial({ color: 0x93a3b8, size: 0.09, transparent: true, opacity: 0.11, depthWrite: false })
     );
     dust.frustumCulled = false;
     structure.add(dust);
@@ -546,12 +485,11 @@ export function createHelixScene(canvas, opts = {}) {
   // its band's height at the near rim — projected from 3D every frame
   // — sitting in the black outside the silhouette, never over covers.
   // HERO CLAMPING (integration polish): positions are computed in the
-  // canvas's own box (the hero band window, shorter than the bench
+  // hero layer's own box (the hero band window, shorter than the bench
   // frame) and clamped so each visible band's name + count stay fully
   // inside the band; a band whose height falls outside the window has
   // its label hidden rather than pinned to an edge it doesn't occupy.
   const bandLabels = [];
-  const tagLabels = [];
   if (labelsEl) {
     BANDS.forEach((g, i) => {
       const el = document.createElement("div");
@@ -576,19 +514,8 @@ export function createHelixScene(canvas, opts = {}) {
         h: 0,
       });
     });
-    clusterAnchors
-      .filter((c) => c.tag)
-      .forEach((c) => {
-        const el = document.createElement("div");
-        el.style.opacity = "0";
-        el.className = "tower-helix-tag-label";
-        el.textContent = SATELLITE_COLLECTION.name + " ";
-        const span = document.createElement("span");
-        span.textContent = fmt(SATELLITE_COLLECTION.count);
-        el.appendChild(span);
-        labelsEl.appendChild(el);
-        tagLabels.push({ el, pos: c.pos });
-      });
+    // Every band — FOLKLORE included — gets the same band label;
+    // the old satellite tag labels are gone with the satellites.
   }
 
   const _v1 = new THREE.Vector3();
@@ -603,19 +530,32 @@ export function createHelixScene(canvas, opts = {}) {
     out.behind = _v3.z > 1;
     return out;
   }
+  // Label coordinate space (FIX PASS, Joshua's scroll recording,
+  // 2026-11-12): labels are placed in the hero layer's own box —
+  // DOCUMENT space. Projections land in viewport coordinates (the
+  // canvas is a fixed layer), so they are converted with the layer's
+  // DOCUMENT offset, which is invariant under scroll and cached in
+  // layout(). The shipped build converted with the layer's LIVE
+  // viewport rect: the offset grew with scrollY, exactly cancelling
+  // the layer's scroll movement, so the labels stayed pinned to the
+  // viewport while the page scrolled under them. In document space
+  // the labels belong to the hero region of the page: they track
+  // their bands while the hero is in view and scroll away with it,
+  // and the layer's overflow:hidden box guarantees none can show
+  // below the hero. Caching the offset also keeps the render loop
+  // free of layout reads (a per-frame getBoundingClientRect during
+  // scroll can force synchronous layout — a stutter source).
+  let labelDocX = 0;
+  let labelDocY = 0;
+  let labelW = 0;
+  let labelH = 0;
   function updateLabels() {
     if (!labelsEl) return;
     const focusAmt = uniforms.uFocusAmt.value;
-    // Label space = the labels layer's own box (the hero region; the
-    // canvas is a fixed full-page layer, so projections land in
-    // viewport coordinates and are translated by the layer's current
-    // viewport offset — as the page scrolls, the hero and its labels
-    // move together and the labels scroll away with the hero).
-    const lr = labelsEl.getBoundingClientRect();
-    const offX = -lr.left;
-    const offY = -lr.top;
-    const W = labelsEl.clientWidth || viewW;
-    const H = labelsEl.clientHeight || viewH;
+    const offX = -labelDocX;
+    const offY = -labelDocY;
+    const W = labelW || viewW;
+    const H = labelH || viewH;
     const e = camera.matrixWorld.elements;
     let rx = e[0], rz = e[2];
     const rl = Math.hypot(rx, rz) || 1;
@@ -658,8 +598,12 @@ export function createHelixScene(canvas, opts = {}) {
       const boxX = L.side > 0 ? anchorX + 16 : anchorX - 16 - L.w;
       const hitsAvoid = (by) => {
         for (const a of avoidRects) {
-          const iw = Math.min(boxX + L.w, a.x + a.w + 2) - Math.max(boxX, a.x - 2);
-          const ih = Math.min(by + L.h, a.y + a.h + 2) - Math.max(by, a.y - 2);
+          // avoid rects arrive in document coords; label boxes are
+          // in layer coords — convert by the layer's document offset
+          const ax = a.x - labelDocX;
+          const ay = a.y - labelDocY;
+          const iw = Math.min(boxX + L.w, ax + a.w + 2) - Math.max(boxX, ax - 2);
+          const ih = Math.min(by + L.h, ay + a.h + 2) - Math.max(by, ay - 2);
           if (iw > 0 && ih > 0 && iw * ih > 0.18 * L.w * L.h) return true;
         }
         return false;
@@ -700,28 +644,6 @@ export function createHelixScene(canvas, opts = {}) {
         "translate3d(" + anchorX.toFixed(1) + "px," + placeY.toFixed(1) + "px,0)" +
         (L.side > 0 ? " translate(16px,-50%)" : " translate(calc(-100% - 16px),-50%)");
     }
-    for (const T of tagLabels) {
-      const w = structure.localToWorld(_v2.copy(T.pos));
-      const scr = projectToScreen(w, _scrA);
-      scr.x += offX;
-      scr.y += offY;
-      if (scr.behind || scr.x < -30 || scr.x > W + 30 || scr.y < -20 || scr.y > H + 20) {
-        T.el.style.opacity = "0";
-        continue;
-      }
-      // fade when the cluster swings to the far side of the structure
-      const dx = w.x, dz = w.z;
-      const dl = Math.hypot(dx, dz) || 1;
-      const cx = camera.position.x - w.x, cz = camera.position.z - w.z;
-      const cl = Math.hypot(cx, cz) || 1;
-      const facing = (dx * cx + dz * cz) / (dl * cl);
-      const op = 0.10 + 0.90 * THREE.MathUtils.smoothstep(facing, -0.15, 0.35);
-      T.el.style.opacity = String(op * (1 - focusAmt * 0.5));
-      const tx = Math.min(Math.max(scr.x, 44), W - 44);
-      const ty = Math.min(Math.max(scr.y, 18), H - 10);
-      T.el.style.transform =
-        "translate3d(" + tx.toFixed(1) + "px," + ty.toFixed(1) + "px,0) translate(-50%,-150%)";
-    }
   }
 
   // ---- sizing
@@ -748,11 +670,15 @@ export function createHelixScene(canvas, opts = {}) {
       L.el.style.fontSize = Math.round(L.basePx * labelScale) + "px";
       L.w = 0; // re-measure after the size change
     }
-    // Narrow bands show a single FOLKLORE tag — three identical tags
-    // stack into clutter in a portrait frame.
-    tagLabels.forEach((t, i) => {
-      t.el.style.display = viewW < 700 && i > 0 ? "none" : "";
-    });
+    // Cache the labels layer's document offset + box (scroll-
+    // invariant): per-frame label updates then need no layout reads.
+    if (labelsEl) {
+      const lr = labelsEl.getBoundingClientRect();
+      labelDocX = lr.left + window.scrollX;
+      labelDocY = lr.top + window.scrollY;
+      labelW = labelsEl.clientWidth || 0;
+      labelH = labelsEl.clientHeight || 0;
+    }
     // Refresh the hero content blocks labels must not sit under.
     if (getAvoidRects) {
       try {
@@ -821,13 +747,21 @@ export function createHelixScene(canvas, opts = {}) {
         // capped at ~30 fps, so a window under ~24 fps means frames
         // are slipping at the current resolution — after two
         // consecutive such windows (8 s sustained), step the cap down
-        // one rung, never up.
+        // one rung, never up. A step is a canvas resize + a visible
+        // sharpness jump, so it never fires mid-scroll: while the
+        // user is scrolling it is held (counter parked at threshold)
+        // until the scroll settles — no resolution stepping or
+        // resize hitches under the finger (FIX PASS 2026-11-12).
         if (fps < 24 && dprTier < DPR_LADDER.length - 1) {
           lowDprWindows++;
           if (lowDprWindows >= 2) {
-            dprTier++;
-            lowDprWindows = 0;
-            applyDpr();
+            if (now - lastScrollAt < 700) {
+              lowDprWindows = 2;
+            } else {
+              dprTier++;
+              lowDprWindows = 0;
+              applyDpr();
+            }
           }
         } else {
           lowDprWindows = 0;
@@ -864,6 +798,13 @@ export function createHelixScene(canvas, opts = {}) {
     updateLabels();
   }
 
+  // Scroll activity marker (passive listener, timestamp only — no
+  // layout reads, no work): the DPR ladder consults it so resolution
+  // never steps mid-scroll.
+  let lastScrollAt = -1e9;
+  const onScrollMark = () => { lastScrollAt = performance.now(); };
+  window.addEventListener("scroll", onScrollMark, { passive: true });
+
   // Debounced resize: re-layout only (positions are baked; nothing is
   // regenerated), and repaint the still if we are parked.
   let resizeTimer = 0;
@@ -891,6 +832,7 @@ export function createHelixScene(canvas, opts = {}) {
     dispose() {
       disposed = true;
       stop();
+      window.removeEventListener("scroll", onScrollMark);
       window.removeEventListener("resize", onResize);
       window.clearTimeout(resizeTimer);
       if (labelsEl) labelsEl.innerHTML = "";

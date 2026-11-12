@@ -120,16 +120,24 @@ function HelixLayer() {
         scene = mod.createHelixScene(canvas, {
           frozen,
           labelsEl: labelsRef.current,
-          // The hero's own text blocks (title + intro), in canvas
-          // coordinates: band labels hide rather than sit under them.
+          // The hero's own text blocks (title + intro), in DOCUMENT
+          // coordinates (scroll-invariant): band labels hide rather
+          // than sit under them. The scene converts into its label
+          // layer's space; document coords keep the conversion exact
+          // at any scroll depth (the canvas is a fixed layer, so
+          // canvas-relative rects drift with scroll).
           getAvoidRects: () => {
             try {
               const section = canvas.closest("section");
               if (!section) return [];
-              const c = canvas.getBoundingClientRect();
               return [...section.querySelectorAll(":scope > h1, :scope > p")].map((el) => {
                 const r = el.getBoundingClientRect();
-                return { x: r.left - c.left, y: r.top - c.top, w: r.width, h: r.height };
+                return {
+                  x: r.left + window.scrollX,
+                  y: r.top + window.scrollY,
+                  w: r.width,
+                  h: r.height,
+                };
               });
             } catch (e) {
               return [];
