@@ -14,6 +14,7 @@ import { site } from "./content/site.js";
 import { operator } from "./content/operator.js";
 import { government } from "./content/government.js";
 import { towerOfBabel } from "./content/tower-of-babel.js";
+import { privacyFaqs } from "./content/faq.js";
 // Entry JSON-LD uses the cached catalog when available (see
 // ./lib/catalog.js); falls back to a generic entry node until it arrives.
 import { getCachedArtifacts } from "./lib/catalog.js";
@@ -128,6 +129,7 @@ function faqsForPath(path) {
   if (path === "/government-contracting") return government.faqs;
   if (path === "/tower-of-babel/library") return towerOfBabel.library.faqs;
   if (path === "/tower-of-babel/api") return towerOfBabel.agentFaqs;
+  if (path === "/privacy") return privacyFaqs;
   return undefined;
 }
 

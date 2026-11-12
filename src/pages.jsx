@@ -33,6 +33,7 @@ import { site } from "./content/site.js";
 import { operator } from "./content/operator.js";
 import { towerOfBabel } from "./content/tower-of-babel.js";
 import { PORTAL_URL } from "./content/tower-api.js";
+import { privacyFaqs } from "./content/faq.js";
 // The artifact catalog is lazy (see ./lib/catalog.js): it is ~2.6MB of
 // source and used to ride in the main bundle, stalling every cold load.
 // Components that need it use useArtifacts() below.
@@ -6645,6 +6646,8 @@ export function PrivacyPage({ go }) {
           <p className="body-copy"><a href="#" onClick={(e) => { e.preventDefault(); go("/about"); }}>About Antarctic Labs</a> · <a href="#" onClick={(e) => { e.preventDefault(); go("/tower-of-babel"); }}>Tower of Babel</a></p>
         </div>
       </section>
+
+      <FaqBlock index="QUESTIONS" faqs={privacyFaqs} />
     </main>
   );
 }
