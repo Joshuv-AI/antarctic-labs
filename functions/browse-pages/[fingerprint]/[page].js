@@ -13,7 +13,8 @@
 // "fall back to the search endpoint for this page".
 const BASE = "https://search-index.antarctic-labs.com";
 
-export async function onRequestGet({ params }) {
+export async function onRequestGet(context) {
+  const { params, waitUntil } = context;
   const fp = String(params.fingerprint || "");
   const page = String(params.page || "");
   // orders.bin (2026-11-10): the baked sort-order permutations live
@@ -26,6 +27,23 @@ export async function onRequestGet({ params }) {
       headers: { "content-type": "application/json", "cache-control": "no-store" },
     });
   }
+  // Edge-cache the response through the Cache API (2026-11-11 error
+  // investigation): a Pages Function response is served DYNAMIC — the
+  // immutable Cache-Control header alone never populates the edge cache,
+  // so every library load from every visitor re-executed this function
+  // and re-fetched from R2 (128 pages per full catalog load). The
+  // content is addressed by the catalog fingerprint and can never
+  // change, so a colo cache fill is permanent in practice.
+  const cache =
+    typeof caches !== "undefined" && caches.default ? caches.default : null;
+  const cacheKey = new Request(
+    `https://antarctic-labs.com/browse-pages/${fp}/${page}`,
+    { method: "GET" }
+  );
+  if (cache) {
+    const hit = await cache.match(cacheKey).catch(() => null);
+    if (hit) return hit;
+  }
   const upstream = await fetch(
     isOrders ? `${BASE}/meta/${fp}/orders.bin` : `${BASE}/meta/${fp}/browse/${page}`,
     { cf: { cacheTtl: 31536000, cacheEverything: true } }
@@ -36,11 +54,16 @@ export async function onRequestGet({ params }) {
       headers: { "content-type": "application/json", "cache-control": "no-store" },
     });
   }
-  return new Response(upstream.body, {
+  const res = new Response(upstream.body, {
     status: 200,
     headers: {
       "content-type": isOrders ? "application/octet-stream" : "application/json",
       "cache-control": "public, max-age=31536000, immutable",
     },
   });
+  if (cache) {
+    const put = cache.put(cacheKey, res.clone()).catch(() => {});
+    if (typeof waitUntil === "function") waitUntil(put);
+  }
+  return res;
 }

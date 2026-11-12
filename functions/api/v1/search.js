@@ -354,5 +354,27 @@ export async function onRequest(context) {
   if (context.request.headers.get("Authorization") !== null) {
     return keyedSearch(context);
   }
+  // Keyless responses are pure functions of the URL (query, field,
+  // limit, cursor — no auth, no per-caller state) and already carry a
+  // 1h Cache-Control; but a Pages Function response is served DYNAMIC,
+  // so the header alone never populated the edge cache and every agent
+  // search re-paid the multi-shard scan — measured 4.5 s with
+  // intermittent 503 "error code: 1102" under no particular load
+  // (2026-11-11 error investigation). Route keyless 200s through the
+  // Cache API so repeats are edge serves. The keyed path above is
+  // never cached: it authenticates and bills quota per call.
+  const cache =
+    typeof caches !== "undefined" && caches.default ? caches.default : null;
+  if (cache && context.request.method === "GET") {
+    const key = new Request(context.request.url, { method: "GET" });
+    const hit = await cache.match(key).catch(() => null);
+    if (hit) return hit;
+    const res = await legacySearch(context);
+    if (res.status === 200) {
+      const put = cache.put(key, res.clone()).catch(() => {});
+      if (typeof context.waitUntil === "function") context.waitUntil(put);
+    }
+    return res;
+  }
   return legacySearch(context);
 }

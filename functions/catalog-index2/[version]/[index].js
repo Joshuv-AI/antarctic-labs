@@ -21,6 +21,20 @@ export async function onRequest(context) {
   if (!Number.isInteger(i) || i < 0 || i >= SHARD_COUNT) {
     return new Response("Not found", { status: 404 });
   }
+  // Edge-cache through the Cache API (2026-11-11 error investigation):
+  // a Pages Function response is served DYNAMIC — the immutable header
+  // alone never populates the edge cache, so every visitor's index load
+  // re-executed this function and re-fetched the shard from GitHub. The
+  // version segment is part of the request URL, so it keys the cache:
+  // new data means new URLs and therefore new fills, exactly as the
+  // header contract already promised browsers.
+  const cache =
+    typeof caches !== "undefined" && caches.default ? caches.default : null;
+  const cacheKey = new Request(context.request.url, { method: "GET" });
+  if (cache) {
+    const hit = await cache.match(cacheKey).catch(() => null);
+    if (hit) return hit;
+  }
   const url = `${RAW}/catalog-index-${String(i).padStart(2, "0")}.json`;
   let r;
   try {
@@ -29,11 +43,16 @@ export async function onRequest(context) {
     return new Response("Not found", { status: 404 });
   }
   if (!r.ok) return new Response("Not found", { status: 404 });
-  return new Response(r.body, {
+  const res = new Response(r.body, {
     status: 200,
     headers: {
       "Content-Type": "application/json",
       "Cache-Control": "public, max-age=31536000, immutable",
     },
   });
+  if (cache) {
+    const put = cache.put(cacheKey, res.clone()).catch(() => {});
+    if (typeof context.waitUntil === "function") context.waitUntil(put);
+  }
+  return res;
 }
