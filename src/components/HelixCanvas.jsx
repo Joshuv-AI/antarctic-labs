@@ -1,13 +1,12 @@
 // HelixCanvas — mounts the Tower page's helix background scene
-// (src/lib/helix-scene.js) as a FIXED FULL-PAGE backdrop (Joshua's
-// 2026-11-12 full-page extension): the canvas layer is position:fixed
-// behind every section of the TowerOfBabel page, while the floating
-// band labels stay confined to the hero region (their layer is
-// absolutely positioned inside the hero section and scrolls away
-// with it). Decorative only: pointer-events none (CSS), aria-hidden,
-// and every failure mode resolves to "no canvas" — the black page
-// remains and the content is untouched. This page has a crash
-// history; the background must never be able to take it down.
+// (src/lib/helix-scene.js) as a FIXED FULL-PAGE backdrop: the canvas
+// layer is position:fixed behind every section of the TowerOfBabel
+// page, while the band labels stay confined to the hero region
+// (their layer is absolutely positioned inside the hero section and
+// scrolls away with it). Decorative only: pointer-events none (CSS),
+// aria-hidden, and every failure mode resolves to "no canvas" — the
+// black page remains and the content is untouched. This page has a
+// crash history; the background must never be able to take it down.
 //
 // Safety wiring (mirrors the site's established patterns):
 //  - HelixShield: an error boundary with the same semantics as
@@ -16,17 +15,21 @@
 //    exported and pages.jsx cannot import main.jsx (module cycle), so
 //    the shield is replicated here deliberately.
 //  - The scene module (and three.js with it) loads via dynamic
-//    import() with retry, deferred until after first paint + the
-//    Tower boot overlay — the TypographyVortexCanvas pattern (a
-//    1500 ms beat, then requestIdleCallback) — so it never competes
-//    with the catalog auto-start stream.
+//    import() with retry. SHIP 2 (Amendment M): the import starts at
+//    mount — the scene and atlas load DURING the page's boot — but
+//    the scene's animation stays gated on the boot completing
+//    (setSettled, called by the library section when it reports
+//    ready); before that, at most a motionless top-down still shows.
+//  - Navigation binding: the owning page passes an apiRef; this
+//    component registers { setDisplay, setSettled } into it as soon
+//    as it mounts (calls queue their latest state until the scene
+//    exists, then apply). Binding is state-only — the scene's damped
+//    rig does all motion; no per-frame React state anywhere.
 //  - Frozen frame instead of a loop for prefers-reduced-motion and
 //    weak-device heuristics; the scene itself auto-degrades to the
 //    frozen frame on sustained low fps.
 //  - Rendering pauses while the tab is hidden; route changes unmount
-//    the component, which disposes the scene. (A fixed full-page
-//    canvas has no off-screen state, so there is no Intersection-
-//    Observer pause anymore.)
+//    the component, which disposes the scene.
 //  - Kill switch: ?bg=0 disables the canvas entirely.
 import { Component, useEffect, useRef, useState } from "react";
 
@@ -88,7 +91,7 @@ async function loadHelixSceneModule() {
   return null;
 }
 
-function HelixLayer() {
+function HelixLayer({ apiRef }) {
   const ref = useRef(null);
   const labelsRef = useRef(null);
   const [failed, setFailed] = useState(false);
@@ -98,9 +101,25 @@ function HelixLayer() {
     if (!canvas) return;
     let disposed = false;
     let scene = null;
-    let timer = 0;
-    let idleId = 0;
     const frozen = prefersReducedMotion() || weakDevice();
+
+    // Binding bridge: registered into the owner's apiRef immediately,
+    // before the scene module even loads. Calls record their latest
+    // state and apply it the moment the scene exists (latest-wins —
+    // exactly the scene rig's own semantics).
+    let pendingDisplay = null;
+    let pendingSettled = false;
+    const bridge = {
+      setDisplay: (state) => {
+        pendingDisplay = state;
+        if (scene) scene.setDisplay(state);
+      },
+      setSettled: () => {
+        pendingSettled = true;
+        if (scene) scene.setSettled();
+      },
+    };
+    if (apiRef) apiRef.current = bridge;
 
     const sync = () => {
       if (!scene) return;
@@ -120,12 +139,9 @@ function HelixLayer() {
         scene = mod.createHelixScene(canvas, {
           frozen,
           labelsEl: labelsRef.current,
-          // The hero's own text blocks (title + intro), in DOCUMENT
-          // coordinates (scroll-invariant): band labels hide rather
-          // than sit under them. The scene converts into its label
-          // layer's space; document coords keep the conversion exact
-          // at any scroll depth (the canvas is a fixed layer, so
-          // canvas-relative rects drift with scroll).
+          // The hero's own text blocks (title + total line), in
+          // DOCUMENT coordinates (scroll-invariant): large band labels
+          // hide rather than sit under them.
           getAvoidRects: () => {
             try {
               const section = canvas.closest("section");
@@ -158,39 +174,26 @@ function HelixLayer() {
         setFailed(true);
         return;
       }
+      if (pendingDisplay) scene.setDisplay(pendingDisplay);
+      if (pendingSettled) scene.setSettled();
       if (!frozen) {
         document.addEventListener("visibilitychange", onVis);
         sync();
       }
     };
 
-    // Deferred init (vortex pattern): the 1500 ms beat lets first
-    // paint and the Tower boot overlay finish; the idle callback keeps
-    // the scene build off the catalog stream's critical path.
-    timer = window.setTimeout(() => {
-      if (disposed) return;
-      if ("requestIdleCallback" in window) {
-        idleId = window.requestIdleCallback(
-          () => {
-            if (!disposed) init();
-          },
-          { timeout: 1200 }
-        );
-      } else {
-        init();
-      }
-    }, 1500);
+    // Amendment M: no deferral — the scene + atlas load during the
+    // page's boot. Motion stays gated inside the scene until
+    // setSettled (the boot-complete signal).
+    init();
 
     return () => {
       disposed = true;
-      window.clearTimeout(timer);
-      if (idleId && "cancelIdleCallback" in window) {
-        window.cancelIdleCallback(idleId);
-      }
       document.removeEventListener("visibilitychange", onVis);
+      if (apiRef && apiRef.current === bridge) apiRef.current = null;
       if (scene) scene.dispose();
     };
-  }, []);
+  }, [apiRef]);
 
   if (failed) return null;
   return (
@@ -205,21 +208,21 @@ function HelixLayer() {
           style={{ display: "block", width: "100%", height: "100%" }}
         />
       </div>
-      {/* Floating collection labels (reel style) — a HERO composition:
-          this layer is absolutely positioned inside the hero section,
-          so the labels scroll away with the hero. The scene fills and
-          positions them; decorative only. */}
+      {/* Band labels (reel style) — a HERO composition: this layer is
+          absolutely positioned inside the hero section, so the labels
+          scroll away with the hero. The scene fills and positions
+          them (they ride their coil anchors); decorative only. */}
       <div ref={labelsRef} className="tower-helix-labels" aria-hidden="true" />
     </>
   );
 }
 
-export default function HelixCanvas() {
+export default function HelixCanvas({ apiRef }) {
   const [off] = useState(bgDisabled);
   if (off) return null;
   return (
     <HelixShield>
-      <HelixLayer />
+      <HelixLayer apiRef={apiRef} />
     </HelixShield>
   );
 }

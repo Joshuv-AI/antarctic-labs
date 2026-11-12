@@ -248,6 +248,10 @@ export function TowerOfBabel({ go, onReady }) {
   // The combined Tower page: landing content + full library section below.
   // The library section manages its own catalog loading and reports ready
   // via onReady once the first 50 rows paint.
+  // Helix navigation binding (Ship 2, 2026-11-12): one ref carries the
+  // scene bridge ({ setDisplay, setSettled }) from HelixCanvas to the
+  // library section, whose search/filter state drives the background.
+  const helixApiRef = useRef(null);
   return (
     <main className="page-shell inner-page tower-light tower-combined" id="main-content" tabIndex={-1}>
       <section className="inner-hero section tower-landing-hero tower-helix-band">
@@ -257,12 +261,17 @@ export function TowerOfBabel({ go, onReady }) {
             hero-confined labels layer; then a soft shade for hero
             text contrast, then the content itself. The library below
             scrolls over the same black space. */}
-        <HelixCanvas />
+        <HelixCanvas apiRef={helixApiRef} />
         <div className="tower-helix-shade" aria-hidden="true" />
+        {/* Center block (Amendments O/P): the title sits centered in
+            the bore of the top-down poster frame, with the library
+            total beneath it — mirroring the reel's overhead frame.
+            The intro paragraph that used to sit under the title was
+            removed 2026-11-12 (Joshua): the title + total carry the
+            hero now. The total string matches the stats panel's
+            verified live count. */}
         <h1>{towerOfBabel.heading}</h1>
-        {towerOfBabel.intro.map((p, i) => (
-          <p className={i === 0 ? "display-copy" : "body-copy"} key={i}>{p}</p>
-        ))}
+        <p className="tower-helix-total">2,557,923 texts</p>
       </section>
 
       {/* About the project — removed 2026-11-11 (Joshua): the project
@@ -274,7 +283,7 @@ export function TowerOfBabel({ go, onReady }) {
       {/* The full library, poured directly below the landing content.
           Collections live inside the library browse section below as a
           filter on the same entry list — there is no separate hub page. */}
-      <TowerLibrarySection go={go} onReady={onReady} />
+      <TowerLibrarySection go={go} onReady={onReady} helixApiRef={helixApiRef} />
     </main>
   );
 }
@@ -1514,7 +1523,7 @@ function TowerDiscovery({ artifacts, towerData, countsFinal, go, onBrowse, onShe
   );
 }
 
-function TowerLibrarySection({ go, onReady }) {
+function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // Stability (2026-10-27): the +6s shard-manifest warm that used to live
   // here is REMOVED — it parsed a ~16MB manifest on every landing-page
   // visit for data this page never uses. Entry pages fetch it on demand.
@@ -1903,7 +1912,8 @@ function TowerLibrarySection({ go, onReady }) {
   // is never mounted at once — the DOM stays small so style recalc and
   // paint stay cheap, and the loader releases after the first 50 paint.
   const [rowBudget, setRowBudget] = useState(TOWER_ROWS_PER_PAGE);
-  const [shelfActive, setShelfActive] = useState(false);
+  // (The shelfActive state went with the discovery zone — removed
+  // 2026-11-12, Ship 2 minimal page: no stacks/featured/shelves.)
   // Cutover (2026-10-29): opening a stack shelf is browse intent — the
   // shelf's groups and tiles are built from the full catalog, so the
   // index starts when a shelf opens (in server mode it no longer
@@ -1913,11 +1923,8 @@ function TowerLibrarySection({ go, onReady }) {
   // tabs. Shelves resolve their curated ids against the resident
   // catalog, which the automatic browse stream keeps growing, so a
   // shelf fills in as the catalog arrives instead of demanding it all.
-  useEffect(() => {
-    if (!shelfActive) return;
-    if (serverFlag) return;
-    requestCatalogIndex();
-  }, [shelfActive]);
+  // (The shelf-open catalog-index effect went with the discovery
+  // zone too — shelves no longer exist on this page.)
   // Stage 1 ungating (2026-10-23): the full catalog index no longer loads
   // automatically with the page. It starts when the visitor shows intent —
   // the first change to any browse control (search text, filter, sort,
@@ -3034,6 +3041,12 @@ function TowerLibrarySection({ go, onReady }) {
     const fire = () => {
       if (!fired) {
         fired = true;
+        // Helix boot gate (Amendment M): the background's animation
+        // clock starts exactly when the page's boot completes — the
+        // same moment onReady dismisses the loader.
+        try {
+          if (helixApiRef && helixApiRef.current) helixApiRef.current.setSettled();
+        } catch (e) { /* decorative layer — never block ready */ }
         onReady();
       }
     };
@@ -3049,6 +3062,115 @@ function TowerLibrarySection({ go, onReady }) {
       clearTimeout(t);
     };
   }, [settled, onReady]);
+  // Helix navigation binding (Ship 2, Amendments H/I/J): the page's
+  // search + filter state drives the background scene. Rules, applied
+  // to the CURRENT combined state whenever a committed model changes:
+  //  - nothing active → idle.
+  //  - results ≤ 50 (and > 0) → the matching works lift into the
+  //    center display above the helix (tiles carry those works).
+  //  - results > 50 → camera flight to the implicated band(s) with
+  //    in-place highlight; a single collection implicates its band(s)
+  //    (HELIX_LANE_BANDS), a cross-collection set its dominant lane.
+  //  - curated/era-only states implicate no band → idle (no invented
+  //    effects).
+  // Lane → scene-band mapping (VERIFIED against both tables — the
+  // filter lanes are catalog `collection` values; the scene's bands
+  // are its own grouping): LAW/PAPERS/DECLASSIFIED/PODCASTS map to
+  // their exact bands; BOOKS spans the six thematic bands the scene
+  // split it into; REFERENCE and DOCUMENTS have no constituent bands
+  // in the scene's grouping, so they (like curated/era states) get
+  // no flight. Scene band order: LAW 0, PAPERS 1, RELIGION 2,
+  // DECLASSIFIED 3, HISTORY 4, LITERATURE 5, SCIENCE 6,
+  // PHILOSOPHY 7, PODCASTS 8, FOLKLORE 9.
+  const helixSigRef = useRef("");
+  useEffect(() => {
+    const api = helixApiRef && helixApiRef.current;
+    if (!api || typeof api.setDisplay !== "function") return;
+    const HELIX_LANE_BANDS = {
+      LAW: [0],
+      PAPERS: [1],
+      DECLASSIFIED: [3],
+      PODCASTS: [8],
+      BOOKS: [2, 4, 5, 6, 7, 9],
+    };
+    const searching = !!(q && q.trim().length >= 2);
+    const anyFilter = !!(bucketFilter || collKey || eraFilter);
+    let state = null;
+    if (!searching && !anyFilter) {
+      state = { kind: "idle" };
+    } else {
+      let count = -1;
+      let topArtifacts = null;
+      let sampleArtifacts = null;
+      if (searching) {
+        const m = serverActive && serverModel ? serverModel : blendedModel;
+        if (m && !m.pending && m.query === q && Array.isArray(m.items)) {
+          count = typeof m.total === "number" ? m.total : m.items.length;
+          topArtifacts = m.items.slice(0, 50).map((it) => it.artifact).filter(Boolean);
+          sampleArtifacts = m.items.slice(0, 200).map((it) => it.artifact).filter(Boolean);
+        }
+      } else if (browseResult && artifacts) {
+        count = browseResult.count;
+        topArtifacts = browseResult.indices
+          .slice(0, 50)
+          .map((ix) => artifacts[ix])
+          .filter(Boolean);
+        sampleArtifacts = browseResult.indices
+          .slice(0, 200)
+          .map((ix) => artifacts[ix])
+          .filter(Boolean);
+      }
+      if (count === 0) {
+        state = { kind: "idle" };
+      } else if (count > 0 && count <= 50 && topArtifacts) {
+        state = {
+          kind: "lift",
+          items: topArtifacts.map((a) => ({
+            title: a.title || "",
+            creator: a.creator || "",
+            year: a.year || null,
+            collection: a.collection || "",
+          })),
+        };
+      } else if (count > 50) {
+        let groups = null;
+        const lane = bucketFilter ? bucketFilter.split(":")[0] : "";
+        if (lane && HELIX_LANE_BANDS[lane]) {
+          groups = HELIX_LANE_BANDS[lane];
+        } else if (sampleArtifacts && sampleArtifacts.length) {
+          const tally = {};
+          let bestLane = "";
+          let bestN = 0;
+          for (const a of sampleArtifacts) {
+            const c = (a && a.collection) || "";
+            if (!c) continue;
+            const n = (tally[c] = (tally[c] || 0) + 1);
+            if (n > bestN) {
+              bestN = n;
+              bestLane = c;
+            }
+          }
+          if (bestLane && HELIX_LANE_BANDS[bestLane]) groups = HELIX_LANE_BANDS[bestLane];
+        }
+        state = groups ? { kind: "focus", groups } : { kind: "idle" };
+      }
+      // count still unknown (model pending / browse not committed):
+      // hold the previous scene state — the scene's latest-wins rig
+      // retargets when the committed state lands.
+    }
+    if (!state) return;
+    const sig =
+      state.kind +
+      "|" +
+      (state.groups ? state.groups.join(",") : "") +
+      "|" +
+      (state.items ? state.items.map((i) => i.title).join("§") : "");
+    if (sig === helixSigRef.current) return;
+    helixSigRef.current = sig;
+    try {
+      api.setDisplay(state);
+    } catch (e) { /* decorative layer — never disturb the page */ }
+  }, [q, bucketFilter, collKey, eraFilter, serverActive, serverModel, blendedModel, browseResult, artifacts, helixApiRef]);
   // Analytics: one search_performed per settled query (900ms debounce so
   // keystrokes don't flood it), with the result count the user saw.
   useEffect(() => {
@@ -3272,20 +3394,16 @@ function TowerLibrarySection({ go, onReady }) {
                 )}
               </div>
             </div>
-            {!q && !bucketFilter && !collKey && !eraFilter && (
-              <TowerDiscovery
-                artifacts={artifacts}
-                towerData={discoveryData}
-                countsFinal={fullIndexReady && deriveFinal}
-                go={go}
-                onBrowse={browseTo}
-                onShelfChange={setShelfActive}
-              />
-            )}
+            {/* MINIMAL PAGE (Ship 2, Joshua 2026-11-12): the discovery
+                zone — Browse-the-stacks cards, the Featured rails and
+                every curated cover-row shelf — is REMOVED. The page is
+                hero, CATALOG actions, stats, search, sort + view
+                toggle, filters, results, footer. The TowerDiscovery
+                component below is retained in the file for reference
+                but is no longer rendered anywhere. */}
             <div
               className="tower-browse-layout"
               id="tower-results"
-              style={shelfActive ? { display: "none" } : undefined}
             >
               {/* Unified filter revamp (2026-10-25, visual only): the desktop
                   "Zoom in" sidebar is retired. Format lanes now render once,
