@@ -11,7 +11,8 @@
 // Claude-SearchBot, CCBot, Meta-WebIndexer, … — see _lib/tower-catalog.js)
 // receive a complete static HTML record: answer-first summary, the
 // bibliographic metadata table, the entry description, a Book JSON-LD node
-// mirroring src/seo.js, and a direct link to the plain-text file where the
+// mirroring src/seo.js, Google Scholar citation_* meta tags built from the
+// record's own fields, and a direct link to the plain-text file where the
 // record carries one. Most AI crawlers never execute JavaScript, so
 // without this the 375k+ entries are invisible to them.
 //
@@ -99,6 +100,79 @@ function bookJsonLd(record, description, canonical) {
   return { "@context": "https://schema.org", "@graph": [crumb, book] };
 }
 
+// Google Scholar (Highwire Press) citation meta tags. Scholar's ingestion
+// parser reads citation_* tags, not the Book JSON-LD below; without them
+// the PAPERS collection is invisible to Scholar's preferred ingestion
+// path (2026-11-11 discoverability audit, gap 2). Every value comes from
+// the record's own metadata — a tag is omitted when the record carries
+// no such field, and nothing is derived or invented:
+// - citation_title: the record title.
+// - citation_author: the record's creator field as-is. The catalog stores
+//   creators as one string (often several names comma-joined); it is
+//   emitted once, unsplit — author lists are never fabricated. Only a
+//   creator that is genuinely an array yields one tag per element.
+// - citation_publication_date: Scholar format — "YYYY" for a year-only
+//   record, "YYYY/MM/DD" when the record carries a full date. Emitted
+//   only when a plausible 4-digit year can be read from the record.
+// - citation_pdf_url: the record's full-text URL (textFileUrl) where the
+//   record carries one. The tag name is Scholar's; our full text is a
+//   .txt file, which is the correct ingestion pointer regardless.
+// - Journal/volume/issue/page/DOI/ISSN tags only when the record
+//   genuinely carries those fields (none do in the current catalog
+//   schema; the mapping exists so a future field lands without a
+//   template change).
+function scholarDate(record) {
+  const candidates = [
+    record.date,
+    record.publication_date,
+    record.published_date,
+    record.year,
+  ];
+  for (const raw of candidates) {
+    if (raw === undefined || raw === null || raw === "") continue;
+    const s = String(raw).trim();
+    const full = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+    if (full) {
+      return `${full[1]}/${full[2].padStart(2, "0")}/${full[3].padStart(
+        2,
+        "0"
+      )}`;
+    }
+    const yearOnly = s.match(/^(\d{4})/);
+    if (yearOnly) {
+      const y = Number(yearOnly[1]);
+      if (y >= 1000 && y <= 2100) return yearOnly[1];
+    }
+  }
+  return null;
+}
+
+function scholarMetaTags(record, txt) {
+  const tags = [];
+  const add = (name, value) => {
+    if (value === undefined || value === null || value === "") return;
+    tags.push(
+      `<meta name="${name}" content="${escapeHtml(String(value))}" />`
+    );
+  };
+  add("citation_title", record.title);
+  if (Array.isArray(record.creator)) {
+    for (const a of record.creator) add("citation_author", a);
+  } else {
+    add("citation_author", record.creator);
+  }
+  add("citation_publication_date", scholarDate(record));
+  add("citation_pdf_url", txt);
+  add("citation_journal_title", record.journal_title ?? record.journal);
+  add("citation_volume", record.volume);
+  add("citation_issue", record.issue);
+  add("citation_firstpage", record.firstpage ?? record.first_page);
+  add("citation_lastpage", record.lastpage ?? record.last_page);
+  add("citation_doi", record.doi);
+  add("citation_issn", record.issn);
+  return tags.length ? tags.join("\n") + "\n" : "";
+}
+
 function renderEntryHtml(record, description) {
   const canonical = entryUrl(record.artifact_id);
   const title = `${record.title} — Read Free | Tower of Babel`;
@@ -145,7 +219,7 @@ function renderEntryHtml(record, description) {
 <meta property="og:url" content="${escapeHtml(canonical)}" />
 <meta name="twitter:title" content="${escapeHtml(title)}" />
 <meta name="twitter:description" content="${escapeHtml(metaDesc)}" />
-<script type="application/ld+json">${JSON.stringify(jsonLd).replace(
+${scholarMetaTags(record, txt)}<script type="application/ld+json">${JSON.stringify(jsonLd).replace(
     /</g,
     "\\u003c"
   )}</script>
