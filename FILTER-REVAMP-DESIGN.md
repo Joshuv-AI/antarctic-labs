@@ -328,3 +328,167 @@ records in catalog order on EVERY filter change, just to recount):
   untouched.
 - Full `npm run build` locally before push; scoped CSS verified on the
   landing + library pages, desktop and mobile widths, zero JS errors.
+
+## 9. Curated-collections follow-up (2026-11-11 evening — Joshua's orders 21:01 + 21:04 EST)
+
+Joshua confirmed the revamp live and ordered three things: (1) remove
+the Authors group from the Curated axis entirely; (2) complete the
+remaining curated groups — rule-based over the full catalog, no
+partial collections, residual gaps explicit and honestly labeled;
+(3) add a small number of audience-keyed collections. Plus the
+hierarchy rule: Collections is the surface axis; Curated is the
+DEEPER layer beneath it, in presentation as well as order.
+
+### 9.1 Method
+
+Same audit method as §4, extended: all 168 full-record catalog shards
+at HEAD (2,557,923 records, verified against count.json) were walked
+locally with candidate rules; every rule change was verified against
+captured/missed samples before being ported into
+functions/_lib/tower-hubs.js. The regenerated hub index is the ground
+truth below — audit predictions matched it exactly for programmes
+(26,298), course (9/38/23), and Primary Sources (26,657); tradition
+deltas of ±1–29 trace to named rule fixes made after the last audit
+pass (the Ante-/Post-Nicene Fathers patterns, the Anglo-Saxon /
+Icelandic saga patterns, Josephus) and are noted per line.
+
+### 9.2 Removed: the Authors group
+
+The group was not just broad, it was broken: the hub index caps each
+author's stored work list at 500, so the group's 50 authors displayed
+25,000 listed works against 888,150 true works by those authors —
+the chip counts and the filter results could never agree. The SPA
+group, its descriptors, and its mapping are deleted. Authors stay
+reachable through search; the topAuthors data remains in the hub
+index for the server-side author hub pages and the API, untouched.
+
+### 9.3 Sacred traditions — before / after (hub-listed works)
+
+| Tradition | Before | After | Note |
+|---|---|---|---|
+| Jainism | 6 | 6 | already complete — rules capture everything the signals find |
+| Shinto | 6 | 6 | already complete |
+| Zoroastrianism | 25 | 25 | already complete |
+| Latter-day Saint | 92 | 92 | already complete |
+| Sikhism | — | 16 | NEW — captures all 16 signal records exactly |
+| Baháʼí | — | 6 | NEW — of 8 signal records: 1 comparative work sits in Christianity, 1 below honest pattern reach |
+| Gnosticism & Hermeticism | — | 87 | NEW — Nag Hammadi, Hermetica, Mandaean, Manichaean |
+| Norse & Germanic | — | 109 | NEW — Eddas, sagas, Anglo-Saxon chronicles |
+| Celtic | — | 180 | NEW — Mabinogion, Arthurian, Taliesin |
+| Esoteric & Occult | — | 646 | NEW — grimoires, alchemy, Theosophy, ceremonial magic |
+| Buddhism | 108 | 126 | sutra patterns (with Hindu-sutra guards), Mahayana/Theravada/Zen terms |
+| Hinduism | 115 | 138 | yoga, Kama Sutra, Grihya Sutras, Vivekananda |
+| Taoism & Chinese Classics | 32 | 39 | the other Chinese classics (Mencius, Liezi, Xunzi, Mozi, Han Fei) |
+| Islam | 108 | 118 | Ghazālī spellings, Kashf al-Mahjub, Rumi, Jabir/Geber, period terms |
+| Judaism | 154 | 157 | Josephus, Hebraic |
+| Egypt & Mesopotamia | 380 | 374 | net −6: Hermetic works moved to Gnosticism, their proper home |
+| Indigenous & Folk Traditions | 416 | 408 | net −8: Norse/Celtic works moved to their own new traditions |
+| Greek & Roman | 335 | 368 | Tacitus, Livy, Pausanias, Strabo, the Neoplatonists, Cicero ids |
+| Christianity | 1,637 | 1,799 | Quaker, Christian Science, Methodism/Wesley, Unitarian, Aquinas, Dante, Lutheran confessions, the Nicene Fathers sets, and the (KJV) creator pattern (bare Bible books — Job, Joshua, Hosea — previously matched nothing) |
+| More Sacred & Wisdom Texts | — | 1,233 | NEW — the labeled remainder (see 9.6) |
+| **Total listed** | **3,414** | **5,933** | named traditions alone: 4,700 |
+
+Dead curated pins found and repaired: five pins pointed at records
+that no longer exist — tob-0004 (Bhagavad Gita), tob-10233
+(Dhammapada), tob-10337 (Egyptian Book of the Dead) were replaced by
+the live editions of the same works (judge-bhagavad-gita-1890,
+tob-4314, tob-4053); tob-10229 and tob-10071 could not be identified
+with any live work and were dropped.
+
+### 9.4 Declassified programmes — completed
+
+Before: 25,280 of 26,298 programme records were listed; 1,014
+DECLASSIFIED records (the govdocs archive + famous one-off releases)
+sat in NO collection, and 4 programme-prefix records in other lanes
+were missed by the lane-gated walk. After: prefixes are tested over
+all records, the Pentagon Papers (3) are their own collection, and
+the unclaimed DECLASSIFIED records form a labeled catch-all, "Other
+Declassified Releases" (1,011). CIA 6,978→6,980 · State 5,826 ·
+Congress 8,754 · United Nations 3,206→3,207 · National Security
+Archive 377→378 · FBI 139 · Pentagon Papers 3 · Other 1,011.
+**Total: 26,298 of 26,298 — the group is complete by construction.**
+
+### 9.5 Course primary sources — completed against the canon
+
+Membership unit = the catalog's own CANON entries (60). Founding
+documents was already complete (9/9) and is unchanged. Sacred &
+wisdom landmarks went 5 → 38: every canon sacred entry whose work
+exists in the catalog is now represented, including the two whose
+pinned ids were dead while the works live under other ids
+(Dhammapada → tob-4314; Diamond Sutra → tob-4230). Landmark works
+went 21 → 23: its fallback mechanism already covered 15 of the 17
+unpinned canon entries (verified by simulating the build); the two
+genuinely missing works — Dryden's Aeneid and Shakespeare's complete
+works — were added. One deliberate exclusion: the canon "jesus"
+entry also resolves to a Catholic Encyclopedia article (REFERENCE
+lane) — a reference article is not a course primary source, so the
+course does not absorb it.
+
+### 9.6 The remainder, honestly
+
+"More Sacred & Wisdom Texts" (1,233 works) is a labeled remainder,
+not a tradition: every BOOKS record no named tradition claims that
+the site's own taxonomy shelves as a sacred text, plus records whose
+title/tags carry a devotional signal (mysticism, comparative
+religion, sermons, devotion). Sampled: the core is genuinely
+religious (Underhill, Ruysbroeck, Kabir, James's Varieties of
+Religious Experience); a thin tail is taxonomy quirk — the source
+shelves every tob-* record as "sacred", including Tesla's writings
+and Freud's Interpretation of Dreams. The blurb says what it is.
+Residuals left in NO tradition, by design: 22 early-modern "philo"
+wonder-books (EEBO bestiaries and natural histories — Topsell,
+Jonston, Swan) that no tradition honestly claims, reachable through
+the BOOKS subcategory. Scope boundaries: the REFERENCE religion
+encyclopedias (Jewish Encyclopedia 12,943 articles, Catholic
+Encyclopedia 11,541, Britannica 16,578) stay out of the traditions —
+article-level encyclopedias, already first-class REFERENCE
+subcategories; 41 of 1,091 podcast episodes carry religious signals
+but are audio listings, not texts, and stay out.
+
+### 9.7 New audience collections (Study shelves)
+
+Each addition had to pass (a) real catalog mass, (b) a named
+audience/use case, (c) not already served by the existing axes.
+
+| Collection | Works | Audience | Why the axes don't serve it |
+|---|---|---|---|
+| Primary Sources | 26,657 | historians, journalists, students | the union of DOCUMENTS + DECLASSIFIED; the Collections axis is single-select, so the cross-lane shelf cannot be expressed |
+| Philosophy | 1,573 | students, general readers | the BOOKS "philo" subcategory is a 41-record EEBO prefix set; the catalog's real philosophy — Plato to Russell, as subject tags, titles, and complete authorial shelves — had no home |
+| Epics, Myths & Sagas | 226 | students, general readers | the epics are scattered across six traditions and several BOOKS subcategories; no existing filter gathers them |
+| Classics of Science | 349 | engineers, researchers, students | the science classics sit inside BOOKS literature with no subcategory; PAPERS is modern research, not Darwin/Huxley/Lyell |
+
+Rejected candidates, with reasons: a founding-documents collection
+(≈ the DOCUMENTS founding subcategory, 305 — one tap away already);
+a world-scriptures union (= the BOOKS sacred subcategory); the
+complete declassified file (= the lane itself); a philosophy &
+esoteric merged shelf (= the BOOKS philo subcategory); landmark
+science via canon pins (too thin — superseded by the rule-based
+shelf). Surname rules are precision-checked (Alfred Russel Wallace,
+not Lew or Edgar Wallace; Isaac Newton, not John Newton; Thomas
+Huxley, not Aldous) — an early loose-creator draft of the science
+shelf held 488 works, of which ~139 were other men's books; the
+shipped shelf is the honest 349. The philosophy shelf deliberately
+exceeds its title/tag signal (1,193) because it carries complete
+authorial shelves (1,573). Science's broad-signal residue (~174) is
+mostly "evolution" in literary, political, and theological senses —
+sampled and confirmed not science.
+
+### 9.8 Hierarchy (Joshua 2026-11-11 21:04)
+
+The Curated axis now carries the tf2-axis--deep treatment, in the
+panel's own vocabulary: the axis is indented behind a left hairline,
+its label is quieter (500 weight, dimmed), and its group tabs sit in
+the subcategory register (11px, 400 weight, thinner borders, 27px)
+while the active state keeps the full cyan. Within the axis, the
+Study shelves render last — the deepest cut. Collections and Era are
+untouched; the panel, counts, pills, and clear-all behave exactly as
+shipped.
+
+### 9.9 Pipeline
+
+All counts flow through the same phase-0 hub-index pipeline as the
+rest of the panel (displayed count = list length = filter set size,
+by construction). The hub index grew 11.2 MB → 16.9 MB (Primary
+Sources' 26,657 records are most of it) — still under the 25 MiB
+Pages per-file cap. public/api-collections.json was regenerated in
+the same push, per the pipeline rule.

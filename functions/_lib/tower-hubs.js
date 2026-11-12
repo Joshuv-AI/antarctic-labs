@@ -18,11 +18,18 @@
 //   included first. Further membership is derived ONLY from BOOKS records:
 //   a record joins the FIRST tradition (in TRADITION_DEFS order — most
 //   distinctive traditions first, Christianity last) whose tag set,
-//   title pattern, or artifact-id pattern matches. Records in other
-//   collections are never auto-classified (REFERENCE is an encyclopedia
-//   lane, not a sacred-text shelf). Records that match nothing are in no
-//   hub — the catalog carries ~600 sacred-shelf books (mostly tob-* with
-//   bare titles like "Job") that no honest rule can place; hubs say so.
+//   title pattern, artifact-id pattern, or creator pattern matches.
+//   Records in other collections are never auto-classified (REFERENCE is
+//   an encyclopedia lane, not a sacred-text shelf). Records that match
+//   no tradition join the sacred-shelf remainder (sacred-wisdom-
+//   remainder) when the browse taxonomy counts them as sacred texts or
+//   their title/tags carry a religious signal — a labeled remainder,
+//   never dressed as a tradition. (Completeness pass 2026-11-11: rules
+//   re-audited over the full 2,557,923-record catalog; six traditions
+//   added — Sikhism, Baháʼí, Gnosticism & Hermeticism, Norse &
+//   Germanic, Celtic, Esoteric & Occult — and every existing rule
+//   widened against the records it was missing; dead curated pins
+//   repaired or dropped.)
 // - Authors: creators counted over the whole catalog. "", "Unknown" and
 //   "Anonymous" are excluded (catalog placeholders, not authors). Rank:
 //   count desc, then decoded name asc. Top 50 get hubs. Slugs: entity-
@@ -32,9 +39,18 @@
 //   site's own taxonomy (src/lib/tower-taxonomy.js DECLASSIFIED subs):
 //   cia- -> CIA; frus- -> Dept. of State (FRUS); gao- | plaw- -> Congress
 //   (GAO reports + public laws); un- -> United Nations; govdocs-nsarchive
-//   | nsa- -> National Security Archive; fbi-vault -> FBI Vault. The
-//   taxonomy's residual "other" bucket gets NO hub — it is a mixed
+//   | nsa- -> National Security Archive; fbi-vault -> FBI Vault;
+//   pentagon-papers- -> Pentagon Papers. Prefixes are tested over ALL
+//   records (a handful of programme records sit in other lanes).
+//   DECLASSIFIED records matching no programme form the "other"
+//   catch-all collection ("Other Declassified Releases") — a labeled
 //   remainder, not a programme.
+// - Study shelves (AUDIENCE_DEFS): rule-based cross-cuts computed in the
+//   same walk — Primary Sources (every DOCUMENTS + DECLASSIFIED
+//   record), Philosophy, Epics Myths & Sagas, and Classics of Science
+//   (BOOKS-lane tag/title/id/creator rules). They live only in the hub
+//   index JSON (the `audiences` key) for the in-page filter; they have
+//   no hub pages.
 // - Course primary sources: the catalog's own canon pins
 //   (src/lib/search-rank.js CANON) — a curated subset listed explicitly
 //   in COURSE_GROUPS below, resolved against the catalog; ids that do
@@ -150,34 +166,82 @@ export const TRADITION_DEFS = [
     curated: ["tob-0214", "smith-doctrine-covenants-1835", "smith-pearl-great-price-1851"],
   },
   {
+    id: "sikhism", label: "Sikhism",
+    blurb: "Sikh scripture and scholarship in the Tower: Macauliffe's The Sikh Religion and works on the Guru Granth Sahib, Guru Nanak, and the Khalsa, with catalog-matched Sikh works.",
+    tags: T(["sikhism", "sikh"]),
+    titleRe: /\bsikh|guru granth|adi granth|guru nanak|khalsa|gurdwara/,
+    idRe: /sikh/,
+    curated: ["macauliffe-sikh-religion-vol1-1909"],
+  },
+  {
+    id: "bahai", label: "Baháʼí",
+    blurb: "Baháʼí texts in the Tower: ʻAbdu'l-Bahá's Some Answered Questions and works on Baháʼu'lláh, the Kitáb-i-Aqdas and Kitáb-i-Íqán, and the Bábí movement, with catalog-matched works on the Baháʼí faith.",
+    tags: T(["bahai", "baha'i", "bahaism", "babi"]),
+    titleRe: /baha'?i|bahaullah|baha'u'llah|abdul-baha|kitab-i-aqdas|kitab-i-iqan|\bbabi\b|babism/,
+    idRe: /bahai|baha-i/,
+    curated: ["abdul-baha-some-answered-questions-1908"],
+  },
+  {
+    id: "gnosticism", label: "Gnosticism & Hermeticism",
+    blurb: "Gnostic and Hermetic texts in the Tower: the Nag Hammadi writings, the Pistis Sophia, and the Corpus Hermeticum, with catalog-matched works on Gnosticism, Hermeticism, Manichaeism, and the Mandaeans.",
+    tags: T(["gnosticism", "gnostic", "hermeticism", "hermetica", "manichaeism", "mandaean"]),
+    titleRe: /gnostic|nag hammadi|hermetic|hermes trismegistus|corpus hermeticum|pistis sophia|emerald tablet|apocryphon|hypostasis|demiurge|manichaean|manichaeism|mandaean|(?<!infancy )gospel of (thomas|philip|mary|judas|truth)/,
+    idRe: /^(pistis-sophia|corpus-hermeticum|emerald-tablet)/,
+    curated: ["tob-0176", "tob-0115"],
+  },
+  {
+    id: "norse-germanic", label: "Norse & Germanic",
+    blurb: "Norse and Germanic myth in the Tower: the Poetic and Prose Eddas, the Nibelungenlied, and Beowulf, with catalog-matched works on the Eddas, the Icelandic sagas and chronicles, and Germanic legend.",
+    tags: T(["norse", "norse mythology", "edda", "germanic mythology", "scandinavian mythology"]),
+    titleRe: /\beddas?\b|nibelung|beowulf|valhalla|ragnarok|asgard|\bnorse\b|\bviking|odin\b|heimskringla|\bnjal\b|volsunga|germanic (myth|legend|hero)|anglo-saxon|saxon chronicle|\bsaxo\b|icelandic|\bvinland\b|wineland/,
+    idRe: /^(poetic-edda|prose-edda|nibelungenlied)|nibelung|norse-mythology/,
+    curated: ["tob-0167", "tob-0168"],
+  },
+  {
+    id: "celtic", label: "Celtic",
+    blurb: "Celtic myth and legend in the Tower: the Mabinogion, the Arthurian romances of Chrétien de Troyes, and the Taliesin poems, with catalog-matched works on Celtic and Arthurian tradition.",
+    tags: T(["celtic", "celtic mythology", "druid", "arthurian"]),
+    titleRe: /\bceltic\b|\bcelts?\b|druid|mabinogion|arthurian|king arthur|holy grail|cu chulain|cuchulain|tuatha|chretien|erec et|yvain|cliges|perceval|gawain|tristan|taliesin|ossian/,
+    idRe: /^(mabinogion|chretien-)/,
+    curated: ["tob-0170"],
+  },
+  {
+    id: "esoteric", label: "Esoteric & Occult",
+    blurb: "Esoteric and occult works in the Tower: the grimoires, Éliphas Lévi, and the literature of alchemy, astrology, Theosophy, Rosicrucianism, and ceremonial magic, with catalog-matched works across the Western esoteric tradition.",
+    tags: T(["occult", "occultism", "theosophy", "alchemy", "astrology", "rosicrucian", "freemasonry", "witchcraft", "tarot", "spiritualism"]),
+    titleRe: /occult|theosoph|alchem|astrolog(?!onom)|grimoire|grimorium|rosicrucian|freemason|masonic|\bmagick\b|witchcraft|tarot|spiritualism|golden dawn|crowley|blavatsky|eliphas levi|key of solomon|clavicle of solomon|heptameron|book of the law|mesmeris|black magic|white magic|scottish rite|demonolog|daemonolog|secret doctrine/,
+    idRe: /^(grimorium|grand-grimoire|petit-albert|heptameron|theurgia|almadel|clavicle)/,
+    curated: [],
+  },
+  {
     id: "buddhism", label: "Buddhism",
     blurb: "Buddhist texts in the Tower: the Dhammapada, the Pali Nikayas in Sujato's translations, the Jatakas, and the Tibetan Book of the Dead, with catalog-matched works across Theravada, Mahayana, and Tibetan traditions.",
     tags: T(["buddhism", "buddhist", "pali canon", "nikaya", "sutta", "theravada", "mahayana", "zen", "tibetan buddhism"]),
-    titleRe: /tibetan book of the dead|\bbuddha\b|buddhist|buddhism|dhammapada|tripitaka|\bsutta\b|nikaya|jataka|bodhisattva|\bnirvana\b|pali canon|lamaism/,
+    titleRe: /tibetan book of the dead|\bbuddha\b|buddhist|buddhism|dhammapada|tripitaka|\bsutta\b|nikaya|jataka|bodhisattva|\bnirvana\b|pali canon|lamaism|(?<!kama )(?<!grihya[- ])(?<!yoga )sutra|mahayana|theravada|\bzen\b|lankavatara/,
     idRe: /^(anguttara-|samyutta-|majjhima-|khuddakapatha-|itivuttaka-|theragatha-|therigatha-|udana-|jataka-|dhammapada)/,
-    curated: ["tob-10233", "majjhima-nikaya-sujato", "samyutta-nikaya-sujato", "jataka-cowell-vol-1", "tibetan-book-of-dead-evans-wentz-1927"],
+    curated: ["tob-4314", "majjhima-nikaya-sujato", "samyutta-nikaya-sujato", "jataka-cowell-vol-1", "tibetan-book-of-dead-evans-wentz-1927"],
   },
   {
     id: "hinduism", label: "Hinduism",
     blurb: "Hindu scripture in the Tower: the Bhagavad Gita, Griffith's Rig Veda, the Upanishads, the Ramayana, and Wilson's Vishnu Purana, with catalog-matched Vedic, epic, and Puranic works.",
     tags: T(["hinduism", "hindu", "vedas", "veda", "upanishads", "vedic"]),
-    titleRe: /\bveda(s|ic)?\b|upanishad|bhagavad|ramayana|mahabharata|purana|\bhindu(s|ism)?\b| rig ?veda/,
+    titleRe: /\bveda(s|ic)?\b|upanishad|bhagavad|ramayana|mahabharata|purana|\bhindu(s|ism)?\b| rig ?veda|kama sutra|\byoga\b|vivekananda|grihya/,
     idRe: /^(upanishads-|vishnu-purana|rig-veda)/,
-    curated: ["tob-0004", "rig-veda-griffith-1896", "tob-0191", "tob-13328", "vishnu-purana-wilson-1840"],
+    curated: ["judge-bhagavad-gita-1890", "rig-veda-griffith-1896", "tob-0191", "tob-13328", "vishnu-purana-wilson-1840"],
   },
   {
     id: "taoism-china", label: "Taoism & Chinese Classics",
     blurb: "Taoist and classical Chinese texts in the Tower: the Tao Te Ching, the Analects of Confucius, Legge's I Ching, Chuang Tzu, and the Art of War, with catalog-matched works on Taoism and Confucian thought.",
     tags: T(["taoism", "taoist", "confucianism", "confucian", "chinese philosophy"]),
-    titleRe: /\btao(ism|ist|ists)?\b|lao ?tzu|laozi|chuang ?tzu|zhuangzi|confucius|confucian|analects of|i ching|book of changes|art of war|sun tzu/,
+    titleRe: /\btao(ism|ist|ists)?\b|lao ?tzu|laozi|chuang ?tzu|zhuangzi|confucius|confucian|analects of|i ching|book of changes|art of war|sun tzu|mencius|lieh ?tzu|liezi|xunzi|mo ?tzu|han fei|chinese classic/,
     idRe: /^(giles-taoist|i-ching-|art-of-war|tao-te-ching)/,
-    curated: ["tob-0005", "tob-10415", "i-ching-legge-1882", "tob-10229", "art-of-war-giles-1910"],
+    curated: ["tob-0005", "tob-10415", "i-ching-legge-1882", "art-of-war-giles-1910"],
   },
   {
     id: "islam", label: "Islam",
     blurb: "Islamic texts in the Tower: Pickthall's Meaning of the Glorious Koran, Al-Ghazali's Mishkat Al-Anwar and Confessions, with catalog-matched works on the Quran, Hadith, and Sufism.",
     tags: T(["islam", "islamic", "quran", "koran", "muslim", "sufism", "sufi"]),
-    titleRe: /\bquran\b|\bkoran\b|qur'an|\bislam\b|islamic|\bmuslim|mohammed|muhammad|ghazali|hadith|\bsufi/,
+    titleRe: /\bquran\b|\bkoran\b|qur'an|\bislam\b|islamic|\bmuslim|mohammed|muhammad|ghaz+ali|hadith|\bsufi|kashf|moslem|mohammedan|\brumi\b|\bjabir\b|\bgeber\b/,
     idRe: /^pickthall-/,
     curated: ["pickthall-meaning-glorious-koran-1930", "tob-10501", "ghazali-mishkat-anwar-gairdner-1924", "tob-10039"],
   },
@@ -185,7 +249,7 @@ export const TRADITION_DEFS = [
     id: "judaism", label: "Judaism",
     blurb: "Jewish scripture and scholarship in the Tower: the JPS 1917 Tanakh, the Talmud, the Targums, and the Zohar, with catalog-matched works on Torah, Mishnah, Midrash, and Kabbalah.",
     tags: T(["judaism", "jewish", "talmud", "torah", "kabbalah", "hebrew bible", "mishnah"]),
-    titleRe: /talmud|torah|tanakh|mishnah|zohar|kabbalah|kabala|\bjewish\b|judaism|hebrew bible|midrash|targum/,
+    titleRe: /talmud|torah|tanakh|mishnah|zohar|kabbalah|kabala|\bjewish\b|judaism|hebrew bible|midrash|targum|\bhebraic\b|josephus/,
     idRe: /^(tanakh-|polano-talmud|babylonian-talmud|danby-mishnah|targums-)/,
     curated: ["tob-0006", "tob-10816", "targums-etheridge-vol-1", "zohar-de-pauly-french-vol-1-1906"],
   },
@@ -193,15 +257,15 @@ export const TRADITION_DEFS = [
     id: "egypt-mesopotamia", label: "Egypt & Mesopotamia",
     blurb: "Ancient Egyptian and Mesopotamian texts in the Tower: the Egyptian Book of the Dead, the Epic of Gilgamesh, and Enuma Elish, with catalog-matched works on Egypt, Babylon, Assyria, and Sumer.",
     tags: T(["egypt", "egyptian", "egyptology", "mesopotamia", "assyriology", "babylonian", "sumerian"]),
-    titleRe: /egyptian book of the dead|\begypt|pharaoh|hieroglyph|gilgamesh|babylon|assyria|mesopotamia|sumerian|akkadian|enuma|book of the dead/,
+    titleRe: /egyptian book of the dead|\begypt|pharaoh|hieroglyph|gilgamesh|babylon|assyria|mesopotamia|sumerian|akkadian|enuma|book of the dead|cuneiform|pyramid texts|coffin texts/,
     idRe: /^enuma-elish/,
-    curated: ["tob-10337", "tob-10088", "enuma-elish-king-1902"],
+    curated: ["tob-4053", "tob-10088", "enuma-elish-king-1902"],
   },
   {
     id: "indigenous-folk", label: "Indigenous & Folk Traditions",
     blurb: "Indigenous and folk tradition texts in the Tower: the Popol Vuh, the Chilam Balam of Chumayel, and Kirby's Kalevala, with catalog-matched works on Maya, Aztec, Inca, Native American, and folk traditions worldwide.",
     tags: T(["folklore", "folk tales", "fairy tales", "mythology", "native american"]),
-    titleRe: /popol vuh|chilam balam|kalevala|\bmaya\b|mayan|\baztec\b|\binca\b|peruvian|navajo|apache|\bsioux\b|dakota|ojibwa|algonquin|iroquois|maori|hawaiian|polynesian|\bfinnish (epic|folk|myth)|estonian folk|slavonic folk|folk tales|fairy tales|folklore/,
+    titleRe: /popol vuh|chilam balam|kalevala|\bmaya\b|mayan|\baztec\b|\binca\b|peruvian|navajo|apache|\bsioux\b|dakota|ojibwa|algonquin|iroquois|maori|hawaiian|polynesian|\bfinnish (epic|folk|myth)|estonian folk|slavonic folk|folk tales|fairy tales|folklore|yoruba|\bifa\b|orisha|ashanti|african (myth|folk|legend)|slavic|bylina|baba yaga|russian folk/,
     idRe: null,
     curated: ["tob-4274-d1", "roys-chilam-balam-chumayel-1933", "kalevala-vol-1-kirby-1907"],
   },
@@ -209,17 +273,33 @@ export const TRADITION_DEFS = [
     id: "greek-roman", label: "Greek & Roman",
     blurb: "Greek and Roman classics in the Tower: Butler's Iliad and Odyssey, Plato's Republic, Marcus Aurelius, and Epictetus, with catalog-matched works of classical philosophy, history, and literature.",
     tags: T(["stoicism", "stoic", "greek philosophy", "roman philosophy", "classics"]),
-    titleRe: /\bhomer\b|iliad|odyssey|\bplato\b|aristotle|socrates|marcus aurelius|epictetus|\bseneca\b|\bstoic|cicero|\bvirgil\b|\bovid\b|aeneid|plutarch|xenophon|thucydides|herodotus|euripides|sophocles|aeschylus|aristophanes|lucretius|plotinus|greek philosophy|greek mythology|roman philosophy/,
-    idRe: /^(homer-|marcus-aurelius|epictetus-)/,
+    titleRe: /\bhomer\b|iliad|odyssey|\bplato\b|aristotle|socrates|marcus aurelius|epictetus|\bseneca\b|\bstoic|cicero|\bvirgil\b|\bovid\b|aeneid|plutarch|xenophon|thucydides|herodotus|euripides|sophocles|aeschylus|aristophanes|lucretius|plotinus|greek philosophy|greek mythology|roman philosophy|tacitus|\blivy\b|pausanias|strabo|proclus|porphyry|iamblichus|neoplaton/,
+    idRe: /^(homer-|marcus-aurelius|epictetus-|cicero-)/,
     curated: ["homer-iliad-butler", "homer-odyssey-butler", "the-republic", "marcus-aurelius-meditations-long", "epictetus-discourses-enchiridion-matheson"],
   },
   {
     id: "christianity", label: "Christianity",
     blurb: "Christian texts in the Tower: the King James Bible, Augustine's Confessions, The Imitation of Christ, Bunyan's Pilgrim's Progress, and the Ante-Nicene Fathers, with catalog-matched works of scripture, patristics, and theology.",
     tags: T(["patristics", "church fathers", "nicene and post-nicene fathers", "ante-nicene fathers", "bible", "biblical", "christian", "christianity", "catholic", "theology", "new testament", "old testament", "jesus", "gospel"]),
-    titleRe: /\bbible\b|biblical|\bjesus\b|\bchrist\b|christian|gospel|new testament|old testament|catholic|church fathers|apostle|epistles?\b|psalms?\b|doctrine of|sermons?\b/,
+    titleRe: /\bbible\b|biblical|\bjesus\b|\bchrist\b|christian|gospel|new testament|old testament|catholic|church fathers|apostle|epistles?\b|psalms?\b|doctrine of|sermons?\b|\bquaker|society of friends|christian science|mary baker eddy|science and health|unitarian|methodist|\bwesley\b|aquinas|summa theologica|dante|divine comedy|smalcald|lutheran|augsburg confession|george fox|ante-nicene|post-nicene|nicene|apostolic fathers/,
+    creatorRe: /\(kjv\)|^saint\b|^st\.\s/i,
     idRe: null,
-    curated: ["holy-bible-king-james-version", "tob-3002", "tob-10071", "bunyan-pilgrims-progress-1678", "ante-nicene-fathers-vol-2"],
+    curated: ["holy-bible-king-james-version", "tob-3002", "bunyan-pilgrims-progress-1678", "ante-nicene-fathers-vol-2"],
+  },
+  {
+    // The remainder is not a tradition: it is every BOOKS record the
+    // rules above leave unclaimed that the catalog itself shelves as a
+    // sacred text or that carries a religious signal (see
+    // remainderApplies). It carries no rules of its own — traditionOf
+    // never returns it — and it is labeled as a remainder everywhere it
+    // appears.
+    id: "sacred-wisdom-remainder", label: "More Sacred & Wisdom Texts",
+    blurb: "Sacred and wisdom writing in the Tower that no single tradition claims: comparative religion, mysticism, mythology, and devotional works from across traditions — the remainder of the sacred shelf, gathered in one place.",
+    tags: T([]),
+    titleRe: null,
+    idRe: null,
+    curated: [],
+    remainder: true,
   },
 ];
 
@@ -227,12 +307,42 @@ function traditionOf(record) {
   const tags = tagList(record).map((t) => String(t).toLowerCase().trim());
   const title = String(record.title || "").toLowerCase();
   const id = record.artifact_id;
+  const creator = decodeEntities(record.creator || "");
   for (const def of TRADITION_DEFS) {
+    if (def.remainder) continue;
     if (tags.some((t) => def.tags.has(t))) return def.id;
     if (def.titleRe && def.titleRe.test(title)) return def.id;
     if (def.idRe && def.idRe.test(id)) return def.id;
+    if (def.creatorRe && def.creatorRe.test(creator)) return def.id;
   }
   return null;
+}
+
+// ---------------------------------------------------------------------
+// The sacred-shelf remainder: BOOKS records no tradition claims that
+// the catalog itself shelves as sacred texts, or whose title/tags carry
+// a religious signal. The prefix test is copied from the browse
+// taxonomy (src/lib/tower-taxonomy.js — BOOKS "sacred" subcategory;
+// copy-don't-import, per the module-boundary rule) so the remainder
+// holds exactly what the Collections axis calls sacred, minus what the
+// traditions claim.
+
+const REMAINDER_SIGNAL = /bible|biblical|scripture|sacred|theolog|religio|mystic|prayer|sermon|gospel|psalm|hymn|ritual|doctrine|prophet|apostl|worship|liturgy|catechism|devotion|spiritual|pilgrim|monastic/;
+const REMAINDER_SACRED_PREFIXES = new Set(
+  "alexander-of,alphonsus-uniformity,ambrose-of,andrewes-devotions,anguttara-nikaya,aphrahat-the,aristides-the,asterius-the,athanasius-against,athanasius-de,athanasius-defence,athanasius-festal,athanasius-four,athanasius-history,athanasius-on,athanasius-personal,athanasius-synodal,athanasius-the,athanasius-to,athanasius-tomus,athenagoras-the,attar-bird,augustine-of,basil-the,clement-of,clementine-literature,constantine-the,cyprian-the,cyprian-treatises,cyril-of,dionysius-of,enuma-elish,ephraim-the,eusebius-the,gennadius-of,ghazali-mishkat,giles-taoist,gregory-of,gregory-thaumaturgus,gregory-the,hilary-of,hippolytus-against,hippolytus-on,hippolytus-refutation,hippolytus-the,ignatius-of,itivuttaka-sujato,jataka-cowell,jerome-against,jerome-jerome,jerome-lives,jerome-prefaces,jerome-the,jerome-to,john-cassian,john-chrysostom,john-of,julius-africanus,justin-martyr,kalpa-sutra,khuddakapatha-sujato,lactantius-a,lactantius-fragments,lactantius-of,lactantius-on,lactantius-the,leo-the,lockyer-stonehenge,majjhima-nikaya,malchion-epistles,methodius-from,methodius-oration,novatian-on,origen-epistle,origen-origen,pamphilus-an,phileas-fragments,phileas-the,pickthall-meaning,pierius-a,polano-talmud,ptolemy-tetrabiblos,rapaport-tales,rufinus-of,ruysbroeck-adornment,samyutta-nikaya,socrates-scholasticus,sozomen-the,stukeley-stonehenge,sulpitius-severus,suso-eternal,suso-life,tanakh-jps,tatian-the,tauler-following,tauler-inner,tertullian-a,tertullian-ad,tertullian-against,tertullian-an,tertullian-appendix,tertullian-de,tertullian-of,tertullian-on,tertullian-scorpiace,tertullian-the,tertullian-to,the-didache,the-epistle,theodoret-letters,theodoret-the,theognostus-from,theonas-the,theophilus-of,theragatha-sujato,therigatha-sujato,udana-sujato,upanishads-muller,uttaradhyayana-jacobi,various-early,victorinus-commentary,vincent-of,vishnu-purana,way-of".split(",")
+);
+const REMAINDER_SACRED_IA = new Set(
+  "jesuit-relations,nicene-post,ante-nicene,thomson-bible,saint-simon,psalms-of,saint-martin,churchward-lost,gospel-philip,gospel-truth,aquarian-gospel,shaku-sermons,tauler-sermons,baxter-saints,westcott-gospel,loisy-gospel,geneva-bible,coverdale-bible,bishops-bible,holy-bible,satow-jesuit,bernard-sermons".split(",")
+);
+
+function remainderApplies(record) {
+  const id = record.artifact_id || "";
+  if (id.startsWith("tob-")) return true;
+  const m = /^([a-z0-9]+(?:-[a-z0-9]+)?)/.exec(id);
+  const p = m ? m[1] : "";
+  if (REMAINDER_SACRED_PREFIXES.has(p) || REMAINDER_SACRED_IA.has(p)) return true;
+  const hay = `${String(record.title || "").toLowerCase()} ${tagList(record).join(" ").toLowerCase()}`;
+  return REMAINDER_SIGNAL.test(hay);
 }
 
 // ---------------------------------------------------------------------
@@ -269,6 +379,18 @@ export const PROGRAMME_DEFS = [
     blurb: "FBI records in the Tower released through the Bureau's Vault reading room: investigative files published under FOIA.",
     test: (id) => id.startsWith("fbi-vault"),
   },
+  {
+    id: "pentagon", label: "Pentagon Papers",
+    blurb: "The Pentagon Papers in the Tower: the United States–Vietnam Relations study — the Defense Department's secret history of decision-making in Vietnam.",
+    test: (id) => id.startsWith("pentagon-papers"),
+  },
+  {
+    // Catch-all, filled by buildHubIndexData from DECLASSIFIED records
+    // no programme prefix claims. test() never matches directly.
+    id: "other", label: "Other Declassified Releases",
+    blurb: "Declassified records in the Tower outside the named programmes: the govdocs archive and one-off releases such as the 9/11 Commission and Warren Commission reports.",
+    test: () => false,
+  },
 ];
 
 // ---------------------------------------------------------------------
@@ -287,10 +409,26 @@ export const COURSE_GROUPS = [
   },
   {
     label: "Sacred & wisdom landmarks",
+    // 2026-11-11 completeness pass: the three pins whose records no
+    // longer exist (tob-0004 Bhagavad Gita, tob-10233 Dhammapada,
+    // tob-10337 Egyptian Book of the Dead) were replaced by the live
+    // editions of the same works, and every CANON entry for this group
+    // that the catalog holds was added — the group now carries the
+    // catalog's whole sacred canon, not a sample of it.
     ids: [
       "holy-bible-king-james-version", "pickthall-meaning-glorious-koran-1930",
-      "tob-0006", "tob-0004", "tob-0005", "tob-10233",
-      "tibetan-book-of-dead-evans-wentz-1927", "tob-10337",
+      "tob-0006", "tob-0005", "tibetan-book-of-dead-evans-wentz-1927",
+      "tob-0214", "tyndale-pentateuch-1530", "rheims-new-testament-1582",
+      "bible-tyndale-new-testament-1526", "babylonian-talmud-rodkinson-vol-1",
+      "barclay-talmud-1878", "danby-mishnah-1933", "zohar-de-pauly-french-vol-1-1906",
+      "kabbalah-unveiled-mathers-1887", "waite-holy-kabbalah-1929", "tob-0009",
+      "judge-bhagavad-gita-1890", "tob-13450", "tob-9104",
+      "rig-veda-griffith-1896", "tob-9100", "tob-0003", "tob-13328",
+      "dutt-ramayana-bala-kanda", "dutt-mahabharata-adi-parva", "tob-10236",
+      "heart-sutra-muller-sbe49", "tob-4314", "tob-4230", "tob-10415",
+      "i-ching-legge-1882", "art-of-war-giles-1910", "popol-vuh-spence-1908",
+      "brasseur-popol-vuh-1861", "tob-4107", "sbe-23-zend-avesta-2-1883",
+      "tob-4053", "augustine-confessions-watts-vol-1-1919",
     ],
   },
   {
@@ -318,9 +456,66 @@ export const COURSE_GROUPS = [
       { id: "machiavelli-the-prince", title: "^the prince", creator: "machiavelli" },
       { id: "poetic-edda-bellows-1936", title: "poetic edda" },
       { id: "prose-edda-sturluson-brodeur-1916", title: "prose edda" },
+      // 2026-11-11: the two canon works the fallback set did not cover.
+      "virgil-aeneid-dryden-1697",
+      "shakespeare-complete-works-1623",
     ],
   },
 ];
+
+// ---------------------------------------------------------------------
+// Study shelves: audience-keyed cross-cuts over the same walk
+// (2026-11-11). Unlike traditions these are NOT first-match — a work
+// can sit on several shelves. Rules were audited over the full catalog;
+// creator patterns name the canonical authors whose complete shelves
+// belong (surname collisions checked: e.g. Alfred Russel Wallace, not
+// Lew Wallace; Isaac Newton, not John Newton).
+
+export const AUDIENCE_DEFS = [
+  {
+    // Every DOCUMENTS + DECLASSIFIED record — the cross-lane union the
+    // single-select Collections axis cannot express.
+    id: "primary-sources", label: "Primary Sources",
+    lanes: ["DOCUMENTS", "DECLASSIFIED"],
+  },
+  {
+    id: "philosophy", label: "Philosophy",
+    tags: T(["philosophy", "metaphysics", "ethics", "logic", "epistemology", "aesthetics", "philosopher", "philosophers", "stoicism", "existentialism"]),
+    titleRe: /philosoph|metaphysic|epistemolog|\bethics\b|\blogic\b|aesthetic|phenomenolog|existential|critique of (pure|practical)|zarathustra|beyond good and evil|genealogy of morals|world as will|fear and trembling|sickness unto death|tractatus|also sprach/,
+    idRe: /^(kant-|nietzsche-|descartes-|spinoza-|hume-|locke-|schopenhauer-|kierkegaard-|russell-|hegel-|leibniz-|berkeley-|proclus-|plato-|aristotle-)/,
+    creatorRe: /(augustine|santayana|dewey, john|john dewey|russell|voltaire|william james|john stuart mill|david hume|hume, david|whitehead|royce|emerson|herbert spencer|bayle|spinoza|schopenhauer|aristotle|plato|mctaggart|hutcheson|bosanquet|g\. e\. moore|berkeley|croce|lotze|\bkant\b|proclus|diogenes laertius|descartes|nietzsche|kierkegaard|hegel|leibniz|plotinus|marcus aurelius|epictetus|seneca|lucretius|francis bacon|hobbes|john locke|locke, john|thomas reid|joseph butler|shaftesbury|mandeville|fichte|schelling|schleiermacher|feuerbach|comte|bergson|peirce|f\. h\. bradley|t\. h\. green|caird|samuel alexander|james ward|f\. c\. s\. schiller|aquinas|philo of alexandria|nukariya|thomas taylor|diderot|rousseau|montesquieu|vico|herder|friedrich schlegel|f\. schlegel)/i,
+  },
+  {
+    id: "epics-myths-sagas", label: "Epics, Myths & Sagas",
+    titleRe: /iliad|odyssey|aeneid|mahabharata|ramayana|gilgamesh|kalevala|popol vuh|beowulf|\bedda\b|shahnameh|nibelungenlied|song of roland|chanson de roland|\bel cid\b|\bnjal\b|volsunga|volsung|divine comedy|paradise lost|orlando furioso|jerusalem delivered|faerie queene|kalevipoeg|mabinogion|epic of|book of invasions|argonautica|thebaid|pharsalia|metamorphoses/,
+    idRe: /(iliad|odyssey|aeneid|mahabharata|ramayana|gilgamesh|kalevala|beowulf|edda|nibelungenlied|shahnameh|mabinogion|popol-vuh)/,
+  },
+  {
+    id: "classics-of-science", label: "Classics of Science",
+    titleRe: /origin of species|descent of man|vestiges of the natural history|principia|two chief world systems|sidereus|de revolutionibus|on the revolutions|theory of relativity|voyage of the beagle|expression of the emotions|principles of geology|natural selection|creative evolution|foundations of science|space, time and gravitation|evolution of man|history of the planetary|copernicus|galileo|\bkepler\b|\bnewton\b|einstein|\bdarwin\b/,
+    idRe: /^(darwin-|newton-)/,
+    creatorRe: /(darwin|thomas henry huxley|thomas h\. huxley|huxley, thomas|alfred russel wallace|wallace, alfred|haeckel|einstein|isaac newton|newton, isaac|galileo|kepler|lyell|agassiz|asa gray|tyndall|faraday|maxwell|herschel|lamarck|cuvier|linnaeus|poincaré|poincare|eddington|james jeans|kropotkin|herbert spencer)/i,
+  },
+];
+
+// BOOKS-lane shelf matches for one record (all matching shelves —
+// cross-cuts, not first-match). Primary Sources is lane-driven and
+// handled by the walk itself.
+function audienceMatches(record) {
+  const tags = tagList(record).map((t) => String(t).toLowerCase().trim());
+  const title = String(record.title || "").toLowerCase();
+  const id = record.artifact_id;
+  const creator = decodeEntities(record.creator || "");
+  const out = [];
+  for (const def of AUDIENCE_DEFS) {
+    if (def.lanes) continue;
+    if (def.tags && tags.some((t) => def.tags.has(t))) { out.push(def.id); continue; }
+    if (def.titleRe && def.titleRe.test(title)) { out.push(def.id); continue; }
+    if (def.idRe && def.idRe.test(id)) { out.push(def.id); continue; }
+    if (def.creatorRe && def.creatorRe.test(creator)) { out.push(def.id); continue; }
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------
 // The index build. One counting/collecting walk over the shards plus a
@@ -377,6 +572,7 @@ export async function buildHubIndexData(getRecords = getShardRecords) {
     traditionSlots.set(def.id, { seen: new Set(def.curated), derived: [] });
   }
   const programmes = new Map(PROGRAMME_DEFS.map((d) => [d.id, []]));
+  const audienceLists = new Map(AUDIENCE_DEFS.map((d) => [d.id, []]));
 
   for (let s = 0; s < shardCount; s++) {
     const records = await getRecords(s);
@@ -392,7 +588,7 @@ export async function buildHubIndexData(getRecords = getShardRecords) {
         creatorCounts.set(name, (creatorCounts.get(name) || 0) + 1);
       }
       if (r.collection === "BOOKS") {
-        const tid = traditionOf(r);
+        const tid = traditionOf(r) || (remainderApplies(r) ? "sacred-wisdom-remainder" : null);
         if (tid) {
           const slot = traditionSlots.get(tid);
           if (!slot.seen.has(r.artifact_id)) {
@@ -400,6 +596,7 @@ export async function buildHubIndexData(getRecords = getShardRecords) {
             slot.derived.push(lr);
           }
         }
+        for (const aid of audienceMatches(r)) audienceLists.get(aid).push(lr);
         for (const fb of courseFallbacks) {
           if (fallbackWinners.has(fb.key)) continue;
           if (!fb.re.test(lr.title)) continue;
@@ -407,12 +604,18 @@ export async function buildHubIndexData(getRecords = getShardRecords) {
           fallbackWinners.set(fb.key, lr);
         }
       }
-      if (r.collection === "DECLASSIFIED") {
+      {
+        // Programme prefixes are tested over ALL records (a handful of
+        // programme records sit in other lanes); DECLASSIFIED records
+        // no prefix claims fall into the "other" catch-all.
+        let pid = null;
         for (const def of PROGRAMME_DEFS) {
-          if (def.test(r.artifact_id)) {
-            programmes.get(def.id).push(lr);
-            break;
-          }
+          if (def.id !== "other" && def.test(r.artifact_id)) { pid = def.id; break; }
+        }
+        if (pid) programmes.get(pid).push(lr);
+        else if (r.collection === "DECLASSIFIED") programmes.get("other").push(lr);
+        if (r.collection === "DOCUMENTS" || r.collection === "DECLASSIFIED") {
+          audienceLists.get("primary-sources").push(lr);
         }
       }
     }
@@ -509,6 +712,9 @@ export async function buildHubIndexData(getRecords = getShardRecords) {
       works: authorWorks.get(a.name),
     })),
     programmes: Object.fromEntries(programmes),
+    audiences: Object.fromEntries(
+      [...audienceLists].map(([id, list]) => [id, list.sort(byTitle)])
+    ),
     course: { groups: courseGroups, courseCount },
     hubPaths,
   };

@@ -19,11 +19,17 @@
 // case the Tower page hides the Collections UI and keeps the existing
 // category browse — never an error panel.
 
+// Group order is the panel's depth order inside the Curated axis:
+// the editorial groups first, the audience-keyed Study shelves last
+// (the deepest cut). The Authors group was removed 2026-11-11 (way
+// too broad as a browse axis; authors stay reachable through search,
+// and the hub index still carries topAuthors for the server-side
+// author hub pages and the API).
 export const COLLECTION_GROUPS = [
   { id: "traditions", label: "Sacred traditions" },
-  { id: "authors", label: "Authors" },
   { id: "programmes", label: "Declassified programmes" },
   { id: "course", label: "Course primary sources" },
+  { id: "audiences", label: "Study shelves" },
 ];
 
 export const TRADITION_BLURBS = {
@@ -52,6 +58,20 @@ export const TRADITION_BLURBS = {
     "Greek and Roman classics in the Tower: Butler's Iliad and Odyssey, Plato's Republic, Marcus Aurelius, and Epictetus, with catalog-matched works of classical philosophy, history, and literature.",
   christianity:
     "Christian texts in the Tower: the King James Bible, Augustine's Confessions, The Imitation of Christ, Bunyan's Pilgrim's Progress, and the Ante-Nicene Fathers, with catalog-matched works of scripture, patristics, and theology.",
+  sikhism:
+    "Sikh scripture and scholarship in the Tower: Macauliffe's The Sikh Religion and works on the Guru Granth Sahib, Guru Nanak, and the Khalsa, with catalog-matched Sikh works.",
+  bahai:
+    "Baháʼí texts in the Tower: ʻAbdu'l-Bahá's Some Answered Questions and works on Baháʼu'lláh, the Kitáb-i-Aqdas and Kitáb-i-Íqán, and the Bábí movement, with catalog-matched works on the Baháʼí faith.",
+  gnosticism:
+    "Gnostic and Hermetic texts in the Tower: the Nag Hammadi writings, the Pistis Sophia, and the Corpus Hermeticum, with catalog-matched works on Gnosticism, Hermeticism, Manichaeism, and the Mandaeans.",
+  "norse-germanic":
+    "Norse and Germanic myth in the Tower: the Poetic and Prose Eddas, the Nibelungenlied, and Beowulf, with catalog-matched works on the Eddas, the Icelandic sagas and chronicles, and Germanic legend.",
+  celtic:
+    "Celtic myth and legend in the Tower: the Mabinogion, the Arthurian romances of Chrétien de Troyes, and the Taliesin poems, with catalog-matched works on Celtic and Arthurian tradition.",
+  esoteric:
+    "Esoteric and occult works in the Tower: the grimoires, Éliphas Lévi, and the literature of alchemy, astrology, Theosophy, Rosicrucianism, and ceremonial magic, with catalog-matched works across the Western esoteric tradition.",
+  "sacred-wisdom-remainder":
+    "Sacred and wisdom writing in the Tower that no single tradition claims: comparative religion, mysticism, mythology, and devotional works from across traditions — the remainder of the sacred shelf, gathered in one place.",
 };
 
 export const PROGRAMME_BLURBS = {
@@ -64,6 +84,21 @@ export const PROGRAMME_BLURBS = {
   nsarchive:
     "Declassified U.S. national security documents in the Tower published through the National Security Archive's FOIA-based releases.",
   fbi: "FBI records in the Tower released through the Bureau's Vault reading room: investigative files published under FOIA.",
+  pentagon:
+    "The Pentagon Papers in the Tower: the United States–Vietnam Relations study — the Defense Department's secret history of decision-making in Vietnam.",
+  other:
+    "Declassified records in the Tower outside the named programmes: the govdocs archive and one-off releases such as the 9/11 Commission and Warren Commission reports.",
+};
+
+export const AUDIENCE_BLURBS = {
+  "primary-sources":
+    "The Tower's two primary-source lanes in one shelf: every catalogued document and declassified record — the raw material for historians, journalists, and students.",
+  philosophy:
+    "Philosophy in the Tower: Plato, Aristotle, Kant, Nietzsche, and the philosophical tradition — metaphysics, ethics, logic, and the history of philosophy, gathered from the whole catalog.",
+  "epics-myths-sagas":
+    "The great epics in one shelf: the Iliad and Odyssey, the Mahabharata and Ramayana, Gilgamesh, the Eddas, Beowulf, the Kalevala, and the Divine Comedy.",
+  "classics-of-science":
+    "Classics of science in the Tower: Darwin, Huxley, Wallace, Lyell, and the foundational works of evolution, geology, and modern science.",
 };
 
 export const COURSE_BLURBS = {
@@ -108,18 +143,18 @@ export function buildCollections(data) {
     blurb: TRADITION_BLURBS[id] || "",
     ids: toSet(works),
   }));
-  const authors = (data.topAuthors || []).map((a) => ({
-    key: `author:${a.slug}`,
-    label: a.name,
-    count: a.count,
-    blurb: `${a.count.toLocaleString()} works by ${a.name} in the Tower.`,
-    ids: toSet(a.works),
-  }));
   const programmes = Object.entries(data.programmes).map(([id, works]) => ({
     key: `programme:${id}`,
     label: PROGRAMME_LABELS[id] || id,
     count: works.length,
     blurb: PROGRAMME_BLURBS[id] || "",
+    ids: toSet(works),
+  }));
+  const audiences = Object.entries(data.audiences || {}).map(([id, works]) => ({
+    key: `audience:${id}`,
+    label: AUDIENCE_LABELS[id] || id,
+    count: works.length,
+    blurb: AUDIENCE_BLURBS[id] || "",
     ids: toSet(works),
   }));
   const course = (data.course.groups || []).map((g, i) => ({
@@ -133,9 +168,9 @@ export function buildCollections(data) {
     total: data.total,
     groups: [
       { id: "traditions", collections: traditions },
-      { id: "authors", collections: authors },
       { id: "programmes", collections: programmes },
       { id: "course", collections: course },
+      { id: "audiences", collections: audiences },
     ],
   };
 }
@@ -147,6 +182,12 @@ export const TRADITION_LABELS = {
   shinto: "Shinto",
   zoroastrianism: "Zoroastrianism",
   lds: "Latter-day Saint",
+  sikhism: "Sikhism",
+  bahai: "Baháʼí",
+  gnosticism: "Gnosticism & Hermeticism",
+  "norse-germanic": "Norse & Germanic",
+  celtic: "Celtic",
+  esoteric: "Esoteric & Occult",
   buddhism: "Buddhism",
   hinduism: "Hinduism",
   "taoism-china": "Taoism & Chinese Classics",
@@ -156,6 +197,7 @@ export const TRADITION_LABELS = {
   "indigenous-folk": "Indigenous & Folk Traditions",
   "greek-roman": "Greek & Roman",
   christianity: "Christianity",
+  "sacred-wisdom-remainder": "More Sacred & Wisdom Texts",
 };
 
 export const PROGRAMME_LABELS = {
@@ -165,4 +207,13 @@ export const PROGRAMME_LABELS = {
   un: "United Nations",
   nsarchive: "National Security Archive",
   fbi: "FBI Vault",
+  pentagon: "Pentagon Papers",
+  other: "Other Declassified Releases",
+};
+
+export const AUDIENCE_LABELS = {
+  "primary-sources": "Primary Sources",
+  philosophy: "Philosophy",
+  "epics-myths-sagas": "Epics, Myths & Sagas",
+  "classics-of-science": "Classics of Science",
 };

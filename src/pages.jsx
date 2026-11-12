@@ -1681,9 +1681,9 @@ function TowerLibrarySection({ go, onReady }) {
   // it never renders a second list.
   const [collGroup, setCollGroup] = useState("");
   const [collKey, setCollKey] = useState("");
-  // Curated-collection lists longer than 10 (the Authors group has 50)
-  // start collapsed behind a "Show all" row (filter revamp 2026-11-11,
-  // VuFind's top-N pattern from the October study).
+  // Curated-collection lists longer than 10 start collapsed behind a
+  // "Show all" row (filter revamp 2026-11-11, VuFind's top-N pattern
+  // from the October study).
   const [collShowAll, setCollShowAll] = useState(false);
   const [collData, setCollData] = useState(null);
   const [collLoading, setCollLoading] = useState(false);
@@ -3238,7 +3238,7 @@ function TowerLibrarySection({ go, onReady }) {
                       failure this axis hides and the rest carries on —
                       no error panel. */}
                   {!collFailed && (
-                    <div ref={collSectionRef} className="tf2-axis">
+                    <div ref={collSectionRef} className="tf2-axis tf2-axis--deep">
                       <div className="tf2-axis-label" id="tf2-axis-curated">
                         Curated collections
                       </div>
