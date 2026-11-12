@@ -37,45 +37,16 @@ const FOOT = `<footer>
 <p>© 2026 Antarctic Labs. All rights reserved.</p>
 </footer>`;
 
-// FAQ JSON-LD parity (2026-11-11 discoverability fix): the app's pages
-// emit a FAQPage node for the library and API pages (src/seo.js
-// faqsForPath) and render the questions visibly, but these static
-// renders historically carried no FAQPage node at all — and the API
-// static render did not even carry the questions. The Q&A below is
-// copied VERBATIM from src/content/tower-api.js (libraryFaqs and
-// apiPage.faqs); keep the copies in sync when the source changes.
+// FAQ JSON-LD parity (2026-11-11 discoverability fix): the app's API
+// page emits a FAQPage node (src/seo.js faqsForPath) and renders the
+// questions visibly, but this static render historically carried no
+// FAQPage node at all — and did not even carry the questions. The Q&A
+// below is copied VERBATIM from src/content/tower-api.js (apiPage.faqs);
+// keep the copy in sync when the source changes.
 // No other static page gets an FAQ: the app has no FAQ for them either.
-const LIBRARY_FAQS = [
-  {
-    q: "Where can I read classic books online for free?",
-    a: "The Tower of Babel library catalogues 2,557,923 works, and every work with available text opens as a full, clean text you can read in the browser. There is no sign-up, no paywall, and no app to install. The collection covers public domain classics, sacred texts from every tradition, foundational documents, scientific papers, and historical records. The access button appears only where the text file exists.",
-  },
-  {
-    q: "Is the Tower of Babel a good Project Gutenberg alternative?",
-    a: "It serves the same purpose with a different scope. Project Gutenberg is the largest archive of public domain ebooks. The Tower of Babel also carries material Gutenberg does not: declassified government documents, scientific papers, reference works, and long-form podcast transcripts alongside the book collection, all in one catalog with per-record rights status. If a work is in the catalog, you can read the full text directly where the text is present.",
-  },
-  {
-    q: "Do I need to sign up or pay to use the library?",
-    a: "No. Everything readable in the library is free with no account required. There are no trials, no tiers, and no checkout process. If a work shows an access button, the full text is available to read immediately.",
-  },
-  {
-    q: "Is it legal to read these books for free?",
-    a: "Yes. Each catalog record carries a rights_status and license field, and the readable collection is built around public domain works whose copyright has expired, plus documents released into the public record. The catalog tells you the rights status of each work, so you can verify it yourself.",
-  },
-  {
-    q: "What is actually in the catalog?",
-    a: "More than 2,557,923 works and growing daily: books of classic literature, philosophy, and the sacred texts of every religion and tradition; declassified government documents released to the public; scientific papers; reference works; foundational political documents; and long-form podcast transcripts. Every work is preserved as clean, searchable plain text where the text is present.",
-  },
-  {
-    q: "Can I download the books, or only read them in the browser?",
-    a: "Works with available text can be opened and read in full in the browser, and the underlying plain-text file can be downloaded directly. There is no bulk download for the whole catalog; the machine-readable catalog files are the way to work with the collection at scale.",
-  },
-  {
-    q: "Can AI agents use the Tower of Babel as a reference source?",
-    a: "Yes. The catalog is published as machine-readable JSON with a documented schema, and texts are served as plain .txt files at predictable URLs where the text exists. The /tower-of-babel/api page documents the fetch pattern, the record fields, licensing, and the limits of what is available.",
-  },
-];
-
+// (The library page's QUESTIONS section was removed 2026-11-12 on
+// Joshua's order — that Q&A lives on the Privacy Policy page now — so
+// the library static render carries no FAQ and no FAQPage node.)
 const API_FAQS = [
   {
     q: "Is there a free API for Project Gutenberg texts?",
@@ -125,9 +96,9 @@ function faqPageNode(faqs) {
 // Overviews / AI Mode); the copy makes no ranking claim.
 const PREFERRED_SOURCE_LINE = `<p><a href="https://www.google.com/preferences/source?q=antarctic-labs.com" target="_blank" rel="noopener">Add Antarctic Labs as a preferred source on Google</a></p>`;
 
-// Visible FAQ block, mirroring the library static page's Questions
-// section shape (h2 + h3/p pairs), generated from the same verbatim
-// data as the FAQPage JSON-LD so the two can never drift apart.
+// Visible FAQ block, mirroring the app API page's Questions section
+// shape (h2 + h3/p pairs), generated from the same verbatim data as
+// the FAQPage JSON-LD so the two can never drift apart.
 function faqSection(faqs) {
   const esc = (s) =>
     String(s ?? "")
@@ -341,7 +312,6 @@ ${PREFERRED_SOURCE_LINE}`,
 PAGES["/tower-of-babel/library"] = {
   path: "/tower-of-babel/library",
   title: "Free Classic Books Online | Tower of Babel Library",
-  faq: LIBRARY_FAQS,
   description:
     "Read free classic books online: search 2,557,923 books, documents, and texts in the Tower of Babel's free library catalog. No sign-up.",
   body: `<h1>The Library</h1>
@@ -353,21 +323,6 @@ PAGES["/tower-of-babel/library"] = {
 <li><a href="/tower-of-babel/library/holy-bible-king-james-version">The Holy Bible — King James Version</a></li>
 <li><a href="/tower-of-babel/library/darwin-origin-of-species-1st-ed-1859">On the Origin of Species — Charles Darwin</a></li>
 </ul>
-<h2>Questions</h2>
-<h3>Where can I read classic books online for free?</h3>
-<p>The Tower of Babel library catalogues 2,557,923 works, and every work with available text opens as a full, clean text you can read in the browser. There is no sign-up, no paywall, and no app to install. The collection covers public domain classics, sacred texts from every tradition, foundational documents, scientific papers, and historical records. The access button appears only where the text file exists.</p>
-<h3>Is the Tower of Babel a good Project Gutenberg alternative?</h3>
-<p>It serves the same purpose with a different scope. Project Gutenberg is the largest archive of public domain ebooks. The Tower of Babel also carries material Gutenberg does not: declassified government documents, scientific papers, reference works, and long-form podcast transcripts alongside the book collection, all in one catalog with per-record rights status. If a work is in the catalog, you can read the full text directly where the text is present.</p>
-<h3>Do I need to sign up or pay to use the library?</h3>
-<p>No. Everything readable in the library is free with no account required. There are no trials, no tiers, and no checkout process. If a work shows an access button, the full text is available to read immediately.</p>
-<h3>Is it legal to read these books for free?</h3>
-<p>Yes. Each catalog record carries a rights_status and license field, and the readable collection is built around public domain works whose copyright has expired, plus documents released into the public record. The catalog tells you the rights status of each work, so you can verify it yourself.</p>
-<h3>What is actually in the catalog?</h3>
-<p>More than 2,557,923 works and growing daily: books of classic literature, philosophy, and the sacred texts of every religion and tradition; declassified government documents released to the public; scientific papers; reference works; foundational political documents; and long-form podcast transcripts. Every work is preserved as clean, searchable plain text where the text is present.</p>
-<h3>Can I download the books, or only read them in the browser?</h3>
-<p>Works with available text can be opened and read in full in the browser, and the underlying plain-text file can be downloaded directly. There is no bulk download for the whole catalog; the machine-readable catalog files are the way to work with the collection at scale.</p>
-<h3>Can AI agents use the Tower of Babel as a reference source?</h3>
-<p>Yes. The catalog is published as machine-readable JSON with a documented schema, and texts are served as plain .txt files at predictable URLs where the text exists. The <a href="/tower-of-babel/api">API page</a> documents the fetch pattern, the record fields, licensing, and the limits of what is available.</p>
 <p><a href="/tower-of-babel/library/suggest">Suggest an entry</a> · <a href="/tower-of-babel/library/research">API access and keys</a></p>`,
 };
 

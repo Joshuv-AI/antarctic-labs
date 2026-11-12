@@ -3818,7 +3818,6 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           </>
         )}
       </section>
-      <FaqBlock index="QUESTIONS" faqs={towerOfBabel.library.faqs} />
     </>
   );
 }

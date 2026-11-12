@@ -127,7 +127,6 @@ const ORG_NAME = site.brand;
 // array must never break meta application.
 function faqsForPath(path) {
   if (path === "/government-contracting") return government.faqs;
-  if (path === "/tower-of-babel/library") return towerOfBabel.library.faqs;
   if (path === "/tower-of-babel/api") return towerOfBabel.agentFaqs;
   if (path === "/privacy") return privacyFaqs;
   return undefined;

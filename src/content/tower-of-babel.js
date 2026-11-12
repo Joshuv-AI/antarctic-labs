@@ -9,7 +9,7 @@
 // lazy-loaded via ../lib/catalog.js (dynamic import); a static import here
 // would drag all 3,448 records back into the main bundle.
 
-import { libraryFaqs, apiPage } from "./tower-api.js";
+import { apiPage } from "./tower-api.js";
 
 export const towerOfBabel = {
   heading: "TOWER OF BABEL",
@@ -35,8 +35,6 @@ export const towerOfBabel = {
       body:
         "Tower of Babel is being structured before the catalog opens. Once entries are finalized, they will appear here with their rights status, source links, and (where redistribution is permitted) direct access.",
     },
-    // Library FAQ — rendered on /tower-of-babel/library, FAQPage JSON-LD.
-    faqs: libraryFaqs,
   },
   // Collections — removed 2026-10-24: the old server-rendered hub pages
   // (/tower-of-babel/hubs) were deleted. Collections now live only as a
