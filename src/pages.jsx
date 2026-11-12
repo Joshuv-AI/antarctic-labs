@@ -250,13 +250,13 @@ export function TowerOfBabel({ go, onReady }) {
   return (
     <main className="page-shell inner-page tower-light tower-combined" id="main-content" tabIndex={-1}>
       <section className="inner-hero section tower-landing-hero tower-helix-band">
-        {/* Dark hero band (2026-11-12): the helix background lives
-            behind the existing hero content — canvas layer, then a
-            soft shade for text contrast, then the content itself.
-            The paper library below is untouched. */}
-        <div className="tower-helix-layer" aria-hidden="true">
-          <HelixCanvas />
-        </div>
+        {/* Helix background (2026-11-12): a fixed full-page backdrop
+            for the whole Tower page (Joshua's full-page extension) —
+            HelixCanvas renders the fixed canvas layer plus the
+            hero-confined labels layer; then a soft shade for hero
+            text contrast, then the content itself. The library below
+            scrolls over the same black space. */}
+        <HelixCanvas />
         <div className="tower-helix-shade" aria-hidden="true" />
         <h1>{towerOfBabel.heading}</h1>
         {towerOfBabel.intro.map((p, i) => (

@@ -1,44 +1,60 @@
 // Helix scene — the Tower of Babel landing's dark hero band background:
-// a wide, nearly flat spiral disc of book-cover rings in black space —
-// thin separated coil bands of tiny covers, dark gaps with a fine red
-// wire strand running in them, sparse satellite clusters on strands
-// past the rim, and a calm black center behind the hero title.
-// Reel-match build (2026-11-12, bench: helix-bench RESULTS.md "REEL-
-// MATCH PASS" — Joshua rejected the earlier conical dome; this layout
-// is the one whose bench screenshots match the reel's poster frame).
+// a 3D helix of book-cover TUBES in black space. Two spirals at once:
+//   Spiral A (coil path): a fat tube winds around a vertical axis,
+//     descending like a coiled hose / spring.
+//   Spiral B (tube surface): covers tile AROUND the tube's circular
+//     cross-section — top, front and underside all carry covers — so
+//     each band reads as a rope of books with real round thickness.
+// Bands are the real top-level collections, one contiguous segment of
+// the coil each with bare-wire gaps between, panel counts mapped from
+// the REAL collection sizes by sqrt compression (LAW and PAPERS use
+// the true live totals). The smallest collection (FOLKLORE) hangs as
+// small clusters on red wire strands above the stack, like the reel's
+// small countries. Floating HTML labels in the reel's style (big thin
+// caps name, true count beneath) ride beside their bands.
+// Tube rebuild (2026-11-12, bench: helix-bench RESULTS.md "TUBE
+// REBUILD" — Joshua's morning verdict on the shipped flat disc: the
+// reel is tubes, not rings in a plane; plan Amendment C).
 //
-// Rendering economy (plan section 5 — "looks expensive, costs almost
-// nothing"): ONE InstancedMesh for all ~13,000 panels, ONE baked
-// texture atlas (/helix-atlas.webp), the whole structure rotating as a
-// single group. Three draw calls total: panels, wire, dust.
+// Rendering economy: ONE InstancedMesh for all 15,006 panels, ONE
+// baked texture atlas (/helix-atlas.webp, 4096² WebP), the whole
+// structure rotating as a single group. Four draw calls total:
+// panels, red wire, grey threads, dust.
 //
-// Production lifecycle: idle state only (state binding is Phase 3/4),
-// ~30 fps cap, DPR cap, sustained-low-fps auto-degrade to a frozen
-// frame, full disposal. This module is loaded ONLY via dynamic
-// import() from components/HelixCanvas.jsx, deferred until after
-// first paint + the Tower boot overlay — three.js and this scene
-// never ride the page's initial chunks and never compete with the
-// catalog stream's startup.
+// Sharpness (Joshua 2026-11-12): the 4096² atlas is sampled with the
+// GPU's max anisotropy + full mip chain, and render resolution runs a
+// DPR ladder — min(devicePixelRatio, 2.0) by default, stepping down
+// 2.0 → 1.5 → 1.25 → 1.0 under sustained low fps (never up).
+//
+// Production lifecycle (unchanged from the Phase 2 ship): idle state
+// only (state binding is a later phase), ~30 fps cap, sustained-low-
+// fps auto-degrade to a frozen frame, full disposal. This module is
+// loaded ONLY via dynamic import() from components/HelixCanvas.jsx,
+// deferred until after first paint + the Tower boot overlay — three.js
+// and this scene never ride the page's initial chunks and never
+// compete with the catalog stream's startup.
 
 import * as THREE from "three";
 
 const ATLAS_COLS = 16;
 const ATLAS_ROWS = 16;
 
-// ------------------------------------------------------------------ groups
-// name + relative weight (illustrative shares of the real catalog)
-const GROUPS = [
-  { name: "PAPERS", weight: 44 },
-  { name: "LAW", weight: 49 },
-  { name: "DECLASSIFIED", weight: 7 },
-  { name: "RELIGION", weight: 8 },
-  { name: "HISTORY", weight: 6 },
-  { name: "LITERATURE", weight: 6 },
-  { name: "SCIENCE", weight: 5 },
-  { name: "PHILOSOPHY", weight: 4 },
-  { name: "PODCASTS", weight: 4 },
-  { name: "FOLKLORE", weight: 3 },
+// ------------------------------------------------------------------ collections
+// Real live totals (2026-11-12). The small-collection split of the
+// remaining ~150,516 is illustrative; LAW / PAPERS are the true counts.
+const BANDS = [
+  { name: "LAW", count: 1277197 },
+  { name: "PAPERS", count: 1130210 },
+  { name: "RELIGION", count: 38000 },
+  { name: "DECLASSIFIED", count: 34000 },
+  { name: "HISTORY", count: 22000 },
+  { name: "LITERATURE", count: 19000 },
+  { name: "SCIENCE", count: 15000 },
+  { name: "PHILOSOPHY", count: 9500 },
+  { name: "PODCASTS", count: 8000 },
 ];
+const SATELLITE_COLLECTION = { name: "FOLKLORE", count: 5016 };
+const BAND_PANEL_TARGET = 14934; // band panels; + 72 satellite = 15,006
 
 // ------------------------------------------------------------------ rng
 function mulberry32(seed) {
@@ -50,90 +66,93 @@ function mulberry32(seed) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+const fmt = (n) => n.toLocaleString("en-US");
 
-// ------------------------------------------------------------------ spiral disc
-// Archimedean spiral in the horizontal plane with a gentle dome. Each
-// turn is one thin band; successive turns are separated by a black gap
-// (PITCH - band width) where the wire strand runs. The inner radius
-// leaves the poster's calm center — about a third of the disc radius —
-// empty behind the hero title.
-const R0 = 9.5;
-const PITCH = 0.95;
-const TURNS = 21;
-const THETA_MAX = TURNS * Math.PI * 2;
-const R_MAX = R0 + PITCH * TURNS;
-const DOME_H = 3.0;
+// ------------------------------------------------------------------ tube helix
+// Centerline: circle of radius R around the vertical axis, descending
+// PITCH per turn. Panels sit on the tube surface (radius TUBE_R) at
+// ROWS angular steps around the cross-section.
+const R = 34;                    // centerline radius — the reel's
+                                 // proportion (R/tube ~17:1): the big
+                                 // bands are 3–4-turn rings and the
+                                 // camera sits in the near arc's
+                                 // neighborhood, so ropes CROSS the
+                                 // frame and far arcs layer behind
+                                 // across the bore
+const PITCH = 3.4;               // descent per turn
+const TUBE_R = 1.0;              // tube radius (0.29 × PITCH — fatter
+                                 // merged the turns into a solid braid;
+                                 // the reel keeps a clear black groove
+                                 // between turns, so the groove wins)
+const ROWS = 6;                  // cover rows around the cross-section
+const RISE = PITCH / (Math.PI * 2);   // y per radian of coil angle
+const DS = Math.hypot(R, RISE);       // centerline arc per radian
+const PANEL_W = 0.78;            // along the tube
+const PANEL_H = 0.94;            // around the cross-section
+const STEP = 0.84;               // station spacing along the tube
+const DTHETA = STEP / DS;
+const GAP_DTHETA = Math.PI * 2 * 0.5; // bare-wire advance between
+                                 // bands: 0.5 of a turn of red strand +
+                                 // stitch threads separates each band
 
-function radiusAt(theta) { return R0 + (PITCH / (Math.PI * 2)) * theta; }
-function domeY(r) { const s = Math.min(1, r / R_MAX); return DOME_H * (1 - s * s); }
-function spiralPoint(theta) {
-  const r = radiusAt(theta);
-  return new THREE.Vector3(Math.cos(theta) * r, domeY(r), Math.sin(theta) * r);
-}
-// Surface frame at theta: T = along-spiral tangent, N = surface normal
-// (up, tilted by the dome slope), Y = across the band (in-surface).
-// Panels lie flat on this frame, faces up.
-function spiralFrame(theta) {
-  const C = spiralPoint(theta);
-  const C2 = spiralPoint(theta + 0.01);
-  const T = C2.sub(C).normalize();
-  const radial = new THREE.Vector3(C.x, 0, C.z).normalize();
-  const slope = (domeY(radiusAt(theta) + 0.05) - domeY(radiusAt(theta))) / 0.05;
-  const N = new THREE.Vector3(-slope * radial.x, 1, -slope * radial.z).normalize();
-  const Y = new THREE.Vector3().crossVectors(N, T).normalize();
-  const T2 = new THREE.Vector3().crossVectors(Y, N).normalize();
-  return { C, T: T2, Y, N };
-}
+// sqrt-compressed panel allocation (module-level, deterministic)
+const sqrtSum = BANDS.reduce((s, g) => s + Math.sqrt(g.count), 0);
+BANDS.forEach((g, gi) => {
+  g.sqrt = Math.sqrt(g.count);
+  g.index = gi;
+  g.stations = Math.max(8, Math.round((BAND_PANEL_TARGET * (g.sqrt / sqrtSum)) / ROWS));
+});
+const totalTheta =
+  BANDS.reduce((s, g) => s + g.stations * DTHETA, 0) + (BANDS.length - 1) * GAP_DTHETA;
+const Y_TOP = (totalTheta * RISE) / 2;
 
-// arc-length table over theta
-const ARC_SAMPLES = 6000;
-const arcTable = [{ theta: 0, cum: 0 }];
-{
-  let prev = spiralPoint(0), cum = 0;
-  for (let i = 1; i <= ARC_SAMPLES; i++) {
-    const theta = (i / ARC_SAMPLES) * THETA_MAX;
-    const p = spiralPoint(theta);
-    cum += p.distanceTo(prev);
-    arcTable.push({ theta, cum });
-    prev = p;
-  }
+function centerAt(theta, out) {
+  return out.set(Math.cos(theta) * R, Y_TOP - RISE * theta, Math.sin(theta) * R);
 }
-const TOTAL_ARC = arcTable[ARC_SAMPLES].cum;
-function thetaAtArc(s) {
-  let lo = 0, hi = ARC_SAMPLES;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (arcTable[mid].cum < s) lo = mid + 1; else hi = mid;
-  }
-  const b = arcTable[Math.max(1, lo)], a = arcTable[Math.max(1, lo) - 1];
-  const f = (s - a.cum) / Math.max(1e-6, b.cum - a.cum);
-  return a.theta + (b.theta - a.theta) * f;
+// Frame at coil angle theta: T = centerline tangent; e1/e2 span the
+// cross-section plane (e1 = axis-radial made perpendicular to T).
+function frameAt(theta) {
+  const C = centerAt(theta, new THREE.Vector3());
+  const T = new THREE.Vector3(-R * Math.sin(theta), -RISE, R * Math.cos(theta)).normalize();
+  const a = new THREE.Vector3(Math.cos(theta), 0, Math.sin(theta));
+  const e1 = a.addScaledVector(T, -a.dot(T)).normalize();
+  const e2 = new THREE.Vector3().crossVectors(T, e1);
+  return { C, T, e1, e2 };
 }
-
-// ------------------------------------------------------------------ panel field
-const PANEL_W = 0.46;              // along the band (tangent)
-const PANEL_H = 0.26;              // across the band (radial)
-const ROW_OFFS = [-0.21, 0, 0.21]; // 3 rows per band -> band width ~0.68
-const STATION_STEP = 0.56;         // along-band spacing (beads nearly touching)
-const GROUP_GAP_ARC = 0.3;         // hairline seam between collections
+function surfacePoint(theta, phi, out) {
+  const { C, e1, e2 } = frameAt(theta);
+  return out
+    .copy(C)
+    .addScaledVector(e1, Math.cos(phi) * TUBE_R)
+    .addScaledVector(e2, Math.sin(phi) * TUBE_R);
+}
 
 // Create the scene on `canvas`. opts:
 //   atlasUrl — the baked atlas asset (default "/helix-atlas.webp")
 //   frozen   — render one still frame, never run the loop
 //   onError  — called if the WebGL context cannot be created at all
+//   labelsEl — optional overlay element (inside the hero band) the
+//              scene fills with the floating band labels; positions
+//              are computed in the canvas's own box, clamped to it
+//   getAvoidRects — optional () => [{x, y, w, h}] in canvas coords:
+//              hero content blocks (title/intro) a band label must
+//              not sit under; refreshed on layout
 // Returns a controller { start, stop, renderStill, dispose, isDegraded }
 // or null when the renderer could not be created.
 export function createHelixScene(canvas, opts = {}) {
   const atlasUrl = opts.atlasUrl || "/helix-atlas.webp";
   const frozen = !!opts.frozen;
   const onError = typeof opts.onError === "function" ? opts.onError : () => {};
+  const labelsEl = opts.labelsEl || null;
+  const getAvoidRects = typeof opts.getAvoidRects === "function" ? opts.getAvoidRects : null;
+  let avoidRects = [];
 
   let renderer;
   try {
     renderer = new THREE.WebGLRenderer({
       canvas,
-      // No antialiasing on small screens (plan section 5); desktop-class
-      // viewports keep it — the scene is three draw calls either way.
+      // No antialiasing on small screens (Phase 2 safety wiring);
+      // desktop-class viewports keep it — four draw calls either way.
       antialias: window.innerWidth >= 820,
       alpha: false,
       powerPreference: "low-power",
@@ -148,66 +167,84 @@ export function createHelixScene(canvas, opts = {}) {
     return null;
   }
 
-  // DPR cap: 1.5 desktop-class, 1.0 on small screens (plan section 5).
-  const dprCap = window.innerWidth < 700 ? 1.0 : 1.5;
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, dprCap));
+  // ---- sizing + DPR ladder
+  // Render resolution: default tier min(devicePixelRatio, 2.0); the
+  // auto-degrade ladder steps the cap 2.0 → 1.5 → 1.25 → 1.0 under
+  // sustained low fps (never up). Backing store always matches the
+  // canvas's CSS size × effective DPR.
+  const DPR_LADDER = [2.0, 1.5, 1.25, 1.0];
+  let dprTier = 0;
+  let viewW = 1;
+  let viewH = 1;
+  function containerSize() {
+    const w = Math.max(1, canvas.clientWidth || canvas.parentElement?.clientWidth || window.innerWidth);
+    const h = Math.max(1, canvas.clientHeight || canvas.parentElement?.clientHeight || window.innerHeight);
+    return { w, h };
+  }
+  function applyDpr() {
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, DPR_LADDER[dprTier]));
+    renderer.setSize(viewW, viewH, false);
+  }
+
   renderer.setClearColor(0x000000, 1);
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 400);
-  // Idle framing (the bench's rings state): high oblique, ~61 deg down,
-  // so the rings read as ellipses with the spiral sweep and the calm
-  // center sits behind the hero title zone.
-  const CAM_POS = new THREE.Vector3(0, 46, 25);
-  const CAM_TGT = new THREE.Vector3(0, 0.4, 0);
+  const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 500);
+  // Idle framing (the bench's oblique hero state): camera ~62 from the
+  // axis at ~15° elevation — inside the near arc's neighborhood, so the
+  // LAW and PAPERS ropes cross the frame foreground while the smaller
+  // bands and far arcs layer behind/above across the bore, whose calm
+  // black center sits behind the hero title zone.
+  const CAM_POS = new THREE.Vector3(38, 24, 46);
+  const CAM_TGT = new THREE.Vector3(0, 1, 0);
   camera.position.copy(CAM_POS);
+  camera.lookAt(CAM_TGT);
 
   const structure = new THREE.Group();
   scene.add(structure);
 
-  // ---- group arc ranges by weight
-  const totalWeight = GROUPS.reduce((s, g) => s + g.weight, 0);
-  const groupRanges = [];
-  {
-    let acc = 0;
-    GROUPS.forEach((g, gi) => {
-      const a0 = (acc / totalWeight) * TOTAL_ARC;
-      acc += g.weight;
-      const a1 = (acc / totalWeight) * TOTAL_ARC;
-      groupRanges.push({ name: g.name, weight: g.weight, index: gi, arc0: a0, arc1: a1 });
-    });
-  }
-
   // ---- placements (baked instance matrices; runs once at init)
-  const placements = [];
-  const satellitePaths = [];
+  const placements = []; // {matrix, cell:[c,r], group, phase}
+  const gapRanges = [];  // [theta0, theta1] bare-wire gaps between bands
+  const clusterAnchors = []; // {pos: Vector3 (structure-local)} satellite clusters
+  const satStrands = [];
   {
     const rnd = mulberry32(987123);
     const m = new THREE.Matrix4();
     const qj = new THREE.Quaternion();
     const e = new THREE.Euler();
-    for (const g of groupRanges) {
-      const a0 = g.arc0 + GROUP_GAP_ARC / 2;
-      const a1 = g.arc1 - GROUP_GAP_ARC / 2;
-      const stations = Math.max(2, Math.floor((a1 - a0) / STATION_STEP));
-      for (let s = 0; s < stations; s++) {
-        const arc = a0 + ((s + 0.5) / stations) * (a1 - a0);
-        const theta = thetaAtArc(arc);
-        const { C, T, Y, N } = spiralFrame(theta);
-        // Rim dissolve: the reel's outer rings break up into the wire
-        // instead of ending in a clean circle.
-        const rr = C.length();
-        const dissolve = rr > R_MAX - 2.0 ? 0.15 + 0.50 * ((rr - (R_MAX - 2.0)) / 2.0) : 0;
-        for (const ro of ROW_OFFS) {
-          if (dissolve > 0 && rnd() < dissolve) continue;
+    let theta = 0;
+
+    // Placement order: the reversed list puts PODCASTS at the top of
+    // the stack and LAW at the bottom, so the low hero camera sees
+    // the biggest rope fat in the foreground with smaller bands
+    // receding above it — the reel side frame's composition.
+    const order = [...BANDS].reverse();
+    order.forEach((g, gi) => {
+      g.thetaStart = theta;
+      let count = 0;
+      for (let s = 0; s < g.stations; s++) {
+        const th = theta + s * DTHETA;
+        const { C, T, e1, e2 } = frameAt(th);
+        const brick = (s % 2) * 0.5; // brick offset, like the reel's tiling
+        // Band-end taper: the first/last few stations shrink toward
+        // the centerline so a band's end closes instead of showing an
+        // open pipe mouth.
+        const taper = Math.min(1, (s + 1) / 5, (g.stations - s) / 5);
+        const tScale = 0.25 + 0.75 * taper;
+        for (let j = 0; j < ROWS; j++) {
+          const phi = ((j + brick) / ROWS) * Math.PI * 2;
+          const n = e1.clone().multiplyScalar(Math.cos(phi)).addScaledVector(e2, Math.sin(phi));
+          const Y = new THREE.Vector3().crossVectors(n, T); // around-circumference dir
           const pos = C.clone()
-            .addScaledVector(Y, ro + (rnd() - 0.5) * 0.03)
-            .addScaledVector(N, 0.012)
-            .addScaledVector(T, (rnd() - 0.5) * 0.05);
-          e.set((rnd() - 0.5) * 0.10, (rnd() - 0.5) * 0.14, (rnd() - 0.5) * 0.06);
+            .addScaledVector(n, TUBE_R * (0.35 + 0.65 * taper))
+            .addScaledVector(T, (rnd() - 0.5) * 0.04)
+            .addScaledVector(Y, (rnd() - 0.5) * 0.04);
+          e.set((rnd() - 0.5) * 0.07, (rnd() - 0.5) * 0.09, (rnd() - 0.5) * 0.05);
           qj.setFromEuler(e);
-          const basis = new THREE.Matrix4().makeBasis(T, Y, N)
-            .multiply(new THREE.Matrix4().makeRotationFromQuaternion(qj));
+          const basis = new THREE.Matrix4().makeBasis(T, Y, n)
+            .multiply(new THREE.Matrix4().makeRotationFromQuaternion(qj))
+            .multiply(new THREE.Matrix4().makeScale(tScale, tScale, tScale));
           m.copy(basis).setPosition(pos);
           placements.push({
             matrix: m.clone(),
@@ -215,58 +252,98 @@ export function createHelixScene(canvas, opts = {}) {
             group: g.index,
             phase: rnd(),
           });
+          count++;
         }
       }
-    }
-    // satellite clusters on strands beyond the rim
-    const SAT_STRANDS = 11;
-    for (let j = 0; j < SAT_STRANDS; j++) {
-      const ang = (j / SAT_STRANDS) * Math.PI * 2 + rnd() * 0.35;
-      const dir = new THREE.Vector3(Math.cos(ang), 0, Math.sin(ang));
-      const drift = new THREE.Vector3(-Math.sin(ang), 0, Math.cos(ang)).multiplyScalar((rnd() - 0.5) * 0.35);
-      const clusters = 2 + ((rnd() * 3) | 0);
-      const path = [dir.clone().multiplyScalar(R_MAX + 0.1).add(new THREE.Vector3(0, domeY(R_MAX) + 0.015, 0))];
-      for (let cix = 0; cix < clusters; cix++) {
-        const dist = R_MAX + 2.2 + cix * (2.4 + rnd() * 2.0) + rnd() * 0.6;
-        const center = dir.clone().multiplyScalar(dist)
-          .addScaledVector(drift, (dist - R_MAX) * 1.4)
-          .add(new THREE.Vector3(0, domeY(R_MAX) + 0.02 - cix * 0.05, 0));
-        path.push(center.clone().add(new THREE.Vector3(0, 0.015, 0)));
-        const n = 4 + ((rnd() * 8) | 0);
-        for (let k = 0; k < n; k++) {
-          const pos = center.clone().add(new THREE.Vector3(
-            (rnd() - 0.5) * 1.1, (rnd() - 0.5) * 0.05, (rnd() - 0.5) * 1.1
-          ));
-          e.set((rnd() - 0.5) * 0.15, rnd() * Math.PI * 2, (rnd() - 0.5) * 0.15);
+      g.panels = count;
+      theta += g.stations * DTHETA;
+      g.thetaEnd = theta;
+      g.yMid = Y_TOP - RISE * ((g.thetaStart + g.thetaEnd) / 2);
+      if (gi < order.length - 1) {
+        gapRanges.push([theta, theta + GAP_DTHETA]);
+        theta += GAP_DTHETA;
+      }
+    });
+
+    // ---- satellite field: FOLKLORE clusters on wavy red strands
+    // above the stack (the reel's small countries on wire). Strand
+    // shapes are kept for the wire drawing below.
+    const strandPoint = (i, x) => {
+      const baseY = Y_TOP + 4.4 + i * 1.9;
+      const baseZ = -7 + (i % 3) * 6.5;
+      return new THREE.Vector3(
+        x,
+        baseY + Math.sin(x * 0.20 + i * 2.1) * 0.6,
+        baseZ + Math.cos(x * 0.16 + i * 1.3) * 0.9
+      );
+    };
+    const clusterXs = [[-9, 4.5], [-3, 11], [-13, 7]];
+    for (let i = 0; i < 3; i++) {
+      const pts = [];
+      for (let x = -18; x <= 18; x += 1.2) pts.push(strandPoint(i, x));
+      satStrands.push(pts);
+      for (const cx of clusterXs[i]) {
+        const center = strandPoint(i, cx);
+        clusterAnchors.push({ pos: center.clone(), tag: clusterAnchors.length % 2 === 0 });
+        const yaw = (rnd() - 0.5) * 0.7;
+        const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, yaw, 0));
+        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+        const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+        const basis = new THREE.Matrix4().makeBasis(
+          right,
+          new THREE.Vector3(0, 1, 0),
+          fwd
+        );
+        for (let k = 0; k < 12; k++) {
+          const col = k % 4, row = (k / 4) | 0;
+          const pos = center.clone()
+            .addScaledVector(right, (col - 1.5) * 0.82)
+            .add(new THREE.Vector3(0, (row - 1) * 0.97, 0))
+            .addScaledVector(fwd, (rnd() - 0.5) * 0.05);
+          e.set((rnd() - 0.5) * 0.10, 0, (rnd() - 0.5) * 0.10);
           qj.setFromEuler(e);
-          m.makeRotationFromQuaternion(qj).setPosition(pos);
+          m.copy(basis)
+            .multiply(new THREE.Matrix4().makeRotationFromQuaternion(qj))
+            .setPosition(pos);
           placements.push({
             matrix: m.clone(),
             cell: [(rnd() * ATLAS_COLS) | 0, (rnd() * ATLAS_ROWS) | 0],
-            group: j % GROUPS.length,
+            group: BANDS.length, // satellite group index
             phase: rnd(),
           });
         }
       }
-      satellitePaths.push(path);
     }
   }
   const panelCount = placements.length;
 
-  // ---- instanced mesh (added once the atlas arrives)
-  const geo = new THREE.PlaneGeometry(PANEL_W, PANEL_H, 1, 1);
+  // ---- instanced mesh
+  // Panel geometry: a plane bent around the tube cross-section so each
+  // cover hugs the rope surface (bend axis = panel width / tube tangent).
+  function buildPanelGeometry() {
+    const geo = new THREE.PlaneGeometry(PANEL_W, PANEL_H, 1, 6);
+    const p = geo.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const y = p.getY(i);
+      const a = y / TUBE_R;
+      p.setY(i, Math.sin(a) * TUBE_R);
+      p.setZ(i, (Math.cos(a) - 1) * TUBE_R);
+    }
+    return geo;
+  }
+  const geo = buildPanelGeometry();
   const cells = new Float32Array(panelCount * 2);
   const groupsAttr = new Float32Array(panelCount);
   const phases = new Float32Array(panelCount);
   const uniforms = {
     uMap: { value: null },
     uTime: { value: 0 },
-    uFocusGroup: { value: -1 },
-    uFocusAmt: { value: 0 }, // Phase 2 ships idle only; focus lands in Phase 3
+    uFocusGroup: { value: BANDS[0].index }, // LAW; amount stays 0 in
+    uFocusAmt: { value: 0 },                // idle (focus is a later phase)
   };
   const mat = new THREE.ShaderMaterial({
     uniforms,
-    side: THREE.DoubleSide, // backs read as dim aged paper, never black wedges
+    side: THREE.DoubleSide,
     vertexShader: [
       "attribute vec2 aCell;",
       "attribute float aGroup;",
@@ -295,11 +372,8 @@ export function createHelixScene(canvas, opts = {}) {
       "varying float vBright;",
       "void main() {",
       "  vec3 col = texture2D(uMap, vUv).rgb;",
-      // reel palette: beads average to warm cream — saturation pulled
-      // a notch toward warm luminance, overall lift for the poster's
-      // bright read against black
       "  float clum = dot(col, vec3(0.3333));",
-      "  col = mix(col, vec3(clum) * vec3(1.05, 1.00, 0.90), 0.10) * 1.10;",
+      "  col = mix(col, vec3(clum) * vec3(1.05, 1.00, 0.90), 0.10) * 1.02;",
       "  if (!gl_FrontFacing) {",
       "    float lum = dot(col, vec3(0.3333));",
       "    col = mix(vec3(lum) * vec3(0.92, 0.84, 0.70), col, 0.30) * 0.45;",
@@ -323,17 +397,26 @@ export function createHelixScene(canvas, opts = {}) {
   mesh.instanceMatrix.needsUpdate = true;
   mesh.frustumCulled = false;
 
+  let disposed = false;
   let atlasTexture = null;
   new THREE.TextureLoader().load(
     atlasUrl,
     (tex) => {
       if (disposed) { tex.dispose(); return; }
       tex.colorSpace = THREE.SRGBColorSpace;
-      tex.anisotropy = 4;
+      // Oblique angles are where anisotropy matters: use the GPU max,
+      // full mip chain, trilinear sampling.
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      tex.generateMipmaps = true;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
       atlasTexture = tex;
       uniforms.uMap.value = tex;
       structure.add(mesh);
-      if (frozen) renderStill();
+      // If the loop already parked (degraded) or never started, the
+      // frame on screen is wire-only — repaint it now the panels exist,
+      // so a slow atlas decode can never strand the page on bare wire.
+      if (frozen || degraded || !running) renderStill();
       else if (running) renderFrame(performance.now());
     },
     undefined,
@@ -344,121 +427,354 @@ export function createHelixScene(canvas, opts = {}) {
     }
   );
 
-  // ---- wire: the reel's red strands — a twisted double strand in
-  // every ring gap with barb ticks, a rim circle, and the strands
-  // carrying the satellite clusters.
+  // ---- wire + threads: two red strands spiralling around the tube
+  // along the whole coil, bare strands through the inter-band gaps
+  // with faint grey stitch threads, satellite strands with barb
+  // ticks, and sparse long threads across the structure (the reel's
+  // web between bands).
   {
-    const pts = [];
-    const push = (a, b) => pts.push(a.x, a.y, a.z, b.x, b.y, b.z);
-    for (const off of [-0.085, 0.085]) {
+    const red = [];
+    const grey = [];
+    const pushR = (a, b) => red.push(a.x, a.y, a.z, b.x, b.y, b.z);
+    const pushG = (a, b) => grey.push(a.x, a.y, a.z, b.x, b.y, b.z);
+    const tmp = new THREE.Vector3();
+
+    for (const phase of [0, Math.PI]) {
       let prev = null;
-      const steps = 2600;
+      const steps = 3600;
       for (let s = 0; s <= steps; s++) {
-        const theta = (s / steps) * THETA_MAX;
-        const r = radiusAt(theta) + PITCH / 2 + off;
-        const P = new THREE.Vector3(Math.cos(theta) * r, domeY(r) + 0.015, Math.sin(theta) * r);
-        if (prev) push(prev, P);
+        const th = (s / steps) * totalTheta;
+        const P = surfacePoint(th, th * 2.2 + phase, tmp).clone();
+        P.add(new THREE.Vector3(P.x, 0, P.z).normalize().multiplyScalar(0.05));
+        if (prev) pushR(prev, P);
         prev = P;
       }
     }
-    // barb ticks: short diagonal crosses over the gap strand, ~every
-    // 2.3 units of arc, spiking slightly past the band edges
-    {
-      const steps = 1500;
-      let acc = 0;
-      let prevTheta = 0;
-      for (let s = 1; s <= steps; s++) {
-        const theta = (s / steps) * THETA_MAX;
-        acc += spiralPoint(theta).distanceTo(spiralPoint(prevTheta));
-        prevTheta = theta;
-        if (acc >= 2.3) {
-          acc = 0;
-          const r = radiusAt(theta) + PITCH / 2;
-          const C = new THREE.Vector3(Math.cos(theta) * r, domeY(r) + 0.02, Math.sin(theta) * r);
-          const radial = new THREE.Vector3(Math.cos(theta), 0, Math.sin(theta));
-          const tang = new THREE.Vector3(-Math.sin(theta), 0, Math.cos(theta));
-          push(
-            C.clone().addScaledVector(radial, -0.44).addScaledVector(tang, -0.16),
-            C.clone().addScaledVector(radial, 0.44).addScaledVector(tang, 0.16)
-          );
+    for (const [t0, t1] of gapRanges) {
+      for (const off of [-0.14, 0.14]) {
+        let prev = null;
+        const steps = 12;
+        for (let s = 0; s <= steps; s++) {
+          const th = t0 + ((t1 - t0) * s) / steps;
+          const { C, e1 } = frameAt(th);
+          const P = C.clone().addScaledVector(e1, off);
+          if (prev) pushR(prev, P);
+          prev = P;
         }
       }
-    }
-    // rim circle
-    {
-      let prev = null;
-      const steps = 220;
-      const r = R_MAX + 0.62;
-      for (let s = 0; s <= steps; s++) {
-        const a = (s / steps) * Math.PI * 2;
-        const P = new THREE.Vector3(Math.cos(a) * r, domeY(R_MAX) + 0.015, Math.sin(a) * r);
-        if (prev) push(prev, P);
-        prev = P;
+      const rndG = mulberry32(4000 + ((t0 * 100) | 0));
+      for (let k = 0; k < 12; k++) {
+        const a = surfacePoint(t0 - 0.4 - rndG() * 1.4, rndG() * Math.PI * 2, new THREE.Vector3());
+        const b = surfacePoint(t1 + 0.4 + rndG() * 1.4, rndG() * Math.PI * 2, new THREE.Vector3());
+        pushG(a, b);
       }
     }
-    // satellite strands through their cluster anchors
-    for (const path of satellitePaths) {
-      for (let s = 1; s < path.length; s++) push(path[s - 1], path[s]);
-      const last = path[path.length - 1], prevP = path[path.length - 2];
-      push(last, last.clone().add(last.clone().sub(prevP).multiplyScalar(0.5)));
+    const fieldStrands = satStrands.slice();
+    for (let i = 3; i < 5; i++) {
+      const pts = [];
+      for (let x = -19; x <= 19; x += 1.2) {
+        pts.push(new THREE.Vector3(
+          x,
+          Y_TOP + 9.5 + i * 1.6 + Math.sin(x * 0.18 + i * 1.7) * 0.7,
+          -4 + (i % 2) * 9 + Math.cos(x * 0.15 + i) * 1.0
+        ));
+      }
+      fieldStrands.push(pts);
     }
-    const lg = new THREE.BufferGeometry();
-    lg.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
-    const lines = new THREE.LineSegments(
-      lg,
-      new THREE.LineBasicMaterial({ color: 0xa8492f, transparent: true, opacity: 0.8 })
-    );
-    lines.frustumCulled = false;
-    structure.add(lines);
+    for (const pts of fieldStrands) {
+      for (let s = 1; s < pts.length; s++) pushR(pts[s - 1], pts[s]);
+      for (let s = 2; s < pts.length; s += 2) {
+        const C = pts[s];
+        pushR(
+          C.clone().add(new THREE.Vector3(-0.18, -0.42, 0)),
+          C.clone().add(new THREE.Vector3(0.18, 0.42, 0))
+        );
+      }
+    }
+    {
+      const rndW = mulberry32(31337);
+      const posOf = (i) => {
+        const el = placements[i].matrix.elements;
+        return new THREE.Vector3(el[12], el[13], el[14]);
+      };
+      for (let k = 0; k < 120; k++) {
+        const i = (rndW() * placements.length) | 0;
+        let j = (rndW() * placements.length) | 0;
+        if (Math.abs(i - j) < 500) j = (j + 700) % placements.length;
+        pushG(posOf(i), posOf(j));
+      }
+    }
+    const mkLines = (arr, color, opacity) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(arr, 3));
+      const l = new THREE.LineSegments(
+        g,
+        new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false })
+      );
+      l.frustumCulled = false;
+      structure.add(l);
+      return l;
+    };
+    mkLines(red, 0xa8492f, 0.55);
+    mkLines(grey, 0x9aa0a8, 0.07);
   }
 
   // ---- dust: a faint particle field for depth
   {
-    const N = 450;
+    const N = 550;
     const dp = new Float32Array(N * 3);
     const rnd = mulberry32(777);
     for (let i = 0; i < N; i++) {
       const a = rnd() * Math.PI * 2;
-      const r = 2.0 + Math.pow(rnd(), 0.7) * 34;
+      const r = 2.0 + Math.pow(rnd(), 0.7) * (R + 9);
       dp[i * 3] = Math.cos(a) * r;
-      dp[i * 3 + 1] = (rnd() - 0.5) * 9;
+      dp[i * 3 + 1] = (rnd() - 0.5) * (2 * Y_TOP + 16);
       dp[i * 3 + 2] = Math.sin(a) * r;
     }
     const dg = new THREE.BufferGeometry();
     dg.setAttribute("position", new THREE.BufferAttribute(dp, 3));
     const dust = new THREE.Points(
       dg,
-      new THREE.PointsMaterial({ color: 0x93a3b8, size: 0.09, transparent: true, opacity: 0.22, depthWrite: false })
+      new THREE.PointsMaterial({ color: 0x93a3b8, size: 0.09, transparent: true, opacity: 0.16, depthWrite: false })
     );
     dust.frustumCulled = false;
     structure.add(dust);
   }
 
+  // ---- floating labels (HTML overlay, reel style)
+  // Big thin all-caps name, true count beneath. Each band label rides
+  // its band's height at the near rim — projected from 3D every frame
+  // — sitting in the black outside the silhouette, never over covers.
+  // HERO CLAMPING (integration polish): positions are computed in the
+  // canvas's own box (the hero band window, shorter than the bench
+  // frame) and clamped so each visible band's name + count stay fully
+  // inside the band; a band whose height falls outside the window has
+  // its label hidden rather than pinned to an edge it doesn't occupy.
+  const bandLabels = [];
+  const tagLabels = [];
+  if (labelsEl) {
+    BANDS.forEach((g, i) => {
+      const el = document.createElement("div");
+      el.style.opacity = "0"; // until the first updateLabels positions it
+      el.className = "tower-helix-band-label " + (i % 2 ? "tower-helix-lft" : "tower-helix-rgt");
+      const nameSpan = document.createElement("span");
+      nameSpan.className = "tower-helix-label-name";
+      nameSpan.textContent = g.name;
+      const countSpan = document.createElement("span");
+      countSpan.className = "tower-helix-label-count";
+      countSpan.textContent = fmt(g.count);
+      el.appendChild(nameSpan);
+      el.appendChild(countSpan);
+      labelsEl.appendChild(el);
+      bandLabels.push({
+        el,
+        yMid: g.yMid,
+        side: i % 2 ? -1 : 1,
+        group: g.index,
+        basePx: 15 + 37 * (g.sqrt / BANDS[0].sqrt),
+        w: 0,
+        h: 0,
+      });
+    });
+    clusterAnchors
+      .filter((c) => c.tag)
+      .forEach((c) => {
+        const el = document.createElement("div");
+        el.style.opacity = "0";
+        el.className = "tower-helix-tag-label";
+        el.textContent = SATELLITE_COLLECTION.name + " ";
+        const span = document.createElement("span");
+        span.textContent = fmt(SATELLITE_COLLECTION.count);
+        el.appendChild(span);
+        labelsEl.appendChild(el);
+        tagLabels.push({ el, pos: c.pos });
+      });
+  }
+
+  const _v1 = new THREE.Vector3();
+  const _v2 = new THREE.Vector3();
+  const _v3 = new THREE.Vector3();
+  const _scrA = { x: 0, y: 0, behind: false };
+  const _scrB = { x: 0, y: 0, behind: false };
+  function projectToScreen(v3, out) {
+    _v3.copy(v3).project(camera);
+    out.x = (_v3.x * 0.5 + 0.5) * viewW;
+    out.y = (-_v3.y * 0.5 + 0.5) * viewH;
+    out.behind = _v3.z > 1;
+    return out;
+  }
+  function updateLabels() {
+    if (!labelsEl) return;
+    const focusAmt = uniforms.uFocusAmt.value;
+    // Label space = the labels layer's own box (the hero region; the
+    // canvas is a fixed full-page layer, so projections land in
+    // viewport coordinates and are translated by the layer's current
+    // viewport offset — as the page scrolls, the hero and its labels
+    // move together and the labels scroll away with the hero).
+    const lr = labelsEl.getBoundingClientRect();
+    const offX = -lr.left;
+    const offY = -lr.top;
+    const W = labelsEl.clientWidth || viewW;
+    const H = labelsEl.clientHeight || viewH;
+    const e = camera.matrixWorld.elements;
+    let rx = e[0], rz = e[2];
+    const rl = Math.hypot(rx, rz) || 1;
+    rx /= rl; rz /= rl;
+    const placedBoxes = [];
+    for (const L of bandLabels) {
+      const axisW = structure.localToWorld(_v2.set(0, L.yMid, 0));
+      const axisScr = projectToScreen(axisW, _scrA);
+      axisScr.x += offX;
+      axisScr.y += offY;
+      if (axisScr.behind || axisScr.y < -70 || axisScr.y > H + 70) {
+        L.el.style.opacity = "0";
+        continue;
+      }
+      const rimW = _v1.set(
+        axisW.x + rx * L.side * (R + TUBE_R + 1.7),
+        axisW.y,
+        axisW.z + rz * L.side * (R + TUBE_R + 1.7)
+      );
+      const rimScr = projectToScreen(rimW, _scrB);
+      rimScr.x += offX;
+      rimScr.y += offY;
+      if (rimScr.behind) {
+        L.el.style.opacity = "0";
+        continue;
+      }
+      if (!L.w) { L.w = L.el.offsetWidth; L.h = L.el.offsetHeight; }
+      // The label's box once placed at its band's height: never sit
+      // under the hero's own text or on top of another label. Block
+      // on a SUBSTANTIAL overlap only — content blocks are near-
+      // full-width boxes whose edges carry no glyphs, so a few px of
+      // edge contact is not a collision. If the band's own height is
+      // blocked, nudge vertically to the nearest clear spot (labels
+      // float in the black near their band, reel-style); hide only
+      // when no clear spot exists inside the band window.
+      let anchorX = rimScr.x;
+      if (L.side > 0) anchorX = Math.min(Math.max(anchorX, 12), Math.max(12, W - L.w - 26));
+      else anchorX = Math.max(Math.min(anchorX, W - 12), Math.min(W - 12, L.w + 26));
+      const anchorY = Math.min(Math.max(axisScr.y, L.h / 2 + 8), Math.max(L.h / 2 + 8, H - L.h / 2 - 8));
+      const boxX = L.side > 0 ? anchorX + 16 : anchorX - 16 - L.w;
+      const hitsAvoid = (by) => {
+        for (const a of avoidRects) {
+          const iw = Math.min(boxX + L.w, a.x + a.w + 2) - Math.max(boxX, a.x - 2);
+          const ih = Math.min(by + L.h, a.y + a.h + 2) - Math.max(by, a.y - 2);
+          if (iw > 0 && ih > 0 && iw * ih > 0.18 * L.w * L.h) return true;
+        }
+        return false;
+      };
+      const hitsPlaced = (by) => {
+        for (const p of placedBoxes) {
+          const iw = Math.min(boxX + L.w, p.x + p.w) - Math.max(boxX, p.x);
+          const ih = Math.min(by + L.h, p.y + p.h) - Math.max(by, p.y);
+          if (iw > 6 && ih > 4) return true;
+        }
+        return false;
+      };
+      let placeY = anchorY;
+      if (hitsAvoid(placeY - L.h / 2) || hitsPlaced(placeY - L.h / 2)) {
+        let found = false;
+        for (const dy of [30, -30, 60, -60, 90, -90, 120, -120]) {
+          const ny = anchorY + dy;
+          if (ny - L.h / 2 < 8 || ny + L.h / 2 > H - 8) continue;
+          if (hitsAvoid(ny - L.h / 2) || hitsPlaced(ny - L.h / 2)) continue;
+          placeY = ny;
+          found = true;
+          break;
+        }
+        if (!found) {
+          L.el.style.opacity = "0";
+          continue;
+        }
+      }
+      placedBoxes.push({ x: boxX, y: placeY - L.h / 2, w: L.w, h: L.h });
+      const isFocus = L.group === uniforms.uFocusGroup.value;
+      const dim = 1 - focusAmt * (isFocus ? 0 : 0.68);
+      L.el.style.opacity = String(0.96 * dim);
+      // Place at the clamped anchor: the whole label block (name +
+      // count) stays inside the band window; horizontally the label
+      // extends inward from its rim anchor, vertically it rides its
+      // band's screen height (or the nearest clear nudge).
+      L.el.style.transform =
+        "translate3d(" + anchorX.toFixed(1) + "px," + placeY.toFixed(1) + "px,0)" +
+        (L.side > 0 ? " translate(16px,-50%)" : " translate(calc(-100% - 16px),-50%)");
+    }
+    for (const T of tagLabels) {
+      const w = structure.localToWorld(_v2.copy(T.pos));
+      const scr = projectToScreen(w, _scrA);
+      scr.x += offX;
+      scr.y += offY;
+      if (scr.behind || scr.x < -30 || scr.x > W + 30 || scr.y < -20 || scr.y > H + 20) {
+        T.el.style.opacity = "0";
+        continue;
+      }
+      // fade when the cluster swings to the far side of the structure
+      const dx = w.x, dz = w.z;
+      const dl = Math.hypot(dx, dz) || 1;
+      const cx = camera.position.x - w.x, cz = camera.position.z - w.z;
+      const cl = Math.hypot(cx, cz) || 1;
+      const facing = (dx * cx + dz * cz) / (dl * cl);
+      const op = 0.10 + 0.90 * THREE.MathUtils.smoothstep(facing, -0.15, 0.35);
+      T.el.style.opacity = String(op * (1 - focusAmt * 0.5));
+      const tx = Math.min(Math.max(scr.x, 44), W - 44);
+      const ty = Math.min(Math.max(scr.y, 18), H - 10);
+      T.el.style.transform =
+        "translate3d(" + tx.toFixed(1) + "px," + ty.toFixed(1) + "px,0) translate(-50%,-150%)";
+    }
+  }
+
   // ---- sizing
   function layout() {
-    const w = Math.max(1, canvas.clientWidth || canvas.parentElement?.clientWidth || window.innerWidth);
-    const h = Math.max(1, canvas.clientHeight || canvas.parentElement?.clientHeight || window.innerHeight);
+    const { w, h } = containerSize();
+    viewW = w;
+    viewH = h;
     camera.aspect = w / h;
-    // Narrow (portrait) viewports get a wider lens so the disc's
-    // center and inner rings still compose behind the title instead
-    // of cropping to a wall of covers.
-    camera.fov = camera.aspect < 1 ? 58 : 42;
+    // Narrow (portrait) viewports get a wider lens so the bore and
+    // the near ropes still compose behind the title instead of
+    // cropping to a wall of covers.
+    camera.fov = camera.aspect < 1 ? 55 : 40;
+    // Portrait frames also sit a little farther out, so more of the
+    // stack's height (and its labels) fits the tall band window.
+    const dist = camera.aspect < 0.75 ? 1.32 : 1.0;
+    camera.position.copy(CAM_POS).multiplyScalar(dist);
+    camera.lookAt(CAM_TGT);
     camera.updateProjectionMatrix();
-    renderer.setSize(w, h, false);
+    applyDpr();
+    // Label scale follows the band width: full size on desktop,
+    // shrinking toward phone widths so name + count stay inside.
+    const labelScale = Math.min(1, Math.max(0.45, viewW / 1400));
+    for (const L of bandLabels) {
+      L.el.style.fontSize = Math.round(L.basePx * labelScale) + "px";
+      L.w = 0; // re-measure after the size change
+    }
+    // Narrow bands show a single FOLKLORE tag — three identical tags
+    // stack into clutter in a portrait frame.
+    tagLabels.forEach((t, i) => {
+      t.el.style.display = viewW < 700 && i > 0 ? "none" : "";
+    });
+    // Refresh the hero content blocks labels must not sit under.
+    if (getAvoidRects) {
+      try {
+        avoidRects = getAvoidRects() || [];
+      } catch (e) {
+        avoidRects = [];
+      }
+    }
   }
   layout();
 
-  // ---- loop: ~30 fps cap + sustained-low-fps auto-degrade
+  // ---- loop: ~30 fps cap + DPR ladder + sustained-low-fps park
   const FRAME_MS = 1000 / 30;
   let raf = 0;
   let running = false;
-  let disposed = false;
   let degraded = false;
   let sceneTime = 2.2; // start at a settled, pleasing rotation
   let lastRender = 0;
   let loopStart = 0;
   let fpsWindowStart = 0;
   let fpsWindowFrames = 0;
+  let lowDprWindows = 0;
 
   function renderFrame(now) {
     // Scene time advances by wall time since the last RENDERED frame,
@@ -466,10 +782,11 @@ export function createHelixScene(canvas, opts = {}) {
     const dt = lastRender ? Math.min(0.1, (now - lastRender) / 1000) : 0.016;
     sceneTime += dt;
     uniforms.uTime.value = sceneTime;
-    structure.rotation.y = sceneTime * 0.05;
-    structure.position.y = Math.sin(sceneTime * 0.09) * 0.12;
+    structure.rotation.y = sceneTime * 0.045;
+    structure.position.y = Math.sin(sceneTime * 0.07) * 0.9;
     camera.lookAt(CAM_TGT);
     renderer.render(scene, camera);
+    updateLabels();
     lastRender = now;
   }
 
@@ -478,21 +795,43 @@ export function createHelixScene(canvas, opts = {}) {
     raf = requestAnimationFrame(tick);
     if (lastRender && now - lastRender < FRAME_MS - 1) return;
     renderFrame(now);
-    // Auto-degrade (plan section 5): after a grace period, if the
-    // sustained rate is under ~12 fps the device is telling us it
-    // cannot carry the loop — park on the current frame. The still
-    // image remains; the page keeps its CPU.
     if (!fpsWindowStart) { fpsWindowStart = now; loopStart = now; }
     fpsWindowFrames++;
     const winMs = now - fpsWindowStart;
     if (winMs >= 4000) {
+      // Keep the label avoid-rects current (webfont swaps can move
+      // the hero text after init).
+      if (getAvoidRects) {
+        try {
+          avoidRects = getAvoidRects() || avoidRects;
+        } catch (e) { /* keep the previous rects */ }
+      }
       const fps = (fpsWindowFrames * 1000) / winMs;
-      if (now - loopStart > 6000 && fps < 12) {
-        degraded = true;
-        running = false;
-        if (raf) cancelAnimationFrame(raf);
-        raf = 0;
-        return;
+      if (now - loopStart > 6000) {
+        // Park (Phase 2 safety): sustained under ~12 fps means the
+        // device cannot carry the loop — freeze on the current frame.
+        if (fps < 12) {
+          degraded = true;
+          running = false;
+          if (raf) cancelAnimationFrame(raf);
+          raf = 0;
+          return;
+        }
+        // DPR ladder (tube scene sharpness spec): the render loop is
+        // capped at ~30 fps, so a window under ~24 fps means frames
+        // are slipping at the current resolution — after two
+        // consecutive such windows (8 s sustained), step the cap down
+        // one rung, never up.
+        if (fps < 24 && dprTier < DPR_LADDER.length - 1) {
+          lowDprWindows++;
+          if (lowDprWindows >= 2) {
+            dprTier++;
+            lowDprWindows = 0;
+            applyDpr();
+          }
+        } else {
+          lowDprWindows = 0;
+        }
       }
       fpsWindowStart = now;
       fpsWindowFrames = 0;
@@ -506,6 +845,7 @@ export function createHelixScene(canvas, opts = {}) {
     fpsWindowStart = 0;
     fpsWindowFrames = 0;
     loopStart = 0;
+    lowDprWindows = 0;
     raf = requestAnimationFrame(tick);
   }
   function stop() {
@@ -517,10 +857,11 @@ export function createHelixScene(canvas, opts = {}) {
     if (disposed) return;
     // One frame at the settled rotation — the frozen fallback's image.
     uniforms.uTime.value = sceneTime;
-    structure.rotation.y = sceneTime * 0.05;
-    structure.position.y = Math.sin(sceneTime * 0.09) * 0.12;
+    structure.rotation.y = sceneTime * 0.045;
+    structure.position.y = Math.sin(sceneTime * 0.07) * 0.9;
     camera.lookAt(CAM_TGT);
     renderer.render(scene, camera);
+    updateLabels();
   }
 
   // Debounced resize: re-layout only (positions are baked; nothing is
@@ -552,6 +893,7 @@ export function createHelixScene(canvas, opts = {}) {
       stop();
       window.removeEventListener("resize", onResize);
       window.clearTimeout(resizeTimer);
+      if (labelsEl) labelsEl.innerHTML = "";
       scene.traverse((o) => {
         if (o.geometry) o.geometry.dispose();
         if (o.material) {

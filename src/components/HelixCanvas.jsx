@@ -1,9 +1,13 @@
-// HelixCanvas — mounts the Tower landing's helix background scene
-// (src/lib/helix-scene.js) inside the dark hero band. Decorative only:
-// pointer-events none (CSS), aria-hidden, and every failure mode
-// resolves to "no canvas" — the black band remains and the page is
-// untouched. This page has a crash history; the background must never
-// be able to take it down.
+// HelixCanvas — mounts the Tower page's helix background scene
+// (src/lib/helix-scene.js) as a FIXED FULL-PAGE backdrop (Joshua's
+// 2026-11-12 full-page extension): the canvas layer is position:fixed
+// behind every section of the TowerOfBabel page, while the floating
+// band labels stay confined to the hero region (their layer is
+// absolutely positioned inside the hero section and scrolls away
+// with it). Decorative only: pointer-events none (CSS), aria-hidden,
+// and every failure mode resolves to "no canvas" — the black page
+// remains and the content is untouched. This page has a crash
+// history; the background must never be able to take it down.
 //
 // Safety wiring (mirrors the site's established patterns):
 //  - HelixShield: an error boundary with the same semantics as
@@ -19,8 +23,10 @@
 //  - Frozen frame instead of a loop for prefers-reduced-motion and
 //    weak-device heuristics; the scene itself auto-degrades to the
 //    frozen frame on sustained low fps.
-//  - Rendering pauses while the hero is off-screen
-//    (IntersectionObserver) and while the tab is hidden.
+//  - Rendering pauses while the tab is hidden; route changes unmount
+//    the component, which disposes the scene. (A fixed full-page
+//    canvas has no off-screen state, so there is no Intersection-
+//    Observer pause anymore.)
 //  - Kill switch: ?bg=0 disables the canvas entirely.
 import { Component, useEffect, useRef, useState } from "react";
 
@@ -84,6 +90,7 @@ async function loadHelixSceneModule() {
 
 function HelixLayer() {
   const ref = useRef(null);
+  const labelsRef = useRef(null);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
@@ -91,15 +98,13 @@ function HelixLayer() {
     if (!canvas) return;
     let disposed = false;
     let scene = null;
-    let io = null;
-    let inView = true;
     let timer = 0;
     let idleId = 0;
     const frozen = prefersReducedMotion() || weakDevice();
 
     const sync = () => {
       if (!scene) return;
-      if (inView && !document.hidden) scene.start();
+      if (!document.hidden) scene.start();
       else scene.stop();
     };
     const onVis = () => sync();
@@ -114,6 +119,22 @@ function HelixLayer() {
       try {
         scene = mod.createHelixScene(canvas, {
           frozen,
+          labelsEl: labelsRef.current,
+          // The hero's own text blocks (title + intro), in canvas
+          // coordinates: band labels hide rather than sit under them.
+          getAvoidRects: () => {
+            try {
+              const section = canvas.closest("section");
+              if (!section) return [];
+              const c = canvas.getBoundingClientRect();
+              return [...section.querySelectorAll(":scope > h1, :scope > p")].map((el) => {
+                const r = el.getBoundingClientRect();
+                return { x: r.left - c.left, y: r.top - c.top, w: r.width, h: r.height };
+              });
+            } catch (e) {
+              return [];
+            }
+          },
           onError: () => {
             if (!disposed) setFailed(true);
           },
@@ -130,13 +151,6 @@ function HelixLayer() {
         return;
       }
       if (!frozen) {
-        if ("IntersectionObserver" in window) {
-          io = new IntersectionObserver((entries) => {
-            inView = entries.some((en) => en.isIntersecting);
-            sync();
-          });
-          io.observe(canvas);
-        }
         document.addEventListener("visibilitychange", onVis);
         sync();
       }
@@ -165,7 +179,6 @@ function HelixLayer() {
       if (idleId && "cancelIdleCallback" in window) {
         window.cancelIdleCallback(idleId);
       }
-      if (io) io.disconnect();
       document.removeEventListener("visibilitychange", onVis);
       if (scene) scene.dispose();
     };
@@ -173,12 +186,23 @@ function HelixLayer() {
 
   if (failed) return null;
   return (
-    <canvas
-      ref={ref}
-      className="tower-helix-canvas"
-      aria-hidden="true"
-      style={{ display: "block", width: "100%", height: "100%" }}
-    />
+    <>
+      {/* Fixed full-page canvas layer (CSS: position fixed, behind
+          all page content). */}
+      <div className="tower-helix-layer" aria-hidden="true">
+        <canvas
+          ref={ref}
+          className="tower-helix-canvas"
+          aria-hidden="true"
+          style={{ display: "block", width: "100%", height: "100%" }}
+        />
+      </div>
+      {/* Floating collection labels (reel style) — a HERO composition:
+          this layer is absolutely positioned inside the hero section,
+          so the labels scroll away with the hero. The scene fills and
+          positions them; decorative only. */}
+      <div ref={labelsRef} className="tower-helix-labels" aria-hidden="true" />
+    </>
   );
 }
 
