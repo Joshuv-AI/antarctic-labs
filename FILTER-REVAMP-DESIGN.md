@@ -492,3 +492,161 @@ by construction). The hub index grew 11.2 MB → 16.9 MB (Primary
 Sources' 26,657 records are most of it) — still under the 25 MiB
 Pages per-file cap. public/api-collections.json was regenerated in
 the same push, per the pipeline rule.
+
+## 10. Filter performance & stability fix (2026-11-11 night — Joshua's screen recording, 22:37 EST)
+
+### 10.1 The report
+
+Joshua's recording (iPhone Safari, Low Power Mode, 10% battery):
+tap through filter options quickly, changing selections while the
+previous one is still applying. Symptoms, frame-checked: slow result
+application; visible tearing ~7–18 s in (overlapping copies of the
+panel and rows, counts flickering through partial values); the
+viewport yanked to a different position mid-switch; at ~19 s a
+WebKit tab kill ("This webpage was reloaded because a problem
+occurred") and a from-scratch reload. Worst across the big lanes
+(Papers/Law) combined with era chips and curated groups.
+
+### 10.2 Diagnosis (code evidence; measured numbers in §10.4)
+
+The browse filter ran synchronously inside the results `useMemo` in
+pages.jsx, on the main thread, per render — and three properties of
+that pass made it explode under rapid switching at full scale:
+
+1. **Record materialization in the hot loop.** With a curated
+   collection selected, the precomputed-count fast path is disabled
+   (`knownCount` is null whenever `collSet` is set), so the memo
+   walked the ENTIRE sort order (2,557,923 entries) on every click.
+   The collection predicate itself was
+   `collSet.has(artifacts[i].artifact_id)`: `artifacts` is a Proxy
+   view over the column store, so each step allocated a
+   `ColumnRecord`, decoded the id's UTF-8 bytes into a fresh string,
+   and hashed it into the Set. The row-window walk in
+   LibraryResults (`visibleIndices`) repeated the same
+   Proxy+decode+hash per step. Per click: millions of short-lived
+   allocations on the main thread.
+2. **No latest-wins discipline.** Filter state, header count, panel
+   counts and rows were recomputed by different memos/effects at
+   different times (phase-0 derivation per stream publish, the rank
+   memo per render, the window walk per render). During a tap storm
+   — and during streaming, when a new catalog prefix publishes every
+   ~2 s and restarts all of it — the screen routinely showed pieces
+   of different filter states at once: that is the tearing and the
+   garbled, flickering counts. Interrupted React renders discarded
+   and restarted the synchronous memo work, multiplying it.
+3. **Scroll anchoring fired per intermediate render.** The
+   2026-10-28 anchor records the panel's viewport offset at tap time
+   and corrects once, on the first layout effect that runs. With a
+   storm's worth of intermediate commits (subcategory rows mounting
+   when the hub data landed, result-window pitch re-measurement,
+   stream publishes), later height changes landed after the anchor
+   was spent — the viewport moved under the user's finger: the
+   bounce.
+4. **The crash is the sum.** A ~1–2 GB resident catalog (column
+   store + baked orders + derivation arrays) plus per-click churn of
+   millions of objects (memo Maps, decoded id strings, record
+   wrappers) across a storm = GC pressure spikes on a memory-capped
+   phone tab in Low Power Mode → jetsam kill. Contributing: the
+   16.9 MB hub-index JSON parse on the main thread ("Loading
+   collections…" in the recording) queued behind the saturated main
+   thread and landed mid-storm as one more multi-second task.
+
+### 10.3 The fix (performance/stability only — design, axes, counts
+semantics and the parity invariant unchanged)
+
+- **Filter engine (new, lib/filter-engine.js):** a filter selection
+  is computed ONCE per (selection, sort order, catalog length) into
+  a committed result object `{key, indices: Uint32Array, count}` —
+  the full match list in display order. The scan reads only typed
+  arrays: per-record bucket CODES (a Uint16 dictionary encoding of
+  the existing bucketKeys, built once and then extended
+  incrementally over stream prefixes, like phase 0 itself), the
+  existing eraCodes, and a membership BITSET for the selected
+  curated collection (built once per collection+catalog length from
+  the phase-0 id index — ~26k lookups worst case, vs 2.56M
+  string-hash probes per click before). No record is materialized,
+  no id is decoded, no string is hashed inside the scan.
+- **Chunked + latest-wins:** the scan runs in ~7 ms slices with a
+  generation token. A newer selection (or a newer catalog prefix)
+  supersedes the running job at the next slice boundary; a
+  superseded job never commits. Header count, active summary and
+  rows all render from the single committed object, so the screen
+  can never show pieces of two filter states at once (the previous
+  committed state stays, coherent, until the new one lands —
+  keep-previous-data, atomically swapped).
+- **Zero-scan fast paths:** no predicates at all commits the sort
+  order itself; repeat selections hit the committed cache.
+- **Row rendering:** LibraryResults takes the committed index list
+  directly (browse branch) — the Proxy/decode window walk is gone;
+  the rank map is built for the visible window only (≤ rowBudget id
+  decodes, as before).
+- **Scroll anchor, completed:** the anchor recorded at tap time now
+  carries the selection the tap produces and keeps correcting on
+  every render until that selection's own committed result lands
+  (2.5 s safety expiry), so height changes from hub-data arrival
+  and the results commit itself are corrected too, not just the
+  panel's first re-render.
+- The search (blended) pipeline, the server-search path, counts,
+  taxonomy and membership rules are untouched; the engine feeds
+  exactly the two browse branches of the results memo, with the
+  same outputs (rankMap / matchCount / row window).
+
+### 10.4 Verification (phone-class profile: Chromium, 390×844,
+CPU throttled 6×, full 2,557,923-record catalog resident from the
+production fingerprint data; storm = 20 taps at ~120 ms across
+Collections × Era × Curated incl. Papers/Law and Primary Sources)
+
+Baseline harness note: the "before" build blocked the main thread
+so hard that only 2 of 20 automated taps could even land through
+the driver's stability waits (the two that landed committed at
+~1.7 s per application) — the "after" runs use an in-page tap
+driver (real taps queue the same way), so their per-tap numbers
+are conservative against the baseline, not flattered by it. The
+harness serves the catalog from a disk mirror of the production
+fingerprint build (the browse worker fetches its pages from the
+production origin; the first harness version only mirrored the
+preview origin and the stream secretly ran over the slow egress
+proxy — that stall was the harness's, not the app's).
+
+Settled counts were verified against ground truth computed
+independently from the mirrored data (collection lane x era from
+the record year, deduped by id): Papers 1,130,210 · Law 1,277,197 ·
+era 1700s total 545 · Papers x 1700s = 10 · Law x 1700s = 0 — the
+engine's committed counts match exactly. The old code's transient
+"Papers x 1700s = 1,784" exceeded the era's own 545 total: one of
+the garbled counts from the recording, produced by the accumulated
+precomputed-count map drifting from the arrays. With the engine,
+the header count is the committed scan's own count, so a count
+that disagrees with the listed rows cannot be produced.
+
+| Measure (storm window) | Before | After |
+|---|---|---|
+| Taps landed (of 20) | 2 (rest timed out on a blocked UI) | 16 (4 misses were rows still mounting during the one-time hub-index load; each verified clickable in isolation) |
+| Time for the storm to fully settle | 62.1 s, ending broken (no results header rendered) | 49.3 s / 51.9 s (two runs), ending in the correct cleared state |
+| Main-thread blocking, storm window | Multi-second stretches; 2,165 long tasks / 223.8 s across load+storm | 247-279 long tasks / 35.8-38.9 s; max single task 4,486 -> 3,821 ms |
+| Filter application latency (tap -> header commit) | ~1.7-3.4 s for the 2 taps that landed | ~0.1-2 s per commit (median ~0.8 s) at the same throttle |
+| Scroll while parked at 2,600 px | Yanked to 113 and left there (2,487 px) | Run 1: parked position preserved exactly (2,600). Run 2: +587 px drift during settle (browser scroll anchoring against hub-load growth + window re-measure) |
+| Tab crash / error text | Failure class reproduced (UI collapse) | No crash, zero JS errors, clean final state in both runs |
+| JS heap (CDP), settled -> post-storm | not captured (harness v1) | ~189-206 MB -> ~227-229 MB (+21-40 MB, inside the 60 MB budget) |
+| Full-catalog load soak (same profile) | 476 s wall, completes at 2,557,918 resident | 469-625 s wall (variance = shared-box contention), completes at 2,557,918 in every run |
+
+Residuals, honestly stated: (1) the storm's largest remaining
+blocks are one-time loads landing mid-storm — the 16.9 MB hub-index
+fetch + parse + collection build (~4 s at this throttle) that the
+first curated tap can trigger, and the baked sort-orders landing —
+not filter computation; on a real visit the approach trigger
+usually completes the hub load before the first tap. (2) Scroll
+position is far better protected than before but not perfectly
+pinned in the harness when the hub load lands mid-storm; the
+results window's own re-measure and the browser's scroll anchoring
+also move the numeric position while keeping content stable.
+(3) One intermediate stale-count commit from the pre-first-commit
+fallback (the accumulated precomputed counts) can still flash
+before the engine's first commit for a selection lands; it
+self-corrects to the scanned truth in ~1.5 s and cannot persist.
+
+### 10.5 Gate
+
+Joshua's phone retest of the exact repro (rapid tapping across
+lanes/eras/curated groups, Low Power Mode included) is the final
+gate, per the standing rule.

@@ -77,6 +77,16 @@ import {
   loadHubsIndex,
   buildCollections,
 } from "./lib/tower-collections.js";
+// Browse filter engine (2026-11-11 perf fix, FILTER-REVAMP-DESIGN.md
+// §10): chunked, latest-wins filter computation over typed arrays —
+// replaces the per-render full-catalog walks in the rank memo below.
+import {
+  createBucketCodeTable,
+  extendBucketCodes,
+  bucketMaskFor,
+  buildMembershipBitset,
+  startFilterScan,
+} from "./lib/filter-engine.js";
 import {
   coverCandidates,
   coverTone,
@@ -1730,6 +1740,26 @@ function TowerLibrarySection({ go, onReady }) {
     return null;
   }, [collData, collKey]);
   const collSet = activeCollection ? activeCollection.ids : null;
+  // Committed browse-filter result (filter engine, FILTER-REVAMP-
+  // DESIGN.md §10): the exact match list (catalog indices in display
+  // order) plus its count for ONE selection, produced by the chunked
+  // engine effect near the rank memo. The rank memo and the results
+  // list render only committed results — while a newer selection's
+  // job is still running, the previous commit stays on screen whole,
+  // so the header count and the rows always describe the same list.
+  const [browseResult, setBrowseResult] = useState(null);
+  const browseResultRef = useRef(null);
+  const browseFx = useRef(null);
+  if (browseFx.current === null) {
+    browseFx.current = {
+      gen: 0,
+      job: null,
+      codes: createBucketCodeTable(),
+      memberFor: null,
+      memberLen: 0,
+      member: null,
+    };
+  }
   // Subcategories added by the 2026-11-11 revamp (LAW, REFERENCE) are
   // not in the server facet products yet, so — like a hub filter — a
   // search under one runs on the client pipeline (see
@@ -1749,44 +1779,98 @@ function TowerLibrarySection({ go, onReady }) {
   // inside the panel never move what the visitor is looking at. Filter
   // logic, counts and click-to-clear are unchanged.
   const filterAnchor = useRef(null);
-  const noteFilterAnchor = useCallback(() => {
+  // The anchor now also carries the selection the tap PRODUCES
+  // (filter perf fix, design §10): the layout effect keeps correcting
+  // the panel offset on every render until that selection's own
+  // filter-engine result has committed — hub-index data landing, a
+  // subchip row mounting, the results window re-measuring can all
+  // shift the panel AFTER the tap's first re-render, and the old
+  // one-shot correction had already spent itself by then (the scroll
+  // bounce in Joshua's 2026-11-11 recording). A generous safety
+  // expiry retires an anchor whose commit never comes (e.g. a
+  // selection the server-search path owns), and a deliberate scroll
+  // gesture retires it at once.
+  const noteFilterAnchor = useCallback((sel) => {
     if (typeof window === "undefined") return;
+    const prev = filterAnchor.current;
+    if (prev && prev.release) prev.release();
     const el = filterPanelRef.current;
-    filterAnchor.current = {
+    const anchor = {
       y: window.scrollY || 0,
       top: el ? el.getBoundingClientRect().top : null,
+      sel: sel || null,
+      at: Date.now(),
+      release: null,
     };
+    // A deliberate scroll gesture retires the anchor immediately —
+    // it exists to absorb the tap's own aftermath, never to fight
+    // the visitor for the viewport.
+    const retire = () => {
+      if (filterAnchor.current === anchor) filterAnchor.current = null;
+      anchor.release();
+    };
+    anchor.release = () => {
+      window.removeEventListener("wheel", retire);
+      window.removeEventListener("touchmove", retire);
+    };
+    window.addEventListener("wheel", retire, { passive: true });
+    window.addEventListener("touchmove", retire, { passive: true });
+    filterAnchor.current = anchor;
   }, []);
   useLayoutEffect(() => {
     const anchor = filterAnchor.current;
     if (!anchor) return;
-    filterAnchor.current = null;
     const el = filterPanelRef.current;
-    if (!el || anchor.top === null || typeof window === "undefined") return;
-    const delta = el.getBoundingClientRect().top - anchor.top;
-    if (delta) window.scrollTo(0, Math.max(0, window.scrollY + delta));
-  }, [collGroup, collKey, bucketFilter, filtersOpen, eraFilter, collShowAll]);
+    if (el && anchor.top !== null && typeof window !== "undefined") {
+      const delta = el.getBoundingClientRect().top - anchor.top;
+      if (delta) window.scrollTo(0, Math.max(0, window.scrollY + delta));
+    }
+    const committed =
+      anchor.sel &&
+      browseResult &&
+      browseResult.sel.bucketFilter === anchor.sel.bucketFilter &&
+      browseResult.sel.eraFilter === anchor.sel.eraFilter &&
+      browseResult.sel.collKey === anchor.sel.collKey;
+    // Safety expiry is generous (15s): the hub-index load that a
+    // first curated tap can trigger takes seconds on a throttled
+    // phone, and its panel growth is exactly what the anchor must
+    // outlive (measured in the storm harness, design §10.4). The
+    // commit match and the scroll-gesture retirement above are the
+    // normal exits.
+    if (committed || Date.now() - anchor.at > 15000) {
+      if (anchor.release) anchor.release();
+      filterAnchor.current = null;
+    }
+  }, [collGroup, collKey, bucketFilter, filtersOpen, eraFilter, collShowAll, browseResult]);
   const selectCollGroup = (g) => {
-    noteFilterAnchor();
+    noteFilterAnchor({ bucketFilter, eraFilter, collKey: "" });
     setCollGroup(g);
     setCollKey("");
     setCollShowAll(false);
     if (g) ensureCollections();
   };
   const selectCollection = (key) => {
-    noteFilterAnchor();
+    noteFilterAnchor({
+      bucketFilter,
+      eraFilter,
+      collKey: collKey === key ? "" : key,
+    });
     setCollKey((prev) => (prev === key ? "" : key));
   };
   const selectLane = (key) => {
-    noteFilterAnchor();
+    noteFilterAnchor({ bucketFilter: key, eraFilter, collKey });
     setBucketFilter(key);
   };
   const selectEra = (id) => {
-    noteFilterAnchor();
+    noteFilterAnchor({
+      bucketFilter,
+      eraFilter: eraFilter === id ? "" : id,
+      collKey,
+    });
     setEraFilter((prev) => (prev === id ? "" : id));
   };
   const clearFilters = () => {
-    noteFilterAnchor();
+    noteFilterAnchor({ bucketFilter: "", eraFilter: "", collKey: "" });
     setCollGroup("");
     setCollKey("");
     setBucketFilter("");
@@ -2112,10 +2196,117 @@ function TowerLibrarySection({ go, onReady }) {
     ]
       .filter(Boolean)
       .join(" · ") || "All entries";
-  const { rankMap, matchCount, rankedIndices, blendedModel } = useMemo(() => {
+  // Browse filter engine job (2026-11-11, design §10): computes the
+  // committed match list for the current selection ONCE per
+  // (selection, sort order, catalog length) — chunked into ~7ms
+  // slices off typed arrays, latest-wins via the generation counter:
+  // a newer selection (or a longer resident prefix) cancels the
+  // running job at its next slice boundary and a superseded job never
+  // commits. This replaces the memo's per-render full-catalog walks,
+  // whose cost per click at 2.56M records — with a curated collection
+  // active, a Proxy record materialization + id decode + Set hash per
+  // record — froze the main thread for seconds per tap and, stacked
+  // across rapid taps, tore the UI and jetsam-killed phone tabs.
+  useEffect(() => {
+    if (!towerData || !artifacts || !towerOrder) return undefined;
+    // While a real query is being answered by the blended search
+    // pipeline the browse list is not rendered — don't spend the
+    // cycles. (A 0-1 character query still browses in catalog order;
+    // the memo's short-query branch reads this same committed result.)
+    if (query && query.trim().length >= 2 && towerData.haystacks)
+      return undefined;
+    const fx = browseFx.current;
+    const sel = {
+      bucketFilter,
+      eraFilter,
+      collKey,
+      collSet,
+      order: towerOrder,
+      len: artifacts.length,
+    };
+    const cur = browseResultRef.current;
+    if (
+      cur &&
+      cur.sel.bucketFilter === sel.bucketFilter &&
+      cur.sel.eraFilter === sel.eraFilter &&
+      cur.sel.collKey === sel.collKey &&
+      cur.sel.collSet === sel.collSet &&
+      cur.sel.order === sel.order &&
+      cur.sel.len === sel.len
+    )
+      return undefined;
+    const gen = ++fx.gen;
+    if (fx.job) {
+      fx.job.cancel();
+      fx.job = null;
+    }
+    const commit = (indices, count) => {
+      if (fx.gen !== gen) return;
+      const res = { sel, indices, count };
+      browseResultRef.current = res;
+      setBrowseResult(res);
+    };
+    // Bucket codes extend over just the newly resident tail on EVERY
+    // catalog version — including unfiltered ones — so the one full
+    // encoding pass is spread across the stream's publishes instead
+    // of landing as a single task on the visitor's first filtered
+    // tap (measured in the storm harness, design §10.4).
+    extendBucketCodes(fx.codes, towerData.bucketKeys);
+    // Zero-predicate fast path: the whole resident order, in order —
+    // committed as-is, no scan at all.
+    if (!bucketFilter && !eraFilter && !collSet) {
+      commit(towerOrder, towerOrder.length);
+      return undefined;
+    }
+    // Typed-array prep, cached across jobs (see filter-engine.js):
+    // a curated collection becomes an index bitset once per
+    // (collection, catalog length) — ~26k id-index lookups replace
+    // 2.56M per-record Set probes per click.
+    const mask = bucketMaskFor(fx.codes, bucketFilter);
+    let member = null;
+    if (collSet) {
+      if (
+        fx.memberFor !== collSet ||
+        fx.memberLen !== artifacts.length ||
+        !fx.member
+      ) {
+        fx.member = buildMembershipBitset(
+          towerData.idIndex,
+          collSet,
+          artifacts.length
+        );
+        fx.memberFor = collSet;
+        fx.memberLen = artifacts.length;
+      }
+      member = fx.member;
+    }
+    const eraCodeWanted = eraFilter
+      ? TOWER_ERAS.findIndex((e) => e.id === eraFilter) + 1
+      : 0;
+    fx.job = startFilterScan({
+      order: towerOrder,
+      bucketCodes: fx.codes.codes,
+      bucketMask: mask,
+      eraCodes: towerData.eraCodes,
+      eraCode: eraCodeWanted,
+      member,
+      isCurrent: () => fx.gen === gen,
+      onCommit: (indices, count) => {
+        fx.job = null;
+        commit(indices, count);
+      },
+    });
+    return () => {
+      if (fx.job) {
+        fx.job.cancel();
+        fx.job = null;
+      }
+    };
+  }, [towerData, artifacts, towerOrder, bucketFilter, eraFilter, collSet, collKey, query]);
+  const { rankMap, matchCount, rankedIndices, blendedModel, browseIndices } = useMemo(() => {
     const map = new Map();
     if (!artifacts || !towerData)
-      return { rankMap: map, matchCount: 0, rankedIndices: null };
+      return { rankMap: map, matchCount: 0, rankedIndices: null, browseIndices: null };
     // Two-level filter: a lane bucket ("PAPERS") matches every record whose
     // bucket key starts with "PAPERS:" (the subcategory partition is exact,
     // so this is identical to the old collection equality check); a
@@ -2148,15 +2339,38 @@ function TowerLibrarySection({ go, onReady }) {
       // in catalog order rather than blocking on the indexing.) Only the
       // first `rowBudget` ranks are materialized into the map (they are
       // the only rows that can mount).
+      // Browse results (filter perf fix 2026-11-11, design §10): the
+      // match list + count are the filter engine's last COMMITTED
+      // result — this memo only windows the committed list into
+      // ranks, it never scans the catalog for browsing. While the
+      // engine's job for the current selection is still running, the
+      // previous commit renders whole: header count and rows always
+      // describe the same list (the parity invariant), and nothing
+      // half-computed ever paints (the tearing in the recording).
+      const committed = browseResultRef.current;
+      if (committed) {
+        const idx = committed.indices;
+        const lim = Math.min(idx.length, rowBudget);
+        for (let k = 0; k < lim; k++)
+          map.set(artifacts[idx[k]].artifact_id, k + 1);
+        return {
+          rankMap: map,
+          matchCount: committed.count,
+          rankedIndices: null,
+          blendedModel: null,
+          browseIndices: idx,
+        };
+      }
+      // Before the first commit exists (the first paint after the
+      // data lands, one effect cycle), fall back to the precomputed
+      // counts + a window-only walk — the old fast path, unchanged.
       // Fast count (filter revamp 2026-11-11): with no hub filter in
       // play, the exact match count is already known from phase 0's
       // precomputed counts — bucket totals, era totals, and bucket×era
       // intersections — so the loop only walks far enough to fill the
-      // visible window and early-exits. A filter change used to
-      // re-scan all 2.56M records just to recount them; that scan WAS
-      // the option-selection delay. (During streaming the precomputed
-      // counts cover the same resident prefix the scan would, so the
-      // semantics are unchanged.)
+      // visible window and early-exits. (During streaming the
+      // precomputed counts cover the same resident prefix the scan
+      // would, so the semantics are unchanged.)
       const knownCount =
         !collSet && towerData.eraCounts
           ? eraFilter
@@ -2182,6 +2396,7 @@ function TowerLibrarySection({ go, onReady }) {
         matchCount: knownCount !== null ? knownCount : count,
         rankedIndices: null,
         blendedModel: null,
+        browseIndices: null,
       };
     }
     // Searching (Workstream D, SPEC-6): ONE blended list. Catalog-field
@@ -2192,6 +2407,23 @@ function TowerLibrarySection({ go, onReady }) {
     // leads. Below 2 characters the blended pipeline does not engage and
     // the query browses in catalog order (previous behavior).
     if (q.trim().length < 2) {
+      // Same committed browse result as the no-query branch (design
+      // §10); the legacy full walk below remains only as the
+      // pre-first-commit fallback.
+      const committed = browseResultRef.current;
+      if (committed) {
+        const idx = committed.indices;
+        const lim = Math.min(idx.length, rowBudget);
+        for (let k = 0; k < lim; k++)
+          map.set(artifacts[idx[k]].artifact_id, k + 1);
+        return {
+          rankMap: map,
+          matchCount: committed.count,
+          rankedIndices: null,
+          blendedModel: null,
+          browseIndices: idx,
+        };
+      }
       let count = 0;
       for (let k = 0; k < towerOrder.length; k++) {
         const i = towerOrder[k];
@@ -2199,7 +2431,7 @@ function TowerLibrarySection({ go, onReady }) {
         count++;
         if (map.size < rowBudget) map.set(artifacts[i].artifact_id, count);
       }
-      return { rankMap: map, matchCount: count, rankedIndices: null, blendedModel: null };
+      return { rankMap: map, matchCount: count, rankedIndices: null, blendedModel: null, browseIndices: null };
     }
     const tokens = queryTokens(qNorm);
     const qMask = querySecondaryMask(qNorm);
@@ -2535,8 +2767,8 @@ function TowerLibrarySection({ go, onReady }) {
     for (let k = 0; k < cap; k++) {
       if (items[k].index >= 0) map.set(items[k].key, k + 1);
     }
-    return { rankMap: map, matchCount: total, rankedIndices: null, blendedModel };
-  }, [q, bucketFilter, eraFilter, sortId, towerOrder, artifacts, towerData, rowBudget, collSet, deep, strictQuery]);
+    return { rankMap: map, matchCount: total, rankedIndices: null, blendedModel, browseIndices: null };
+  }, [q, bucketFilter, eraFilter, sortId, towerOrder, artifacts, towerData, rowBudget, collSet, deep, strictQuery, browseResult]);
   // ---- Phase B: server-side catalog search (CUTOVER, 2026-10-29) -------
   // Server search is the DEFAULT: the SEARCH path routes to
   // /api/catalog-search and adapts its pages into the blendedModel shape
@@ -3376,6 +3608,7 @@ function TowerLibrarySection({ go, onReady }) {
               towerOrder={towerOrder}
               rankMap={rankMap}
               rankedIndices={rankedIndices}
+              browseIndices={browseIndices}
               matchCount={matchCount}
               rowBudget={rowBudget}
               onLoadMore={() => setRowBudget((b) => b + TOWER_ROWS_PER_PAGE)}
@@ -4567,6 +4800,7 @@ const LibraryResults = memo(function LibraryResults({
   towerOrder,
   rankMap,
   rankedIndices,
+  browseIndices,
   matchCount,
   rowBudget,
   onLoadMore,
@@ -4589,6 +4823,12 @@ const LibraryResults = memo(function LibraryResults({
   // Browse-mode visible slice. Computed unconditionally (hooks order must
   // never depend on the mode) and only used by the browse branch below.
   const visibleIndices = useMemo(() => {
+    // Committed browse result (filter engine, design §10): the match
+    // list IS the window source — slice it directly. This replaces a
+    // second full-order walk here (rankMap membership per record,
+    // with a Proxy id decode per probed record) that repeated the
+    // rank memo's scan cost on every browse render.
+    if (browseIndices) return browseIndices.slice(0, rowBudget);
     if (rankedIndices) return rankedIndices.slice(0, rowBudget);
     const out = [];
     for (let k = 0; k < towerOrder.length && out.length < rowBudget; k++) {
@@ -4596,7 +4836,7 @@ const LibraryResults = memo(function LibraryResults({
       if (rankMap.has(artifacts[i].artifact_id)) out.push(i);
     }
     return out;
-  }, [artifacts, towerOrder, rankMap, rankedIndices, rowBudget]);
+  }, [artifacts, towerOrder, rankMap, rankedIndices, browseIndices, rowBudget]);
   // --------------------- Browse windowing (2026-11-10) -------------------
   // The load-more model used to keep EVERY loaded card mounted: DOM
   // nodes, decoded cover bitmaps and compositor layers grew linearly
