@@ -59,14 +59,30 @@ export async function onRequest(context) {
   // for new texts), otherwise the already-in-flight flat response is
   // used, so a cold text costs one round trip of latency, not two.
   const encoded = encodeURIComponent(file);
+  // Keep the upstream status alongside the response: a 404 is only
+  // honest when BOTH layouts definitively answered 404. Any other
+  // failure (GitHub 5xx, rate limit, network error) is transient —
+  // answering 404 for it tells crawlers a real text does not exist,
+  // so those cases answer 503 with a retry hint instead (error census
+  // 2026-11-11: the old collapse-to-null made every upstream hiccup a
+  // false 404).
   const tryFetch = (u) =>
-    fetch(u, fetchOpts).then((r) => (r.ok ? r : null)).catch(() => null);
+    fetch(u, fetchOpts)
+      .then((r) => ({ status: r.status, body: r.ok ? r.body : null }))
+      .catch(() => ({ status: 0, body: null }));
   const bucketP = tryFetch(ORIGIN + (await bucketPrefix(file)) + encoded);
   const flatP = tryFetch(ORIGIN + encoded);
-  let upstream = await bucketP;
-  if (!upstream) upstream = await flatP;
-  if (!upstream) {
-    return new Response("Not found", { status: 404 });
+  const bucket = await bucketP;
+  const flat = bucket.body ? null : await flatP;
+  const upstream = bucket.body ? bucket : flat;
+  if (!upstream || !upstream.body) {
+    if (bucket.status === 404 && flat && flat.status === 404) {
+      return new Response("Not found", { status: 404 });
+    }
+    return new Response("Text temporarily unavailable", {
+      status: 503,
+      headers: { "Retry-After": "300" },
+    });
   }
 
   const res = new Response(upstream.body, {
