@@ -650,3 +650,95 @@ self-corrects to the scanned truth in ~1.5 s and cannot persist.
 Joshua's phone retest of the exact repro (rapid tapping across
 lanes/eras/curated groups, Low Power Mode included) is the final
 gate, per the standing rule.
+
+## 11. Loading-state fix (2026-11-12 — Joshua's screenshot, 12:07 EST)
+
+Joshua's screenshot, taken seconds after opening the Tower page on his
+phone: Era = 1500s selected, header "208 OF 20000 ENTRIES", a long row
+of faint "0000…" glyphs overflowing the right edge of the results
+region, no result cards anywhere, and a Load More button claiming
+"SHOWING 50 OF 208". His note: the revamp "feels much better… but it
+still feels like the results are loading slow." Diagnosis first,
+reproduced in the harness (bootstrap-only residency held at exactly
+20,000 records, Era=1500s applied, stream then released) before any
+code changed.
+
+### 11.1 The zeros row — a type bug, not a loading placeholder
+
+The engine (§10) commits its match list as a `Uint32Array`
+(`out.slice(0, n)` in filter-engine.js; the baked sort orders are
+`Uint32Array` subarrays too, so the zero-predicate fast path commits
+one as well). `LibraryResults` computed its window as
+`browseIndices.slice(0, rowBudget)` — still a `Uint32Array` — and
+rendered it with `.map(...)`. `TypedArray.prototype.map` coerces
+every callback return value to a number: each React element the
+callback built was converted to `0`. React then rendered the
+resulting typed array as one text node of 50 zeros inside
+`.tower-grid` (rowBudget = 50 — measured live in the harness:
+`.tower-grid` with 0 element children and textContent of exactly 50
+"0" characters; identical in list view via `.tower-rows`). The
+browse window has therefore rendered NO cards at all in any
+engine-committed state since e7fa2d41 — at 20k resident and still at
+1.24M resident in the harness. It throws no JS error, which is why
+the §10 gates (header counts, error counts) never saw it. A second
+victim: the pitch-measurement layout effect counts element children
+of the results container, found none, and never enabled windowing.
+
+Fix: the window memo converts the slice with `Array.from(...)`
+(the slice is ≤ rowBudget entries — the conversion is trivially
+cheap and covers every producer, present and future).
+
+### 11.2 The button's claim was arithmetic, never a measurement
+
+"showing {Math.min(rowBudget, matchCount)}" is computed from the
+budget and the committed count, not from what rendered — so it
+claimed 50 while 0 were on screen. Fix: the label now reads the
+actually-rendered window size (`visibleIndices.length`), so the
+claim can never exceed the rendered list again.
+
+### 11.3 Prefix counts presented as final
+
+Every number in the screenshot is a count of the resident prefix
+(verified against the mirror's bootstrap file: 1500s = 208 exactly;
+DECLASSIFIED 10,572 / BOOKS 6,302 / PAPERS 1,784 / PODCASTS 1,091 /
+DOCUMENTS 176 / REFERENCE 75; LAW absent because no LAW record is
+in the first 20,000). The only streaming disclosure was the plain
+"Loading full catalog…" line — no progress, no total — while the
+results header used the prefix length as its denominator. The true
+total (2,557,923) is known client-side from first paint via the
+browse manifest (`getBrowseTotalHint()`), it just was not shown.
+Fix: the status line now carries progress ("Loading full catalog…
+20,000 of 2,557,923") in the same slot and vocabulary, and while
+streaming the results header's denominator is the true total
+instead of the prefix length. All provisional markers vanish at
+completion; post-load counts are byte-identical to before (parity
+invariant unchanged).
+
+### 11.4 Churn during streaming
+
+The engine effect depends on `artifacts`, so every stream publish
+(~127 chunks) cancelled the running scan and restarted it from
+position 0 over the grown prefix, then committed → rank memo +
+results + panel re-render. Measured in the harness churn window
+(6× CPU throttle, stream released from 20k): 24 committed-result
+rebuilds while ~61 chunks landed, the header count climbing
+208 → 246 step by step, 377 long tasks (max ~1.5 s) sharing the
+main thread with derivation and the stream transposes. On the
+phone this is the "results feel slow, numbers keep moving"
+sensation. Fix: while the catalog is still streaming, a
+length-only change (same selection, longer prefix) re-scans at
+most once per 2 s on a trailing timer; the last committed result
+stays on screen between rebuilds. Selection changes and the final
+(full-residency) publish always scan immediately — per-tap
+behavior after full load is unchanged.
+
+### 11.5 Verification
+
+Harness scenario (this section's repro, after the fix): no
+zero/garbage text node in the results region at 20k or after;
+rendered card count equals the button's "showing" count; the
+provisional line is present while streaming and absent after;
+final post-load counts match ground truth exactly (total
+2,557,923; LAW 1,277,197). The §10 storm test passes unchanged.
+Full `npm run build` + desktop/mobile regression, zero JS errors.
+Joshua's phone remains the final gate.

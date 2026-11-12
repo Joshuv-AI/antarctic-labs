@@ -1017,6 +1017,9 @@ const SEARCH_PAGE_SIZE = 25;
 // next page — the full catalog is never mounted at once, so the DOM stays
 // small and style recalc/paint stay cheap at any catalog size.
 const TOWER_ROWS_PER_PAGE = 50;
+// While the catalog streams in, committed browse results rebuild at
+// most once per this cadence for a length-only change (design §11.4).
+const STREAM_RESCAN_MS = 2000;
 
 // ----- Tower landing discovery zone (revamp 2026-10-21) ------------------
 // Open Library pattern (browse-the-stacks cards + featured cover rails) and
@@ -1617,6 +1620,12 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     setDeriveSeq((n) => n + 1);
   };
   const failed = catalogError || deriveError;
+  // True catalog total from the browse manifest, known from first
+  // paint (design §11.3): while the stream is still arriving, the
+  // status line reports progress against it and the results header
+  // uses it as its denominator, instead of letting the resident
+  // prefix pose as the whole library.
+  const catalogTotalHint = getBrowseTotalHint() || 0;
   // Live search + two-level browse filter + sort. Empty query/filter = show all.
   // bucketFilter is "" (all), a lane ("PAPERS"), or a subcategory
   // ("PAPERS:bio"). Click mechanics are unchanged from the old collection
@@ -1771,6 +1780,12 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // so the header count and the rows always describe the same list.
   const [browseResult, setBrowseResult] = useState(null);
   const browseResultRef = useRef(null);
+  // Streaming rebuild throttle (design §11.4): while the catalog is
+  // still arriving, a length-only change (same selection, longer
+  // resident prefix) re-runs the engine at most once per
+  // STREAM_RESCAN_MS on a trailing timer instead of once per chunk;
+  // the kick state re-enters the effect when the timer fires.
+  const [streamKick, setStreamKick] = useState(0);
   const browseFx = useRef(null);
   if (browseFx.current === null) {
     browseFx.current = {
@@ -1780,6 +1795,8 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       memberFor: null,
       memberLen: 0,
       member: null,
+      lastScanAt: 0,
+      throttleTimer: null,
     };
   }
   // Subcategories added by the 2026-11-11 revamp (LAW, REFERENCE) are
@@ -2245,16 +2262,38 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       len: artifacts.length,
     };
     const cur = browseResultRef.current;
-    if (
+    const sameSel =
       cur &&
       cur.sel.bucketFilter === sel.bucketFilter &&
       cur.sel.eraFilter === sel.eraFilter &&
       cur.sel.collKey === sel.collKey &&
       cur.sel.collSet === sel.collSet &&
-      cur.sel.order === sel.order &&
-      cur.sel.len === sel.len
-    )
-      return undefined;
+      cur.sel.order === sel.order;
+    if (sameSel && cur.sel.len === sel.len) return undefined;
+    // Streaming throttle (§11.4): the selection is unchanged and only
+    // the resident prefix grew, and the catalog is still arriving —
+    // don't restart the scan for every chunk. The committed result
+    // stays on screen; a trailing timer re-enters the effect once
+    // the cadence window has elapsed. Selection changes and the
+    // final publish (fullIndexReady) always scan immediately.
+    if (sameSel && !fullIndexReady) {
+      const now = Date.now();
+      const since = now - fx.lastScanAt;
+      if (fx.lastScanAt && since < STREAM_RESCAN_MS) {
+        if (!fx.throttleTimer) {
+          fx.throttleTimer = setTimeout(() => {
+            fx.throttleTimer = null;
+            setStreamKick((k) => k + 1);
+          }, STREAM_RESCAN_MS - since);
+        }
+        return undefined;
+      }
+    }
+    if (fx.throttleTimer) {
+      clearTimeout(fx.throttleTimer);
+      fx.throttleTimer = null;
+    }
+    fx.lastScanAt = Date.now();
     const gen = ++fx.gen;
     if (fx.job) {
       fx.job.cancel();
@@ -2322,7 +2361,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         fx.job = null;
       }
     };
-  }, [towerData, artifacts, towerOrder, bucketFilter, eraFilter, collSet, collKey, query]);
+  }, [towerData, artifacts, towerOrder, bucketFilter, eraFilter, collSet, collKey, query, fullIndexReady, streamKick]);
   const { rankMap, matchCount, rankedIndices, blendedModel, browseIndices } = useMemo(() => {
     const map = new Map();
     if (!artifacts || !towerData)
@@ -3385,6 +3424,13 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                 {!fullIndexReady && (isIndexInFlight() || isBrowseStreaming()) && (
                   <p className="tower-index-status" aria-live="polite">
                     Loading full catalog…
+                    {catalogTotalHint > 0 &&
+                    artifacts &&
+                    catalogTotalHint > artifacts.length
+                      ? ` ${artifacts.length.toLocaleString(
+                          "en-US"
+                        )} of ${catalogTotalHint.toLocaleString("en-US")}`
+                      : ""}
                   </p>
                 )}
                 {fullIndexReady && towerData && !towerData.haystacks && (!serverFlag || needSearchData) && (
@@ -3759,6 +3805,8 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
               onClearQuery={() => setQuery("")}
               showSkeleton={showSkeleton}
               headingRef={resultsHeadingRef}
+              provisional={!fullIndexReady}
+              totalHint={catalogTotalHint}
               q={q}
               rawQuery={query}
               go={go}
@@ -4945,6 +4993,8 @@ const LibraryResults = memo(function LibraryResults({
   onClearQuery,
   showSkeleton,
   headingRef,
+  provisional,
+  totalHint,
   q,
   rawQuery,
   go,
@@ -4959,8 +5009,15 @@ const LibraryResults = memo(function LibraryResults({
     // second full-order walk here (rankMap membership per record,
     // with a Proxy id decode per probed record) that repeated the
     // rank memo's scan cost on every browse render.
-    if (browseIndices) return browseIndices.slice(0, rowBudget);
-    if (rankedIndices) return rankedIndices.slice(0, rowBudget);
+    // Array.from is load-bearing (design §11.1): browseIndices is a
+    // Uint32Array (the engine commits typed-array slices, and the
+    // baked sort orders are typed subarrays), and
+    // TypedArray.prototype.map coerces every mapped value to a
+    // number — the card elements became 0s and the window rendered
+    // as a text node of raw zeros with no cards at all. The slice
+    // is at most rowBudget long, so the conversion is trivial.
+    if (browseIndices) return Array.from(browseIndices.slice(0, rowBudget));
+    if (rankedIndices) return Array.from(rankedIndices.slice(0, rowBudget));
     const out = [];
     for (let k = 0; k < towerOrder.length && out.length < rowBudget; k++) {
       const i = towerOrder[k];
@@ -5230,7 +5287,10 @@ const LibraryResults = memo(function LibraryResults({
   return (
     <>
       <p className="tower-result-count" aria-live="polite">
-        {matchCount} of {artifacts.length}{" "}
+        {matchCount} of{" "}
+        {provisional && totalHint > artifacts.length
+          ? totalHint
+          : artifacts.length}{" "}
         {artifacts.length === 1 ? "entry" : "entries"}
         {q ? ` matching “${q}”` : ""}
       </p>
@@ -5304,7 +5364,7 @@ const LibraryResults = memo(function LibraryResults({
           className="tower-load-more"
           onClick={onLoadMore}
         >
-          Load more — showing {Math.min(rowBudget, matchCount)} of {matchCount}
+          Load more — showing {browseCount} of {matchCount}
         </button>
       )}
     </>
