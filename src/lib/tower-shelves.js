@@ -296,26 +296,10 @@ export const RAIL_ESSENTIAL = [
   "tob-0214",
 ];
 
-export const STACKS_POOL = [
-  "tob-10233",
-  "i-ching-legge-1882",
-  "frankenstein-1818",
-  "tob-10816",
-  "federalist-papers",
-  "melville-moby-dick-1851",
-  "tob-4107",
-  "kojiki-chamberlain-1882",
-  "pentagon-papers-vol-3",
-  "austen-pride-and-prejudice-1813",
-  "tob-13328",
-  "epictetus-discourses-enchiridion-matheson",
-  "english-bill-of-rights-1689",
-  "bronte-jane-eyre-1847",
-  "tibetan-book-of-dead-evans-wentz-1927",
-  "virgil-aeneid-dryden-1697",
-  "kalpa-sutra-jacobi-1884",
-  "tob-4274-d1",
-];
+// STACKS_POOL (the "From the stacks" weekly-rotation pool) was
+// removed 2026-11-11 with the section itself, on Joshua's order —
+// the rail no longer renders on the landing, and nothing else
+// consumed the pool.
 
 // --- Per-category grouped showcases (2026-10-21 category panels) ---------
 // Each stack card, when selected, swaps the Featured rails for its own

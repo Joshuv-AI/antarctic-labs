@@ -337,7 +337,6 @@ function App() {
   // via client-side navigation (the index.html overlay only covers the
   // initial page load). Dismissed when the library reports it has painted.
   const [towerBoot, setTowerBoot] = useState(false);
-  const [towerBootLeaving, setTowerBootLeaving] = useState(false);
   const towerBootStarted = useRef(0);
   const towerBootTimers = useRef([]);
   const clearTowerBootTimers = () => {
@@ -345,13 +344,14 @@ function App() {
     towerBootTimers.current = [];
   };
   const dismissTowerBoot = useCallback(() => {
+    // Instant removal, NO fade (2026-11-11 presentation fix): the
+    // old 650 ms opacity crossfade composited the boot title
+    // semi-transparently over the painted page — two titles ghosted
+    // at once in Joshua's phone video. The overlay is fully opaque
+    // for its whole life and then is gone; it is never visible
+    // simultaneously with page content.
     clearTowerBootTimers();
-    setTowerBootLeaving(true);
-    const t = setTimeout(() => {
-      setTowerBoot(false);
-      setTowerBootLeaving(false);
-    }, 650);
-    towerBootTimers.current.push(t);
+    setTowerBoot(false);
   }, []);
   const handleTowerReady = useCallback(() => {
     // Keep the loader up for at least ~1.1s so the animation reads.
@@ -366,7 +366,6 @@ function App() {
   // Either way the overlay can never trap the user.
   const raiseTowerBoot = useCallback(() => {
     clearTowerBootTimers();
-    setTowerBootLeaving(false);
     setTowerBoot(true);
     towerBootStarted.current = Date.now();
     // Prefetch the bootstrap chunk now (43KB, instant) — the route awaits
@@ -615,7 +614,7 @@ function App() {
         active={transitioning}
         label={pathLabel(path)}
       />
-      {towerBoot && <TowerBoot leaving={towerBootLeaving} />}
+      {towerBoot && <TowerBoot />}
       {brandBoot && <BrandLoader leaving={brandBootLeaving} />}
       {/* Route content + its background layers: one error boundary (fresh
           per path, so a failed route can't poison the next navigation) and
@@ -800,13 +799,10 @@ function PageCurtain({ active, label }) {
 }
 // Tower of Babel boot loader for in-app navigation into the library.
 // Same visual language as the initial-load overlay in index.html.
-function TowerBoot({ leaving }) {
+function TowerBoot() {
   const word = "Tower of Babel";
   return (
-    <div
-      className={`tower-boot${leaving ? " is-leaving" : ""}`}
-      aria-hidden="true"
-    >
+    <div className="tower-boot" aria-hidden="true">
       <div className="tb-boot-inner">
         <div className="tb-boot-brand">ANTARCTIC LABS</div>
         <div className="tb-boot-title">

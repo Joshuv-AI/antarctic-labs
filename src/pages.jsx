@@ -83,7 +83,6 @@ import {
   STACK_GROUPS,
   TRADITIONS,
   RAIL_ESSENTIAL,
-  STACKS_POOL,
 } from "./lib/tower-shelves.js";
 // The build-time manifest of hosted tower texts (2.4MB at current scale)
 // is NOT statically imported: it would ride inside the lazy pages chunk and
@@ -1185,7 +1184,44 @@ function CategoryGroups({ stack, byId, artifacts, go }) {
   );
 }
 
-function TowerDiscovery({ artifacts, towerData, go, onBrowse, onShelfChange }) {
+const EMPTY_FACES = [null, null, null];
+// One "Browse the stacks" card (2026-11-11 presentation-stability
+// fix). Memoized: the collage re-renders only when a face slot locks
+// (the faces array identity changes) — the catalog publishes that
+// stream past during the load never touch the covers again. The three
+// face slots always render, locked or not: an unresolved slot is the
+// bare .stack-face spine (fixed geometry), so the card's box can
+// never change size as covers arrive. A sub-bucket count of null is
+// the held state (derivation not final): a steady dash, same line
+// box, no ticking numbers.
+const StackCard = memo(function StackCard({ stackDef, faces, count, active, onSelect }) {
+  const isSub = stackDef.bucket.indexOf(":") >= 0;
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      className={`stack-card${active ? " is-active" : ""}`}
+      onClick={() => onSelect(stackDef.bucket)}
+    >
+      <span className="stack-collage" aria-hidden="true">
+        {[0, 1, 2].map((k) => (
+          <span className={`stack-face stack-face-${k}`} key={k}>
+            {faces[k] ? <TowerCover a={faces[k]} /> : null}
+          </span>
+        ))}
+      </span>
+      <span className="stack-label">{stackDef.label}</span>
+      <span className="stack-count">
+        {isSub && count == null
+          ? "— works"
+          : `${(count || 0).toLocaleString()} works`}
+      </span>
+    </button>
+  );
+});
+
+function TowerDiscovery({ artifacts, towerData, countsFinal, go, onBrowse, onShelfChange }) {
   // Resolve curated ids through the derivation's phase-0 id index
   // (published with the first partial, so shelves are whole the
   // moment the catalog itself lands — the earlier objection was to
@@ -1242,11 +1278,54 @@ function TowerDiscovery({ artifacts, towerData, go, onBrowse, onShelfChange }) {
   }, []);
   const popularItems = popularIds ? popularIds.map(byId).filter(Boolean) : null;
   const showPopular = !!popularItems && popularItems.length >= 4;
+  // Locked collage slots (2026-11-11 presentation-stability fix): each
+  // stack card has exactly three face slots, bound POSITIONALLY to the
+  // stack's curated cover ids. A slot renders a neutral placeholder
+  // spine until its own record resolves, then locks to that record
+  // forever — later publishes never re-pick, re-position, or replace
+  // it. The old render (covers.map(byId).filter(Boolean).slice(0, 3))
+  // compacted whichever subset had resolved so far into slots 0..n,
+  // so every publish visibly swapped faces and sides on the cards
+  // (Joshua's 18:28 phone video). Slots fill from the phase-0 id
+  // index / artifact map as records arrive; the state update is a
+  // no-op unless a new slot actually locks, so publishes that resolve
+  // nothing new don't re-render the grid at all.
+  const [lockedFaces, setLockedFaces] = useState({});
+  useEffect(() => {
+    setLockedFaces((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const s of STACKS) {
+        const cur = next[s.bucket] ? next[s.bucket].slice() : [null, null, null];
+        let dirty = false;
+        for (let k = 0; k < 3; k++) {
+          if (!cur[k]) {
+            const rec = byId(s.covers[k]);
+            if (rec) {
+              cur[k] = rec;
+              dirty = true;
+            }
+          }
+        }
+        if (dirty) {
+          next[s.bucket] = cur;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [byId]);
   // The stacks are a selector (2026-10-21 category panels): nothing is
   // selected by default — the Featured rails own the page. Selecting a
   // stack swaps Featured for that category's shelf + grouped showcase;
   // selecting it again returns to Featured.
   const [shelf, setShelf] = useState(null);
+  // Stable identity so the memoized stack cards don't re-render on
+  // unrelated publishes (see StackCard above).
+  const onSelectStack = useCallback(
+    (bucket) => setShelf((cur) => (cur === bucket ? null : bucket)),
+    []
+  );
   // Report selection upward: while a shelf is open the browse/results
   // section below hides, exactly like the Featured rails swap out.
   useEffect(() => {
@@ -1259,16 +1338,19 @@ function TowerDiscovery({ artifacts, towerData, go, onBrowse, onShelfChange }) {
     [onShelfChange],
   );
   const stack = shelf ? STACKS.find((s) => s.bucket === shelf) || null : null;
+  // Sub-bucket counts (only BOOKS:sacred) have no static total: the
+  // derivation feeds them and they tick upward all load long
+  // (986 → 1,042 in Joshua's 18:28 video). Hold the number until the
+  // derivation is final over the full catalog; null renders a steady
+  // dash in the panel header. Top-level counts come from the seeded
+  // discoveryData and are steady already.
   const shelfCount = !stack
     ? 0
     : stack.bucket.indexOf(":") >= 0
-      ? towerData.subCounts[stack.bucket] || 0
+      ? countsFinal
+        ? towerData.subCounts[stack.bucket] || 0
+        : null
       : towerData.counts[stack.bucket] || 0;
-  // "From the stacks" rotates a fixed slice of the pool by week —
-  // curation, honestly labeled (the catalog has no usage or date data).
-  const week = Math.floor(Date.now() / (7 * 24 * 3600 * 1000));
-  const pool = STACKS_POOL;
-  const rotated = pool.map((_, k) => pool[(k + week) % pool.length]).slice(0, 8);
   return (
     <div className="tower-discovery">
       <div className="tower-block-head">
@@ -1276,32 +1358,21 @@ function TowerDiscovery({ artifacts, towerData, go, onBrowse, onShelfChange }) {
       </div>
       <div className="stacks-grid" role="tablist" aria-label="Browse the stacks">
         {STACKS.map((s) => {
-          const count =
-            s.bucket.indexOf(":") >= 0
+          const isSub = s.bucket.indexOf(":") >= 0;
+          const count = isSub
+            ? countsFinal
               ? towerData.subCounts[s.bucket] || 0
-              : towerData.counts[s.bucket] || 0;
-          const faces = s.covers.map(byId).filter(Boolean).slice(0, 3);
+              : null
+            : towerData.counts[s.bucket] || 0;
           return (
-            <button
+            <StackCard
               key={s.bucket}
-              type="button"
-              role="tab"
-              aria-selected={shelf === s.bucket}
-              className={`stack-card${shelf === s.bucket ? " is-active" : ""}`}
-              onClick={() => setShelf(shelf === s.bucket ? null : s.bucket)}
-            >
-              <span className="stack-collage" aria-hidden="true">
-                {faces.map((a, k) => (
-                  <span className={`stack-face stack-face-${k}`} key={a.artifact_id}>
-                    <TowerCover a={a} />
-                  </span>
-                ))}
-              </span>
-              <span className="stack-label">{s.label}</span>
-              <span className="stack-count">
-                {count.toLocaleString()} works
-              </span>
-            </button>
+              stackDef={s}
+              faces={lockedFaces[s.bucket] || EMPTY_FACES}
+              count={count}
+              active={shelf === s.bucket}
+              onSelect={onSelectStack}
+            />
           );
         })}
       </div>
@@ -1311,7 +1382,10 @@ function TowerDiscovery({ artifacts, towerData, go, onBrowse, onShelfChange }) {
             <div>
               <h3 className="shelf-title">{stack.label}</h3>
               <p className="shelf-blurb">
-                {stack.blurb} · {shelfCount.toLocaleString()} works
+                {stack.blurb}
+                {shelfCount == null
+                  ? ""
+                  : ` · ${shelfCount.toLocaleString()} works`}
               </p>
             </div>
             <button
@@ -1361,7 +1435,6 @@ function TowerDiscovery({ artifacts, towerData, go, onBrowse, onShelfChange }) {
             go={go}
             wide
           />
-          <CoverRail title="From the stacks" items={rotated.map(byId)} go={go} />
           </div>
         </>
       )}
@@ -1389,6 +1462,16 @@ function TowerLibrarySection({ go, onReady }) {
   // loader failsafe guarantees the overlay dismisses either way.
   const [deriveError, setDeriveError] = useState(false);
   const [deriveSeq, setDeriveSeq] = useState(0);
+  // Derivation completion for the CURRENT artifacts (2026-11-11
+  // presentation-stability fix): flips false whenever a derivation
+  // run starts and true only when that run resolves over the array
+  // as it now stands. Combined with fullIndexReady it marks the one
+  // moment the derivation's counts describe the WHOLE catalog —
+  // until then the header/stacks must read the hubs seed (or hold),
+  // never a partial derivation count: Joshua's 18:28 phone video
+  // caught "6 collections" flipping to 7 mid-load because a partial
+  // derivation (DOCUMENTS' 363 records arrive last) won the header.
+  const [deriveFinal, setDeriveFinal] = useState(false);
   // Deferred-search trigger (2026-11-10 crash fix): flips true the
   // first time a hub filter or strict query needs the local search
   // layer in server mode; the derivation then upgrades in place.
@@ -1405,9 +1488,11 @@ function TowerLibrarySection({ go, onReady }) {
   useEffect(() => {
     if (!artifacts) {
       setTowerData(null);
+      setDeriveFinal(false);
       return;
     }
     let cancelled = false;
+    setDeriveFinal(false);
     deriveTowerData(
       artifacts,
       () => cancelled,
@@ -1430,8 +1515,10 @@ function TowerLibrarySection({ go, onReady }) {
     ).then(
       (data) => {
         if (cancelled) return;
-        if (data) setTowerData(data);
-        else setDeriveError(true);
+        if (data) {
+          setTowerData(data);
+          setDeriveFinal(true);
+        } else setDeriveError(true);
       },
       () => {
         if (!cancelled) setDeriveError(true);
@@ -1901,19 +1988,27 @@ function TowerLibrarySection({ go, onReady }) {
   // these, so they show the library's real totals from first paint.
   const [serverCounts, setServerCounts] = useState(null);
   const [serverTotal, setServerTotal] = useState(null);
-  // Stats-strip collection count: the hubs seed's collection count
-  // (the library's real seven) while the catalog streams, the
-  // derivation's lane list once the full index is in. The scan this
-  // replaces ran over EVERY published prefix — at 2.5M records
-  // through the column view it materialized a record per entry on
-  // every publish, a multi-hundred-ms task repeating all stream
-  // long on a phone. The scan remains only as the pre-derivation
-  // fallback, where it runs at bootstrap scale (20,000 records).
+  // Stats-strip collection count (2026-11-11 presentation-stability
+  // fix): the ONLY truthful values are the hubs seed's count (the
+  // library's real seven, static truth) and the derivation's count
+  // once the derivation has completed over the FULL catalog
+  // (fullIndexReady && deriveFinal). A partial derivation count never
+  // displays: the previous logic fell back to the derivation (or a
+  // bootstrap Set scan) whenever the seed hadn't landed or the moment
+  // fullIndexReady flipped — both read the resident prefix, which
+  // lacks DOCUMENTS until the stream's tail, so the header showed 6
+  // and flipped to 7 mid-load in Joshua's 18:28 phone video. Before
+  // the seed lands the value holds at the last truthful one shown,
+  // or null (the strip renders a steady dash) if none has.
+  const truthfulCollRef = useRef(null);
   const collectionsCount = useMemo(() => {
-    if (serverCounts && !fullIndexReady) return Object.keys(serverCounts).length;
-    if (towerData) return towerData.collections.length;
-    return artifacts ? new Set(artifacts.map((a) => a.collection)).size : 0;
-  }, [artifacts, towerData, serverCounts, fullIndexReady]);
+    let v = null;
+    if (fullIndexReady && deriveFinal && towerData)
+      v = towerData.collections.length;
+    else if (serverCounts) v = Object.keys(serverCounts).length;
+    if (v != null) truthfulCollRef.current = v;
+    return v != null ? v : truthfulCollRef.current;
+  }, [artifacts, towerData, serverCounts, fullIndexReady, deriveFinal]);
   const towerOrder = towerData
     ? towerData.order
       ? towerData.order[sortId] || towerData.order["title-asc"]
@@ -2386,16 +2481,21 @@ function TowerLibrarySection({ go, onReady }) {
   // drives the stack counts (serverCounts override below) and the
   // search result totals, where it is labeled as a total.
   const displayCount = artifacts ? artifacts.length : 0;
-  // Stack counts in server mode: hubs counts override the bootstrap's
-  // partial collection counts until the full index is in (after which
-  // towerData.counts is complete and authoritative).
+  // Stack counts in server mode: hubs counts override the derivation's
+  // partial collection counts until the derivation has completed over
+  // the full catalog (fullIndexReady && deriveFinal), after which
+  // towerData.counts is complete and authoritative. The override used
+  // to drop the moment fullIndexReady flipped — one publish before
+  // the final derivation landed — flashing partial counts at the
+  // completion boundary (2026-11-11 presentation-stability fix).
   const discoveryData = useMemo(() => {
-    if (!towerData || !serverCounts || fullIndexReady) return towerData;
+    if (!towerData || !serverCounts || (fullIndexReady && deriveFinal))
+      return towerData;
     return {
       ...towerData,
       counts: { ...towerData.counts, ...serverCounts },
     };
-  }, [towerData, serverCounts, fullIndexReady]);
+  }, [towerData, serverCounts, fullIndexReady, deriveFinal]);
   const adaptServerItem = (r, tokens) => {
     const nt = normText(r.title || "");
     const nc = normText(r.creator || "");
@@ -2687,10 +2787,10 @@ function TowerLibrarySection({ go, onReady }) {
           <>
             <div className="tower-stats" aria-label="The library at a glance">
               <span>
-                <strong>{displayCount.toLocaleString()}</strong> works
+                <strong className="ts-num ts-works">{displayCount.toLocaleString()}</strong> works
               </span>
               <span>
-                <strong>{collectionsCount}</strong> collections
+                <strong className="ts-num ts-coll">{collectionsCount == null ? "–" : collectionsCount}</strong> collections
               </span>
               <span>
                 <strong>{TRADITIONS.length}</strong> sacred traditions
@@ -2783,21 +2883,30 @@ function TowerLibrarySection({ go, onReady }) {
                   </p>
                 </form>
               </search>
-              {!fullIndexReady && (isIndexInFlight() || isBrowseStreaming()) && (
-                <p className="tower-index-status" aria-live="polite">
-                  Loading full catalog…
-                </p>
-              )}
-              {fullIndexReady && towerData && !towerData.haystacks && (!serverFlag || needSearchData) && (
-                <p className="tower-index-status" aria-live="polite">
-                  Indexing the catalog for search…
-                </p>
-              )}
+              {/* Status lines live in a fixed-height slot (2026-11-11
+                  presentation fix): "Loading full catalog…" used to
+                  vanish the moment the stream completed, yanking the
+                  stacks grid below it up by the line's height (~68px)
+                  in the middle of the page. The slot reserves one
+                  line's space whether a status is showing or not. */}
+              <div className="tower-status-slot">
+                {!fullIndexReady && (isIndexInFlight() || isBrowseStreaming()) && (
+                  <p className="tower-index-status" aria-live="polite">
+                    Loading full catalog…
+                  </p>
+                )}
+                {fullIndexReady && towerData && !towerData.haystacks && (!serverFlag || needSearchData) && (
+                  <p className="tower-index-status" aria-live="polite">
+                    Indexing the catalog for search…
+                  </p>
+                )}
+              </div>
             </div>
             {!q && !bucketFilter && !collKey && (
               <TowerDiscovery
                 artifacts={artifacts}
                 towerData={discoveryData}
+                countsFinal={fullIndexReady && deriveFinal}
                 go={go}
                 onBrowse={browseTo}
                 onShelfChange={setShelfActive}
