@@ -35,17 +35,41 @@ const FIELD_WEIGHTS = [
 const pointers = new Map(); // root -> { fp, at }
 const fileCache = new Map(); // `${base}/${path}` -> Promise<json|null>
 
+// Upstream fetches get a hard timeout: an untimeouted fetch that
+// hangs under load stalls the whole invocation until the platform
+// kills it (the /api/browse-manifest 504s — 2026-11-12, Tail A).
+const FETCH_TIMEOUT_MS = 2500;
+async function fetchT(url) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { signal: ctl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function resolveBase(env) {
   const root = (env && env.CATALOG_META_BASE) || DEFAULT_BASE;
   const now = Date.now();
   const hit = pointers.get(root);
   if (hit && now - hit.at < 60_000) return { root, fp: hit.fp };
-  const res = await fetch(`${root}/meta/latest.json`);
-  if (!res.ok) return { root, fp: null };
-  const body = await res.json().catch(() => null);
-  const fp = body && typeof body.fingerprint === "string" ? body.fingerprint : null;
-  if (fp) pointers.set(root, { fp, at: now });
-  return { root, fp };
+  try {
+    const res = await fetchT(`${root}/meta/latest.json`);
+    if (res.ok) {
+      const body = await res.json().catch(() => null);
+      const fp = body && typeof body.fingerprint === "string" ? body.fingerprint : null;
+      if (fp) {
+        pointers.set(root, { fp, at: now });
+        return { root, fp };
+      }
+    }
+  } catch {
+    // fall through to the last known fingerprint
+  }
+  // Upstream failed or timed out: serve the last known fingerprint
+  // instead of failing every caller (2026-11-12, Tail A).
+  return { root, fp: hit ? hit.fp : null };
 }
 
 // Browse-manifest helper for /api/browse-manifest (2026-11-10 load-
@@ -54,29 +78,50 @@ async function resolveBase(env) {
 // fingerprint is current, the catalog total, and the baked page
 // layout (absent on manifests generated before the pack, which the
 // client reads as "static pages not built — use the function").
-// The manifest is immutable per fingerprint, so it is cached for the
-// isolate's life once read.
-const manifestCache = new Map(); // fp -> manifest json
+// The manifest is immutable per fingerprint, so the RESOLVED value
+// is cached for the isolate's life once read. The in-flight promise
+// is dropped the moment it settles (2026-11-12, Tail A): caching the
+// promise itself let one hung fetch poison every later request in
+// the isolate — each awaited the same never-settling promise until
+// the platform timed the invocation out.
+const manifestCache = new Map(); // fp -> manifest json (resolved values only)
+const manifestPending = new Map(); // fp -> in-flight Promise, dropped on settle
+let lastManifestOut = null; // last good browse-manifest document (any fp)
 export async function catalogManifest(env) {
   const { root, fp } = await resolveBase(env);
-  if (!fp) return null;
+  if (!fp) return lastManifestOut;
   if (!manifestCache.has(fp)) {
-    manifestCache.set(
-      fp,
-      fetch(`${root}/meta/${fp}/manifest.json`)
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null)
-    );
+    if (!manifestPending.has(fp)) {
+      manifestPending.set(
+        fp,
+        (async () => {
+          try {
+            const r = await fetchT(`${root}/meta/${fp}/manifest.json`);
+            const m = r.ok ? await r.json().catch(() => null) : null;
+            if (m) manifestCache.set(fp, m);
+            return m;
+          } catch {
+            return null;
+          } finally {
+            manifestPending.delete(fp);
+          }
+        })()
+      );
+    }
+    await manifestPending.get(fp);
   }
-  const manifest = await manifestCache.get(fp);
-  if (!manifest) return null;
-  return {
+  const manifest = manifestCache.get(fp);
+  // Upstream failure: fall back to the last known good document
+  // rather than failing the request (2026-11-12, Tail A).
+  if (!manifest) return lastManifestOut;
+  lastManifestOut = {
     fingerprint: fp,
     total: manifest.total,
     browse_page_size: manifest.browse_page_size ?? null,
     browse_pages: manifest.browse_pages ?? null,
     orders: manifest.orders ?? null,
   };
+  return lastManifestOut;
 }
 
 export async function catalogSearch(env, { q = "", filters = {}, cursor = 0, pageSize = 25 } = {}) {
