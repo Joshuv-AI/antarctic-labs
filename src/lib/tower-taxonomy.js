@@ -17,9 +17,60 @@
 // exactly one subcategory of that collection (verified by
 // parity-test.mjs against the live catalog).
 
+// --- Era axis (filter revamp 2026-11-11) ----------------------------------
+// The catalog projection carries a real `year` on the overwhelming
+// majority of records (audited over the full 2,557,923-entry live
+// catalog, 2026-11-11), so era is an honest second axis: flat,
+// chronological, composable with the collection lanes and the curated
+// collections. Buckets are periods a reader actually thinks in —
+// centuries for the early material, generations for the modern flood
+// (a flat "2000s" bucket would hold ~90% of the papers lane). Order is
+// chronological: position along the row IS time. A record with no
+// usable year (0/missing in the projection) is era code 0 — it matches
+// NO era selection and is never dressed up as an era of its own; the
+// option counts make its size visible by subtraction.
+export const TOWER_ERAS = [
+  { id: "before-1500", label: "Before 1500" },
+  { id: "1500s", label: "1500s" },
+  { id: "1600s", label: "1600s" },
+  { id: "1700s", label: "1700s" },
+  { id: "1800s", label: "1800s" },
+  { id: "1900-1945", label: "1900–1945" },
+  { id: "1946-1989", label: "1946–1989" },
+  { id: "1990-2009", label: "1990–2009" },
+  { id: "2010s", label: "2010s" },
+  { id: "2020s", label: "2020–today" },
+];
+
+// Era code for a catalog year: 0 = unknown, else TOWER_ERAS index + 1.
+// Negative years (BCE works) fall in "Before 1500" like everything
+// else pre-1500. Strings coerce the way the projection sometimes
+// stores them; anything unparseable is unknown.
+export function towerEraCode(year) {
+  let y = year;
+  if (typeof y === "string") y = parseInt(y, 10);
+  if (typeof y !== "number" || !Number.isFinite(y) || y === 0) return 0;
+  if (y < 1500) return 1;
+  if (y < 1600) return 2;
+  if (y < 1700) return 3;
+  if (y < 1800) return 4;
+  if (y < 1900) return 5;
+  if (y <= 1945) return 6;
+  if (y <= 1989) return 7;
+  if (y <= 2009) return 8;
+  if (y <= 2019) return 9;
+  return 10;
+}
+
+export function towerEraLabel(eraId) {
+  const e = TOWER_ERAS.find((x) => x.id === eraId);
+  return e ? e.label : "";
+}
+
 // Display names for the top-level lanes.
 export const TOWER_TOP_LABELS = {
   PAPERS: "Papers",
+  LAW: "Law",
   DECLASSIFIED: "Declassified",
   BOOKS: "Books",
   REFERENCE: "Reference",
@@ -27,13 +78,23 @@ export const TOWER_TOP_LABELS = {
   PODCASTS: "Podcasts",
 };
 
+// Lanes whose subcategories were added by the 2026-11-11 filter revamp.
+// The server-side facet products (R2, built by
+// scripts/build-catalog-meta.mjs on the publish cycle) predate these
+// subcategories, so a server-mode search filtered by one of them would
+// find no bucket postings. Searches under these lanes' subcategories
+// therefore run on the client pipeline — the same boundary curated
+// collections already use — until the next meta rebuild. Lane-level
+// (whole-collection) server search is unaffected.
+export const TOWER_CLIENT_ONLY_SUB_LANES = ["LAW", "REFERENCE"];
+
 // Subcategory definitions per collection. `id` is collection-scoped and
 // stable (used in filter state as "COLLECTION:sub"). Order = display order
 // (largest first, like Internet Archive's top-N facet ordering).
 export const TOWER_SUBS = {
   PAPERS: [
     { id: "bio", label: "Biomedical & Life Sciences" },
-    { id: "cs", label: "Physics, Math & Computing" },
+    { id: "cs", label: "arXiv Preprints — All Fields" },
     { id: "plos", label: "PLOS Journals" },
     { id: "energy", label: "Energy Research" },
     { id: "space", label: "Space & Aeronautics" },
@@ -53,7 +114,25 @@ export const TOWER_SUBS = {
     { id: "sacred", label: "Sacred & Religious Texts" },
     { id: "philo", label: "Philosophy & Esoteric" },
   ],
-  REFERENCE: [],
+  // LAW subcategories (2026-11-11 filter revamp, from the full-catalog
+  // audit): the lane is three federal sources — Federal Register
+  // 1,008,664 · Code of Federal Regulations 217,658 · U.S. Code 50,875
+  // = 100% named coverage, zero "Other" in practice.
+  LAW: [
+    { id: "fr", label: "Federal Register" },
+    { id: "cfr", label: "Code of Federal Regulations" },
+    { id: "usc", label: "U.S. Code" },
+    { id: "other", label: "Other Law" },
+  ],
+  // REFERENCE subcategories (2026-11-11): the three great encyclopedias
+  // are the lane — Britannica 16,578 · Jewish Encyclopedia 12,943 ·
+  // Catholic Encyclopedia 11,541 · everything else 75 records.
+  REFERENCE: [
+    { id: "britannica", label: "Encyclopædia Britannica (1911)" },
+    { id: "jewish", label: "Jewish Encyclopedia" },
+    { id: "catholic", label: "Catholic Encyclopedia" },
+    { id: "other", label: "Dictionaries & Other Reference" },
+  ],
   DOCUMENTS: [
     { id: "founding", label: "Laws & Founding Documents" },
     { id: "trials", label: "Trials & Investigations" },
@@ -151,6 +230,20 @@ export function towerSubIdForPrefix(col, p) {
       if (/^podcast-(joerogan|powerfuljre)/.test(p)) return "joerogan";
       if (/^podcast-dannyjones/.test(p)) return "dannyjones";
       if (/^podcast-tuckercarlson/.test(p)) return "tuckercarlson";
+      return "other";
+    case "LAW":
+      // uslaw-<source>-… ids (2026-11-11): the lane is exactly three
+      // federal sources; anything else lands in the catch-all.
+      if (/^uslaw-fr/.test(p)) return "fr";
+      if (/^uslaw-cfr/.test(p)) return "cfr";
+      if (/^uslaw-usc/.test(p)) return "usc";
+      return "other";
+    case "REFERENCE":
+      // The lane is three named encyclopedias plus a small dictionary
+      // tail (2026-11-11 audit: 75 records outside the three).
+      if (/^britannica-1911/.test(p)) return "britannica";
+      if (/^jewish-encyclopedia/.test(p)) return "jewish";
+      if (/^catholic-encyclopedia/.test(p)) return "catholic";
       return "other";
     default:
       return "";

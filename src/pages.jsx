@@ -61,8 +61,12 @@ import {
 import {
   TOWER_TOP_LABELS,
   TOWER_SUBS,
+  TOWER_ERAS,
+  TOWER_CLIENT_ONLY_SUB_LANES,
   towerBucketKey,
   towerBucketKeyForParts,
+  towerEraCode,
+  towerEraLabel,
   towerSubLabel,
 } from "./lib/tower-taxonomy.js";
 // Collections browser (2026-10-24): the old hub pages were deleted and
@@ -658,6 +662,23 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
   const subCounts = extendsPrev ? { ...prev0.subCounts } : {};
   const bucketKeys = extendsPrev ? prev0.bucketKeys.slice() : new Array(artifacts.length);
   bucketKeys.length = artifacts.length;
+  // Era axis (filter revamp 2026-11-11): one era code per record
+  // (Uint8Array, ~2.6 MB at full catalog — bounded, typed, no strings),
+  // era totals, and bucket×era intersection counts, all computed in
+  // the same sliced phase-0 pass below. The intersections are what let
+  // the results memo answer any bucket+era result count in O(1)
+  // instead of re-scanning the catalog on every filter change (the
+  // old selection delay). Lane-level intersections are accumulated
+  // alongside sub-level ones so a lane filter + era also resolves.
+  const eraCounts = extendsPrev ? { ...prev0.eraCounts } : {};
+  const bucketEraCounts = extendsPrev ? { ...prev0.bucketEraCounts } : {};
+  let eraCodes;
+  if (extendsPrev && prev0.eraCodes) {
+    eraCodes = new Uint8Array(artifacts.length);
+    eraCodes.set(prev0.eraCodes);
+  } else {
+    eraCodes = new Uint8Array(artifacts.length);
+  }
   // Id index (2026-11-10 columnar pass): an open-addressing hash table
   // over Uint32 slots (~33 MB at full catalog) replaces the 2.56M-entry
   // Map (~150-250 MB with its key table) — same .get(id) contract for
@@ -729,6 +750,10 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
     artifacts && typeof artifacts.__columnCollectionAt === "function"
       ? artifacts.__columnCollectionAt
       : null;
+  const yearAt =
+    artifacts && typeof artifacts.__columnYearAt === "function"
+      ? artifacts.__columnYearAt
+      : null;
   // Time-sliced (2026-11-11 phone load fix): this tail pass used to
   // run synchronously to completion on every publish — at phone speed
   // a >50 ms main-thread task per publish, stacked on the stream's own
@@ -754,6 +779,19 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
       );
       bucketKeys[pi] = bk;
       subCounts[bk] = (subCounts[bk] || 0) + 1;
+      const ec = towerEraCode(yearAt ? yearAt(pi) : artifacts[pi].year);
+      eraCodes[pi] = ec;
+      if (ec) {
+        const eid = TOWER_ERAS[ec - 1].id;
+        eraCounts[eid] = (eraCounts[eid] || 0) + 1;
+        const bek = bk + "|" + eid;
+        bucketEraCounts[bek] = (bucketEraCounts[bek] || 0) + 1;
+        const ci = bk.indexOf(":");
+        if (ci > 0) {
+          const lek = bk.slice(0, ci) + "|" + eid;
+          bucketEraCounts[lek] = (bucketEraCounts[lek] || 0) + 1;
+        }
+      }
       if ((pi & 1023) === 1023 && performance.now() - t0 >= PHASE0_SLICE_MS) {
         pi++;
         break;
@@ -784,6 +822,9 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
       counts,
       subCounts,
       bucketKeys,
+      eraCodes,
+      eraCounts,
+      bucketEraCounts,
       idIndex,
     };
   }
@@ -800,6 +841,9 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
     counts,
     subCounts,
     bucketKeys,
+    eraCodes,
+    eraCounts,
+    bucketEraCounts,
     collections,
     idIndex,
     order: null,
@@ -879,6 +923,9 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
     counts: up ? up.counts : counts,
     subCounts: up ? up.subCounts : subCounts,
     bucketKeys: up ? up.bucketKeys : bucketKeys,
+    eraCodes: up ? up.eraCodes : eraCodes,
+    eraCounts: up ? up.eraCounts : eraCounts,
+    bucketEraCounts: up ? up.bucketEraCounts : bucketEraCounts,
     collections: up ? up.collections : collections,
     order: up ? up.order : null,
   };
@@ -1393,7 +1440,9 @@ function TowerDiscovery({ artifacts, towerData, countsFinal, go, onBrowse, onShe
               className="shelf-seeall"
               onClick={() => onBrowse(stack.bucket)}
             >
-              See all ›
+              {shelfCount == null
+                ? "See all ›"
+                : `See all ${shelfCount.toLocaleString()} works ›`}
             </button>
           </div>
           <CoverRail
@@ -1544,6 +1593,11 @@ function TowerLibrarySection({ go, onReady }) {
   // (The query state itself lives further down, with the unified-search
   // pipeline it feeds — see "ONE search".)
   const [bucketFilter, setBucketFilter] = useState("");
+  // Era axis (filter revamp 2026-11-11): "" | TOWER_ERAS id. Composes
+  // with the bucket and curated-collection filters (AND), and — like a
+  // hub filter — it is answered by the client pipeline in server mode:
+  // the server search API has no era parameter.
+  const [eraFilter, setEraFilter] = useState("");
   const [sortId, setSortId] = useState("title-asc");
   // Results presentation (revamp 2026-10-21): cover grid by default, list
   // on request; the choice persists across visits.
@@ -1627,6 +1681,10 @@ function TowerLibrarySection({ go, onReady }) {
   // it never renders a second list.
   const [collGroup, setCollGroup] = useState("");
   const [collKey, setCollKey] = useState("");
+  // Curated-collection lists longer than 10 (the Authors group has 50)
+  // start collapsed behind a "Show all" row (filter revamp 2026-11-11,
+  // VuFind's top-N pattern from the October study).
+  const [collShowAll, setCollShowAll] = useState(false);
   const [collData, setCollData] = useState(null);
   const [collLoading, setCollLoading] = useState(false);
   const [collFailed, setCollFailed] = useState(false);
@@ -1672,6 +1730,15 @@ function TowerLibrarySection({ go, onReady }) {
     return null;
   }, [collData, collKey]);
   const collSet = activeCollection ? activeCollection.ids : null;
+  // Subcategories added by the 2026-11-11 revamp (LAW, REFERENCE) are
+  // not in the server facet products yet, so — like a hub filter — a
+  // search under one runs on the client pipeline (see
+  // TOWER_CLIENT_ONLY_SUB_LANES in tower-taxonomy.js).
+  const bucketClientOnly =
+    bucketFilter.indexOf(":") > 0 &&
+    TOWER_CLIENT_ONLY_SUB_LANES.indexOf(bucketFilter.split(":")[0]) !== -1;
+  // Any filter state the client pipeline owns in server mode.
+  const clientFiltersActive = !!collSet || !!eraFilter || bucketClientOnly;
   // Filter scroll stability (2026-10-28 revamp): the 2026-10-25 approach
   // scrolled the Collections block into view after every tap. On mobile
   // that read as a bounce — the tap target jumped away mid-interaction,
@@ -1698,11 +1765,12 @@ function TowerLibrarySection({ go, onReady }) {
     if (!el || anchor.top === null || typeof window === "undefined") return;
     const delta = el.getBoundingClientRect().top - anchor.top;
     if (delta) window.scrollTo(0, Math.max(0, window.scrollY + delta));
-  }, [collGroup, collKey, bucketFilter, filtersOpen]);
+  }, [collGroup, collKey, bucketFilter, filtersOpen, eraFilter, collShowAll]);
   const selectCollGroup = (g) => {
     noteFilterAnchor();
     setCollGroup(g);
     setCollKey("");
+    setCollShowAll(false);
     if (g) ensureCollections();
   };
   const selectCollection = (key) => {
@@ -1713,11 +1781,16 @@ function TowerLibrarySection({ go, onReady }) {
     noteFilterAnchor();
     setBucketFilter(key);
   };
+  const selectEra = (id) => {
+    noteFilterAnchor();
+    setEraFilter((prev) => (prev === id ? "" : id));
+  };
   const clearFilters = () => {
     noteFilterAnchor();
     setCollGroup("");
     setCollKey("");
     setBucketFilter("");
+    setEraFilter("");
   };
   // Stack-card "See all" / subcategory jumps: apply the existing bucket
   // filter, then bring the results into view (the discovery zone hands
@@ -1757,7 +1830,7 @@ function TowerLibrarySection({ go, onReady }) {
   const prevIntentDeps = useRef(null);
   useEffect(() => {
     const prev = prevIntentDeps.current;
-    prevIntentDeps.current = { query, bucketFilter, sortId, rowBudget, collKey };
+    prevIntentDeps.current = { query, bucketFilter, sortId, rowBudget, collKey, eraFilter };
     if (!indexIntentSeen.current) {
       indexIntentSeen.current = true;
       return;
@@ -1774,8 +1847,9 @@ function TowerLibrarySection({ go, onReady }) {
       prev.bucketFilter === bucketFilter &&
       prev.sortId === sortId &&
       prev.rowBudget === rowBudget &&
-      prev.collKey === collKey;
-    if (queryOnly && serverFlag && !collSet && strictQuery !== query)
+      prev.collKey === collKey &&
+      prev.eraFilter === eraFilter;
+    if (queryOnly && serverFlag && !clientFiltersActive && strictQuery !== query)
       return;
     // Server mode (2026-11-09): every other browse control is answered
     // by the server too — queries by server search, lanes/filters/sorts
@@ -1784,12 +1858,12 @@ function TowerLibrarySection({ go, onReady }) {
     // past the resident set resumes the browse stream on demand. The
     // client pipeline still owns hub filters (collSet) and the strict
     // path, exactly the boundaries serverActive observes.
-    if (serverFlag && !collSet && strictQuery !== query) {
+    if (serverFlag && !clientFiltersActive && strictQuery !== query) {
       if (prev && prev.rowBudget !== rowBudget) resumeCatalogBrowse();
       return;
     }
     requestCatalogIndex();
-  }, [query, bucketFilter, sortId, rowBudget, collKey]);
+  }, [query, bucketFilter, sortId, rowBudget, collKey, eraFilter]);
   // Automatic start (2026-10-28, Joshua's direct order): the explicit-
   // intent-only rule below left the library presenting as a 20,000-work
   // library — plain scrolling never started the index, the header count
@@ -1925,7 +1999,7 @@ function TowerLibrarySection({ go, onReady }) {
     setSearchPage(1);
     setSearchExtra(0);
     setStrictQuery("");
-  }, [listQuery, bucketFilter, sortId, collKey]);
+  }, [listQuery, bucketFilter, sortId, collKey, eraFilter]);
   // Deep full-text search: part of the SAME blended query now, not a
   // second mode. Runs on the debounced query with an AbortController +
   // sequence guard (SPEC-5): a stale response can never land over a
@@ -2031,7 +2105,11 @@ function TowerLibrarySection({ go, onReady }) {
       : TOWER_TOP_LABELS[activeLane] || activeLane
     : "";
   const activeFilterSummary =
-    [activeCollection ? activeCollection.label : "", activeBucketLabel]
+    [
+      activeCollection ? activeCollection.label : "",
+      activeBucketLabel,
+      eraFilter ? towerEraLabel(eraFilter) : "",
+    ]
       .filter(Boolean)
       .join(" · ") || "All entries";
   const { rankMap, matchCount, rankedIndices, blendedModel } = useMemo(() => {
@@ -2053,23 +2131,58 @@ function TowerLibrarySection({ go, onReady }) {
     // set is out, whatever the search/category state says.
     const passesCollection = (i) =>
       !collSet || collSet.has(artifacts[i].artifact_id);
+    // Era filter (2026-11-11): era codes were precomputed per record
+    // in derivation phase 0, so this is one typed-array read. A record
+    // with no usable year (code 0) matches no era selection.
+    const eraCodeWanted = eraFilter
+      ? TOWER_ERAS.findIndex((e) => e.id === eraFilter) + 1
+      : 0;
+    const passesEra = (i) =>
+      !eraCodeWanted ||
+      !towerData.eraCodes ||
+      towerData.eraCodes[i] === eraCodeWanted;
     const qNorm = q ? normText(q) : "";
     if (!qNorm || !towerData.haystacks) {
       // Browsing: the chosen sort order governs, as before. (Also the
       // phase-0 path: until the search data lands, a typed query browses
       // in catalog order rather than blocking on the indexing.) Only the
       // first `rowBudget` ranks are materialized into the map (they are
-      // the only rows that can mount); the full match count comes from
-      // a counting pass, so a filter/sort change costs a light scan
-      // instead of a catalog-sized Map build.
+      // the only rows that can mount).
+      // Fast count (filter revamp 2026-11-11): with no hub filter in
+      // play, the exact match count is already known from phase 0's
+      // precomputed counts — bucket totals, era totals, and bucket×era
+      // intersections — so the loop only walks far enough to fill the
+      // visible window and early-exits. A filter change used to
+      // re-scan all 2.56M records just to recount them; that scan WAS
+      // the option-selection delay. (During streaming the precomputed
+      // counts cover the same resident prefix the scan would, so the
+      // semantics are unchanged.)
+      const knownCount =
+        !collSet && towerData.eraCounts
+          ? eraFilter
+            ? bucketFilter
+              ? towerData.bucketEraCounts[bucketFilter + "|" + eraFilter] || 0
+              : towerData.eraCounts[eraFilter] || 0
+            : bucketFilter
+              ? bucketFilter.indexOf(":") > -1
+                ? towerData.subCounts[bucketFilter] || 0
+                : towerData.counts[bucketFilter] || 0
+              : towerOrder.length
+          : null;
       let count = 0;
       for (let k = 0; k < towerOrder.length; k++) {
         const i = towerOrder[k];
-        if (!passesBucket(i) || !passesCollection(i)) continue;
+        if (!passesBucket(i) || !passesCollection(i) || !passesEra(i)) continue;
         count++;
         if (map.size < rowBudget) map.set(artifacts[i].artifact_id, count);
+        else if (knownCount !== null) break;
       }
-      return { rankMap: map, matchCount: count, rankedIndices: null, blendedModel: null };
+      return {
+        rankMap: map,
+        matchCount: knownCount !== null ? knownCount : count,
+        rankedIndices: null,
+        blendedModel: null,
+      };
     }
     // Searching (Workstream D, SPEC-6): ONE blended list. Catalog-field
     // matches (BM25F over title/creator/subject/description) and full-text
@@ -2082,7 +2195,7 @@ function TowerLibrarySection({ go, onReady }) {
       let count = 0;
       for (let k = 0; k < towerOrder.length; k++) {
         const i = towerOrder[k];
-        if (!passesBucket(i) || !passesCollection(i)) continue;
+        if (!passesBucket(i) || !passesCollection(i) || !passesEra(i)) continue;
         count++;
         if (map.size < rowBudget) map.set(artifacts[i].artifact_id, count);
       }
@@ -2116,7 +2229,7 @@ function TowerLibrarySection({ go, onReady }) {
     const df = new Map(tokens.map((t) => [t, 0]));
     const andSet = [];
     for (let i = 0; i < N; i++) {
-      if (!passesBucket(i) || !passesCollection(i)) continue;
+      if (!passesBucket(i) || !passesCollection(i) || !passesEra(i)) continue;
       const hay = towerData.haystacks[i];
       let ok = true;
       for (const t of tokens) {
@@ -2179,7 +2292,7 @@ function TowerLibrarySection({ go, onReady }) {
           const corrQ = corrTokens.join(" ");
           const corrSet = [];
           for (let i = 0; i < N; i++) {
-            if (!passesBucket(i) || !passesCollection(i)) continue;
+            if (!passesBucket(i) || !passesCollection(i) || !passesEra(i)) continue;
             const hay = towerData.haystacks[i];
             let ok = true;
             for (const t of corrTokens) if (!hay.includes(t)) { ok = false; break; }
@@ -2210,7 +2323,7 @@ function TowerLibrarySection({ go, onReady }) {
         if (kept.length > 0 && kept.length < tokens.length) {
           const dropSet = [];
           for (let i = 0; i < N; i++) {
-            if (!passesBucket(i) || !passesCollection(i)) continue;
+            if (!passesBucket(i) || !passesCollection(i) || !passesEra(i)) continue;
             const hay = towerData.haystacks[i];
             let ok = true;
             for (const t of kept) if (!hay.includes(t)) { ok = false; break; }
@@ -2232,7 +2345,7 @@ function TowerLibrarySection({ go, onReady }) {
         const need = Math.ceil(tokens.length / 2);
         const partSet = [];
         for (let i = 0; i < N; i++) {
-          if (!passesBucket(i) || !passesCollection(i)) continue;
+          if (!passesBucket(i) || !passesCollection(i) || !passesEra(i)) continue;
           const hay = towerData.haystacks[i];
           let hits = 0;
           for (const t of tokens) if (hay.includes(t)) hits++;
@@ -2295,6 +2408,13 @@ function TowerLibrarySection({ go, onReady }) {
         const ix = towerData.idIndex.get(id);
         if (ix !== undefined && !passesBucket(ix)) continue;
         if (ix !== undefined && !passesCollection(ix)) continue;
+        if (ix !== undefined && !passesEra(ix)) continue;
+        if (
+          ix === undefined &&
+          eraCodeWanted &&
+          towerEraCode(w.doc.year) !== eraCodeWanted
+        )
+          continue;
         const textScore = FIELD_WEIGHTS.fulltext * (w.score || 0);
         const existing = byId.get(id);
         if (existing) {
@@ -2416,7 +2536,7 @@ function TowerLibrarySection({ go, onReady }) {
       if (items[k].index >= 0) map.set(items[k].key, k + 1);
     }
     return { rankMap: map, matchCount: total, rankedIndices: null, blendedModel };
-  }, [q, bucketFilter, sortId, towerOrder, artifacts, towerData, rowBudget, collSet, deep, strictQuery]);
+  }, [q, bucketFilter, eraFilter, sortId, towerOrder, artifacts, towerData, rowBudget, collSet, deep, strictQuery]);
   // ---- Phase B: server-side catalog search (CUTOVER, 2026-10-29) -------
   // Server search is the DEFAULT: the SEARCH path routes to
   // /api/catalog-search and adapts its pages into the blendedModel shape
@@ -2439,7 +2559,11 @@ function TowerLibrarySection({ go, onReady }) {
   const serverCursorRef = useRef(null);
   const serverBusyRef = useRef(false);
   const serverActive =
-    serverFlag && !!q && q.trim().length >= 2 && !collSet && strictQuery !== q;
+    serverFlag &&
+    !!q &&
+    q.trim().length >= 2 &&
+    !clientFiltersActive &&
+    strictQuery !== q;
   // Deferred-search trigger: the two paths the client pipeline owns
   // in server mode — a hub filter (collSet) and the strict path
   // (strictQuery === q) — are exactly the ones that need the local
@@ -2449,8 +2573,9 @@ function TowerLibrarySection({ go, onReady }) {
   // set this: the server answers them.
   useEffect(() => {
     if (needSearchData || !serverFlag) return;
-    if (collSet || (strictQuery && strictQuery === q)) setNeedSearchData(true);
-  }, [needSearchData, serverFlag, collSet, strictQuery, q]);
+    if (clientFiltersActive || (strictQuery && strictQuery === q))
+      setNeedSearchData(true);
+  }, [needSearchData, serverFlag, clientFiltersActive, strictQuery, q]);
   // Catalog total + per-collection counts from the hubs index (a
   // derived file the publish lane regenerates), so counts are truthful
   // in server mode before — or without — the client index arriving.
@@ -2902,7 +3027,7 @@ function TowerLibrarySection({ go, onReady }) {
                 )}
               </div>
             </div>
-            {!q && !bucketFilter && !collKey && (
+            {!q && !bucketFilter && !collKey && !eraFilter && (
               <TowerDiscovery
                 artifacts={artifacts}
                 towerData={discoveryData}
@@ -2958,164 +3083,291 @@ function TowerLibrarySection({ go, onReady }) {
                     </button>
                   </div>
                 </div>
-            <div
-              ref={filterPanelRef}
-              className={`tower-filter-panel${filtersOpen ? " is-open" : ""}`}
-            >
-              <div className="tower-filter-head">
+            <div ref={filterPanelRef} className="tower-filters2">
+              <div className="tf2-head">
                 <button
                   type="button"
-                  className="tower-filter-toggle"
+                  className="tf2-toggle"
                   aria-expanded={filtersOpen}
                   aria-controls="tower-filter-body"
                   onClick={() => setFiltersOpen((open) => !open)}
                 >
-                  <span className="section-index">FILTERS</span>
-                  <span className="tower-filter-summary">
-                    {activeFilterSummary}
-                  </span>
-                  <span className="tower-filter-chevron" aria-hidden="true">
-                    ▾
+                  <span className="tf2-title">Filters</span>
+                  <span className="tf2-summary">{activeFilterSummary}</span>
+                  <span className="tf2-chevron" aria-hidden="true">
+                    {filtersOpen ? "−" : "+"}
                   </span>
                 </button>
-                {(collKey || bucketFilter) && (
+                {(collKey || bucketFilter || eraFilter) && (
                   <button
                     type="button"
-                    className="tower-filter-clear"
+                    className="tf2-clear"
                     onClick={clearFilters}
                   >
                     Clear all
                   </button>
                 )}
               </div>
-              {filtersOpen && (
-                <div className="tower-filter-body" id="tower-filter-body">
-            {/* Collections browser (2026-10-24, unified 2026-10-25):
-                the deleted hub pages, folded into this section as a
-                filter on the same entry list. Group tabs, then — in
-                the old subchip style, indented with a ↳ and a group
-                label — the collections in the chosen group; a
-                collection filters the list below (intersected with
-                search + category + sort), it never renders a second
-                list. Same markup and order on desktop and mobile.
-                On a hub-index fetch failure this block hides and
-                category browse carries on — no error panel. */}
-            {!collFailed && (
-              <div ref={collSectionRef} className="tower-collections">
-                <div className="section-index tower-filter-axis-label">COLLECTIONS <span>subject</span></div>
-                <div
-                  className="tower-chips"
-                  role="group"
-                  aria-label="Browse by collection group"
-                >
-                  <button
-                    type="button"
-                    className={`tower-chip${collGroup === "" ? " is-active" : ""}`}
-                    onClick={() => selectCollGroup("")}
-                    aria-pressed={collGroup === ""}
-                  >
-                    All collections
-                  </button>
-                  {COLLECTION_GROUPS.map((g) => (
+              {(collKey || bucketFilter || eraFilter) && (
+                <div className="tf2-pills" aria-label="Active filters">
+                  {activeCollection && (
                     <button
-                      key={g.id}
                       type="button"
-                      className={`tower-chip${collGroup === g.id ? " is-active" : ""}`}
-                      onClick={() => selectCollGroup(g.id)}
-                      aria-pressed={collGroup === g.id}
+                      className="tf2-pill"
+                      onClick={() => selectCollection(collKey)}
                     >
-                      {g.label}
+                      {activeCollection.label}
+                      <span aria-hidden="true"> ×</span>
                     </button>
-                  ))}
+                  )}
+                  {bucketFilter && (
+                    <button
+                      type="button"
+                      className="tf2-pill"
+                      onClick={() => selectLane("")}
+                    >
+                      {activeBucketLabel}
+                      <span aria-hidden="true"> ×</span>
+                    </button>
+                  )}
+                  {eraFilter && (
+                    <button
+                      type="button"
+                      className="tf2-pill"
+                      onClick={() => selectEra(eraFilter)}
+                    >
+                      {towerEraLabel(eraFilter)}
+                      <span aria-hidden="true"> ×</span>
+                    </button>
+                  )}
                 </div>
-                {collLoading && (
-                  <p className="tower-index-status" aria-live="polite">
-                    Loading collections…
-                  </p>
-                )}
-                {collData && collGroup && (
-                  <div
-                    className="tower-subchips"
-                    role="group"
-                    aria-label={`Collections in ${COLLECTION_GROUPS.find((g) => g.id === collGroup)?.label || collGroup}`}
-                  >
-                    <span className="tower-coll-sub-label" aria-hidden="true">
-                      IN {COLLECTION_GROUPS.find((g) => g.id === collGroup)?.label?.toUpperCase() || collGroup}
-                    </span>
-                    {(collData.groups.find((g) => g.id === collGroup)?.collections || []).map((c) => (
-                      <button
-                        key={c.key}
-                        type="button"
-                        className={`tower-subchip${collKey === c.key ? " is-active" : ""}`}
-                        onClick={() => selectCollection(c.key)}
-                        aria-pressed={collKey === c.key}
-                      >
-                        {c.label} <span>{c.count.toLocaleString()}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {activeCollection && (
-                  <p className="tower-index-status">
-                    {activeCollection.blurb}{" "}
-                    <span>{activeCollection.count.toLocaleString()} works</span>
-                  </p>
-                )}
-              </div>
-            )}
-            <div className="section-index tower-filter-axis-label">FORMAT <span>form</span></div>
-            <div className="tower-chips" role="group" aria-label="Filter by format">
-              <button
-                type="button"
-                className={`tower-chip${bucketFilter === "" ? " is-active" : ""}`}
-                onClick={() => selectLane("")}
-              >
-                All entries <span>{displayCount}</span>
-              </button>
-              {towerData.collections.map((c) => {
-                const laneActive =
-                  bucketFilter === c || bucketFilter.indexOf(c + ":") === 0;
-                const isOpenLane = laneActive && c === activeLane && activeSubs.length > 0;
-                return (
-                  <Fragment key={c}>
-                    <button
-                      type="button"
-                      className={`tower-chip${laneActive ? " is-active" : ""}`}
-                      onClick={() => selectLane(bucketFilter === c ? "" : c)}
-                      aria-pressed={laneActive}
-                      aria-expanded={isOpenLane}
-                    >
-                      {TOWER_TOP_LABELS[c] || c} <span>{towerData.counts[c]}</span>
-                    </button>
-                    {isOpenLane && (
+              )}
+              {filtersOpen && (
+                <div className="tf2-body" id="tower-filter-body">
+                  {/* Axis 1 — Collections: the catalog lanes (filter
+                      revamp 2026-11-11; this axis replaces the retired
+                      "FORMAT" chip row — the lanes were never formats).
+                      Category chips carry the lane total; the active
+                      lane's subcategories open beneath the chip row as
+                      quiet full-width rows: indented, one size smaller,
+                      one weight lighter, counts right-aligned. Hierarchy
+                      by type and spacing — no glyphs anywhere. */}
+                  <div className="tf2-axis">
+                    <div className="tf2-axis-label" id="tf2-axis-collections">
+                      Collections
+                    </div>
+                    <div className="tf2-axis-main">
                       <div
-                        className="tower-subchips"
+                        className="tf2-chips"
                         role="group"
-                        aria-label={`Filter ${TOWER_TOP_LABELS[activeLane] || activeLane} by subcategory`}
+                        aria-labelledby="tf2-axis-collections"
                       >
-                        {activeSubs.map((s) => {
-                          const key = `${activeLane}:${s.id}`;
-                          const count = towerData.subCounts[key] || 0;
-                          if (count === 0) return null;
-                          const subActive = bucketFilter === key;
+                        <button
+                          type="button"
+                          className={`tf2-chip${bucketFilter === "" ? " is-active" : ""}`}
+                          onClick={() => selectLane("")}
+                          aria-pressed={bucketFilter === ""}
+                        >
+                          All entries
+                          <span className="tf2-count">
+                            {displayCount.toLocaleString()}
+                          </span>
+                        </button>
+                        {towerData.collections.map((c) => {
+                          const laneActive =
+                            bucketFilter === c ||
+                            bucketFilter.indexOf(c + ":") === 0;
                           return (
                             <button
+                              key={c}
                               type="button"
-                              key={s.id}
-                              className={`tower-subchip${subActive ? " is-active" : ""}`}
-                              onClick={() => selectLane(subActive ? activeLane : key)}
-                              aria-pressed={subActive}
+                              className={`tf2-chip${laneActive ? " is-active" : ""}`}
+                              onClick={() =>
+                                selectLane(bucketFilter === c ? "" : c)
+                              }
+                              aria-pressed={laneActive}
                             >
-                              {s.label} <span>{count}</span>
+                              {TOWER_TOP_LABELS[c] || c}
+                              <span className="tf2-count">
+                                {(towerData.counts[c] || 0).toLocaleString()}
+                              </span>
                             </button>
                           );
                         })}
                       </div>
-                    )}
-                  </Fragment>
-                );
-              })}
-            </div>
+                      {activeLane && activeSubs.length > 0 && (
+                        <div
+                          className="tf2-subs"
+                          role="group"
+                          aria-label={`${TOWER_TOP_LABELS[activeLane] || activeLane} subcategories`}
+                        >
+                          {activeSubs.map((s) => {
+                            const key = `${activeLane}:${s.id}`;
+                            const count = towerData.subCounts[key] || 0;
+                            if (count === 0) return null;
+                            const subActive = bucketFilter === key;
+                            return (
+                              <button
+                                type="button"
+                                key={s.id}
+                                className={`tf2-sub${subActive ? " is-active" : ""}`}
+                                onClick={() =>
+                                  selectLane(subActive ? activeLane : key)
+                                }
+                                aria-pressed={subActive}
+                              >
+                                <span className="tf2-sub-label">{s.label}</span>
+                                <span className="tf2-count">
+                                  {count.toLocaleString()}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {/* Axis 2 — Curated collections (2026-10-24, restyled
+                      2026-11-11): the deleted hub pages, folded into
+                      this section as a filter on the same entry list.
+                      Group chips, then the group's collections as
+                      subcategory rows in the same visual language as
+                      Axis 1. A collection filters the list below
+                      (intersected with search + lane + era + sort); it
+                      never renders a second list. On a hub-index fetch
+                      failure this axis hides and the rest carries on —
+                      no error panel. */}
+                  {!collFailed && (
+                    <div ref={collSectionRef} className="tf2-axis">
+                      <div className="tf2-axis-label" id="tf2-axis-curated">
+                        Curated collections
+                      </div>
+                      <div className="tf2-axis-main">
+                        <div
+                          className="tf2-chips"
+                          role="group"
+                          aria-labelledby="tf2-axis-curated"
+                        >
+                          <button
+                            type="button"
+                            className={`tf2-chip${collGroup === "" ? " is-active" : ""}`}
+                            onClick={() => selectCollGroup("")}
+                            aria-pressed={collGroup === ""}
+                          >
+                            All collections
+                          </button>
+                          {COLLECTION_GROUPS.map((g) => (
+                            <button
+                              key={g.id}
+                              type="button"
+                              className={`tf2-chip${collGroup === g.id ? " is-active" : ""}`}
+                              onClick={() => selectCollGroup(g.id)}
+                              aria-pressed={collGroup === g.id}
+                            >
+                              {g.label}
+                            </button>
+                          ))}
+                        </div>
+                        {collLoading && (
+                          <p className="tf2-note" aria-live="polite">
+                            Loading collections…
+                          </p>
+                        )}
+                        {collData && collGroup && (
+                          <div
+                            className="tf2-subs"
+                            role="group"
+                            aria-label={`Collections in ${COLLECTION_GROUPS.find((g) => g.id === collGroup)?.label || collGroup}`}
+                          >
+                            {(collData.groups.find((g) => g.id === collGroup)
+                              ?.collections || []
+                            )
+                              .slice(0, collShowAll ? undefined : 10)
+                              .map((c) => (
+                                <button
+                                  key={c.key}
+                                  type="button"
+                                  className={`tf2-sub${collKey === c.key ? " is-active" : ""}`}
+                                  onClick={() => selectCollection(c.key)}
+                                  aria-pressed={collKey === c.key}
+                                >
+                                  <span className="tf2-sub-label">
+                                    {c.label}
+                                  </span>
+                                  <span className="tf2-count">
+                                    {c.count.toLocaleString()}
+                                  </span>
+                                </button>
+                              ))}
+                            {!collShowAll &&
+                              (collData.groups.find((g) => g.id === collGroup)
+                                ?.collections.length || 0) > 10 && (
+                                <button
+                                  type="button"
+                                  className="tf2-more"
+                                  onClick={() => setCollShowAll(true)}
+                                >
+                                  Show all{" "}
+                                  {(
+                                    collData.groups.find(
+                                      (g) => g.id === collGroup
+                                    )?.collections || []
+                                  ).length.toLocaleString()}{" "}
+                                  collections
+                                </button>
+                              )}
+                          </div>
+                        )}
+                        {activeCollection && (
+                          <p className="tf2-note">
+                            {activeCollection.blurb}{" "}
+                            <span>
+                              {activeCollection.count.toLocaleString()} works
+                            </span>
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {/* Axis 3 — Era (2026-11-11): chronological period
+                      chips with counts from phase 0's era derivation.
+                      Position along the row is time. Records with no
+                      usable year match no era selection; there is no
+                      "unknown" chip — the residue is visible by
+                      subtraction from the counts. */}
+                  <div className="tf2-axis">
+                    <div className="tf2-axis-label" id="tf2-axis-era">
+                      Era
+                    </div>
+                    <div className="tf2-axis-main">
+                      <div
+                        className="tf2-chips"
+                        role="group"
+                        aria-labelledby="tf2-axis-era"
+                      >
+                        {TOWER_ERAS.map((e) => {
+                          const count = towerData.eraCounts
+                            ? towerData.eraCounts[e.id] || 0
+                            : 0;
+                          const on = eraFilter === e.id;
+                          return (
+                            <button
+                              key={e.id}
+                              type="button"
+                              className={`tf2-chip${on ? " is-active" : ""}`}
+                              onClick={() => selectEra(e.id)}
+                              aria-pressed={on}
+                            >
+                              {e.label}
+                              <span className="tf2-count">
+                                {count.toLocaleString()}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

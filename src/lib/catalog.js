@@ -479,6 +479,9 @@ export function createColumnStore(expectedTotal = 0) {
     collAt(i) {
       return this.collDict[this.collCode.a[i]];
     },
+    yearAt(i) {
+      return this.yearDict[this.yearCode.a[i]];
+    },
     titleAt(i) {
       const c = this.chunks[this.chunkIdx.a[i]];
       const local = i - c.start;
@@ -641,6 +644,11 @@ export function createCatalogView(store, length) {
             // record's collection string from the dictionary, so
             // counting a record never materializes it.
             return (i) => store.collAt(i);
+          case "__columnYearAt":
+            // Internal hook for pages.jsx's phase-0 era loop: the
+            // record's year from the dictionary, so era counting a
+            // record never materializes it (filter revamp 2026-11-11).
+            return (i) => store.yearAt(i);
           case "__columnIdPrefixAt":
             // Internal hook for pages.jsx's phase-0 bucket loop: the
             // record's taxonomy id prefix from its stored bytes, so
