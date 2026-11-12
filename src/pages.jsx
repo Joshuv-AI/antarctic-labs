@@ -218,6 +218,10 @@ function getTowerFiles() {
   return towerFilesPromise;
 }
 import ReaderAssist, { SUPPORTS_HIGHLIGHTS } from "./components/ReaderAssist.jsx";
+// The Tower landing's dark hero band background (helix of covers,
+// Phase 2 2026-11-12). Self-contained and failure-proof: lazy scene,
+// shielded, ?bg=0 kill switch — see components/HelixCanvas.jsx.
+import HelixCanvas from "./components/HelixCanvas.jsx";
 import { applyMeta } from "./seo.js";
 import { government } from "./content/government.js";
 // Module-level LRU cache for entry full texts (2026-10-18): avoids re-downloading
@@ -245,7 +249,15 @@ export function TowerOfBabel({ go, onReady }) {
   // via onReady once the first 50 rows paint.
   return (
     <main className="page-shell inner-page tower-light tower-combined" id="main-content" tabIndex={-1}>
-      <section className="inner-hero section tower-landing-hero">
+      <section className="inner-hero section tower-landing-hero tower-helix-band">
+        {/* Dark hero band (2026-11-12): the helix background lives
+            behind the existing hero content — canvas layer, then a
+            soft shade for text contrast, then the content itself.
+            The paper library below is untouched. */}
+        <div className="tower-helix-layer" aria-hidden="true">
+          <HelixCanvas />
+        </div>
+        <div className="tower-helix-shade" aria-hidden="true" />
         <h1>{towerOfBabel.heading}</h1>
         {towerOfBabel.intro.map((p, i) => (
           <p className={i === 0 ? "display-copy" : "body-copy"} key={i}>{p}</p>
