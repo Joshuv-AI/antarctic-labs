@@ -43,6 +43,20 @@ for (const pattern of routes) {
   });
 }
 
+// Collection landing pages (2026-11-11): server-rendered by
+// functions/tower-of-babel/collections.js and collections/[collection].js,
+// so they are not SPA routes and do not appear in the route registry
+// above. They belong in this pages sitemap (NOT the entry sitemap
+// shards, whose sum is the catalog total and must not change). Slugs
+// mirror COLLECTIONS in functions/_lib/collections.js.
+for (const slug of ["papers", "law", "books", "reference", "declassified", "documents", "podcasts"]) {
+  urls.push({
+    loc: `${SITE}/tower-of-babel/collections/${slug}`,
+    priority: "0.6",
+  });
+}
+urls.push({ loc: `${SITE}/tower-of-babel/collections`, priority: "0.6" });
+
 const body = urls
   .map(
     (u) => `  <url>\n    <loc>${u.loc}</loc>\n    <lastmod>${today}</lastmod>\n    <changefreq>weekly</changefreq>\n    <priority>${u.priority}</priority>\n  </url>`

@@ -37,8 +37,138 @@ const FOOT = `<footer>
 <p>© 2026 Antarctic Labs. All rights reserved.</p>
 </footer>`;
 
-function doc({ path, title, description, body }) {
+// FAQ JSON-LD parity (2026-11-11 discoverability fix): the app's pages
+// emit a FAQPage node for the library and API pages (src/seo.js
+// faqsForPath) and render the questions visibly, but these static
+// renders historically carried no FAQPage node at all — and the API
+// static render did not even carry the questions. The Q&A below is
+// copied VERBATIM from src/content/tower-api.js (libraryFaqs and
+// apiPage.faqs); keep the copies in sync when the source changes.
+// No other static page gets an FAQ: the app has no FAQ for them either.
+const LIBRARY_FAQS = [
+  {
+    q: "Where can I read classic books online for free?",
+    a: "The Tower of Babel library catalogues 2,557,923 works, and every work with available text opens as a full, clean text you can read in the browser. There is no sign-up, no paywall, and no app to install. The collection covers public domain classics, sacred texts from every tradition, foundational documents, scientific papers, and historical records. The access button appears only where the text file exists.",
+  },
+  {
+    q: "Is the Tower of Babel a good Project Gutenberg alternative?",
+    a: "It serves the same purpose with a different scope. Project Gutenberg is the largest archive of public domain ebooks. The Tower of Babel also carries material Gutenberg does not: declassified government documents, scientific papers, reference works, and long-form podcast transcripts alongside the book collection, all in one catalog with per-record rights status. If a work is in the catalog, you can read the full text directly where the text is present.",
+  },
+  {
+    q: "Do I need to sign up or pay to use the library?",
+    a: "No. Everything readable in the library is free with no account required. There are no trials, no tiers, and no checkout process. If a work shows an access button, the full text is available to read immediately.",
+  },
+  {
+    q: "Is it legal to read these books for free?",
+    a: "Yes. Each catalog record carries a rights_status and license field, and the readable collection is built around public domain works whose copyright has expired, plus documents released into the public record. The catalog tells you the rights status of each work, so you can verify it yourself.",
+  },
+  {
+    q: "What is actually in the catalog?",
+    a: "More than 2,557,923 works and growing daily: books of classic literature, philosophy, and the sacred texts of every religion and tradition; declassified government documents released to the public; scientific papers; reference works; foundational political documents; and long-form podcast transcripts. Every work is preserved as clean, searchable plain text where the text is present.",
+  },
+  {
+    q: "Can I download the books, or only read them in the browser?",
+    a: "Works with available text can be opened and read in full in the browser, and the underlying plain-text file can be downloaded directly. There is no bulk download for the whole catalog; the machine-readable catalog files are the way to work with the collection at scale.",
+  },
+  {
+    q: "Can AI agents use the Tower of Babel as a reference source?",
+    a: "Yes. The catalog is published as machine-readable JSON with a documented schema, and texts are served as plain .txt files at predictable URLs where the text exists. The /tower-of-babel/api page documents the fetch pattern, the record fields, licensing, and the limits of what is available.",
+  },
+];
+
+const API_FAQS = [
+  {
+    q: "Is there a free API for Project Gutenberg texts?",
+    a: "Project Gutenberg itself has no official API; that gap is why third-party services like Gutendex exist, and Gutendex serves metadata only. The Tower of Babel takes the other approach: a free, keyless catalog over 2,557,923 works that includes Gutenberg-sourced public domain works and serves the full text of each work whose text is present as a plain .txt file, not just metadata. Where a work's text is present, one GET returns the entire book. Confirm with a request before assuming text exists.",
+  },
+  {
+    q: "How can my AI agent access public domain books?",
+    a: "Download https://antarctic-labs.com/catalog.json, filter the records by title, collection, creator, or rights_status, then GET the download_url of each work you want. The texts are plain UTF-8 .txt at predictable URLs shaped like /tower-of-babel/<artifact_id>.txt. No key, no sign-up, no published rate limit. Confirm each URL returns 200 before treating the text as present — download_status is not perfectly current, so the HTTP response is the reliable signal. Index the texts you need for retrieval, and re-fetch the catalog on a schedule to pick up new holdings.",
+  },
+  {
+    q: "Does the API return full text or just metadata?",
+    a: "Full text, where present. The catalog record is metadata; the download_url on a record with a live text file points to the complete work as a plain text file. This is the deliberate difference from metadata-only book APIs, which tell you a book exists but make you find the text elsewhere. Availability varies per record, so confirm with the HTTP response before treating a text as present.",
+  },
+  {
+    q: "Do I need an API key? Are there rate limits?",
+    a: "Not for the catalog itself: no key, no account, no published rate limit on the static surface, which is static files on CDN-backed hosting and tolerates normal programmatic use well. The keyed API v1 (rolling out — see the tiers on this page) is separate: a free key by email at 200 requests/day, with paid tiers above that. Reasonable behavior still applies on the keyless surface: download the catalog once and cache it, fetch only the texts you need, and do not hammer the host with parallel thousands-wide crawls.",
+  },
+  {
+    q: "Can I use these texts commercially, including for training data?",
+    a: "It depends on the record. Each catalog entry carries rights_status and license fields; most readable works are public domain, which permits commercial use and training. Read those two fields on every record you use. The site makes no blanket grant beyond what each record's stated rights allow, and it offers no legal advice on edge cases.",
+  },
+  {
+    q: "Is there a search endpoint or an MCP server?",
+    a: "A search endpoint is rolling out as API v1 (see “API v1 — keys, search, and full text” on this page): keyed, with catalog search now and full-text search answering once the deep-search index is live. The keyless pattern — download catalog.json once, filter and search it locally, fetch texts by URL — remains the primary surface and is unchanged. There is no MCP server at this time; this page will be updated if one ships.",
+  },
+  {
+    q: "How fresh is the catalog? How do I stay current?",
+    a: "The catalog grows daily as new holdings are added. There is no versioning scheme or changelog feed; the practical approach is to re-fetch catalog.json on a schedule (weekly is reasonable) and diff artifact_id values against your local copy. Artifact IDs are not reused for different works, so a text URL that returned 200 keeps returning the same text, and new records appear as additions.",
+  },
+];
+
+function faqPageNode(faqs) {
+  return {
+    "@type": "FAQPage",
+    mainEntity: faqs.map((f) => ({
+      "@type": "Question",
+      name: f.q,
+      acceptedAnswer: { "@type": "Answer", text: f.a },
+    })),
+  };
+}
+
+// Google Preferred Sources deeplink (2026-11-11): the plain-link form
+// only — Google's JS button form loads publisher.js sitewide and is
+// deliberately not used. The feature is per-user personalization
+// (readers who pick a source see it surfaced more in their own AI
+// Overviews / AI Mode); the copy makes no ranking claim.
+const PREFERRED_SOURCE_LINE = `<p><a href="https://www.google.com/preferences/source?q=antarctic-labs.com" target="_blank" rel="noopener">Add Antarctic Labs as a preferred source on Google</a></p>`;
+
+// Visible FAQ block, mirroring the library static page's Questions
+// section shape (h2 + h3/p pairs), generated from the same verbatim
+// data as the FAQPage JSON-LD so the two can never drift apart.
+function faqSection(faqs) {
+  const esc = (s) =>
+    String(s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  return (
+    `<h2>Questions</h2>\n` +
+    faqs.map((f) => `<h3>${esc(f.q)}</h3>\n<p>${esc(f.a)}</p>`).join("\n")
+  );
+}
+
+function doc({ path, title, description, body, faq }) {
   const canonical = SITE + (path === "/" ? "/" : path);
+  const graph = [
+    {
+      "@type": "Organization",
+      name: "Antarctic Labs",
+      url: "https://antarctic-labs.com/",
+      email: "hello@antarctic-labs.com",
+    },
+    {
+      "@type": "WebSite",
+      name: "Antarctic Labs",
+      url: "https://antarctic-labs.com/",
+      potentialAction: {
+        "@type": "SearchAction",
+        target: {
+          "@type": "EntryPoint",
+          urlTemplate:
+            "https://antarctic-labs.com/tower-of-babel/library?q={search_term_string}",
+        },
+        "query-input": "required name=search_term_string",
+      },
+    },
+  ];
+  if (faq) graph.push(faqPageNode(faq));
+  const jsonLd = JSON.stringify({ "@context": "https://schema.org", "@graph": graph }).replace(
+    /</g,
+    "\\u003c"
+  );
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -55,7 +185,7 @@ function doc({ path, title, description, body }) {
 <meta name="twitter:title" content="${title}" />
 <meta name="twitter:description" content="${description}" />
 <script type="application/ld+json">
-{"@context":"https://schema.org","@graph":[{"@type":"Organization","name":"Antarctic Labs","url":"https://antarctic-labs.com/","email":"hello@antarctic-labs.com"},{"@type":"WebSite","name":"Antarctic Labs","url":"https://antarctic-labs.com/","potentialAction":{"@type":"SearchAction","target":{"@type":"EntryPoint","urlTemplate":"https://antarctic-labs.com/tower-of-babel/library?q={search_term_string}"},"query-input":"required name=search_term_string"}}]}
+${jsonLd}
 </script>
 ${ADS_SCRIPT}
 <style>
@@ -194,21 +324,24 @@ PAGES["/tower-of-babel"] = {
 <p>Tower of Babel is a library and archival project from Antarctic Labs — 2,557,923 books, documents, transcripts, and texts in one organized, searchable collection. Individual resources appear here once finalized.</p>
 <h2>The collections</h2>
 <ul>
-<li>Books — classic literature, philosophy, and foundational documents</li>
-<li>Sacred Texts — the scriptures and sacred writings of every tradition</li>
-<li>Papers — scientific and scholarly papers</li>
-<li>Declassified — government documents released into the public record</li>
-<li>Law — statutes, codes, and legal texts</li>
-<li>Reference — encyclopedias, dictionaries, and reference works</li>
-<li>Documents — foundational and historical documents</li>
-<li>Podcasts — long-form conversation transcripts</li>
+<li><a href="/tower-of-babel/collections/books">Books</a> — 81,631 works of classic literature, philosophy, and foundational documents</li>
+<li>Sacred Texts — the scriptures and sacred writings of every tradition, shelved within <a href="/tower-of-babel/collections/books">Books</a></li>
+<li><a href="/tower-of-babel/collections/papers">Papers</a> — 1,130,210 scientific and scholarly papers</li>
+<li><a href="/tower-of-babel/collections/declassified">Declassified</a> — 26,294 government documents released into the public record</li>
+<li><a href="/tower-of-babel/collections/law">Law</a> — 1,277,197 statutes, codes, and legal texts</li>
+<li><a href="/tower-of-babel/collections/reference">Reference</a> — 41,137 encyclopedias, dictionaries, and reference works</li>
+<li><a href="/tower-of-babel/collections/documents">Documents</a> — 363 foundational and historical documents</li>
+<li><a href="/tower-of-babel/collections/podcasts">Podcasts</a> — 1,091 long-form conversation transcripts</li>
 </ul>
-<p><a href="/tower-of-babel/library">Browse the library</a> · <a href="/tower-of-babel/library/suggest">Suggest an entry</a> · <a href="/tower-of-babel/api">API for agents</a> · <a href="/tower-of-babel/donate">Support the Tower</a></p>`,
+<p><a href="/tower-of-babel/collections">All collections</a></p>
+<p><a href="/tower-of-babel/library">Browse the library</a> · <a href="/tower-of-babel/library/suggest">Suggest an entry</a> · <a href="/tower-of-babel/api">API for agents</a> · <a href="/tower-of-babel/donate">Support the Tower</a></p>
+${PREFERRED_SOURCE_LINE}`,
 };
 
 PAGES["/tower-of-babel/library"] = {
   path: "/tower-of-babel/library",
   title: "Free Classic Books Online | Tower of Babel Library",
+  faq: LIBRARY_FAQS,
   description:
     "Read free classic books online: search 2,557,923 books, documents, and texts in the Tower of Babel's free library catalog. No sign-up.",
   body: `<h1>The Library</h1>
@@ -241,6 +374,7 @@ PAGES["/tower-of-babel/library"] = {
 PAGES["/tower-of-babel/api"] = {
   path: "/tower-of-babel/api",
   title: "Free Books API for AI Agents | Tower of Babel",
+  faq: API_FAQS,
   description:
     "Free books API for AI agents: machine-readable catalog of 2,557,923 works (books, sacred texts, declassified documents, papers, transcripts) with plain-text .txt downloads where text is present. No key, no sign-up.",
   body: `<h1>Free books API for AI agents</h1>
@@ -259,7 +393,9 @@ PAGES["/tower-of-babel/api"] = {
 <h2>Harvest with OAI-PMH</h2>
 <p>Libraries and harvesters can take the catalog through the OAI-PMH 2.0 endpoint at https://antarctic-labs.com/oai — it supports the standard verbs: Identify, ListMetadataFormats, ListSets, ListIdentifiers, ListRecords, and GetRecord, with metadata in oai_dc (Dublin Core). Sets are the catalog's collections, and identifiers take the form oai:antarctic-labs.com:&lt;artifact_id&gt;.</p>
 <h2>API v1 — keys, search, and full text</h2>
-<p>API v1 is the keyed companion to the static surface above, at https://antarctic-labs.com/api/v1. It exists for one reason: convenience at scale — server-side search, full-text delivery, and bulk snapshot packages, at published daily limits, with a commercial-use licence on the paid tiers. The texts themselves stay free on this site either way; a key buys the maintained pipe, the throughput, and someone standing behind it, never access. Daily limits: free key 200 requests/day, Pro 5,000, Commercial 25,000. Keys are delivered by email and shown only there; only a hash of each key is stored. See <a href="/tower-of-babel/library/research">API access</a> for the tiers and to request a free key. No uptime SLA is offered on any tier.</p>`,
+<p>API v1 is the keyed companion to the static surface above, at https://antarctic-labs.com/api/v1. It exists for one reason: convenience at scale — server-side search, full-text delivery, and bulk snapshot packages, at published daily limits, with a commercial-use licence on the paid tiers. The texts themselves stay free on this site either way; a key buys the maintained pipe, the throughput, and someone standing behind it, never access. Daily limits: free key 200 requests/day, Pro 5,000, Commercial 25,000. Keys are delivered by email and shown only there; only a hash of each key is stored. See <a href="/tower-of-babel/library/research">API access</a> for the tiers and to request a free key. No uptime SLA is offered on any tier.</p>
+${faqSection(API_FAQS)}
+${PREFERRED_SOURCE_LINE}`,
 };
 
 PAGES["/tower-of-babel/library/research"] = {
@@ -280,7 +416,8 @@ PAGES["/tower-of-babel/library/research"] = {
 <p>25,000 requests/day. Everything in Pro at commercial scale: bulk snapshot packages and a commercial-use licence covering multiple projects.</p>
 <h2>Get a free key</h2>
 <p>Enter your email on this page in the app and a free key is sent to it — shown only in that email, stored here only as a hash. Asking for a new key revokes the previous free key for that address.</p>
-<p>Billing is managed through Stripe — the receipt for any payment includes a manage-billing link. Refunds: cancel within 7 days of a charge and that charge is refunded in full — email us from the address on the subscription and we will process it; the API key stays active until the end of the paid period unless you ask us to revoke it sooner.</p>`,
+<p>Billing is managed through Stripe — the receipt for any payment includes a manage-billing link. Refunds: cancel within 7 days of a charge and that charge is refunded in full — email us from the address on the subscription and we will process it; the API key stays active until the end of the paid period unless you ask us to revoke it sooner.</p>
+${PREFERRED_SOURCE_LINE}`,
 };
 
 PAGES["/tower-of-babel/library/suggest"] = {
