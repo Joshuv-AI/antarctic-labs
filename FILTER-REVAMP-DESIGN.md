@@ -742,3 +742,203 @@ final post-load counts match ground truth exactly (total
 2,557,923; LAW 1,277,197). The §10 storm test passes unchanged.
 Full `npm run build` + desktop/mobile regression, zero JS errors.
 Joshua's phone remains the final gate.
+## 12. Phase 2A — the data/input plane (2026-11-12 night, Joshua's optimization program)
+
+Implements the audit's F1/F2/F6/F9 fixes and research §§1/5: the browse
+page now loads the catalog as a columnar binary dataset (TCB1) instead
+of the 795 MB browse JSON, with device caching + resume, latest-only
+filter input under a byte-ledger memory budget, and precomputed
+curated-collection bitsets. The JSON pipeline remains in place,
+untouched, as the fallback for every failure mode.
+
+### 12.1 The dataset and its publishing pattern
+
+- `scripts/build-tcb1.mjs` (repo pipeline) generates the dataset from
+  the canonical catalog-index shards + `public/tower-hubs-index.json`:
+  128 shards × 20,000 records (last 17,923), a TCD1 dictionary file,
+  and TCU1 curated bitsets, Brotli-q11 into repo-root `tcb1-data/`.
+  Regeneration is byte-identical to the stage-1 proof dataset (every
+  shard + dictionary sha256 matches; manifest fingerprint =
+  the browse manifest fingerprint `7e389387…`).
+- Wire size: **107,356,479 B total** (shards 70.6 MB, dictionary
+  36.7 MB, curated 10,430 B) vs the browse JSON's ~251 MB gzip wire /
+  795 MB raw. Decoded columns: 426 MB.
+- Serving follows the repo's established large-file pattern (the
+  search-index-data precedent): `tcb1-data/` never enters `dist/`
+  (no Pages 25 MiB exposure); `functions/api/tcb1-manifest.js` serves
+  the manifest and `functions/tcb1/[fingerprint]/[file].js` streams
+  each `.br` file from `raw.githubusercontent.com` at the deployed
+  commit with `Content-Encoding: br`, immutable cache headers and
+  Cache API edge caching. Files are addressed by the dataset
+  fingerprint; a catalog publish that changes the fingerprint
+  orphans the old URLs cleanly.
+- Curated bitsets (audit F9): one packed bitset per curated
+  collection over catalog index space — 11,192,162 B raw for all 35
+  collections, 10,430 B on the wire. Counts are popcounts over the
+  catalog, i.e. the number the filter itself returns. One known,
+  intended divergence from the hub file: `tradition:christianity`
+  counts **1,800** (the hub list names 1,799 ids; one artifact_id is
+  duplicated in the catalog and both records match). The panel now
+  shows the true filtered count instead of the list length.
+
+### 12.2 The loader
+
+- The existing browse worker runs the TCB1 branch when discovery
+  validates the dataset against the browse manifest (source
+  fingerprint, total, shard size must all match exactly — the shard
+  grid then provably lands on the browse cursor grid). Any doubt or
+  failure leaves the JSON stream exactly as it was: a shard-0/dict
+  failure posts `error` (main-thread JSON takeover, committed chunks
+  kept); a later shard failure posts `failed{cursor}` (the JSON
+  path's frontier-stop semantics).
+- Streaming reads use `fetch` + `response.body.getReader()` (never
+  for-await over the body — Safari), into exact-size buffers from the
+  manifest; every file is sha256-verified on BOTH the cache read and
+  the network read before it may feed the decoder. String decoders
+  use `ignoreBOM: true` (264 records carry a genuine leading U+FEFF;
+  stage 1 proved this is load-bearing). The transpose emits the exact
+  payload shape the JSON transpose emits — the column store, filter
+  engine, sort orders and §10/§11 invariants are unchanged by
+  construction (node gate: both sessions driven over the full catalog
+  produce byte-identical stores, count 2,557,918 after the 5 known
+  duplicate-id drops).
+- Flow control is ack-based: the main thread acks each committed
+  chunk; the worker holds at most a 2-shard window (1 decode + 1
+  fetch-ahead). No shard is pulled before the window allows.
+- Device caching + resume: decoded-verbatim files persist in Cache
+  Storage (`tcb1-v1`) keyed by fingerprint, with a completion bitmap
+  persisted after every shard and a `__fp__` pointer entry — a
+  changed fingerprint wipes the cache before anything is read.
+  Measured: killed at 419,995 resident (21 shards), a reopened page
+  issued exactly 105 requests (the 104 uncached shards + manifest)
+  and completed with exact counts. A warm repeat visit issues **1**
+  TCB1 request (the manifest) — everything else is served from Cache
+  Storage. No persistence is promised in the UI (Safari eviction);
+  the honest progress line is the only copy.
+
+### 12.3 Residency decision — flat columns (measured)
+
+Stage 1's open flag: decoded columns are 426 MB (titles 243 MB,
+creator dictionary ~110 MB) against research's ≲400 MB whole-page
+peak target, with title/dictionary compression-at-rest as the
+preferred direction. Measured in the harness (6× CPU throttle) at
+full residency, the flat design the JSON path already uses lands at:
+
+- byte ledger (deterministic self-accounting): **502 MB** total —
+  columns 330 MB, dictionaries 113 MB, sort orders 49 MB, external
+  (curated bitsets) 11 MB;
+- CDP JS heap: **190–280 MB** across runs (189.8 MB warm-settled,
+  192.4 MB after the storm, 280.2 MB cold pre-GC sample), vs the
+  JSON path's 241.9 MB in the same harness and 195.9 MB in §11's.
+
+The store is byte-identical to the JSON path's by construction, so
+its heap class is the same — inside the target with headroom.
+**Decision: flat columns, no compression-at-rest.** Compressing the
+title blob at rest would break the identical-columnar-state
+invariant (every title read becomes an inflate-or-cache decision),
+add a second cache to evict and invalidate, and buy memory the
+budget does not need. The transients TCB1 actually removes are the
+JSON path's real cost: the 795 MB of raw text in flight, the parsed
+object forms, and the per-page transpose garbage.
+
+### 12.4 Latest-only input + the byte ledger ladder
+
+- The browse effect never cancels a running scan. It stores the
+  newest selection in a single pending slot (a still-newer tap
+  replaces it); the engine's `onSettle` (fires exactly once per job:
+  commit, abandon, or cancel) drains it, skipping a drain identical
+  to the just-committed result. At most one scan in flight + one
+  pending, generation-tagged — filter transients stay bounded no
+  matter how fast taps arrive (§5 pattern). The §11.4 streaming
+  throttle is preserved inside the same model.
+- The byte ledger (Safari has no gauge) accounts columns,
+  dictionaries, the dedupe index, orders and registered external
+  planes at allocation time and is exposed as
+  `window.__towerLedger`. Two latched rungs, checked on the publish
+  cadence: **rung 1 at 560 MB** sheds the 51 MB sort-order buffer
+  (status returns to "pending", never "failed" — a "failed" status
+  would trigger the ~1.24 GB on-device sort rebuild of audit F6;
+  a 15 s refetch timer re-arms if orders are still wanted);
+  **rung 2 at 640 MB** narrows the fetch pipeline (8 → 3) and the
+  worker ack window (2 → 1). Residency itself is never shed, and
+  there is **no record cap** (Joshua's 2026-11-10 uncap order).
+  Neither rung fired in any verification run (peak ledger 502 MB).
+
+### 12.5 Two bugs the throttled harness caught (both fixed)
+
+1. **Discovery race (found by the cell profile):** stream start
+   raced TCB1 manifest discovery against a 3 s timer. On a
+   throttled connection the boot prefetch's JSON pages saturate
+   the connection pool, the race expires, and the page silently
+   committed to the 795 MB JSON stream for the whole load — the
+   exact phone scenario this phase exists to prevent. Fix:
+   discovery is awaited on the same terms as `browseMeta` (same
+   attempts/timeout discipline; the manifest is a few KB). A dead
+   TCB1 endpoint now delays stream start no more than a dead
+   browse manifest already does. Re-test: dict.bin is requested
+   and the stream engages on the cell profile.
+2. **Settle-window artifact (diagnosed, not a defect):** the
+   fresh-profile storm/soak runs exhausted their settle-observation
+   windows (300 s / 600 s) while ending in exactly correct states.
+   A warm-profile probe of the identical storm settles in ≤10 s
+   with long-task counts flat — the drag was the harness host
+   (426 MB of Cache Storage writes flushing + swap pressure on a
+   1.5-CPU box), not the scheduler. Reported here so the numbers
+   are never quoted without their context.
+
+### 12.6 Verification (6× CPU throttle harness, this build)
+
+- **Parity:** node gate byte-identical (§12.2). In-browser, TCB1 vs
+  JSON on the same build: panel chip lists **exactly equal** (all
+  lane, era and group counts); taps equal — Law 1,277,197, Primary
+  Sources 26,657, All entries 2,557,918 shown of 2,557,923;
+  Christianity 1,800 via bitsets (panel + result). §11 assertions
+  in every run: rendered cards == claimed window (50), zero
+  text-nodes == 0, zero JS errors.
+- **Load, fast network:** cold TCB1 — first 20k **7.5 s**, full
+  residency **56.6 s** (131 requests = manifest + dict + curated +
+  128 shards, nothing else). Same-harness JSON: 6.5 s / **81.7 s**.
+  (§11's production-shaped JSON baseline was 256.5 s.)
+- **Repeat visit:** 1 TCB1 request (manifest only); full residency
+  64.6 s — on a local disk-speed network the repeat is decode-bound,
+  not network-bound; the saving shows on real networks (below).
+- **Cell profile (10 Mbps / 100 ms RTT, HTTP/1.1 harness,
+  unminified assets — a worst case vs production's HTTP/2 CDN):**
+  post-fix, the binary stream engages and the first 20k are
+  resident at **78 s** (pre-fix it never engaged at all — §12.5.1).
+  A full-completion time is **not quoted**: the harness host could
+  not sustain the profile (the app's aggregate demand — unminified
+  assets, the 24 MB boot prefetch, hub, dictionary and shards —
+  shares one emulated bucket; the dictionary alone measured
+  ~195 s from a page-context fetch under that contention, the
+  loader's 120 s per-attempt timeout fired once and its retry
+  proceeded; two attempts were also lost to runtime restarts of
+  the harness VM). The network-bound comparison that does hold
+  everywhere is the measured wire size: **107.4 MB vs ~251 MB
+  (2.34× less)** plus the removal of the 795 MB text parse. On
+  production's stack the dictionary is a ~30 s transfer at this
+  rate; Joshua's phone on a real network is the deciding check,
+  as with every phase of this program.
+- **Resume:** §12.2 (105 requests after a 419,995 kill, exact).
+- **Spam-during-stream soak (the audit's missing profile):** 143
+  taps at 120 ms cadence from the first seconds of streaming
+  through residency (105 landed; the rest name subchips hidden
+  behind the panel's "Show all" expander at that moment) —
+  residency in **73.6 s** under spam (vs 56.6 s unspammed), zero
+  JS errors, **zero frame gaps over 1 s across 18,152 frames**,
+  final selection exact (2,557,918 / 2,557,923).
+- **§10 storm regression:** 16/20 taps landed (baseline band
+  15–16/20; misses are the same expander-hidden subchips), scroll
+  parked mid-results, final state exact, zero errors, heap
+  192.4 MB. Settle-window caveat: §12.5(2).
+- **Curated axis early:** with the bitsets primed from the TCB1
+  manifest at mount, the axis answers before the hub file is
+  parsed — probed live at 2.42 M of 2.56 M resident: Christianity
+  tapped mid-stream settled at exactly 1,800.
+
+### 12.7 What did not change
+
+JSON pipeline and its worker protocol (untouched, still the
+fallback); the filter engine's scan/commit model (§10) and the
+§11 loading-state rules; the hub file and its other UI uses; the
+helix scene (another lane). Expansion remains paused.

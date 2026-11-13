@@ -170,6 +170,23 @@ export class CatalogIdIndex {
     const v = this.table[slot];
     return v === 0 ? undefined : v - 1;
   }
+  // Byte-mode probe for callers that hold an id's UTF-8 bytes and no
+  // string (the TCB1 binary session, tcb1.js): identical semantics to
+  // get() — byte equality is decoded-string equality — without
+  // materializing the string. Byte-mode indexes only.
+  getBytes(idBytes) {
+    if (!this._byteMode) return undefined;
+    const slot = this._probe(null, idBytes);
+    const v = this.table[slot];
+    return v === 0 ? undefined : v - 1;
+  }
+  // Byte-mode insert twin of add(): same last-wins semantics.
+  addBytes(idx, idBytes) {
+    if ((this.count + 1) * 2 > this.cap) this._grow();
+    const slot = this._probe(null, idBytes);
+    if (this.table[slot] === 0) this.count++;
+    this.table[slot] = idx + 1;
+  }
   // Extend the index over an artifacts array-like (growing-prefix
   // incremental, exactly like the Map fill loop it replaces).
   syncTo(artifacts, maxNew = Infinity) {

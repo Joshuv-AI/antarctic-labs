@@ -57,6 +57,8 @@ import {
   getBrowseTotalHint,
   isCatalogPending,
   CatalogIdIndex,
+  tcb1Meta,
+  noteExternalBytes,
 } from "./lib/catalog.js";
 // Two-level browse taxonomy for the library filter (revamp 2026-10-17):
 // top-level lanes + subcategories derived from the artifact_id prefix.
@@ -79,6 +81,7 @@ import {
   COLLECTION_GROUPS,
   loadHubsIndex,
   buildCollections,
+  loadCuratedBitsets,
 } from "./lib/tower-collections.js";
 // Browse filter engine (2026-11-11 perf fix, FILTER-REVAMP-DESIGN.md
 // §10): chunked, latest-wins filter computation over typed arrays —
@@ -1801,6 +1804,40 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     return null;
   }, [collData, collKey]);
   const collSet = activeCollection ? activeCollection.ids : null;
+  // Curated bitsets (Phase 2A, design §12): when the collection's
+  // descriptor came from the TCU1 bitsets, membership is the packed
+  // bitset instead of an id Set — the filter engine tests bits
+  // directly, no per-length rebuild, usable from the first seconds
+  // of the load.
+  const collBitsSel =
+    activeCollection && activeCollection.bits ? activeCollection.bits : null;
+  // Prime the curated axis from the bitsets at mount (design §12):
+  // they ride the TCB1 dataset (a few MB on the wire, parsed in
+  // milliseconds) instead of the 17.7 MB hub index, so the axis is
+  // ready early. When they land they become the panel's data; the
+  // hub fetch remains the fallback for when no dataset exists.
+  useEffect(() => {
+    let dead = false;
+    tcb1Meta().then((m) => {
+      if (dead || !m) return;
+      const fp = m.source && m.source.fingerprint_sha256_concat;
+      if (!fp) return;
+      loadCuratedBitsets(fp).then((data) => {
+        if (dead || !data) return;
+        let bytes = 0;
+        for (const g of data.groups) {
+          for (const c of g.collections) {
+            if (c.bits) bytes += c.bits.byteLength;
+          }
+        }
+        noteExternalBytes("curated-bitsets", bytes);
+        setCollData(data);
+      });
+    });
+    return () => {
+      dead = true;
+    };
+  }, []);
   // Committed browse-filter result (filter engine, FILTER-REVAMP-
   // DESIGN.md §10): the exact match list (catalog indices in display
   // order) plus its count for ONE selection, produced by the chunked
@@ -1821,6 +1858,10 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     browseFx.current = {
       gen: 0,
       job: null,
+      // Latest-only input (design §12): while a scan runs, newer
+      // selections land here (one slot — a newer tap replaces the
+      // pending one) and drain from the job's onSettle.
+      pendingSel: null,
       codes: createBucketCodeTable(),
       memberFor: null,
       memberLen: 0,
@@ -1829,6 +1870,9 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       throttleTimer: null,
     };
   }
+  // The scan launcher, re-assigned every render so its closures are
+  // never stale; the engine's onSettle drains through it too.
+  const filterLaunchRef = useRef(null);
   // Subcategories added by the 2026-11-11 revamp (LAW, REFERENCE) are
   // not in the server facet products yet, so — like a hub filter — a
   // search under one runs on the client pipeline (see
@@ -1837,7 +1881,8 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     bucketFilter.indexOf(":") > 0 &&
     TOWER_CLIENT_ONLY_SUB_LANES.indexOf(bucketFilter.split(":")[0]) !== -1;
   // Any filter state the client pipeline owns in server mode.
-  const clientFiltersActive = !!collSet || !!eraFilter || bucketClientOnly;
+  const clientFiltersActive =
+    !!collSet || !!collBitsSel || !!eraFilter || bucketClientOnly;
   // Filter scroll stability (2026-10-28 revamp): the 2026-10-25 approach
   // scrolled the Collections block into view after every tap. On mobile
   // that read as a bounce — the tap target jumped away mid-interaction,
@@ -2274,6 +2319,95 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // active, a Proxy record materialization + id decode + Set hash per
   // record — froze the main thread for seconds per tap and, stacked
   // across rapid taps, tore the UI and jetsam-killed phone tabs.
+  // The scan launcher (design §12): runs ONE selection's scan to a
+  // commit. Re-assigned every render (fresh closures); the engine's
+  // onSettle drains the pending latest selection through it.
+  filterLaunchRef.current = (sel) => {
+    const fx = browseFx.current;
+    const gen = ++fx.gen;
+    const commit = (indices, count) => {
+      if (fx.gen !== gen) return;
+      const res = { sel, indices, count };
+      browseResultRef.current = res;
+      setBrowseResult(res);
+    };
+    // Zero-predicate fast path: the whole resident order, in order —
+    // committed as-is, no scan at all.
+    if (!sel.bucketFilter && !sel.eraFilter && !sel.collSet && !sel.collBits) {
+      commit(sel.order, sel.order.length);
+      return;
+    }
+    const mask = bucketMaskFor(fx.codes, sel.bucketFilter);
+    let member = null;
+    if (sel.collSet) {
+      if (
+        fx.memberFor !== sel.collSet ||
+        fx.memberLen !== sel.len ||
+        !fx.member
+      ) {
+        fx.member = buildMembershipBitset(sel.idIndex, sel.collSet, sel.len);
+        fx.memberFor = sel.collSet;
+        fx.memberLen = sel.len;
+      }
+      member = fx.member;
+    }
+    const eraCodeWanted = sel.eraFilter
+      ? TOWER_ERAS.findIndex((e) => e.id === sel.eraFilter) + 1
+      : 0;
+    fx.job = startFilterScan({
+      order: sel.order,
+      bucketCodes: fx.codes.codes,
+      bucketMask: mask,
+      eraCodes: sel.eraCodes,
+      eraCode: eraCodeWanted,
+      member,
+      memberBits: sel.collBits || null,
+      isCurrent: () => fx.gen === gen,
+      onCommit: (indices, count) => commit(indices, count),
+      onSettle: () => {
+        fx.job = null;
+        const p = fx.pendingSel;
+        fx.pendingSel = null;
+        if (!p) return;
+        // A pending selection identical to what just committed
+        // (the visitor tapped back to the running selection) needs
+        // no second scan.
+        const cur = browseResultRef.current;
+        if (
+          cur &&
+          cur.sel.bucketFilter === p.bucketFilter &&
+          cur.sel.eraFilter === p.eraFilter &&
+          cur.sel.collKey === p.collKey &&
+          cur.sel.collSet === p.collSet &&
+          cur.sel.collBits === p.collBits &&
+          cur.sel.order === p.order &&
+          cur.sel.len === p.len
+        ) {
+          return;
+        }
+        filterLaunchRef.current(p);
+      },
+    });
+  };
+  // Unmount-only teardown for the filter machinery (design §12):
+  // dependency changes must NOT cancel a running scan (the
+  // latest-only queue replaces the old cancel-and-restart), so the
+  // cancel lives here, in an effect that runs its cleanup once.
+  useEffect(() => {
+    return () => {
+      const fx = browseFx.current;
+      if (!fx) return;
+      if (fx.job) {
+        fx.job.cancel();
+        fx.job = null;
+      }
+      if (fx.throttleTimer) {
+        clearTimeout(fx.throttleTimer);
+        fx.throttleTimer = null;
+      }
+      fx.pendingSel = null;
+    };
+  }, []);
   useEffect(() => {
     if (!towerData || !artifacts || !towerOrder) return undefined;
     // While a real query is being answered by the blended search
@@ -2288,8 +2422,12 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       eraFilter,
       collKey,
       collSet,
+      collBits: collBitsSel,
       order: towerOrder,
       len: artifacts.length,
+      bucketKeys: towerData.bucketKeys,
+      eraCodes: towerData.eraCodes,
+      idIndex: towerData.idIndex,
     };
     const cur = browseResultRef.current;
     const sameSel =
@@ -2298,8 +2436,13 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       cur.sel.eraFilter === sel.eraFilter &&
       cur.sel.collKey === sel.collKey &&
       cur.sel.collSet === sel.collSet &&
+      cur.sel.collBits === sel.collBits &&
       cur.sel.order === sel.order;
-    if (sameSel && cur.sel.len === sel.len) return undefined;
+    if (sameSel && cur.sel.len === sel.len) {
+      // The committed result already IS the latest intent.
+      fx.pendingSel = null;
+      return undefined;
+    }
     // Streaming throttle (§11.4): the selection is unchanged and only
     // the resident prefix grew, and the catalog is still arriving —
     // don't restart the scan for every chunk. The committed result
@@ -2310,6 +2453,10 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       const now = Date.now();
       const since = now - fx.lastScanAt;
       if (fx.lastScanAt && since < STREAM_RESCAN_MS) {
+        // Latest-only: the growth re-scan becomes the pending
+        // intent (a running job drains it on settle); the trailing
+        // timer covers the idle case, as before.
+        fx.pendingSel = sel;
         if (!fx.throttleTimer) {
           fx.throttleTimer = setTimeout(() => {
             fx.throttleTimer = null;
@@ -2324,74 +2471,26 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       fx.throttleTimer = null;
     }
     fx.lastScanAt = Date.now();
-    const gen = ++fx.gen;
-    if (fx.job) {
-      fx.job.cancel();
-      fx.job = null;
-    }
-    const commit = (indices, count) => {
-      if (fx.gen !== gen) return;
-      const res = { sel, indices, count };
-      browseResultRef.current = res;
-      setBrowseResult(res);
-    };
     // Bucket codes extend over just the newly resident tail on EVERY
     // catalog version — including unfiltered ones — so the one full
     // encoding pass is spread across the stream's publishes instead
     // of landing as a single task on the visitor's first filtered
     // tap (measured in the storm harness, design §10.4).
     extendBucketCodes(fx.codes, towerData.bucketKeys);
-    // Zero-predicate fast path: the whole resident order, in order —
-    // committed as-is, no scan at all.
-    if (!bucketFilter && !eraFilter && !collSet) {
-      commit(towerOrder, towerOrder.length);
+    // Latest-only input (design §12): a running scan is NEVER
+    // cancelled for a newer tap. The latest selection takes the
+    // single pending slot (a still-newer tap replaces it) and the
+    // running job's onSettle launches it — at most one scan in
+    // flight and one pending, so filter transients stay bounded
+    // no matter how fast taps arrive, and the final selection
+    // always lands.
+    if (fx.job) {
+      fx.pendingSel = sel;
       return undefined;
     }
-    // Typed-array prep, cached across jobs (see filter-engine.js):
-    // a curated collection becomes an index bitset once per
-    // (collection, catalog length) — ~26k id-index lookups replace
-    // 2.56M per-record Set probes per click.
-    const mask = bucketMaskFor(fx.codes, bucketFilter);
-    let member = null;
-    if (collSet) {
-      if (
-        fx.memberFor !== collSet ||
-        fx.memberLen !== artifacts.length ||
-        !fx.member
-      ) {
-        fx.member = buildMembershipBitset(
-          towerData.idIndex,
-          collSet,
-          artifacts.length
-        );
-        fx.memberFor = collSet;
-        fx.memberLen = artifacts.length;
-      }
-      member = fx.member;
-    }
-    const eraCodeWanted = eraFilter
-      ? TOWER_ERAS.findIndex((e) => e.id === eraFilter) + 1
-      : 0;
-    fx.job = startFilterScan({
-      order: towerOrder,
-      bucketCodes: fx.codes.codes,
-      bucketMask: mask,
-      eraCodes: towerData.eraCodes,
-      eraCode: eraCodeWanted,
-      member,
-      isCurrent: () => fx.gen === gen,
-      onCommit: (indices, count) => {
-        fx.job = null;
-        commit(indices, count);
-      },
-    });
-    return () => {
-      if (fx.job) {
-        fx.job.cancel();
-        fx.job = null;
-      }
-    };
-  }, [towerData, artifacts, towerOrder, bucketFilter, eraFilter, collSet, collKey, query, fullIndexReady, streamKick]);
+    filterLaunchRef.current(sel);
+    return undefined;
+  }, [towerData, artifacts, towerOrder, bucketFilter, eraFilter, collSet, collBitsSel, collKey, query, fullIndexReady, streamKick]);
   const { rankMap, matchCount, rankedIndices, blendedModel, browseIndices } = useMemo(() => {
     const map = new Map();
     if (!artifacts || !towerData)
@@ -2410,7 +2509,11 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     // collection's id Set comes from the hub index; a work not in the
     // set is out, whatever the search/category state says.
     const passesCollection = (i) =>
-      !collSet || collSet.has(artifacts[i].artifact_id);
+      collSet
+        ? collSet.has(artifacts[i].artifact_id)
+        : collBitsSel
+          ? (collBitsSel[i >> 5] & (1 << (i & 31))) !== 0
+          : true;
     // Era filter (2026-11-11): era codes were precomputed per record
     // in derivation phase 0, so this is one typed-array read. A record
     // with no usable year (code 0) matches no era selection.
@@ -2461,7 +2564,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       // precomputed counts cover the same resident prefix the scan
       // would, so the semantics are unchanged.)
       const knownCount =
-        !collSet && towerData.eraCounts
+        !collSet && !collBitsSel && towerData.eraCounts
           ? eraFilter
             ? bucketFilter
               ? towerData.bucketEraCounts[bucketFilter + "|" + eraFilter] || 0
@@ -2857,7 +2960,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       if (items[k].index >= 0) map.set(items[k].key, k + 1);
     }
     return { rankMap: map, matchCount: total, rankedIndices: null, blendedModel, browseIndices: null };
-  }, [q, bucketFilter, eraFilter, sortId, towerOrder, artifacts, towerData, rowBudget, collSet, deep, strictQuery, browseResult]);
+  }, [q, bucketFilter, eraFilter, sortId, towerOrder, artifacts, towerData, rowBudget, collSet, collBitsSel, deep, strictQuery, browseResult]);
   // ---- Phase B: server-side catalog search (CUTOVER, 2026-10-29) -------
   // Server search is the DEFAULT: the SEARCH path routes to
   // /api/catalog-search and adapts its pages into the blendedModel shape

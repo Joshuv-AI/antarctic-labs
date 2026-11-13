@@ -338,6 +338,9 @@ export function isIndexInFlight() {
 // function; only this plain browse stream reads static pages.
 const BROWSE_API_PAGE = 2000;
 const BROWSE_PIPELINE = 8;
+// Live pipeline width: the memory ladder's rung 2 narrows it (see
+// the byte ledger below); a fresh stream restores the full width.
+let browsePipelineWidth = BROWSE_PIPELINE;
 // Publish cadence for the browse stream (2026-11-11 smoothness).
 // Was 2500 ms (2026-10-28): back then every publish restarted the
 // full derivation and stacked half-built structures into jetsam
@@ -558,6 +561,11 @@ export function appendRecordsToStore(store, records) {
   }
   const chunkIndex = store.chunks.length;
   store.chunks.push({ start, idBytes, idOff, titleBytes, titleOff });
+  // Byte ledger (design §12): text + offset tables + per-record
+  // columns (Uint16 chunk index; Uint32 creator/year; 4 × Uint8).
+  storeBytes(store).chunks +=
+    idBytes.byteLength + idOff.byteLength +
+    titleBytes.byteLength + titleOff.byteLength + n * 14;
   for (let j = 0; j < n; j++) {
     const r = accepted[j];
     colPush(store.chunkIdx, chunkIndex);
@@ -789,6 +797,165 @@ function browseMeta() {
   return browseMetaPromise;
 }
 
+// TCB1 binary dataset discovery (Phase 2A, design §12): the catalog
+// also publishes as a columnar binary dataset (scripts/build-tcb1.mjs)
+// whose manifest names the browse fingerprint it was generated from.
+// The binary stream engages only when that fingerprint, the record
+// total and the shard size all match the browse manifest exactly —
+// the dataset then provably describes the same catalog in the same
+// order — and any doubt (no manifest, mismatch) leaves the JSON
+// stream exactly as it was. Discovery mirrors browseMeta's
+// discipline (boot-prefetch handoff first, bounded retries, only
+// success is session-sticky) and is awaited at stream start on the
+// same terms as browseMeta (see startCatalogBrowse for why a short
+// race was removed).
+let tcb1MetaPromise = null;
+
+function tcb1MetaShape(m) {
+  if (
+    m && m.format === "TCB1" && m.version === 1 &&
+    typeof m.total_records === "number" &&
+    Number.isFinite(m.shard_size) && Number.isFinite(m.shard_count) &&
+    Array.isArray(m.shards) && m.shards.length === m.shard_count &&
+    m.dictionaries && typeof m.dictionaries.sha256 === "string" &&
+    m.source && typeof m.source.fingerprint_sha256_concat === "string"
+  ) {
+    return m;
+  }
+  return null;
+}
+
+async function discoverTcb1Meta() {
+  const boot = typeof window !== "undefined" ? window.__tcb1Manifest : null;
+  const fromBoot = tcb1MetaShape(boot);
+  if (fromBoot) return fromBoot;
+  for (let attempt = 0; attempt < BROWSE_META_ATTEMPTS; attempt++) {
+    try {
+      const m = await fetchJsonOnce("/api/tcb1-manifest", BROWSE_META_TIMEOUT_MS);
+      return tcb1MetaShape(m);
+    } catch {
+      if (attempt < BROWSE_META_ATTEMPTS - 1) {
+        await new Promise((r) =>
+          setTimeout(r, BROWSE_META_BACKOFF_MS[attempt] || 1600)
+        );
+      }
+    }
+  }
+  return null;
+}
+
+// Discovery read for the TCB1 manifest; never rejects. Only a
+// successful (well-formed) discovery is cached for the session.
+export function tcb1Meta() {
+  if (!tcb1MetaPromise) {
+    tcb1MetaPromise = discoverTcb1Meta().then(
+      (m) => {
+        if (!m) tcb1MetaPromise = null;
+        return m;
+      },
+      () => {
+        tcb1MetaPromise = null;
+        return null;
+      }
+    );
+  }
+  return tcb1MetaPromise;
+}
+
+// The engagement gate: the binary dataset must describe THIS browse
+// build — same source fingerprint, same total, same page size (the
+// shard grid must land exactly on the browse cursor grid).
+function tcb1ForBrowse(tcb1, meta) {
+  if (!tcb1 || !meta) return null;
+  if (tcb1.source.fingerprint_sha256_concat !== meta.fp) return null;
+  if (tcb1.total_records !== meta.total) return null;
+  if (tcb1.shard_size !== meta.pageSize) return null;
+  return tcb1;
+}
+
+// ---------------------------------------------------------------------
+// Byte ledger + degradation ladder (Phase 2A, design §12; research
+// §5.5 pattern 1/6): Safari exposes no memory gauge, so the loader
+// accounts its own bytes deterministically — column chunks and
+// dictionary growth are counted where they are allocated (per store,
+// so a fallback re-base self-corrects), the dedupe index and the
+// sort orders are read live, and sibling planes (the curated
+// bitsets) register through noteExternalBytes. Two latched rungs,
+// checked on the publish cadence: rung 1 sheds the 51 MB sort-order
+// buffer (status returns to "pending" — derivations wait for the
+// refetch; it must NEVER read as "failed", which is the signal that
+// triggers the on-device order build the phone cannot survive);
+// rung 2 narrows the fetch pipelines. Residency itself is never
+// shed and no record cap exists (Joshua's 2026-11-10 uncap order).
+const LEDGER_RUNG1_BYTES = 560 * 1048576;
+const LEDGER_RUNG2_BYTES = 640 * 1048576;
+let ledgerRung = 0;
+const ledgerExternal = new Map();
+
+export function noteExternalBytes(tag, bytes) {
+  if (bytes > 0) ledgerExternal.set(tag, bytes);
+  else ledgerExternal.delete(tag);
+}
+
+function storeBytes(store) {
+  if (!store.__bytes) store.__bytes = { chunks: 0, dicts: 0, dictLens: null };
+  return store.__bytes;
+}
+
+// Dictionary growth is sampled (at publish cadence) rather than
+// counted per insert: only entries added since the last sample are
+// walked, so the cost is proportional to growth, never to size.
+function accountDictGrowth(store) {
+  const b = storeBytes(store);
+  const prev = b.dictLens || {};
+  const next = {};
+  for (const dictKey of ["creatorDict", "yearDict", "collDict", "fmtDict", "rightsDict", "dlDict"]) {
+    const dict = store[dictKey];
+    const from = prev[dictKey] || 0;
+    for (let i = from; i < dict.length; i++) {
+      const v = dict[i];
+      b.dicts += typeof v === "string" ? utf8ByteLength(v) + 16 : 8;
+    }
+    next[dictKey] = dict.length;
+  }
+  b.dictLens = next;
+}
+
+export function getCatalogMemoryLedger() {
+  const st = browseState;
+  const sb = st && st.store ? storeBytes(st.store) : { chunks: 0, dicts: 0 };
+  const parts = {
+    columns: sb.chunks,
+    dictionaries: sb.dicts,
+    idIndex: st && st.store && st.store.idIndex ? st.store.idIndex.table.byteLength : 0,
+    orders: browseOrdersBytes,
+    external: 0,
+  };
+  for (const v of ledgerExternal.values()) parts.external += v;
+  return {
+    total: parts.columns + parts.dictionaries + parts.idIndex + parts.orders + parts.external,
+    parts,
+    rung: ledgerRung,
+  };
+}
+
+function checkMemoryPressure() {
+  const st = browseState;
+  if (st && st.store) accountDictGrowth(st.store);
+  const led = getCatalogMemoryLedger();
+  if (typeof window !== "undefined") window.__towerLedger = led;
+  if (ledgerRung === 0 && led.total >= LEDGER_RUNG1_BYTES) {
+    ledgerRung = 1;
+    shedBrowseOrders();
+  } else if (ledgerRung === 1 && led.total >= LEDGER_RUNG2_BYTES) {
+    ledgerRung = 2;
+    browsePipelineWidth = 3;
+    if (st && st.tcb1 && st.worker) {
+      try { st.worker.postMessage({ type: "window", size: 1 }); } catch {}
+    }
+  }
+}
+
 // Baked sort orders (2026-11-10 completion-spike fix): the metadata
 // generator bakes the five sort permutations into orders.bin beside
 // the browse pages (see scripts/build-catalog-meta.mjs). The library
@@ -810,6 +977,7 @@ function browseMeta() {
 // first asks for a non-default sort (ensureBrowseOrders), whichever
 // comes first.
 let browseOrders = null; // {fp, total, order}
+let browseOrdersBytes = 0; // live buffer size for the byte ledger
 let browseOrdersStatus = "absent"; // absent | pending | ready | failed
 const browseOrdersSettleCbs = new Set();
 function settleBrowseOrders() {
@@ -857,6 +1025,7 @@ function loadBrowseOrders(fp, total) {
     .then((buf) => {
       clearTimeout(timer);
       if (buf.byteLength !== total * 5 * 4) throw new Error("orders size mismatch");
+      browseOrdersBytes = buf.byteLength;
       const all = new Uint32Array(buf);
       browseOrders = {
         fp,
@@ -871,10 +1040,15 @@ function loadBrowseOrders(fp, total) {
       };
       browseOrdersStatus = "ready";
       settleBrowseOrders();
+      // The 51 MB landing is the ledger's biggest single step: if it
+      // crosses rung 1, the ladder sheds it again (once — the rung
+      // latches, so a wanted refetch that lands later stays).
+      checkMemoryPressure();
     })
     .catch(() => {
       clearTimeout(timer);
       browseOrders = null;
+      browseOrdersBytes = 0;
       browseOrdersStatus = "failed";
       settleBrowseOrders();
     });
@@ -907,6 +1081,27 @@ export function ensureBrowseOrders() {
   if (!browseOrdersDeferred || browseOrdersFetchStarted) return;
   browseOrdersFetchStarted = true;
   loadBrowseOrders(browseOrdersDeferred.fp, browseOrdersDeferred.total);
+}
+
+// Rung 1 of the memory ladder: release the sort-order buffer. The
+// status returns to "pending" — the derivations' contract for
+// "baked orders are coming; wait" — and NEVER to "failed", which
+// would trigger the on-device order build (audit F6). The deferred
+// arm stays in place, so the next ensureBrowseOrders() (a sort tap,
+// or the refetch timer below when a sort already wanted them)
+// brings the orders back.
+function shedBrowseOrders() {
+  if (browseOrdersStatus !== "ready" || !browseOrders) return;
+  browseOrders = null;
+  browseOrdersBytes = 0;
+  browseOrdersStatus = "pending";
+  browseOrdersFetchStarted = false;
+  settleBrowseOrders();
+  if (browseOrdersWanted) {
+    setTimeout(() => {
+      if (browseOrdersStatus === "pending") ensureBrowseOrders();
+    }, 15000);
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -968,6 +1163,16 @@ export function commitTransposedChunk(store, remap, payload) {
     titleBytes: payload.titleBytes,
     titleOff: payload.titleOff,
   });
+  // Byte ledger (design §12): chunk text + offset tables + the
+  // chunk-index column (Uint16 per record); code columns below are
+  // counted from the payload's own arrays.
+  const sb = storeBytes(store);
+  sb.chunks +=
+    payload.idBytes.byteLength + payload.idOff.byteLength +
+    payload.titleBytes.byteLength + payload.titleOff.byteLength + n * 2;
+  for (const key of Object.keys(payload.codes || {})) {
+    sb.chunks += payload.codes[key].byteLength;
+  }
   if (!n) return;
   colEnsure(store.chunkIdx, n);
   for (let j = 0; j < n; j++) store.chunkIdx.a[store.chunkIdx.n + j] = chunkIndex;
@@ -1007,6 +1212,8 @@ function browsePublishNow(complete) {
   // and the columns keep growing between publishes — the view pins
   // the length it was published with, like the old array slice did.
   publishIndex(createCatalogView(st.store, st.store.count), complete);
+  // Byte-ledger pressure check on the publish cadence (design §12).
+  checkMemoryPressure();
 }
 function browsePublish(complete) {
   const st = browseState;
@@ -1040,7 +1247,7 @@ function browsePublish(complete) {
 // base, then pipelines the browse pages — its first page fetch fires
 // the moment it starts, never waiting on the base transpose the way
 // the old begin() pre-transpose blocked browseLaunch.
-function browseWorkerBegin(st, meta) {
+function browseWorkerBegin(st, meta, tcb1) {
   let worker;
   try {
     worker = new Worker(new URL("./browse-worker.js", import.meta.url), {
@@ -1051,6 +1258,7 @@ function browseWorkerBegin(st, meta) {
   }
   st.workerMode = true;
   st.worker = worker;
+  st.tcb1 = !!tcb1;
   st.baseDone = false;
   st.remap = createCodeRemap();
   st.store = createColumnStore(meta ? meta.total : 0);
@@ -1105,11 +1313,15 @@ function browseWorkerBegin(st, meta) {
       total: meta ? meta.total : null,
       apiPage: BROWSE_API_PAGE,
       startCursor: st.cursor,
+      // TCB1 mode (design §12): the validated binary-dataset
+      // manifest. The worker decodes shard 0 as the base chunk
+      // itself — no JSON bootstrap handoff is needed or used.
+      tcb1: tcb1 || undefined,
       // The handoff (above): only when the cached bootstrap IS the
       // prefix the cursor names — the worker verifies the length
       // itself and falls back to its own fetch on any mismatch.
       bootstrap:
-        bootstrapCache && bootstrapCache.length === st.cursor
+        !tcb1 && bootstrapCache && bootstrapCache.length === st.cursor
           ? bootstrapCache
           : undefined,
     });
@@ -1117,6 +1329,14 @@ function browseWorkerBegin(st, meta) {
     browseWorkerFallback(st);
   }
   return true;
+}
+
+// TCB1 flow control: one ack per committed chunk releases the
+// worker to decode the next shard (its window is 1–2 chunks). Acks
+// are posted only in TCB1 mode; the JSON pipeline is self-paced.
+function browseAck(st) {
+  if (!st.tcb1 || !st.worker) return;
+  try { st.worker.postMessage({ type: "ack" }); } catch {}
 }
 
 // The worker failed (could not start, crashed, or its bootstrap read
@@ -1130,6 +1350,7 @@ function browseWorkerBegin(st, meta) {
 function browseWorkerFallback(st) {
   if (!st.workerMode) return;
   st.workerMode = false;
+  st.tcb1 = false;
   if (st.visCleanup) { st.visCleanup(); st.visCleanup = null; }
   if (st.worker) {
     try { st.worker.terminate(); } catch {}
@@ -1281,6 +1502,7 @@ function browseAppend(st) {
     commitTransposedChunk(st.store, st.remap, base.transposed);
     st.baseDone = true;
     st.cursor = base.next_cursor != null ? base.next_cursor : st.store.count;
+    browseAck(st);
     burst = 1;
   } else if (!st.store) {
     browseEnsureStore(st);
@@ -1312,6 +1534,7 @@ function browseAppend(st) {
     st.cursor = body.next_cursor != null
       ? body.next_cursor
       : (st.total != null ? st.total : st.cursor + rawLen);
+    browseAck(st);
     const exhausted = body.next_cursor == null || rawLen === 0;
     if (exhausted) {
       // Everything the server has is now resident: that IS the full
@@ -1337,7 +1560,7 @@ function browseLaunch(st) {
   // only for the fallback path (which clears workerMode first).
   if (st.workerMode) return;
   if (browseIsHidden()) { browseWaitAndLaunch(st); return; }
-  while (st.inflight < BROWSE_PIPELINE) {
+  while (st.inflight < browsePipelineWidth) {
     if (st.failedAt != null && st.fetchCursor >= st.failedAt) return;
     if (st.total != null && st.fetchCursor >= st.total) return;
     const cursor = st.fetchCursor;
@@ -1375,7 +1598,18 @@ export function startCatalogBrowse() {
     // before the first launch, so cursor arithmetic never changes
     // mid-run: static mode (fingerprint + baked page size) when the
     // metadata build carries browse pages, function mode otherwise.
-    browseMeta().then((meta) => {
+    // TCB1 discovery runs in parallel with browse-meta discovery
+    // and is awaited on the same terms: the manifest is a few KB,
+    // and a fixed short race was measured (design §12, cell-profile
+    // harness) to expire on throttled connections — the boot
+    // prefetch's JSON pages saturate the connection pool — which
+    // silently committed the page to the 795 MB JSON stream for
+    // the whole load. Discovery failure still falls back to JSON;
+    // it is bounded by the same attempts/timeout discipline as
+    // browseMeta, so a dead TCB1 endpoint delays the stream start
+    // no more than a dead browse manifest already does.
+    Promise.all([browseMeta(), tcb1Meta()]).then(([meta, tcb1Raw]) => {
+      const tcb1 = tcb1ForBrowse(tcb1Raw, meta);
       browseBeginPending = false;
       if (indexComplete || indexPending) return;
       if (browseState && !browseState.stopped) return;
@@ -1385,9 +1619,13 @@ export function startCatalogBrowse() {
         if (browseState.visCleanup) browseState.visCleanup();
         try { browseState.worker.terminate(); } catch {}
       }
+      // A fresh stream resets the memory ladder (design §12).
+      ledgerRung = 0;
+      browsePipelineWidth = BROWSE_PIPELINE;
       browseState = {
         store: null, // column store, lazily based on the resident prefix
         workerMode: false, // browse worker owns fetch+parse+transpose
+        tcb1: false, // worker streams the TCB1 binary dataset
         worker: null,
         baseDone: false, // worker bootstrap chunk committed
         remap: null, // worker->global dictionary code remap tables
@@ -1418,6 +1656,7 @@ export function startCatalogBrowse() {
         browseOrdersFetchStarted = false;
         browseOrdersStatus = "absent";
         browseOrders = null;
+        browseOrdersBytes = 0;
       }
       // Worker path (2026-11-11 phone fix): fetch + parse + transpose
       // run off the main thread. The worker fires its first page
@@ -1430,7 +1669,7 @@ export function startCatalogBrowse() {
       // smoothness) and bases lazily in browseAppend otherwise.
       let workerStarted = false;
       if (bootstrapCache && !indexCache) {
-        workerStarted = browseWorkerBegin(browseState, meta);
+        workerStarted = browseWorkerBegin(browseState, meta, tcb1);
       }
       if (!workerStarted) {
         if (bootstrapCache && !indexCache) browseEnsureStore(browseState);

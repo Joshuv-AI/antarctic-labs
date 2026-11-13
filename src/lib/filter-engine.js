@@ -122,6 +122,18 @@ export function buildMembershipBitset(idIndex, collSet, length) {
 // every slice boundary — a superseded job abandons silently and
 // never calls onCommit. onCommit receives the exact-size match
 // array (catalog indices in display order) and its length.
+//
+// Membership comes in two shapes: `member` (a Uint8Array over
+// catalog indices, built per (collection, length) from an id Set)
+// and `memberBits` (a Uint32Array of PACKED bits over catalog
+// indices — the precomputed TCU1 bitsets of design §12, length-
+// independent, no per-length rebuild). At most one is passed.
+//
+// onSettle (design §12) fires exactly once when the job ENDS, for
+// any reason — commit, abandon at a slice boundary, or cancel —
+// after onCommit in the commit case. The caller's latest-only
+// scheduler drains its pending selection from it, so a queued tap
+// is never lost and never needs the running job cancelled.
 export function startFilterScan(opts) {
   const {
     order,
@@ -130,8 +142,10 @@ export function startFilterScan(opts) {
     eraCodes,
     eraCode,
     member,
+    memberBits,
     isCurrent,
     onCommit,
+    onSettle,
   } = opts;
   const sliceMs = opts.sliceMs || 7;
   const total = order ? order.length : 0;
@@ -141,15 +155,25 @@ export function startFilterScan(opts) {
   let out = new Uint32Array(Math.min(cap, Math.max(total, 1)));
   let timer = null;
   let dead = false;
+  let settled = false;
+
+  const settle = () => {
+    if (settled) return;
+    settled = true;
+    if (onSettle) {
+      try { onSettle(); } catch { /* a listener must never break the engine */ }
+    }
+  };
 
   const step = () => {
-    if (dead || !isCurrent()) return;
+    if (dead || !isCurrent()) { settle(); return; }
     const t0 = performance.now();
     while (pos < total) {
       const i = order[pos++];
       if (bucketMask && !bucketMask[bucketCodes[i]]) continue;
       if (eraCode && (!eraCodes || eraCodes[i] !== eraCode)) continue;
       if (member && !member[i]) continue;
+      if (memberBits && !(memberBits[i >> 5] & (1 << (i & 31)))) continue;
       if (n === out.length) {
         const grown = new Uint32Array(out.length * 2);
         grown.set(out);
@@ -162,14 +186,16 @@ export function startFilterScan(opts) {
       timer = setTimeout(step, 0);
       return;
     }
-    if (!isCurrent()) return;
+    if (!isCurrent()) { settle(); return; }
     onCommit(n === out.length ? out : out.slice(0, n), n);
+    settle();
   };
   timer = setTimeout(step, 0);
   return {
     cancel() {
       dead = true;
       if (timer) clearTimeout(timer);
+      settle();
     },
   };
 }

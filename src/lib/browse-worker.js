@@ -39,6 +39,11 @@
 // a 30 s per-fetch deadline, eight pages in flight, pages transposed
 // strictly in cursor order.
 import { createTransposeSession } from "./catalog-core.js";
+import {
+  parseTcb1Dict,
+  parseTcb1Shard,
+  createTcb1Session,
+} from "./tcb1.js";
 
 const FETCH_TIMEOUT_MS = 30000;
 const PIPELINE = 8;
@@ -253,17 +258,340 @@ async function begin(msg) {
   tryTranspose();
 }
 
+// ---------------------------------------------------------------------
+// TCB1 binary pipeline (Phase 2A, design §12): the same stream over
+// the columnar binary dataset instead of the JSON pages. Chosen by
+// the main thread at begin time (it validates the TCB1 manifest
+// against the browse manifest first); every failure mode lands on
+// the JSON path's exact semantics — a shard that fails twice posts
+// "failed" (stream stops at the frontier, prefix kept), a fatal
+// dataset problem (bad dictionary, checksum mismatch on the
+// dictionary, unreadable manifest data) posts "error" (the main
+// thread takes the stream over with the JSON pipeline).
+//
+// Flow control is ack-based (research §5.5): the worker never holds
+// more than `windowSize` unacknowledged chunks — it does not pull
+// the next shard's bytes until the main thread's commit of an
+// earlier chunk acks. Shard bytes persist in Cache Storage keyed by
+// the dataset fingerprint, with a completion bitmap written after
+// every shard, so a repeat visit reads everything from disk and an
+// interrupted load resumes where it stopped; a changed fingerprint
+// invalidates the whole cache cleanly. All cache access is
+// best-effort (Safari evicts script-written storage freely): any
+// cache failure silently degrades to network-only.
+const TCB1_CACHE = "tcb1-v1";
+let tcb = null;
+
+function tcbKey(fp, name) {
+  return `${self.location.origin}/tcb1/${fp}/${name}`;
+}
+
+async function tcbCacheOpen() {
+  if (typeof caches === "undefined") return null;
+  try {
+    return await caches.open(TCB1_CACHE);
+  } catch {
+    return null;
+  }
+}
+
+async function tcbCacheRead(cache, key) {
+  if (!cache) return null;
+  try {
+    const r = await cache.match(key);
+    if (!r) return null;
+    return new Uint8Array(await r.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+async function tcbCacheWrite(cache, key, bytes) {
+  if (!cache) return;
+  try {
+    await cache.put(
+      key,
+      new Response(bytes, {
+        headers: { "Content-Type": "application/octet-stream" },
+      })
+    );
+  } catch {
+    // Quota or eviction: the stream continues network-only.
+  }
+}
+
+function hexOf(buf) {
+  let out = "";
+  for (let i = 0; i < buf.length; i++) {
+    out += buf[i].toString(16).padStart(2, "0");
+  }
+  return out;
+}
+
+async function sha256Ok(bytes, wantHex) {
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return hexOf(new Uint8Array(digest)) === wantHex;
+  } catch {
+    return false;
+  }
+}
+
+// Streaming fetch of one dataset file into an exact-size buffer.
+// Uses response.body.getReader() — never for-await over the body,
+// which Safari does not support (research §1). The fixed expected
+// length comes from the manifest, so a truncated or oversized body
+// is a failed attempt, not a corrupt shard.
+async function tcbFetchBytes(url, expectedBytes, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`tcb1 fetch ${res.status}`);
+    if (!res.body || !res.body.getReader) {
+      const buf = new Uint8Array(await res.arrayBuffer());
+      if (buf.byteLength !== expectedBytes) throw new Error("tcb1 size");
+      return buf;
+    }
+    const reader = res.body.getReader();
+    const out = new Uint8Array(expectedBytes);
+    let filled = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (filled + value.byteLength > expectedBytes) {
+        throw new Error("tcb1 overflow");
+      }
+      out.set(value, filled);
+      filled += value.byteLength;
+    }
+    if (filled !== expectedBytes) throw new Error("tcb1 truncated");
+    return out;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// One dataset file, cache-first: a cached copy is used only after
+// its sha256 matches the manifest (a changed or corrupted cache can
+// never feed the decoder); a network copy is verified the same way
+// before it is stored. Two attempts, mirroring the page pipeline.
+async function tcbLoadFile(t, name, meta, timeoutMs) {
+  const key = tcbKey(t.fp, name);
+  const cached = await tcbCacheRead(t.cache, key);
+  if (cached && cached.byteLength === meta.bytes && (await sha256Ok(cached, meta.sha256))) {
+    return cached;
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let bytes = null;
+    try {
+      bytes = await tcbFetchBytes(`/tcb1/${t.fp}/${name}`, meta.bytes, timeoutMs);
+    } catch {
+      bytes = null;
+    }
+    if (bytes && (await sha256Ok(bytes, meta.sha256))) {
+      await tcbCacheWrite(t.cache, key, bytes);
+      return bytes;
+    }
+  }
+  return null;
+}
+
+async function tcbPersistBitmap(t) {
+  if (!t.cache || !t.bitmapDirty) return;
+  t.bitmapDirty = false;
+  await tcbCacheWrite(t.cache, tcbKey(t.fp, "bitmap.bin"), t.bitmap);
+}
+
+async function beginTcb1(msg) {
+  const manifest = msg.tcb1;
+  const fp = msg.fp;
+  const cache = await tcbCacheOpen();
+  const t = {
+    fp,
+    manifest,
+    cache,
+    dict: null,
+    session: null,
+    bitmap: new Uint8Array(manifest.completion_bitmap_bytes || 16),
+    bitmapDirty: false,
+    windowSize: 2,
+    unacked: 0,
+    ackWaiters: [],
+    gen: 0,
+    failed: false,
+  };
+  tcb = t;
+  // Fingerprint invalidation: the cache is meaningful only for the
+  // dataset it was written under. A pointer entry records the
+  // fingerprint the cache currently holds; a mismatch wipes the
+  // whole cache before anything is read from it.
+  if (cache) {
+    const pointer = await tcbCacheRead(cache, tcbKey("", "__fp__"));
+    const held = pointer ? new TextDecoder().decode(pointer) : null;
+    if (held !== fp) {
+      try {
+        await caches.delete(TCB1_CACHE);
+      } catch {}
+      t.cache = await tcbCacheOpen();
+      if (t.cache) {
+        await tcbCacheWrite(
+          t.cache,
+          tcbKey("", "__fp__"),
+          new TextEncoder().encode(fp)
+        );
+      }
+    }
+    const bm = await tcbCacheRead(t.cache, tcbKey(fp, "bitmap.bin"));
+    if (bm && bm.byteLength === t.bitmap.byteLength) t.bitmap = bm;
+  }
+  const dictBytes = await tcbLoadFile(
+    t,
+    manifest.dictionaries.file,
+    manifest.dictionaries,
+    120000
+  );
+  if (!dictBytes) {
+    post({ type: "error", stage: "tcb1-dict" });
+    return;
+  }
+  try {
+    t.dict = parseTcb1Dict(dictBytes);
+    t.session = createTcb1Session(t.dict, manifest.total_records || 0);
+  } catch {
+    post({ type: "error", stage: "tcb1-dict-parse" });
+    return;
+  }
+  runTcb1(t, 0);
+}
+
+// The decode loop: strictly in shard order (the session's dedupe and
+// dictionary state are sequential), one shard of fetch-ahead (the
+// next shard's bytes download while this one decodes), and the ack
+// window bounding how far ahead of the main thread's commits the
+// worker may run. Shard 0 posts as the base chunk, exactly like the
+// JSON bootstrap.
+async function runTcb1(t, fromShard) {
+  const gen = ++t.gen;
+  const manifest = t.manifest;
+  const pageSize = manifest.shard_size;
+  const shardCount = manifest.shard_count;
+  let shardIdx = fromShard;
+  let prefetched =
+    shardIdx < shardCount ? tcbLoadShard(t, shardIdx) : Promise.resolve(null);
+  while (shardIdx < shardCount) {
+    if (t.gen !== gen || t.failed) return;
+    while (paused && t.gen === gen) {
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    if (t.gen !== gen) return;
+    const bytes = await prefetched;
+    if (t.gen !== gen) return; // superseded by a reset while fetching
+    const isLast = shardIdx === shardCount - 1;
+    prefetched = isLast ? Promise.resolve(null) : tcbLoadShard(t, shardIdx + 1);
+    if (bytes == null) {
+      t.failed = true;
+      if (shardIdx === 0) {
+        // The base chunk failing is the bootstrap failing: the JSON
+        // path answers that with "error" (main-thread takeover),
+        // never with a frontier stop.
+        post({ type: "error", stage: "tcb1-shard0" });
+      } else {
+        post({ type: "failed", cursor: shardIdx * pageSize });
+      }
+      return;
+    }
+    let payload;
+    try {
+      const shard = parseTcb1Shard(bytes);
+      if (shard.shardIndex !== shardIdx) throw new Error("shard index");
+      payload = t.session.transposeShard(shard, shardIdx === 0 ? -1 : shardIdx * pageSize);
+    } catch {
+      t.failed = true;
+      post({ type: "error", stage: "tcb1-decode" });
+      return;
+    }
+    const meta = manifest.shards[shardIdx];
+    if (shardIdx === 0) {
+      post(
+        { type: "base", total: null, nextCursor: meta.records, payload },
+        payloadTransfer(payload)
+      );
+    } else {
+      post(
+        {
+          type: "page",
+          cursor: shardIdx * pageSize,
+          rawCount: meta.records,
+          total: manifest.total_records,
+          nextCursor: isLast ? null : (shardIdx + 1) * pageSize,
+          payload,
+        },
+        payloadTransfer(payload)
+      );
+    }
+    if ((t.bitmap[shardIdx >> 3] & (1 << (shardIdx & 7))) === 0) {
+      t.bitmap[shardIdx >> 3] |= 1 << (shardIdx & 7);
+      t.bitmapDirty = true;
+    }
+    await tcbPersistBitmap(t);
+    t.unacked++;
+    if (t.unacked >= t.windowSize) {
+      await new Promise((resolve) => t.ackWaiters.push(resolve));
+    }
+    shardIdx++;
+  }
+}
+
+function tcbLoadShard(t, idx) {
+  const meta = t.manifest.shards[idx];
+  return tcbLoadFile(t, meta.file, meta, 60000);
+}
+
+function tcbAck() {
+  if (!tcb) return;
+  if (tcb.unacked > 0) tcb.unacked--;
+  const waiters = tcb.ackWaiters;
+  tcb.ackWaiters = [];
+  for (const resolve of waiters) resolve();
+}
+
 self.onmessage = (e) => {
   const m = e.data || {};
   try {
     if (m.type === "begin") {
       if (started) return;
-      begin(m).catch(() => post({ type: "error", stage: "begin" }));
+      started = true;
+      if (m.tcb1) {
+        beginTcb1(m).catch(() => post({ type: "error", stage: "tcb1" }));
+      } else {
+        begin(m).catch(() => post({ type: "error", stage: "begin" }));
+      }
+    } else if (m.type === "ack") {
+      tcbAck();
+    } else if (m.type === "window") {
+      if (tcb && (m.size === 1 || m.size === 2)) tcb.windowSize = m.size;
     } else if (m.type === "pause") {
       paused = true;
     } else if (m.type === "resume") {
       paused = false;
-      pump();
+      if (!tcb) pump();
+    } else if (m.type === "reset" && tcb) {
+      // TCB1 resume: the main thread dropped every buffered chunk
+      // at/after its append frontier — the session drops its
+      // matching transposed shards and the loop restarts there.
+      // Cached shard bytes stay valid (the bitmap is untouched);
+      // only the decode re-runs. The frontier is always a shard
+      // boundary in this pipeline.
+      const t = tcb;
+      t.session.resetTo(m.cursor);
+      t.failed = false;
+      t.unacked = 0;
+      const waiters = t.ackWaiters;
+      t.ackWaiters = [];
+      for (const resolve of waiters) resolve();
+      paused = false;
+      runTcb1(t, Math.floor(m.cursor / t.manifest.shard_size));
     } else if (m.type === "reset") {
       // Resume after a failure stop: the main thread dropped every
       // buffered page at/after its append frontier, so the session
