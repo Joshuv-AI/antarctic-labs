@@ -55,6 +55,34 @@ export function descShardKey(artifactId) {
 export const descShardUrl = (artifactId) =>
   `${RAW}/tower-descriptions/${descShardKey(artifactId)}.json`;
 
+// Entry-record buckets (2026-11-13, residual-503 fix #2): the catalog
+// records themselves, split by scripts/build-entry-records.mjs into
+// small per-bucket files keyed by an FNV-1a hash of the artifact id
+// (mod 46656, base36). A lookup fetches one ~60 KB bucket instead of
+// the ~19 MB shard text whose transfer was the remaining
+// platform-kill cost on cache misses. (Suffix keying was measured and
+// rejected: numeric-suffixed ids pile into digit buckets — last-3
+// chars gave a 4.3 MB largest bucket / 2.35 MB weighted mean fetch;
+// the hash is uniform: max 96 KB, weighted mean 59 KB.) The bucket
+// files carry only the fields the getRecordById consumers read
+// (entry render, API publicFullRecord, OAI) — the shard path below
+// stays the fallback for ANY bucket failure (missing file, timeout,
+// parse error, record absent), so this layer is an accelerator,
+// never the only copy of the truth, and only the shard path can
+// declare an id missing. The key function MUST stay byte-identical
+// to the one in scripts/build-entry-records.mjs.
+export function entryRecordKey(artifactId) {
+  const s = String(artifactId || "");
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return (h % 46656).toString(36).padStart(3, "0");
+}
+export const entryRecordUrl = (artifactId) =>
+  `${RAW}/entry-records/${entryRecordKey(artifactId)}.json`;
+
 // Upstream fetches are timeout-bounded (2026-11-13, residual-503 fix
 // #1): every consumer of the helpers below degrades on null — the entry
 // function falls back to the SPA shell (200), sitemaps skip — but a
@@ -308,6 +336,25 @@ function boundedMemo(cap) {
 }
 const locateMemo = boundedMemo(256);
 const descMemo = boundedMemo(8);
+const entryRecordMemo = boundedMemo(16);
+
+// One entry-record bucket file, parsed, or null on any failure. A
+// bucket is an { artifact_id: record } object; anything else (404
+// body, error page parsed as JSON, a non-object) is a failure and the
+// caller falls back to the shard path.
+async function fetchEntryRecordBucket(artifactId) {
+  const url = entryRecordUrl(artifactId);
+  let bucket = entryRecordMemo.get(url);
+  if (bucket === undefined) {
+    bucket = await fetchJsonCached(url, 3600);
+    if (bucket && typeof bucket === "object" && !Array.isArray(bucket)) {
+      entryRecordMemo.set(url, bucket);
+    } else {
+      bucket = null;
+    }
+  }
+  return bucket;
+}
 
 // artifact_id -> shard index map. ~4 MB at 133k entries, ~11 MB at 375k.
 // The parsed manifest is memoized per isolate: crawlers arrive in bursts
@@ -385,6 +432,19 @@ export async function getRecordById(artifactId) {
   // Layer 1: the colo-shared record memo (see the diagnosis note above).
   const cached = await recordCacheGet(artifactId);
   if (cached !== undefined) return cached;
+  // Layer 1.5 (2026-11-13 fix #2): the per-bucket record file. On a hit
+  // this is the whole lookup — no work-locate fetch, no shard text.
+  // ANY failure (no bucket file yet, timeout, record absent from the
+  // bucket) falls through to the shard path below: bucket data can lag
+  // a publish, so absence here is never treated as proof of missing.
+  const bucketFile = await fetchEntryRecordBucket(artifactId);
+  if (bucketFile) {
+    const rec = bucketFile[artifactId];
+    if (rec && typeof rec === "object" && rec.artifact_id === artifactId) {
+      await recordCachePut(artifactId, { state: "ok", record: rec });
+      return { state: "ok", record: rec };
+    }
+  }
   // Work-locate buckets are tiny and repeat constantly during a crawl;
   // memoize the parsed bucket per isolate (bounded, see boundedMemo).
   const url = locateUrl(artifactId);
