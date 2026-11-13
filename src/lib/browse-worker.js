@@ -10,7 +10,13 @@
 // (dictionary remap + bulk column writes, a few ms per page).
 //
 // Protocol — main posts:
-//   { type: "begin", fp, pageSize, total, apiPage }  start the stream
+//   { type: "begin", fp, pageSize, total, apiPage, startCursor,
+//     bootstrap? }  start the stream. `bootstrap` is the resident
+//     prefix's records, handed over by the main thread (2026-11-12,
+//     audit F2) so the base transpose never waits on a redundant
+//     5.3 MB re-fetch of /catalog-bootstrap.json queued behind the
+//     page pipeline; when it is absent (or its length disagrees with
+//     startCursor) the worker falls back to its own read, unchanged.
 //   { type: "pause" }                                stop launching fetches
 //   { type: "resume" }                               resume launching
 //   { type: "reset", cursor }                        resume-after-failure:
@@ -216,7 +222,17 @@ async function begin(msg) {
   fetchCursor = msg.startCursor || 0;
   transposeCursor = fetchCursor;
   pump();
+  // Handoff first (audit F2): the main thread's bootstrap IS the
+  // prefix the start cursor names — same file, already parsed. The
+  // length check is the same one the fetch path applies below; a
+  // mismatch discards the handoff and falls through to the read.
   let boot = null;
+  if (
+    Array.isArray(msg.bootstrap) &&
+    msg.bootstrap.length === (msg.startCursor || 0)
+  ) {
+    boot = msg.bootstrap;
+  }
   for (let attempt = 0; attempt < 2 && !boot; attempt++) {
     try {
       boot = await fetchJsonOnce("/catalog-bootstrap.json");

@@ -713,37 +713,102 @@ export function createCatalogView(store, length) {
 }
 let browseMetaPromise = null;
 
-// One discovery read per page load: {fp, total, pageSize} when the
-// current metadata build carries baked browse pages, else null
-// (function-only mode). Never rejects.
+function browseMetaShape(m) {
+  if (
+    m && typeof m.total === "number" && typeof m.fingerprint === "string" &&
+    Number.isFinite(m.browse_page_size) && Number.isFinite(m.browse_pages)
+  ) {
+    return { fp: m.fingerprint, total: m.total, pageSize: m.browse_page_size, orders: !!m.orders };
+  }
+  return null;
+}
+
+// Discovery robustness (2026-11-12, audit F2): /api/browse-manifest
+// 504'd on ~33% of sampled requests on Nov 12 (census Tail A), and the
+// old single-attempt read cached its null for the whole session — one
+// bad first minute silently degraded the entire load to slow
+// function-mode paging, with no way to recover short of a reload.
+// Now: bounded retries with backoff inside one discovery round, and
+// only a SUCCESSFUL discovery is cached for the session. A failed or
+// function-only (null) round clears the cached promise, so the next
+// intent trigger (scroll, filter tap, Load more) re-runs discovery
+// instead of inheriting the failure. A well-formed response settles
+// the round immediately (null = function-only mode is a real answer,
+// not an error worth retrying). Per-attempt timeout is shorter than
+// the generic 30 s: the manifest is a small function response, and a
+// hung attempt should re-roll onto a fresh isolate quickly.
+const BROWSE_META_TIMEOUT_MS = 12000;
+const BROWSE_META_ATTEMPTS = 3;
+const BROWSE_META_BACKOFF_MS = [700, 1600];
+
+async function discoverBrowseMeta() {
+  // Boot-prefetch handoff: the inline boot script in index.html
+  // already fetched and parsed this manifest before the bundle
+  // parsed (to prefetch the first browse pages). Reuse its result —
+  // discovery is then done at mount, with no second network read.
+  const boot =
+    typeof window !== "undefined" ? window.__browseManifest : null;
+  const fromBoot = browseMetaShape(boot);
+  if (fromBoot) return fromBoot;
+  let lastErr = null;
+  for (let attempt = 0; attempt < BROWSE_META_ATTEMPTS; attempt++) {
+    try {
+      const m = await fetchJsonOnce("/api/browse-manifest", BROWSE_META_TIMEOUT_MS);
+      return browseMetaShape(m);
+    } catch (e) {
+      lastErr = e;
+      if (attempt < BROWSE_META_ATTEMPTS - 1) {
+        await new Promise((r) =>
+          setTimeout(r, BROWSE_META_BACKOFF_MS[attempt] || 1600)
+        );
+      }
+    }
+  }
+  throw lastErr || new Error("browse manifest discovery failed");
+}
+
+// Discovery read: {fp, total, pageSize} when the current metadata
+// build carries baked browse pages, else null (function-only mode).
+// Never rejects.
 function browseMeta() {
   if (!browseMetaPromise) {
-    browseMetaPromise = fetchJsonOnce("/api/browse-manifest")
-      .then((m) => {
-        if (
-          m && typeof m.total === "number" && typeof m.fingerprint === "string" &&
-          Number.isFinite(m.browse_page_size) && Number.isFinite(m.browse_pages)
-        ) {
-          return { fp: m.fingerprint, total: m.total, pageSize: m.browse_page_size, orders: !!m.orders };
-        }
+    browseMetaPromise = discoverBrowseMeta().then(
+      (meta) => {
+        // Only success is session-sticky (see above): a null round
+        // (function-only answer, or a malformed body) may be re-run
+        // by the next startCatalogBrowse() call.
+        if (!meta) browseMetaPromise = null;
+        return meta;
+      },
+      () => {
+        browseMetaPromise = null;
         return null;
-      })
-      .catch(() => null);
+      }
+    );
   }
   return browseMetaPromise;
 }
 
 // Baked sort orders (2026-11-10 completion-spike fix): the metadata
 // generator bakes the five sort permutations into orders.bin beside
-// the browse pages (see scripts/build-catalog-meta.mjs). The streamer
-// fetches the file in parallel with the page stream — 51 MB of binary
-// against the catalog's ~675 MB of pages, so it lands long before the
-// stream completes — and the library derivation attaches the views
-// instead of building the orders on-device at completion (the build
-// was a sustained ~1.24 GB heap plateau that killed phone tabs
-// seconds after the load finished). Any failure (older fingerprint
-// without the file, size mismatch, network) settles as "failed" and
-// the derivation falls back to the on-device build, unchanged.
+// the browse pages (see scripts/build-catalog-meta.mjs). The library
+// derivation attaches the views instead of building the orders
+// on-device at completion (the build was a sustained ~1.24 GB heap
+// plateau that killed phone tabs seconds after the load finished).
+// Any failure (older fingerprint without the file, size mismatch,
+// network) settles as "failed" and the derivation falls back to the
+// on-device build, unchanged.
+//
+// Scheduling (2026-11-12, audit F3): the fetch no longer fires in
+// parallel with the stream. 51 MB at default priority took a full
+// share of a cellular pipe from the very first second, starving the
+// browse pages that produce the visible climb — for data the UI can
+// only consume once the stream stops or at a non-default sort. The
+// stream's discovery now only ARMS the deferred orders (reported as
+// pending, so derivations wait rather than building on-device); the
+// fetch starts when the stream stops (browseStop) or when the page
+// first asks for a non-default sort (ensureBrowseOrders), whichever
+// comes first.
 let browseOrders = null; // {fp, total, order}
 let browseOrdersStatus = "absent"; // absent | pending | ready | failed
 const browseOrdersSettleCbs = new Set();
@@ -813,6 +878,35 @@ function loadBrowseOrders(fp, total) {
       browseOrdersStatus = "failed";
       settleBrowseOrders();
     });
+}
+
+// Deferred orders registry (audit F3 scheduling, above): armed from
+// the stream's discovery result; the network fetch itself waits for
+// a trigger. ARMING already reports the orders as "pending" — that
+// is the derivation's long-standing contract (pending = "baked
+// orders are coming; publish without them and re-run on the settle
+// tick — do NOT build on-device"), and it must hold from discovery
+// on, exactly as it did when the fetch fired immediately. Only the
+// fetch moved; the outward state machine did not.
+let browseOrdersDeferred = null; // {fp, total}
+let browseOrdersFetchStarted = false;
+let browseOrdersWanted = false; // a sort asked before discovery landed
+function armBrowseOrders(fp, total) {
+  if (!browseOrdersDeferred || browseOrdersDeferred.fp !== fp) {
+    browseOrdersFetchStarted = false;
+  }
+  browseOrdersDeferred = { fp, total };
+  if (browseOrders && browseOrders.fp === fp && browseOrdersStatus === "ready") {
+    return;
+  }
+  browseOrdersStatus = "pending";
+  if (browseOrdersWanted) ensureBrowseOrders();
+}
+export function ensureBrowseOrders() {
+  browseOrdersWanted = true;
+  if (!browseOrdersDeferred || browseOrdersFetchStarted) return;
+  browseOrdersFetchStarted = true;
+  loadBrowseOrders(browseOrdersDeferred.fp, browseOrdersDeferred.total);
 }
 
 // ---------------------------------------------------------------------
@@ -934,9 +1028,15 @@ function browsePublish(complete) {
 
 // Start the browse worker for a fresh stream state. Returns false
 // when no worker could be created (the caller then runs the
-// main-thread pipeline, unchanged). The worker fetches the bootstrap
-// itself (a second, cache-hit read of the same immutable file the
-// page already loaded for first paint), transposes it as the store's
+// main-thread pipeline, unchanged). The bootstrap body is HANDED to
+// the worker in the begin message (2026-11-12, audit F2): the main
+// thread already holds it parsed — it is the resident prefix the
+// start cursor names — while the worker's own re-fetch of the same
+// 5.3 MB file queued behind its eight page fetches on a congested
+// link and gated EVERY transpose (nothing committed until the base
+// landed), which is exactly the long flat stretch at 20,000 in
+// Joshua's recordings. The worker still falls back to its own read
+// if no body arrives. The worker transposes the base as the store's
 // base, then pipelines the browse pages — its first page fetch fires
 // the moment it starts, never waiting on the base transpose the way
 // the old begin() pre-transpose blocked browseLaunch.
@@ -1005,6 +1105,13 @@ function browseWorkerBegin(st, meta) {
       total: meta ? meta.total : null,
       apiPage: BROWSE_API_PAGE,
       startCursor: st.cursor,
+      // The handoff (above): only when the cached bootstrap IS the
+      // prefix the cursor names — the worker verifies the length
+      // itself and falls back to its own fetch on any mismatch.
+      bootstrap:
+        bootstrapCache && bootstrapCache.length === st.cursor
+          ? bootstrapCache
+          : undefined,
     });
   } catch {
     browseWorkerFallback(st);
@@ -1119,6 +1226,16 @@ function browseStop(st, complete) {
   // table (~33 MB at full scale). A stopped-early stream keeps it —
   // resume appends against it.
   if (complete && st.store) st.store.idIndex = null;
+  // Deferred orders (audit F3): any stop — completion, exhaustion
+  // with a deduped count a few records under the server total (the
+  // publish's complete flag above keys off that comparison, the
+  // stream's workload does not), a page failure, an on-demand pause
+  // — means the stream has stopped consuming the pipe, so the 51 MB
+  // orders fetch may start now. It starts BEFORE the publish below,
+  // so the derivation that publish triggers sees the fetch in flight
+  // under the armed "pending" state and waits on the settle callback
+  // rather than building orders on-device.
+  ensureBrowseOrders();
   browsePublish(!!complete);
 }
 
@@ -1291,9 +1408,14 @@ export function startCatalogBrowse() {
         pubTimer: null,
         lastPubAt: 0,
       };
-      // Baked sort orders ride in parallel with the stream (above).
-      if (meta && meta.orders) loadBrowseOrders(meta.fp, meta.total);
-      else {
+      // Baked sort orders are DEFERRED (audit F3, above): arm what
+      // discovery found; the 51 MB fetch waits for the stream to
+      // stop or the first non-default sort, whichever comes first.
+      if (meta && meta.orders) {
+        armBrowseOrders(meta.fp, meta.total);
+      } else {
+        browseOrdersDeferred = null;
+        browseOrdersFetchStarted = false;
         browseOrdersStatus = "absent";
         browseOrders = null;
       }

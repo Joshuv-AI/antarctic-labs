@@ -53,7 +53,9 @@ import {
   getBrowseOrders,
   browseOrdersPending,
   onBrowseOrdersSettled,
+  ensureBrowseOrders,
   getBrowseTotalHint,
+  isCatalogPending,
   CatalogIdIndex,
 } from "./lib/catalog.js";
 // Two-level browse taxonomy for the library filter (revamp 2026-10-17):
@@ -313,7 +315,17 @@ const TOWER_SORTS = [
 // behind the loader is never a dead end. The loader's own failsafe
 // (main.jsx) dismisses the overlay regardless; this guarantees the section
 // reaches a settled state (rows or the error UI) on its own.
+// Differential fix (2026-11-12, audit F4): the watchdog used to fire
+// at 15 s even while the bootstrap fetch was verifiably still in
+// flight — on a contended cellular link (boot prefetch + bundle +
+// fonts + the 5.3 MB bootstrap sharing one pipe) the fetch routinely
+// needs longer, so healthy first loads were being forced into the
+// error state and only a reload (warm caches) populated the page.
+// While isCatalogPending() reports the fetch in flight, the watchdog
+// re-checks on a short cadence instead of forcing the error; the
+// fetch's own 30 s abort + retry still bounds the total wait.
 const CATALOG_WATCHDOG_MS = 15000;
+const CATALOG_WATCHDOG_RECHECK_MS = 3000;
 function useArtifacts() {
   const [retrySeq, setRetrySeq] = useState(0);
   const [state, setState] = useState(() => ({
@@ -361,8 +373,26 @@ function useArtifacts() {
   }, [state.artifacts, state.error, state.fullIndexReady, retrySeq]);
   useEffect(() => {
     if (state.artifacts || state.error) return;
-    const t = setTimeout(() => setWatchdogError(true), CATALOG_WATCHDOG_MS);
-    return () => clearTimeout(t);
+    let t = null;
+    let cancelled = false;
+    const arm = (delay) => {
+      t = setTimeout(() => {
+        if (cancelled) return;
+        // A bootstrap fetch verifiably in flight outranks the
+        // watchdog (audit F4): re-check shortly rather than forcing
+        // the error UI over a load that is still arriving.
+        if (isCatalogPending()) {
+          arm(CATALOG_WATCHDOG_RECHECK_MS);
+          return;
+        }
+        setWatchdogError(true);
+      }, delay);
+    };
+    arm(CATALOG_WATCHDOG_MS);
+    return () => {
+      cancelled = true;
+      if (t) clearTimeout(t);
+    };
   }, [state.artifacts, state.error, retrySeq]);
   const retry = () => {
     setWatchdogError(false);
@@ -2888,15 +2918,46 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       live = false;
     };
   }, [serverFlag, serverTotal]);
-  // Honest header count (2026-11-09, Joshua's order): the number is
-  // what has actually loaded onto the page — the bootstrap first, then
-  // the catalog as it streams in (server browse pages in server mode,
-  // index chunks in client mode). It never borrows the catalog total:
-  // presenting the total as if it were loaded is what made the page
-  // claim ~600,000 works while 20,000 were on it. The full total still
-  // drives the stack counts (serverCounts override below) and the
-  // search result totals, where it is labeled as a total.
+  // Resident count: what has actually loaded onto the page — the
+  // bootstrap first, then the catalog as it streams in (server browse
+  // pages in server mode, index chunks in client mode). This is the
+  // FILTER PANEL's working number: its chips partition the resident
+  // set, so "All entries" must be this count for the panel's
+  // arithmetic to agree — and the status line beside it carries the
+  // honest progress ("N of 2,557,923") while the stream runs.
   const displayCount = artifacts ? artifacts.length : 0;
+  // Stats-strip works number (2026-11-12, audit F8): the strip states
+  // library FACTS — like its collections count beside it and the
+  // hero's total above — so its works number is the library's true
+  // total, never the resident prefix (which read "20,000 works" in
+  // Joshua's first recording and "159,995 works" in his second, both
+  // presented as the size of the library). Sources, in order: the hub
+  // seed's total (on-device within ~1 s of mount), the browse
+  // manifest's total once discovery has run, and the resident length
+  // once the full index is in (where resident == total). Before any
+  // source lands, the strip holds the last truthful value it showed,
+  // or the same steady dash the collections number uses — it never
+  // invents a number and never counts the prefix as the library.
+  const truthfulWorksRef = useRef(null);
+  const worksTotal = useMemo(() => {
+    let v = null;
+    if (serverTotal != null) v = serverTotal;
+    else {
+      const hint = getBrowseTotalHint();
+      if (hint) v = hint;
+      else if (fullIndexReady && artifacts) v = artifacts.length;
+    }
+    if (v != null) truthfulWorksRef.current = v;
+    return v != null ? v : truthfulWorksRef.current;
+  }, [serverTotal, artifacts, fullIndexReady]);
+  // Deferred sort orders (2026-11-12, audit F3): the 51 MB orders
+  // fetch no longer rides in parallel with the browse stream — the
+  // loader starts it at stream completion. A non-default sort is the
+  // other sanctioned trigger: the user just asked for exactly the
+  // data it carries, so it starts now, even mid-stream.
+  useEffect(() => {
+    if (sortId !== "title-asc") ensureBrowseOrders();
+  }, [sortId]);
   // Stack counts in server mode: hubs counts override the derivation's
   // partial collection counts until the derivation has completed over
   // the full catalog (fullIndexReady && deriveFinal), after which
@@ -3272,13 +3333,94 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // lift before a slow connection delivers the catalog, and the shell
   // guarantees the user never stares at a void in that gap.
   if (failed) return <TowerCatalogError onRetry={retryCatalog} />;
+  // Loading branch (2026-11-12, audit F10): this used to render
+  // "CATALOG" + one line and nothing else, so for the whole initial
+  // load the section collapsed and the footer floated up directly
+  // under the hero — the page read as broken precisely during its
+  // longest wait (frame f08 of Joshua's recording). The branch now
+  // renders the section's real chrome at its final geometry — the
+  // action buttons, the stats strip (with F8's truthful total), a
+  // disabled search shell, the status slot, and skeleton rows in the
+  // search skeleton's existing vocabulary — inside a min-height
+  // section, so the page holds its shape and content pours into
+  // place when the first publish lands. No new visual language.
   if (!artifacts || !towerData) return (
     <>
-      <section className="tower-index section">
+      <section className="tower-index tower-index--loading section">
         <div className="section-index">CATALOG</div>
-        <p className="tower-empty-results" aria-live="polite">
-          Loading the catalog…
-        </p>
+        <div className="tower-suggest-actions">
+          <button
+            type="button"
+            className="tower-access-btn"
+            onClick={() => go("/tower-of-babel/library/research")}
+          >
+            API ACCESS <span aria-hidden="true">↗</span>
+          </button>
+          <button
+            type="button"
+            className="tower-access-btn"
+            onClick={() => go("/tower-of-babel/library/suggest")}
+          >
+            SUGGEST AN ENTRY <span aria-hidden="true">↗</span>
+          </button>
+          <button
+            type="button"
+            className="tower-access-btn tower-donate-btn"
+            onClick={() => go("/tower-of-babel/donate")}
+          >
+            DONATE <span aria-hidden="true">♥</span>
+          </button>
+        </div>
+        <div className="tower-stats" aria-label="The library at a glance">
+          <span>
+            <strong className="ts-num ts-works">{worksTotal == null ? "–" : worksTotal.toLocaleString()}</strong> works
+          </span>
+          <span>
+            <strong className="ts-num ts-coll">{collectionsCount == null ? "–" : collectionsCount}</strong> collections
+          </span>
+          <span>
+            <strong>{TRADITIONS.length}</strong> sacred traditions
+          </span>
+          <span>No accounts, no paywalls</span>
+        </div>
+        <div className="tower-controls">
+          <search>
+            <form
+              role="search"
+              className="tower-search-form"
+              onSubmit={(e) => e.preventDefault()}
+            >
+              <label className="tower-search-label">
+                Search the library
+              </label>
+              <div className="tower-search-row">
+                <input
+                  type="search"
+                  name="q"
+                  className="tower-search tower-search-hero"
+                  placeholder="Search titles, creators, tags… — or words inside the texts"
+                  disabled
+                />
+                <button type="submit" className="tower-search-submit" disabled>
+                  Search
+                </button>
+              </div>
+              <p className="tower-search-help">
+                Searches titles, authors and the full text of every work.
+              </p>
+            </form>
+          </search>
+          <div className="tower-status-slot">
+            <p className="tower-index-status" aria-live="polite">
+              Loading the catalog…
+            </p>
+          </div>
+        </div>
+        <div className="tower-rows" aria-hidden="true">
+          {Array.from({ length: 6 }, (_, i) => (
+            <div key={i} className="tower-skel-row" />
+          ))}
+        </div>
       </section>
     </>
   );
@@ -3318,7 +3460,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           <>
             <div className="tower-stats" aria-label="The library at a glance">
               <span>
-                <strong className="ts-num ts-works">{displayCount.toLocaleString()}</strong> works
+                <strong className="ts-num ts-works">{worksTotal == null ? "–" : worksTotal.toLocaleString()}</strong> works
               </span>
               <span>
                 <strong className="ts-num ts-coll">{collectionsCount == null ? "–" : collectionsCount}</strong> collections
