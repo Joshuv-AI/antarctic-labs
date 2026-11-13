@@ -1622,6 +1622,42 @@ function browseLaunch(st) {
   }
 }
 
+// Start-path discovery budgets (2026-11-13 loadfix-v3): begin() used
+// to await BOTH manifest discoveries for as long as their retry
+// discipline could burn — three 12 s attempts plus backoffs, ~38 s
+// per endpoint — before the stream existed at all. Against a
+// degraded function layer (Cloudflare's own numbers for the hour of
+// Joshua's 17:01 recording: ~1/3 of manifest requests 504ing) that
+// left the page sitting on the bootstrap prefix for the whole
+// window, and the panel presented the prefix as final. Discovery
+// itself keeps its full discipline in the background — a success is
+// session-sticky and a later stream start picks it up — but the
+// START proceeds with whatever is known when the budget expires:
+// no browse manifest yet means function mode (a supported mode with
+// the same data, whose page bodies carry the total), and no TCB1
+// manifest yet means the JSON page stream (the pre-2A path). The
+// budgets sit far above a healthy manifest's latency — the boot
+// prefetch usually has both before the bundle parses — and far
+// below the retry burn they replace.
+//
+// The TCB1 budget is the generous one, deliberately: TCB1 is the
+// difference between a ~107 MB load and a ~795 MB one, and the
+// JSON stream it falls back to parses 20,000-record pages under a
+// 30 s fetch timeout that a throttled phone-class CPU can exceed
+// on parse time alone (measured on the phone profile: 9–37 s per
+// page) — a slow-but-alive TCB1 endpoint is worth waiting for.
+// Twenty seconds still halves the hung-endpoint burn, and the
+// panel stays honest for every second of the wait.
+const BROWSE_START_META_BUDGET_MS = 15000;
+const BROWSE_START_TCB1_BUDGET_MS = 20000;
+
+function withStartBudget(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(null), ms)),
+  ]);
+}
+
 // Start (or restart a stopped) automatic browse stream. Idempotent;
 // a no-op while the client index owns the cache (non-server mode or
 // the search-failure fallback), so the two loaders never fight.
@@ -1644,11 +1680,16 @@ export function startCatalogBrowse() {
     // harness) to expire on throttled connections — the boot
     // prefetch's JSON pages saturate the connection pool — which
     // silently committed the page to the 795 MB JSON stream for
-    // the whole load. Discovery failure still falls back to JSON;
-    // it is bounded by the same attempts/timeout discipline as
-    // browseMeta, so a dead TCB1 endpoint delays the stream start
-    // no more than a dead browse manifest already does.
-    Promise.all([browseMeta(), tcb1Meta()]).then(([meta, tcb1Raw]) => {
+    // the whole load. Discovery failure still falls back to JSON.
+    // Both reads are start-budgeted (see withStartBudget above):
+    // the §12 race was a hard sub-second-to-seconds cutoff against
+    // HEALTHY-but-throttled endpoints, while the budgets here only
+    // cut in when an endpoint is effectively hung — the failure
+    // mode that otherwise gates the entire stream start.
+    Promise.all([
+      withStartBudget(browseMeta(), BROWSE_START_META_BUDGET_MS),
+      withStartBudget(tcb1Meta(), BROWSE_START_TCB1_BUDGET_MS),
+    ]).then(([meta, tcb1Raw]) => {
       const tcb1 = tcb1ForBrowse(tcb1Raw, meta);
       browseBeginPending = false;
       if (indexComplete || indexPending) return;
@@ -1759,6 +1800,26 @@ export function resumeCatalogBrowse() {
 // (the library status line keys off this alongside isIndexInFlight).
 export function isBrowseStreaming() {
   return !!(browseState && !browseState.stopped);
+}
+
+// True only when the WHOLE catalog is resident on the page: the
+// client index finished, or the browse stream stopped because it
+// consumed everything — its append frontier reached the manifest
+// total. The frontier counts raw records (duplicates included),
+// which is why completion is provable here even though the deduped
+// resident count runs a few records under the raw total and can
+// never prove it by comparison. Every other stopped state — a page
+// failure, an on-demand pause, and above all the window before the
+// stream exists at all (manifest discovery still in flight) — is
+// NOT complete. Filter-panel finality keys off this (2026-11-13
+// loadfix-v3): the previous test, "not streaming", flipped final
+// during the discovery window and presented the 20,000-record
+// bootstrap prefix's counts as the library's finals whenever the
+// manifest endpoints were slow — Joshua's 17:01 phone recording.
+export function isBrowseComplete() {
+  if (indexComplete) return true;
+  const st = browseState;
+  return !!(st && st.stopped && st.total != null && st.cursor >= st.total);
 }
 
 // The browse stream's known catalog total (from the manifest), or 0

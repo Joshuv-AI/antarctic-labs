@@ -43,6 +43,7 @@ import {
   startCatalogBrowse,
   resumeCatalogBrowse,
   isBrowseStreaming,
+  isBrowseComplete,
   isIndexInFlight,
   getCachedArtifacts,
   getFullArtifact,
@@ -1629,18 +1630,27 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           setTowerData(phase);
           // The phase callback's first delivery is phase 0 —
           // counts, era counts and subcategory counts computed over
-          // this run's input. Those counts are final when the input
-          // is the whole catalog, which the stream's own stopped
-          // state attests: once it stops, no further artifacts can
-          // arrive, so the derivation in hand describes everything
-          // resident. (fullIndexReady cannot be the trigger — it
-          // keys off the publish's complete flag, which the
-          // deduped resident count never satisfies when the raw
-          // total counts duplicate ids, so it never flips at all.)
-          // The panel keys its final state off this, not the
-          // derivation promise, whose phases 1–3 lag phase 0
-          // (2026-11-13 load-state fix).
-          if (!isBrowseStreaming()) setCountsReady(true);
+          // this run's input. Those counts are final only when the
+          // input is the whole catalog, which isBrowseComplete()
+          // attests (stream consumed the manifest total, or the
+          // client index finished). The panel keys its final state
+          // off this, not the derivation promise, whose phases 1–3
+          // lag phase 0 (2026-11-13 load-state fix).
+          //
+          // The trigger used to be "!isBrowseStreaming()" — the
+          // stream's stopped state — which is also true BEFORE the
+          // stream exists: while manifest discovery was still in
+          // flight (a degraded manifest endpoint can burn ~38 s of
+          // retries there), the first derivation over the bootstrap
+          // prefix flipped the panel "final" and presented prefix
+          // counts as the library's own — seed bypassed, note
+          // suppressed, era/subcategory numbers shown, Law missing
+          // (Joshua's 17:01 recording, 2026-11-13 loadfix-v3).
+          // (fullIndexReady cannot be the trigger either — it keys
+          // off the publish's complete flag, which the deduped
+          // resident count never satisfies when the raw total counts
+          // duplicate ids, so it never flips at all.)
+          if (isBrowseComplete()) setCountsReady(true);
         }
       },
       {
@@ -1659,7 +1669,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         if (data) {
           setTowerData(data);
           setDeriveFinal(true);
-          if (!isBrowseStreaming()) setCountsReady(true);
+          if (isBrowseComplete()) setCountsReady(true);
         } else setDeriveError(true);
       },
       () => {
@@ -3843,19 +3853,23 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
               {filtersOpen && (
                 <div className="tf2-body" id="tower-filter-body">
                   {/* Provisional-state honesty (2026-11-13 load-state
-                      fix): while the catalog streams, collection
-                      chips carry the library's true totals (hub
-                      seed), and the axes whose counts only exist
-                      once the derivation is final — era,
-                      subcategories — show no numbers at all rather
-                      than prefix counts dressed as finals. This note
-                      is what makes that state explicit in the panel
-                      itself. */}
+                      fix; no-seed case closed 2026-11-13 loadfix-v3):
+                      while the catalog streams, collection chips carry
+                      the library's true totals (hub seed), and the
+                      axes whose counts only exist once the derivation
+                      is final — era, subcategories — show no numbers
+                      at all rather than prefix counts dressed as
+                      finals. This note is what makes that state
+                      explicit in the panel itself. If the hub seed
+                      itself hasn't landed, the collection chips show
+                      no numbers either and the note drops its totals
+                      claim — a prefix count is never presented as a
+                      final, with or without the seed. */}
                   {!countsFinal && (
                     <p className="tf2-note" aria-live="polite">
-                      Counting the full catalog — collection counts
-                      are library totals; era and subcategory counts
-                      appear when the counting finishes.
+                      {serverCounts
+                        ? "Counting the full catalog — collection counts are library totals; era and subcategory counts appear when the counting finishes."
+                        : "Counting the full catalog — counts appear when the counting finishes."}
                     </p>
                   )}
                   {/* Axis 1 — Collections: the catalog lanes (filter
@@ -3883,9 +3897,11 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                           aria-pressed={bucketFilter === ""}
                         >
                           All entries
-                          <span className="tf2-count">
-                            {allEntriesCount.toLocaleString()}
-                          </span>
+                          {(countsFinal || worksTotal != null) && (
+                            <span className="tf2-count">
+                              {allEntriesCount.toLocaleString()}
+                            </span>
+                          )}
                         </button>
                         {(discoveryData || towerData).collections.map((c) => {
                           const laneActive =
@@ -3902,11 +3918,13 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                               aria-pressed={laneActive}
                             >
                               {TOWER_TOP_LABELS[c] || c}
-                              <span className="tf2-count">
-                                {(
-                                  (discoveryData || towerData).counts[c] || 0
-                                ).toLocaleString()}
-                              </span>
+                              {(countsFinal || serverCounts) && (
+                                <span className="tf2-count">
+                                  {(
+                                    (discoveryData || towerData).counts[c] || 0
+                                  ).toLocaleString()}
+                                </span>
+                              )}
                             </button>
                           );
                         })}
