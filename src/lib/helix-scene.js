@@ -380,6 +380,7 @@ export function createHelixScene(canvas, opts = {}) {
     uMap: { value: null },
     uTime: { value: 0 },
     uFocusAmt: { value: 0 },
+    uDim: { value: 1 },
     uTints: { value: BAND_TINTS.map((t) => new THREE.Vector3(t[0], t[1], t[2])) },
   };
   const mat = new THREE.ShaderMaterial({
@@ -392,6 +393,7 @@ export function createHelixScene(canvas, opts = {}) {
       "attribute float aFocusW;",
       "uniform float uTime;",
       "uniform float uFocusAmt;",
+      "uniform float uDim;",
       "uniform vec3 uTints[10];",
       "varying vec2 vUv;",
       "varying float vBright;",
@@ -407,7 +409,7 @@ export function createHelixScene(canvas, opts = {}) {
       // distant coils sink into the black.
       "  float dist = -mv.z;",
       "  float depth = mix(1.10, 0.40, smoothstep(52.0, 150.0, dist));",
-      "  vBright = bright * shimmer * depth;",
+      "  vBright = bright * shimmer * depth * uDim;",
       "  gl_Position = projectionMatrix * mv;",
       "}",
     ].join("\n"),
@@ -450,7 +452,12 @@ export function createHelixScene(canvas, opts = {}) {
   function setFocusWeights(groups) {
     const set = new Set(groups || []);
     placements.forEach((p, i) => {
-      focusW[i] = set.has(p.group) ? 1.32 : 0.20;
+      // Visual containment (2026-11-13): the focus boost is gentler
+      // than the original 1.32 / 0.20 split — the lit segment still
+      // reads unmistakably against its neighbours, but the near rope
+      // no longer glares at full strength behind the filter panel
+      // while the visitor is reading it.
+      focusW[i] = set.has(p.group) ? 1.16 : 0.30;
     });
     focusAttr.needsUpdate = true;
   }
@@ -969,18 +976,43 @@ export function createHelixScene(canvas, opts = {}) {
   let stillDirty = true;
   let lastScrollAt = -1e9;
   let lastScrollY = 0;
+  let scrollHalf = false;
+  // Visual containment (2026-11-13): the structure's rotation is an
+  // accumulated angle, not a pure function of scene time, so its
+  // rate can ease while a display state (focus/lift) is active —
+  // the lit segment settles instead of sweeping the reading zone
+  // again and again. uDim likewise calms the whole backdrop a step
+  // while the visitor is working with a filter or search.
+  let rotCur = 2.2 * 0.045; // matches the sceneTime start phase
+  let dimCur = 1;
+  const dimTarget = () => {
+    let t = mode === "idle" ? 1 : 0.8;
+    // Reading-zone calm: once the visitor has scrolled past the
+    // hero into the library tools (search label + help line, the
+    // status line, the result count — bare text that sits directly
+    // on the scene), the backdrop eases down a step so rope
+    // stretches passing behind those lines lose their punch. The
+    // hero keeps the visual at full strength; the dim eases back
+    // as the visitor scrolls up. This dims the BACKGROUND only —
+    // no film over the content.
+    if (lastScrollY > viewH * 0.55) t = Math.min(t, 0.78);
+    return t;
+  };
   try { lastScrollY = window.scrollY || 0; } catch (e) {}
 
   function renderFrame(now) {
     const dt = lastRender ? Math.min(0.1, (now - lastRender) / 1000) : 0.016;
     if (booted) sceneTime += dt;
     uniforms.uTime.value = sceneTime;
-    structure.rotation.y = sceneTime * 0.045;
+    rotCur += Math.max(dt, 0.001) * 0.045 * (mode === "idle" ? 1 : 0.45);
+    structure.rotation.y = rotCur;
     structure.position.y = Math.sin(sceneTime * 0.07) * 0.9;
     applyRig(Math.max(dt, 0.001));
     const fk = 1 - Math.exp(-Math.max(dt, 0.001) / 0.9);
     focusAmtCur += (focusAmtTgt - focusAmtCur) * fk;
     uniforms.uFocusAmt.value = focusAmtCur;
+    dimCur += (dimTarget() - dimCur) * fk;
+    uniforms.uDim.value = dimCur;
     updateLift(Math.max(dt, 0.001));
     renderer.render(scene, camera);
     updateLabels();
@@ -1004,6 +1036,20 @@ export function createHelixScene(canvas, opts = {}) {
       return;
     }
     if (lastRender && now - lastRender < FRAME_MS - 1) return;
+    // Scroll economy (2026-11-13, audit F7 class): while a scroll
+    // gesture is active the backdrop updates at half rate. The
+    // recorded scroll ghosting is iOS presenting stale + fresh
+    // content tiles at mismatched offsets; every backdrop repaint
+    // widens that window, so halving the invalidation rate during
+    // the gesture shrinks it. The camera scrub still tracks on the
+    // frames that do render, and full rate resumes the moment the
+    // gesture ends.
+    if (now - lastScrollAt < 180) {
+      if (!scrollHalf) { scrollHalf = true; return; }
+      scrollHalf = false;
+    } else {
+      scrollHalf = false;
+    }
     renderFrame(now);
     if (!fpsWindowStart) { fpsWindowStart = now; loopStart = now; }
     fpsWindowFrames++;
@@ -1023,11 +1069,22 @@ export function createHelixScene(canvas, opts = {}) {
           raf = 0;
           return;
         }
-        // DPR ladder: never step mid-scroll (ship-1 fix).
+        // DPR ladder: never step mid-scroll (ship-1 fix), and never
+        // mid-flight either (2026-11-13): a filter tap sends the
+        // camera travelling and the focus ramp running for ~1–2 s;
+        // a DPR step inside that window resizes the canvas under
+        // the moving scene — the background resize/stutter against
+        // the tap in Joshua's second recording. Holding the counter
+        // at 2 makes the ladder re-evaluate at the next window,
+        // once the rig has settled.
         if (fps < 24 && dprTier < DPR_LADDER.length - 1) {
           lowDprWindows++;
           if (lowDprWindows >= 2) {
-            if (now - lastScrollAt < 700) {
+            const inTransit =
+              camPos.distanceTo(camTgt) > 0.75 ||
+              Math.abs(focusAmtTgt - focusAmtCur) > 0.01 ||
+              Math.abs(liftTgt - liftAmtCur) > 0.01;
+            if (now - lastScrollAt < 700 || inTransit) {
               lowDprWindows = 2;
             } else {
               dprTier++;
@@ -1062,11 +1119,13 @@ export function createHelixScene(canvas, opts = {}) {
   function renderStill() {
     if (disposed) return;
     uniforms.uTime.value = sceneTime;
-    structure.rotation.y = sceneTime * 0.045;
+    structure.rotation.y = rotCur;
     structure.position.y = Math.sin(sceneTime * 0.07) * 0.9;
     applyRig(10); // snap to target (poster framing incl. scroll scrub)
     focusAmtCur = focusAmtTgt;
     uniforms.uFocusAmt.value = focusAmtCur;
+    dimCur = dimTarget();
+    uniforms.uDim.value = dimCur;
     liftAmt = liftTarget;
     updateLift(10);
     renderer.render(scene, camera);
@@ -1090,7 +1149,14 @@ export function createHelixScene(canvas, opts = {}) {
       const ys = focusGroups.map((i) => BANDS[i].yMid);
       focusY = ys.reduce((a, b) => a + b, 0) / ys.length;
       const span = Math.max(...ys) - Math.min(...ys);
-      focusDistMul = Math.min(0.85, Math.max(0.42, 0.40 + span / 110));
+      // Visual containment (2026-11-13): the focus flight no longer
+      // dives to ~0.42× distance. On the phone that put the lit
+      // band's near turn a few units from the camera — a wall of
+      // giant covers filling the viewport behind the filter panel.
+      // At a 0.66 floor the flight still clearly travels to the
+      // segment and the segment still lights, but the near rope
+      // stays rope-sized.
+      focusDistMul = Math.min(0.88, Math.max(0.66, 0.62 + span / 110));
       focusAmtTgt = 1;
       liftTarget = 0;
     } else if (state.kind === "lift" && Array.isArray(state.items)) {
