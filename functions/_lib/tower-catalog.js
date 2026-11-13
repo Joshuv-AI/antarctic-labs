@@ -55,6 +55,35 @@ export function descShardKey(artifactId) {
 export const descShardUrl = (artifactId) =>
   `${RAW}/tower-descriptions/${descShardKey(artifactId)}.json`;
 
+// Upstream fetches are timeout-bounded (2026-11-13, residual-503 fix
+// #1): every consumer of the helpers below degrades on null — the entry
+// function falls back to the SPA shell (200), sitemaps skip — but a
+// HUNG fetch never returns null; it holds the invocation until the
+// platform kills it (503 / error 1102) and endangers co-tenant
+// requests sharing the isolate. An abort lands in the same catch ->
+// null path as any other failure, so degradation works as designed.
+// 3s (the browse-manifest fix 11a5aeae uses 2.5s for small JSON; the
+// shard-text fetch below moves ~19 MB and gets the extra room). The
+// timer covers the body read, not just the headers.
+const FETCH_TIMEOUT_MS = 3000;
+
+async function fetchBounded(url, ttlSeconds, read) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const r = await fetch(url, {
+      cf: { cacheTtl: ttlSeconds, cacheEverything: true },
+      signal: ctl.signal,
+    });
+    if (!r.ok) return null;
+    return await read(r);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Fetch JSON through the Cloudflare edge cache. Returns null on any
 // failure — callers degrade (fall back to the SPA / skip the entry) rather
 // than erroring a crawler request.
@@ -76,17 +105,7 @@ export function fetchJsonCached(url, ttlSeconds) {
   const key = `${ttlSeconds}:${url}`;
   const existing = inflightJson.get(key);
   if (existing) return existing;
-  const p = (async () => {
-    try {
-      const r = await fetch(url, {
-        cf: { cacheTtl: ttlSeconds, cacheEverything: true },
-      });
-      if (!r.ok) return null;
-      return await r.json();
-    } catch {
-      return null;
-    }
-  })();
+  const p = fetchBounded(url, ttlSeconds, (r) => r.json());
   inflightJson.set(key, p);
   const done = () => {
     if (inflightJson.get(key) === p) inflightJson.delete(key);
@@ -125,17 +144,7 @@ export function fetchTextCoalesced(url, ttlSeconds) {
   const key = `${ttlSeconds}:${url}`;
   const existing = inflightText.get(key);
   if (existing) return existing;
-  const p = (async () => {
-    try {
-      const r = await fetch(url, {
-        cf: { cacheTtl: ttlSeconds, cacheEverything: true },
-      });
-      if (!r.ok) return null;
-      return await r.text();
-    } catch {
-      return null;
-    }
-  })();
+  const p = fetchBounded(url, ttlSeconds, (r) => r.text());
   inflightText.set(key, p);
   const done = () => {
     if (inflightText.get(key) === p) inflightText.delete(key);
