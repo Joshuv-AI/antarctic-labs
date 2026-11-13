@@ -44,6 +44,10 @@ import {
   parseTcb1Shard,
   createTcb1Session,
 } from "./tcb1.js";
+import {
+  createWasmTcb1Session,
+  tcb1PayloadsEqual,
+} from "./tcb1-wasm.js";
 
 const FETCH_TIMEOUT_MS = 30000;
 const PIPELINE = 8;
@@ -426,6 +430,9 @@ async function beginTcb1(msg) {
     cache,
     dict: null,
     session: null,
+    wsession: null,
+    wasmChecked: false,
+    dictRaw: null,
     bitmap: new Uint8Array(manifest.completion_bitmap_bytes || 16),
     bitmapDirty: false,
     windowSize: 2,
@@ -483,12 +490,35 @@ async function beginTcb1(msg) {
     return;
   }
   t.dictBytes = dictBytes.byteLength;
+  // WASM decoder first (2026-11-13 Rust port, src/lib/tcb1-wasm/):
+  // the session is built from the same checksum-verified dictionary
+  // bytes. Any failure to load or initialize the module lands on the
+  // JS decoder below, unchanged; and the shard-0 cross-check in
+  // runTcb1 is the runtime parity gate — if the two decoders ever
+  // disagree on the first shard, the WASM session is abandoned and
+  // the stream continues on the JS one. The raw dictionary bytes are
+  // retained until that check passes (the JS session is parsed from
+  // them on demand), then released: in WASM mode the dictionary
+  // lives in the module's linear memory, counted by the same
+  // t.dictBytes figure the ledger already uses.
   try {
-    t.dict = parseTcb1Dict(dictBytes);
-    t.session = createTcb1Session(t.dict, manifest.total_records || 0);
+    t.wsession = await createWasmTcb1Session(
+      dictBytes,
+      manifest.total_records || 0
+    );
   } catch {
-    post({ type: "error", stage: "tcb1-dict-parse" });
-    return;
+    t.wsession = null;
+  }
+  if (t.wsession) {
+    t.dictRaw = dictBytes;
+  } else {
+    try {
+      t.dict = parseTcb1Dict(dictBytes);
+      t.session = createTcb1Session(t.dict, manifest.total_records || 0);
+    } catch {
+      post({ type: "error", stage: "tcb1-dict-parse" });
+      return;
+    }
   }
   runTcb1(t, 0, shard0);
 }
@@ -496,11 +526,14 @@ async function beginTcb1(msg) {
 // This worker's retained footprint in TCB1 mode, reported with every
 // payload for the main thread's byte ledger: the raw dictionary
 // buffer (105 MB at full scale — the single largest block the worker
-// pins) plus the decode session's retained id bytes and index table.
+// pins; in WASM mode the same bytes live in the module's linear
+// memory instead) plus the decode session's retained id bytes and
+// index table.
 function tcbWorkerBytes(t) {
   let n = t.dictBytes || 0;
-  if (t.session && typeof t.session.stats === "function") {
-    const s = t.session.stats();
+  const sess = t.wsession || t.session;
+  if (sess && typeof sess.stats === "function") {
+    const s = sess.stats();
     n += s.retainedBytes + s.indexBytes;
   }
   return n;
@@ -545,9 +578,44 @@ async function runTcb1(t, fromShard, initialPrefetch) {
     }
     let payload;
     try {
-      const shard = parseTcb1Shard(bytes);
-      if (shard.shardIndex !== shardIdx) throw new Error("shard index");
-      payload = t.session.transposeShard(shard, shardIdx === 0 ? -1 : shardIdx * pageSize);
+      if (t.wsession && shardIdx === 0 && !t.wasmChecked) {
+        // Runtime parity gate: decode shard 0 with BOTH decoders and
+        // compare the payloads byte-for-byte before the WASM session
+        // is trusted with the stream (see beginTcb1). Whichever
+        // payload survives, the session that produced it is the one
+        // whose state continues — the two are interchangeable only
+        // because this check proved them identical on this shard.
+        t.wasmChecked = true;
+        const shard = parseTcb1Shard(bytes);
+        if (shard.shardIndex !== shardIdx) throw new Error("shard index");
+        if (!t.session) {
+          t.dict = parseTcb1Dict(t.dictRaw);
+          t.session = createTcb1Session(t.dict, manifest.total_records || 0);
+        }
+        const jsPayload = t.session.transposeShard(shard, -1);
+        const wPayload = t.wsession.transposeBytes(bytes, -1, shardIdx);
+        if (tcb1PayloadsEqual(jsPayload, wPayload)) {
+          payload = wPayload;
+          t.session = null;
+          t.dict = null;
+          t.dictRaw = null;
+        } else {
+          t.wsession.dispose();
+          t.wsession = null;
+          t.dictRaw = null;
+          payload = jsPayload;
+        }
+      } else if (t.wsession) {
+        payload = t.wsession.transposeBytes(
+          bytes,
+          shardIdx === 0 ? -1 : shardIdx * pageSize,
+          shardIdx
+        );
+      } else {
+        const shard = parseTcb1Shard(bytes);
+        if (shard.shardIndex !== shardIdx) throw new Error("shard index");
+        payload = t.session.transposeShard(shard, shardIdx === 0 ? -1 : shardIdx * pageSize);
+      }
     } catch {
       t.failed = true;
       post({ type: "error", stage: "tcb1-decode" });
@@ -627,7 +695,8 @@ self.onmessage = (e) => {
       // only the decode re-runs. The frontier is always a shard
       // boundary in this pipeline.
       const t = tcb;
-      t.session.resetTo(m.cursor);
+      if (t.wsession) t.wsession.resetTo(m.cursor);
+      else if (t.session) t.session.resetTo(m.cursor);
       t.failed = false;
       t.unacked = 0;
       const waiters = t.ackWaiters;
