@@ -1589,6 +1589,12 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // caught "6 collections" flipping to 7 mid-load because a partial
   // derivation (DOCUMENTS' 363 records arrive last) won the header.
   const [deriveFinal, setDeriveFinal] = useState(false);
+  // Filter-panel finality (2026-11-13 load-state fix): true once a
+  // derivation phase 0 has landed over the full catalog — the point
+  // at which counts / era counts / subcategory counts are final.
+  // Distinct from deriveFinal (the whole derivation promise), which
+  // can lag phase 0 by the full phase 1–3 build.
+  const [countsReady, setCountsReady] = useState(false);
   // Deferred-search trigger (2026-11-10 crash fix): flips true the
   // first time a hub filter or strict query needs the local search
   // layer in server mode; the derivation then upgrades in place.
@@ -1606,10 +1612,12 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     if (!artifacts) {
       setTowerData(null);
       setDeriveFinal(false);
+      setCountsReady(false);
       return;
     }
     let cancelled = false;
     setDeriveFinal(false);
+    setCountsReady(false);
     deriveTowerData(
       artifacts,
       () => cancelled,
@@ -1617,7 +1625,23 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         // Phase 1 (search data) is live the moment it lands — the sort
         // orders still building in the background must not hold search
         // hostage.
-        if (!cancelled) setTowerData(phase);
+        if (!cancelled) {
+          setTowerData(phase);
+          // The phase callback's first delivery is phase 0 —
+          // counts, era counts and subcategory counts computed over
+          // this run's input. Those counts are final when the input
+          // is the whole catalog, which the stream's own stopped
+          // state attests: once it stops, no further artifacts can
+          // arrive, so the derivation in hand describes everything
+          // resident. (fullIndexReady cannot be the trigger — it
+          // keys off the publish's complete flag, which the
+          // deduped resident count never satisfies when the raw
+          // total counts duplicate ids, so it never flips at all.)
+          // The panel keys its final state off this, not the
+          // derivation promise, whose phases 1–3 lag phase 0
+          // (2026-11-13 load-state fix).
+          if (!isBrowseStreaming()) setCountsReady(true);
+        }
       },
       {
         browseOnly: !fullIndexReady,
@@ -1635,6 +1659,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         if (data) {
           setTowerData(data);
           setDeriveFinal(true);
+          if (!isBrowseStreaming()) setCountsReady(true);
         } else setDeriveError(true);
       },
       () => {
@@ -3068,14 +3093,33 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // to drop the moment fullIndexReady flipped — one publish before
   // the final derivation landed — flashing partial counts at the
   // completion boundary (2026-11-11 presentation-stability fix).
+  const countsFinal = countsReady;
   const discoveryData = useMemo(() => {
-    if (!towerData || !serverCounts || (fullIndexReady && deriveFinal))
-      return towerData;
+    if (!towerData || !serverCounts || countsFinal) return towerData;
+    const counts = { ...towerData.counts, ...serverCounts };
     return {
       ...towerData,
-      counts: { ...towerData.counts, ...serverCounts },
+      counts,
+      // The chip LIST comes from the merged counts too (2026-11-13
+      // load-state fix): the derivation's own key list only names
+      // collections the resident prefix has reached, which silently
+      // dropped LAW — half the library — from the panel for the
+      // whole load. The hubs seed names every collection from the
+      // first second, in the same count order the derivation uses.
+      collections: Object.keys(counts).sort(
+        (a, b) => counts[b] - counts[a] || (a < b ? -1 : a > b ? 1 : 0)
+      ),
     };
-  }, [towerData, serverCounts, fullIndexReady, deriveFinal]);
+  }, [towerData, serverCounts, countsFinal]);
+  // "All entries" chip number (2026-11-13 load-state fix): while the
+  // catalog is still streaming, the chip states the library's true
+  // total (hub seed / browse manifest — the same truthful source as
+  // the stats strip above it), never the resident prefix count,
+  // which read as "the library has 20,000 entries" beside a header
+  // stating 2,557,923. Once the derivation is final the chip returns
+  // to the resident count, which is then the exact catalog count.
+  const allEntriesCount =
+    countsFinal || worksTotal == null ? displayCount : worksTotal;
   const adaptServerItem = (r, tokens) => {
     const nt = normText(r.title || "");
     const nc = normText(r.creator || "");
@@ -3798,6 +3842,22 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
               )}
               {filtersOpen && (
                 <div className="tf2-body" id="tower-filter-body">
+                  {/* Provisional-state honesty (2026-11-13 load-state
+                      fix): while the catalog streams, collection
+                      chips carry the library's true totals (hub
+                      seed), and the axes whose counts only exist
+                      once the derivation is final — era,
+                      subcategories — show no numbers at all rather
+                      than prefix counts dressed as finals. This note
+                      is what makes that state explicit in the panel
+                      itself. */}
+                  {!countsFinal && (
+                    <p className="tf2-note" aria-live="polite">
+                      Counting the full catalog — collection counts
+                      are library totals; era and subcategory counts
+                      appear when the counting finishes.
+                    </p>
+                  )}
                   {/* Axis 1 — Collections: the catalog lanes (filter
                       revamp 2026-11-11; this axis replaces the retired
                       "FORMAT" chip row — the lanes were never formats).
@@ -3824,10 +3884,10 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                         >
                           All entries
                           <span className="tf2-count">
-                            {displayCount.toLocaleString()}
+                            {allEntriesCount.toLocaleString()}
                           </span>
                         </button>
-                        {towerData.collections.map((c) => {
+                        {(discoveryData || towerData).collections.map((c) => {
                           const laneActive =
                             bucketFilter === c ||
                             bucketFilter.indexOf(c + ":") === 0;
@@ -3843,7 +3903,9 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                             >
                               {TOWER_TOP_LABELS[c] || c}
                               <span className="tf2-count">
-                                {(towerData.counts[c] || 0).toLocaleString()}
+                                {(
+                                  (discoveryData || towerData).counts[c] || 0
+                                ).toLocaleString()}
                               </span>
                             </button>
                           );
@@ -3858,7 +3920,14 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                           {activeSubs.map((s) => {
                             const key = `${activeLane}:${s.id}`;
                             const count = towerData.subCounts[key] || 0;
-                            if (count === 0) return null;
+                            // While streaming, a zero here only means
+                            // "not arrived yet" — hiding the row would
+                            // silently vanish real subcategories
+                            // (2026-11-13 load-state fix). Rows show
+                            // without counts until the derivation is
+                            // final; the zero-hide applies only to
+                            // final counts, as before.
+                            if (countsFinal && count === 0) return null;
                             const subActive = bucketFilter === key;
                             return (
                               <button
@@ -3871,9 +3940,11 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                 aria-pressed={subActive}
                               >
                                 <span className="tf2-sub-label">{s.label}</span>
-                                <span className="tf2-count">
-                                  {count.toLocaleString()}
-                                </span>
+                                {countsFinal && (
+                                  <span className="tf2-count">
+                                    {count.toLocaleString()}
+                                  </span>
+                                )}
                               </button>
                             );
                           })}
@@ -4013,9 +4084,17 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                               aria-pressed={on}
                             >
                               {e.label}
-                              <span className="tf2-count">
-                                {count.toLocaleString()}
-                              </span>
+                              {/* Era counts have no precomputed
+                                  source — while the catalog streams
+                                  they would be prefix counts, so the
+                                  chips carry no number until the
+                                  derivation is final (2026-11-13
+                                  load-state fix). */}
+                              {countsFinal && (
+                                <span className="tf2-count">
+                                  {count.toLocaleString()}
+                                </span>
+                              )}
                             </button>
                           );
                         })}

@@ -143,6 +143,18 @@ async function fetchPage(cursor) {
   return null;
 }
 
+// This worker's retained footprint, reported with every payload so
+// the main thread's byte ledger can account for the memory the
+// stream pins OFF the main thread (2026-11-13 load-state fix: the
+// ledger previously counted only the main-thread store, so the
+// degradation ladder never saw the worker's share of the jetsam
+// wall). JSON pipeline: the transpose session's own accounting.
+function sessionWorkerBytes() {
+  if (!session || typeof session.stats !== "function") return 0;
+  const s = session.stats();
+  return s.retainedBytes + s.indexBytes + (s.dictBytes || 0);
+}
+
 // Transpose everything that is ready, strictly in cursor order: the
 // bootstrap first (it is the store's base), then pages as their raw
 // bodies land. Nothing transposes past a failed page — the caller
@@ -153,7 +165,7 @@ function tryTranspose() {
     const payload = session.transpose(baseBody, -1);
     baseBody = null;
     post(
-      { type: "base", total: null, nextCursor: baseLen, payload },
+      { type: "base", total: null, nextCursor: baseLen, payload, workerBytes: sessionWorkerBytes() },
       payloadTransfer(payload)
     );
   }
@@ -171,6 +183,7 @@ function tryTranspose() {
         total: typeof body.total === "number" ? body.total : null,
         nextCursor: body.next_cursor != null ? body.next_cursor : null,
         payload,
+        workerBytes: sessionWorkerBytes(),
       },
       payloadTransfer(payload)
     );
@@ -445,16 +458,31 @@ async function beginTcb1(msg) {
     const bm = await tcbCacheRead(t.cache, tcbKey(fp, "bitmap.bin"));
     if (bm && bm.byteLength === t.bitmap.byteLength) t.bitmap = bm;
   }
+  // Shard 0's fetch starts NOW, in parallel with the dictionary
+  // load below (2026-11-13 load-state fix, defect 2): the dictionary
+  // gate is serial and long on a phone connection, and shard 0 used
+  // to wait behind ALL of it — transfer, SHA-256, parse — before its
+  // own transfer even began. Its bytes are checksum-verified inside
+  // tcbLoadFile exactly like the dictionary's; runTcb1 consumes this
+  // promise as its initial prefetch.
+  const shard0 = tcbLoadShard(t, 0);
   const dictBytes = await tcbLoadFile(
     t,
     manifest.dictionaries.file,
     manifest.dictionaries,
-    120000
+    // 240s per attempt (raised from 120s, 2026-11-13 load-state
+    // fix): the dictionary is 36.7 MB on the wire, which a poor
+    // cellular link delivers in ~2.5 minutes; at 120s the binary
+    // path timed out and fell back to the far heavier JSON stream
+    // on exactly the connections it exists to serve. Shard loads
+    // keep their 60s budget (they are ~0.5 MB each).
+    240000
   );
   if (!dictBytes) {
     post({ type: "error", stage: "tcb1-dict" });
     return;
   }
+  t.dictBytes = dictBytes.byteLength;
   try {
     t.dict = parseTcb1Dict(dictBytes);
     t.session = createTcb1Session(t.dict, manifest.total_records || 0);
@@ -462,7 +490,20 @@ async function beginTcb1(msg) {
     post({ type: "error", stage: "tcb1-dict-parse" });
     return;
   }
-  runTcb1(t, 0);
+  runTcb1(t, 0, shard0);
+}
+
+// This worker's retained footprint in TCB1 mode, reported with every
+// payload for the main thread's byte ledger: the raw dictionary
+// buffer (105 MB at full scale — the single largest block the worker
+// pins) plus the decode session's retained id bytes and index table.
+function tcbWorkerBytes(t) {
+  let n = t.dictBytes || 0;
+  if (t.session && typeof t.session.stats === "function") {
+    const s = t.session.stats();
+    n += s.retainedBytes + s.indexBytes;
+  }
+  return n;
 }
 
 // The decode loop: strictly in shard order (the session's dedupe and
@@ -471,14 +512,15 @@ async function beginTcb1(msg) {
 // window bounding how far ahead of the main thread's commits the
 // worker may run. Shard 0 posts as the base chunk, exactly like the
 // JSON bootstrap.
-async function runTcb1(t, fromShard) {
+async function runTcb1(t, fromShard, initialPrefetch) {
   const gen = ++t.gen;
   const manifest = t.manifest;
   const pageSize = manifest.shard_size;
   const shardCount = manifest.shard_count;
   let shardIdx = fromShard;
   let prefetched =
-    shardIdx < shardCount ? tcbLoadShard(t, shardIdx) : Promise.resolve(null);
+    initialPrefetch ||
+    (shardIdx < shardCount ? tcbLoadShard(t, shardIdx) : Promise.resolve(null));
   while (shardIdx < shardCount) {
     if (t.gen !== gen || t.failed) return;
     while (paused && t.gen === gen) {
@@ -514,7 +556,7 @@ async function runTcb1(t, fromShard) {
     const meta = manifest.shards[shardIdx];
     if (shardIdx === 0) {
       post(
-        { type: "base", total: null, nextCursor: meta.records, payload },
+        { type: "base", total: null, nextCursor: meta.records, payload, workerBytes: tcbWorkerBytes(t) },
         payloadTransfer(payload)
       );
     } else {
@@ -526,6 +568,7 @@ async function runTcb1(t, fromShard) {
           total: manifest.total_records,
           nextCursor: isLast ? null : (shardIdx + 1) * pageSize,
           payload,
+          workerBytes: tcbWorkerBytes(t),
         },
         payloadTransfer(payload)
       );

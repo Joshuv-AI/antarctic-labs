@@ -198,10 +198,29 @@ export function createTcb1Session(dict, expectedCount = 0) {
   for (const field of ["collection", "download_status", "rights_status", "format"]) {
     smallXlate[field] = new Int32Array(dict[field].count).fill(-1);
   }
+  // Creator interning WITHOUT value retention (2026-11-13 load-state
+  // fix, defect 3): the generic string-keyed intern (dictCodeLocal)
+  // pins every decoded creator string in a Map + values array for the
+  // session's whole life — at full scale that is ~1.07M strings (the
+  // dictionary's ~100 MB blob re-materialized as JS strings) plus a
+  // 1.07M-entry Map, held in the worker ON TOP of the raw dictionary
+  // buffer and the main thread's own dictionary copies: a primary
+  // driver of the iPhone jetsam crash. It is also redundant here:
+  // dictionary values are unique per global code by construction, and
+  // creatorXlate guarantees the intern runs exactly once per code, so
+  // the session-local code is simply a counter — dense, assigned in
+  // first-appearance order, which is exactly the order `fresh` ships
+  // the values and the main thread consumes them. Numbering is
+  // therefore identical to the dictCodeLocal numbering it replaces.
+  // The other fields keep dictCodeLocal: year is keyed by VALUE (no
+  // global code exists to translate) and the small dictionaries hold
+  // a handful of entries.
+  let creatorNext = 0;
   function creatorLocal(globalCode, fresh) {
     let local = creatorXlate[globalCode];
     if (local < 0) {
-      local = dictCodeLocal("creator", tcb1DictValue(dict, "creator", globalCode), fresh);
+      local = creatorNext++;
+      fresh.creator.push(tcb1DictValue(dict, "creator", globalCode));
       creatorXlate[globalCode] = local;
     }
     return local;
@@ -348,9 +367,23 @@ export function createTcb1Session(dict, expectedCount = 0) {
     index.builtLen = count;
   }
 
+  // Retained-footprint accounting for the main thread's byte ledger
+  // (2026-11-13): the bytes this session pins in the worker — the
+  // retained chunk id bytes its dedupe index probes against, and the
+  // index table itself. The dictionary buffer is the caller's (it
+  // outlives the session object in beginTcb1) and is added there.
+  function stats() {
+    let retainedBytes = 0;
+    for (const c of retained) {
+      retainedBytes += c.idBytes.byteLength + c.idOff.byteLength;
+    }
+    return { retainedBytes, indexBytes: index.table.byteLength };
+  }
+
   return {
     transposeShard,
     resetTo,
+    stats,
     get count() { return count; },
   };
 }

@@ -391,9 +391,31 @@ export function createTransposeSession(expectedCount = 0) {
     index.builtLen = count;
   }
 
+  // Retained-footprint accounting for the main thread's byte ledger
+  // (2026-11-13): the bytes this session pins in the worker — the
+  // retained chunk id bytes its dedupe index probes against, the
+  // index table, and the session dictionaries (counted the same way
+  // catalog.js's ledger counts the store's: UTF-8 bytes + 16 per
+  // string value, a flat 8 per non-string).
+  function stats() {
+    let retainedBytes = 0;
+    for (const c of retained) {
+      retainedBytes += c.idBytes.byteLength + c.idOff.byteLength;
+    }
+    let dictBytes = 0;
+    for (const [key] of TRANSPOSE_COLUMNS) {
+      const d = dicts[key];
+      for (const v of d.values) {
+        dictBytes += typeof v === "string" ? utf8ByteLength(v) + 16 : 8;
+      }
+    }
+    return { retainedBytes, indexBytes: index.table.byteLength, dictBytes };
+  }
+
   return {
     transpose,
     resetTo,
+    stats,
     get count() { return count; },
   };
 }

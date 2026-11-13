@@ -1190,7 +1190,22 @@ export function commitTransposedChunk(store, remap, payload) {
       remap[key] = nr;
     }
     for (let k = 0; k < fresh.length; k++) {
-      rm[base + k] = dictCode(store, mapKey, dictKey, fresh[k]);
+      // Map-free interning (2026-11-13 load-state fix, defect 3): a
+      // transpose session ships each dictionary value as `fresh`
+      // exactly once in its life — its session-side map guarantees
+      // first-ship-only, and both sessions' dictionaries survive
+      // resetTo untouched, so a value can never be re-shipped after
+      // a resume either. The global code is therefore simply the
+      // dictionary's next slot, identical to what dictCode would
+      // return, and the store's Maps stay empty in worker mode.
+      // That deletes the ~1.07M-entry creator Map (and its pinned
+      // key strings' table overhead) from the main thread's peak
+      // footprint. The main-thread fallback path interns through
+      // dictCode + the Maps as before; browseWorkerFallback rebuilds
+      // the Maps from the dictionaries before any fallback append
+      // can run against a worker-built store.
+      rm[base + k] = store[dictKey].length;
+      store[dictKey].push(fresh[k]);
     }
     remap.len[key] = base + fresh.length;
     const col = store[colKey];
@@ -1282,6 +1297,14 @@ function browseWorkerBegin(st, meta, tcb1) {
   worker.onmessage = (e) => {
     if (browseState !== st || st.worker !== worker) return;
     const m = e.data || {};
+    // Byte-ledger honesty (2026-11-13): the worker reports the
+    // footprint it pins off-thread with every payload; folding it
+    // into the ledger's external account is what makes the
+    // degradation ladder see the stream's true total (it previously
+    // counted only this thread's store and never engaged).
+    if (typeof m.workerBytes === "number") {
+      noteExternalBytes("browse-worker", m.workerBytes);
+    }
     if (m.type === "base") {
       st.buffer.set(-1, {
         transposed: m.payload,
@@ -1356,12 +1379,27 @@ function browseWorkerFallback(st) {
     try { st.worker.terminate(); } catch {}
     st.worker = null;
   }
+  // The worker is gone: its off-thread footprint leaves the ledger.
+  noteExternalBytes("browse-worker", 0);
   st.buffer.clear();
   st.inflight = 0;
   st.failedAt = null;
   if (!st.store || (st.store.count === 0 && !st.baseDone)) {
     st.store = null;
     st.baseDone = false;
+  } else {
+    // The kept store was built by worker commits, which intern
+    // map-free (see commitTransposedChunk): its dictionary Maps are
+    // empty. The main-thread appends that follow intern through
+    // dictCode + the Maps, so rebuild them from the dictionaries
+    // first — one pass, on this rare path only. Dictionary values
+    // are unique by construction, so the rebuild is exact.
+    for (const [, mapKey, dictKey] of COMMIT_COLUMNS) {
+      const dict = st.store[dictKey];
+      const map = new Map();
+      for (let i = 0; i < dict.length; i++) map.set(dict[i], i);
+      st.store[mapKey] = map;
+    }
   }
   st.fetchCursor = st.cursor;
   if (!st.stopped && browseState === st) browseLaunch(st);
@@ -1437,6 +1475,8 @@ function browseStop(st, complete) {
       if (st.visCleanup) { st.visCleanup(); st.visCleanup = null; }
       try { st.worker.terminate(); } catch {}
       st.worker = null;
+      // Its off-thread footprint leaves the ledger with it.
+      noteExternalBytes("browse-worker", 0);
     } else {
       // Stopped early (a page failed): keep the worker for the
       // resume reset, but stop it fetching ahead into the void.
@@ -1618,6 +1658,7 @@ export function startCatalogBrowse() {
         // A superseded stream's worker never outlives its state.
         if (browseState.visCleanup) browseState.visCleanup();
         try { browseState.worker.terminate(); } catch {}
+        noteExternalBytes("browse-worker", 0);
       }
       // A fresh stream resets the memory ladder (design §12).
       ledgerRung = 0;
