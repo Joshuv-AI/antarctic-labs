@@ -507,7 +507,7 @@ let towerDataFor = null;
 // extension case is the norm while loading; anything else falls back
 // to the full build. The id index Map is shared and only ever gains
 // entries, which its consumers (read-only lookups) tolerate.
-let phase0Cache = null;
+let phase0Cache = null; // { len, lastId, forArray, counts, subCounts, bucketKeys, eraCodes, eraCounts, bucketEraCounts, idIndex }
 // Canonical bucket-key strings for phase 0 (see deriveTowerData).
 const bucketKeyCanon = new Map();
 function canonBucketKey(bk) {
@@ -746,9 +746,20 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
     prev0 && prev0.len > 0 && artifacts.length > prev0.len &&
     artifacts[prev0.len - 1] &&
     artifacts[prev0.len - 1].artifact_id === prev0.lastId;
-  const counts = extendsPrev ? { ...prev0.counts } : {};
-  const subCounts = extendsPrev ? { ...prev0.subCounts } : {};
-  const bucketKeys = extendsPrev ? prev0.bucketKeys.slice() : new Array(artifacts.length);
+  // Same-array fast path (RC-2b, 2026-11-14): an option-only restart
+  // (baked orders settling, trailing coverage bump) re-derives over
+  // the identical array object this cache was built from. Phase 0 is
+  // deterministic for that array, so reuse the cached maps wholesale
+  // (phase0From lands at the array's end; the passes below no-op)
+  // instead of paying a full recompute + CatalogIdIndex rebuild over
+  // an unchanged catalog. Any new array identity misses and takes
+  // the existing paths unchanged.
+  const sameArray0 =
+    !!prev0 && prev0.forArray === artifacts && prev0.len === artifacts.length;
+  const reusePrev = extendsPrev || sameArray0;
+  const counts = reusePrev ? { ...prev0.counts } : {};
+  const subCounts = reusePrev ? { ...prev0.subCounts } : {};
+  const bucketKeys = reusePrev ? prev0.bucketKeys.slice() : new Array(artifacts.length);
   bucketKeys.length = artifacts.length;
   // Era axis (filter revamp 2026-11-11): one era code per record
   // (Uint8Array, ~2.6 MB at full catalog — bounded, typed, no strings),
@@ -758,10 +769,10 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
   // instead of re-scanning the catalog on every filter change (the
   // old selection delay). Lane-level intersections are accumulated
   // alongside sub-level ones so a lane filter + era also resolves.
-  const eraCounts = extendsPrev ? { ...prev0.eraCounts } : {};
-  const bucketEraCounts = extendsPrev ? { ...prev0.bucketEraCounts } : {};
+  const eraCounts = reusePrev ? { ...prev0.eraCounts } : {};
+  const bucketEraCounts = reusePrev ? { ...prev0.bucketEraCounts } : {};
   let eraCodes;
-  if (extendsPrev && prev0.eraCodes) {
+  if (reusePrev && prev0.eraCodes) {
     eraCodes = new Uint8Array(artifacts.length);
     eraCodes.set(prev0.eraCodes);
   } else {
@@ -788,7 +799,7 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
     typeof artifacts.__columnBytesAt === "function"
       ? artifacts.__columnBytesAt
       : null;
-  let idIndex = extendsPrev
+  let idIndex = reusePrev
     ? prev0.idIndex
     : new CatalogIdIndex(
         null,
@@ -817,7 +828,7 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
       artifacts.__columnBytesAt
     );
   }
-  const phase0From = extendsPrev ? prev0.len : 0;
+  const phase0From = sameArray0 ? artifacts.length : extendsPrev ? prev0.len : 0;
   // Two-level browse taxonomy (filter revamp 2026-10-17): one bucket key per
   // record ("COLLECTION" or "COLLECTION:sub"), aligned with artifacts like
   // haystacks. Subcategory partitions are exact — the union of a lane's
@@ -907,6 +918,7 @@ async function deriveTowerData(artifacts, isCancelled, onPhase, opts = {}) {
     phase0Cache = {
       len: artifacts.length,
       lastId: artifacts[artifacts.length - 1].artifact_id,
+      forArray: artifacts,
       counts,
       subCounts,
       bucketKeys,
@@ -1714,6 +1726,12 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // run's late phase deliveries (its detached vocabulary build in
   // particular) must not overwrite a newer state.
   const derivePublishedRef = useRef(0);
+  // The artifacts array identity counts finality was earned on
+  // (RC-2a, 2026-11-14): an option-only restart over the SAME array
+  // (baked orders settling, trailing coverage bump) must not un-final
+  // the panel for its recompute's duration; a restart over any other
+  // array (every streaming publish) still resets as before.
+  const countsFinalInputRef = useRef(null);
   useEffect(() => {
     if (!artifacts) {
       const run = deriveRunRef.current;
@@ -1724,6 +1742,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       setTowerData(null);
       setDeriveFinal(false);
       setCountsReady(false);
+      countsFinalInputRef.current = null;
       return;
     }
     const restartKey = `${deriveSeq}|${fullIndexReady}|${needSearchData}|${ordersTick}`;
@@ -1739,7 +1758,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     }
     if (live) live.cancelled = true;
     setDeriveFinal(false);
-    setCountsReady(false);
+    if (countsFinalInputRef.current !== artifacts) setCountsReady(false);
     deriveGenRef.current += 1;
     const run = {
       input: artifacts,
@@ -1804,8 +1823,10 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         // above, but its counts are NOT final — only the run whose
         // input is still the newest array may flip finality (the
         // guarantee cancellation timing used to provide).
-        if (run.input === latestArtifactsRef.current && isBrowseComplete())
+        if (run.input === latestArtifactsRef.current && isBrowseComplete()) {
+          countsFinalInputRef.current = run.input;
           setCountsReady(true);
+        }
       },
       {
         browseOnly: !fullIndexReady,
@@ -1828,7 +1849,10 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
             if (run.input === latestArtifactsRef.current) {
               publish(data);
               setDeriveFinal(true);
-              if (isBrowseComplete()) setCountsReady(true);
+              if (isBrowseComplete()) {
+                countsFinalInputRef.current = run.input;
+                setCountsReady(true);
+              }
             }
             // A superseded run resolving empty is not an error —
             // its trailing run owns the outcome.
@@ -2728,6 +2752,11 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       fx.pendingSel = sel;
       return undefined;
     }
+    // Launching immediately (RC-1, 2026-11-14): any pending snapshot
+    // predates this selection (stored by an earlier render, possibly
+    // mid-stream). Drop it so it cannot drain over this scan when it
+    // settles and overwrite the result with a stale selection.
+    fx.pendingSel = null;
     filterLaunchRef.current(sel);
     return undefined;
   }, [towerData, artifacts, towerOrder, bucketFilter, eraFilter, collSet, collBitsSel, collKey, query, fullIndexReady, streamKick]);
@@ -6854,8 +6883,18 @@ function LibraryFullText({ artifact }) {
     fetch(url, { signal: ctrl.signal })
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        // Reader hardening (2026-11-14): a .txt answered with the SPA
+        // shell (HTTP 200, text/html — the Nov 12-13 platform
+        // incident) is an error, never the book. Reject on the
+        // Content-Type up front, and sniff the body below in case a
+        // shell ever arrives mislabeled.
+        const ctype = (r.headers.get("content-type") || "").toLowerCase();
+        if (ctype.includes("text/html")) throw new Error("unexpected HTML response");
         if (!r.body || typeof r.body.getReader !== "function") {
           const t = await r.text();
+          const sniffFb = t.replace(/^\s+/, "").slice(0, 16).toLowerCase();
+          if (sniffFb.startsWith("<!doctype") || sniffFb.startsWith("<html"))
+            throw new Error("unexpected HTML response");
           if (live) {
             setCachedText(url, t);
             setText(t);
@@ -6867,11 +6906,18 @@ function LibraryFullText({ artifact }) {
         const decoder = new TextDecoder("utf-8");
         let acc = "";
         let nextPublish = 12000;
+        let sniffed = false;
         try {
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
             acc += decoder.decode(value, { stream: true });
+            if (!sniffed && acc.length >= 64) {
+              sniffed = true;
+              const head = acc.replace(/^\s+/, "").slice(0, 16).toLowerCase();
+              if (head.startsWith("<!doctype") || head.startsWith("<html"))
+                throw new Error("unexpected HTML response");
+            }
             if (live && acc.length >= nextPublish) {
               painted = true;
               setText(acc);
