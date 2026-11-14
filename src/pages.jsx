@@ -1792,10 +1792,12 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // it never renders a second list.
   const [collGroup, setCollGroup] = useState("");
   const [collKey, setCollKey] = useState("");
-  // Curated-collection lists longer than 10 start collapsed behind a
-  // "Show all" row (filter revamp 2026-11-11, VuFind's top-N pattern
-  // from the October study).
-  const [collShowAll, setCollShowAll] = useState(false);
+  // Curated-collection lists render in FULL inside the fixed-height
+  // slot, which scrolls internally (2026-11-13, Joshua): the old
+  // top-10 collapse behind a "Show all" row is removed — the slot
+  // already scrolls, so the button was a second, redundant way to
+  // reach the same rows. No show-all/show-more control exists
+  // anywhere in the filter box now.
   const [collData, setCollData] = useState(null);
   const [collLoading, setCollLoading] = useState(false);
   const [collFailed, setCollFailed] = useState(false);
@@ -2001,12 +2003,11 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       if (anchor.release) anchor.release();
       filterAnchor.current = null;
     }
-  }, [collGroup, collKey, bucketFilter, filtersOpen, eraFilter, collShowAll, browseResult]);
+  }, [collGroup, collKey, bucketFilter, filtersOpen, eraFilter, browseResult]);
   const selectCollGroup = (g) => {
     noteFilterAnchor({ bucketFilter, eraFilter, collKey: "" });
     setCollGroup(g);
     setCollKey("");
-    setCollShowAll(false);
     if (g) ensureCollections();
   };
   const selectCollection = (key) => {
@@ -3867,24 +3868,28 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
               )}
               {filtersOpen && (
                 <div className="tf2-body" id="tower-filter-body">
-                  {/* Provisional-state honesty (2026-11-13 load-state
-                      fix; no-seed case closed 2026-11-13 loadfix-v3):
-                      while the catalog streams, collection chips carry
-                      the library's true totals (hub seed), and the
-                      axes whose counts only exist once the derivation
-                      is final — era, subcategories — show no numbers
-                      at all rather than prefix counts dressed as
-                      finals. This note is what makes that state
-                      explicit in the panel itself. If the hub seed
-                      itself hasn't landed, the collection chips show
-                      no numbers either and the note drops its totals
-                      claim — a prefix count is never presented as a
-                      final, with or without the seed. */}
+                  {/* Provisional-state marker (2026-11-13 load-state
+                      fix; wording replaced 2026-11-13 evening on
+                      Joshua's order): while the catalog streams, the
+                      collection chips carry the library's true totals
+                      (hub seed) and the axes whose counts only exist
+                      once the derivation is final — era, subcategories
+                      — show no numbers at all rather than prefix counts
+                      dressed as finals. The panel marks that state with
+                      a single line — a small spinner + "Currently
+                      cataloging library" — in place of the multi-line
+                      explanation it used to carry; Joshua found the
+                      long note clutter and asked for one quick line.
+                      Visibility is exactly the old note's: shown only
+                      while the counts are not final, gone the moment
+                      they are. */}
                   {!countsFinal && (
-                    <p className="tf2-note" aria-live="polite">
-                      {serverCounts
-                        ? "Counting the full catalog — collection counts are library totals; era and subcategory counts appear when the counting finishes."
-                        : "Counting the full catalog — counts appear when the counting finishes."}
+                    <p
+                      className="tf2-note tf2-note--cataloging"
+                      aria-live="polite"
+                    >
+                      <span className="tf2-spin" aria-hidden="true" />
+                      Currently cataloging library
                     </p>
                   )}
                   {/* Axis 1 — Collections: the catalog lanes (filter
@@ -4060,9 +4065,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                             )}
                             {(collData.groups.find((g) => g.id === collGroup)
                               ?.collections || []
-                            )
-                              .slice(0, collShowAll ? undefined : 10)
-                              .map((c) => (
+                            ).map((c) => (
                                 <button
                                   key={c.key}
                                   type="button"
@@ -4078,23 +4081,6 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                   </span>
                                 </button>
                               ))}
-                            {!collShowAll &&
-                              (collData.groups.find((g) => g.id === collGroup)
-                                ?.collections.length || 0) > 10 && (
-                                <button
-                                  type="button"
-                                  className="tf2-more"
-                                  onClick={() => setCollShowAll(true)}
-                                >
-                                  Show all{" "}
-                                  {(
-                                    collData.groups.find(
-                                      (g) => g.id === collGroup
-                                    )?.collections || []
-                                  ).length.toLocaleString()}{" "}
-                                  collections
-                                </button>
-                              )}
                           </div>
                         )}
                       </div>
