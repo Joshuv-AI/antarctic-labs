@@ -1607,49 +1607,138 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     () => onBrowseOrdersSettled(() => setOrdersTick((t) => t + 1)),
     []
   );
+  // Derivation scheduling (2026-11-13 arrival fix): latest-only,
+  // the same discipline as the filter engine (design §12). The old
+  // effect cancelled the running derivation on EVERY stream publish
+  // and restarted it over the longer prefix. A cancelled run
+  // discards its unfinished phase-0 tail work — the phase-0 cache
+  // advances only when a run completes both phase-0 loops — so the
+  // moment one publish's tail work outgrew the publish interval
+  // (measured: ~2.0M resident records on a throttled profile; the
+  // very first publish under heavier contention), every later run
+  // faced a strictly larger tail and was cancelled in turn. The
+  // derived browse data (bucket keys, era codes, id index) froze
+  // mid-stream while the catalog kept arriving, and filtered views
+  // counted over the frozen prefix — an early Law selection sat on
+  // the starter pack's table, which contains no Law at all. A
+  // started run is therefore never cancelled for catalog growth:
+  // it publishes its phases for its own input (a valid,
+  // prefix-consistent state) and, when it settles, a trailing run
+  // starts over the newest array if the catalog moved on. Cancel +
+  // restart still applies to what it is for: option changes (the
+  // browseOnly / deferSearch flips, the orders tick, a manual
+  // retry through deriveSeq) and unmount.
+  const deriveRunRef = useRef(null);
+  const latestArtifactsRef = useRef(null);
+  latestArtifactsRef.current = artifacts;
+  // Derivation generation: bumped every time a new run starts (and
+  // when the catalog goes away). A run's detached phase-3 vocabulary
+  // build outlives the run itself — under the old cancel-on-publish
+  // scheduling it was aborted by cancellation, but a settled run is
+  // never cancelled, so without this guard a fast stream stacks
+  // several full-catalog vocabulary builds on top of the trailing
+  // run's phases until the main thread wedges (the stream stalls on
+  // append backpressure and the panel starves). The generation check
+  // makes supersession itself abort the detached build at its next
+  // slice boundary.
+  const deriveGenRef = useRef(0);
+  // Monotonic publication guard: towerData never regresses to a
+  // shorter derivation than one already published — a superseded
+  // run's late phase deliveries (its detached vocabulary build in
+  // particular) must not overwrite a newer state.
+  const derivePublishedRef = useRef(0);
   useEffect(() => {
     if (!artifacts) {
+      const run = deriveRunRef.current;
+      if (run) run.cancelled = true;
+      deriveRunRef.current = null;
+      deriveGenRef.current += 1;
+      derivePublishedRef.current = 0;
       setTowerData(null);
       setDeriveFinal(false);
       setCountsReady(false);
       return;
     }
-    let cancelled = false;
+    const restartKey = `${deriveSeq}|${fullIndexReady}|${needSearchData}|${ordersTick}`;
+    const live = deriveRunRef.current;
+    if (live && !live.settled && live.restartKey === restartKey) {
+      // Catalog growth only (the running run's options are
+      // unchanged): leave it its input — its settle handler starts
+      // the trailing run over the newest array. Finality flags are
+      // not reset here: they belong to the run that publishes over
+      // the latest array, and during the stream they are false
+      // either way.
+      return;
+    }
+    if (live) live.cancelled = true;
     setDeriveFinal(false);
     setCountsReady(false);
+    deriveGenRef.current += 1;
+    const run = {
+      input: artifacts,
+      restartKey,
+      cancelled: false,
+      settled: false,
+      gen: deriveGenRef.current,
+    };
+    deriveRunRef.current = run;
+    const publish = (obj) => {
+      if (!obj) return;
+      const k = obj.bucketKeys ? obj.bucketKeys.length : 0;
+      if (k < derivePublishedRef.current) return;
+      derivePublishedRef.current = k;
+      setTowerData(obj);
+    };
+    const settleRun = () => {
+      run.settled = true;
+      if (deriveRunRef.current === run) deriveRunRef.current = null;
+      if (
+        !run.cancelled &&
+        latestArtifactsRef.current &&
+        latestArtifactsRef.current !== run.input
+      ) {
+        setDeriveSeq((n) => n + 1);
+      }
+    };
     deriveTowerData(
       artifacts,
-      () => cancelled,
+      () => run.cancelled || run.gen !== deriveGenRef.current,
       (phase) => {
         // Phase 1 (search data) is live the moment it lands — the sort
         // orders still building in the background must not hold search
         // hostage.
-        if (!cancelled) {
-          setTowerData(phase);
-          // The phase callback's first delivery is phase 0 —
-          // counts, era counts and subcategory counts computed over
-          // this run's input. Those counts are final only when the
-          // input is the whole catalog, which isBrowseComplete()
-          // attests (stream consumed the manifest total, or the
-          // client index finished). The panel keys its final state
-          // off this, not the derivation promise, whose phases 1–3
-          // lag phase 0 (2026-11-13 load-state fix).
-          //
-          // The trigger used to be "!isBrowseStreaming()" — the
-          // stream's stopped state — which is also true BEFORE the
-          // stream exists: while manifest discovery was still in
-          // flight (a degraded manifest endpoint can burn ~38 s of
-          // retries there), the first derivation over the bootstrap
-          // prefix flipped the panel "final" and presented prefix
-          // counts as the library's own — seed bypassed, note
-          // suppressed, era/subcategory numbers shown, Law missing
-          // (Joshua's 17:01 recording, 2026-11-13 loadfix-v3).
-          // (fullIndexReady cannot be the trigger either — it keys
-          // off the publish's complete flag, which the deduped
-          // resident count never satisfies when the raw total counts
-          // duplicate ids, so it never flips at all.)
-          if (isBrowseComplete()) setCountsReady(true);
-        }
+        if (run.cancelled || run.gen !== deriveGenRef.current) return;
+        publish(phase);
+        // The phase callback's first delivery is phase 0 —
+        // counts, era counts and subcategory counts computed over
+        // this run's input. Those counts are final only when the
+        // input is the whole catalog, which isBrowseComplete()
+        // attests (stream consumed the manifest total, or the
+        // client index finished). The panel keys its final state
+        // off this, not the derivation promise, whose phases 1–3
+        // lag phase 0 (2026-11-13 load-state fix).
+        //
+        // The trigger used to be "!isBrowseStreaming()" — the
+        // stream's stopped state — which is also true BEFORE the
+        // stream exists: while manifest discovery was still in
+        // flight (a degraded manifest endpoint can burn ~38 s of
+        // retries there), the first derivation over the bootstrap
+        // prefix flipped the panel "final" and presented prefix
+        // counts as the library's own — seed bypassed, note
+        // suppressed, era/subcategory numbers shown, Law missing
+        // (Joshua's 17:01 recording, 2026-11-13 loadfix-v3).
+        // (fullIndexReady cannot be the trigger either — it keys
+        // off the publish's complete flag, which the deduped
+        // resident count never satisfies when the raw total counts
+        // duplicate ids, so it never flips at all.)
+        //
+        // Latest-only scheduling adds the input check: a run the
+        // stream has already moved past publishes its prefix state
+        // above, but its counts are NOT final — only the run whose
+        // input is still the newest array may flip finality (the
+        // guarantee cancellation timing used to provide).
+        if (run.input === latestArtifactsRef.current && isBrowseComplete())
+          setCountsReady(true);
       },
       {
         browseOnly: !fullIndexReady,
@@ -1663,21 +1752,39 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       }
     ).then(
       (data) => {
-        if (cancelled) return;
-        if (data) {
-          setTowerData(data);
-          setDeriveFinal(true);
-          if (isBrowseComplete()) setCountsReady(true);
-        } else setDeriveError(true);
+        if (!run.cancelled) {
+          if (data) {
+            // Only the run over the newest array completes the
+            // derivation; a superseded run's phases already
+            // published its prefix state, and its trailing run
+            // (settleRun, below) brings the final flags.
+            if (run.input === latestArtifactsRef.current) {
+              publish(data);
+              setDeriveFinal(true);
+              if (isBrowseComplete()) setCountsReady(true);
+            }
+            // A superseded run resolving empty is not an error —
+            // its trailing run owns the outcome.
+          } else if (run.input === latestArtifactsRef.current)
+            setDeriveError(true);
+        }
+        settleRun();
       },
       () => {
-        if (!cancelled) setDeriveError(true);
+        if (!run.cancelled && run.input === latestArtifactsRef.current)
+          setDeriveError(true);
+        settleRun();
       }
     );
-    return () => {
-      cancelled = true;
-    };
   }, [artifacts, deriveSeq, fullIndexReady, needSearchData, ordersTick]);
+  // Unmount is the one unconditional cancellation (growth no longer
+  // cancels, so it cannot ride the scheduling effect's cleanup).
+  useEffect(() => {
+    return () => {
+      const run = deriveRunRef.current;
+      if (run) run.cancelled = true;
+    };
+  }, []);
   const retryCatalog = () => {
     setDeriveError(false);
     retryArtifacts();
@@ -2428,7 +2535,8 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           cur.sel.collSet === p.collSet &&
           cur.sel.collBits === p.collBits &&
           cur.sel.order === p.order &&
-          cur.sel.len === p.len
+          cur.sel.len === p.len &&
+          cur.sel.keysLen === p.keysLen
         ) {
           return;
         }
@@ -2472,6 +2580,23 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       collBits: collBitsSel,
       order: towerOrder,
       len: artifacts.length,
+      // Derivation coverage (2026-11-13 arrival fix): the scan reads
+      // bucket membership from the code table built over
+      // towerData.bucketKeys, whose length is the derivation's
+      // coverage of the resident catalog. While the derivation lags
+      // the stream (its runs are latest-only now, but a heavy prefix
+      // still trails the newest publish), two selections can share
+      // every field above yet scan different data — so coverage is
+      // part of the selection's identity wherever "already current"
+      // is decided (the no-op return below, the settle drain). A
+      // committed result computed over a shorter bucketKeys is NOT
+      // the latest intent once a longer derivation lands, even when
+      // the resident length and the selection are unchanged — that
+      // exact case stranded an early Law selection on its starter-
+      // pack zero (or a frozen prefix count) past load completion,
+      // because the completion derivation changed nothing the old
+      // checks compared.
+      keysLen: towerData.bucketKeys ? towerData.bucketKeys.length : 0,
       bucketKeys: towerData.bucketKeys,
       eraCodes: towerData.eraCodes,
       idIndex: towerData.idIndex,
@@ -2485,8 +2610,9 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       cur.sel.collSet === sel.collSet &&
       cur.sel.collBits === sel.collBits &&
       cur.sel.order === sel.order;
-    if (sameSel && cur.sel.len === sel.len) {
-      // The committed result already IS the latest intent.
+    if (sameSel && cur.sel.len === sel.len && cur.sel.keysLen === sel.keysLen) {
+      // The committed result already IS the latest intent — same
+      // selection, same resident length, same derivation coverage.
       fx.pendingSel = null;
       return undefined;
     }
