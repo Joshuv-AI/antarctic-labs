@@ -42,9 +42,7 @@ import {
   requestCatalogIndex,
   startCatalogBrowse,
   resumeCatalogBrowse,
-  isBrowseStreaming,
   isBrowseComplete,
-  isIndexInFlight,
   getCachedArtifacts,
   getFullArtifact,
   getDescription,
@@ -1688,11 +1686,15 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     setDeriveSeq((n) => n + 1);
   };
   const failed = catalogError || deriveError;
-  // True catalog total from the browse manifest, known from first
-  // paint (design §11.3): while the stream is still arriving, the
-  // status line reports progress against it and the results header
-  // uses it as its denominator, instead of letting the resident
-  // prefix pose as the whole library.
+  // True catalog total from the browse manifest (design §11.3): the
+  // results header uses a truthful total as its denominator instead
+  // of letting the resident prefix pose as the whole library. The
+  // header receives worksTotal FIRST (hub seed → this hint): this
+  // hint alone was still 0 through Joshua's whole 18:31 recording —
+  // it waits on the browse manifest, the slowest discovery fetch —
+  // while the seed total was already on screen in the stats strip,
+  // so the header read "20,000 of 20,000 entries" (the starter pack
+  // posing as the library) for the entire clip.
   const catalogTotalHint = getBrowseTotalHint() || 0;
   // Live search + two-level browse filter + sort. Empty query/filter = show all.
   // bucketFilter is "" (all), a lane ("PAPERS"), or a subcategory
@@ -3130,6 +3132,37 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // to the resident count, which is then the exact catalog count.
   const allEntriesCount =
     countsFinal || worksTotal == null ? displayCount : worksTotal;
+  // Zero-resident selection (2026-11-13 statusfix): a lane or
+  // subcategory tap whose committed scan found ZERO resident matches
+  // while the catalog is still arriving is not an empty result — it
+  // is a part of the library that has not streamed in yet. The
+  // starter pack holds no LAW records at all (Law arrives late in
+  // browse order), so a Law tap in the first stretch of a load read
+  // "0 of 20,000 entries / No entries match — choose a different
+  // collection" beside a chip stating Law's 1,277,197 works
+  // (Joshua's 18:31 recording; the same zero appears on a direct Law
+  // tap seconds into the clip, before any subcategory is touched —
+  // the selection state itself is atomic lane[:sub], so nothing
+  // leaks across a lane switch; the trap is the resident prefix).
+  // While counting is not final, a bucket-only selection (no era,
+  // curated or query composition) whose library count is known
+  // positive — the seed/derivation count for a lane, the taxonomy
+  // itself for a subcategory — renders the awaiting state instead,
+  // and the engine's per-publish rescan replaces it with the real
+  // entries the moment they arrive. Once counts are final a zero is
+  // a true zero and the plain empty message returns.
+  const awaitingArrival = (() => {
+    if (!bucketFilter || eraFilter || collSet || collBitsSel) return false;
+    if (q && q.trim().length >= 2) return false;
+    if (countsFinal || matchCount !== 0 || !towerData) return false;
+    if (bucketFilter.indexOf(":") > -1) {
+      const lane = bucketFilter.split(":")[0];
+      return (TOWER_SUBS[lane] || []).some(
+        (s) => `${lane}:${s.id}` === bucketFilter
+      );
+    }
+    return (((discoveryData || towerData).counts || {})[bucketFilter] || 0) > 0;
+  })();
   const adaptServerItem = (r, tokens) => {
     const nt = normText(r.title || "");
     const nc = normText(r.creator || "");
@@ -3562,16 +3595,8 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                   Search
                 </button>
               </div>
-              <p className="tower-search-help">
-                Searches titles, authors and the full text of every work.
-              </p>
             </form>
           </search>
-          <div className="tower-status-slot">
-            <p className="tower-index-status" aria-live="polite">
-              Loading the catalog…
-            </p>
-          </div>
         </div>
         <div className="tower-rows" aria-hidden="true">
           {Array.from({ length: 6 }, (_, i) => (
@@ -3708,36 +3733,17 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                       Search
                     </button>
                   </div>
-                  <p className="tower-search-help">
-                    Searches titles, authors and the full text of every work.
-                  </p>
                 </form>
               </search>
-              {/* Status lines live in a fixed-height slot (2026-11-11
-                  presentation fix): "Loading full catalog…" used to
-                  vanish the moment the stream completed, yanking the
-                  stacks grid below it up by the line's height (~68px)
-                  in the middle of the page. The slot reserves one
-                  line's space whether a status is showing or not. */}
-              <div className="tower-status-slot">
-                {!fullIndexReady && (isIndexInFlight() || isBrowseStreaming()) && (
-                  <p className="tower-index-status" aria-live="polite">
-                    Loading full catalog…
-                    {catalogTotalHint > 0 &&
-                    artifacts &&
-                    catalogTotalHint > artifacts.length
-                      ? ` ${artifacts.length.toLocaleString(
-                          "en-US"
-                        )} of ${catalogTotalHint.toLocaleString("en-US")}`
-                      : ""}
-                  </p>
-                )}
-                {fullIndexReady && towerData && !towerData.haystacks && (!serverFlag || needSearchData) && (
-                  <p className="tower-index-status" aria-live="polite">
-                    Indexing the catalog for search…
-                  </p>
-                )}
-              </div>
+              {/* No fine print under the search bar (Joshua's order,
+                  2026-11-13): the "Searches titles, authors…" help
+                  line and the "Loading full catalog…" status line
+                  that lived here are REMOVED, with no replacement —
+                  the page reads as loaded because it is usable, and
+                  the load state that matters lives in the filter
+                  panel's counting note and the results header.
+                  Removed stays removed: do not re-add a status or
+                  help line in this slot. */}
             </div>
             {/* MINIMAL PAGE (Ship 2, Joshua 2026-11-12): the discovery
                 zone — Browse-the-stacks cards, the Featured rails and
@@ -4148,7 +4154,9 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
               showSkeleton={showSkeleton}
               headingRef={resultsHeadingRef}
               provisional={!fullIndexReady}
-              totalHint={catalogTotalHint}
+              totalHint={worksTotal || catalogTotalHint}
+              awaitingArrival={awaitingArrival}
+              awaitingLabel={activeBucketLabel}
               q={q}
               rawQuery={query}
               go={go}
@@ -5336,6 +5344,8 @@ const LibraryResults = memo(function LibraryResults({
   headingRef,
   provisional,
   totalHint,
+  awaitingArrival,
+  awaitingLabel,
   q,
   rawQuery,
   go,
@@ -5637,7 +5647,15 @@ const LibraryResults = memo(function LibraryResults({
       </p>
       {matchCount === 0 && (
         <p className="tower-empty-results">
-          No entries match. Clear the search or choose a different collection.
+          {awaitingArrival
+            ? `No ${awaitingLabel} entries have loaded yet — this part of the catalog is still arriving${
+                totalHint > artifacts.length
+                  ? ` (${artifacts.length.toLocaleString(
+                      "en-US"
+                    )} of ${totalHint.toLocaleString("en-US")} loaded so far)`
+                  : ""
+              }. Entries appear here on their own as the load continues.`
+            : "No entries match. Clear the search or choose a different collection."}
         </p>
       )}
       <div ref={wrapRef}>
