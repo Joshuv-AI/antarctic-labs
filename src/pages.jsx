@@ -43,6 +43,7 @@ import {
   startCatalogBrowse,
   resumeCatalogBrowse,
   isBrowseComplete,
+  isBrowseStreaming,
   getCachedArtifacts,
   getFullArtifact,
   getDescription,
@@ -396,6 +397,29 @@ function useArtifacts() {
       if (t) clearTimeout(t);
     };
   }, [state.artifacts, state.error, retrySeq]);
+  // Automatic recovery (2026-11-13 load-window fix): a bootstrap
+  // fetch that fails transiently (a 504 burst, a stalled connection)
+  // used to leave the manual-retry error screen as the only way
+  // back — a session that hit it sat on that screen (or, before the
+  // watchdog, on the skeleton branch) until the visitor happened to
+  // reload. Retry on a bounded backoff while the error state
+  // persists; a success clears the error through the normal path.
+  const autoRetryRef = useRef(0);
+  useEffect(() => {
+    if (state.artifacts) {
+      autoRetryRef.current = 0;
+      return;
+    }
+    if (!state.error && !watchdogError) return;
+    const delays = [4000, 10000, 20000, 40000];
+    if (autoRetryRef.current >= delays.length) return;
+    const t = setTimeout(() => {
+      autoRetryRef.current += 1;
+      retry();
+    }, delays[autoRetryRef.current]);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.error, watchdogError, state.artifacts, retrySeq]);
   const retry = () => {
     setWatchdogError(false);
     // A late success may have populated the module cache since the failure.
@@ -1594,6 +1618,49 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // Distinct from deriveFinal (the whole derivation promise), which
   // can lag phase 0 by the full phase 1–3 build.
   const [countsReady, setCountsReady] = useState(false);
+  // Load-window honesty (2026-11-13): if the skeleton loading branch
+  // is still the whole section after 12 s, the branch says so in
+  // plain words — a stalled session must not sit on anonymous slabs
+  // with no indication anything is wrong or still coming.
+  const [slowLoad, setSlowLoad] = useState(false);
+  useEffect(() => {
+    if (artifacts && towerData) {
+      setSlowLoad(false);
+      return;
+    }
+    const t = setTimeout(() => setSlowLoad(true), 12000);
+    return () => clearTimeout(t);
+  }, [artifacts, towerData]);
+  // Stream self-recovery (2026-11-13): the browse stream can
+  // failure-stop mid-load (a burst of failed page fetches on a
+  // throttled connection) with the catalog half-arrived and the
+  // counting note up indefinitely — the visitor's only recovery was
+  // a reload. While the page is visible, a stopped-but-incomplete
+  // stream resumes itself on a bounded backoff; a stream that is
+  // moving resets the budget.
+  useEffect(() => {
+    if (!artifacts || countsReady) return;
+    let attempts = 0;
+    let timer = null;
+    const delays = [10000, 20000, 40000, 60000, 60000, 60000];
+    const tick = () => {
+      if (
+        document.visibilityState === "visible" &&
+        !isBrowseComplete() &&
+        !isBrowseStreaming()
+      ) {
+        if (attempts < delays.length) {
+          resumeCatalogBrowse();
+          attempts += 1;
+        }
+      } else if (isBrowseStreaming()) {
+        attempts = 0;
+      }
+      timer = setTimeout(tick, delays[Math.min(attempts, delays.length - 1)]);
+    };
+    timer = setTimeout(tick, delays[0]);
+    return () => clearTimeout(timer);
+  }, [artifacts, countsReady]);
   // Deferred-search trigger (2026-11-10 crash fix): flips true the
   // first time a hub filter or strict query needs the local search
   // layer in server mode; the derivation then upgrades in place.
@@ -3680,14 +3747,14 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
             className="tower-access-btn"
             onClick={() => go("/tower-of-babel/library/research")}
           >
-            API ACCESS <span aria-hidden="true">↗</span>
+            API ACCESS
           </button>
           <button
             type="button"
             className="tower-access-btn"
             onClick={() => go("/tower-of-babel/library/suggest")}
           >
-            SUGGEST AN ENTRY <span aria-hidden="true">↗</span>
+            SUGGEST AN ENTRY
           </button>
           <button
             type="button"
@@ -3696,18 +3763,6 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           >
             DONATE <span aria-hidden="true">♥</span>
           </button>
-        </div>
-        <div className="tower-stats" aria-label="The library at a glance">
-          <span>
-            <strong className="ts-num ts-works">{worksTotal == null ? "–" : worksTotal.toLocaleString()}</strong> works
-          </span>
-          <span>
-            <strong className="ts-num ts-coll">{collectionsCount == null ? "–" : collectionsCount}</strong> collections
-          </span>
-          <span>
-            <strong>{TRADITIONS.length}</strong> sacred traditions
-          </span>
-          <span>No accounts, no paywalls</span>
         </div>
         <div className="tower-controls">
           <search>
@@ -3734,6 +3789,13 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
             </form>
           </search>
         </div>
+        {slowLoad && (
+          <p className="tower-loading-note">
+            Still loading — the catalog is large, and this connection
+            is taking a while. Entries appear here on their own as
+            soon as the first part of the library arrives.
+          </p>
+        )}
         <div className="tower-rows" aria-hidden="true">
           {Array.from({ length: 6 }, (_, i) => (
             <div key={i} className="tower-skel-row" />
@@ -3752,14 +3814,14 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
             className="tower-access-btn"
             onClick={() => go("/tower-of-babel/library/research")}
           >
-            API ACCESS <span aria-hidden="true">↗</span>
+            API ACCESS
           </button>
           <button
             type="button"
             className="tower-access-btn"
             onClick={() => go("/tower-of-babel/library/suggest")}
           >
-            SUGGEST AN ENTRY <span aria-hidden="true">↗</span>
+            SUGGEST AN ENTRY
           </button>
           <button
             type="button"
@@ -3776,18 +3838,6 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           </div>
         ) : (
           <>
-            <div className="tower-stats" aria-label="The library at a glance">
-              <span>
-                <strong className="ts-num ts-works">{worksTotal == null ? "–" : worksTotal.toLocaleString()}</strong> works
-              </span>
-              <span>
-                <strong className="ts-num ts-coll">{collectionsCount == null ? "–" : collectionsCount}</strong> collections
-              </span>
-              <span>
-                <strong>{TRADITIONS.length}</strong> sacred traditions
-              </span>
-              <span>No accounts, no paywalls</span>
-            </div>
             <div className="tower-controls">
               {/* ONE search bar (Workstream D, SPEC-1): a real search
                   landmark + form, one input, one submit. There is no
@@ -5445,14 +5495,6 @@ const UnifiedRow = memo(function UnifiedRow({ item, rank, go, tokens, autoSnippe
         <span className="tower-tag">{a.collection}</span>
         {a.format && <span className="tower-tag">{a.format}</span>}
       </span>
-      <button
-        type="button"
-        className="tower-row-arrow-btn"
-        onClick={() => go(entryPath)}
-        aria-label={`Open ${a.title}`}
-      >
-        <span className="tower-row-arrow" aria-hidden="true">↗</span>
-      </button>
     </div>
   );
 });
@@ -5901,9 +5943,6 @@ const TowerRow = memo(function TowerRow({ a, index, go }) {
           </span>
         )}
         {a.format && <span className="tower-tag">{a.format}</span>}
-      </span>
-      <span className="tower-row-arrow" aria-hidden="true">
-        ↗
       </span>
     </button>
   );

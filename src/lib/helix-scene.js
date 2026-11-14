@@ -975,6 +975,8 @@ export function createHelixScene(canvas, opts = {}) {
   let lowDprWindows = 0;
   let stillDirty = true;
   let lastScrollAt = -1e9;
+  let loadPollAt = 0;
+  let loadActive = true; // the catalog stream starts with the page
   let lastScrollY = 0;
   // Visual containment (2026-11-13): the structure's rotation is an
   // accumulated angle, not a pure function of scene time, so its
@@ -1054,8 +1056,35 @@ export function createHelixScene(canvas, opts = {}) {
     // the trajectory. The 30 fps economy cap still applies when no
     // gesture is active, and focus flights outside a gesture keep
     // their established character.
+    //
+    // Load-window economy (2026-11-13, Joshua's 21:42 recording):
+    // the full-rate gesture rendering above made the OPENING
+    // seconds worse, not better — while the catalog stream is
+    // saturating the main thread (worker commits, record parses,
+    // derivation slices), an every-frame WebGL render competes for
+    // the same thread, and its irregular frame times ARE the
+    // stutter he filmed ("much smoother after a few seconds" —
+    // once the load drains, the thread frees and it glides). So
+    // while the library is still loading, the gesture exemption is
+    // suspended and the plain 30 fps cap governs: an even 30 fps
+    // reads smoother than a starved, irregular full rate, and the
+    // turns it saves go to the stream's own commits — the load
+    // finishes sooner, which ends the window sooner. The load
+    // state is read from the library section's own DOM (the
+    // skeleton loading branch before the first publish; the
+    // "Currently cataloging library" note while counts are not
+    // final), polled a few times a second. The moment neither is
+    // present, the full-rate glide above returns unchanged.
     const scrolling = now - lastScrollAt < 180;
-    if (!scrolling && lastRender && now - lastRender < FRAME_MS - 1) return;
+    if (now - loadPollAt > 250) {
+      loadPollAt = now;
+      try {
+        loadActive = !!document.querySelector(
+          ".tower-index--loading, .tf2-note--cataloging"
+        );
+      } catch (e) { /* keep previous */ }
+    }
+    if ((!scrolling || loadActive) && lastRender && now - lastRender < FRAME_MS - 1) return;
     renderFrame(now);
     if (!fpsWindowStart) { fpsWindowStart = now; loopStart = now; }
     fpsWindowFrames++;
@@ -1086,10 +1115,22 @@ export function createHelixScene(canvas, opts = {}) {
         if (fps < 24 && dprTier < DPR_LADDER.length - 1) {
           lowDprWindows++;
           if (lowDprWindows >= 2) {
+            // In transit = the damped rig has not converged on its
+            // mode target (a filter tap's flight), or the focus /
+            // lift ramps are still running. (Repaired 2026-11-13:
+            // this check used to reference camPos / camTgt /
+            // liftTgt / liftAmtCur, which exist nowhere in this
+            // file — evaluating it threw a ReferenceError every
+            // time the ladder reached it, so the DPR step never
+            // applied. The real state is rigCur vs modeTarget()
+            // plus the liftTarget / liftAmt pair.)
+            const rigTgt = modeTarget(sceneTime);
             const inTransit =
-              camPos.distanceTo(camTgt) > 0.75 ||
+              Math.abs(rigTgt.dist - rigCur.dist) > 0.75 ||
+              Math.abs(rigTgt.tgtY - rigCur.tgtY) > 0.75 ||
+              Math.abs(rigTgt.elev - rigCur.elev) > 0.02 ||
               Math.abs(focusAmtTgt - focusAmtCur) > 0.01 ||
-              Math.abs(liftTgt - liftAmtCur) > 0.01;
+              Math.abs(liftTarget - liftAmt) > 0.01;
             if (now - lastScrollAt < 700 || inTransit) {
               lowDprWindows = 2;
             } else {
