@@ -1800,6 +1800,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   const [collLoading, setCollLoading] = useState(false);
   const [collFailed, setCollFailed] = useState(false);
   const collSectionRef = useRef(null);
+  const collSubsRef = useRef(null);
   const [filtersOpen, setFiltersOpen] = useState(true);
   const filterPanelRef = useRef(null);
   const ensureCollections = useCallback(() => {
@@ -1840,6 +1841,14 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     }
     return null;
   }, [collData, collKey]);
+  // The active collection's blurb renders INSIDE the fixed-height
+  // subs slot (see the curated axis markup) so selecting a shelf
+  // never resizes the panel; scroll the slot back to its top on a
+  // selection change so the blurb is the first thing seen, exactly
+  // as it was when it rendered below the slot.
+  useEffect(() => {
+    if (collKey && collSubsRef.current) collSubsRef.current.scrollTop = 0;
+  }, [collKey]);
   const collSet = activeCollection ? activeCollection.ids : null;
   // Curated bitsets (Phase 2A, design §12): when the collection's
   // descriptor came from the TCU1 bitsets, membership is the packed
@@ -4024,10 +4033,31 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                         )}
                         {collData && collGroup && (
                           <div
+                            ref={collSubsRef}
                             className="tf2-subs"
                             role="group"
                             aria-label={`Collections in ${COLLECTION_GROUPS.find((g) => g.id === collGroup)?.label || collGroup}`}
                           >
+                            {/* The active shelf's blurb lives INSIDE
+                                the fixed-height slot (first child), not
+                                below it: below the slot it mounted and
+                                unmounted with every selection and its
+                                height varied per blurb, resizing the
+                                panel by ~131px on each curated tap —
+                                the last panel resize left after the
+                                fixed slot. Same text, same visibility
+                                (the slot scrolls back to its top on a
+                                selection change); the panel frame now
+                                never moves on a curated selection. */}
+                            {activeCollection && (
+                              <p className="tf2-note">
+                                {activeCollection.blurb}{" "}
+                                <span>
+                                  {activeCollection.count.toLocaleString()}{" "}
+                                  works
+                                </span>
+                              </p>
+                            )}
                             {(collData.groups.find((g) => g.id === collGroup)
                               ?.collections || []
                             )
@@ -4066,14 +4096,6 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                 </button>
                               )}
                           </div>
-                        )}
-                        {activeCollection && (
-                          <p className="tf2-note">
-                            {activeCollection.blurb}{" "}
-                            <span>
-                              {activeCollection.count.toLocaleString()} works
-                            </span>
-                          </p>
                         )}
                       </div>
                     </div>
