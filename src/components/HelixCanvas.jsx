@@ -97,27 +97,74 @@ async function loadHelixSceneModule() {
 // filter chips read — so the background and the panel can never
 // disagree. Bounded wait (2.5 s): on any failure the scene falls
 // back to its built-in seed of the same true totals.
+//
+// Smoothness repair (2026-11-14): the counts object lives in the
+// file's HEAD ({"snapshotDate":...,"total":N,"collections":{...}}),
+// so the body is STREAMED only until the collections object closes
+// and then cancelled — the same head-read the page's own hub seed
+// uses (fetchHubSeed in pages.jsx). The previous implementation
+// downloaded and JSON.parsed the whole ~17.7 MB document before the
+// scene could be created: on a phone link that is seconds of radio
+// contention against the catalog stream plus a multi-hundred-ms
+// main-thread parse, all to extract seven numbers.
 const HELIX_COLLECTIONS = ["LAW", "PAPERS", "BOOKS", "REFERENCE", "DECLASSIFIED", "PODCASTS", "DOCUMENTS"];
+function extractHeadCollections(text) {
+  const key = text.indexOf('"collections"');
+  if (key < 0) return null;
+  const open = text.indexOf("{", key);
+  if (open < 0) return null;
+  // The collections object is flat (name -> count): the first "}"
+  // after its "{" that balances it is its end.
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        try {
+          const cols = JSON.parse(text.slice(open, i + 1));
+          const out = {};
+          for (const n of HELIX_COLLECTIONS) {
+            const v = cols[n];
+            if (typeof v !== "number" || !(v > 0)) return null;
+            out[n] = v;
+          }
+          return out;
+        } catch (e) {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
 async function fetchHubCounts() {
   try {
     const ctl = new AbortController();
     const to = setTimeout(() => ctl.abort(), 2500);
-    let j = null;
     try {
       const r = await fetch("/tower-hubs-index.json", { signal: ctl.signal });
-      if (r && r.ok) j = await r.json();
+      if (!r || !r.ok || !r.body || typeof r.body.getReader !== "function") return null;
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let text = "";
+      // The collections object sits within the first few hundred
+      // bytes; the 256 KB scan cap is pure headroom.
+      for (let n = 0; n < 64 && text.length < 262144; n++) {
+        const { done, value } = await reader.read();
+        if (value) text += dec.decode(value, { stream: !done });
+        const out = extractHeadCollections(text);
+        if (out) {
+          try { reader.cancel(); } catch (e) {}
+          return out;
+        }
+        if (done) break;
+      }
+      return null;
     } finally {
       clearTimeout(to);
     }
-    const cols = j && j.collections;
-    if (!cols) return null;
-    const out = {};
-    for (const n of HELIX_COLLECTIONS) {
-      const v = cols[n];
-      if (typeof v !== "number" || !(v > 0)) return null;
-      out[n] = v;
-    }
-    return out;
   } catch (e) {
     return null;
   }

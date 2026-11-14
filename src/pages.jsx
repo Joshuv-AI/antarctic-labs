@@ -3628,16 +3628,36 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           }
         }
       } else if (browseResult && artifacts) {
-        count = browseResult.count;
-        topArtifacts = browseResult.indices
-          .slice(0, 50)
-          .map((ix) => artifacts[ix])
-          .filter(Boolean);
-        sampleArtifacts = browseResult.indices
-          .slice(0, 200)
-          .map((ix) => artifacts[ix])
-          .filter(Boolean);
-        facetSource = { indices: browseResult.indices };
+        // Correspondence gate (2026-11-14): a committed browse
+        // result belongs to the selection that produced it
+        // (browseResult.sel — the same fields the filter anchor
+        // matches on). While the scan for the CURRENT selection is
+        // still running, the previous selection's result must not
+        // drive the scene: without this check the effect emitted a
+        // reshape tallied from the superseded result wearing the
+        // new selection's name and the old count (measured on a
+        // slow device: an era tap bound a "reshape" of the full
+        // 2,557,918-entry set under the era's name). On a mismatch
+        // the count stays unknown and the previous scene state
+        // holds until the matching result commits.
+        const bs = browseResult.sel;
+        if (
+          bs &&
+          bs.bucketFilter === bucketFilter &&
+          bs.eraFilter === eraFilter &&
+          bs.collKey === collKey
+        ) {
+          count = browseResult.count;
+          topArtifacts = browseResult.indices
+            .slice(0, 50)
+            .map((ix) => artifacts[ix])
+            .filter(Boolean);
+          sampleArtifacts = browseResult.indices
+            .slice(0, 200)
+            .map((ix) => artifacts[ix])
+            .filter(Boolean);
+          facetSource = { indices: browseResult.indices };
+        }
       }
       if (count === 0) {
         state = { kind: "idle" };
@@ -3689,13 +3709,17 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
             facets = {};
             facets[HELIX_BAND_OF[lane]] = count;
           } else {
-            // Exact tally over the full match set, capped: past the
-            // cap the set is a broad cross-collection slice whose
-            // honest scene answer is the dominant-lane focus above.
-            const FACET_CAP = 300000;
+            // Exact tally over the full match set (2026-11-14: the
+            // former 300k cap is removed — it silently demoted broad
+            // refined selections, e.g. a big era spanning several
+            // collections, to the dominant-lane focus, but Joshua's
+            // standing direction is that EVERY refined combination
+            // gets the reshuffle; the tally is one pass over the
+            // already-materialized match set, once per settled
+            // selection change).
             const tally = [0, 0, 0, 0, 0, 0, 0];
             let n = 0;
-            if (facetSource.indices && facetSource.indices.length <= FACET_CAP) {
+            if (facetSource.indices) {
               const idx = facetSource.indices;
               n = idx.length;
               for (let k = 0; k < n; k++) {
@@ -3703,7 +3727,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                 const bi = a ? HELIX_BAND_OF[a.collection] : undefined;
                 if (bi !== undefined) tally[bi]++;
               }
-            } else if (facetSource.items && facetSource.items.length <= FACET_CAP) {
+            } else if (facetSource.items) {
               const items = facetSource.items;
               n = items.length;
               for (let k = 0; k < n; k++) {

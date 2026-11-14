@@ -336,6 +336,12 @@ export function createHelixScene(canvas, opts = {}) {
   let focusGroups = [];
   let focusY = 0;
   let focusDistMul = 0.5;
+  // Focus tracking (2026-11-14): in focus mode the structure's
+  // rotation damps to this angle — the one where the focused band's
+  // label anchor faces the camera — and holds there, so the section
+  // the visitor travelled to stays in front of them. null = no
+  // tracking (free rotation).
+  let focusRotTarget = null;
   let displayY = Y_TOP + 12;
   let booted = false;           // boot gate (Amendment M)
   let bootAt = 0;               // performance.now() when boot completed
@@ -657,6 +663,7 @@ export function createHelixScene(canvas, opts = {}) {
     focusAttr.needsUpdate = true;
     cells.set(scratchCells);
     cellAttr.needsUpdate = true;
+    focusRotTarget = null;
     mode = "reshape";
     focusGroups = BANDS.filter((g, b) => facets[b] > 0).map((g) => g.index);
     focusAmtTgt = 1;
@@ -684,27 +691,62 @@ export function createHelixScene(canvas, opts = {}) {
   let degraded = false;
   let running = false;
   let atlasTexture = null;
-  new THREE.TextureLoader().load(
-    atlasUrl,
-    (tex) => {
-      if (disposed) { tex.dispose(); return; }
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-      tex.generateMipmaps = true;
-      tex.minFilter = THREE.LinearMipmapLinearFilter;
-      tex.magFilter = THREE.LinearFilter;
-      atlasTexture = tex;
-      uniforms.uMap.value = tex;
-      structure.add(mesh);
-      stillDirty = true;
-      if (frozen || degraded || !running) renderStill();
-      else if (running) renderFrame(performance.now());
-    },
-    undefined,
-    () => {
-      if (frozen) renderStill();
-    }
-  );
+  let atlasBitmap = null;
+  const applyAtlasTexture = (tex) => {
+    if (disposed) { tex.dispose(); return; }
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    tex.generateMipmaps = true;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    atlasTexture = tex;
+    uniforms.uMap.value = tex;
+    structure.add(mesh);
+    stillDirty = true;
+    if (frozen || degraded || !running) renderStill();
+    else if (running) renderFrame(performance.now());
+  };
+  const loadAtlasTextureLoader = () => {
+    new THREE.TextureLoader().load(
+      atlasUrl,
+      (tex) => applyAtlasTexture(tex),
+      undefined,
+      () => {
+        if (frozen) renderStill();
+      }
+    );
+  };
+  // Smoothness repair (2026-11-14): decode the atlas OFF the main
+  // thread via createImageBitmap where available — TextureLoader's
+  // <img> decode of the 4096px atlas can block the main thread
+  // during the page's opening seconds on the phone. Any failure
+  // falls back to the original TextureLoader path; texture
+  // parameters and the rendered result are identical either way
+  // (pixel-verified against the loader path in the gate).
+  if (typeof window !== "undefined" && window.fetch && window.createImageBitmap) {
+    window
+      .fetch(atlasUrl)
+      .then((r) => {
+        if (!r || !r.ok) throw new Error("atlas fetch failed");
+        return r.blob();
+      })
+      .then((b) => window.createImageBitmap(b))
+      .then((bmp) => {
+        if (disposed) {
+          if (bmp && bmp.close) bmp.close();
+          return;
+        }
+        atlasBitmap = bmp;
+        const tex = new THREE.Texture(bmp);
+        tex.needsUpdate = true;
+        applyAtlasTexture(tex);
+      })
+      .catch(() => {
+        if (!disposed && !atlasTexture) loadAtlasTextureLoader();
+      });
+  } else {
+    loadAtlasTextureLoader();
+  }
 
   // ---- wire + threads: two red strands spiralling around the tube
   // along the whole coil WITH BARB TICKS (the reel's barbed wire),
@@ -1301,7 +1343,18 @@ export function createHelixScene(canvas, opts = {}) {
     const dt = lastRender ? Math.min(0.1, (now - lastRender) / 1000) : 0.016;
     if (booted) sceneTime += dt;
     uniforms.uTime.value = sceneTime;
-    rotCur += Math.max(dt, 0.001) * 0.045 * (mode === "idle" ? 1 : 0.45);
+    if (mode === "focus" && focusRotTarget != null) {
+      // Focus tracking (2026-11-14): damp the rotation to the held
+      // angle and stop there. Before this fix the structure kept
+      // turning at 0.45x through the whole focus, so the lit section
+      // swept away from the fixed camera within seconds — the flight
+      // arrived, then lost the section it arrived at.
+      const rk = 1 - Math.exp(-Math.max(dt, 0.001) / 0.9);
+      rotCur += (focusRotTarget - rotCur) * rk;
+      if (Math.abs(focusRotTarget - rotCur) < 0.0005) rotCur = focusRotTarget;
+    } else {
+      rotCur += Math.max(dt, 0.001) * 0.045 * (mode === "idle" ? 1 : 0.45);
+    }
     structure.rotation.y = rotCur;
     structure.position.y = Math.sin(sceneTime * 0.07) * 0.9;
     applyRig(Math.max(dt, 0.001));
@@ -1525,8 +1578,29 @@ export function createHelixScene(canvas, opts = {}) {
       focusDistMul = Math.min(0.88, Math.max(0.66, 0.62 + span / 110));
       focusAmtTgt = 1;
       liftTarget = 0;
+      // Focus tracking target: the rotation angle — the equivalent
+      // nearest the current angle, so the flight swings the short
+      // way — at which the focused band's label anchor faces the
+      // camera azimuth. The camera sits at azimuth atan2(cos, sin)
+      // of CAM_AZ (its position is (sin, cos) * dist in x/z), and a
+      // point at local azimuth a sits at world azimuth a - rotCur
+      // under rotation.y, so the anchor faces the camera when
+      // rotCur = aAnchor - aCamera (mod 2pi).
+      {
+        const anchor = BANDS[focusGroups[0]] && BANDS[focusGroups[0]].anchorLocal;
+        if (anchor) {
+          const aA = Math.atan2(anchor.z, anchor.x);
+          const aC = Math.atan2(Math.cos(CAM_AZ), Math.sin(CAM_AZ));
+          const base = aA - aC;
+          const twoPi = Math.PI * 2;
+          focusRotTarget = base + twoPi * Math.round((rotCur - base) / twoPi);
+        } else {
+          focusRotTarget = null;
+        }
+      }
     } else if (state.kind === "lift" && Array.isArray(state.items)) {
       pendingReshape = null;
+      focusRotTarget = null;
       if (selLabel) selLabel.active = false;
       const items = state.items.slice(0, LIFT_MAX);
       const sig = items.map((i) => (i.title || "") + "|" + (i.creator || "")).join("§");
@@ -1543,6 +1617,7 @@ export function createHelixScene(canvas, opts = {}) {
       focusAmtTgt = 0;
     } else {
       pendingReshape = null;
+      focusRotTarget = null;
       if (selLabel) selLabel.active = false;
       mode = "idle";
       focusGroups = [];
@@ -1610,6 +1685,7 @@ export function createHelixScene(canvas, opts = {}) {
         }
       });
       if (atlasTexture) atlasTexture.dispose();
+      if (atlasBitmap && atlasBitmap.close) atlasBitmap.close();
       liftTex.dispose();
       try { renderer.dispose(); } catch (e) {}
       try { renderer.forceContextLoss(); } catch (e) {}
