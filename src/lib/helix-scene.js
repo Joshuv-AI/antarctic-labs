@@ -976,7 +976,6 @@ export function createHelixScene(canvas, opts = {}) {
   let stillDirty = true;
   let lastScrollAt = -1e9;
   let lastScrollY = 0;
-  let scrollHalf = false;
   // Visual containment (2026-11-13): the structure's rotation is an
   // accumulated angle, not a pure function of scene time, so its
   // rate can ease while a display state (focus/lift) is active —
@@ -1001,6 +1000,13 @@ export function createHelixScene(canvas, opts = {}) {
   try { lastScrollY = window.scrollY || 0; } catch (e) {}
 
   function renderFrame(now) {
+    // Sample the scroll position as of THIS frame, not as of the
+    // last scroll-event delivery: a scroll event can land after
+    // the frame's rAF callback, which left the scrub camera one
+    // frame stale and doubled the visible step on alternating
+    // frames. The cached value still serves the frozen/degraded
+    // still path, which has no rAF loop of its own.
+    try { lastScrollY = window.scrollY || 0; } catch (e) {}
     const dt = lastRender ? Math.min(0.1, (now - lastRender) / 1000) : 0.016;
     if (booted) sceneTime += dt;
     uniforms.uTime.value = sceneTime;
@@ -1035,21 +1041,21 @@ export function createHelixScene(canvas, opts = {}) {
       }
       return;
     }
-    if (lastRender && now - lastRender < FRAME_MS - 1) return;
-    // Scroll economy (2026-11-13, audit F7 class): while a scroll
-    // gesture is active the backdrop updates at half rate. The
-    // recorded scroll ghosting is iOS presenting stale + fresh
-    // content tiles at mismatched offsets; every backdrop repaint
-    // widens that window, so halving the invalidation rate during
-    // the gesture shrinks it. The camera scrub still tracks on the
-    // frames that do render, and full rate resumes the moment the
-    // gesture ends.
-    if (now - lastScrollAt < 180) {
-      if (!scrollHalf) { scrollHalf = true; return; }
-      scrollHalf = false;
-    } else {
-      scrollHalf = false;
-    }
+    // Scroll glide (2026-11-13, Joshua's phone verdict on the
+    // a430c585 package): while a scroll gesture is active the scene
+    // renders on EVERY animation frame. The scroll economy that
+    // shipped in a430c585 (30 fps cap, halved again during gestures
+    // to ~15 fps) stepped the scroll-scrub camera against the
+    // compositor's full-rate scroll: the page glided at display
+    // rate while the coil advanced in ~66 ms jumps — the "small
+    // steps" in his recording. The motion model is dt-based
+    // throughout (rig damping, rotation rate, focus ramp), so
+    // sampling it at display rate changes only the cadence, never
+    // the trajectory. The 30 fps economy cap still applies when no
+    // gesture is active, and focus flights outside a gesture keep
+    // their established character.
+    const scrolling = now - lastScrollAt < 180;
+    if (!scrolling && lastRender && now - lastRender < FRAME_MS - 1) return;
     renderFrame(now);
     if (!fpsWindowStart) { fpsWindowStart = now; loopStart = now; }
     fpsWindowFrames++;
