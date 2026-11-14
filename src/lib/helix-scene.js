@@ -4,9 +4,17 @@
 //   Spiral A (coil path): a fat tube winds around a vertical axis.
 //   Spiral B (tube surface): covers tile AROUND the tube's circular
 //     cross-section, so each band reads as a rope of books.
-// Bands are the top-level collections, one contiguous segment of the
-// coil each with bare-wire gaps between, panel counts mapped from the
-// REAL collection sizes by sqrt compression.
+// Bands are the seven real collections, one contiguous segment of
+// the coil each with bare-wire gaps between, panel counts mapped
+// LINEARLY from the real collection sizes (true representation,
+// 2026-11-13: 1 panel ≈ 170 works against a 15,006-panel budget,
+// with a disclosed 72-panel minimum segment for the two
+// micro-collections). Counts arrive from /tower-hubs-index.json —
+// the same file the filter chips read — via opts.counts, with the
+// built-in seed below as the fallback; tiles are textured from an
+// atlas baked out of real catalog entries (per-collection cell
+// pools, provenance in scripts/helix-atlas-manifest.json), so a
+// panel always shows material from its own collection.
 //
 // SHIP 2 (2026-11-12, plan Amendments H–M): the scene is now bound to
 // page state and re-framed to the reel's proportions:
@@ -54,40 +62,54 @@ const ATLAS_COLS = 16;
 const ATLAS_ROWS = 16;
 
 // ------------------------------------------------------------------ collections
-// Real live totals (2026-11-12). The small-collection split of the
-// remaining ~150,516 is illustrative; LAW / PAPERS are the true counts.
-const BANDS = [
-  { name: "LAW", count: 1277197 },
-  { name: "PAPERS", count: 1130210 },
-  { name: "RELIGION", count: 38000 },
-  { name: "DECLASSIFIED", count: 34000 },
-  { name: "HISTORY", count: 22000 },
-  { name: "LITERATURE", count: 19000 },
-  { name: "SCIENCE", count: 15000 },
-  { name: "PHILOSOPHY", count: 9500 },
-  { name: "PODCASTS", count: 8000 },
-  { name: "FOLKLORE", count: 5016 },
+// TRUE REPRESENTATION (2026-11-13): the bands ARE the library's seven
+// real collections, in canonical order. Counts come from
+// /tower-hubs-index.json (the exact file the filter chips read),
+// fetched by HelixCanvas and passed in as opts.counts; SEED_COUNTS
+// below — today's true totals — are the fallback when that fetch
+// fails, so the scene and the panel can never disagree for long and
+// the scene never invents numbers. Panel allocation is LINEAR in
+// the counts against the same 15,006-panel budget the scene has
+// always used (1 panel ≈ 170 works), with one disclosed exception:
+// a minimum segment of 12 stations (72 panels) for collections too
+// small to form a visible segment otherwise (PODCASTS, DOCUMENTS) —
+// without the floor they would hold ~6 and ~2 panels and have no
+// labelable presence at all. Atlas cell pools are per-collection
+// (the atlas is baked from real entries of each collection;
+// manifest: scripts/helix-atlas-manifest.json), and panels only
+// ever draw cells from their own band's pool.
+const BAND_DEFS = [
+  { name: "LAW", cells: [0, 64] },
+  { name: "PAPERS", cells: [64, 128] },
+  { name: "BOOKS", cells: [128, 168] },
+  { name: "REFERENCE", cells: [168, 196] },
+  { name: "DECLASSIFIED", cells: [196, 220] },
+  { name: "PODCASTS", cells: [220, 240] },
+  { name: "DOCUMENTS", cells: [240, 256] },
 ];
+const SEED_COUNTS = {
+  LAW: 1277197, PAPERS: 1130210, BOOKS: 81631, REFERENCE: 41137,
+  DECLASSIFIED: 26294, PODCASTS: 1091, DOCUMENTS: 363,
+};
 const BAND_PANEL_TARGET = 15006; // all panels live in band segments
+const MIN_STATIONS = 12; // 72 panels — the minimum-segment floor
 // Label anchor positions along each band (fraction of its theta
 // span), staggered at build time so the big labels rarely sweep the
 // front together (Amendment L collision rule).
-const ANCHOR_FRAC = [0.34, 0.66, 0.48, 0.78, 0.26, 0.58, 0.84, 0.40, 0.62, 0.50];
+const ANCHOR_FRAC = [0.34, 0.66, 0.48, 0.78, 0.26, 0.58, 0.84];
 const LARGE_LABEL_MIN = 30000; // count at/above which a band gets the
                                // large label treatment (else tiny tag)
 // Per-band color temperature (Amendment K stretch): subtle RGB
-// multipliers echoing the reel's per-band palette variety.
+// multipliers echoing the reel's per-band palette variety, in
+// canonical band order.
 const BAND_TINTS = [
   [1.03, 1.05, 1.12], // LAW — cool slate
   [1.10, 1.04, 0.92], // PAPERS — warm paper
-  [1.10, 0.98, 0.82], // RELIGION — amber
+  [1.08, 1.00, 0.86], // BOOKS — sepia
+  [0.92, 1.02, 1.10], // REFERENCE — pale cyan
   [1.08, 0.94, 0.90], // DECLASSIFIED — red-grey
-  [1.08, 1.00, 0.86], // HISTORY — sepia
-  [0.94, 1.04, 1.02], // LITERATURE — teal-grey
-  [0.92, 1.02, 1.10], // SCIENCE — pale cyan
-  [1.02, 0.96, 1.10], // PHILOSOPHY — violet-grey
   [1.10, 0.94, 0.96], // PODCASTS — coral-grey
-  [0.96, 1.08, 0.94], // FOLKLORE — green-grey
+  [1.02, 0.96, 1.10], // DOCUMENTS — violet-grey
 ];
 // Tile plate colors by catalog lane (lift display).
 const LANE_PLATE = {
@@ -131,16 +153,79 @@ const STEP = 0.84;
 const DTHETA = STEP / DS;
 const GAP_DTHETA = Math.PI * 2 * 0.65; // bare-wire advance between bands
 
-// sqrt-compressed panel allocation (module-level, deterministic)
-const sqrtSum = BANDS.reduce((s, g) => s + Math.sqrt(g.count), 0);
-BANDS.forEach((g, gi) => {
-  g.sqrt = Math.sqrt(g.count);
-  g.index = gi;
-  g.stations = Math.max(8, Math.round((BAND_PANEL_TARGET * (g.sqrt / sqrtSum)) / ROWS));
-});
-const totalTheta =
-  BANDS.reduce((s, g) => s + g.stations * DTHETA, 0) + (BANDS.length - 1) * GAP_DTHETA;
-const Y_TOP = (totalTheta * RISE) / 2;
+// Linear-proportional panel allocation (module-level,
+// deterministic). Bands whose strict share of the panel budget
+// falls below the minimum segment are floored at MIN_STATIONS and
+// leave the pool; the rest re-share the remaining budget linearly
+// (one pass suffices: flooring a band only raises the others'
+// shares). Stations are rounded from panels, so realized panel
+// counts track strict proportionality to within one station.
+function allocateStations(counts) {
+  const floored = new Set();
+  let pool = BAND_DEFS.map((d) => d.name);
+  for (;;) {
+    const poolCount = pool.reduce((s, n) => s + (counts[n] || 0), 0);
+    const budget = BAND_PANEL_TARGET - floored.size * MIN_STATIONS * ROWS;
+    const tiny = pool.filter(
+      (n) => ((counts[n] || 0) * budget) / Math.max(1, poolCount) < MIN_STATIONS * ROWS
+    );
+    if (!tiny.length || !pool.length) break;
+    tiny.forEach((n) => floored.add(n));
+    pool = pool.filter((n) => !floored.has(n));
+  }
+  const poolCount = pool.reduce((s, n) => s + (counts[n] || 0), 0);
+  const budget = BAND_PANEL_TARGET - floored.size * MIN_STATIONS * ROWS;
+  const out = {};
+  for (const d of BAND_DEFS) if (floored.has(d.name)) out[d.name] = MIN_STATIONS;
+  if (pool.length) {
+    // Largest-remainder apportionment: floor every pool band's
+    // exact station share, then hand the leftover stations to the
+    // largest fractional remainders, so the pool total lands
+    // exactly on the budget's station count.
+    const target = Math.round(budget / ROWS);
+    const raw = pool.map((n) => ({
+      n,
+      v: ((counts[n] || 0) * budget) / Math.max(1, poolCount) / ROWS,
+    }));
+    let sum = 0;
+    for (const r of raw) {
+      out[r.n] = Math.floor(r.v);
+      sum += out[r.n];
+    }
+    const byRem = raw
+      .slice()
+      .sort((a, b) => b.v - Math.floor(b.v) - (a.v - Math.floor(a.v)));
+    let i = 0;
+    while (sum < target && byRem.length) {
+      out[byRem[i % byRem.length].n]++;
+      sum++;
+      i++;
+    }
+  }
+  return out;
+}
+function buildBands(counts) {
+  const stations = allocateStations(counts);
+  return BAND_DEFS.map((d, i) => ({
+    name: d.name,
+    count: counts[d.name] || 0,
+    index: i,
+    sqrt: Math.sqrt(counts[d.name] || 0),
+    stations: stations[d.name],
+    cellStart: d.cells[0],
+    cellEnd: d.cells[1],
+  }));
+}
+let BANDS = [];
+let totalTheta = 0;
+let Y_TOP = 0;
+function rebuildBands(counts) {
+  BANDS = buildBands(counts);
+  totalTheta =
+    BANDS.reduce((s, g) => s + g.stations * DTHETA, 0) + (BANDS.length - 1) * GAP_DTHETA;
+  Y_TOP = (totalTheta * RISE) / 2;
+}
+rebuildBands(SEED_COUNTS);
 
 function centerAt(theta, out) {
   return out.set(Math.cos(theta) * R, Y_TOP - RISE * theta, Math.sin(theta) * R);
@@ -174,8 +259,27 @@ function surfacePoint(theta, phi, out) {
 //   { kind: "idle" }
 //   { kind: "focus", groups: [bandIndex, ...] }
 //   { kind: "lift", items: [{ title, creator, year, collection }] }
+//   { kind: "reshape", facets: { bandIndex: count, ... }, total,
+//     name } — a refined filter combination: the coil contracts to
+//     the combination's exact per-collection shares and re-skins
+//     from its own collections' covers (Phase 2b, applyReshape).
 export function createHelixScene(canvas, opts = {}) {
   const atlasUrl = opts.atlasUrl || "/helix-atlas.webp";
+  // True counts from the hub seed (HelixCanvas fetches
+  // /tower-hubs-index.json — the same file the filter chips read).
+  // A malformed or partial payload is ignored wholesale: the scene
+  // then runs on the built-in seed, which carries the same true
+  // totals as of this build.
+  if (opts.counts && typeof opts.counts === "object") {
+    const c = {};
+    let ok = true;
+    for (const d of BAND_DEFS) {
+      const v = opts.counts[d.name];
+      if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) { ok = false; break; }
+      c[d.name] = Math.round(v);
+    }
+    if (ok) rebuildBands(c);
+  }
   const frozen = !!opts.frozen;
   const onError = typeof opts.onError === "function" ? opts.onError : () => {};
   const labelsEl = opts.labelsEl || null;
@@ -296,8 +400,8 @@ export function createHelixScene(canvas, opts = {}) {
     const e = new THREE.Euler();
     let theta = 0;
 
-    // Placement order: reversed list puts PODCASTS/FOLKLORE at the
-    // top of the stack and LAW at the bottom.
+    // Placement order: reversed list puts DOCUMENTS/PODCASTS at
+    // the top of the stack and LAW at the bottom.
     const order = [...BANDS].reverse();
     order.forEach((g, gi) => {
       g.thetaStart = theta;
@@ -322,9 +426,12 @@ export function createHelixScene(canvas, opts = {}) {
             .multiply(new THREE.Matrix4().makeRotationFromQuaternion(qj))
             .multiply(new THREE.Matrix4().makeScale(tScale, tScale, tScale));
           m.copy(basis).setPosition(pos);
+          // Band-scoped cell: a panel only ever wears material from
+          // its own collection's atlas pool (true representation).
+          const cellIdx = g.cellStart + ((rnd() * (g.cellEnd - g.cellStart)) | 0);
           placements.push({
             matrix: m.clone(),
-            cell: [(rnd() * ATLAS_COLS) | 0, (rnd() * ATLAS_ROWS) | 0],
+            cell: [cellIdx % ATLAS_COLS, (cellIdx / ATLAS_COLS) | 0],
             group: g.index,
             phase: rnd(),
           });
@@ -381,6 +488,7 @@ export function createHelixScene(canvas, opts = {}) {
     uTime: { value: 0 },
     uFocusAmt: { value: 0 },
     uDim: { value: 1 },
+    uDissolve: { value: 1 },
     uTints: { value: BAND_TINTS.map((t) => new THREE.Vector3(t[0], t[1], t[2])) },
   };
   const mat = new THREE.ShaderMaterial({
@@ -394,7 +502,8 @@ export function createHelixScene(canvas, opts = {}) {
       "uniform float uTime;",
       "uniform float uFocusAmt;",
       "uniform float uDim;",
-      "uniform vec3 uTints[10];",
+      "uniform float uDissolve;",
+      "uniform vec3 uTints[" + BAND_DEFS.length + "];",
       "varying vec2 vUv;",
       "varying float vBright;",
       "varying vec3 vTint;",
@@ -409,7 +518,7 @@ export function createHelixScene(canvas, opts = {}) {
       // distant coils sink into the black.
       "  float dist = -mv.z;",
       "  float depth = mix(1.10, 0.40, smoothstep(52.0, 150.0, dist));",
-      "  vBright = bright * shimmer * depth * uDim;",
+      "  vBright = bright * shimmer * depth * uDim * uDissolve;",
       "  gl_Position = projectionMatrix * mv;",
       "}",
     ].join("\n"),
@@ -440,7 +549,12 @@ export function createHelixScene(canvas, opts = {}) {
     groupsAttr[i] = p.group;
     phases[i] = p.phase;
   });
-  geo.setAttribute("aCell", new THREE.InstancedBufferAttribute(cells, 2));
+  const cellAttr = new THREE.InstancedBufferAttribute(cells, 2);
+  cellAttr.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute("aCell", cellAttr);
+  // The canonical (init) cell assignment. Reshape re-skins rewrite
+  // the cells attribute; unlit instances always return to these.
+  const baseCells = cells.slice();
   geo.setAttribute("aGroup", new THREE.InstancedBufferAttribute(groupsAttr, 1));
   geo.setAttribute("aPhase", new THREE.InstancedBufferAttribute(phases, 1));
   const focusAttr = new THREE.InstancedBufferAttribute(focusW, 1);
@@ -460,6 +574,110 @@ export function createHelixScene(canvas, opts = {}) {
       focusW[i] = set.has(p.group) ? 1.16 : 0.30;
     });
     focusAttr.needsUpdate = true;
+  }
+
+  // ---- reshape (Phase 2b, Joshua 2026-11-13 22:26): a refined
+  // filter combination re-forms the coil to the combination's own
+  // shape. Three parts, all committed together or not at all:
+  //   contraction — within each band, the lit prefix of stations is
+  //     the combination's exact share of that band (facet count ÷
+  //     band total), expressed through the same per-instance focus
+  //     weights + damped uFocusAmt machinery as focus mode;
+  //   re-skin — lit instances' atlas cells are re-rolled from their
+  //     own band's cell pool, seeded by the selection signature, so
+  //     the lit coil wears the selection's collections afresh;
+  //     unlit instances return to their canonical cells;
+  //   dissolve — uDissolve dips to ~0.22 on commit and damps back
+  //     to 1 over ~700 ms, so the re-form reads as a dissolve, not
+  //     a pop.
+  // Weights and cells are computed into scratch buffers and copied
+  // over only after the whole state validates — a malformed state
+  // leaves the previous scene state untouched. Per-selection work
+  // only: no geometry recompute, no per-frame additions beyond one
+  // scalar damp.
+  let pendingReshape = null; // latest-wins stash while the stream runs
+  let selLabel = null;       // bound in the labels block below
+  let dissolveCur = 1;
+  const scratchFocus = new Float32Array(panelCount);
+  const scratchCells = new Float32Array(panelCount * 2);
+  const stationOf = new Int32Array(panelCount);
+  placements.forEach((p, i) => {
+    stationOf[i] = ((i - groupFirst.get(p.group)) / ROWS) | 0;
+  });
+  function sigHash(str) {
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+  function applyReshape(state) {
+    const facetsIn = state.facets;
+    if (!facetsIn || typeof facetsIn !== "object") return false;
+    const total = state.total;
+    if (typeof total !== "number" || !(total > 0)) return false;
+    const facets = [0, 0, 0, 0, 0, 0, 0];
+    let facetSum = 0;
+    for (const k of Object.keys(facetsIn)) {
+      const bi = Number(k);
+      const v = facetsIn[k];
+      if (!Number.isInteger(bi) || bi < 0 || bi >= BANDS.length) return false;
+      if (typeof v !== "number" || !Number.isFinite(v) || v < 0) return false;
+      facets[bi] = v;
+      facetSum += v;
+    }
+    if (facetSum <= 0) return false;
+    // Dominant band: largest facet (ties go to the larger
+    // collection) — the selection label anchors there.
+    let dom = 0;
+    for (let b = 1; b < BANDS.length; b++) {
+      if (facets[b] > facets[dom] || (facets[b] === facets[dom] && BANDS[b].count > BANDS[dom].count)) dom = b;
+    }
+    const litStations = BANDS.map((g, b) =>
+      Math.round(clamp01(facets[b] / Math.max(1, g.count)) * g.stations)
+    );
+    const rng = mulberry32(sigHash((state.name || "") + "#" + total + "#" + facets.join(",")));
+    for (let i = 0; i < panelCount; i++) {
+      const g = groupsAttr[i];
+      if (stationOf[i] < litStations[g]) {
+        scratchFocus[i] = 1.16;
+        const band = BANDS[g];
+        const ci = band.cellStart + ((rng() * (band.cellEnd - band.cellStart)) | 0);
+        scratchCells[i * 2] = ci % ATLAS_COLS;
+        scratchCells[i * 2 + 1] = ATLAS_ROWS - 1 - ((ci / ATLAS_COLS) | 0);
+      } else {
+        scratchFocus[i] = 0.30;
+        scratchCells[i * 2] = baseCells[i * 2];
+        scratchCells[i * 2 + 1] = baseCells[i * 2 + 1];
+      }
+    }
+    // Commit.
+    focusW.set(scratchFocus);
+    focusAttr.needsUpdate = true;
+    cells.set(scratchCells);
+    cellAttr.needsUpdate = true;
+    mode = "reshape";
+    focusGroups = BANDS.filter((g, b) => facets[b] > 0).map((g) => g.index);
+    focusAmtTgt = 1;
+    liftTarget = 0;
+    dissolveCur = 0.22;
+    if (selLabel) {
+      const band = BANDS[dom];
+      const frac = (ANCHOR_FRAC[dom] + 0.28) % 1;
+      const aTheta = band.thetaStart + frac * (band.thetaEnd - band.thetaStart);
+      const af = frameAt(aTheta);
+      selLabel.anchorLocal = af.C.clone().addScaledVector(af.e1, TUBE_R + 1.05);
+      selLabel.anchorY = af.C.y;
+      selLabel.basePx = 15 + 37 * (band.sqrt / BANDS[0].sqrt);
+      selLabel.nameEl.textContent = state.name || "Selection";
+      selLabel.countEl.textContent = fmt(total);
+      selLabel.w = 0;
+      selLabel.active = true;
+      const labelScale = Math.min(1, Math.max(0.45, viewW / 1400));
+      selLabel.el.style.fontSize = Math.round(selLabel.basePx * labelScale) + "px";
+    }
+    return true;
   }
 
   let disposed = false;
@@ -787,6 +1005,35 @@ export function createHelixScene(canvas, opts = {}) {
         sy: 0,
       });
     });
+    // Selection label (Phase 2b): ONE dynamic label in the same
+    // band-label styling, created once and re-bound by applyReshape
+    // to the dominant band of the current refined selection —
+    // carrying the selection's name + the page's exact result
+    // count. Hidden unless a reshape is active.
+    const el = document.createElement("div");
+    el.style.opacity = "0";
+    el.className = "tower-helix-band-label";
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "tower-helix-label-name";
+    const countSpan = document.createElement("span");
+    countSpan.className = "tower-helix-label-count";
+    el.appendChild(nameSpan);
+    el.appendChild(countSpan);
+    labelsEl.appendChild(el);
+    selLabel = {
+      el,
+      nameEl: nameSpan,
+      countEl: countSpan,
+      anchorLocal: null,
+      anchorY: 0,
+      basePx: 30,
+      w: 0,
+      h: 0,
+      op: 0,
+      sx: 0,
+      sy: 0,
+      active: false,
+    };
   }
 
   let labelDocX = 0;
@@ -871,6 +1118,44 @@ export function createHelixScene(canvas, opts = {}) {
           "translate3d(" + L.sx.toFixed(1) + "px," + L.sy.toFixed(1) + "px,0) translate(-50%,-135%)";
       }
     }
+    // Selection label: same facing + hero-avoidance treatment as a
+    // band label, but never focus-dimmed (it is the selection's own
+    // voice) and outside the large-label collision pass.
+    if (selLabel) {
+      let op = 0;
+      if (selLabel.active && mode === "reshape" && selLabel.anchorLocal) {
+        const world = structure.localToWorld(_v1.copy(selLabel.anchorLocal));
+        const axisW = structure.localToWorld(_v2.set(0, selLabel.anchorY, 0));
+        const rx = world.x - axisW.x;
+        const rz = world.z - axisW.z;
+        const rl = Math.hypot(rx, rz) || 1;
+        const vx = camera.position.x - world.x;
+        const vy = camera.position.y - world.y;
+        const vz = camera.position.z - world.z;
+        const vl = Math.hypot(vx, vy, vz) || 1;
+        const facing = (rx / rl) * (vx / vl) + (rz / rl) * (vz / vl);
+        op = smoothstep(-0.30, 0.30, facing);
+        const s = projectToScreen(world, _scr);
+        selLabel.sx = s.x + offX;
+        selLabel.sy = s.y + offY;
+        if (s.behind || selLabel.sx < -80 || selLabel.sx > W + 80 || selLabel.sy < -60 || selLabel.sy > H + 60) op = 0;
+        if (!selLabel.w) { selLabel.w = selLabel.el.offsetWidth; selLabel.h = selLabel.el.offsetHeight; }
+        if (op > 0 && avoidRects.length) {
+          for (const a of avoidRects) {
+            const ax = a.x - labelDocX, ay = a.y - labelDocY;
+            if (selLabel.sx > ax - 4 && selLabel.sx < ax + a.w + 4 && selLabel.sy > ay - 4 && selLabel.sy < ay + a.h + 4) {
+              op = 0;
+              break;
+            }
+          }
+        }
+      }
+      selLabel.el.style.opacity = String(0.96 * op);
+      if (op > 0.01) {
+        selLabel.el.style.transform =
+          "translate3d(" + selLabel.sx.toFixed(1) + "px," + selLabel.sy.toFixed(1) + "px,0) translate(-50%,-135%)";
+      }
+    }
   }
 
   // ---- lift animation (per frame, damped, allocation-free)
@@ -947,6 +1232,10 @@ export function createHelixScene(canvas, opts = {}) {
       L.el.style.fontSize = Math.round(L.basePx * labelScale) + "px";
       L.w = 0;
     }
+    if (selLabel) {
+      selLabel.el.style.fontSize = Math.round(selLabel.basePx * labelScale) + "px";
+      selLabel.w = 0;
+    }
     if (labelsEl) {
       const lr = labelsEl.getBoundingClientRect();
       labelDocX = lr.left + window.scrollX;
@@ -1021,6 +1310,11 @@ export function createHelixScene(canvas, opts = {}) {
     uniforms.uFocusAmt.value = focusAmtCur;
     dimCur += (dimTarget() - dimCur) * fk;
     uniforms.uDim.value = dimCur;
+    // Dissolve recovery (Phase 2b): after a reshape commit dips
+    // uDissolve, it damps back to full over ~700 ms.
+    dissolveCur += (1 - dissolveCur) * (1 - Math.exp(-Math.max(dt, 0.001) / 0.22));
+    if (dissolveCur > 0.995) dissolveCur = 1;
+    uniforms.uDissolve.value = dissolveCur;
     updateLift(Math.max(dt, 0.001));
     renderer.render(scene, camera);
     updateLabels();
@@ -1083,6 +1377,13 @@ export function createHelixScene(canvas, opts = {}) {
           ".tower-index--loading, .tf2-note--cataloging"
         );
       } catch (e) { /* keep previous */ }
+    }
+    // A reshape stashed during the stream applies the moment the
+    // load markers clear (Phase 2b streaming safety).
+    if (!loadActive && pendingReshape) {
+      const s = pendingReshape;
+      pendingReshape = null;
+      setDisplay(s);
     }
     if ((!scrolling || loadActive) && lastRender && now - lastRender < FRAME_MS - 1) return;
     renderFrame(now);
@@ -1173,6 +1474,8 @@ export function createHelixScene(canvas, opts = {}) {
     uniforms.uFocusAmt.value = focusAmtCur;
     dimCur = dimTarget();
     uniforms.uDim.value = dimCur;
+    dissolveCur = 1;
+    uniforms.uDissolve.value = 1;
     liftAmt = liftTarget;
     updateLift(10);
     renderer.render(scene, camera);
@@ -1189,7 +1492,23 @@ export function createHelixScene(canvas, opts = {}) {
 
   function setDisplay(state) {
     if (!state || disposed) return;
-    if (state.kind === "focus" && Array.isArray(state.groups) && state.groups.length) {
+    if (state.kind === "reshape") {
+      // Phase 2b streaming safety: while the catalog stream is
+      // running, the state is recorded latest-wins and the tick
+      // applies it the moment the load markers clear — the
+      // re-organization never competes with the stream. (pages.jsx
+      // also gates its own emission on the settled load.)
+      if (running && loadActive) {
+        pendingReshape = state;
+        return;
+      }
+      pendingReshape = null;
+      let ok = false;
+      try { ok = applyReshape(state); } catch (e) { ok = false; }
+      if (!ok) return; // malformed state: previous state untouched
+    } else if (state.kind === "focus" && Array.isArray(state.groups) && state.groups.length) {
+      pendingReshape = null;
+      if (selLabel) selLabel.active = false;
       mode = "focus";
       focusGroups = state.groups.slice();
       setFocusWeights(focusGroups);
@@ -1207,6 +1526,8 @@ export function createHelixScene(canvas, opts = {}) {
       focusAmtTgt = 1;
       liftTarget = 0;
     } else if (state.kind === "lift" && Array.isArray(state.items)) {
+      pendingReshape = null;
+      if (selLabel) selLabel.active = false;
       const items = state.items.slice(0, LIFT_MAX);
       const sig = items.map((i) => (i.title || "") + "|" + (i.creator || "")).join("§");
       if (sig !== liftSig) {
@@ -1221,6 +1542,8 @@ export function createHelixScene(canvas, opts = {}) {
       liftTarget = 1;
       focusAmtTgt = 0;
     } else {
+      pendingReshape = null;
+      if (selLabel) selLabel.active = false;
       mode = "idle";
       focusGroups = [];
       focusAmtTgt = 0;

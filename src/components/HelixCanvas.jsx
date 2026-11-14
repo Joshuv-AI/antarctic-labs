@@ -91,6 +91,38 @@ async function loadHelixSceneModule() {
   return null;
 }
 
+// True band counts for the scene (true representation, 2026-11-13):
+// the scene's bands are the seven real collections, and their counts
+// come from /tower-hubs-index.json — the exact file the page's
+// filter chips read — so the background and the panel can never
+// disagree. Bounded wait (2.5 s): on any failure the scene falls
+// back to its built-in seed of the same true totals.
+const HELIX_COLLECTIONS = ["LAW", "PAPERS", "BOOKS", "REFERENCE", "DECLASSIFIED", "PODCASTS", "DOCUMENTS"];
+async function fetchHubCounts() {
+  try {
+    const ctl = new AbortController();
+    const to = setTimeout(() => ctl.abort(), 2500);
+    let j = null;
+    try {
+      const r = await fetch("/tower-hubs-index.json", { signal: ctl.signal });
+      if (r && r.ok) j = await r.json();
+    } finally {
+      clearTimeout(to);
+    }
+    const cols = j && j.collections;
+    if (!cols) return null;
+    const out = {};
+    for (const n of HELIX_COLLECTIONS) {
+      const v = cols[n];
+      if (typeof v !== "number" || !(v > 0)) return null;
+      out[n] = v;
+    }
+    return out;
+  } catch (e) {
+    return null;
+  }
+}
+
 function HelixLayer({ apiRef }) {
   const ref = useRef(null);
   const labelsRef = useRef(null);
@@ -129,15 +161,22 @@ function HelixLayer({ apiRef }) {
     const onVis = () => sync();
 
     const init = async () => {
+      // The hub-seed fetch runs in parallel with the scene module
+      // load; both are awaited (the fetch is timeout-bounded) so
+      // the scene is created once, with true counts when available.
+      const countsP = fetchHubCounts();
       const mod = await loadHelixSceneModule();
       if (disposed) return;
       if (!mod) {
         setFailed(true);
         return;
       }
+      const counts = await countsP;
+      if (disposed) return;
       try {
         scene = mod.createHelixScene(canvas, {
           frozen,
+          counts: counts || undefined,
           labelsEl: labelsRef.current,
           // The hero's own text blocks (title + total line), in
           // DOCUMENT coordinates (scroll-invariant): large band labels

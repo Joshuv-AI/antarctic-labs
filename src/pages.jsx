@@ -3561,20 +3561,30 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   //  - nothing active → idle.
   //  - results ≤ 50 (and > 0) → the matching works lift into the
   //    center display above the helix (tiles carry those works).
-  //  - results > 50 → camera flight to the implicated band(s) with
-  //    in-place highlight; a single collection implicates its band(s)
-  //    (HELIX_LANE_BANDS), a cross-collection set its dominant lane.
-  //  - curated/era-only states implicate no band → idle (no invented
-  //    effects).
-  // Lane → scene-band mapping (VERIFIED against both tables — the
-  // filter lanes are catalog `collection` values; the scene's bands
-  // are its own grouping): LAW/PAPERS/DECLASSIFIED/PODCASTS map to
-  // their exact bands; BOOKS spans the six thematic bands the scene
-  // split it into; REFERENCE and DOCUMENTS have no constituent bands
-  // in the scene's grouping, so they (like curated/era states) get
-  // no flight. Scene band order: LAW 0, PAPERS 1, RELIGION 2,
-  // DECLASSIFIED 3, HISTORY 4, LITERATURE 5, SCIENCE 6,
-  // PHILOSOPHY 7, PODCASTS 8, FOLKLORE 9.
+  //  - results > 50, plain single-collection selection → camera
+  //    flight to the collection's band with in-place highlight
+  //    (HELIX_LANE_BANDS); a cross-collection set implicates its
+  //    dominant lane the same way.
+  //  - results > 50, REFINED combination (collection × era,
+  //    curated, era-only, search) → reshape (Phase 2b, 2026-11-13):
+  //    the coil contracts to the combination's exact per-collection
+  //    shares and re-skins from its own collections, with a
+  //    selection label carrying this page's exact result count.
+  //    Reshape is emitted ONLY once the catalog load has settled —
+  //    keyed to countsFinal, the panel's own finality signal (the
+  //    same one that dismisses the "Currently cataloging" note the
+  //    scene polls) — and exact facet counts are available; before
+  //    that the focus/idle rules above apply unchanged, and the
+  //    scene additionally stashes a reshape until its load markers
+  //    clear. (fullIndexReady && deriveFinal is NOT the settled
+  //    signal: fullIndexReady keys off a complete flag the deduped
+  //    resident count never satisfies with duplicate ids in the
+  //    catalog, and deriveFinal waits on the search vocabulary
+  //    build, which lags the catalog itself by minutes.)
+  // Lane → scene-band mapping: the scene's bands ARE the seven real
+  // collections (true representation, 2026-11-13), one band per
+  // lane, in canonical order: LAW 0, PAPERS 1, BOOKS 2, REFERENCE 3,
+  // DECLASSIFIED 4, PODCASTS 5, DOCUMENTS 6.
   const helixSigRef = useRef("");
   useEffect(() => {
     const api = helixApiRef && helixApiRef.current;
@@ -3582,9 +3592,15 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     const HELIX_LANE_BANDS = {
       LAW: [0],
       PAPERS: [1],
-      DECLASSIFIED: [3],
-      PODCASTS: [8],
-      BOOKS: [2, 4, 5, 6, 7, 9],
+      BOOKS: [2],
+      REFERENCE: [3],
+      DECLASSIFIED: [4],
+      PODCASTS: [5],
+      DOCUMENTS: [6],
+    };
+    const HELIX_BAND_OF = {
+      LAW: 0, PAPERS: 1, BOOKS: 2, REFERENCE: 3,
+      DECLASSIFIED: 4, PODCASTS: 5, DOCUMENTS: 6,
     };
     const searching = !!(q && q.trim().length >= 2);
     const anyFilter = !!(bucketFilter || collKey || eraFilter);
@@ -3595,12 +3611,21 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       let count = -1;
       let topArtifacts = null;
       let sampleArtifacts = null;
+      let facetSource = null;
       if (searching) {
         const m = serverActive && serverModel ? serverModel : blendedModel;
         if (m && !m.pending && m.query === q && Array.isArray(m.items)) {
           count = typeof m.total === "number" ? m.total : m.items.length;
           topArtifacts = m.items.slice(0, 50).map((it) => it.artifact).filter(Boolean);
           sampleArtifacts = m.items.slice(0, 200).map((it) => it.artifact).filter(Boolean);
+          // Exact facet tallies need the FULL match set: the blended
+          // (client) model holds it when its total is its items (no
+          // deep-search extra outstanding); the server model's items
+          // are only the pages loaded so far, so server search keeps
+          // the dominant-lane fallback below.
+          if (!(serverActive && serverModel) && count === m.items.length) {
+            facetSource = { items: m.items };
+          }
         }
       } else if (browseResult && artifacts) {
         count = browseResult.count;
@@ -3612,6 +3637,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           .slice(0, 200)
           .map((ix) => artifacts[ix])
           .filter(Boolean);
+        facetSource = { indices: browseResult.indices };
       }
       if (count === 0) {
         state = { kind: "idle" };
@@ -3645,7 +3671,67 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           }
           if (bestLane && HELIX_LANE_BANDS[bestLane]) groups = HELIX_LANE_BANDS[bestLane];
         }
-        state = groups ? { kind: "focus", groups } : { kind: "idle" };
+        // RESHAPE (Phase 2b): a refined combination — anything
+        // beyond a plain single-collection selection — re-forms the
+        // coil to the combination's exact per-collection shares.
+        // Emitted only once the catalog load has settled and exact
+        // facets are in hand; otherwise the focus/idle state above
+        // stands, exactly as the scene behaved before reshape.
+        const refined =
+          searching || !!collKey || !!eraFilter || (bucketFilter && bucketFilter.indexOf(":") > -1);
+        let reshapeState = null;
+        if (refined && countsFinal && facetSource) {
+          let facets = null;
+          if (facetSource.indices && lane && HELIX_BAND_OF[lane] !== undefined) {
+            // Single-lane refinement (lane × era / sub / curated):
+            // every match is in the lane by construction, so the
+            // facets are exact with no tally pass at all.
+            facets = {};
+            facets[HELIX_BAND_OF[lane]] = count;
+          } else {
+            // Exact tally over the full match set, capped: past the
+            // cap the set is a broad cross-collection slice whose
+            // honest scene answer is the dominant-lane focus above.
+            const FACET_CAP = 300000;
+            const tally = [0, 0, 0, 0, 0, 0, 0];
+            let n = 0;
+            if (facetSource.indices && facetSource.indices.length <= FACET_CAP) {
+              const idx = facetSource.indices;
+              n = idx.length;
+              for (let k = 0; k < n; k++) {
+                const a = artifacts[idx[k]];
+                const bi = a ? HELIX_BAND_OF[a.collection] : undefined;
+                if (bi !== undefined) tally[bi]++;
+              }
+            } else if (facetSource.items && facetSource.items.length <= FACET_CAP) {
+              const items = facetSource.items;
+              n = items.length;
+              for (let k = 0; k < n; k++) {
+                const a = items[k] && items[k].artifact;
+                const bi = a ? HELIX_BAND_OF[a.collection] : undefined;
+                if (bi !== undefined) tally[bi]++;
+              }
+            }
+            if (n > 0) {
+              const f = {};
+              tally.forEach((v, bi) => {
+                if (v > 0) f[bi] = v;
+              });
+              if (Object.keys(f).length) facets = f;
+            }
+          }
+          if (facets) {
+            const summary =
+              activeFilterSummary && activeFilterSummary !== "All entries"
+                ? activeFilterSummary
+                : "";
+            const name = searching
+              ? "“" + q.trim() + "”" + (summary ? " · " + summary : "")
+              : summary || "Selection";
+            reshapeState = { kind: "reshape", facets, total: count, name };
+          }
+        }
+        state = reshapeState || (groups ? { kind: "focus", groups } : { kind: "idle" });
       }
       // count still unknown (model pending / browse not committed):
       // hold the previous scene state — the scene's latest-wins rig
@@ -3657,13 +3743,24 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       "|" +
       (state.groups ? state.groups.join(",") : "") +
       "|" +
-      (state.items ? state.items.map((i) => i.title).join("§") : "");
+      (state.items ? state.items.map((i) => i.title).join("§") : "") +
+      "|" +
+      (state.kind === "reshape"
+        ? state.name +
+          "#" +
+          state.total +
+          "#" +
+          Object.keys(state.facets)
+            .sort()
+            .map((k) => k + ":" + state.facets[k])
+            .join(",")
+        : "");
     if (sig === helixSigRef.current) return;
     helixSigRef.current = sig;
     try {
       api.setDisplay(state);
     } catch (e) { /* decorative layer — never disturb the page */ }
-  }, [q, bucketFilter, collKey, eraFilter, serverActive, serverModel, blendedModel, browseResult, artifacts, helixApiRef]);
+  }, [q, bucketFilter, collKey, eraFilter, serverActive, serverModel, blendedModel, browseResult, artifacts, helixApiRef, countsFinal, activeFilterSummary]);
   // Analytics: one search_performed per settled query (900ms debounce so
   // keystrokes don't flood it), with the result count the user saw.
   useEffect(() => {
