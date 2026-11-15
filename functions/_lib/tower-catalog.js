@@ -65,12 +65,21 @@ export const descShardUrl = (artifactId) =>
 // chars gave a 4.3 MB largest bucket / 2.35 MB weighted mean fetch;
 // the hash is uniform: max 96 KB, weighted mean 59 KB.) The bucket
 // files carry only the fields the getRecordById consumers read
-// (entry render, API publicFullRecord, OAI) — the shard path below
-// stays the fallback for ANY bucket failure (missing file, timeout,
-// parse error, record absent), so this layer is an accelerator,
-// never the only copy of the truth, and only the shard path can
-// declare an id missing. The key function MUST stay byte-identical
-// to the one in scripts/build-entry-records.mjs.
+// (entry render, API publicFullRecord, OAI) — this layer is an
+// accelerator, never the only copy of the truth, and only the shard
+// path can declare an id missing. Failure contract (revised
+// 2026-11-15, QUEUED-1): a bucket-layer TIMEOUT or ERROR degrades the
+// lookup to { state: "error" } — the caller's established fallback
+// (the entry function serves the SPA shell at 200) — instead of
+// escalating into the shard path, whose ~19 MB text fetch + parse is
+// exactly the cost that was killing busy isolates under crawler
+// bursts (entry 500s concentrated in one crawler's burst hours while
+// every other requester stayed at ~0%). Only a bucket 404 (file not
+// published yet) or a record absent from a fetched bucket falls
+// through to the shard path: bucket data can lag a publish, so
+// absence is never treated as proof of missing. The key function
+// MUST stay byte-identical to the one in
+// scripts/build-entry-records.mjs.
 export function entryRecordKey(artifactId) {
   const s = String(artifactId || "");
   let h = 0x811c9dc5;
@@ -112,6 +121,30 @@ async function fetchBounded(url, ttlSeconds, read) {
   }
 }
 
+// Status-reporting twin of fetchBounded: same bounded fetch, but the
+// caller learns WHY a fetch failed. Returns { ok: true, value } on
+// success, { ok: false, reason: "http", status } for an HTTP error
+// status, and { ok: false, reason: "timeout" | "error" } for an abort
+// (the 3s bound firing) or any other failure (network, body parse).
+// Exists for the entry-record bucket layer below, whose degradation
+// contract depends on the failure class (2026-11-15, QUEUED-1).
+async function fetchBoundedStatus(url, ttlSeconds, read) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const r = await fetch(url, {
+      cf: { cacheTtl: ttlSeconds, cacheEverything: true },
+      signal: ctl.signal,
+    });
+    if (!r.ok) return { ok: false, reason: "http", status: r.status };
+    return { ok: true, value: await read(r) };
+  } catch {
+    return { ok: false, reason: ctl.signal.aborted ? "timeout" : "error" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Fetch JSON through the Cloudflare edge cache. Returns null on any
 // failure — callers degrade (fall back to the SPA / skip the entry) rather
 // than erroring a crawler request.
@@ -137,6 +170,24 @@ export function fetchJsonCached(url, ttlSeconds) {
   inflightJson.set(key, p);
   const done = () => {
     if (inflightJson.get(key) === p) inflightJson.delete(key);
+  };
+  p.then(done, done);
+  return p;
+}
+
+// fetchJsonCached's status-reporting twin (same in-flight coalescing,
+// separate map because the promise carries a status object, not the
+// parsed body). Used only by the entry-record bucket layer.
+const inflightJsonStatus = new Map();
+
+function fetchJsonStatus(url, ttlSeconds) {
+  const key = `${ttlSeconds}:${url}`;
+  const existing = inflightJsonStatus.get(key);
+  if (existing) return existing;
+  const p = fetchBoundedStatus(url, ttlSeconds, (r) => r.json());
+  inflightJsonStatus.set(key, p);
+  const done = () => {
+    if (inflightJsonStatus.get(key) === p) inflightJsonStatus.delete(key);
   };
   p.then(done, done);
   return p;
@@ -338,22 +389,29 @@ const locateMemo = boundedMemo(256);
 const descMemo = boundedMemo(8);
 const entryRecordMemo = boundedMemo(16);
 
-// One entry-record bucket file, parsed, or null on any failure. A
-// bucket is an { artifact_id: record } object; anything else (404
-// body, error page parsed as JSON, a non-object) is a failure and the
-// caller falls back to the shard path.
+// One entry-record bucket file, classified for the caller (see the
+// failure contract at entryRecordKey above):
+//   { kind: "ok", bucket } — fetched; an { artifact_id: record } object.
+//   { kind: "lag" }        — HTTP 404: the file is not published yet.
+//   { kind: "down" }       — timeout, network/HTTP error, or a body
+//                            that is not a bucket object.
+// Only "ok" buckets are memoized.
 async function fetchEntryRecordBucket(artifactId) {
   const url = entryRecordUrl(artifactId);
-  let bucket = entryRecordMemo.get(url);
-  if (bucket === undefined) {
-    bucket = await fetchJsonCached(url, 3600);
-    if (bucket && typeof bucket === "object" && !Array.isArray(bucket)) {
-      entryRecordMemo.set(url, bucket);
-    } else {
-      bucket = null;
-    }
+  const memo = entryRecordMemo.get(url);
+  if (memo !== undefined) return { kind: "ok", bucket: memo };
+  const res = await fetchJsonStatus(url, 3600);
+  if (!res.ok) {
+    return res.reason === "http" && res.status === 404
+      ? { kind: "lag" }
+      : { kind: "down" };
   }
-  return bucket;
+  const bucket = res.value;
+  if (bucket && typeof bucket === "object" && !Array.isArray(bucket)) {
+    entryRecordMemo.set(url, bucket);
+    return { kind: "ok", bucket };
+  }
+  return { kind: "down" };
 }
 
 // artifact_id -> shard index map. ~4 MB at 133k entries, ~11 MB at 375k.
@@ -434,12 +492,18 @@ export async function getRecordById(artifactId) {
   if (cached !== undefined) return cached;
   // Layer 1.5 (2026-11-13 fix #2): the per-bucket record file. On a hit
   // this is the whole lookup — no work-locate fetch, no shard text.
-  // ANY failure (no bucket file yet, timeout, record absent from the
-  // bucket) falls through to the shard path below: bucket data can lag
-  // a publish, so absence here is never treated as proof of missing.
-  const bucketFile = await fetchEntryRecordBucket(artifactId);
-  if (bucketFile) {
-    const rec = bucketFile[artifactId];
+  // Failure classes (2026-11-15, QUEUED-1): a bucket-layer timeout or
+  // error degrades to { state: "error" } — the caller's shell-200
+  // fallback — and NEVER escalates into the shard path below: a bucket
+  // fetch only times out when the isolate/upstream is already
+  // saturated, which is precisely when the ~19 MB shard fetch + parse
+  // turns a slow lookup into a platform 500. A bucket 404 or a record
+  // absent from a fetched bucket still falls through: bucket data can
+  // lag a publish, so absence here is never proof of missing.
+  const bucketRes = await fetchEntryRecordBucket(artifactId);
+  if (bucketRes.kind === "down") return { state: "error" };
+  if (bucketRes.kind === "ok") {
+    const rec = bucketRes.bucket[artifactId];
     if (rec && typeof rec === "object" && rec.artifact_id === artifactId) {
       await recordCachePut(artifactId, { state: "ok", record: rec });
       return { state: "ok", record: rec };
