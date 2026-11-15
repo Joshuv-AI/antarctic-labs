@@ -11,12 +11,47 @@
 // with a disclosed 72-panel minimum segment for the two
 // micro-collections). Counts arrive from /tower-hubs-index.json —
 // the same file the filter chips read — via opts.counts, with the
-// built-in seed below as the fallback; tiles are textured from an
-// atlas baked out of real catalog entries (per-collection cell
-// pools, provenance in scripts/helix-atlas-manifest.json), so a
-// panel always shows material from its own collection.
+// built-in seed below as the fallback; tiles are textured from
+// atlases baked out of real catalog entries (provenance in
+// scripts/helix-starter-manifest.json +
+// scripts/helix-segments-manifest.json), so a panel always shows
+// material from its own collection.
 //
-// SHIP 2 (2026-11-12, plan Amendments H–M): the scene is now bound to
+// ATLAS-SCALE (2026-11-14): the single 4096² atlas is replaced by
+// PAGED atlases — one mesh per page, all sharing the tier shader:
+//   starter page (2048², 256 cells = today's pools) + a 1024²
+//     grain page paint the FIRST frame (≤0.70 MB wire together);
+//   eight segment pages (2048², 2,048 further distinct real cells)
+//     load only after the catalog stream settles, nearest-first,
+//     at most 3 GPU-resident, and swap in only at legal moments —
+//     when every panel they would re-skin is in the FAR tier (or
+//     off-frustum), or bundled into a user-caused commit under the
+//     reshape dissolve — so a page arrival is never a visible pop;
+//   a live page (1024² canvas) mirrors the current selection's top
+//     results as typeset title pages on the dominant band's lit
+//     segment (mirroring v1: zero wire, typeset from data already
+//     on the page).
+// Distance tiers in the shader: NEAR panels sample their page at
+// full detail, MID panels the same page (or the starter when their
+// segment has not arrived), FAR panels cross-fade to the grain
+// page — a per-band impression texture — below ~7 device px, where
+// no individual cover is legible anyway. Assignment is DECK-DEALT
+// per (page, band) pool: a seeded shuffle dealt in placement
+// order, reshuffled on exhaustion with a boundary guard, so no
+// cell repeats within a pool's deal. A per-instance phase drives
+// paper-tone jitter (±10% brightness + a warm tint wobble), so
+// even the grain impression never reads as one flat stamp.
+// All page bitmaps decode via createImageBitmap WITH
+// { imageOrientation: "flipY" } — without it the tiles sample
+// upside-down (the pre-atlas-scale build had that defect; the
+// gate proved the flipY bitmap byte-exact against CanvasTexture).
+// Segment pages prefer KTX2 (ETC1S → ASTC/BC7 GPU-compressed,
+// ~5.6 MiB GPU per page against 21.3 MiB RGBA) when the loader +
+// transcoder are available, and fall back to the WebP page on any
+// failure; the starter and grain stay WebP so first paint never
+// waits on the transcoder.
+//
+// SHIP 2 (2026-11-12, plan Amendments H–M): the scene is bound to
 // page state and re-framed to the reel's proportions:
 //  - Framing: camera FARTHER OUT and LOWER, coil STRETCHED — pitch
 //    7.4 against a 0.85 tube radius, so bands read as thin ribbons
@@ -36,48 +71,45 @@
 //    sweeps to the far side. Big collections get large labels, small
 //    ones tiny tags; when two large labels collide on the front
 //    sweep, the larger collection wins and the smaller fades.
+//    (2026-11-14 reel-fidelity: labels sit BESIDE their coil —
+//    centered on the anchor and nudged radially outward on screen —
+//    never floating above it; verified in top-down and side
+//    renders against the reel frames.)
 //  - Navigation binding (one damped rig, latest-wins, retarget
 //    mid-flight — never queued keyframes, never a snap):
 //      focus(groups)  — camera flies to frame the bands, they
 //        brighten, the rest dim (per-group weights in an instanced
-//        attribute, ramped by a single damped uniform).
+//        attribute, ramped by a single damped uniform). The flight
+//        mirrors the reel's move: top-down → tilt to side → push
+//        INTO the section until the band fills the frame's middle.
 //      lift(items)    — up to 50 result works rise OUT of the coil on
 //        thread lines into a tiered pyramid above the stack (the
 //        reel's ending); camera eases to frame the display.
 //      idle           — everything damps back to the idle framing.
 //  - Wire carries barb ticks; grey stitch threads slightly raised.
 //
-// Rendering economy: ONE InstancedMesh for all panels + one baked
-// atlas (4096² WebP); lift tiles are a small pooled mesh set with a
+// Rendering economy: one InstancedMesh PER PAGE (≤10 total) sharing
+// the tier shader; lift tiles are a small pooled mesh set with a
 // dynamic typeset canvas atlas (the results grid's own covers are
 // typeset plates — the tiles speak the same language). ~30 fps cap,
-// DPR ladder (steps deferred while scrolling), sustained-low-fps
-// park, full disposal. Loaded ONLY via dynamic import() from
-// components/HelixCanvas.jsx, kicked off at mount (Amendment M: the
-// scene and atlas load DURING the page boot; motion waits for it).
+// DPR ladder (steps deferred while scrolling or in transit; steps
+// back UP after sustained full-rate windows), sustained-low-fps
+// park, webglcontextlost recovery, full disposal. Loaded ONLY via
+// dynamic import() from components/HelixCanvas.jsx, kicked off at
+// mount (Amendment M: the scene and starter page load DURING the
+// page boot; motion waits for it).
 
 import * as THREE from "three";
 
-const ATLAS_COLS = 16;
-const ATLAS_ROWS = 16;
-
-// ------------------------------------------------------------------ collections
-// TRUE REPRESENTATION (2026-11-13): the bands ARE the library's seven
-// real collections, in canonical order. Counts come from
-// /tower-hubs-index.json (the exact file the filter chips read),
-// fetched by HelixCanvas and passed in as opts.counts; SEED_COUNTS
-// below — today's true totals — are the fallback when that fetch
-// fails, so the scene and the panel can never disagree for long and
-// the scene never invents numbers. Panel allocation is LINEAR in
-// the counts against the same 15,006-panel budget the scene has
-// always used (1 panel ≈ 170 works), with one disclosed exception:
-// a minimum segment of 12 stations (72 panels) for collections too
-// small to form a visible segment otherwise (PODCASTS, DOCUMENTS) —
-// without the floor they would hold ~6 and ~2 panels and have no
-// labelable presence at all. Atlas cell pools are per-collection
-// (the atlas is baked from real entries of each collection;
-// manifest: scripts/helix-atlas-manifest.json), and panels only
-// ever draw cells from their own band's pool.
+// ------------------------------------------------------------------ pages
+// Page ids: 0 = starter, 1..8 = segment pages 0..7, 9 = live page.
+const PAGE_STARTER = 0;
+const PAGE_LIVE = 9;
+const PAGE_DIV = 16; // 2048² pages: 16×16 grid of 128px cells
+const LIVE_DIV = 8;  // live page: 8×8 grid of 128px cells on 1024²
+const MAX_RESIDENT_SEGMENTS = 3;
+// Starter cell pools per band (the 16×16 starter grid) — identical
+// to the pre-atlas-scale atlas pools.
 const BAND_DEFS = [
   { name: "LAW", cells: [0, 64] },
   { name: "PAPERS", cells: [64, 128] },
@@ -86,6 +118,21 @@ const BAND_DEFS = [
   { name: "DECLASSIFIED", cells: [196, 220] },
   { name: "PODCASTS", cells: [220, 240] },
   { name: "DOCUMENTS", cells: [240, 256] },
+];
+// Segment pools: SEG_POOLS[s] maps band index → [cellStart, cellEnd)
+// within segment page s (cells numbered row-major over the page's
+// 16×16 grid). Extracted from the bake's segments-manifest.json —
+// the gate-verified layout. A panel whose (segment, band) pool is
+// absent keeps its starter cell permanently.
+const SEG_POOLS = [
+  { 0: [0, 256] },
+  { 0: [0, 256] },
+  { 0: [0, 256] },
+  { 0: [0, 240], 1: [240, 256] },
+  { 1: [0, 256] },
+  { 1: [0, 256] },
+  { 1: [0, 256] },
+  { 1: [0, 115], 2: [115, 177], 3: [177, 207], 4: [207, 224], 5: [224, 240], 6: [240, 256] },
 ];
 const SEED_COUNTS = {
   LAW: 1277197, PAPERS: 1130210, BOOKS: 81631, REFERENCE: 41137,
@@ -111,7 +158,7 @@ const BAND_TINTS = [
   [1.10, 0.94, 0.96], // PODCASTS — coral-grey
   [1.02, 0.96, 1.10], // DOCUMENTS — violet-grey
 ];
-// Tile plate colors by catalog lane (lift display).
+// Tile plate colors by catalog lane (lift display + live mirror page).
 const LANE_PLATE = {
   LAW: "#3d4a5c", PAPERS: "#6b5b3e", DECLASSIFIED: "#5c3d3d",
   BOOKS: "#4a5d43", REFERENCE: "#555048", DOCUMENTS: "#4c4a55",
@@ -134,6 +181,20 @@ const smoothstep = (a, b, v) => {
   const t = clamp01((v - a) / (b - a));
   return t * t * (3 - 2 * t);
 };
+// CPU-side cell encoding for the shader: the bake numbers cells
+// row-major from the image TOP; textures upload flipped (flipY), so
+// the shader's row is counted from the bottom. aCell carries the
+// pre-flipped index: col + (div-1-row)*div.
+function encCell(cell, div) {
+  const row = (cell / div) | 0;
+  const col = cell - row * div;
+  return col + (div - 1 - row) * div;
+}
+function rangeArr(a, b) {
+  const out = new Array(b - a);
+  for (let i = a; i < b; i++) out[i - a] = i;
+  return out;
+}
 
 // ------------------------------------------------------------------ tube helix
 // Centerline: circle of radius R around the vertical axis, descending
@@ -247,24 +308,37 @@ function surfacePoint(theta, phi, out) {
 }
 
 // Create the scene on `canvas`. opts:
-//   atlasUrl — the baked atlas asset (default "/helix-atlas.webp")
+//   starterUrl — first-paint page (default "/helix-starter.webp")
+//   grainUrl   — far-tier impression page (default "/helix-grain.webp")
+//   segmentUrl — (i) => url for segment page i (webp fallback path)
+//   segmentKtx2Url — (i) => url for segment page i (KTX2 preferred)
 //   frozen   — render one still frame (top-down), never run the loop
 //   onError  — called if the WebGL context cannot be created at all
 //   labelsEl — hero-confined overlay the scene fills with band labels
 //   getAvoidRects — () => [{x, y, w, h}] in DOCUMENT coords: hero
 //              content blocks a large label must not sit under
 // Returns a controller { start, stop, renderStill, dispose,
-// isDegraded, setSettled, setDisplay } or null when the renderer
-// could not be created. setDisplay(state) accepts:
+// isDegraded, setSettled, setDisplay, debugState } or null when the
+// renderer could not be created. setDisplay(state) accepts:
 //   { kind: "idle" }
 //   { kind: "focus", groups: [bandIndex, ...] }
 //   { kind: "lift", items: [{ title, creator, year, collection }] }
 //   { kind: "reshape", facets: { bandIndex: count, ... }, total,
-//     name } — a refined filter combination: the coil contracts to
-//     the combination's exact per-collection shares and re-skins
-//     from its own collections' covers (Phase 2b, applyReshape).
+//     name, items?: [{ title, creator, year, collection }] } — a
+//     refined filter combination: the coil contracts to the
+//     combination's exact per-collection shares and re-skins from
+//     its own collections' covers (Phase 2b, applyReshape); when
+//     items are present, the top results also mirror onto the
+//     dominant band's lit segment via the live page.
 export function createHelixScene(canvas, opts = {}) {
-  const atlasUrl = opts.atlasUrl || "/helix-atlas.webp";
+  const starterUrl = opts.starterUrl || "/helix-starter.webp";
+  const grainUrl = opts.grainUrl || "/helix-grain.webp";
+  const segmentUrl = typeof opts.segmentUrl === "function"
+    ? opts.segmentUrl
+    : (i) => "/helix-segment-" + i + ".webp";
+  const segmentKtx2Url = typeof opts.segmentKtx2Url === "function"
+    ? opts.segmentKtx2Url
+    : (i) => "/helix-segment-" + i + ".ktx2";
   // True counts from the hub seed (HelixCanvas fetches
   // /tower-hubs-index.json — the same file the filter chips read).
   // A malformed or partial payload is ignored wholesale: the scene
@@ -349,7 +423,7 @@ export function createHelixScene(canvas, opts = {}) {
 
   function modeTarget(t) {
     if (!booted) return { dist: idleDist * 1.15, elev: 1.02, tgtY: 8 };
-    if (mode === "focus") return { dist: idleDist * focusDistMul, elev: 0.12, tgtY: focusY };
+    if (mode === "focus") return { dist: idleDist * focusDistMul, elev: 0.10, tgtY: focusY };
     if (mode === "display") return { dist: idleDist * 0.82, elev: 0.30, tgtY: displayY };
     // Idle drift (Amendment K): slow breathing around the idle frame.
     return {
@@ -397,7 +471,7 @@ export function createHelixScene(canvas, opts = {}) {
   scene.add(structure);
 
   // ---- placements (baked instance matrices; runs once at init)
-  const placements = []; // {matrix, cell:[c,r], group, phase}
+  const placements = []; // {matrix, group, phase, theta}
   const gapRanges = [];  // [theta0, theta1] bare-wire gaps between bands
   {
     const rnd = mulberry32(987123);
@@ -432,14 +506,11 @@ export function createHelixScene(canvas, opts = {}) {
             .multiply(new THREE.Matrix4().makeRotationFromQuaternion(qj))
             .multiply(new THREE.Matrix4().makeScale(tScale, tScale, tScale));
           m.copy(basis).setPosition(pos);
-          // Band-scoped cell: a panel only ever wears material from
-          // its own collection's atlas pool (true representation).
-          const cellIdx = g.cellStart + ((rnd() * (g.cellEnd - g.cellStart)) | 0);
           placements.push({
             matrix: m.clone(),
-            cell: [cellIdx % ATLAS_COLS, (cellIdx / ATLAS_COLS) | 0],
             group: g.index,
             phase: rnd(),
+            theta: th,
           });
           count++;
         }
@@ -454,6 +525,7 @@ export function createHelixScene(canvas, opts = {}) {
       const af = frameAt(aTheta);
       g.anchorLocal = af.C.clone().addScaledVector(af.e1, TUBE_R + 1.05);
       g.anchorY = af.C.y;
+      g.anchorTheta = aTheta;
       if (gi < order.length - 1) {
         gapRanges.push([theta, theta + GAP_DTHETA]);
         theta += GAP_DTHETA;
@@ -463,8 +535,204 @@ export function createHelixScene(canvas, opts = {}) {
     // (Joshua 2026-11-12: no satellites, nothing floating outside).
   }
   const panelCount = placements.length;
+  const groupFirst = new Map();
+  const groupLast = new Map();
+  placements.forEach((p, i) => {
+    if (!groupFirst.has(p.group)) groupFirst.set(p.group, i);
+    groupLast.set(p.group, i);
+  });
+  const stationOf = new Int32Array(panelCount);
+  placements.forEach((p, i) => {
+    stationOf[i] = ((i - groupFirst.get(p.group)) / ROWS) | 0;
+  });
+  // Canonical position along the whole coil (band panel starts in
+  // canonical band order) — the segment a panel belongs to is a
+  // pure function of it: seg = min(7, floor(canon / (count/8))).
+  const bandPanelStart = new Array(BAND_DEFS.length).fill(0);
+  {
+    let acc = 0;
+    for (const g of BANDS) { // BANDS is canonical order
+      bandPanelStart[g.index] = acc;
+      acc += g.panels;
+    }
+  }
+  const instSeg = new Uint8Array(panelCount);
+  const segOfPanel = (i) => {
+    const canon = bandPanelStart[placements[i].group] + (i - groupFirst.get(placements[i].group));
+    return Math.min(7, Math.floor(canon / (panelCount / 8)));
+  };
+  const segPanels = Array.from({ length: 8 }, () => []);
+  for (let i = 0; i < panelCount; i++) {
+    instSeg[i] = segOfPanel(i);
+    segPanels[instSeg[i]].push(i);
+  }
 
-  // ---- instanced mesh
+  // ---- paged panel machinery -------------------------------------
+  // Logical per-instance state; the partition builder below is the
+  // ONLY writer of mesh attributes, and it runs at commits (init,
+  // page activation/eviction, reshape, focus-weight changes are
+  // synced separately) — never per frame.
+  let disposed = false;
+  let degraded = false;
+  let running = false;
+  let contextLost = false;
+  const instPage = new Uint8Array(panelCount);       // all starter (0)
+  const instCell = new Int32Array(panelCount);       // raw cell index on instPage
+  const instBaseCell = new Int32Array(panelCount);   // canonical starter cell
+  const instHomeCell = new Int32Array(panelCount);   // canonical cell on the home page
+  const instHomePage = new Uint8Array(panelCount);   // page instHomeCell belongs to
+  const focusW = new Float32Array(panelCount).fill(1); // per-instance
+  // focus weight (1.16 focused / 0.30 dimmed), rewritten on focus
+  // change only; the damped uFocusAmt ramps the transition.
+
+  // Cell assignment is a PURE FUNCTION of (page, band, rank):
+  // each pool has one static seeded shuffle (its order), and an
+  // instance's cell on a page is order[(rank + bandEpoch[band]) %
+  // poolSize], where rank is the instance's canonical ordinal
+  // within that (page, band) set. Every assignment set in the
+  // scene is rank-contiguous per (page, band) — a segment's
+  // panels, a band's lit stations — so per-cell counts over any
+  // assigned set differ by at most one BY CONSTRUCTION, under any
+  // interleaving of activations, reshapes, evictions and mirror
+  // binds. (The stateful deck this replaces leaked single cards
+  // whenever a home page moved mid-stream: activation deals,
+  // mirror home-reads and eviction resets each consumed cards
+  // outside a full traversal, skewing counts to 6..10 against a
+  // 7..8 expectation.) bandEpoch[band] increments on every
+  // reshape that includes the band — that rotation is what makes
+  // a reshape visibly re-skin: the same ranks land on new cells.
+  const orders = new Map();
+  function orderFor(page, band) {
+    const key = page + ":" + band;
+    let o = orders.get(key);
+    if (o) return o;
+    let cellsArr = null;
+    if (page === PAGE_STARTER) {
+      cellsArr = rangeArr(BAND_DEFS[band].cells[0], BAND_DEFS[band].cells[1]);
+    } else if (page >= 1 && page <= 8) {
+      const pool = SEG_POOLS[page - 1][band];
+      if (pool) cellsArr = rangeArr(pool[0], pool[1]);
+    }
+    if (!cellsArr) return null;
+    const rng = mulberry32((0x9e3779b9 ^ (page * 1000003 + band * 131 + 7)) >>> 0);
+    o = cellsArr.slice();
+    for (let i = o.length - 1; i > 0; i--) {
+      const j = (rng() * (i + 1)) | 0;
+      const t = o[i]; o[i] = o[j]; o[j] = t;
+    }
+    orders.set(key, o);
+    return o;
+  }
+  const bandEpoch = new Array(BANDS.length).fill(0);
+  // Canonical ranks: within the whole band (for the starter
+  // page) and within the instance's own segment slice (for
+  // segment pages). An instance belongs to exactly one segment,
+  // so one rank array serves all segment pages.
+  const bandRank = new Int32Array(panelCount);
+  const segSliceRank = new Int32Array(panelCount);
+  {
+    const seen = new Array(BANDS.length).fill(0);
+    for (let i = 0; i < panelCount; i++) bandRank[i] = seen[placements[i].group]++;
+    for (let s = 0; s < 8; s++) {
+      const per = new Array(BANDS.length).fill(0);
+      for (const i of segPanels[s]) segSliceRank[i] = per[placements[i].group]++;
+    }
+  }
+  function rankOnPage(i, page) {
+    return page === PAGE_STARTER ? bandRank[i] : segSliceRank[i];
+  }
+  function cellFor(page, band, rank) {
+    const o = orderFor(page, band);
+    if (!o) return -1;
+    return o[(rank + bandEpoch[band]) % o.length];
+  }
+  // Canonical starter assignment (epoch 0 on every band).
+  for (let i = 0; i < panelCount; i++) {
+    const c = cellFor(PAGE_STARTER, placements[i].group, bandRank[i]);
+    instCell[i] = c;
+    instBaseCell[i] = c;
+    instHomeCell[i] = c;
+  }
+
+  // ---- shared uniforms + tier shader
+  const uniforms = {
+    uGrain: { value: null },
+    uTime: { value: 0 },
+    uFocusAmt: { value: 0 },
+    uDim: { value: 1 },
+    uDissolve: { value: 1 },
+    uProjFactor: { value: 800 },
+    uTints: { value: BAND_TINTS.map((t) => new THREE.Vector3(t[0], t[1], t[2])) },
+  };
+  const PANEL_VERT = [
+    "attribute float aCell;",
+    "attribute float aGroup;",
+    "attribute float aPhase;",
+    "attribute float aFocusW;",
+    "uniform float uTime;",
+    "uniform float uFocusAmt;",
+    "uniform float uDim;",
+    "uniform float uDissolve;",
+    "uniform float uGridDiv;",
+    "uniform float uProjFactor;",
+    "uniform vec3 uTints[" + BAND_DEFS.length + "];",
+    "varying vec2 vUv;",
+    "varying vec2 vGrainUv;",
+    "varying float vBright;",
+    "varying vec3 vTint;",
+    "varying float vTierMix;",
+    "void main() {",
+    "  float col = mod(aCell, uGridDiv);",
+    "  float row = floor(aCell / uGridDiv);",
+    "  vUv = (vec2(col, row) + uv) / uGridDiv;",
+    // Grain cell: band b occupies grain cells [b*8, b*8+8); the
+    // per-instance variant comes from the phase hash.
+    "  float gCell = (7.0 - aGroup) * 8.0 + floor(fract(aPhase * 7.317) * 8.0);",
+    "  vGrainUv = (vec2(mod(gCell, 8.0), floor(gCell / 8.0)) + uv) / 8.0;",
+    // Paper-tone jitter: brightness + warm tint wobble per instance.
+    "  float jit = 0.90 + 0.20 * fract(aPhase * 13.731);",
+    "  vec3 warm = mix(vec3(1.0), vec3(1.06, 1.00, 0.92), fract(aPhase * 7.913));",
+    "  vTint = uTints[int(aGroup + 0.5)] * warm;",
+    "  vec4 wp = instanceMatrix * vec4(position, 1.0);",
+    "  vec4 mv = modelViewMatrix * wp;",
+    "  float bright = mix(1.0, aFocusW, uFocusAmt);",
+    "  float shimmer = 0.94 + 0.06 * sin(uTime * 0.6 + aPhase * 17.0);",
+    // Depth falloff (Amendment K): near coils carry the brightness,
+    // distant coils sink into the black.
+    "  float dist = -mv.z;",
+    "  float depth = mix(1.10, 0.40, smoothstep(52.0, 150.0, dist));",
+    "  vBright = bright * shimmer * depth * uDim * uDissolve * jit;",
+    // Distance tier: panel height in device px (0.80 world units).
+    "  float hPx = 0.80 * uProjFactor / max(dist, 0.001);",
+    "  vTierMix = 1.0 - smoothstep(5.0, 9.0, hPx);",
+    "  gl_Position = projectionMatrix * mv;",
+    "}",
+  ].join("\n");
+  const PANEL_FRAG = [
+    "uniform sampler2D uMap;",
+    "uniform sampler2D uGrain;",
+    "varying vec2 vUv;",
+    "varying vec2 vGrainUv;",
+    "varying float vBright;",
+    "varying vec3 vTint;",
+    "varying float vTierMix;",
+    "void main() {",
+    "  vec3 col = texture2D(uMap, vUv).rgb;",
+    "  if (vTierMix > 0.003) {",
+    "    col = mix(col, texture2D(uGrain, vGrainUv).rgb, vTierMix);",
+    "  }",
+    "  col *= mix(vec3(1.0), vTint, 0.45);",
+    "  float clum = dot(col, vec3(0.3333));",
+    "  col = mix(col, vec3(clum) * vec3(1.05, 1.00, 0.90), 0.10) * 1.02;",
+    "  if (!gl_FrontFacing) {",
+    "    float lum = dot(col, vec3(0.3333));",
+    "    col = mix(vec3(lum) * vec3(0.92, 0.84, 0.70), col, 0.30) * 0.45;",
+    "  }",
+    "  gl_FragColor = vec4(col * vBright, 1.0);",
+    "  #include <colorspace_fragment>",
+    "}",
+  ].join("\n");
+
   function buildPanelGeometry() {
     const geo = new THREE.PlaneGeometry(PANEL_W, PANEL_H, 1, 6);
     const p = geo.attributes.position;
@@ -476,99 +744,109 @@ export function createHelixScene(canvas, opts = {}) {
     }
     return geo;
   }
-  const geo = buildPanelGeometry();
-  const cells = new Float32Array(panelCount * 2);
-  const groupsAttr = new Float32Array(panelCount);
-  const phases = new Float32Array(panelCount);
-  const focusW = new Float32Array(panelCount).fill(1); // per-instance
-  // focus weight (1.3 focused / 0.22 dimmed), rewritten on focus
-  // change only; the damped uFocusAmt ramps the transition.
-  const groupFirst = new Map();
-  const groupLast = new Map();
-  placements.forEach((p, i) => {
-    if (!groupFirst.has(p.group)) groupFirst.set(p.group, i);
-    groupLast.set(p.group, i);
-  });
-  const uniforms = {
-    uMap: { value: null },
-    uTime: { value: 0 },
-    uFocusAmt: { value: 0 },
-    uDim: { value: 1 },
-    uDissolve: { value: 1 },
-    uTints: { value: BAND_TINTS.map((t) => new THREE.Vector3(t[0], t[1], t[2])) },
-  };
-  const mat = new THREE.ShaderMaterial({
-    uniforms,
-    side: THREE.DoubleSide,
-    vertexShader: [
-      "attribute vec2 aCell;",
-      "attribute float aGroup;",
-      "attribute float aPhase;",
-      "attribute float aFocusW;",
-      "uniform float uTime;",
-      "uniform float uFocusAmt;",
-      "uniform float uDim;",
-      "uniform float uDissolve;",
-      "uniform vec3 uTints[" + BAND_DEFS.length + "];",
-      "varying vec2 vUv;",
-      "varying float vBright;",
-      "varying vec3 vTint;",
-      "void main() {",
-      "  vUv = (aCell + uv) / " + ATLAS_COLS.toFixed(1) + ";",
-      "  vTint = uTints[int(aGroup + 0.5)];",
-      "  vec4 wp = instanceMatrix * vec4(position, 1.0);",
-      "  vec4 mv = modelViewMatrix * wp;",
-      "  float bright = mix(1.0, aFocusW, uFocusAmt);",
-      "  float shimmer = 0.94 + 0.06 * sin(uTime * 0.6 + aPhase * 17.0);",
-      // Depth falloff (Amendment K): near coils carry the brightness,
-      // distant coils sink into the black.
-      "  float dist = -mv.z;",
-      "  float depth = mix(1.10, 0.40, smoothstep(52.0, 150.0, dist));",
-      "  vBright = bright * shimmer * depth * uDim * uDissolve;",
-      "  gl_Position = projectionMatrix * mv;",
-      "}",
-    ].join("\n"),
-    fragmentShader: [
-      "uniform sampler2D uMap;",
-      "varying vec2 vUv;",
-      "varying float vBright;",
-      "varying vec3 vTint;",
-      "void main() {",
-      "  vec3 col = texture2D(uMap, vUv).rgb;",
-      "  col *= mix(vec3(1.0), vTint, 0.45);",
-      "  float clum = dot(col, vec3(0.3333));",
-      "  col = mix(col, vec3(clum) * vec3(1.05, 1.00, 0.90), 0.10) * 1.02;",
-      "  if (!gl_FrontFacing) {",
-      "    float lum = dot(col, vec3(0.3333));",
-      "    col = mix(vec3(lum) * vec3(0.92, 0.84, 0.70), col, 0.30) * 0.45;",
-      "  }",
-      "  gl_FragColor = vec4(col * vBright, 1.0);",
-      "  #include <colorspace_fragment>",
-      "}",
-    ].join("\n"),
-  });
-  const mesh = new THREE.InstancedMesh(geo, mat, panelCount);
-  placements.forEach((p, i) => {
-    mesh.setMatrixAt(i, p.matrix);
-    cells[i * 2] = p.cell[0];
-    cells[i * 2 + 1] = ATLAS_ROWS - 1 - p.cell[1];
-    groupsAttr[i] = p.group;
-    phases[i] = p.phase;
-  });
-  const cellAttr = new THREE.InstancedBufferAttribute(cells, 2);
-  cellAttr.setUsage(THREE.DynamicDrawUsage);
-  geo.setAttribute("aCell", cellAttr);
-  // The canonical (init) cell assignment. Reshape re-skins rewrite
-  // the cells attribute; unlit instances always return to these.
-  const baseCells = cells.slice();
-  geo.setAttribute("aGroup", new THREE.InstancedBufferAttribute(groupsAttr, 1));
-  geo.setAttribute("aPhase", new THREE.InstancedBufferAttribute(phases, 1));
-  const focusAttr = new THREE.InstancedBufferAttribute(focusW, 1);
-  focusAttr.setUsage(THREE.DynamicDrawUsage);
-  geo.setAttribute("aFocusW", focusAttr);
-  mesh.instanceMatrix.needsUpdate = true;
-  mesh.frustumCulled = false;
+  const basePanelGeo = buildPanelGeometry();
 
+  const pageRecs = new Map();
+  function pageRec(page) {
+    let rec = pageRecs.get(page);
+    if (!rec) {
+      rec = {
+        page,
+        tex: null,
+        ready: false,
+        mesh: null,
+        geo: null,
+        mat: null,
+        aCell: null, aGroup: null, aPhase: null, aFocusW: null,
+        list: [],
+        div: page === PAGE_LIVE ? LIVE_DIV : PAGE_DIV,
+        capacity:
+          page === PAGE_LIVE ? LIVE_DIV * LIVE_DIV :
+          page === PAGE_STARTER ? panelCount :
+          segPanels[page - 1].length,
+      };
+      pageRecs.set(page, rec);
+    }
+    return rec;
+  }
+  function buildPageMesh(rec) {
+    const geo = basePanelGeo.clone();
+    const cap = Math.max(1, rec.capacity);
+    rec.aCell = new THREE.InstancedBufferAttribute(new Float32Array(cap), 1);
+    rec.aGroup = new THREE.InstancedBufferAttribute(new Float32Array(cap), 1);
+    rec.aPhase = new THREE.InstancedBufferAttribute(new Float32Array(cap), 1);
+    rec.aFocusW = new THREE.InstancedBufferAttribute(new Float32Array(cap), 1);
+    for (const a of [rec.aCell, rec.aGroup, rec.aPhase, rec.aFocusW]) {
+      a.setUsage(THREE.DynamicDrawUsage);
+    }
+    geo.setAttribute("aCell", rec.aCell);
+    geo.setAttribute("aGroup", rec.aGroup);
+    geo.setAttribute("aPhase", rec.aPhase);
+    geo.setAttribute("aFocusW", rec.aFocusW);
+    rec.mat = new THREE.ShaderMaterial({
+      uniforms: {
+        uMap: { value: rec.tex },
+        uGrain: uniforms.uGrain,
+        uTime: uniforms.uTime,
+        uFocusAmt: uniforms.uFocusAmt,
+        uDim: uniforms.uDim,
+        uDissolve: uniforms.uDissolve,
+        uProjFactor: uniforms.uProjFactor,
+        uTints: uniforms.uTints,
+        uGridDiv: { value: rec.div },
+      },
+      side: THREE.DoubleSide,
+      vertexShader: PANEL_VERT,
+      fragmentShader: PANEL_FRAG,
+    });
+    rec.mesh = new THREE.InstancedMesh(geo, rec.mat, cap);
+    rec.mesh.count = 0;
+    rec.mesh.frustumCulled = false;
+    rec.geo = geo;
+    structure.add(rec.mesh);
+  }
+  // The partition: group instances by their current page and write
+  // every per-mesh attribute from the logical arrays. Commit-time
+  // only (a few ms at 15k instances).
+  function rebuildPartition() {
+    const byPage = new Map();
+    for (let i = 0; i < panelCount; i++) {
+      const p = instPage[i];
+      let arr = byPage.get(p);
+      if (!arr) { arr = []; byPage.set(p, arr); }
+      arr.push(i);
+    }
+    for (const rec of pageRecs.values()) {
+      const list = byPage.get(rec.page) || [];
+      rec.list = list;
+      if (!rec.mesh) continue;
+      const n = Math.min(list.length, rec.capacity);
+      for (let k = 0; k < n; k++) {
+        const i = list[k];
+        rec.mesh.setMatrixAt(k, placements[i].matrix);
+        rec.aCell.array[k] = encCell(instCell[i], rec.div);
+        rec.aGroup.array[k] = placements[i].group;
+        rec.aPhase.array[k] = placements[i].phase;
+        rec.aFocusW.array[k] = focusW[i];
+      }
+      rec.mesh.count = rec.ready ? n : 0;
+      rec.mesh.instanceMatrix.needsUpdate = true;
+      rec.aCell.needsUpdate = true;
+      rec.aGroup.needsUpdate = true;
+      rec.aPhase.needsUpdate = true;
+      rec.aFocusW.needsUpdate = true;
+    }
+    stillDirty = true;
+  }
+  function syncFocusAttrs() {
+    for (const rec of pageRecs.values()) {
+      if (!rec.mesh) continue;
+      const list = rec.list;
+      const n = Math.min(list.length, rec.capacity);
+      for (let k = 0; k < n; k++) rec.aFocusW.array[k] = focusW[list[k]];
+      rec.aFocusW.needsUpdate = true;
+    }
+  }
   function setFocusWeights(groups) {
     const set = new Set(groups || []);
     placements.forEach((p, i) => {
@@ -579,7 +857,418 @@ export function createHelixScene(canvas, opts = {}) {
       // while the visitor is reading it.
       focusW[i] = set.has(p.group) ? 1.16 : 0.30;
     });
-    focusAttr.needsUpdate = true;
+    syncFocusAttrs();
+  }
+
+  // ---- texture loading -------------------------------------------
+  function prepPageTexture(tex) {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+    if (!tex.isCompressedTexture) {
+      tex.generateMipmaps = true;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+    }
+    return tex;
+  }
+  function disposeTexture(tex) {
+    if (!tex) return;
+    try { tex.dispose(); } catch (e) {}
+    if (tex.userData && tex.userData.bitmap && tex.userData.bitmap.close) {
+      try { tex.userData.bitmap.close(); } catch (e) {}
+    }
+  }
+  // WebP page loader: fetch + createImageBitmap WITH flipY (the
+  // gate-proven upright path), TextureLoader as the fallback (its
+  // default flipY is also upright). Resolves null on total failure.
+  function loadWebpTexture(url) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (t) => { if (!done) { done = true; resolve(t); } };
+      const viaLoader = () => {
+        try {
+          new THREE.TextureLoader().load(
+            url,
+            (t) => finish(t),
+            undefined,
+            () => finish(null)
+          );
+        } catch (e) { finish(null); }
+      };
+      if (typeof window !== "undefined" && window.fetch && window.createImageBitmap) {
+        window
+          .fetch(url)
+          .then((r) => {
+            if (!r || !r.ok) throw new Error("page fetch failed");
+            return r.blob();
+          })
+          .then((b) => window.createImageBitmap(b, { imageOrientation: "flipY" }))
+          .then((bmp) => {
+            if (disposed) {
+              if (bmp && bmp.close) bmp.close();
+              finish(null);
+              return;
+            }
+            const tex = new THREE.Texture(bmp);
+            tex.needsUpdate = true;
+            tex.userData.bitmap = bmp;
+            finish(tex);
+          })
+          .catch(() => {
+            if (!disposed) viaLoader();
+            else finish(null);
+          });
+      } else {
+        viaLoader();
+      }
+    });
+  }
+  // KTX2 (candidate 1, Joshua 2026-11-14 18:26): GPU-compressed
+  // segment pages. The loader chunk + transcoder load lazily; ANY
+  // failure permanently selects the WebP path for this session.
+  let ktx2Loader = null;
+  let ktx2Ready = false;
+  {
+    import("three/examples/jsm/loaders/KTX2Loader.js")
+      .then((mod) => {
+        try {
+          if (disposed) return;
+          const l = new mod.KTX2Loader();
+          l.setTranscoderPath("/basis/");
+          if (typeof l.setWorkerLimit === "function") l.setWorkerLimit(2);
+          l.detectSupport(renderer);
+          ktx2Loader = l;
+          ktx2Ready = true;
+        } catch (e) {
+          ktx2Ready = false;
+        }
+      })
+      .catch(() => { ktx2Ready = false; });
+  }
+  async function loadSegmentTexture(s) {
+    if (ktx2Ready && ktx2Loader) {
+      try {
+        const tex = await ktx2Loader.loadAsync(segmentKtx2Url(s));
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        return tex;
+      } catch (e) { /* fall through to the WebP page */ }
+    }
+    return loadWebpTexture(segmentUrl(s));
+  }
+
+  // Grain: a 1×1 neutral placeholder binds instantly (the FAR tier
+  // is a soft impression; the real grain page swaps in on arrival).
+  {
+    const ph = new THREE.DataTexture(new Uint8Array([43, 40, 36, 255]), 1, 1);
+    ph.colorSpace = THREE.SRGBColorSpace;
+    ph.needsUpdate = true;
+    uniforms.uGrain.value = ph;
+  }
+  loadWebpTexture(grainUrl).then((t) => {
+    if (!t) return;
+    if (disposed) { disposeTexture(t); return; }
+    prepPageTexture(t);
+    const old = uniforms.uGrain.value;
+    uniforms.uGrain.value = t;
+    if (old && old.isDataTexture) old.dispose();
+    stillDirty = true;
+    if (frozen || degraded || !running) renderStill();
+  });
+  // Starter: first paint. The starter mesh appears the moment its
+  // texture lands (the wire + dust already render without it).
+  loadWebpTexture(starterUrl).then((t) => {
+    if (!t) {
+      if (frozen) renderStill();
+      return;
+    }
+    if (disposed) { disposeTexture(t); return; }
+    prepPageTexture(t);
+    const rec = pageRec(PAGE_STARTER);
+    rec.tex = t;
+    rec.ready = true;
+    buildPageMesh(rec);
+    rebuildPartition();
+    if (frozen || degraded || !running) renderStill();
+    else if (running) renderFrame(performance.now());
+  });
+
+  // ---- segment lifecycle ------------------------------------------
+  const segState = SEG_POOLS.map(() => ({ status: "idle", tex: null, failAt: 0 }));
+  let segLoading = false;
+  function homePageOf(i) {
+    const s = instSeg[i];
+    if (segState[s].status === "active" && SEG_POOLS[s][placements[i].group]) return s + 1;
+    return PAGE_STARTER;
+  }
+  // The instance's canonical cell on its CURRENT home page: a
+  // pure function of (home page, band, rank), so a home page
+  // moving under a mirrored instance can never leak a card —
+  // the value is recomputed, never dealt.
+  function homeCellOf(i) {
+    const hp = homePageOf(i);
+    instHomePage[i] = hp;
+    const c = cellFor(hp, placements[i].group, rankOnPage(i, hp));
+    instHomeCell[i] = c >= 0 ? c : instBaseCell[i];
+    return instHomeCell[i];
+  }
+  const _pv = new THREE.Vector3();
+  const _cv = new THREE.Vector3();
+  // Sample a segment's panels: allFar = every visible sample is
+  // deep in the FAR tier (panel height ≤ ~5.8 device px, tierMix
+  // ≥ ~0.9) or off-frustum / behind the camera — the no-pop-in
+  // activation test. meanDist ranks eviction candidates.
+  function probeSegment(s) {
+    const list = segPanels[s];
+    const stride = Math.max(1, Math.floor(list.length / 24));
+    const pf = uniforms.uProjFactor.value || 800;
+    let allFar = true;
+    let sum = 0;
+    let n = 0;
+    for (let k = 0; k < list.length; k += stride) {
+      const i = list[k];
+      _pv.setFromMatrixPosition(placements[i].matrix);
+      structure.localToWorld(_pv);
+      _cv.copy(_pv).applyMatrix4(camera.matrixWorldInverse);
+      const fwd = -_cv.z;
+      if (fwd > 0) { sum += fwd; n++; }
+      if (fwd <= 0.1) continue;
+      if (0.8 * pf / fwd <= 5.8) continue;
+      _pv.project(camera);
+      if (Math.abs(_pv.x) <= 1.05 && Math.abs(_pv.y) <= 1.05) allFar = false;
+    }
+    return { allFar, meanDist: n ? sum / n : 0 };
+  }
+  function activateSegment(s) {
+    const st = segState[s];
+    if (st.status !== "resident") return false;
+    st.status = "active";
+    const page = s + 1;
+    const rec = pageRec(page);
+    rec.ready = true;
+    for (const i of segPanels[s]) {
+      if (!SEG_POOLS[s][placements[i].group]) continue;
+      const c = cellFor(page, placements[i].group, segSliceRank[i]);
+      if (mirrorSet.has(i)) {
+        // Mirrored instances keep sampling the live page; only
+        // their home moves to this page (same pure-function
+        // value they would get on any later home read).
+        instHomeCell[i] = c;
+        instHomePage[i] = page;
+        continue;
+      }
+      instPage[i] = page;
+      instCell[i] = c;
+      instHomeCell[i] = c;
+      instHomePage[i] = page;
+    }
+    rebuildPartition();
+    return true;
+  }
+  function evictSegment(s) {
+    const st = segState[s];
+    if (st.status === "idle" || st.status === "loading") return;
+    const page = s + 1;
+    if (st.status === "active") {
+      for (const i of segPanels[s]) {
+        // Homes return to the starter page's current-epoch cell
+        // (the pure-function value), for visible and mirrored
+        // instances of this segment alike.
+        const home = cellFor(PAGE_STARTER, placements[i].group, bandRank[i]);
+        if (instPage[i] === page) {
+          instPage[i] = PAGE_STARTER;
+          instCell[i] = home;
+          instHomeCell[i] = home;
+          instHomePage[i] = PAGE_STARTER;
+        } else if (mirrorSet.has(i) && instHomePage[i] === page) {
+          instHomeCell[i] = home;
+          instHomePage[i] = PAGE_STARTER;
+        }
+      }
+    }
+    st.status = "idle";
+    const rec = pageRec(page);
+    rec.ready = false;
+    if (rec.tex) { disposeTexture(rec.tex); rec.tex = null; }
+    st.tex = null;
+    rebuildPartition();
+  }
+  function evictOverflow() {
+    let guard = 0;
+    const activeCount = () => segState.filter((x) => x.status === "active").length;
+    while (activeCount() > MAX_RESIDENT_SEGMENTS && guard++ < 8) {
+      let best = -1;
+      let bestDist = -1;
+      for (let s = 0; s < 8; s++) {
+        if (segState[s].status !== "active") continue;
+        const probe = probeSegment(s);
+        if (probe.allFar && probe.meanDist > bestDist) {
+          best = s;
+          bestDist = probe.meanDist;
+        }
+      }
+      if (best < 0) return; // transient overflow stands (design rule 3)
+      evictSegment(best);
+    }
+  }
+  function loadSegment(s) {
+    const st = segState[s];
+    st.status = "loading";
+    segLoading = true;
+    loadSegmentTexture(s).then((tex) => {
+      segLoading = false;
+      if (disposed) {
+        if (tex) disposeTexture(tex);
+        st.status = "idle";
+        return;
+      }
+      if (!tex) {
+        st.status = "idle";
+        st.failAt = performance.now();
+        return;
+      }
+      st.tex = tex;
+      st.status = "resident";
+      const rec = pageRec(s + 1);
+      rec.tex = tex;
+      if (!rec.mesh) buildPageMesh(rec);
+      rec.mat.uniforms.uMap.value = tex;
+      stillDirty = true;
+    });
+  }
+  // Runs on the tick's 250 ms poll cadence (and only there): page
+  // arrivals, activations and evictions are commit-class events,
+  // never per-frame work.
+  function segmentHousekeeping() {
+    if (disposed || frozen || contextLost) return;
+    // Activations at legal moments only: bundled synchronously
+    // into a user-caused commit (see setDisplay), or — here, on
+    // the poll — when the whole segment sits in the FAR tier.
+    for (let s = 0; s < 8; s++) {
+      if (segState[s].status !== "resident") continue;
+      if (probeSegment(s).allFar) activateSegment(s);
+    }
+    evictOverflow();
+    // Loads: post-settle only, one at a time, nearest-first.
+    if (!booted || loadActive || segLoading) return;
+    const resident = segState.filter((x) => x.status !== "idle").length;
+    if (resident >= MAX_RESIDENT_SEGMENTS) {
+      // Free a slot only by dropping a FAR, never-activated texture
+      // (invisible by construction — no panel samples it).
+      let dropped = false;
+      for (let s = 0; s < 8; s++) {
+        if (segState[s].status === "resident" && probeSegment(s).allFar) {
+          evictSegment(s);
+          dropped = true;
+          break;
+        }
+      }
+      if (!dropped) return;
+    }
+    const nowMs = performance.now();
+    const candidates = [];
+    for (let s = 0; s < 8; s++) {
+      if (segState[s].status !== "idle") continue;
+      if (nowMs - segState[s].failAt < 30000) continue;
+      candidates.push({ s, d: probeSegment(s).meanDist });
+    }
+    if (!candidates.length) return;
+    candidates.sort((a, b) => a.d - b.d);
+    loadSegment(candidates[0].s);
+  }
+
+  // ---- live mirror page -------------------------------------------
+  // Mirroring v1: the current selection's top results typeset as
+  // title pages (zero wire — title/creator/year/collection are
+  // already on the page) on a 1024² canvas, bound to the lit prefix
+  // of the dominant band nearest its selection-label anchor.
+  const mirrorSet = new Map(); // instance -> live cell
+  const liveCanvas = document.createElement("canvas");
+  liveCanvas.width = 1024;
+  liveCanvas.height = 1024;
+  const liveCtx = liveCanvas.getContext("2d");
+  const liveTex = new THREE.CanvasTexture(liveCanvas);
+  liveTex.colorSpace = THREE.SRGBColorSpace;
+  liveTex.anisotropy = 4;
+  function drawMirrorCell(k, item) {
+    const CELL = 128;
+    const x0 = (k % LIVE_DIV) * CELL;
+    const y0 = ((k / LIVE_DIV) | 0) * CELL;
+    const plate = LANE_PLATE[item.collection] || "#4a4a44";
+    liveCtx.save();
+    liveCtx.beginPath();
+    liveCtx.rect(x0, y0, CELL, CELL);
+    liveCtx.clip();
+    liveCtx.fillStyle = "#0a0a09";
+    liveCtx.fillRect(x0, y0, CELL, CELL);
+    const pw = 84, ph = 116, px = x0 + (CELL - pw) / 2, py = y0 + (CELL - ph) / 2;
+    liveCtx.fillStyle = plate;
+    liveCtx.fillRect(px, py, pw, ph);
+    liveCtx.strokeStyle = "rgba(255,255,255,0.35)";
+    liveCtx.lineWidth = 1;
+    liveCtx.strokeRect(px + 3, py + 3, pw - 6, ph - 6);
+    liveCtx.fillStyle = "rgba(244,240,230,0.96)";
+    liveCtx.textAlign = "center";
+    const title = String(item.title || "Untitled");
+    liveCtx.font = "600 10px Georgia, 'Times New Roman', serif";
+    const words = title.split(/\s+/);
+    const lines = [];
+    let line = "";
+    for (const w of words) {
+      const test = line ? line + " " + w : w;
+      if (liveCtx.measureText(test).width > pw - 12 && line) {
+        lines.push(line);
+        line = w;
+        if (lines.length >= 6) break;
+      } else line = test;
+    }
+    if (line && lines.length < 7) lines.push(line);
+    lines.slice(0, 7).forEach((ln, li) => {
+      liveCtx.fillText(ln, x0 + CELL / 2, py + 20 + li * 13);
+    });
+    liveCtx.font = "6.5px Georgia, serif";
+    liveCtx.fillStyle = "rgba(244,240,230,0.75)";
+    const creator = String(item.creator || "").toUpperCase().slice(0, 30);
+    if (creator) liveCtx.fillText(creator, x0 + CELL / 2, py + ph - 14);
+    if (item.year) liveCtx.fillText(String(item.year), x0 + CELL / 2, py + ph - 5);
+    liveCtx.restore();
+  }
+  function clearMirror() {
+    if (!mirrorSet.size) return;
+    for (const i of mirrorSet.keys()) {
+      instPage[i] = homePageOf(i);
+      instCell[i] = homeCellOf(i);
+    }
+    mirrorSet.clear();
+  }
+  function bindMirror(items, domBand, litStations) {
+    clearMirror();
+    if (!items || !items.length) return;
+    const n = Math.min(items.length, LIVE_DIV * LIVE_DIV);
+    liveCtx.clearRect(0, 0, 1024, 1024);
+    for (let k = 0; k < n; k++) drawMirrorCell(k, items[k]);
+    liveTex.needsUpdate = true;
+    const rec = pageRec(PAGE_LIVE);
+    rec.tex = liveTex;
+    if (!rec.mesh) buildPageMesh(rec);
+    rec.ready = true;
+    const band = BANDS[domBand];
+    const frac = (ANCHOR_FRAC[domBand] + 0.28) % 1;
+    const aTheta = band.thetaStart + frac * (band.thetaEnd - band.thetaStart);
+    const first = groupFirst.get(domBand);
+    const litCount = Math.min(litStations[domBand] * ROWS, band.panels);
+    const cands = [];
+    for (let k = 0; k < litCount; k++) cands.push(first + k);
+    cands.sort(
+      (a, b) => Math.abs(placements[a].theta - aTheta) - Math.abs(placements[b].theta - aTheta)
+    );
+    const take = Math.min(n, cands.length);
+    for (let k = 0; k < take; k++) {
+      const i = cands[k];
+      mirrorSet.set(i, k);
+      instPage[i] = PAGE_LIVE;
+      instCell[i] = k;
+    }
   }
 
   // ---- reshape (Phase 2b, Joshua 2026-11-13 22:26): a refined
@@ -589,13 +1278,15 @@ export function createHelixScene(canvas, opts = {}) {
   //     the combination's exact share of that band (facet count ÷
   //     band total), expressed through the same per-instance focus
   //     weights + damped uFocusAmt machinery as focus mode;
-  //   re-skin — lit instances' atlas cells are re-rolled from their
-  //     own band's cell pool, seeded by the selection signature, so
-  //     the lit coil wears the selection's collections afresh;
-  //     unlit instances return to their canonical cells;
+  //   re-skin — lit instances deal a fresh cell from their own
+  //     band's pool ON THE PAGE THEY CURRENTLY SAMPLE (deck-dealt,
+  //     no repeats within the deal); unlit instances return to
+  //     their canonical home cells; the selection's top results
+  //     mirror onto the dominant band via the live page;
   //   dissolve — uDissolve dips to ~0.22 on commit and damps back
   //     to 1 over ~700 ms, so the re-form reads as a dissolve, not
-  //     a pop.
+  //     a pop. A segment page activation bundled into this commit
+  //     rides the same dissolve (no-pop-in rule).
   // Weights and cells are computed into scratch buffers and copied
   // over only after the whole state validates — a malformed state
   // leaves the previous scene state untouched. Per-selection work
@@ -604,20 +1295,9 @@ export function createHelixScene(canvas, opts = {}) {
   let pendingReshape = null; // latest-wins stash while the stream runs
   let selLabel = null;       // bound in the labels block below
   let dissolveCur = 1;
+  let focusAmtCur = 0;
+  let focusAmtTgt = 0;
   const scratchFocus = new Float32Array(panelCount);
-  const scratchCells = new Float32Array(panelCount * 2);
-  const stationOf = new Int32Array(panelCount);
-  placements.forEach((p, i) => {
-    stationOf[i] = ((i - groupFirst.get(p.group)) / ROWS) | 0;
-  });
-  function sigHash(str) {
-    let h = 2166136261;
-    for (let i = 0; i < str.length; i++) {
-      h ^= str.charCodeAt(i);
-      h = Math.imul(h, 16777619);
-    }
-    return h >>> 0;
-  }
   function applyReshape(state) {
     const facetsIn = state.facets;
     if (!facetsIn || typeof facetsIn !== "object") return false;
@@ -643,26 +1323,37 @@ export function createHelixScene(canvas, opts = {}) {
     const litStations = BANDS.map((g, b) =>
       Math.round(clamp01(facets[b] / Math.max(1, g.count)) * g.stations)
     );
-    const rng = mulberry32(sigHash((state.name || "") + "#" + total + "#" + facets.join(",")));
+    // Skinning: every instance of a facet-positive band gets
+    // the band's NEW-epoch pure-function cell on its current
+    // page, lit or not (dealing only the lit subset would leave
+    // the unlit tail on the older epoch's cells — two rotations
+    // mixed in one pool). Unlit instances stay dimmed; only
+    // their cells change. Zero-facet bands are untouched (home
+    // cells). The epoch bump happens first, so the whole band
+    // rotates together.
+    for (let b = 0; b < BANDS.length; b++) if (facets[b] > 0) bandEpoch[b]++;
+    clearMirror();
     for (let i = 0; i < panelCount; i++) {
-      const g = groupsAttr[i];
+      const g = placements[i].group;
       if (stationOf[i] < litStations[g]) {
         scratchFocus[i] = 1.16;
-        const band = BANDS[g];
-        const ci = band.cellStart + ((rng() * (band.cellEnd - band.cellStart)) | 0);
-        scratchCells[i * 2] = ci % ATLAS_COLS;
-        scratchCells[i * 2 + 1] = ATLAS_ROWS - 1 - ((ci / ATLAS_COLS) | 0);
+        instCell[i] = cellFor(instPage[i], g, rankOnPage(i, instPage[i]));
+        instHomeCell[i] = instCell[i];
+        instHomePage[i] = instPage[i];
+      } else if (facets[g] > 0) {
+        scratchFocus[i] = 0.30;
+        instCell[i] = cellFor(instPage[i], g, rankOnPage(i, instPage[i]));
+        instHomeCell[i] = instCell[i];
+        instHomePage[i] = instPage[i];
       } else {
         scratchFocus[i] = 0.30;
-        scratchCells[i * 2] = baseCells[i * 2];
-        scratchCells[i * 2 + 1] = baseCells[i * 2 + 1];
+        instCell[i] = homeCellOf(i);
       }
     }
+    bindMirror(state.items, dom, litStations);
     // Commit.
     focusW.set(scratchFocus);
-    focusAttr.needsUpdate = true;
-    cells.set(scratchCells);
-    cellAttr.needsUpdate = true;
+    rebuildPartition();
     focusRotTarget = null;
     mode = "reshape";
     focusGroups = BANDS.filter((g, b) => facets[b] > 0).map((g) => g.index);
@@ -685,67 +1376,6 @@ export function createHelixScene(canvas, opts = {}) {
       selLabel.el.style.fontSize = Math.round(selLabel.basePx * labelScale) + "px";
     }
     return true;
-  }
-
-  let disposed = false;
-  let degraded = false;
-  let running = false;
-  let atlasTexture = null;
-  let atlasBitmap = null;
-  const applyAtlasTexture = (tex) => {
-    if (disposed) { tex.dispose(); return; }
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-    tex.generateMipmaps = true;
-    tex.minFilter = THREE.LinearMipmapLinearFilter;
-    tex.magFilter = THREE.LinearFilter;
-    atlasTexture = tex;
-    uniforms.uMap.value = tex;
-    structure.add(mesh);
-    stillDirty = true;
-    if (frozen || degraded || !running) renderStill();
-    else if (running) renderFrame(performance.now());
-  };
-  const loadAtlasTextureLoader = () => {
-    new THREE.TextureLoader().load(
-      atlasUrl,
-      (tex) => applyAtlasTexture(tex),
-      undefined,
-      () => {
-        if (frozen) renderStill();
-      }
-    );
-  };
-  // Smoothness repair (2026-11-14): decode the atlas OFF the main
-  // thread via createImageBitmap where available — TextureLoader's
-  // <img> decode of the 4096px atlas can block the main thread
-  // during the page's opening seconds on the phone. Any failure
-  // falls back to the original TextureLoader path; texture
-  // parameters and the rendered result are identical either way
-  // (pixel-verified against the loader path in the gate).
-  if (typeof window !== "undefined" && window.fetch && window.createImageBitmap) {
-    window
-      .fetch(atlasUrl)
-      .then((r) => {
-        if (!r || !r.ok) throw new Error("atlas fetch failed");
-        return r.blob();
-      })
-      .then((b) => window.createImageBitmap(b))
-      .then((bmp) => {
-        if (disposed) {
-          if (bmp && bmp.close) bmp.close();
-          return;
-        }
-        atlasBitmap = bmp;
-        const tex = new THREE.Texture(bmp);
-        tex.needsUpdate = true;
-        applyAtlasTexture(tex);
-      })
-      .catch(() => {
-        if (!disposed && !atlasTexture) loadAtlasTextureLoader();
-      });
-  } else {
-    loadAtlasTextureLoader();
   }
 
   // ---- wire + threads: two red strands spiralling around the tube
@@ -1014,6 +1644,13 @@ export function createHelixScene(canvas, opts = {}) {
   // the hero layer's DOCUMENT space (ship-1 fix: the layer scrolls
   // with the hero; its cached document offset is scroll-invariant,
   // and the render loop does no layout reads).
+  // Reel-fidelity (2026-11-14): a label is placed BESIDE its coil —
+  // centered on its anchor's projection, then pushed radially
+  // outward on screen (away from the axis projection) so it clears
+  // the panels and sits at its own band's height. The previous
+  // build floated every label ABOVE its anchor (translate -135%),
+  // which read as words hovering at the top of the spiral in both
+  // the side and top-down framings — the defect Joshua flagged.
   const bandLabels = [];
   if (labelsEl) {
     BANDS.forEach((g) => {
@@ -1045,6 +1682,8 @@ export function createHelixScene(canvas, opts = {}) {
         op: 0,
         sx: 0,
         sy: 0,
+        ax: 0,
+        ay: 0,
       });
     });
     // Selection label (Phase 2b): ONE dynamic label in the same
@@ -1074,6 +1713,8 @@ export function createHelixScene(canvas, opts = {}) {
       op: 0,
       sx: 0,
       sy: 0,
+      ax: 0,
+      ay: 0,
       active: false,
     };
   }
@@ -1086,6 +1727,7 @@ export function createHelixScene(canvas, opts = {}) {
   const _v2 = new THREE.Vector3();
   const _v3 = new THREE.Vector3();
   const _scr = { x: 0, y: 0, behind: false };
+  const _asc = { x: 0, y: 0, behind: false };
   function projectToScreen(v3, out) {
     _v3.copy(v3).project(camera);
     out.x = (_v3.x * 0.5 + 0.5) * viewW;
@@ -1093,6 +1735,26 @@ export function createHelixScene(canvas, opts = {}) {
     out.behind = _v3.z > 1;
     return out;
   }
+  // Screen position for a label: its anchor's projection pushed
+  // radially outward (away from the axis projection) so the label
+  // body clears the coil silhouette and sits beside its band.
+  function labelPos(L, out) {
+    let dx = L.sx - L.ax;
+    let dy = L.sy - L.ay;
+    const len = Math.hypot(dx, dy);
+    if (len > 0.001) {
+      dx /= len;
+      dy /= len;
+    } else {
+      dx = 1;
+      dy = 0;
+    }
+    const push = 24 + Math.min(30, (L.w || 0) * 0.22);
+    out.x = L.sx + dx * push;
+    out.y = L.sy + dy * push;
+    return out;
+  }
+  const _lp = { x: 0, y: 0 };
   function updateLabels() {
     if (!labelsEl) return;
     const offX = -labelDocX;
@@ -1117,6 +1779,9 @@ export function createHelixScene(canvas, opts = {}) {
       const s = projectToScreen(world, _scr);
       L.sx = s.x + offX;
       L.sy = s.y + offY;
+      const as = projectToScreen(axisW, _asc);
+      L.ax = as.x + offX;
+      L.ay = as.y + offY;
       if (s.behind || L.sx < -80 || L.sx > W + 80 || L.sy < -60 || L.sy > H + 60) op = 0;
       if (!L.w) { L.w = L.el.offsetWidth; L.h = L.el.offsetHeight; }
       // Hero text avoidance: a label whose center sits under the
@@ -1156,8 +1821,9 @@ export function createHelixScene(canvas, opts = {}) {
     for (const L of bandLabels) {
       L.el.style.opacity = String(0.96 * L.op);
       if (L.op > 0.01) {
+        labelPos(L, _lp);
         L.el.style.transform =
-          "translate3d(" + L.sx.toFixed(1) + "px," + L.sy.toFixed(1) + "px,0) translate(-50%,-135%)";
+          "translate3d(" + _lp.x.toFixed(1) + "px," + _lp.y.toFixed(1) + "px,0) translate(-50%,-50%)";
       }
     }
     // Selection label: same facing + hero-avoidance treatment as a
@@ -1180,6 +1846,9 @@ export function createHelixScene(canvas, opts = {}) {
         const s = projectToScreen(world, _scr);
         selLabel.sx = s.x + offX;
         selLabel.sy = s.y + offY;
+        const as = projectToScreen(axisW, _asc);
+        selLabel.ax = as.x + offX;
+        selLabel.ay = as.y + offY;
         if (s.behind || selLabel.sx < -80 || selLabel.sx > W + 80 || selLabel.sy < -60 || selLabel.sy > H + 60) op = 0;
         if (!selLabel.w) { selLabel.w = selLabel.el.offsetWidth; selLabel.h = selLabel.el.offsetHeight; }
         if (op > 0 && avoidRects.length) {
@@ -1194,15 +1863,14 @@ export function createHelixScene(canvas, opts = {}) {
       }
       selLabel.el.style.opacity = String(0.96 * op);
       if (op > 0.01) {
+        labelPos(selLabel, _lp);
         selLabel.el.style.transform =
-          "translate3d(" + selLabel.sx.toFixed(1) + "px," + selLabel.sy.toFixed(1) + "px,0) translate(-50%,-135%)";
+          "translate3d(" + _lp.x.toFixed(1) + "px," + _lp.y.toFixed(1) + "px,0) translate(-50%,-50%)";
       }
     }
   }
 
   // ---- lift animation (per frame, damped, allocation-free)
-  let focusAmtCur = 0;
-  let focusAmtTgt = 0;
   const _aw = new THREE.Vector3();
   const _tw = new THREE.Vector3();
   function updateLift(dt) {
@@ -1304,6 +1972,7 @@ export function createHelixScene(canvas, opts = {}) {
   let fpsWindowStart = 0;
   let fpsWindowFrames = 0;
   let lowDprWindows = 0;
+  let goodDprWindows = 0;
   let stillDirty = true;
   let lastScrollAt = -1e9;
   let loadPollAt = 0;
@@ -1343,6 +2012,11 @@ export function createHelixScene(canvas, opts = {}) {
     const dt = lastRender ? Math.min(0.1, (now - lastRender) / 1000) : 0.016;
     if (booted) sceneTime += dt;
     uniforms.uTime.value = sceneTime;
+    // Tier projection factor: drawing-buffer height over the
+    // frustum height at unit distance (device px per world unit).
+    const dbh = renderer.domElement.height || 1;
+    uniforms.uProjFactor.value =
+      dbh / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)));
     if (mode === "focus" && focusRotTarget != null) {
       // Focus tracking (2026-11-14): damp the rotation to the held
       // angle and stop there. Before this fix the structure kept
@@ -1423,21 +2097,7 @@ export function createHelixScene(canvas, opts = {}) {
     // final), polled a few times a second. The moment neither is
     // present, the full-rate glide above returns unchanged.
     const scrolling = now - lastScrollAt < 180;
-    if (now - loadPollAt > 250) {
-      loadPollAt = now;
-      try {
-        loadActive = !!document.querySelector(
-          ".tower-index--loading, .tf2-note--cataloging"
-        );
-      } catch (e) { /* keep previous */ }
-    }
-    // A reshape stashed during the stream applies the moment the
-    // load markers clear (Phase 2b streaming safety).
-    if (!loadActive && pendingReshape) {
-      const s = pendingReshape;
-      pendingReshape = null;
-      setDisplay(s);
-    }
+    if (now - loadPollAt > 250) pollCycle(now);
     if ((!scrolling || loadActive) && lastRender && now - lastRender < FRAME_MS - 1) return;
     renderFrame(now);
     if (!fpsWindowStart) { fpsWindowStart = now; loopStart = now; }
@@ -1466,25 +2126,17 @@ export function createHelixScene(canvas, opts = {}) {
         // the tap in Joshua's second recording. Holding the counter
         // at 2 makes the ladder re-evaluate at the next window,
         // once the rig has settled.
+        const rigTgt = modeTarget(sceneTime);
+        const inTransit =
+          Math.abs(rigTgt.dist - rigCur.dist) > 0.75 ||
+          Math.abs(rigTgt.tgtY - rigCur.tgtY) > 0.75 ||
+          Math.abs(rigTgt.elev - rigCur.elev) > 0.02 ||
+          Math.abs(focusAmtTgt - focusAmtCur) > 0.01 ||
+          Math.abs(liftTarget - liftAmt) > 0.01;
         if (fps < 24 && dprTier < DPR_LADDER.length - 1) {
           lowDprWindows++;
+          goodDprWindows = 0;
           if (lowDprWindows >= 2) {
-            // In transit = the damped rig has not converged on its
-            // mode target (a filter tap's flight), or the focus /
-            // lift ramps are still running. (Repaired 2026-11-13:
-            // this check used to reference camPos / camTgt /
-            // liftTgt / liftAmtCur, which exist nowhere in this
-            // file — evaluating it threw a ReferenceError every
-            // time the ladder reached it, so the DPR step never
-            // applied. The real state is rigCur vs modeTarget()
-            // plus the liftTarget / liftAmt pair.)
-            const rigTgt = modeTarget(sceneTime);
-            const inTransit =
-              Math.abs(rigTgt.dist - rigCur.dist) > 0.75 ||
-              Math.abs(rigTgt.tgtY - rigCur.tgtY) > 0.75 ||
-              Math.abs(rigTgt.elev - rigCur.elev) > 0.02 ||
-              Math.abs(focusAmtTgt - focusAmtCur) > 0.01 ||
-              Math.abs(liftTarget - liftAmt) > 0.01;
             if (now - lastScrollAt < 700 || inTransit) {
               lowDprWindows = 2;
             } else {
@@ -1493,8 +2145,21 @@ export function createHelixScene(canvas, opts = {}) {
               applyDpr();
             }
           }
+        } else if (fps >= 29 && dprTier > 0) {
+          // Adaptive resolution, up-step (candidate 3): sustained
+          // full-rate windows earn the sharper tier back — same
+          // mid-scroll / mid-flight guards as the step-down.
+          lowDprWindows = 0;
+          if (now - lastScrollAt < 700 || inTransit) {
+            goodDprWindows = 0;
+          } else if (++goodDprWindows >= 3) {
+            dprTier--;
+            goodDprWindows = 0;
+            applyDpr();
+          }
         } else {
           lowDprWindows = 0;
+          goodDprWindows = 0;
         }
       }
       fpsWindowStart = now;
@@ -1502,14 +2167,50 @@ export function createHelixScene(canvas, opts = {}) {
     }
   }
 
+  // One poll cycle: read the page's load markers, release a stashed
+  // reshape the moment the stream clears, and advance the atlas page
+  // lifecycle. Runs on the render tick's 250 ms cadence while the
+  // loop is alive; a 1 s fallback interval (below) drives the same
+  // cycle when the loop is parked — the fps degrade park or a hidden
+  // tab — because page loads/activations are state progression, not
+  // rendering: without it, a device that parks during the catalog
+  // load would keep starter cells forever even though every legal
+  // activation moment (whole segment in the far tier, or a bundled
+  // commit) is still being honored by segmentHousekeeping itself.
+  function pollCycle(now) {
+    loadPollAt = now;
+    try {
+      loadActive = !!document.querySelector(
+        ".tower-index--loading, .tf2-note--cataloging"
+      );
+    } catch (e) { /* keep previous */ }
+    // A reshape stashed during the stream applies the moment the
+    // load markers clear (Phase 2b streaming safety).
+    if (!loadActive && pendingReshape) {
+      const s = pendingReshape;
+      pendingReshape = null;
+      setDisplay(s);
+    }
+    segmentHousekeeping();
+  }
+  const pollTimer = setInterval(() => {
+    if (disposed) {
+      clearInterval(pollTimer);
+      return;
+    }
+    const now = performance.now();
+    if (now - loadPollAt > 900) pollCycle(now);
+  }, 1000);
+
   function start() {
-    if (frozen || disposed || degraded || running) return;
+    if (frozen || disposed || degraded || running || contextLost) return;
     running = true;
     lastRender = 0;
     fpsWindowStart = 0;
     fpsWindowFrames = 0;
     loopStart = 0;
     lowDprWindows = 0;
+    goodDprWindows = 0;
     raf = requestAnimationFrame(tick);
   }
   function stop() {
@@ -1518,7 +2219,7 @@ export function createHelixScene(canvas, opts = {}) {
     raf = 0;
   }
   function renderStill() {
-    if (disposed) return;
+    if (disposed || contextLost) return;
     uniforms.uTime.value = sceneTime;
     structure.rotation.y = rotCur;
     structure.position.y = Math.sin(sceneTime * 0.07) * 0.9;
@@ -1562,20 +2263,21 @@ export function createHelixScene(canvas, opts = {}) {
     } else if (state.kind === "focus" && Array.isArray(state.groups) && state.groups.length) {
       pendingReshape = null;
       if (selLabel) selLabel.active = false;
+      if (mirrorSet.size) { clearMirror(); rebuildPartition(); }
       mode = "focus";
       focusGroups = state.groups.slice();
       setFocusWeights(focusGroups);
       const ys = focusGroups.map((i) => BANDS[i].yMid);
       focusY = ys.reduce((a, b) => a + b, 0) / ys.length;
       const span = Math.max(...ys) - Math.min(...ys);
-      // Visual containment (2026-11-13): the focus flight no longer
-      // dives to ~0.42× distance. On the phone that put the lit
-      // band's near turn a few units from the camera — a wall of
-      // giant covers filling the viewport behind the filter panel.
-      // At a 0.66 floor the flight still clearly travels to the
-      // segment and the segment still lights, but the near rope
-      // stays rope-sized.
-      focusDistMul = Math.min(0.88, Math.max(0.66, 0.62 + span / 110));
+      // Reel-fidelity push-in (2026-11-14, Joshua 18:05): the
+      // flight ends framed ON the chosen band — the section fills
+      // the frame's middle, its label large beside it, neighbours
+      // above and below. This supersedes the 2026-11-13
+      // containment floor (0.66): at 0.50–0.64× the band's turns
+      // span the frame height on the phone profile while the near
+      // rope stays ~25 units out — rope-sized, not a wall.
+      focusDistMul = Math.min(0.64, Math.max(0.50, 0.48 + span / 130));
       focusAmtTgt = 1;
       liftTarget = 0;
       // Focus tracking target: the rotation angle — the equivalent
@@ -1602,6 +2304,7 @@ export function createHelixScene(canvas, opts = {}) {
       pendingReshape = null;
       focusRotTarget = null;
       if (selLabel) selLabel.active = false;
+      if (mirrorSet.size) { clearMirror(); rebuildPartition(); }
       const items = state.items.slice(0, LIFT_MAX);
       const sig = items.map((i) => (i.title || "") + "|" + (i.creator || "")).join("§");
       if (sig !== liftSig) {
@@ -1619,10 +2322,30 @@ export function createHelixScene(canvas, opts = {}) {
       pendingReshape = null;
       focusRotTarget = null;
       if (selLabel) selLabel.active = false;
+      if (mirrorSet.size) { clearMirror(); rebuildPartition(); }
       mode = "idle";
       focusGroups = [];
       focusAmtTgt = 0;
       liftTarget = 0;
+    }
+    // Bundled activation (no-pop-in rule b): resident segment pages
+    // swap in SYNCHRONOUSLY under this commit's own transition —
+    // the reshape dissolve, the focus flight + weight ramp, or the
+    // lift animation — never as a standalone visible pop. An idle
+    // commit has no transition to ride, so it only activates
+    // segments that pass the FAR test. Focus/lift commits that
+    // carried an activation also dip the dissolve briefly so the
+    // swap reads as part of the commit (reshape already dips).
+    {
+      let activated = false;
+      for (let s = 0; s < 8; s++) {
+        if (segState[s].status !== "resident") continue;
+        if (state.kind === "idle" && !probeSegment(s).allFar) continue;
+        if (activateSegment(s)) activated = true;
+      }
+      if (activated && (state.kind === "focus" || state.kind === "lift")) {
+        dissolveCur = Math.min(dissolveCur, 0.5);
+      }
     }
     if (frozen || degraded || !running) {
       stillDirty = true;
@@ -1661,22 +2384,127 @@ export function createHelixScene(canvas, opts = {}) {
   };
   window.addEventListener("resize", onResize);
 
+  // Candidate 2 (2026-11-14): pause rendering while the tab is
+  // hidden (HelixCanvas also stops/starts on visibility; both are
+  // idempotent, and this handler only resumes a loop IT paused).
+  let hiddenWasRunning = false;
+  const onVis = () => {
+    if (document.hidden) {
+      hiddenWasRunning = running;
+      stop();
+    } else if (hiddenWasRunning) {
+      hiddenWasRunning = false;
+      if (!frozen && !degraded && booted) start();
+    }
+  };
+  document.addEventListener("visibilitychange", onVis);
+
+  // Context loss (candidate 1 companion): prevent the default
+  // (which would kill the context permanently), stop the loop, and
+  // on restore force every texture + buffer to re-upload, then
+  // resume. The scene's logical state (assignments, decks, rig)
+  // lives on the CPU and survives untouched.
+  const onCtxLost = (e) => {
+    try { e.preventDefault(); } catch (err) {}
+    contextLost = true;
+    stop();
+  };
+  const onCtxRestored = () => {
+    contextLost = false;
+    for (const rec of pageRecs.values()) {
+      if (rec.tex) rec.tex.needsUpdate = true;
+    }
+    if (uniforms.uGrain.value) uniforms.uGrain.value.needsUpdate = true;
+    liveTex.needsUpdate = true;
+    liftTex.needsUpdate = true;
+    scene.traverse((o) => {
+      if (o.geometry && o.geometry.attributes) {
+        for (const k of Object.keys(o.geometry.attributes)) {
+          o.geometry.attributes[k].needsUpdate = true;
+        }
+      }
+      if (o.isInstancedMesh && o.instanceMatrix) o.instanceMatrix.needsUpdate = true;
+    });
+    stillDirty = true;
+    if (!frozen && !degraded && booted) start();
+    else renderStill();
+  };
+  canvas.addEventListener("webglcontextlost", onCtxLost);
+  canvas.addEventListener("webglcontextrestored", onCtxRestored);
+
   if (frozen) renderStill();
 
-  return {
+  const controller = {
     start,
     stop,
     renderStill,
     isDegraded: () => degraded,
     setSettled,
     setDisplay,
+    // Read-only inspection for gates + the error-watch lane:
+    // light state by default; full=true adds the per-instance
+    // assignment arrays (page / cell / home cell / segment).
+    debugState(full) {
+      const out = {
+        panelCount,
+        booted,
+        loadActive,
+        mode,
+        mirror: mirrorSet.size,
+        pages: [...pageRecs.values()].map((r) => ({
+          page: r.page,
+          ready: r.ready,
+          count: r.mesh ? r.mesh.count : 0,
+          tex: r.tex
+            ? {
+                format: r.tex.format,
+                compressed: !!r.tex.isCompressedTexture,
+                w: r.tex.image ? r.tex.image.width : null,
+                h: r.tex.image ? r.tex.image.height : null,
+              }
+            : null,
+        })),
+        segments: segState.map((s) => s.status),
+        decks: [...orders.entries()].map(([k, o]) => ({
+          key: k,
+          size: o.length,
+          dealt: 0,
+        })),
+        bandEpoch: bandEpoch.slice(),
+      };
+      if (full) {
+        out.assignments = {
+          page: Array.from(instPage),
+          cell: Array.from(instCell),
+          home: Array.from(instHomeCell),
+          homePage: Array.from(instHomePage),
+          seg: Array.from(instSeg),
+          group: placements.map((p) => p.group),
+        };
+      }
+      return out;
+    },
     dispose() {
       disposed = true;
       stop();
       window.removeEventListener("scroll", onScrollMark);
       window.removeEventListener("resize", onResize);
+      document.removeEventListener("visibilitychange", onVis);
+      canvas.removeEventListener("webglcontextlost", onCtxLost);
+      canvas.removeEventListener("webglcontextrestored", onCtxRestored);
       window.clearTimeout(resizeTimer);
       if (labelsEl) labelsEl.innerHTML = "";
+      if (ktx2Loader && typeof ktx2Loader.dispose === "function") {
+        try { ktx2Loader.dispose(); } catch (e) {}
+      }
+      for (const rec of pageRecs.values()) {
+        if (rec.tex && rec.tex !== liveTex) disposeTexture(rec.tex);
+        rec.tex = null;
+      }
+      if (uniforms.uGrain.value) {
+        try { uniforms.uGrain.value.dispose(); } catch (e) {}
+        uniforms.uGrain.value = null;
+      }
       scene.traverse((o) => {
         if (o.geometry) o.geometry.dispose();
         if (o.material) {
@@ -1684,11 +2512,16 @@ export function createHelixScene(canvas, opts = {}) {
           mats.forEach((mm) => mm.dispose());
         }
       });
-      if (atlasTexture) atlasTexture.dispose();
-      if (atlasBitmap && atlasBitmap.close) atlasBitmap.close();
+      basePanelGeo.dispose();
+      liveTex.dispose();
       liftTex.dispose();
       try { renderer.dispose(); } catch (e) {}
       try { renderer.forceContextLoss(); } catch (e) {}
+      try { if (window.__helixScene === controller) delete window.__helixScene; } catch (e) {}
     },
   };
+  try {
+    if (typeof window !== "undefined") window.__helixScene = controller;
+  } catch (e) {}
+  return controller;
 }

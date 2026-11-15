@@ -3704,14 +3704,20 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           bs.collKey === collKey
         ) {
           count = browseResult.count;
-          topArtifacts = browseResult.indices
-            .slice(0, 50)
-            .map((ix) => artifacts[ix])
-            .filter(Boolean);
-          sampleArtifacts = browseResult.indices
-            .slice(0, 200)
-            .map((ix) => artifacts[ix])
-            .filter(Boolean);
+          // Array.from is load-bearing: browseResult.indices is a
+          // Uint32Array, and TypedArray.prototype.map coerces mapped
+          // values back to numbers — the artifact objects became 0s
+          // and both lists filtered to empty (the same trap the
+          // results window documents). With plain arrays the sample
+          // tally below and the scene's result mirroring receive the
+          // real records.
+          topArtifacts = Array.from(browseResult.indices.slice(0, 50), (ix) =>
+            artifacts[ix],
+          ).filter(Boolean);
+          sampleArtifacts = Array.from(
+            browseResult.indices.slice(0, 200),
+            (ix) => artifacts[ix],
+          ).filter(Boolean);
           facetSource = { indices: browseResult.indices };
         }
       }
@@ -3831,7 +3837,23 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
             const name = searching
               ? "“" + q.trim() + "”" + (summary ? " · " + summary : "")
               : summary || "Selection";
-            reshapeState = { kind: "reshape", facets, total: count, name };
+            reshapeState = {
+              kind: "reshape",
+              facets,
+              total: count,
+              name,
+              // Mirroring v1 (atlas-scale): the selection's top
+              // results ride along so the scene can typeset them
+              // onto the dominant band's lit segment (live page).
+              items: (sampleArtifacts || topArtifacts || [])
+                .slice(0, 64)
+                .map((a) => ({
+                  title: a.title || "",
+                  creator: a.creator || "",
+                  year: a.year || null,
+                  collection: a.collection || "",
+                })),
+            };
           }
         }
         state = reshapeState || (groups ? { kind: "focus", groups } : { kind: "idle" });
