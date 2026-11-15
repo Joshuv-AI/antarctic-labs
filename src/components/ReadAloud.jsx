@@ -14,8 +14,13 @@
 //    utterance chunks (~180 words, broken at sentence ends) because browsers
 //    mishandle very long utterances.
 //  - speechSynthesis boundary events (charIndex) drive the highlight. iOS
-//    Safari often never fires boundary events, so if none arrive within a
-//    few seconds we fall back to timer-estimated word timing (150 WPM).
+//    Safari often never fires boundary events — and when it does, they
+//    can coarsen to sentence granularity or stop mid-utterance — so a
+//    timer fill advances the highlight word-by-word from the last known
+//    word (chunk start, or the latest event) at 150 WPM whenever events
+//    go quiet. The highlight only ever names ONE word: an event that
+//    reports a span (charLength) still paints just the word at its
+//    charIndex, and the fill never crosses the chunk's end.
 //  - Pause = cancel + remember word index (pause()/resume() is unreliable
 //    cross-browser, especially on iOS). Play resumes from the saved word.
 // ---------------------------------------------------------------------------
@@ -208,6 +213,11 @@ function useReadAloudLegacy({ text, getStartOffset, chunkElsRef, chunkStarts, on
       utter.pitch = 1;
       E.chunkChar0 = E.words[ch.from].s;
       E.boundarySeen = false;
+      // Timer-fill anchor: the last point where the spoken word is
+      // known — the chunk's first word at speech start, then every
+      // boundary event re-anchors it (see the watchdog).
+      E.anchorWi = ch.from;
+      E.anchorAt = 0;
       E.utter = utter;
 
       utter.onboundary = (ev) => {
@@ -216,13 +226,25 @@ function useReadAloudLegacy({ text, getStartOffset, chunkElsRef, chunkStarts, on
         if (!E2 || E2.utter !== utter) return;
         E2.boundarySeen = true;
         E2.errStreak = 0;
-        // charIndex is relative to this utterance's text.
+        // charIndex is relative to this utterance's text. Some engines
+        // report a span (a charLength covering a phrase or a sentence):
+        // the highlight still takes only the single word at charIndex.
         const gChar = E2.chunkChar0 + ev.charIndex;
         // Words advance monotonically: scan forward from the last word.
         let wi = E2.lastWi;
         while (wi + 1 < E2.words.length && E2.words[wi + 1].s <= gChar) wi++;
         while (wi > 0 && E2.words[wi].s > gChar) wi--;
+        // The timer fill may already be ahead of a late or batched
+        // event: never paint backwards. The event still counts as
+        // liveness and re-anchors the fill at the current word.
+        if (wi < E2.lastWi) {
+          E2.anchorWi = E2.lastWi;
+          E2.anchorAt = Date.now();
+          return;
+        }
         E2.lastWi = wi;
+        E2.anchorWi = wi;
+        E2.anchorAt = Date.now();
         setWordIdx(wi);
         if (onWord) onWord(E2.words[wi].s, E2.words[wi].e, wi);
       };
@@ -259,8 +281,15 @@ function useReadAloudLegacy({ text, getStartOffset, chunkElsRef, chunkStarts, on
       synth.speak(utter);
 
       // One watchdog interval per utterance:
-      //  - iOS Safari often never fires boundary events: until one
-      //    arrives, advance the highlight on a timer (150 WPM).
+      //  - Word-timing fill (150 WPM): boundary events are the truth
+      //    while they flow, but iOS may never fire them, coarsen them
+      //    to sentence granularity, or stop them mid-utterance — with
+      //    the old boundarySeen latch the highlight then froze for
+      //    the rest of the chunk. Now, whenever the last anchor
+      //    (chunk start, or the latest event) goes quiet, the fill
+      //    advances the highlight word-by-word from that anchor:
+      //    always exactly one word, never past the chunk's end,
+      //    never backwards.
       //  - Chrome stalls long utterances (~15 s, remote voices): a
       //    periodic resume() keeps the speech going.
       //  - If the browser silently dropped the utterance (nothing
@@ -268,22 +297,25 @@ function useReadAloudLegacy({ text, getStartOffset, chunkElsRef, chunkStarts, on
       //    once — silently, never with an error.
       clearTimer();
       E.chunkT0 = Date.now();
+      E.anchorAt = E.chunkT0;
       E.lastResume = Date.now();
       E.dropped = false;
       E.timer = setInterval(() => {
         const E2 = eng.current;
         if (!E2 || E2.utter !== utter || statusRef.current !== "playing") return;
         const now = Date.now();
-        if (!E2.boundarySeen) {
-          const elapsed = now - E2.chunkT0;
+        const anchorAt = E2.anchorAt || E2.chunkT0;
+        // Events get a longer grace than the cold start: a healthy
+        // event stream at any speed fires far more often than this.
+        const quietMs = E2.boundarySeen ? 650 : 240;
+        if (now - anchorAt >= quietMs) {
+          const ch2 = E2.chunks[E2.chunkIdx];
+          const anchorWi = Math.max(E2.anchorWi ?? ch2.from, ch2.from);
           const wordsIn = Math.floor(
-            (elapsed / 60000) * WPM * rateRef.current
+            ((now - anchorAt) / 60000) * WPM * rateRef.current
           );
-          const wi = Math.min(
-            E2.chunks[E2.chunkIdx].from + wordsIn,
-            E2.chunks[E2.chunkIdx].to - 1
-          );
-          if (wi !== E2.lastWi) {
+          const wi = Math.min(anchorWi + wordsIn, ch2.to - 1);
+          if (wi > E2.lastWi) {
             E2.lastWi = wi;
             setWordIdx(wi);
             if (onWord) onWord(E2.words[wi].s, E2.words[wi].e, wi);
@@ -331,6 +363,8 @@ function useReadAloudLegacy({ text, getStartOffset, chunkElsRef, chunkStarts, on
           utter: null,
           timer: 0,
           boundarySeen: false,
+          anchorWi: 0,
+          anchorAt: 0,
         };
         setWordCount(words.length);
       }

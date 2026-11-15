@@ -1438,6 +1438,18 @@ export default function ReaderAssist({
 
   // Live rect of a spoken word (global offsets -> chunk -> text node ->
   // Range). Null when the word isn't currently rendered.
+  //
+  // The pill is sized from the range's own fragment rects, NEVER from
+  // getBoundingClientRect(): iOS WebKit inflates the bounding rect of
+  // a range that starts at a line break to span the previous line, so
+  // single spoken words painted as whole sentence/line spans (Joshua's
+  // 2026-11-14 recording: full text lines lit at line transitions,
+  // word-exact in between). The fragment list holds the word's own
+  // ink; the fragment carrying the word's end is the word's even if a
+  // phantom fragment precedes it. A fragment taller than one line is
+  // rejected outright, with a fallback to the word's last character
+  // (an interior position, never a line-break boundary) — so the
+  // painted highlight can never exceed the current word.
   const speakWordRect = useCallback(
     (gStart, gEnd) => {
       // Chunk containing gStart (chunkStarts is sorted).
@@ -1465,16 +1477,28 @@ export default function ReaderAssist({
       }
       if (!node) return null;
       try {
-        const range = document.createRange();
-        const sOff = Math.max(0, Math.min(local - acc, node.textContent.length));
-        const eOff = Math.max(
-          sOff,
-          Math.min(localEnd - acc, node.textContent.length)
-        );
-        range.setStart(node, sOff);
-        range.setEnd(node, eOff);
-        const rect = range.getBoundingClientRect();
-        return rect && rect.width !== 0 ? rect : null;
+        // One line's height in this chunk, for the span guard.
+        const cs = window.getComputedStyle(chunkEl);
+        const lh = parseFloat(cs.lineHeight);
+        const fs = parseFloat(cs.fontSize) || 16;
+        const maxH = (Number.isFinite(lh) && lh > 0 ? lh : fs * 1.75) * 1.6;
+        const nodeLen = node.textContent.length;
+        // The last fragment of (s, e) that fits on one line, or null.
+        const wordFrag = (s, e) => {
+          const range = document.createRange();
+          const sOff = Math.max(0, Math.min(s - acc, nodeLen));
+          const eOff = Math.max(sOff, Math.min(e - acc, nodeLen));
+          if (eOff <= sOff) return null;
+          range.setStart(node, sOff);
+          range.setEnd(node, eOff);
+          const rects = range.getClientRects();
+          for (let i = rects.length - 1; i >= 0; i--) {
+            const r = rects[i];
+            if (r && r.width > 0 && r.height > 0 && r.height <= maxH) return r;
+          }
+          return null;
+        };
+        return wordFrag(local, localEnd) || wordFrag(localEnd - 1, localEnd);
       } catch {
         return null;
       }
@@ -1508,39 +1532,62 @@ export default function ReaderAssist({
     }
   }, []);
 
+  // Paints are rAF-coalesced (2026-11-14): boundary events can burst
+  // (and the engine's timer fill ticks independently), so the latest
+  // spoken word is stored and painted once per frame — one Range
+  // measurement and one style write per frame, no per-word layout
+  // thrash, and the pill always lands on the newest word.
+  const speakPaintRafRef = useRef(0);
+  const speakPendingRef = useRef(null);
+
+  const paintSpeakWord = useCallback(() => {
+    speakPaintRafRef.current = 0;
+    const p = speakPendingRef.current;
+    if (!p) return;
+    const rect = speakWordRect(p.s, p.e);
+    if (!rect) {
+      clearSpeakHl();
+      return;
+    }
+    placeSpeakOverlays(rect, true);
+    // Gentle auto-scroll: keep the spoken word in the middle band.
+    // Yields to manual scrolling — once the reader scrolls, the follow
+    // waits until 3s after their last scroll (the refocus glide in the
+    // scroll effect fires on the same beat) so it never fights them.
+    const vh = window.innerHeight;
+    if (rect.top < vh * 0.22 || rect.bottom > vh * 0.78) {
+      if (Date.now() - userScrolledAt.current >= 3000) {
+        try {
+          const y = window.scrollY + rect.top - vh * 0.42;
+          autoScrolling.current = true;
+          window.scrollTo({ top: y, behavior: "smooth" });
+          setTimeout(() => { autoScrolling.current = false; }, 900);
+        } catch {
+          /* noop */
+        }
+      }
+    }
+  }, [speakWordRect, placeSpeakOverlays, clearSpeakHl]);
+
   const showSpeakWord = useCallback(
     (gStart, gEnd) => {
       if (gStart == null || gEnd == null) {
+        speakPendingRef.current = null;
         speakWordRef.current = null;
+        if (speakPaintRafRef.current) {
+          cancelAnimationFrame(speakPaintRafRef.current);
+          speakPaintRafRef.current = 0;
+        }
         clearSpeakHl();
         return;
       }
       speakWordRef.current = { s: gStart, e: gEnd };
-      const rect = speakWordRect(gStart, gEnd);
-      if (!rect) {
-        clearSpeakHl();
-        return;
-      }
-      placeSpeakOverlays(rect, true);
-      // Gentle auto-scroll: keep the spoken word in the middle band.
-      // Yields to manual scrolling — once the reader scrolls, the follow
-      // waits until 3s after their last scroll (the refocus glide in the
-      // scroll effect fires on the same beat) so it never fights them.
-      const vh = window.innerHeight;
-      if (rect.top < vh * 0.22 || rect.bottom > vh * 0.78) {
-        if (Date.now() - userScrolledAt.current >= 3000) {
-          try {
-            const y = window.scrollY + rect.top - vh * 0.42;
-            autoScrolling.current = true;
-            window.scrollTo({ top: y, behavior: "smooth" });
-            setTimeout(() => { autoScrolling.current = false; }, 900);
-          } catch {
-            /* noop */
-          }
-        }
+      speakPendingRef.current = { s: gStart, e: gEnd };
+      if (!speakPaintRafRef.current) {
+        speakPaintRafRef.current = requestAnimationFrame(paintSpeakWord);
       }
     },
-    [speakWordRect, placeSpeakOverlays, clearSpeakHl]
+    [paintSpeakWord, clearSpeakHl]
   );
 
   // Re-anchor the pill + ball to the spoken word's live position. Called
@@ -1712,6 +1759,8 @@ export default function ReaderAssist({
       if (refocusTimerRef.current) clearTimeout(refocusTimerRef.current);
       if (speakRafRef.current) cancelAnimationFrame(speakRafRef.current);
       speakRafRef.current = 0;
+      if (speakPaintRafRef.current) cancelAnimationFrame(speakPaintRafRef.current);
+      speakPaintRafRef.current = 0;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listening, repositionSpeakWord, speakWordRect]);
@@ -1774,9 +1823,10 @@ export default function ReaderAssist({
     setSnapping(false);
   };
 
-  // rAF edge-snap tween (ease-out cubic). One mechanism owns the motion: the
-  // .is-snapping class keeps its visual side effects (flat material, no blur)
-  // but its transform transition is neutralized inline for the duration.
+  // rAF edge-snap tween (easeOutBack-lite — see the easing note in the
+  // step function). One mechanism owns the motion: the .is-snapping
+  // class keeps its visual side effects (flat material, no blur) but
+  // its transform transition is neutralized inline for the duration.
   const runTween = (toX, toY, onDone) => {
     cancelTween();
     const from = nowRef.current;
@@ -1793,7 +1843,14 @@ export default function ReaderAssist({
     const t0 = performance.now();
     const step = (now) => {
       const k = Math.min(1, (now - t0) / SNAP_MS);
-      const ez = 1 - Math.pow(1 - k, 3); // easeOutCubic
+      // easeOutBack-lite (2026-11-14, Joshua: the ball gets SLIGHTLY
+      // more bounce — subtle, not excessive): the old easeOutCubic
+      // settled with zero overshoot; c1 = 1.1 peaks at ~4.5% of the
+      // travel distance past the target before settling back, a touch
+      // of spring life at the same 320 ms duration.
+      const c1 = 1.1;
+      const u = k - 1;
+      const ez = 1 + (c1 + 1) * u * u * u + c1 * u * u;
       applyPos(from.x + dx * ez, from.y + dy * ez);
       if (k < 1) {
         tweenRef.current.raf = requestAnimationFrame(step);
