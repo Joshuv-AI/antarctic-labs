@@ -102,6 +102,7 @@ function load() {
 // requestIdleCallback). Called once from the app shell.
 export function initAnalytics() {
   if (typeof window === "undefined") return;
+  installErrorCapture();
   if ("requestIdleCallback" in window) {
     window.requestIdleCallback(() => load(), { timeout: 3000 });
   } else {
@@ -124,4 +125,72 @@ export function track(event, props = {}) {
 
 export function trackPageview(path) {
   track("$pageview", { $current_url: path, path });
+}
+
+// --- Client error capture (2026-11-15, error-watch QUEUED-2) -------------
+// Until now no client-side exception was observable anywhere: PostHog held
+// pageviews and custom events only, so a browser crash class could exist
+// invisibly. These hooks forward window errors and unhandled promise
+// rejections as `client_error` events through the same queue as every
+// other event (an error before the idle load is queued and flushed when
+// PostHog arrives; track() also starts the load, so the first error pulls
+// the library in instead of waiting for idle). Deliberately bounded: at
+// most 10 events per page load, identical message+stack deduped — a
+// runaway error loop must never become an event storm. Resource-load
+// errors (img/script/link) carry no message and are skipped: they are not
+// exceptions. Nothing here changes any user-visible behavior.
+
+const CLIENT_ERROR_CAP = 10;
+let clientErrorsSent = 0;
+const clientErrorsSeen = new Set();
+let errorCaptureInstalled = false;
+
+function buildTag() {
+  try {
+    const el = document.querySelector('script[src*="/assets/"]');
+    const src = el && el.getAttribute("src");
+    return src ? src.split("/").pop() : null;
+  } catch {
+    return null;
+  }
+}
+
+function reportClientError(kind, message, stack) {
+  try {
+    const msg = String(message || "unknown error").slice(0, 300);
+    const stk = stack ? String(stack).slice(0, 2000) : "";
+    const key = `${kind}:${msg}:${stk.slice(0, 120)}`;
+    if (clientErrorsSeen.has(key) || clientErrorsSent >= CLIENT_ERROR_CAP) {
+      return;
+    }
+    clientErrorsSeen.add(key);
+    clientErrorsSent += 1;
+    track("client_error", {
+      kind,
+      message: msg,
+      stack: stk,
+      path: window.location.pathname,
+      url: window.location.href,
+      build: buildTag(),
+    });
+  } catch {
+    /* the reporter itself must never throw into the app */
+  }
+}
+
+function installErrorCapture() {
+  if (errorCaptureInstalled) return;
+  errorCaptureInstalled = true;
+  window.addEventListener("error", (e) => {
+    if (!e || (!e.message && !e.error)) return; // resource-load error
+    reportClientError("error", e.message, e.error && e.error.stack);
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const r = e && e.reason;
+    reportClientError(
+      "unhandledrejection",
+      (r && r.message) || String(r),
+      r && r.stack
+    );
+  });
 }
