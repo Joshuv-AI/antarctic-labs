@@ -277,6 +277,52 @@ function buildBands(counts) {
     cellEnd: d.cells[1],
   }));
 }
+// The same apportionment over an arbitrary counts array (coil
+// layouts, 2026-11-15 re-coiling): identical floor + largest-
+// remainder rules; a zero-count coil gets zero stations (it still
+// occupies its gap slot and carries its label — an honest marker).
+function allocateStationsArr(counts) {
+  const n = counts.length;
+  const out = new Array(n).fill(0);
+  const floored = new Set();
+  let pool = [];
+  for (let i = 0; i < n; i++) if ((counts[i] || 0) > 0) pool.push(i);
+  for (;;) {
+    const poolCount = pool.reduce((s, i) => s + (counts[i] || 0), 0);
+    const budget = BAND_PANEL_TARGET - floored.size * MIN_STATIONS * ROWS;
+    const tiny = pool.filter(
+      (i) => ((counts[i] || 0) * budget) / Math.max(1, poolCount) < MIN_STATIONS * ROWS
+    );
+    if (!tiny.length || !pool.length) break;
+    tiny.forEach((i) => floored.add(i));
+    pool = pool.filter((i) => !floored.has(i));
+  }
+  const poolCount = pool.reduce((s, i) => s + (counts[i] || 0), 0);
+  const budget = BAND_PANEL_TARGET - floored.size * MIN_STATIONS * ROWS;
+  for (const i of floored) out[i] = MIN_STATIONS;
+  if (pool.length) {
+    const target = Math.round(budget / ROWS);
+    const raw = pool.map((i) => ({
+      i,
+      v: ((counts[i] || 0) * budget) / Math.max(1, poolCount) / ROWS,
+    }));
+    let sum = 0;
+    for (const r of raw) {
+      out[r.i] = Math.floor(r.v);
+      sum += out[r.i];
+    }
+    const byRem = raw
+      .slice()
+      .sort((a, b) => b.v - Math.floor(b.v) - (a.v - Math.floor(a.v)));
+    let k = 0;
+    while (sum < target && byRem.length) {
+      out[byRem[k % byRem.length].i]++;
+      sum++;
+      k++;
+    }
+  }
+  return out;
+}
 let BANDS = [];
 let totalTheta = 0;
 let Y_TOP = 0;
@@ -321,18 +367,30 @@ function surfacePoint(theta, phi, out) {
 // isDegraded, setSettled, setDisplay, debugState } or null when the
 // renderer could not be created. setDisplay(state) accepts:
 //   { kind: "idle" }
-//   { kind: "focus", groups: [bandIndex, ...] }
+//   { kind: "focus", groups: [coilIndex, ...] }
 //   { kind: "lift", items: [{ title, creator, year, collection }] }
-//   { kind: "reshape", facets: { bandIndex: count, ... }, total,
+//   { kind: "reshape", facets: { coilIndex: count, ... }, total,
 //     name, items?: [{ title, creator, year, collection }],
-//     windows?: { bandIndex: [newerCount, eraCount] } } — a
+//     windows?: { coilIndex: [newerCount, eraCount] } } — a
 //     refined filter combination: the coil contracts to the
-//     combination's exact per-collection shares and re-skins from
-//     its own collections' covers (Phase 2b, applyReshape); when
+//     combination's exact per-coil shares and re-skins from its
+//     own collections' covers (Phase 2b, applyReshape); when
 //     items are present, the top results also mirror onto the
-//     dominant band's lit segment via the live page. windows, when
-//     present, places a band's lit stations at the selection era's
-//     own stretch of that band (era-position mapping, 2026-11-15).
+//     dominant coil's lit segment via the live page. windows, when
+//     present, places a coil's lit stations at the selection era's
+//     own stretch of that coil (era-position mapping, 2026-11-15).
+// Any state may also carry:
+//   layout: { key, coils: [{key, name, count, band}] } — when the
+//     key differs from the current layout, the spiral first
+//     dissolves and RE-FORMS into the given coils (hierarchical
+//     re-coiling, 2026-11-15): one coil per subcategory of a
+//     curated collection, sized by true counts, sampling only its
+//     parent band's covers, labels exchanged with the coils. The
+//     resting layout's key is "rest" (the seven collections).
+//   eraHold: { coil, f0, f1 } — an era is selected: the camera
+//     frames the era's stretch [f0, f1] of the given coil (from
+//     its front = most recent end) and the rotation stops on it
+//     until a state without eraHold arrives.
 export function createHelixScene(canvas, opts = {}) {
   const starterUrl = opts.starterUrl || "/helix-starter.webp";
   const grainUrl = opts.grainUrl || "/helix-grain.webp";
@@ -419,21 +477,43 @@ export function createHelixScene(canvas, opts = {}) {
   // the visitor travelled to stays in front of them. null = no
   // tracking (free rotation).
   let focusRotTarget = null;
+  // Era hold (2026-11-15, §5): while an era is selected, the camera
+  // frames the era's stretch of the dominant coil and the rotation
+  // damps to a stop on it. Set from display states carrying
+  // eraHold {coil, f0, f1} (fractions of the coil's span measured
+  // from its front = most recent end); null resumes rotation.
+  let eraHold = null; // {coil, f0, f1, thetaMid, y, rotTarget}
   let displayY = Y_TOP + 12;
+  let camElevCur = 1.02; // the scrub-blended camera elevation, read
+                         // by the label pass (top-down blend)
   let booted = false;           // boot gate (Amendment M)
   let bootAt = 0;               // performance.now() when boot completed
   const createdAt = performance.now();
 
   function modeTarget(t) {
-    if (!booted) return { dist: idleDist * 1.15, elev: 1.02, tgtY: 8 };
-    if (mode === "focus") return { dist: idleDist * focusDistMul, elev: 0.10, tgtY: focusY };
-    if (mode === "display") return { dist: idleDist * 0.82, elev: 0.30, tgtY: displayY };
-    // Idle drift (Amendment K): slow breathing around the idle frame.
-    return {
-      dist: idleDist * (1 + 0.035 * Math.sin(t * 0.021)),
-      elev: 0.155 + 0.045 * Math.sin(t * 0.016 + 1.7),
-      tgtY: 1.5 * Math.sin(t * 0.013),
-    };
+    let tgt;
+    if (!booted) {
+      tgt = { dist: idleDist * 1.15, elev: 1.02, tgtY: 8 };
+    } else if (mode === "focus") {
+      tgt = { dist: idleDist * focusDistMul, elev: 0.10, tgtY: focusY };
+    } else if (mode === "display") {
+      tgt = { dist: idleDist * 0.82, elev: 0.30, tgtY: displayY };
+    } else {
+      // Idle drift (Amendment K): slow breathing around the idle frame.
+      tgt = {
+        dist: idleDist * (1 + 0.035 * Math.sin(t * 0.021)),
+        elev: 0.155 + 0.045 * Math.sin(t * 0.016 + 1.7),
+        tgtY: 1.5 * Math.sin(t * 0.013),
+      };
+    }
+    // Era hold: pan/zoom INTO the era's stretch of the dominant
+    // coil (closer than the mode's own framing, centered on the
+    // stretch's midpoint).
+    if (booted && eraHold && (mode === "focus" || mode === "reshape")) {
+      tgt.tgtY = eraHold.y;
+      tgt.dist = Math.min(tgt.dist, idleDist * 0.62);
+    }
+    return tgt;
   }
   function applyRig(dt) {
     const tgt = modeTarget(sceneTime);
@@ -461,6 +541,7 @@ export function createHelixScene(canvas, opts = {}) {
     const elev = posterElev + (rigCur.elev - posterElev) * w;
     const dist = posterDist + (rigCur.dist - posterDist) * w;
     const tgtY = posterY + (rigCur.tgtY - posterY) * w;
+    camElevCur = elev;
     const ce = Math.cos(elev);
     camera.position.set(
       Math.sin(CAM_AZ) * ce * dist,
@@ -473,19 +554,110 @@ export function createHelixScene(canvas, opts = {}) {
   const structure = new THREE.Group();
   scene.add(structure);
 
-  // ---- placements (baked instance matrices; runs once at init)
-  const placements = []; // {matrix, group, phase, theta}
-  const gapRanges = [];  // [theta0, theta1] bare-wire gaps between bands
+  // ---- coil layouts (2026-11-15, hierarchical re-coiling) --------
+  // The scene's geometry is built from a LAYOUT: a list of coils
+  // {key, name, count, band, anchorFrac}. The resting layout is the
+  // seven collections (band == coil); a curated collection's layout
+  // is one coil per subcategory, every coil's panels drawn from its
+  // PARENT BAND's pools (purity by construction — a coil can only
+  // ever sample its own collection's covers). buildLayoutGeometry
+  // reproduces the resting build byte-for-byte (same allocation,
+  // same seeded jitter stream, same placement order), so the shipped
+  // resting scene is untouched; other layouts reuse the identical
+  // builder with a gap that shrinks as the coil count grows.
+  // A panel's canonical segment stays a pure function of (parent
+  // band, pool rank) against the FIXED resting panel starts, so the
+  // baked segment pools remain valid in every layout; where a
+  // (segment, band) pool does not exist the panel keeps its starter
+  // cell, exactly as the resting build treats absent pools.
+  const placements = []; // {matrix, group(coil), band, phase, theta}
+  const gapRanges = [];  // [theta0, theta1] bare-wire gaps between coils
+  let COILS = [];
+  let layoutKey = "rest";
+  let layoutMaxSqrt = 1;
+  let segFrozen = false; // segment lifecycle pauses off the resting layout
+  const coilFirst = [];
+  const coilLast = [];
+  const stationOf = new Int32Array(BAND_PANEL_TARGET);
+  const bandRank = new Int32Array(BAND_PANEL_TARGET); // ordinal within parent band
+  const segSliceRank = new Int32Array(BAND_PANEL_TARGET);
+  const instSeg = new Uint8Array(BAND_PANEL_TARGET);
+  const segPanels = Array.from({ length: 8 }, () => []);
+  const bandSegCount = new Array(BAND_DEFS.length).fill(0);
+  const slicePanels = new Map();
+  const bandRankSpace = new Array(BAND_DEFS.length).fill(0);
+  const REST_PANEL_START = [];
   {
+    let acc = 0;
+    for (const g of BANDS) { // canonical order
+      REST_PANEL_START.push(acc);
+      acc += g.stations * ROWS;
+    }
+  }
+  function restingDefs() {
+    return BANDS.map((g, i) => ({
+      key: "band:" + g.name,
+      name: g.name,
+      count: g.count,
+      band: i,
+      anchorFrac: ANCHOR_FRAC[i],
+    }));
+  }
+  function buildLayoutGeometry(defs) {
+    const counts = defs.map((d) => Math.max(0, Math.round(d.count || 0)));
+    const stationsArr = allocateStationsArr(counts);
+    // Panel-count invariant: the budget is exact by construction
+    // (floors are pre-subtracted from it); the all-floored residue
+    // is the one theoretical exception — fold it into the largest
+    // coil so placements.length is ALWAYS the panel target.
+    const targetStations = BAND_PANEL_TARGET / ROWS;
+    const tot = stationsArr.reduce((a, b) => a + b, 0);
+    if (tot !== targetStations && stationsArr.length) {
+      let li = 0;
+      for (let i = 1; i < stationsArr.length; i++) {
+        if (stationsArr[i] > stationsArr[li]) li = i;
+      }
+      stationsArr[li] = Math.max(1, stationsArr[li] + (targetStations - tot));
+    }
+    const n = defs.length;
+    const gapTheta = GAP_DTHETA * Math.min(1, 7 / Math.max(1, n));
+    COILS = defs.map((d, i) => ({
+      key: d.key,
+      name: d.name,
+      count: counts[i],
+      band: Math.min(BAND_DEFS.length - 1, Math.max(0, d.band | 0)),
+      index: i,
+      sqrt: Math.sqrt(counts[i]),
+      stations: stationsArr[i],
+      anchorFrac:
+        typeof d.anchorFrac === "number"
+          ? d.anchorFrac
+          : 0.2 + 0.6 * ((i * 0.618034) % 1),
+      panels: 0,
+      thetaStart: 0,
+      thetaEnd: 0,
+      yMid: 0,
+      anchorLocal: null,
+      anchorY: 0,
+      anchorTheta: 0,
+    }));
+    layoutMaxSqrt = COILS.reduce((mx, c) => Math.max(mx, c.sqrt), 1);
+    totalTheta =
+      stationsArr.reduce((s, x) => s + x, 0) * DTHETA +
+      Math.max(0, n - 1) * gapTheta;
+    Y_TOP = (totalTheta * RISE) / 2;
+    placements.length = 0;
+    gapRanges.length = 0;
     const rnd = mulberry32(987123);
     const m = new THREE.Matrix4();
     const qj = new THREE.Quaternion();
     const e = new THREE.Euler();
     let theta = 0;
-
-    // Placement order: reversed list puts DOCUMENTS/PODCASTS at
-    // the top of the stack and LAW at the bottom.
-    const order = [...BANDS].reverse();
+    // Placement order: reversed list puts the LAST def at the top
+    // of the stack (resting: DOCUMENTS top, LAW bottom; a curated
+    // group lists largest first, so its largest shelf lands at the
+    // bottom like LAW).
+    const order = COILS.slice().reverse();
     order.forEach((g, gi) => {
       g.thetaStart = theta;
       let count = 0;
@@ -497,21 +669,22 @@ export function createHelixScene(canvas, opts = {}) {
         const tScale = 0.25 + 0.75 * taper;
         for (let j = 0; j < ROWS; j++) {
           const phi = ((j + brick) / ROWS) * Math.PI * 2;
-          const n = e1.clone().multiplyScalar(Math.cos(phi)).addScaledVector(e2, Math.sin(phi));
-          const Y = new THREE.Vector3().crossVectors(n, T);
+          const nv = e1.clone().multiplyScalar(Math.cos(phi)).addScaledVector(e2, Math.sin(phi));
+          const Y = new THREE.Vector3().crossVectors(nv, T);
           const pos = C.clone()
-            .addScaledVector(n, TUBE_R * (0.35 + 0.65 * taper))
+            .addScaledVector(nv, TUBE_R * (0.35 + 0.65 * taper))
             .addScaledVector(T, (rnd() - 0.5) * 0.04)
             .addScaledVector(Y, (rnd() - 0.5) * 0.04);
           e.set((rnd() - 0.5) * 0.07, (rnd() - 0.5) * 0.09, (rnd() - 0.5) * 0.05);
           qj.setFromEuler(e);
-          const basis = new THREE.Matrix4().makeBasis(T, Y, n)
+          const basis = new THREE.Matrix4().makeBasis(T, Y, nv)
             .multiply(new THREE.Matrix4().makeRotationFromQuaternion(qj))
             .multiply(new THREE.Matrix4().makeScale(tScale, tScale, tScale));
           m.copy(basis).setPosition(pos);
           placements.push({
             matrix: m.clone(),
             group: g.index,
+            band: g.band,
             phase: rnd(),
             theta: th,
           });
@@ -522,53 +695,59 @@ export function createHelixScene(canvas, opts = {}) {
       theta += g.stations * DTHETA;
       g.thetaEnd = theta;
       g.yMid = Y_TOP - RISE * ((g.thetaStart + g.thetaEnd) / 2);
-      // Label anchor: a point on the tube surface at the band's
+      // Label anchor: a point on the tube surface at the coil's
       // staggered anchor angle (structure space; rotates with it).
-      const aTheta = g.thetaStart + ANCHOR_FRAC[g.index] * (g.thetaEnd - g.thetaStart);
+      // A zero-station coil anchors on the bare wire at its slot.
+      const aTheta = g.thetaStart + g.anchorFrac * (g.thetaEnd - g.thetaStart);
       const af = frameAt(aTheta);
       g.anchorLocal = af.C.clone().addScaledVector(af.e1, TUBE_R + 1.05);
       g.anchorY = af.C.y;
       g.anchorTheta = aTheta;
       if (gi < order.length - 1) {
-        gapRanges.push([theta, theta + GAP_DTHETA]);
-        theta += GAP_DTHETA;
+        gapRanges.push([theta, theta + gapTheta]);
+        theta += gapTheta;
       }
     });
-    // Every library panel sits on the tube, inside the spiral
-    // (Joshua 2026-11-12: no satellites, nothing floating outside).
-  }
-  const panelCount = placements.length;
-  const groupFirst = new Map();
-  const groupLast = new Map();
-  placements.forEach((p, i) => {
-    if (!groupFirst.has(p.group)) groupFirst.set(p.group, i);
-    groupLast.set(p.group, i);
-  });
-  const stationOf = new Int32Array(panelCount);
-  placements.forEach((p, i) => {
-    stationOf[i] = ((i - groupFirst.get(p.group)) / ROWS) | 0;
-  });
-  // Canonical position along the whole coil (band panel starts in
-  // canonical band order) — the segment a panel belongs to is a
-  // pure function of it: seg = min(7, floor(canon / (count/8))).
-  const bandPanelStart = new Array(BAND_DEFS.length).fill(0);
-  {
-    let acc = 0;
-    for (const g of BANDS) { // BANDS is canonical order
-      bandPanelStart[g.index] = acc;
-      acc += g.panels;
+    // Derived per-instance arrays for this layout.
+    coilFirst.length = 0;
+    coilLast.length = 0;
+    for (let c = 0; c < n; c++) { coilFirst.push(-1); coilLast.push(-1); }
+    placements.forEach((p, i) => {
+      if (coilFirst[p.group] < 0) coilFirst[p.group] = i;
+      coilLast[p.group] = i;
+    });
+    for (let i = 0; i < placements.length; i++) {
+      stationOf[i] = ((i - coilFirst[placements[i].group]) / ROWS) | 0;
     }
+    const seenBand = new Array(BAND_DEFS.length).fill(0);
+    for (let i = 0; i < placements.length; i++) bandRank[i] = seenBand[placements[i].band]++;
+    for (let b = 0; b < BAND_DEFS.length; b++) bandRankSpace[b] = seenBand[b];
+    for (let s = 0; s < 8; s++) segPanels[s].length = 0;
+    for (let i = 0; i < placements.length; i++) {
+      const canon = REST_PANEL_START[placements[i].band] + bandRank[i];
+      instSeg[i] = Math.min(7, Math.floor(canon / (BAND_PANEL_TARGET / 8)));
+      segPanels[instSeg[i]].push(i);
+    }
+    for (let s = 0; s < 8; s++) {
+      const per = new Array(BAND_DEFS.length).fill(0);
+      for (const i of segPanels[s]) segSliceRank[i] = per[placements[i].band]++;
+    }
+    bandSegCount.fill(0);
+    slicePanels.clear();
+    for (let s = 0; s < 8; s++) {
+      const per = new Array(BAND_DEFS.length).fill(0);
+      for (const i of segPanels[s]) per[placements[i].band]++;
+      for (let b = 0; b < BAND_DEFS.length; b++) {
+        if (per[b] > 0) {
+          bandSegCount[b]++;
+          slicePanels.set(s + ":" + b, per[b]);
+        }
+      }
+    }
+    displayY = Y_TOP + 12;
   }
-  const instSeg = new Uint8Array(panelCount);
-  const segOfPanel = (i) => {
-    const canon = bandPanelStart[placements[i].group] + (i - groupFirst.get(placements[i].group));
-    return Math.min(7, Math.floor(canon / (panelCount / 8)));
-  };
-  const segPanels = Array.from({ length: 8 }, () => []);
-  for (let i = 0; i < panelCount; i++) {
-    instSeg[i] = segOfPanel(i);
-    segPanels[instSeg[i]].push(i);
-  }
+  buildLayoutGeometry(restingDefs());
+  const panelCount = placements.length;
 
   // ---- paged panel machinery -------------------------------------
   // Logical per-instance state; the partition builder below is the
@@ -636,37 +815,8 @@ export function createHelixScene(canvas, opts = {}) {
     return o;
   }
   const bandEpoch = new Array(BANDS.length).fill(0);
-  // Canonical ranks: within the whole band (for the starter
-  // page) and within the instance's own segment slice (for
-  // segment pages). An instance belongs to exactly one segment,
-  // so one rank array serves all segment pages.
-  const bandRank = new Int32Array(panelCount);
-  const segSliceRank = new Int32Array(panelCount);
-  {
-    const seen = new Array(BANDS.length).fill(0);
-    for (let i = 0; i < panelCount; i++) bandRank[i] = seen[placements[i].group]++;
-    for (let s = 0; s < 8; s++) {
-      const per = new Array(BANDS.length).fill(0);
-      for (const i of segPanels[s]) segSliceRank[i] = per[placements[i].group]++;
-    }
-  }
   function rankOnPage(i, page) {
     return page === PAGE_STARTER ? bandRank[i] : segSliceRank[i];
-  }
-  // Deal geometry per band: how many segments carry the band, and
-  // how many panels each (segment, band) slice holds — the rank
-  // spaces the quantile deal stretches over.
-  const bandSegCount = new Array(BANDS.length).fill(0);
-  const slicePanels = new Map();
-  for (let s = 0; s < 8; s++) {
-    const per = new Array(BANDS.length).fill(0);
-    for (const i of segPanels[s]) per[placements[i].group]++;
-    for (let b = 0; b < BANDS.length; b++) {
-      if (per[b] > 0) {
-        bandSegCount[b]++;
-        slicePanels.set(s + ":" + b, per[b]);
-      }
-    }
   }
   function cellFor(page, band, rank) {
     const o = orderFor(page, band);
@@ -677,19 +827,29 @@ export function createHelixScene(canvas, opts = {}) {
       idx = rank % o.length;
     } else {
       const space = page === PAGE_STARTER
-        ? BANDS[band].panels
+        ? bandRankSpace[band]
         : slicePanels.get((page - 1) + ":" + band) || o.length;
       idx = Math.min(o.length - 1, Math.floor((rank * o.length) / Math.max(1, space)));
     }
     return o[(idx + rot) % o.length];
   }
-  // Canonical starter assignment (epoch 0 on every band).
-  for (let i = 0; i < panelCount; i++) {
-    const c = cellFor(PAGE_STARTER, placements[i].group, bandRank[i]);
-    instCell[i] = c;
-    instBaseCell[i] = c;
-    instHomeCell[i] = c;
+  // Canonical starter assignment (epoch 0 on every band): every
+  // instance on the starter page with its pure-function cell, homes
+  // reset, focus weights neutral. Runs at init and at every layout
+  // swap (a swap re-homes the whole structure; segment pages return
+  // only through the resting layout's lifecycle).
+  function resetInstanceCells() {
+    for (let i = 0; i < panelCount; i++) {
+      const c = cellFor(PAGE_STARTER, placements[i].band, bandRank[i]);
+      instPage[i] = PAGE_STARTER;
+      instCell[i] = c;
+      instBaseCell[i] = c;
+      instHomeCell[i] = c;
+      instHomePage[i] = PAGE_STARTER;
+      focusW[i] = 1;
+    }
   }
+  resetInstanceCells();
 
   // ---- shared uniforms + tier shader
   const uniforms = {
@@ -862,7 +1022,7 @@ export function createHelixScene(canvas, opts = {}) {
         const i = list[k];
         rec.mesh.setMatrixAt(k, placements[i].matrix);
         rec.aCell.array[k] = encCell(instCell[i], rec.div);
-        rec.aGroup.array[k] = placements[i].group;
+        rec.aGroup.array[k] = placements[i].band;
         rec.aPhase.array[k] = placements[i].phase;
         rec.aFocusW.array[k] = focusW[i];
       }
@@ -1035,7 +1195,7 @@ export function createHelixScene(canvas, opts = {}) {
   let segLoading = false;
   function homePageOf(i) {
     const s = instSeg[i];
-    if (segState[s].status === "active" && SEG_POOLS[s][placements[i].group]) return s + 1;
+    if (segState[s].status === "active" && SEG_POOLS[s][placements[i].band]) return s + 1;
     return PAGE_STARTER;
   }
   // The instance's canonical cell on its CURRENT home page: a
@@ -1045,7 +1205,7 @@ export function createHelixScene(canvas, opts = {}) {
   function homeCellOf(i) {
     const hp = homePageOf(i);
     instHomePage[i] = hp;
-    const c = cellFor(hp, placements[i].group, rankOnPage(i, hp));
+    const c = cellFor(hp, placements[i].band, rankOnPage(i, hp));
     instHomeCell[i] = c >= 0 ? c : instBaseCell[i];
     return instHomeCell[i];
   }
@@ -1084,8 +1244,8 @@ export function createHelixScene(canvas, opts = {}) {
     const rec = pageRec(page);
     rec.ready = true;
     for (const i of segPanels[s]) {
-      if (!SEG_POOLS[s][placements[i].group]) continue;
-      const c = cellFor(page, placements[i].group, segSliceRank[i]);
+      if (!SEG_POOLS[s][placements[i].band]) continue;
+      const c = cellFor(page, placements[i].band, segSliceRank[i]);
       if (mirrorSet.has(i)) {
         // Mirrored instances keep sampling the live page; only
         // their home moves to this page (same pure-function
@@ -1111,7 +1271,7 @@ export function createHelixScene(canvas, opts = {}) {
         // Homes return to the starter page's current-epoch cell
         // (the pure-function value), for visible and mirrored
         // instances of this segment alike.
-        const home = cellFor(PAGE_STARTER, placements[i].group, bandRank[i]);
+        const home = cellFor(PAGE_STARTER, placements[i].band, bandRank[i]);
         if (instPage[i] === page) {
           instPage[i] = PAGE_STARTER;
           instCell[i] = home;
@@ -1178,6 +1338,11 @@ export function createHelixScene(canvas, opts = {}) {
   // never per-frame work.
   function segmentHousekeeping() {
     if (disposed || frozen || contextLost) return;
+    // Off the resting layout the segment lifecycle is frozen: the
+    // baked pools belong to the resting canonical mapping, and a
+    // re-coiled structure samples the starter page (its parent
+    // band's own covers) until the resting layout returns.
+    if (segFrozen) return;
     // Activations at legal moments only: bundled synchronously
     // into a user-caused commit (see setDisplay), or — here, on
     // the poll — when the whole segment sits in the FAR tier.
@@ -1279,7 +1444,7 @@ export function createHelixScene(canvas, opts = {}) {
     }
     mirrorSet.clear();
   }
-  function bindMirror(items, domBand, litRange, anchorFrac) {
+  function bindMirror(items, domCoil, litRange, anchorFrac) {
     clearMirror();
     if (!items || !items.length) return;
     const n = Math.min(items.length, LIVE_DIV * LIVE_DIV);
@@ -1290,14 +1455,15 @@ export function createHelixScene(canvas, opts = {}) {
     rec.tex = liveTex;
     if (!rec.mesh) buildPageMesh(rec);
     rec.ready = true;
-    const band = BANDS[domBand];
+    const coil = COILS[domCoil];
+    if (!coil) return;
     const frac = anchorFrac != null
       ? anchorFrac
-      : (ANCHOR_FRAC[domBand] + 0.28) % 1;
-    const aTheta = band.thetaStart + frac * (band.thetaEnd - band.thetaStart);
-    const first = groupFirst.get(domBand);
+      : (coil.anchorFrac + 0.28) % 1;
+    const aTheta = coil.thetaStart + frac * (coil.thetaEnd - coil.thetaStart);
+    const first = coilFirst[domCoil];
     const p0 = (litRange ? litRange[0] : 0) * ROWS;
-    const p1 = Math.min((litRange ? litRange[1] : band.stations) * ROWS, band.panels);
+    const p1 = Math.min((litRange ? litRange[1] : coil.stations) * ROWS, coil.panels);
     const cands = [];
     for (let k = p0; k < p1; k++) cands.push(first + k);
     cands.sort(
@@ -1349,24 +1515,24 @@ export function createHelixScene(canvas, opts = {}) {
     if (!facetsIn || typeof facetsIn !== "object") return false;
     const total = state.total;
     if (typeof total !== "number" || !(total > 0)) return false;
-    const facets = [0, 0, 0, 0, 0, 0, 0];
+    const facets = new Array(COILS.length).fill(0);
     let facetSum = 0;
     for (const k of Object.keys(facetsIn)) {
       const bi = Number(k);
       const v = facetsIn[k];
-      if (!Number.isInteger(bi) || bi < 0 || bi >= BANDS.length) return false;
+      if (!Number.isInteger(bi) || bi < 0 || bi >= COILS.length) return false;
       if (typeof v !== "number" || !Number.isFinite(v) || v < 0) return false;
       facets[bi] = v;
       facetSum += v;
     }
     if (facetSum <= 0) return false;
-    // Dominant band: largest facet (ties go to the larger
+    // Dominant coil: largest facet (ties go to the larger
     // collection) — the selection label anchors there.
     let dom = 0;
-    for (let b = 1; b < BANDS.length; b++) {
-      if (facets[b] > facets[dom] || (facets[b] === facets[dom] && BANDS[b].count > BANDS[dom].count)) dom = b;
+    for (let b = 1; b < COILS.length; b++) {
+      if (facets[b] > facets[dom] || (facets[b] === facets[dom] && COILS[b].count > COILS[dom].count)) dom = b;
     }
-    const litStations = BANDS.map((g, b) =>
+    const litStations = COILS.map((g, b) =>
       Math.round(clamp01(facets[b] / Math.max(1, g.count)) * g.stations)
     );
     // Era windows (2026-11-15): when the selection pins an era,
@@ -1383,12 +1549,12 @@ export function createHelixScene(canvas, opts = {}) {
     // not tally). Position along a band is time (front = most
     // recent), and the pools are era-ordered, so the stretch's
     // covers are the era's own material.
-    const windows = [null, null, null, null, null, null, null];
+    const windows = new Array(COILS.length).fill(null);
     if (state.windows && typeof state.windows === "object") {
       for (const k of Object.keys(state.windows)) {
         const bi = Number(k);
         const v = state.windows[k];
-        if (!Number.isInteger(bi) || bi < 0 || bi >= BANDS.length) continue;
+        if (!Number.isInteger(bi) || bi < 0 || bi >= COILS.length) continue;
         if (!Array.isArray(v) || v.length !== 2) continue;
         const newer = v[0];
         const eraCount = v[1];
@@ -1396,11 +1562,11 @@ export function createHelixScene(canvas, opts = {}) {
         if (!Number.isFinite(newer) || !Number.isFinite(eraCount)) continue;
         if (newer < 0 || eraCount < 0) continue;
         if (eraCount !== facets[bi]) continue;
-        if (newer + eraCount > BANDS[bi].count) continue;
+        if (newer + eraCount > COILS[bi].count) continue;
         windows[bi] = [newer, eraCount];
       }
     }
-    const litRange = BANDS.map((g, b) => {
+    const litRange = COILS.map((g, b) => {
       if (facets[b] <= 0) return [0, 0];
       const w = windows[b];
       if (!w) return [0, litStations[b]];
@@ -1418,18 +1584,29 @@ export function createHelixScene(canvas, opts = {}) {
     // their cells change. Zero-facet bands are untouched (home
     // cells). The epoch bump happens first, so the whole band
     // rotates together.
-    for (let b = 0; b < BANDS.length; b++) if (facets[b] > 0) bandEpoch[b]++;
+    // Epoch bumps are per parent BAND (the pools are): every
+    // facet-positive coil rotates its band's deal once.
+    {
+      const bumped = new Set();
+      for (let b = 0; b < COILS.length; b++) {
+        if (facets[b] > 0 && !bumped.has(COILS[b].band)) {
+          bumped.add(COILS[b].band);
+          bandEpoch[COILS[b].band]++;
+        }
+      }
+    }
     clearMirror();
     for (let i = 0; i < panelCount; i++) {
       const g = placements[i].group;
+      const band = placements[i].band;
       if (stationOf[i] >= litRange[g][0] && stationOf[i] < litRange[g][1]) {
         scratchFocus[i] = 1.16;
-        instCell[i] = cellFor(instPage[i], g, rankOnPage(i, instPage[i]));
+        instCell[i] = cellFor(instPage[i], band, rankOnPage(i, instPage[i]));
         instHomeCell[i] = instCell[i];
         instHomePage[i] = instPage[i];
       } else if (facets[g] > 0) {
         scratchFocus[i] = 0.30;
-        instCell[i] = cellFor(instPage[i], g, rankOnPage(i, instPage[i]));
+        instCell[i] = cellFor(instPage[i], band, rankOnPage(i, instPage[i]));
         instHomeCell[i] = instCell[i];
         instHomePage[i] = instPage[i];
       } else {
@@ -1438,7 +1615,7 @@ export function createHelixScene(canvas, opts = {}) {
       }
     }
     const domWindow = windows[dom]
-      ? (litRange[dom][0] + litRange[dom][1]) / (2 * Math.max(1, BANDS[dom].stations))
+      ? (litRange[dom][0] + litRange[dom][1]) / (2 * Math.max(1, COILS[dom].stations))
       : null;
     bindMirror(state.items, dom, litRange[dom], domWindow);
     lastReshape = {
@@ -1451,20 +1628,20 @@ export function createHelixScene(canvas, opts = {}) {
     rebuildPartition();
     focusRotTarget = null;
     mode = "reshape";
-    focusGroups = BANDS.filter((g, b) => facets[b] > 0).map((g) => g.index);
+    focusGroups = COILS.filter((g, b) => facets[b] > 0).map((g) => g.index);
     focusAmtTgt = 1;
     liftTarget = 0;
     dissolveCur = 0.22;
     if (selLabel) {
-      const band = BANDS[dom];
+      const coil = COILS[dom];
       const frac = domWindow != null
         ? domWindow
-        : (ANCHOR_FRAC[dom] + 0.28) % 1;
-      const aTheta = band.thetaStart + frac * (band.thetaEnd - band.thetaStart);
+        : (coil.anchorFrac + 0.28) % 1;
+      const aTheta = coil.thetaStart + frac * (coil.thetaEnd - coil.thetaStart);
       const af = frameAt(aTheta);
       selLabel.anchorLocal = af.C.clone().addScaledVector(af.e1, TUBE_R + 1.05);
       selLabel.anchorY = af.C.y;
-      selLabel.basePx = 15 + 37 * (band.sqrt / BANDS[0].sqrt);
+      selLabel.basePx = 15 + 37 * (coil.sqrt / layoutMaxSqrt);
       selLabel.nameEl.textContent = state.name || "Selection";
       selLabel.countEl.textContent = fmt(total);
       selLabel.w = 0;
@@ -1479,7 +1656,9 @@ export function createHelixScene(canvas, opts = {}) {
   // along the whole coil WITH BARB TICKS (the reel's barbed wire),
   // bare strands through the inter-band gaps, and faint grey stitch
   // threads across the structure. All of it follows the coil.
-  {
+  // Rebuilt on every layout swap (the strands follow totalTheta,
+  // the gaps and the placements of the CURRENT layout).
+  function buildWireLines() {
     const red = [];
     const grey = [];
     const pushR = (a, b) => red.push(a.x, a.y, a.z, b.x, b.y, b.z);
@@ -1551,12 +1730,15 @@ export function createHelixScene(canvas, opts = {}) {
       structure.add(l);
       return l;
     };
-    mkLines(red, 0xa8492f, 0.6);
-    mkLines(grey, 0x9aa0a8, 0.13); // raised from 0.07 (Amendment K)
+    return [
+      mkLines(red, 0xa8492f, 0.6),
+      mkLines(grey, 0x9aa0a8, 0.13), // raised from 0.07 (Amendment K)
+    ];
   }
+  let wireLines = buildWireLines();
 
   // ---- dust: faint star-like atmosphere only
-  {
+  function buildDustPoints() {
     const N = 420;
     const dp = new Float32Array(N * 3);
     const rnd = mulberry32(777);
@@ -1575,7 +1757,9 @@ export function createHelixScene(canvas, opts = {}) {
     );
     dust.frustumCulled = false;
     structure.add(dust);
+    return dust;
   }
+  let dustPoints = buildDustPoints();
 
   // ---- lift display (Amendments I/J): the reel's ending — result
   // works pulled OUT of the coil into a tiered pyramid above the
@@ -1733,14 +1917,17 @@ export function createHelixScene(canvas, opts = {}) {
   }
 
   // ---- floating labels (HTML overlay, reel style) — RIDE THE COIL
-  // (Amendment L): each band's label anchors to a fixed angle on its
-  // band (structure space) and is projected every frame; opacity
+  // (Amendment L): each coil's label anchors to a fixed angle on its
+  // coil (structure space) and is projected every frame; opacity
   // follows the anchor's facing — full strength on the near sweep,
   // fading out as it rotates onto the far side. Big collections get
-  // large labels, small ones tiny tags. Positions are converted into
-  // the hero layer's DOCUMENT space (ship-1 fix: the layer scrolls
-  // with the hero; its cached document offset is scroll-invariant,
-  // and the render loop does no layout reads).
+  // large labels, small ones tiny tags. Positions are computed in
+  // the overlay's own coordinate frame: the overlay is viewport-
+  // FIXED (styles.css, 2026-11-15), so projected positions are
+  // viewport coordinates at every scroll depth and the labels stay
+  // tethered to their coils while the visitor works the filters —
+  // the previous hero-confined layer displaced every label by the
+  // scroll delta (the pooled-at-the-top defect).
   // Reel-fidelity (2026-11-14): a label is placed BESIDE its coil —
   // centered on its anchor's projection, then pushed radially
   // outward on screen (away from the axis projection) so it clears
@@ -1748,9 +1935,28 @@ export function createHelixScene(canvas, opts = {}) {
   // build floated every label ABOVE its anchor (translate -135%),
   // which read as words hovering at the top of the spiral in both
   // the side and top-down framings — the defect Joshua flagged.
-  const bandLabels = [];
-  if (labelsEl) {
-    BANDS.forEach((g) => {
+  // Labels are rebuilt per LAYOUT (2026-11-15 re-coiling): the old
+  // coils' labels are removed with their coils and the new coils'
+  // labels are created with them.
+  const coilLabels = [];
+  function applyLabelFonts() {
+    const labelScale = Math.min(1, Math.max(0.45, viewW / 1400));
+    for (const L of coilLabels) {
+      L.el.style.fontSize = Math.round(L.basePx * labelScale) + "px";
+      L.w = 0;
+    }
+    if (selLabel) {
+      selLabel.el.style.fontSize = Math.round(selLabel.basePx * labelScale) + "px";
+      selLabel.w = 0;
+    }
+  }
+  function rebuildCoilLabels() {
+    for (const L of coilLabels) {
+      try { L.el.remove(); } catch (e) { /* already gone */ }
+    }
+    coilLabels.length = 0;
+    if (!labelsEl) return;
+    COILS.forEach((g) => {
       const el = document.createElement("div");
       el.style.opacity = "0";
       const large = g.count >= LARGE_LABEL_MIN;
@@ -1764,7 +1970,7 @@ export function createHelixScene(canvas, opts = {}) {
       el.appendChild(nameSpan);
       el.appendChild(countSpan);
       labelsEl.appendChild(el);
-      bandLabels.push({
+      coilLabels.push({
         el,
         group: g.index,
         count: g.count,
@@ -1772,8 +1978,8 @@ export function createHelixScene(canvas, opts = {}) {
         anchorLocal: g.anchorLocal,
         anchorY: g.anchorY,
         basePx: large
-          ? 15 + 37 * (g.sqrt / BANDS[0].sqrt)
-          : 8 + 5 * (g.sqrt / BANDS[0].sqrt),
+          ? 15 + 37 * (g.sqrt / layoutMaxSqrt)
+          : 8 + 5 * (g.sqrt / layoutMaxSqrt),
         w: 0,
         h: 0,
         op: 0,
@@ -1783,6 +1989,11 @@ export function createHelixScene(canvas, opts = {}) {
         ay: 0,
       });
     });
+    // The selection label keeps painting above the coil labels.
+    if (selLabel) labelsEl.appendChild(selLabel.el);
+    applyLabelFonts();
+  }
+  if (labelsEl) {
     // Selection label (Phase 2b): ONE dynamic label in the same
     // band-label styling, created once and re-bound by applyReshape
     // to the dominant band of the current refined selection —
@@ -1814,6 +2025,7 @@ export function createHelixScene(canvas, opts = {}) {
       ay: 0,
       active: false,
     };
+    rebuildCoilLabels();
   }
 
   let labelDocX = 0;
@@ -1852,6 +2064,19 @@ export function createHelixScene(canvas, opts = {}) {
     return out;
   }
   const _lp = { x: 0, y: 0 };
+  // Clamp a label's layer-space position so its body never clips
+  // off the layer's edge (the atlas renders showed REFERENCE and
+  // DOCUMENTS cut mid-word at the screen edges).
+  function clampLabelPos(L, W, H, offX, offY) {
+    const hw = (L.w || 0) / 2;
+    const hh = (L.h || 0) / 2;
+    const x0 = -offX + hw + 6;
+    const x1 = -offX + W - hw - 6;
+    const y0 = -offY + hh + 6;
+    const y1 = -offY + H - hh - 6;
+    if (x1 > x0) _lp.x = Math.min(Math.max(_lp.x, x0), x1);
+    if (y1 > y0) _lp.y = Math.min(Math.max(_lp.y, y0), y1);
+  }
   function updateLabels() {
     if (!labelsEl) return;
     const offX = -labelDocX;
@@ -1859,8 +2084,14 @@ export function createHelixScene(canvas, opts = {}) {
     const W = labelW || viewW;
     const H = labelH || viewH;
     const focusAmt = focusAmtCur;
+    // Top-down blend (2026-11-15): as the camera approaches the
+    // poster's top-down framing, the facing fade relaxes — in the
+    // reel's top-down frame EVERY ring carries its tag at its own
+    // arc position, near side and far side alike. At side elevation
+    // the facing rule governs unchanged.
+    const topMix = smoothstep(0.80, 1.05, camElevCur);
     // Pass 1: project anchors, compute facing opacity.
-    for (const L of bandLabels) {
+    for (const L of coilLabels) {
       const world = structure.localToWorld(_v1.copy(L.anchorLocal));
       const axisW = structure.localToWorld(_v2.set(0, L.anchorY, 0));
       // facing: radial direction (axis -> anchor) vs view direction
@@ -1873,6 +2104,7 @@ export function createHelixScene(canvas, opts = {}) {
       const vl = Math.hypot(vx, vy, vz) || 1;
       const facing = (rx / rl) * (vx / vl) + (rz / rl) * (vz / vl);
       let op = smoothstep(-0.30, 0.30, facing);
+      if (topMix > 0) op = op * (1 - topMix) + topMix * 0.97;
       const s = projectToScreen(world, _scr);
       L.sx = s.x + offX;
       L.sy = s.y + offY;
@@ -1902,7 +2134,7 @@ export function createHelixScene(canvas, opts = {}) {
     // Pass 2: large-label collisions — when two large labels overlap
     // substantially on the front sweep, the larger collection wins
     // and the smaller fades (Amendment L; no jitter, transform-only).
-    const larges = bandLabels.filter((l) => l.large && l.op > 0.35);
+    const larges = coilLabels.filter((l) => l.large && l.op > 0.35);
     for (let i = 0; i < larges.length; i++) {
       for (let j = i + 1; j < larges.length; j++) {
         const a = larges[i], b = larges[j];
@@ -1915,10 +2147,15 @@ export function createHelixScene(canvas, opts = {}) {
       }
     }
     // Pass 3: write transforms + opacity.
-    for (const L of bandLabels) {
+    for (const L of coilLabels) {
       L.el.style.opacity = String(0.96 * L.op);
+      L.px = null;
+      L.py = null;
       if (L.op > 0.01) {
         labelPos(L, _lp);
+        clampLabelPos(L, W, H, offX, offY);
+        L.px = Math.round(_lp.x);
+        L.py = Math.round(_lp.y);
         L.el.style.transform =
           "translate3d(" + _lp.x.toFixed(1) + "px," + _lp.y.toFixed(1) + "px,0) translate(-50%,-50%)";
       }
@@ -1940,6 +2177,7 @@ export function createHelixScene(canvas, opts = {}) {
         const vl = Math.hypot(vx, vy, vz) || 1;
         const facing = (rx / rl) * (vx / vl) + (rz / rl) * (vz / vl);
         op = smoothstep(-0.30, 0.30, facing);
+        if (topMix > 0) op = op * (1 - topMix) + topMix * 0.97;
         const s = projectToScreen(world, _scr);
         selLabel.sx = s.x + offX;
         selLabel.sy = s.y + offY;
@@ -1959,8 +2197,13 @@ export function createHelixScene(canvas, opts = {}) {
         }
       }
       selLabel.el.style.opacity = String(0.96 * op);
+      selLabel.px = null;
+      selLabel.py = null;
       if (op > 0.01) {
         labelPos(selLabel, _lp);
+        clampLabelPos(selLabel, W, H, offX, offY);
+        selLabel.px = Math.round(_lp.x);
+        selLabel.py = Math.round(_lp.y);
         selLabel.el.style.transform =
           "translate3d(" + _lp.x.toFixed(1) + "px," + _lp.y.toFixed(1) + "px,0) translate(-50%,-50%)";
       }
@@ -2034,19 +2277,17 @@ export function createHelixScene(canvas, opts = {}) {
     }
     camera.updateProjectionMatrix();
     applyDpr();
-    const labelScale = Math.min(1, Math.max(0.45, viewW / 1400));
-    for (const L of bandLabels) {
-      L.el.style.fontSize = Math.round(L.basePx * labelScale) + "px";
-      L.w = 0;
-    }
-    if (selLabel) {
-      selLabel.el.style.fontSize = Math.round(selLabel.basePx * labelScale) + "px";
-      selLabel.w = 0;
-    }
+    applyLabelFonts();
     if (labelsEl) {
       const lr = labelsEl.getBoundingClientRect();
-      labelDocX = lr.left + window.scrollX;
-      labelDocY = lr.top + window.scrollY;
+      // The label overlay is viewport-fixed (styles.css): its local
+      // frame IS the viewport frame, so no scroll term enters the
+      // offset. The document-space fallback stays for any embedding
+      // that keeps the layer in flow.
+      const fixedLayer =
+        window.getComputedStyle(labelsEl).position === "fixed";
+      labelDocX = lr.left + (fixedLayer ? 0 : window.scrollX);
+      labelDocY = lr.top + (fixedLayer ? 0 : window.scrollY);
       labelW = labelsEl.clientWidth || 0;
       labelH = labelsEl.clientHeight || 0;
     }
@@ -2114,7 +2355,14 @@ export function createHelixScene(canvas, opts = {}) {
     const dbh = renderer.domElement.height || 1;
     uniforms.uProjFactor.value =
       dbh / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)));
-    if (mode === "focus" && focusRotTarget != null) {
+    if (eraHold && (mode === "focus" || mode === "reshape")) {
+      // Era hold: damp the rotation onto the era stretch's facing
+      // angle and STOP there — the spiral hovers locked on the
+      // stretch while the era is selected (2026-11-15 §5).
+      const rk = 1 - Math.exp(-Math.max(dt, 0.001) / 0.9);
+      rotCur += (eraHold.rotTarget - rotCur) * rk;
+      if (Math.abs(eraHold.rotTarget - rotCur) < 0.0005) rotCur = eraHold.rotTarget;
+    } else if (mode === "focus" && focusRotTarget != null) {
       // Focus tracking (2026-11-14): damp the rotation to the held
       // angle and stop there. Before this fix the structure kept
       // turning at 0.45x through the whole focus, so the lit section
@@ -2125,6 +2373,12 @@ export function createHelixScene(canvas, opts = {}) {
       if (Math.abs(focusRotTarget - rotCur) < 0.0005) rotCur = focusRotTarget;
     } else {
       rotCur += Math.max(dt, 0.001) * 0.045 * (mode === "idle" ? 1 : 0.45);
+    }
+    // Layout-swap rotation kick: a brief spin impulse under the
+    // dissolve while the spiral re-forms (the shuffle).
+    if (rotBoost > 0.001 && !eraHold) {
+      rotCur += rotBoost * Math.max(dt, 0.001);
+      rotBoost *= Math.exp(-Math.max(dt, 0.001) / 0.7);
     }
     structure.rotation.y = rotCur;
     structure.position.y = Math.sin(sceneTime * 0.07) * 0.9;
@@ -2139,6 +2393,20 @@ export function createHelixScene(canvas, opts = {}) {
     dissolveCur += (1 - dissolveCur) * (1 - Math.exp(-Math.max(dt, 0.001) / 0.22));
     if (dissolveCur > 0.995) dissolveCur = 1;
     uniforms.uDissolve.value = dissolveCur;
+    // Layout swap (re-coiling): the dissolve curve is driven by the
+    // swap clock and the geometry/labels exchange at its bottom —
+    // one dissolve for the whole re-form, never two.
+    if (layoutAnim) {
+      const t = (now - layoutAnim.start) / 950;
+      if (t >= 0.40 && !layoutAnim.swapped) {
+        layoutAnim.swapped = true;
+        if (doLayoutSwap(layoutAnim.state)) applyDisplay(layoutAnim.state);
+      }
+      if (t < 0.40) dissolveCur = Math.max(0.22, 1 - (t / 0.40) * 0.78);
+      else dissolveCur = Math.min(1, 0.22 + ((t - 0.40) / 0.60) * 0.78);
+      uniforms.uDissolve.value = dissolveCur;
+      if (t >= 1) layoutAnim = null;
+    }
     updateLift(Math.max(dt, 0.001));
     renderer.render(scene, camera);
     updateLabels();
@@ -2281,6 +2549,13 @@ export function createHelixScene(canvas, opts = {}) {
         ".tower-index--loading, .tf2-note--cataloging"
       );
     } catch (e) { /* keep previous */ }
+    // A layout state stashed during the stream applies first (the
+    // re-form establishes the coils the reshape then lights).
+    if (!loadActive && pendingLayoutState) {
+      const s = pendingLayoutState;
+      pendingLayoutState = null;
+      setDisplay(s);
+    }
     // A reshape stashed during the stream applies the moment the
     // load markers clear (Phase 2b streaming safety).
     if (!loadActive && pendingReshape) {
@@ -2341,7 +2616,146 @@ export function createHelixScene(canvas, opts = {}) {
     if (!frozen && !degraded && !running) start();
   }
 
+  // ---- layout switching (2026-11-15 re-coiling) ------------------
+  let layoutAnim = null;        // {start, state, swapped}
+  let pendingLayoutState = null; // layout state stashed mid-stream
+  let rotBoost = 0;
+  function computeEraHold(spec) {
+    if (!spec || typeof spec !== "object") return null;
+    const coil = COILS[spec.coil];
+    if (!coil) return null;
+    const f0 = clamp01(typeof spec.f0 === "number" ? spec.f0 : 0);
+    const f1 = clamp01(typeof spec.f1 === "number" ? spec.f1 : f0);
+    const thetaMid = coil.thetaStart + ((f0 + f1) / 2) * (coil.thetaEnd - coil.thetaStart);
+    const af = frameAt(thetaMid);
+    const anchor = af.C.clone().addScaledVector(af.e1, TUBE_R + 1.05);
+    const aA = Math.atan2(anchor.z, anchor.x);
+    const aC = Math.atan2(Math.cos(CAM_AZ), Math.sin(CAM_AZ));
+    const base = aA - aC;
+    const twoPi = Math.PI * 2;
+    return {
+      coil: spec.coil,
+      f0,
+      f1,
+      thetaMid,
+      y: af.C.y,
+      rotTarget: base + twoPi * Math.round((rotCur - base) / twoPi),
+    };
+  }
+  // On return to the resting layout, panels whose segment page is
+  // resident-active move back onto it (their canonical home cells).
+  function rehomeActiveSegments() {
+    for (let s = 0; s < 8; s++) {
+      if (segState[s].status !== "active") continue;
+      const page = s + 1;
+      for (const i of segPanels[s]) {
+        if (!SEG_POOLS[s][placements[i].band]) continue;
+        const c = cellFor(page, placements[i].band, segSliceRank[i]);
+        if (c < 0) continue;
+        instPage[i] = page;
+        instCell[i] = c;
+        instHomeCell[i] = c;
+        instHomePage[i] = page;
+      }
+    }
+  }
+  // The exchange at the bottom of the swap dissolve: geometry,
+  // wire, dust and labels rebuilt for the new layout; every
+  // instance re-homed to the starter page (segment pages return
+  // only on the resting layout); transient display state cleared.
+  // Returns false (leaving the current layout untouched) on a
+  // malformed spec.
+  function doLayoutSwap(state) {
+    const spec = state.layout;
+    if (!spec) return false;
+    // Returning to the resting layout rebuilds the scene's own
+    // seven-collection defs (hub counts), not a page-supplied list.
+    let defs;
+    if (spec.key === "rest") {
+      defs = restingDefs();
+    } else {
+      if (!Array.isArray(spec.coils) || !spec.coils.length) return false;
+      defs = [];
+      for (const c of spec.coils) {
+        if (!c || typeof c.name !== "string" || typeof c.count !== "number") return false;
+        defs.push({
+          key: typeof c.key === "string" ? c.key : "coil:" + defs.length,
+          name: c.name,
+          count: c.count,
+          band: typeof c.band === "number" ? c.band : 0,
+          anchorFrac: typeof c.anchorFrac === "number" ? c.anchorFrac : undefined,
+        });
+      }
+    }
+    if (mirrorSet.size) clearMirror();
+    buildLayoutGeometry(defs);
+    layoutKey = spec.key;
+    segFrozen = layoutKey !== "rest";
+    resetInstanceCells();
+    if (!segFrozen) rehomeActiveSegments();
+    for (const l of wireLines) {
+      structure.remove(l);
+      l.geometry.dispose();
+      l.material.dispose();
+    }
+    wireLines = buildWireLines();
+    if (dustPoints) {
+      structure.remove(dustPoints);
+      dustPoints.geometry.dispose();
+      dustPoints.material.dispose();
+    }
+    dustPoints = buildDustPoints();
+    rebuildCoilLabels();
+    focusGroups = [];
+    focusRotTarget = null;
+    eraHold = null;
+    lastReshape = null;
+    if (selLabel) selLabel.active = false;
+    rebuildPartition();
+    return true;
+  }
   function setDisplay(state) {
+    if (!state || disposed) return;
+    // A state carrying a NEW layout re-forms the spiral first: the
+    // dissolve dips, the geometry/labels exchange at its bottom,
+    // and the carried display state applies onto the new coils in
+    // the same commit. Latest-wins like every other state.
+    if (
+      state.layout &&
+      typeof state.layout === "object" &&
+      typeof state.layout.key === "string" &&
+      state.layout.key !== layoutKey
+    ) {
+      if (layoutAnim && !layoutAnim.swapped) {
+        // A swap is already mid-dissolve: retarget it (a different
+        // target restarts the clock; the same target just updates
+        // the state that will apply at the bottom).
+        if (layoutAnim.state.layout.key !== state.layout.key) {
+          layoutAnim = { start: performance.now(), state, swapped: false };
+        } else {
+          layoutAnim.state = state;
+        }
+        return;
+      }
+      if (running && loadActive) {
+        pendingLayoutState = state;
+        return;
+      }
+      pendingLayoutState = null;
+      if (frozen || degraded || !running) {
+        if (doLayoutSwap(state)) applyDisplay(state);
+        stillDirty = true;
+        renderStill();
+        return;
+      }
+      layoutAnim = { start: performance.now(), state, swapped: false };
+      rotBoost = 2.6;
+      return;
+    }
+    applyDisplay(state);
+  }
+
+  function applyDisplay(state) {
     if (!state || disposed) return;
     if (state.kind === "reshape") {
       // Phase 2b streaming safety: while the catalog stream is
@@ -2357,6 +2771,7 @@ export function createHelixScene(canvas, opts = {}) {
       let ok = false;
       try { ok = applyReshape(state); } catch (e) { ok = false; }
       if (!ok) return; // malformed state: previous state untouched
+      eraHold = state.eraHold ? computeEraHold(state.eraHold) : null;
     } else if (state.kind === "focus" && Array.isArray(state.groups) && state.groups.length) {
       pendingReshape = null;
       lastReshape = null;
@@ -2365,7 +2780,7 @@ export function createHelixScene(canvas, opts = {}) {
       mode = "focus";
       focusGroups = state.groups.slice();
       setFocusWeights(focusGroups);
-      const ys = focusGroups.map((i) => BANDS[i].yMid);
+      const ys = focusGroups.map((i) => COILS[i].yMid);
       focusY = ys.reduce((a, b) => a + b, 0) / ys.length;
       const span = Math.max(...ys) - Math.min(...ys);
       // Reel-fidelity push-in (2026-11-14, Joshua 18:05): the
@@ -2387,7 +2802,7 @@ export function createHelixScene(canvas, opts = {}) {
       // under rotation.y, so the anchor faces the camera when
       // rotCur = aAnchor - aCamera (mod 2pi).
       {
-        const anchor = BANDS[focusGroups[0]] && BANDS[focusGroups[0]].anchorLocal;
+        const anchor = COILS[focusGroups[0]] && COILS[focusGroups[0]].anchorLocal;
         if (anchor) {
           const aA = Math.atan2(anchor.z, anchor.x);
           const aC = Math.atan2(Math.cos(CAM_AZ), Math.sin(CAM_AZ));
@@ -2398,10 +2813,12 @@ export function createHelixScene(canvas, opts = {}) {
           focusRotTarget = null;
         }
       }
+      eraHold = state.eraHold ? computeEraHold(state.eraHold) : null;
     } else if (state.kind === "lift" && Array.isArray(state.items)) {
       pendingReshape = null;
       lastReshape = null;
       focusRotTarget = null;
+      eraHold = null;
       if (selLabel) selLabel.active = false;
       if (mirrorSet.size) { clearMirror(); rebuildPartition(); }
       const items = state.items.slice(0, LIFT_MAX);
@@ -2421,6 +2838,7 @@ export function createHelixScene(canvas, opts = {}) {
       pendingReshape = null;
       lastReshape = null;
       focusRotTarget = null;
+      eraHold = null;
       if (selLabel) selLabel.active = false;
       if (mirrorSet.size) { clearMirror(); rebuildPartition(); }
       mode = "idle";
@@ -2436,7 +2854,8 @@ export function createHelixScene(canvas, opts = {}) {
     // segments that pass the FAR test. Focus/lift commits that
     // carried an activation also dip the dissolve briefly so the
     // swap reads as part of the commit (reshape already dips).
-    {
+    // Skipped off the resting layout (segment lifecycle frozen).
+    if (!segFrozen) {
       let activated = false;
       for (let s = 0; s < 8; s++) {
         if (segState[s].status !== "resident") continue;
@@ -2550,6 +2969,29 @@ export function createHelixScene(canvas, opts = {}) {
         booted,
         loadActive,
         mode,
+        layout: layoutKey,
+        coils: COILS.map((c) => ({
+          key: c.key,
+          name: c.name,
+          count: c.count,
+          band: c.band,
+          stations: c.stations,
+          panels: c.panels,
+        })),
+        eraHold: eraHold
+          ? { coil: eraHold.coil, f0: eraHold.f0, f1: eraHold.f1 }
+          : null,
+        labels: coilLabels.map((L) => ({
+          name: COILS[L.group] ? COILS[L.group].name : "",
+          x: Math.round(L.sx),
+          y: Math.round(L.sy),
+          px: L.px != null ? L.px : null,
+          py: L.py != null ? L.py : null,
+          op: Math.round(L.op * 100) / 100,
+          w: L.w,
+          h: L.h,
+        })),
+        rotCur,
         mirror: mirrorSet.size,
         pages: [...pageRecs.values()].map((r) => ({
           page: r.page,
@@ -2581,6 +3023,7 @@ export function createHelixScene(canvas, opts = {}) {
           homePage: Array.from(instHomePage),
           seg: Array.from(instSeg),
           group: placements.map((p) => p.group),
+          band: placements.map((p) => p.band),
           focus: Array.from(focusW),
         };
       }

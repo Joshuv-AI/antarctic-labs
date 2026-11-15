@@ -4092,6 +4092,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // lane, in canonical order: LAW 0, PAPERS 1, BOOKS 2, REFERENCE 3,
   // DECLASSIFIED 4, PODCASTS 5, DOCUMENTS 6.
   const helixSigRef = useRef("");
+  const helixParentBandRef = useRef(null); // {src, map: key -> bandIdx}
   useEffect(() => {
     const api = helixApiRef && helixApiRef.current;
     if (!api || typeof api.setDisplay !== "function") return;
@@ -4108,10 +4109,168 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       LAW: 0, PAPERS: 1, BOOKS: 2, REFERENCE: 3,
       DECLASSIFIED: 4, PODCASTS: 5, DOCUMENTS: 6,
     };
+    const HELIX_BAND_NAME = [
+      "LAW", "PAPERS", "BOOKS", "REFERENCE", "DECLASSIFIED", "PODCASTS", "DOCUMENTS",
+    ];
     const searching = !!(q && q.trim().length >= 2);
     const anyFilter = !!(bucketFilter || collKey || shelfKey || paperKey || paperTypeKey || eraFilter);
+    // ---- scene layout (2026-11-15, hierarchical re-coiling) -----
+    // The spiral's coil structure is COMPUTED from the selection:
+    // a curated group tab re-forms the spiral into one coil per
+    // subcategory of that group; a Books shelf pick re-forms it
+    // into the 61 shelves; a lane subcategory pick re-forms it into
+    // that lane's subcategories; anything else is the resting
+    // seven-collection layout. Each coil's parent band — the pool
+    // its covers may come from — is the dominant catalog lane among
+    // the subcategory's own members, sampled from its bitset (so a
+    // coil can never show another collection's material).
+    const parentBandOf = (groupId, c) => {
+      const DEF = { traditions: 2, law: 0, med: 1, eng: 1, conspiracy: 4, audiences: 1 };
+      if (!c || !c.bits || !towerData || !towerData.bucketKeys) {
+        return DEF[groupId] !== undefined ? DEF[groupId] : 2;
+      }
+      let cache = helixParentBandRef.current;
+      if (!cache || cache.src !== collData) {
+        cache = { src: collData, map: new Map() };
+        helixParentBandRef.current = cache;
+      }
+      if (cache.map.has(c.key)) return cache.map.get(c.key);
+      const bk = towerData.bucketKeys;
+      const tally = [0, 0, 0, 0, 0, 0, 0];
+      let seen = 0;
+      const bits = c.bits;
+      for (let w = 0; w < bits.length && seen < 240; w++) {
+        let word = bits[w];
+        while (word) {
+          const b = word & -word;
+          const i = (w << 5) + (31 - Math.clz32(b));
+          const bi = HELIX_BAND_OF[(bk[i] || "").split(":")[0]];
+          if (bi !== undefined) {
+            tally[bi]++;
+            seen++;
+          }
+          word ^= b;
+          if (seen >= 240) break;
+        }
+      }
+      let best = -1;
+      let bestN = 0;
+      tally.forEach((n, bi) => {
+        if (n > bestN) {
+          bestN = n;
+          best = bi;
+        }
+      });
+      const band = best >= 0 ? best : DEF[groupId] !== undefined ? DEF[groupId] : 2;
+      cache.map.set(c.key, band);
+      return band;
+    };
+    let layout = null;
+    if (collGroup) {
+      if (!collData) return; // group data still loading — hold the scene
+      const group = collData.groups.find((g) => g.id === collGroup);
+      if (group && group.collections.length) {
+        layout = {
+          key: "g:" + collGroup,
+          kind: "group",
+          groupLabel: group.label,
+          coils: group.collections.map((c) => ({
+            key: c.key,
+            name: c.label,
+            count: c.count,
+            band: parentBandOf(collGroup, c),
+          })),
+          picked: collKey
+            ? group.collections.findIndex((c) => c.key === collKey)
+            : -1,
+        };
+      }
+    }
+    if (!layout && shelfKey) {
+      if (!collData) return; // shelf data still loading — hold
+      if (collData.booksShelves && collData.booksShelves.length) {
+        layout = {
+          key: "shelves",
+          kind: "shelf",
+          groupLabel: "Books",
+          coils: collData.booksShelves.map((s) => ({
+            key: s.key,
+            name: s.label,
+            count: s.count,
+            band: 2,
+          })),
+          picked: collData.booksShelves.findIndex((s) => s.key === shelfKey),
+        };
+      }
+    }
+    if (
+      !layout &&
+      bucketFilter &&
+      bucketFilter.indexOf(":") > -1 &&
+      towerData &&
+      towerData.subCounts
+    ) {
+      const lane = bucketFilter.split(":")[0];
+      const subs = TOWER_SUBS[lane];
+      if (subs && subs.length && HELIX_BAND_OF[lane] !== undefined) {
+        layout = {
+          key: "sub:" + lane,
+          kind: "sub",
+          groupLabel: TOWER_TOP_LABELS[lane] || lane,
+          coils: subs.map((s) => ({
+            key: lane + ":" + s.id,
+            name: s.label,
+            count: towerData.subCounts[lane + ":" + s.id] || 0,
+            band: HELIX_BAND_OF[lane],
+          })),
+          picked: subs.findIndex((s) => lane + ":" + s.id === bucketFilter),
+        };
+      }
+    }
+    const layoutArg = layout
+      ? {
+          // The band + counts fingerprint rides the key: if a coil's
+          // parent band is refined when the full derivation lands
+          // (early emissions can precede the bucket keys the sampler
+          // reads), or a lane-sub layout was first sized from
+          // prefix counts mid-stream, the key changes and the scene
+          // re-forms with the corrected coils instead of keeping
+          // the fallback. Mid-stream re-forms coalesce through the
+          // scene's load stash — one swap lands at settle.
+          key:
+            layout.key +
+            "#" +
+            layout.coils.map((c) => c.band).join("") +
+            "#" +
+            layout.coils.reduce((s, c, i) => (s + c.count * (i + 7)) % 1000000007, 0),
+          coils: layout.coils,
+        }
+      : { key: "rest" };
+    // Era hold (§5): the era's stretch of a coil, as fractions of
+    // the coil measured from its front (most recent) end, from the
+    // phase-0 bucketEraCounts of the coil's parent bucket — the
+    // same tallies the era windows use.
+    const eraHoldFor = (coilIdx, parentKey, parentTotal) => {
+      if (!eraFilter || !towerData || !towerData.bucketEraCounts || !parentTotal) {
+        return null;
+      }
+      const eraIdx = TOWER_ERAS.findIndex((e) => e.id === eraFilter);
+      if (eraIdx < 0) return null;
+      const bec = towerData.bucketEraCounts;
+      const era = bec[parentKey + "|" + eraFilter] || 0;
+      if (!era) return null;
+      let newer = 0;
+      for (let j = eraIdx + 1; j < TOWER_ERAS.length; j++) {
+        newer += bec[parentKey + "|" + TOWER_ERAS[j].id] || 0;
+      }
+      return {
+        coil: coilIdx,
+        f0: newer / parentTotal,
+        f1: (newer + era) / parentTotal,
+      };
+    };
     let state = null;
-    if (!searching && !anyFilter) {
+    if (!searching && !anyFilter && !layout) {
       state = { kind: "idle" };
     } else {
       let count = -1;
@@ -4187,6 +4346,144 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           })),
         };
       } else if (count > 50) {
+        // ---- layout states (re-coiling) --------------------------
+        // When a layout is active, the display is computed over
+        // the layout's coils (below); the resting-layout logic that
+        // follows is skipped and its result overridden. layoutState
+        // stays null while the per-coil facets are not final — the
+        // previous scene state holds, exactly like an uncommitted
+        // browse.
+        let layoutState = undefined;
+        if (layout) {
+          layoutState = null;
+          const mirrorItems = () =>
+            (sampleArtifacts || topArtifacts || []).slice(0, 64).map((a) => ({
+              title: a.title || "",
+              creator: a.creator || "",
+              year: a.year || null,
+              collection: a.collection || "",
+            }));
+          const layoutName = () => {
+            const summary =
+              activeFilterSummary && activeFilterSummary !== "All entries"
+                ? activeFilterSummary
+                : "";
+            if (layout.kind === "group") {
+              return summary
+                ? layout.groupLabel + " · " + summary
+                : layout.groupLabel;
+            }
+            return summary || layout.groupLabel;
+          };
+          if (searching) {
+            // Search exception: travel to the picked coil, else
+            // neutral within the layout — never faked facets.
+            layoutState =
+              layout.picked >= 0
+                ? { kind: "focus", groups: [layout.picked] }
+                : { kind: "idle" };
+          } else if (layout.picked >= 0) {
+            // A picked subcategory / shelf / lane-sub: the result
+            // set lives entirely in that coil — one-hot facets with
+            // the committed count.
+            const facets = {};
+            facets[layout.picked] = count;
+            layoutState = {
+              kind: "reshape",
+              facets,
+              total: count,
+              name: layoutName(),
+              items: mirrorItems(),
+            };
+            if (eraFilter) {
+              let eh = null;
+              if (layout.kind === "sub") {
+                const key = layout.coils[layout.picked].key;
+                eh = eraHoldFor(
+                  layout.picked,
+                  key,
+                  towerData && towerData.subCounts ? towerData.subCounts[key] : 0
+                );
+              } else {
+                const laneName = HELIX_BAND_NAME[layout.coils[layout.picked].band];
+                eh = eraHoldFor(
+                  layout.picked,
+                  laneName,
+                  towerData && towerData.counts ? towerData.counts[laneName] : 0
+                );
+              }
+              if (eh) layoutState.eraHold = eh;
+            }
+          } else if (layout.kind === "group" && !anyFilter) {
+            // The pure curated click: a structural re-form — every
+            // subcategory coil lit at its true count, nothing else
+            // filtered.
+            const facets = {};
+            let total = 0;
+            layout.coils.forEach((c, i) => {
+              if (c.count > 0) {
+                facets[i] = c.count;
+                total += c.count;
+              }
+            });
+            layoutState =
+              total > 0
+                ? {
+                    kind: "reshape",
+                    facets,
+                    total,
+                    name: layout.groupLabel,
+                    items: [],
+                  }
+                : { kind: "idle" };
+          } else if (layout.kind === "group" && facetCounts && facetCounts.curatedMap) {
+            // Combinations: each coil's share of the selection
+            // formed by the OTHER axes — the panel's own dynamic
+            // facet counts, so panel, results and scene cannot
+            // disagree about a combination.
+            const facets = {};
+            let total = 0;
+            layout.coils.forEach((c, i) => {
+              const v = facetCounts.curatedMap[c.key] || 0;
+              if (v > 0) {
+                facets[i] = v;
+                total += v;
+              }
+            });
+            if (total > 0) {
+              layoutState = {
+                kind: "reshape",
+                facets,
+                total,
+                name: layoutName(),
+                items: mirrorItems(),
+              };
+              if (eraFilter) {
+                let dom = -1;
+                let best = -1;
+                for (const k of Object.keys(facets)) {
+                  if (facets[k] > best) {
+                    best = facets[k];
+                    dom = Number(k);
+                  }
+                }
+                if (dom >= 0) {
+                  const laneName = HELIX_BAND_NAME[layout.coils[dom].band];
+                  const eh = eraHoldFor(
+                    dom,
+                    laneName,
+                    towerData && towerData.counts ? towerData.counts[laneName] : 0
+                  );
+                  if (eh) layoutState.eraHold = eh;
+                }
+              }
+            } else {
+              // The combination has no presence inside this group:
+              // the coils stand neutral (the panel shows the zeros).
+              layoutState = { kind: "idle" };
+            }
+          }
+        }
         let groups = null;
         const lane = bucketFilter ? bucketFilter.split(":")[0] : "";
         if (lane && HELIX_LANE_BANDS[lane]) {
@@ -4215,7 +4512,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         const refined =
           searching || !!collKey || !!shelfKey || !!paperKey || !!paperTypeKey || !!eraFilter || (bucketFilter && bucketFilter.indexOf(":") > -1);
         let reshapeState = null;
-        if (refined && countsFinal && facetSource) {
+        if (!layout && refined && countsFinal && facetSource) {
           let facets = null;
           if (
             eraFilter && !lane && !collKey && !shelfKey && !paperKey && !paperTypeKey && !searching &&
@@ -4350,18 +4647,48 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           }
         }
         state = reshapeState || (groups ? { kind: "focus", groups } : { kind: "idle" });
+        // Era hold (resting layout): any era selection also gets
+        // the camera treatment — the dominant band's era stretch,
+        // rotation stopped — on top of the era windows' lighting.
+        if (!layout && eraFilter && state && (state.kind === "reshape" || state.kind === "focus")) {
+          const domB =
+            state.kind === "reshape"
+              ? Number(
+                  Object.keys(state.facets).sort(
+                    (a, b) => state.facets[b] - state.facets[a]
+                  )[0]
+                )
+              : state.groups[0];
+          const laneName = HELIX_BAND_NAME[domB];
+          const eh = laneName
+            ? eraHoldFor(
+                domB,
+                laneName,
+                towerData && towerData.counts ? towerData.counts[laneName] : 0
+              )
+            : null;
+          if (eh) state.eraHold = eh;
+        }
+        if (layout) state = layoutState;
       }
       // count still unknown (model pending / browse not committed):
       // hold the previous scene state — the scene's latest-wins rig
       // retargets when the committed state lands.
     }
     if (!state) return;
+    state.layout = layoutArg;
     const sig =
       state.kind +
+      "|" +
+      layoutArg.key +
       "|" +
       (state.groups ? state.groups.join(",") : "") +
       "|" +
       (state.items ? state.items.map((i) => i.title).join("§") : "") +
+      "|" +
+      (state.eraHold
+        ? "eh" + state.eraHold.coil + "@" + state.eraHold.f0.toFixed(3) + "-" + state.eraHold.f1.toFixed(3)
+        : "") +
       "|" +
       (state.kind === "reshape"
         ? state.name +
@@ -4385,7 +4712,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     try {
       api.setDisplay(state);
     } catch (e) { /* decorative layer — never disturb the page */ }
-  }, [q, bucketFilter, collKey, shelfKey, paperKey, paperTypeKey, eraFilter, serverActive, serverModel, blendedModel, browseResult, artifacts, helixApiRef, countsFinal, activeFilterSummary]);
+  }, [q, bucketFilter, collKey, collGroup, shelfKey, paperKey, paperTypeKey, eraFilter, serverActive, serverModel, blendedModel, browseResult, artifacts, helixApiRef, countsFinal, activeFilterSummary, collData, facetCounts]);
   // Analytics: one search_performed per settled query (900ms debounce so
   // keystrokes don't flood it), with the result count the user saw.
   useEffect(() => {
