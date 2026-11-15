@@ -324,12 +324,15 @@ function surfacePoint(theta, phi, out) {
 //   { kind: "focus", groups: [bandIndex, ...] }
 //   { kind: "lift", items: [{ title, creator, year, collection }] }
 //   { kind: "reshape", facets: { bandIndex: count, ... }, total,
-//     name, items?: [{ title, creator, year, collection }] } — a
+//     name, items?: [{ title, creator, year, collection }],
+//     windows?: { bandIndex: [newerCount, eraCount] } } — a
 //     refined filter combination: the coil contracts to the
 //     combination's exact per-collection shares and re-skins from
 //     its own collections' covers (Phase 2b, applyReshape); when
 //     items are present, the top results also mirror onto the
-//     dominant band's lit segment via the live page.
+//     dominant band's lit segment via the live page. windows, when
+//     present, places a band's lit stations at the selection era's
+//     own stretch of that band (era-position mapping, 2026-11-15).
 export function createHelixScene(canvas, opts = {}) {
   const starterUrl = opts.starterUrl || "/helix-starter.webp";
   const grainUrl = opts.grainUrl || "/helix-grain.webp";
@@ -586,21 +589,35 @@ export function createHelixScene(canvas, opts = {}) {
   // change only; the damped uFocusAmt ramps the transition.
 
   // Cell assignment is a PURE FUNCTION of (page, band, rank):
-  // each pool has one static seeded shuffle (its order), and an
-  // instance's cell on a page is order[(rank + bandEpoch[band]) %
-  // poolSize], where rank is the instance's canonical ordinal
-  // within that (page, band) set. Every assignment set in the
-  // scene is rank-contiguous per (page, band) — a segment's
+  // each pool has one static order — the bake's layout order,
+  // which since the era rebake (2026-11-15) is ERA ORDER within
+  // the pool (year descending; a band's front is its most recent
+  // material) — and an instance's cell on a page is dealt from
+  // that order by rank, where rank is the instance's canonical
+  // ordinal within that (page, band) set. Every assignment set in
+  // the scene is rank-contiguous per (page, band) — a segment's
   // panels, a band's lit stations — so per-cell counts over any
-  // assigned set differ by at most one BY CONSTRUCTION, under any
-  // interleaving of activations, reshapes, evictions and mirror
-  // binds. (The stateful deck this replaces leaked single cards
-  // whenever a home page moved mid-stream: activation deals,
-  // mirror home-reads and eviction resets each consumed cards
-  // outside a full traversal, skewing counts to 6..10 against a
-  // 7..8 expectation.) bandEpoch[band] increments on every
-  // reshape that includes the band — that rotation is what makes
-  // a reshape visibly re-skin: the same ranks land on new cells.
+  // full assignment set differ by at most one BY CONSTRUCTION,
+  // under any interleaving of activations, reshapes, evictions
+  // and mirror binds. (The stateful deck this replaced leaked
+  // single cards whenever a home page moved mid-stream.) Two
+  // deals share the order:
+  //   cyclic — order[rank % poolSize]: a multi-segment band's
+  //     segment pool covers only that segment's era range (the
+  //     rebake stratified the pools), so the deal cycles inside
+  //     a narrow era window and position still ages along the
+  //     band, segment by segment;
+  //   quantile — order[floor(rank * poolSize / rankSpace)]: the
+  //     starter page (one pool spans the whole band) and
+  //     single-segment bands, where a cyclic deal would wrap
+  //     the full era range inside one slice; the quantile deal
+  //     makes year a non-increasing step function of rank.
+  // bandEpoch[band] increments on every reshape that includes
+  // the band; the deal rotates by a BOUNDED slice of the pool
+  // (rot below) — enough that a reshape visibly re-skins (every
+  // panel's cover changes to an era-neighbouring entry), small
+  // enough that the era a rank carries shifts by at most
+  // rot/poolSize of the slice's era range.
   const orders = new Map();
   function orderFor(page, band) {
     const key = page + ":" + band;
@@ -614,12 +631,7 @@ export function createHelixScene(canvas, opts = {}) {
       if (pool) cellsArr = rangeArr(pool[0], pool[1]);
     }
     if (!cellsArr) return null;
-    const rng = mulberry32((0x9e3779b9 ^ (page * 1000003 + band * 131 + 7)) >>> 0);
-    o = cellsArr.slice();
-    for (let i = o.length - 1; i > 0; i--) {
-      const j = (rng() * (i + 1)) | 0;
-      const t = o[i]; o[i] = o[j]; o[j] = t;
-    }
+    o = cellsArr;
     orders.set(key, o);
     return o;
   }
@@ -641,10 +653,35 @@ export function createHelixScene(canvas, opts = {}) {
   function rankOnPage(i, page) {
     return page === PAGE_STARTER ? bandRank[i] : segSliceRank[i];
   }
+  // Deal geometry per band: how many segments carry the band, and
+  // how many panels each (segment, band) slice holds — the rank
+  // spaces the quantile deal stretches over.
+  const bandSegCount = new Array(BANDS.length).fill(0);
+  const slicePanels = new Map();
+  for (let s = 0; s < 8; s++) {
+    const per = new Array(BANDS.length).fill(0);
+    for (const i of segPanels[s]) per[placements[i].group]++;
+    for (let b = 0; b < BANDS.length; b++) {
+      if (per[b] > 0) {
+        bandSegCount[b]++;
+        slicePanels.set(s + ":" + b, per[b]);
+      }
+    }
+  }
   function cellFor(page, band, rank) {
     const o = orderFor(page, band);
     if (!o) return -1;
-    return o[(rank + bandEpoch[band]) % o.length];
+    const rot = bandEpoch[band] % Math.max(1, Math.min(16, o.length >> 3));
+    let idx;
+    if (page !== PAGE_STARTER && bandSegCount[band] > 1) {
+      idx = rank % o.length;
+    } else {
+      const space = page === PAGE_STARTER
+        ? BANDS[band].panels
+        : slicePanels.get((page - 1) + ":" + band) || o.length;
+      idx = Math.min(o.length - 1, Math.floor((rank * o.length) / Math.max(1, space)));
+    }
+    return o[(idx + rot) % o.length];
   }
   // Canonical starter assignment (epoch 0 on every band).
   for (let i = 0; i < panelCount; i++) {
@@ -1180,8 +1217,9 @@ export function createHelixScene(canvas, opts = {}) {
   // ---- live mirror page -------------------------------------------
   // Mirroring v1: the current selection's top results typeset as
   // title pages (zero wire — title/creator/year/collection are
-  // already on the page) on a 1024² canvas, bound to the lit prefix
-  // of the dominant band nearest its selection-label anchor.
+  // already on the page) on a 1024² canvas, bound to the lit
+  // stations of the dominant band nearest its selection-label
+  // anchor (the era stretch when the reshape carries a window).
   const mirrorSet = new Map(); // instance -> live cell
   const liveCanvas = document.createElement("canvas");
   liveCanvas.width = 1024;
@@ -1241,7 +1279,7 @@ export function createHelixScene(canvas, opts = {}) {
     }
     mirrorSet.clear();
   }
-  function bindMirror(items, domBand, litStations) {
+  function bindMirror(items, domBand, litRange, anchorFrac) {
     clearMirror();
     if (!items || !items.length) return;
     const n = Math.min(items.length, LIVE_DIV * LIVE_DIV);
@@ -1253,12 +1291,15 @@ export function createHelixScene(canvas, opts = {}) {
     if (!rec.mesh) buildPageMesh(rec);
     rec.ready = true;
     const band = BANDS[domBand];
-    const frac = (ANCHOR_FRAC[domBand] + 0.28) % 1;
+    const frac = anchorFrac != null
+      ? anchorFrac
+      : (ANCHOR_FRAC[domBand] + 0.28) % 1;
     const aTheta = band.thetaStart + frac * (band.thetaEnd - band.thetaStart);
     const first = groupFirst.get(domBand);
-    const litCount = Math.min(litStations[domBand] * ROWS, band.panels);
+    const p0 = (litRange ? litRange[0] : 0) * ROWS;
+    const p1 = Math.min((litRange ? litRange[1] : band.stations) * ROWS, band.panels);
     const cands = [];
-    for (let k = 0; k < litCount; k++) cands.push(first + k);
+    for (let k = p0; k < p1; k++) cands.push(first + k);
     cands.sort(
       (a, b) => Math.abs(placements[a].theta - aTheta) - Math.abs(placements[b].theta - aTheta)
     );
@@ -1274,10 +1315,13 @@ export function createHelixScene(canvas, opts = {}) {
   // ---- reshape (Phase 2b, Joshua 2026-11-13 22:26): a refined
   // filter combination re-forms the coil to the combination's own
   // shape. Three parts, all committed together or not at all:
-  //   contraction — within each band, the lit prefix of stations is
-  //     the combination's exact share of that band (facet count ÷
-  //     band total), expressed through the same per-instance focus
-  //     weights + damped uFocusAmt machinery as focus mode;
+  //   contraction — within each band, the lit stations are the
+  //     combination's exact share of that band (facet count ÷
+  //     band total): the band's front prefix by default, or the
+  //     era's own stretch when the state carries an era window
+  //     for the band (era-position mapping, 2026-11-15) —
+  //     expressed through the same per-instance focus weights +
+  //     damped uFocusAmt machinery as focus mode;
   //   re-skin — lit instances deal a fresh cell from their own
   //     band's pool ON THE PAGE THEY CURRENTLY SAMPLE (deck-dealt,
   //     no repeats within the deal); unlit instances return to
@@ -1293,6 +1337,8 @@ export function createHelixScene(canvas, opts = {}) {
   // only: no geometry recompute, no per-frame additions beyond one
   // scalar damp.
   let pendingReshape = null; // latest-wins stash while the stream runs
+  let lastReshape = null;    // diagnostics: last committed reshape's
+                             // facets / era windows / lit ranges
   let selLabel = null;       // bound in the labels block below
   let dissolveCur = 1;
   let focusAmtCur = 0;
@@ -1323,6 +1369,47 @@ export function createHelixScene(canvas, opts = {}) {
     const litStations = BANDS.map((g, b) =>
       Math.round(clamp01(facets[b] / Math.max(1, g.count)) * g.stations)
     );
+    // Era windows (2026-11-15): when the selection pins an era,
+    // pages.jsx may add state.windows = { band: [newer, eraCount] }
+    // — the era's position inside the band in record counts (how
+    // many of the band's records are newer than the era, how many
+    // are in it). A window is honored only when it describes the
+    // facet exactly (eraCount === facets[band]) and fits the band
+    // total; the band's lit stations then become the era's own
+    // stretch of the coil — [newer, newer+era) in station space —
+    // instead of the front-anchored prefix. Bands without a valid
+    // window keep the prefix (curated sets, sub-lane picks and
+    // searches, whose within-band era distribution the page does
+    // not tally). Position along a band is time (front = most
+    // recent), and the pools are era-ordered, so the stretch's
+    // covers are the era's own material.
+    const windows = [null, null, null, null, null, null, null];
+    if (state.windows && typeof state.windows === "object") {
+      for (const k of Object.keys(state.windows)) {
+        const bi = Number(k);
+        const v = state.windows[k];
+        if (!Number.isInteger(bi) || bi < 0 || bi >= BANDS.length) continue;
+        if (!Array.isArray(v) || v.length !== 2) continue;
+        const newer = v[0];
+        const eraCount = v[1];
+        if (typeof newer !== "number" || typeof eraCount !== "number") continue;
+        if (!Number.isFinite(newer) || !Number.isFinite(eraCount)) continue;
+        if (newer < 0 || eraCount < 0) continue;
+        if (eraCount !== facets[bi]) continue;
+        if (newer + eraCount > BANDS[bi].count) continue;
+        windows[bi] = [newer, eraCount];
+      }
+    }
+    const litRange = BANDS.map((g, b) => {
+      if (facets[b] <= 0) return [0, 0];
+      const w = windows[b];
+      if (!w) return [0, litStations[b]];
+      let s0 = Math.round((w[0] / Math.max(1, g.count)) * g.stations);
+      let s1 = Math.round(((w[0] + w[1]) / Math.max(1, g.count)) * g.stations);
+      s0 = Math.max(0, Math.min(g.stations - 1, s0));
+      s1 = Math.max(s0 + 1, Math.min(g.stations, s1));
+      return [s0, s1];
+    });
     // Skinning: every instance of a facet-positive band gets
     // the band's NEW-epoch pure-function cell on its current
     // page, lit or not (dealing only the lit subset would leave
@@ -1335,7 +1422,7 @@ export function createHelixScene(canvas, opts = {}) {
     clearMirror();
     for (let i = 0; i < panelCount; i++) {
       const g = placements[i].group;
-      if (stationOf[i] < litStations[g]) {
+      if (stationOf[i] >= litRange[g][0] && stationOf[i] < litRange[g][1]) {
         scratchFocus[i] = 1.16;
         instCell[i] = cellFor(instPage[i], g, rankOnPage(i, instPage[i]));
         instHomeCell[i] = instCell[i];
@@ -1350,7 +1437,15 @@ export function createHelixScene(canvas, opts = {}) {
         instCell[i] = homeCellOf(i);
       }
     }
-    bindMirror(state.items, dom, litStations);
+    const domWindow = windows[dom]
+      ? (litRange[dom][0] + litRange[dom][1]) / (2 * Math.max(1, BANDS[dom].stations))
+      : null;
+    bindMirror(state.items, dom, litRange[dom], domWindow);
+    lastReshape = {
+      facets: facets.slice(),
+      windows: windows.map((w) => (w ? w.slice() : null)),
+      litRange: litRange.map((r) => r.slice()),
+    };
     // Commit.
     focusW.set(scratchFocus);
     rebuildPartition();
@@ -1362,7 +1457,9 @@ export function createHelixScene(canvas, opts = {}) {
     dissolveCur = 0.22;
     if (selLabel) {
       const band = BANDS[dom];
-      const frac = (ANCHOR_FRAC[dom] + 0.28) % 1;
+      const frac = domWindow != null
+        ? domWindow
+        : (ANCHOR_FRAC[dom] + 0.28) % 1;
       const aTheta = band.thetaStart + frac * (band.thetaEnd - band.thetaStart);
       const af = frameAt(aTheta);
       selLabel.anchorLocal = af.C.clone().addScaledVector(af.e1, TUBE_R + 1.05);
@@ -2262,6 +2359,7 @@ export function createHelixScene(canvas, opts = {}) {
       if (!ok) return; // malformed state: previous state untouched
     } else if (state.kind === "focus" && Array.isArray(state.groups) && state.groups.length) {
       pendingReshape = null;
+      lastReshape = null;
       if (selLabel) selLabel.active = false;
       if (mirrorSet.size) { clearMirror(); rebuildPartition(); }
       mode = "focus";
@@ -2302,6 +2400,7 @@ export function createHelixScene(canvas, opts = {}) {
       }
     } else if (state.kind === "lift" && Array.isArray(state.items)) {
       pendingReshape = null;
+      lastReshape = null;
       focusRotTarget = null;
       if (selLabel) selLabel.active = false;
       if (mirrorSet.size) { clearMirror(); rebuildPartition(); }
@@ -2320,6 +2419,7 @@ export function createHelixScene(canvas, opts = {}) {
       focusAmtTgt = 0;
     } else {
       pendingReshape = null;
+      lastReshape = null;
       focusRotTarget = null;
       if (selLabel) selLabel.active = false;
       if (mirrorSet.size) { clearMirror(); rebuildPartition(); }
@@ -2465,6 +2565,7 @@ export function createHelixScene(canvas, opts = {}) {
             : null,
         })),
         segments: segState.map((s) => s.status),
+        reshape: lastReshape,
         decks: [...orders.entries()].map(([k, o]) => ({
           key: k,
           size: o.length,
@@ -2480,6 +2581,7 @@ export function createHelixScene(canvas, opts = {}) {
           homePage: Array.from(instHomePage),
           seg: Array.from(instSeg),
           group: placements.map((p) => p.group),
+          focus: Array.from(focusW),
         };
       }
       return out;

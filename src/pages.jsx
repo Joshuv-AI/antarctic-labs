@@ -3848,6 +3848,45 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
             }
           }
           if (facets) {
+            // Era windows (era-position mapping, 2026-11-15): when
+            // the selection pins an era and its facets are the
+            // plain era-only or plain-lane x era tallies, each
+            // facet band also gets the era's position inside the
+            // band — [records of the band NEWER than the era,
+            // records IN the era] from the same phase-0
+            // bucketEraCounts — so the scene lights the era's own
+            // stretch of the coil (position along a band is time,
+            // front = most recent) instead of the band's front.
+            // A band's window is emitted only when its tally
+            // equals the facet it describes; curated sets, sub-lane
+            // picks and searches — whose within-band era
+            // distribution is not tallied here — keep the
+            // front-anchored reshape.
+            let windows = null;
+            if (
+              eraFilter && !searching && !collKey &&
+              (!bucketFilter || bucketFilter === lane) &&
+              towerData && towerData.bucketEraCounts
+            ) {
+              const eraIdx = TOWER_ERAS.findIndex((e) => e.id === eraFilter);
+              if (eraIdx >= 0) {
+                const bec = towerData.bucketEraCounts;
+                const w = {};
+                let okW = true;
+                for (const ln of Object.keys(HELIX_BAND_OF)) {
+                  const bi = HELIX_BAND_OF[ln];
+                  const c = facets[bi] || 0;
+                  if (!c) continue;
+                  if ((bec[ln + "|" + eraFilter] || 0) !== c) { okW = false; break; }
+                  let newer = 0;
+                  for (let j = eraIdx + 1; j < TOWER_ERAS.length; j++) {
+                    newer += bec[ln + "|" + TOWER_ERAS[j].id] || 0;
+                  }
+                  w[bi] = [newer, c];
+                }
+                if (okW && Object.keys(w).length) windows = w;
+              }
+            }
             const summary =
               activeFilterSummary && activeFilterSummary !== "All entries"
                 ? activeFilterSummary
@@ -3860,6 +3899,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
               facets,
               total: count,
               name,
+              ...(windows ? { windows } : {}),
               // Mirroring v1 (atlas-scale): the selection's top
               // results ride along so the scene can typeset them
               // onto the dominant band's lit segment (live page).
@@ -3896,7 +3936,14 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           Object.keys(state.facets)
             .sort()
             .map((k) => k + ":" + state.facets[k])
-            .join(",")
+            .join(",") +
+          (state.windows
+            ? "#w" +
+              Object.keys(state.windows)
+                .sort()
+                .map((k) => k + "@" + state.windows[k][0])
+                .join(",")
+            : "")
         : "");
     if (sig === helixSigRef.current) return;
     helixSigRef.current = sig;
