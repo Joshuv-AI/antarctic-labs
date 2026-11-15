@@ -1,18 +1,35 @@
 // Tower of Babel — Collections browser data (SPA side).
 //
 // The Collections browser is a FILTER on the main Tower page's existing
-// entry list, not a set of pages. It reads public/tower-hubs-index.json
-// (the precomputed hub data, regenerated from the live catalog by
-// scripts/generate-hubs-index.mjs) and turns each hub's work list into
-// an id Set the list filter intersects with search + category + sort.
+// entry list, not a set of pages. Curated membership ships as TCU1
+// bitsets inside the TCB1 dataset (tcb1-data/curated.bin, baked by
+// scripts/build-curated-bitsets.mjs from the design packages' verified
+// member lists); the hub index JSON remains the fallback for the one
+// group it can still express (Sacred traditions) when no bitsets are
+// available.
 //
-// Blurbs below are copied verbatim from functions/_lib/tower-hubs.js
-// (the server hub definitions) so the in-page browser says exactly what
-// the old hub pages said. This module must NOT import server function
-// code — the SPA bundle cannot run Pages Function modules, and the
-// blurbs are content, not logic. Course groups carry no blurb in the
-// server definitions, so theirs are short label-grounded lines written
-// here (no claims about specific works beyond the group label).
+// Taxonomy (2026-11-15 collections package): the Curated axis carries
+// six groups — Sacred traditions (unchanged), For Law Students,
+// For Med Students, Engineering, Conspiracy, and Mathematics and
+// Sciences (which replaces the old four-shelf "Study shelves" group
+// under the same internal "audiences" id, per its design). The Books
+// lane's subcategories are the 61-shelf Books expansion, delivered as
+// `bookshelf:` bitsets and rendered in the Collections axis' sub slot
+// (multi-match shelves cannot be a prefix partition). Removed and
+// never returning: the "Declassified programmes" curated group (its
+// subcategories merged into the Declassified lane's own subcategory
+// list — see tower-taxonomy.js) and "Course primary sources" (entries
+// stay in their home collections). Empty shelves ship as markers with
+// honest zero counts (Joshua's standing rule) — never padded.
+//
+// Labels and blurbs for the new groups live in
+// tower-collections-data.js, generated from the design packages so the
+// panel's text is the designs' own. Tradition blurbs below are copied
+// verbatim from functions/_lib/tower-hubs.js (the server hub
+// definitions) so the in-page browser says exactly what the old hub
+// pages said. This module must NOT import server function code — the
+// SPA bundle cannot run Pages Function modules, and the blurbs are
+// content, not logic.
 //
 // Loading is lazy and failure-tolerant: loadHubsIndex() fetches the
 // JSON once per session and resolves null on any failure, in which
@@ -20,17 +37,50 @@
 // category browse — never an error panel.
 
 // Group order is the panel's depth order inside the Curated axis:
-// the editorial groups first, the audience-keyed Study shelves last
-// (the deepest cut). The Authors group was removed 2026-11-11 (way
-// too broad as a browse axis; authors stay reachable through search,
-// and the hub index still carries topAuthors for the server-side
-// author hub pages and the API).
+// Sacred traditions first (the editorial shelf), then the student and
+// subject collections, with Mathematics and Sciences last (the deepest
+// cut, where Study shelves sat). The Authors group was removed
+// 2026-11-11 (way too broad as a browse axis; authors stay reachable
+// through search, and the hub index still carries topAuthors for the
+// server-side author hub pages and the API).
 export const COLLECTION_GROUPS = [
   { id: "traditions", label: "Sacred traditions" },
-  { id: "programmes", label: "Declassified programmes" },
-  { id: "course", label: "Course primary sources" },
-  { id: "audiences", label: "Study shelves" },
+  { id: "law", label: "For Law Students" },
+  { id: "med", label: "For Med Students" },
+  { id: "eng", label: "Engineering" },
+  { id: "conspiracy", label: "Conspiracy" },
+  { id: "audiences", label: "Mathematics and Sciences" },
 ];
+
+import {
+  LAW_COLLECTIONS,
+  MED_COLLECTIONS,
+  ENG_COLLECTIONS,
+  CONSPIRACY_COLLECTIONS,
+  MATHSCI_SHELVES,
+  BOOKS_SHELVES,
+} from "./tower-collections-data.js";
+
+// id -> {label, blurb} lookup for one taxonomy table.
+function tableLookup(table) {
+  const m = new Map();
+  for (const e of table) m.set(e.id, e);
+  return m;
+}
+const LAW_LOOKUP = tableLookup(LAW_COLLECTIONS);
+const MED_LOOKUP = tableLookup(MED_COLLECTIONS);
+const ENG_LOOKUP = tableLookup(ENG_COLLECTIONS);
+const CONSPIRACY_LOOKUP = tableLookup(CONSPIRACY_COLLECTIONS);
+const MATHSCI_LOOKUP = tableLookup(MATHSCI_SHELVES);
+const BOOKS_LOOKUP = tableLookup(BOOKS_SHELVES);
+
+// Books shelf descriptors WITHOUT membership (labels/blurbs/wings in
+// display order) — the panel renders the Books sub slot from the TCU1
+// descriptors when they exist; this table is its text source and the
+// ordering authority when counts are attached.
+export function booksShelfTable() {
+  return BOOKS_SHELVES;
+}
 
 export const TRADITION_BLURBS = {
   jainism:
@@ -74,42 +124,6 @@ export const TRADITION_BLURBS = {
     "Sacred and wisdom writing in the Tower that no single tradition claims: comparative religion, mysticism, mythology, and devotional works from across traditions — the remainder of the sacred shelf, gathered in one place.",
 };
 
-export const PROGRAMME_BLURBS = {
-  cia: "Declassified CIA records in the Tower from the CREST release: intelligence reports, estimates, and memoranda published by the Central Intelligence Agency.",
-  state:
-    "Foreign Relations of the United States volumes in the Tower: the State Department's official record of U.S. foreign policy decisions and diplomatic activity, from 1861 forward.",
-  congress:
-    "Congressional material in the Tower: Government Accountability Office reports to Congress and the public laws enacted by the United States Congress.",
-  un: "United Nations records in the Tower: Security Council and General Assembly documents, resolutions, and meeting records.",
-  nsarchive:
-    "Declassified U.S. national security documents in the Tower published through the National Security Archive's FOIA-based releases.",
-  fbi: "FBI records in the Tower released through the Bureau's Vault reading room: investigative files published under FOIA.",
-  pentagon:
-    "The Pentagon Papers in the Tower: the United States–Vietnam Relations study — the Defense Department's secret history of decision-making in Vietnam.",
-  other:
-    "Declassified records in the Tower outside the named programmes: the govdocs archive and one-off releases such as the 9/11 Commission and Warren Commission reports.",
-};
-
-export const AUDIENCE_BLURBS = {
-  "primary-sources":
-    "The Tower's two primary-source lanes in one shelf: every catalogued document and declassified record — the raw material for historians, journalists, and students.",
-  philosophy:
-    "Philosophy in the Tower: Plato, Aristotle, Kant, Nietzsche, and the philosophical tradition — metaphysics, ethics, logic, and the history of philosophy, gathered from the whole catalog.",
-  "epics-myths-sagas":
-    "The great epics in one shelf: the Iliad and Odyssey, the Mahabharata and Ramayana, Gilgamesh, the Eddas, Beowulf, the Kalevala, and the Divine Comedy.",
-  "classics-of-science":
-    "Classics of science in the Tower: Darwin, Huxley, Wallace, Lyell, and the foundational works of evolution, geology, and modern science.",
-};
-
-export const COURSE_BLURBS = {
-  "Founding documents":
-    "Charters, constitutions, declarations, and addresses that founded nations and defined rights.",
-  "Sacred & wisdom landmarks":
-    "The central scriptures and wisdom texts of the world's traditions.",
-  "Landmark works":
-    "The books and epics that anchor the canon — philosophy, literature, and science.",
-};
-
 let hubsPromise = null;
 
 // Fetch the precomputed hub index once per session. Resolves null on
@@ -120,8 +134,7 @@ export function loadHubsIndex() {
     hubsPromise = fetch("/tower-hubs-index.json")
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (!d || !d.traditions || !d.topAuthors || !d.programmes || !d.course)
-          return null;
+        if (!d || !d.traditions || !d.topAuthors) return null;
         return d;
       })
       .catch(() => null);
@@ -129,10 +142,12 @@ export function loadHubsIndex() {
   return hubsPromise;
 }
 
-// Turn the raw hub index into group/collection descriptors the Tower
-// page renders. Work lists become id Sets (the entry list renders from
-// the catalog, never from hub data), so the large JSON arrays can be
-// released after this conversion.
+// Hub-index fallback descriptors. The hub JSON's work lists can only
+// express the traditions group at this taxonomy — the student,
+// engineering, conspiracy, mathematics-and-sciences and Books-shelf
+// memberships exist solely as TCU1 bitsets (their lists would burst
+// the hub file's size budget), so the fallback honestly degrades to
+// traditions alone instead of rendering empty groups.
 export function buildCollections(data) {
   if (!data) return null;
   const toSet = (works) => new Set((works || []).map((w) => w.id));
@@ -143,35 +158,12 @@ export function buildCollections(data) {
     blurb: TRADITION_BLURBS[id] || "",
     ids: toSet(works),
   }));
-  const programmes = Object.entries(data.programmes).map(([id, works]) => ({
-    key: `programme:${id}`,
-    label: PROGRAMME_LABELS[id] || id,
-    count: works.length,
-    blurb: PROGRAMME_BLURBS[id] || "",
-    ids: toSet(works),
-  }));
-  const audiences = Object.entries(data.audiences || {}).map(([id, works]) => ({
-    key: `audience:${id}`,
-    label: AUDIENCE_LABELS[id] || id,
-    count: works.length,
-    blurb: AUDIENCE_BLURBS[id] || "",
-    ids: toSet(works),
-  }));
-  const course = (data.course.groups || []).map((g, i) => ({
-    key: `course:${i}`,
-    label: g.label,
-    count: g.items.length,
-    blurb: COURSE_BLURBS[g.label] || "",
-    ids: toSet(g.items),
-  }));
   return {
     total: data.total,
-    groups: [
-      { id: "traditions", collections: traditions },
-      { id: "programmes", collections: programmes },
-      { id: "course", collections: course },
-      { id: "audiences", collections: audiences },
-    ],
+    groups: [{ id: "traditions", collections: traditions }],
+    booksShelves: null,
+    papersFields: null,
+    papersTypes: null,
   };
 }
 
@@ -179,22 +171,30 @@ export function buildCollections(data) {
 // curated axis used to wait for the 17.7 MB hub index — 61k work
 // records parsed into id Sets — before any curated tap could run.
 // The TCB1 dataset carries the same memberships as precomputed
-// bitsets over catalog indices (TCU1, ~320 KB per collection,
-// generated by scripts/build-tcb1.mjs from the same hub lists):
-// fetched with the dataset fingerprint, parsed in milliseconds, and
-// usable from the first seconds of the load. Descriptors mirror
-// buildCollections exactly (same keys, labels, blurbs, group order);
-// `count` is the bitset popcount — the number of catalog records the
-// filter itself returns — and `bits` replaces `ids` (the hub Set
-// path remains the fallback when no bitsets are available).
+// bitsets over catalog indices (TCU1, generated by
+// scripts/build-tcb1.mjs from the hub lists, and since the 2026-11-15
+// collections package by scripts/build-curated-bitsets.mjs from the
+// design packages' verified member lists): fetched with the dataset
+// fingerprint, parsed in milliseconds, and usable from the first
+// seconds of the load. `count` is the bitset popcount — the number of
+// catalog records the filter itself returns — and `bits` replaces
+// `ids` (the hub Set path remains the fallback when no bitsets are
+// available).
+//
+// The fetch carries ?v=<curated sha256 from the manifest>: the tcb1
+// function serves the file under an immutable one-year cache key, and
+// the dataset fingerprint versions the CATALOG, not the curated
+// membership — a taxonomy-only change (same catalog, new bitsets)
+// must still reach returning visitors instead of their cached copy.
 import { parseCuratedBitsets } from "./tcb1.js";
 
 let curatedPromise = null;
 
-export function loadCuratedBitsets(fp) {
+export function loadCuratedBitsets(fp, version) {
   if (!fp) return Promise.resolve(null);
   if (!curatedPromise) {
-    curatedPromise = fetch(`/tcb1/${fp}/curated.bin`)
+    const url = `/tcb1/${fp}/curated.bin${version ? `?v=${version}` : ""}`;
+    curatedPromise = fetch(url)
       .then((r) => (r.ok ? r.arrayBuffer() : null))
       .then((buf) => {
         if (!buf) return null;
@@ -206,15 +206,49 @@ export function loadCuratedBitsets(fp) {
   return curatedPromise;
 }
 
+// Kind prefix in a TCU1 key -> panel group + text table. "audience"
+// is the Mathematics and Sciences group (its design keeps the
+// internal id); "bookshelf" is not a curated group at all — those
+// descriptors feed the Books lane's subcategory slot.
+const KIND_GROUPS = [
+  { kind: "tradition", group: "traditions", lookup: null },
+  { kind: "law", group: "law", lookup: LAW_LOOKUP },
+  { kind: "med", group: "med", lookup: MED_LOOKUP },
+  { kind: "eng", group: "eng", lookup: ENG_LOOKUP },
+  { kind: "conspiracy", group: "conspiracy", lookup: CONSPIRACY_LOOKUP },
+  { kind: "audience", group: "audiences", lookup: MATHSCI_LOOKUP },
+];
+
 export function buildCollectionsFromBitsets(parsed) {
   if (!parsed || !parsed.collections) return null;
-  const groups = { traditions: [], programmes: [], course: [], audiences: [] };
+  const byGroup = new Map();
+  const booksShelves = [];
+  const pushTo = (groupId, desc) => {
+    if (!byGroup.has(groupId)) byGroup.set(groupId, []);
+    byGroup.get(groupId).push(desc);
+  };
   for (const c of parsed.collections) {
     const cut = c.key.indexOf(":");
     const kind = cut > 0 ? c.key.slice(0, cut) : c.key;
     const rest = cut > 0 ? c.key.slice(cut + 1) : "";
+    if (kind === "bookshelf") {
+      const t = BOOKS_LOOKUP.get(rest);
+      booksShelves.push({
+        key: c.key,
+        id: rest,
+        label: (t && t.label) || rest,
+        blurb: (t && t.blurb) || "",
+        wing: (t && t.wing) || "",
+        count: c.count,
+        ids: null,
+        bits: c.bits,
+      });
+      continue;
+    }
+    const kg = KIND_GROUPS.find((k) => k.kind === kind);
+    if (!kg) continue;
     if (kind === "tradition") {
-      groups.traditions.push({
+      pushTo(kg.group, {
         key: c.key,
         label: TRADITION_LABELS[rest] || rest,
         count: c.count,
@@ -222,48 +256,36 @@ export function buildCollectionsFromBitsets(parsed) {
         ids: null,
         bits: c.bits,
       });
-    } else if (kind === "programme") {
-      groups.programmes.push({
+    } else {
+      const t = kg.lookup.get(rest);
+      pushTo(kg.group, {
         key: c.key,
-        label: PROGRAMME_LABELS[rest] || rest,
+        label: (t && t.label) || c.label || rest,
         count: c.count,
-        blurb: PROGRAMME_BLURBS[rest] || "",
-        ids: null,
-        bits: c.bits,
-      });
-    } else if (kind === "course") {
-      groups.course.push({
-        key: c.key,
-        label: c.label || `Course ${rest}`,
-        count: c.count,
-        blurb: COURSE_BLURBS[c.label] || "",
-        ids: null,
-        bits: c.bits,
-      });
-    } else if (kind === "audience") {
-      groups.audiences.push({
-        key: c.key,
-        label: AUDIENCE_LABELS[rest] || rest,
-        count: c.count,
-        blurb: AUDIENCE_BLURBS[rest] || "",
+        blurb: (t && t.blurb) || "",
         ids: null,
         bits: c.bits,
       });
     }
   }
-  return {
-    total: parsed.total,
-    groups: [
-      { id: "traditions", collections: groups.traditions },
-      { id: "programmes", collections: groups.programmes },
-      { id: "course", collections: groups.course },
-      { id: "audiences", collections: groups.audiences },
-    ],
-  };
+  const groups = [];
+  for (const g of COLLECTION_GROUPS) {
+    const collections = byGroup.get(g.id);
+    if (collections && collections.length) groups.push({ id: g.id, collections });
+  }
+  // Papers subject map: HELD (2026-11-15). The papers-subcategories
+  // design's membership runs on enrichment signals the catalog does
+  // not carry (Europe PMC MeSH/keywords, OpenAlex topics) and the
+  // design ships no counts/members file, so no reproduction gate can
+  // be satisfied in this run; the enrichment pass is a publish-cycle
+  // job and the publish cycle is paused. The panel's dormant Papers
+  // branch keys off these being empty; the lane keeps its current
+  // source-prefix subcategories until the redo ships.
+  return { total: parsed.total, groups, booksShelves, papersFields: [], papersTypes: [] };
 }
 
-// Labels for traditions/programmes (the hub index carries work lists,
-// not labels, for these two groups).
+// Labels for traditions (the hub index carries work lists, not
+// labels, for this group).
 export const TRADITION_LABELS = {
   jainism: "Jainism",
   shinto: "Shinto",
@@ -285,22 +307,4 @@ export const TRADITION_LABELS = {
   "greek-roman": "Greek & Roman",
   christianity: "Christianity",
   "sacred-wisdom-remainder": "More Sacred & Wisdom Texts",
-};
-
-export const PROGRAMME_LABELS = {
-  cia: "CIA — CREST",
-  state: "State — FRUS",
-  congress: "Congress — GAO & Public Laws",
-  un: "United Nations",
-  nsarchive: "National Security Archive",
-  fbi: "FBI Vault",
-  pentagon: "Pentagon Papers",
-  other: "Other Declassified Releases",
-};
-
-export const AUDIENCE_LABELS = {
-  "primary-sources": "Primary Sources",
-  philosophy: "Philosophy",
-  "epics-myths-sagas": "Epics, Myths & Sagas",
-  "classics-of-science": "Classics of Science",
 };

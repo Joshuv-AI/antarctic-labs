@@ -39,7 +39,7 @@
 // JSON path: first occurrence wins).
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
+import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
@@ -228,10 +228,26 @@ function buildCurated() {
     throw new Error(`hub total ${hub.total} != catalog total ${total} — regenerate the hub index first`);
   const colls = [];
   const push = (key, label, works) => colls.push({ key, label, ids: works.map((w) => w.id) });
+  // Taxonomy (2026-11-15 collections package): the hub index now
+  // feeds ONLY the traditions group. The retired groups — Declassified
+  // programmes (merged into the Declassified lane's subcategories) and
+  // Course primary sources — must never be re-emitted, and the old
+  // four Study-shelves audiences were replaced by Mathematics and
+  // Sciences. The student / engineering / conspiracy / mathsci /
+  // Books-shelf memberships are design-package member lists, not hub
+  // data: the id-list groups (audience:*, bookshelf:*, conspiracy:*)
+  // are committed as tcb1-data/curated-members.json and merged below;
+  // law:*/med:*/eng:* are baked by scripts/build-curated-bitsets.mjs
+  // from the design runners and carried over when the catalog is
+  // unchanged (see the carry-over guard below).
   for (const [id, works] of Object.entries(hub.traditions || {})) push(`tradition:${id}`, id, works);
-  for (const [id, works] of Object.entries(hub.programmes || {})) push(`programme:${id}`, id, works);
-  (hub.course?.groups || []).forEach((g, i) => push(`course:${i}`, g.label, g.items));
-  for (const [id, works] of Object.entries(hub.audiences || {})) push(`audience:${id}`, id, works);
+  const membersFile = join(root, "tcb1-data/curated-members.json");
+  if (existsSync(membersFile)) {
+    const members = JSON.parse(readFileSync(membersFile, "utf8"));
+    for (const [key, ids] of Object.entries(members)) {
+      colls.push({ key, label: key.slice(key.indexOf(":") + 1), ids });
+    }
+  }
   const idToColls = new Map();
   colls.forEach((c, ci) => {
     for (const id of c.ids) {
@@ -267,7 +283,11 @@ function buildCurated() {
   colls.forEach((c, ci) => {
     let pop = 0;
     for (let gi = 0; gi < total; gi++) if (bits[ci][gi >> 3] & (1 << (gi & 7))) pop++;
-    if (pop === 0) throw new Error(`curated ${c.key}: empty bitset`);
+    // Empty bitsets are legal for design-package entries (marker
+    // shelves ship with honest zero counts); a tradition coming back
+    // empty still means the hub index is broken.
+    if (pop === 0 && c.key.startsWith("tradition:"))
+      throw new Error(`curated ${c.key}: empty bitset`);
     const kb = Buffer.from(c.key, "utf8");
     const lb = Buffer.from(c.label, "utf8");
     const eh = Buffer.alloc(1 + kb.length + 1 + lb.length + 4);
@@ -279,6 +299,53 @@ function buildCurated() {
     meta.push({ key: c.key, count: pop, hub_list_length: c.ids.length });
     console.log(`curated ${c.key}: ${pop} members (hub list ${c.ids.length})`);
   });
+  // Carry-over for the position-baked groups (law:*, med:*, eng:*):
+  // their member lists live in the design packages' runners, not in a
+  // committed id file, so a full dataset rebuild can only preserve
+  // them — and only when the catalog is byte-identical (same source
+  // fingerprint ⇒ same records in the same order ⇒ the bits still
+  // describe this catalog). On a changed catalog they are dropped
+  // with a loud warning: re-run the design runners and
+  // scripts/build-curated-bitsets.mjs before the dataset ships.
+  const prevBr = join(outDir, "curated.bin.br");
+  const prevManifestFile = join(outDir, "manifest.json");
+  if (existsSync(prevBr) && existsSync(prevManifestFile)) {
+    const prevManifest = JSON.parse(readFileSync(prevManifestFile, "utf8"));
+    const sameCatalog =
+      prevManifest.source &&
+      prevManifest.source.fingerprint_sha256_concat === fingerprint &&
+      prevManifest.total_records === total;
+    const prevRaw = brotliDecompressSync(readFileSync(prevBr));
+    if (prevRaw.toString("latin1", 0, 4) === "TCU1") {
+      const prevCount = prevRaw.readUInt32LE(8);
+      const prevTotal = prevRaw.readUInt32LE(12);
+      const prevBitsetBytes = Math.ceil(prevTotal / 8);
+      let p = 16;
+      const have = new Set(meta.map((m) => m.key));
+      for (let e = 0; e < prevCount; e++) {
+        const kl = prevRaw.readUInt8(p); p += 1;
+        const key = prevRaw.toString("utf8", p, p + kl); p += kl;
+        const ll = prevRaw.readUInt8(p); p += 1;
+        const label = prevRaw.toString("utf8", p, p + ll); p += ll;
+        const n = prevRaw.readUInt32LE(p); p += 4;
+        const entryStart = p - (1 + kl + 1 + ll + 4);
+        const entryBytes = prevRaw.subarray(entryStart, p + prevBitsetBytes);
+        p += prevBitsetBytes;
+        if (!/^(law|med|eng):/.test(key) || have.has(key)) continue;
+        if (!sameCatalog) {
+          console.warn(
+            `curated ${key}: NOT carried over — catalog changed; regenerate via scripts/build-curated-bitsets.mjs`
+          );
+          continue;
+        }
+        parts.push(Buffer.from(entryBytes));
+        meta.push({ key, count: n });
+        console.log(`curated ${key}: ${n} members (carried over, catalog unchanged)`);
+      }
+      // The header's entry count must include carried-over entries.
+      head.writeUInt32LE(meta.length, 8);
+    }
+  }
   return { buf: Buffer.concat(parts), meta };
 }
 const curated = buildCurated();

@@ -75,6 +75,7 @@ import {
   towerEraCode,
   towerEraLabel,
   towerSubLabel,
+  TOWER_CLIENT_ONLY_SUB_KEYS,
 } from "./lib/tower-taxonomy.js";
 // Collections browser (2026-10-24): the old hub pages were deleted and
 // folded into a filter on this section's entry list. The hub index JSON
@@ -2008,6 +2009,24 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // it never renders a second list.
   const [collGroup, setCollGroup] = useState("");
   const [collKey, setCollKey] = useState("");
+  // Books shelf selection (2026-11-15 collections package): the Books
+  // lane's subcategories are 61 multi-match shelves delivered as TCU1
+  // bitsets (collData.booksShelves), not a prefix partition, so the
+  // selection is its own state — a "bookshelf:<id>" key or "". It
+  // intersects with every other axis exactly like a curated selection
+  // (the two bitsets AND into memberBitsSel below).
+  const [shelfKey, setShelfKey] = useState("");
+  // Papers field/subfield/type selection (2026-11-15 collections
+  // package): the Papers lane's subcategories are the design's
+  // two-level subject map (12 fields, ~60 subfields) plus a type
+  // axis, all delivered as TCU1 bitsets (collData.papersFields /
+  // papersTypes), so — like the Books shelves — the selection is its
+  // own state: paperKey is "paperfield:<id>" or
+  // "papersub:<field>:<sub>", paperTypeKey is "papertype:<id>".
+  // Both bitsets AND into memberBitsSel alongside the curated and
+  // Books-shelf bitsets.
+  const [paperKey, setPaperKey] = useState("");
+  const [paperTypeKey, setPaperTypeKey] = useState("");
   // Curated-collection lists render in FULL inside the fixed-height
   // slot, which scrolls internally (2026-11-13, Joshua): the old
   // top-10 collapse behind a "Show all" row is removed — the slot
@@ -2017,8 +2036,14 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   const [collData, setCollData] = useState(null);
   const [collLoading, setCollLoading] = useState(false);
   const [collFailed, setCollFailed] = useState(false);
+  // Which source produced collData: the TCU1 bitsets are the full
+  // taxonomy; the hub index fallback can only express traditions. A
+  // late hub resolution must never clobber bitset data with the
+  // smaller fallback (the two loads race at first paint).
+  const collSourceRef = useRef("");
   const collSectionRef = useRef(null);
   const collSubsRef = useRef(null);
+  const laneSubsRef = useRef(null);
   const [filtersOpen, setFiltersOpen] = useState(true);
   const filterPanelRef = useRef(null);
   const ensureCollections = useCallback(() => {
@@ -2030,6 +2055,8 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         setCollFailed(true);
         return;
       }
+      if (collSourceRef.current === "bitsets") return;
+      collSourceRef.current = "hub";
       setCollData(buildCollections(d));
     });
   }, [collData, collFailed, collLoading]);
@@ -2059,14 +2086,47 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     }
     return null;
   }, [collData, collKey]);
+  const activeShelf = useMemo(() => {
+    if (!collData || !shelfKey || !collData.booksShelves) return null;
+    return collData.booksShelves.find((s) => s.key === shelfKey) || null;
+  }, [collData, shelfKey]);
+  // Papers selection descriptors (same collections package): the
+  // field a paperKey names (directly or through one of its
+  // subfields), the subfield when one is picked, and the combined
+  // selection descriptor the pills/summary/bits read.
+  const activePaperField = useMemo(() => {
+    if (!collData || !paperKey || !collData.papersFields) return null;
+    const fid = paperKey.split(":")[1];
+    return collData.papersFields.find((f) => f.id === fid) || null;
+  }, [collData, paperKey]);
+  const activePaperSub = useMemo(() => {
+    if (!activePaperField || !paperKey.startsWith("papersub:")) return null;
+    const sid = paperKey.split(":")[2];
+    return activePaperField.subs.find((s) => s.id === sid) || null;
+  }, [activePaperField, paperKey]);
+  const activePaperSel = activePaperSub || activePaperField;
+  const activePaperType = useMemo(() => {
+    if (!collData || !paperTypeKey || !collData.papersTypes) return null;
+    return collData.papersTypes.find((t) => t.key === paperTypeKey) || null;
+  }, [collData, paperTypeKey]);
   // The active collection's blurb renders INSIDE the fixed-height
   // subs slot (see the curated axis markup) so selecting a shelf
   // never resizes the panel; scroll the slot back to its top on a
   // selection change so the blurb is the first thing seen, exactly
-  // as it was when it rendered below the slot.
-  useEffect(() => {
-    if (collKey && collSubsRef.current) collSubsRef.current.scrollTop = 0;
-  }, [collKey]);
+  // as it was when it rendered below the slot. Layout effect, not a
+  // passive one (2026-11-15 ghost fix): the reset must land BEFORE
+  // the browser paints the new selection — with a passive effect the
+  // new blurb first painted at the slot's old scroll position and
+  // then jumped to the top over the incoming rows, the description
+  // ghost in Joshua's 2026-11-14/15 recordings. The blurb element is
+  // also keyed by the selection (see the markup), so a stale
+  // description can never co-render with the incoming shelf's rows.
+  useLayoutEffect(() => {
+    if (collSubsRef.current) collSubsRef.current.scrollTop = 0;
+  }, [collKey, collGroup]);
+  useLayoutEffect(() => {
+    if (laneSubsRef.current) laneSubsRef.current.scrollTop = 0;
+  }, [shelfKey, paperKey]);
   const collSet = activeCollection ? activeCollection.ids : null;
   // Curated bitsets (Phase 2A, design §12): when the collection's
   // descriptor came from the TCU1 bitsets, membership is the packed
@@ -2075,6 +2135,28 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // of the load.
   const collBitsSel =
     activeCollection && activeCollection.bits ? activeCollection.bits : null;
+  const shelfBits =
+    activeShelf && activeShelf.bits ? activeShelf.bits : null;
+  const paperBits =
+    activePaperSel && activePaperSel.bits ? activePaperSel.bits : null;
+  const paperTypeBits =
+    activePaperType && activePaperType.bits ? activePaperType.bits : null;
+  // The single membership bitset the engine and the rank memo test:
+  // a curated selection, a Books shelf selection, a Papers
+  // field/subfield selection and a Papers type selection AND
+  // together (all are catalog-index bitsets of identical length).
+  const memberBitsSel = useMemo(() => {
+    const sets = [collBitsSel, shelfBits, paperBits, paperTypeBits].filter(
+      Boolean
+    );
+    if (!sets.length) return null;
+    if (sets.length === 1) return sets[0];
+    const out = new Uint32Array(sets[0].length);
+    out.set(sets[0]);
+    for (let s = 1; s < sets.length; s++)
+      for (let i = 0; i < out.length; i++) out[i] &= sets[s][i];
+    return out;
+  }, [collBitsSel, shelfBits, paperBits, paperTypeBits]);
   // Prime the curated axis from the bitsets at mount (design §12):
   // they ride the TCB1 dataset (a few MB on the wire, parsed in
   // milliseconds) instead of the 17.7 MB hub index, so the axis is
@@ -2086,7 +2168,8 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       if (dead || !m) return;
       const fp = m.source && m.source.fingerprint_sha256_concat;
       if (!fp) return;
-      loadCuratedBitsets(fp).then((data) => {
+      const version = m.curated && m.curated.sha256 ? m.curated.sha256 : null;
+      loadCuratedBitsets(fp, version).then((data) => {
         if (dead || !data) return;
         let bytes = 0;
         for (const g of data.groups) {
@@ -2094,7 +2177,20 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
             if (c.bits) bytes += c.bits.byteLength;
           }
         }
+        for (const s of data.booksShelves || []) {
+          if (s.bits) bytes += s.bits.byteLength;
+        }
+        for (const f of data.papersFields || []) {
+          if (f.bits) bytes += f.bits.byteLength;
+          for (const s of f.subs || []) {
+            if (s.bits) bytes += s.bits.byteLength;
+          }
+        }
+        for (const t of data.papersTypes || []) {
+          if (t.bits) bytes += t.bits.byteLength;
+        }
         noteExternalBytes("curated-bitsets", bytes);
+        collSourceRef.current = "bitsets";
         setCollData(data);
       });
     });
@@ -2142,11 +2238,12 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // search under one runs on the client pipeline (see
   // TOWER_CLIENT_ONLY_SUB_LANES in tower-taxonomy.js).
   const bucketClientOnly =
-    bucketFilter.indexOf(":") > 0 &&
-    TOWER_CLIENT_ONLY_SUB_LANES.indexOf(bucketFilter.split(":")[0]) !== -1;
+    (bucketFilter.indexOf(":") > 0 &&
+      TOWER_CLIENT_ONLY_SUB_LANES.indexOf(bucketFilter.split(":")[0]) !== -1) ||
+    TOWER_CLIENT_ONLY_SUB_KEYS.indexOf(bucketFilter) !== -1;
   // Any filter state the client pipeline owns in server mode.
   const clientFiltersActive =
-    !!collSet || !!collBitsSel || !!eraFilter || bucketClientOnly;
+    !!collSet || !!memberBitsSel || !!eraFilter || bucketClientOnly;
   // Filter scroll stability (2026-10-28 revamp): the 2026-10-25 approach
   // scrolled the Collections block into view after every tap. On mobile
   // that read as a bounce — the tap target jumped away mid-interaction,
@@ -2208,7 +2305,10 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       browseResult &&
       browseResult.sel.bucketFilter === anchor.sel.bucketFilter &&
       browseResult.sel.eraFilter === anchor.sel.eraFilter &&
-      browseResult.sel.collKey === anchor.sel.collKey;
+      browseResult.sel.collKey === anchor.sel.collKey &&
+      browseResult.sel.shelfKey === anchor.sel.shelfKey &&
+      browseResult.sel.paperKey === anchor.sel.paperKey &&
+      browseResult.sel.paperTypeKey === anchor.sel.paperTypeKey;
     // Safety expiry is generous (15s): the hub-index load that a
     // first curated tap can trigger takes seconds on a throttled
     // phone, and its panel growth is exactly what the anchor must
@@ -2219,9 +2319,9 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       if (anchor.release) anchor.release();
       filterAnchor.current = null;
     }
-  }, [collGroup, collKey, bucketFilter, filtersOpen, eraFilter, browseResult]);
+  }, [collGroup, collKey, shelfKey, paperKey, paperTypeKey, bucketFilter, filtersOpen, eraFilter, browseResult]);
   const selectCollGroup = (g) => {
-    noteFilterAnchor({ bucketFilter, eraFilter, collKey: "" });
+    noteFilterAnchor({ bucketFilter, eraFilter, collKey: "", shelfKey, paperKey, paperTypeKey });
     setCollGroup(g);
     setCollKey("");
     if (g) ensureCollections();
@@ -2231,11 +2331,80 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       bucketFilter,
       eraFilter,
       collKey: collKey === key ? "" : key,
+      shelfKey,
+      paperKey,
+      paperTypeKey,
     });
     setCollKey((prev) => (prev === key ? "" : key));
   };
+  const selectShelf = (key) => {
+    const next = shelfKey === key ? "" : key;
+    // A Books shelf lives inside the Books lane: selecting one brings
+    // the lane with it (the shelf rows render under the Books chip),
+    // and the lane chip then truthfully shows where the filter sits.
+    const lane =
+      next && bucketFilter.split(":")[0] !== "BOOKS" ? "BOOKS" : bucketFilter;
+    noteFilterAnchor({ bucketFilter: lane, eraFilter, collKey, shelfKey: next, paperKey, paperTypeKey });
+    if (lane !== bucketFilter) setBucketFilter(lane);
+    setShelfKey(next);
+  };
+  const selectPaper = (key) => {
+    const next = paperKey === key ? "" : key;
+    // A Papers field/subfield lives inside the Papers lane, exactly
+    // like a Books shelf inside Books: selecting one brings the lane
+    // with it.
+    const lane =
+      next && bucketFilter.split(":")[0] !== "PAPERS"
+        ? "PAPERS"
+        : bucketFilter;
+    noteFilterAnchor({
+      bucketFilter: lane,
+      eraFilter,
+      collKey,
+      shelfKey,
+      paperKey: next,
+      paperTypeKey,
+    });
+    if (lane !== bucketFilter) setBucketFilter(lane);
+    setPaperKey(next);
+  };
+  const selectPaperType = (key) => {
+    const next = paperTypeKey === key ? "" : key;
+    const lane =
+      next && bucketFilter.split(":")[0] !== "PAPERS"
+        ? "PAPERS"
+        : bucketFilter;
+    noteFilterAnchor({
+      bucketFilter: lane,
+      eraFilter,
+      collKey,
+      shelfKey,
+      paperKey,
+      paperTypeKey: next,
+    });
+    if (lane !== bucketFilter) setBucketFilter(lane);
+    setPaperTypeKey(next);
+  };
   const selectLane = (key) => {
-    noteFilterAnchor({ bucketFilter: key, eraFilter, collKey });
+    // Leaving the Books lane retires any Books shelf selection with
+    // it — the shelf is a Books subcategory, and carrying it into
+    // another lane would intersect to a silent empty set. The same
+    // holds for the Papers field/subfield/type selections.
+    const dropShelf = shelfKey && key.split(":")[0] !== "BOOKS";
+    const dropPaper = (paperKey || paperTypeKey) && key.split(":")[0] !== "PAPERS";
+    noteFilterAnchor({
+      bucketFilter: key,
+      eraFilter,
+      collKey,
+      shelfKey: dropShelf ? "" : shelfKey,
+      paperKey: dropPaper ? "" : paperKey,
+      paperTypeKey: dropPaper ? "" : paperTypeKey,
+    });
+    if (dropShelf) setShelfKey("");
+    if (dropPaper) {
+      setPaperKey("");
+      setPaperTypeKey("");
+    }
     setBucketFilter(key);
   };
   const selectEra = (id) => {
@@ -2243,13 +2412,19 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       bucketFilter,
       eraFilter: eraFilter === id ? "" : id,
       collKey,
+      shelfKey,
+      paperKey,
+      paperTypeKey,
     });
     setEraFilter((prev) => (prev === id ? "" : id));
   };
   const clearFilters = () => {
-    noteFilterAnchor({ bucketFilter: "", eraFilter: "", collKey: "" });
+    noteFilterAnchor({ bucketFilter: "", eraFilter: "", collKey: "", shelfKey: "", paperKey: "", paperTypeKey: "" });
     setCollGroup("");
     setCollKey("");
+    setShelfKey("");
+    setPaperKey("");
+    setPaperTypeKey("");
     setBucketFilter("");
     setEraFilter("");
   };
@@ -2257,6 +2432,11 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // filter, then bring the results into view (the discovery zone hands
   // the page over to the results in the filtered state).
   const browseTo = (bucket) => {
+    if (shelfKey && bucket.split(":")[0] !== "BOOKS") setShelfKey("");
+    if ((paperKey || paperTypeKey) && bucket.split(":")[0] !== "PAPERS") {
+      setPaperKey("");
+      setPaperTypeKey("");
+    }
     setBucketFilter(bucket);
     requestAnimationFrame(() => {
       const el = document.getElementById("tower-results");
@@ -2289,7 +2469,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   const prevIntentDeps = useRef(null);
   useEffect(() => {
     const prev = prevIntentDeps.current;
-    prevIntentDeps.current = { query, bucketFilter, sortId, rowBudget, collKey, eraFilter };
+    prevIntentDeps.current = { query, bucketFilter, sortId, rowBudget, collKey, shelfKey, paperKey, paperTypeKey, eraFilter };
     if (!indexIntentSeen.current) {
       indexIntentSeen.current = true;
       return;
@@ -2307,6 +2487,9 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       prev.sortId === sortId &&
       prev.rowBudget === rowBudget &&
       prev.collKey === collKey &&
+      prev.shelfKey === shelfKey &&
+      prev.paperKey === paperKey &&
+      prev.paperTypeKey === paperTypeKey &&
       prev.eraFilter === eraFilter;
     if (queryOnly && serverFlag && !clientFiltersActive && strictQuery !== query)
       return;
@@ -2322,7 +2505,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       return;
     }
     requestCatalogIndex();
-  }, [query, bucketFilter, sortId, rowBudget, collKey, eraFilter]);
+  }, [query, bucketFilter, sortId, rowBudget, collKey, shelfKey, paperKey, paperTypeKey, eraFilter]);
   // Automatic start (2026-10-28, Joshua's direct order): the explicit-
   // intent-only rule below left the library presenting as a 20,000-work
   // library — plain scrolling never started the index, the header count
@@ -2458,7 +2641,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     setSearchPage(1);
     setSearchExtra(0);
     setStrictQuery("");
-  }, [listQuery, bucketFilter, sortId, collKey, eraFilter]);
+  }, [listQuery, bucketFilter, sortId, collKey, shelfKey, paperKey, paperTypeKey, eraFilter]);
   // Deep full-text search: part of the SAME blended query now, not a
   // second mode. Runs on the debounced query with an AbortController +
   // sequence guard (SPEC-5): a stale response can never land over a
@@ -2566,11 +2749,251 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   const activeFilterSummary =
     [
       activeCollection ? activeCollection.label : "",
-      activeBucketLabel,
+      activeShelf && bucketFilter.split(":")[0] === "BOOKS"
+        ? activeShelf.label
+        : activePaperSel && bucketFilter.split(":")[0] === "PAPERS"
+          ? activePaperSel.label
+          : activeBucketLabel,
+      activePaperType && bucketFilter.split(":")[0] === "PAPERS"
+        ? activePaperType.label
+        : "",
       eraFilter ? towerEraLabel(eraFilter) : "",
     ]
       .filter(Boolean)
       .join(" · ") || "All entries";
+  // Dynamic facet counts (2026-11-15 collections package): every
+  // axis of the filter panel counts WITHIN the selection formed by
+  // the OTHER axes — era chips within bucket ∧ curated ∧ shelf, lane
+  // and subcategory counts within era ∧ curated ∧ shelf, curated
+  // rows within bucket ∧ era ∧ shelf, Books shelves within bucket ∧
+  // era ∧ curated — all tallied from the same per-record data the
+  // results list and the spiral read (phase 0's bucketKeys/eraCodes
+  // and the TCU1 bitsets), so panel, results and scene can never
+  // disagree about a combination. Null when no cross-axis selection
+  // is active (the panel then uses the global sources, as before) or
+  // while the derivation is not final (prefix counts are never
+  // dressed as finals — the panel shows no numbers in that state).
+  const facetCounts = useMemo(() => {
+    // countsReady, not its countsFinal alias: the alias is declared
+    // further down the component (TDZ — referencing it here crashed
+    // the page on first render, 2026-11-15).
+    if (!countsReady || !towerData || !towerData.bucketKeys || !towerData.eraCodes)
+      return null;
+    const collMemberBits =
+      collBitsSel ||
+      (collSet && towerData.idIndex
+        ? buildMembershipBitset(towerData.idIndex, collSet, towerData.bucketKeys.length)
+        : null);
+    const member = memberBitsSel || collMemberBits;
+    if (!bucketFilter && !eraFilter && !member) return null;
+    const bucketKeys = towerData.bucketKeys;
+    const eraCodes = towerData.eraCodes;
+    const N = bucketKeys.length;
+    const W = Math.ceil(N / 32);
+    const pop32 = (x) => {
+      x -= (x >> 1) & 0x55555555;
+      x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+      x = (x + (x >> 4)) & 0x0f0f0f0f;
+      return (x * 0x01010101) >> 24;
+    };
+    const andPop = (a, b) => {
+      let n = 0;
+      const lim = Math.min(a.length, b.length, W);
+      for (let w = 0; w < lim; w++) n += pop32(a[w] & b[w]);
+      return n;
+    };
+    const andWords = (a, b) => {
+      if (!a) return b;
+      if (!b) return a;
+      const out = new Uint32Array(W);
+      const lim = Math.min(a.length, b.length, W);
+      for (let w = 0; w < lim; w++) out[w] = a[w] & b[w];
+      return out;
+    };
+    // Bucket mask from the few distinct bucket keys the filter can
+    // match (exact key, or the lane prefix for a lane selection).
+    let bucketWords = null;
+    if (bucketFilter) {
+      const laneOnly = bucketFilter.indexOf(":") < 0;
+      const match = new Set();
+      for (const k of Object.keys(towerData.subCounts || {})) {
+        if (k === bucketFilter || (laneOnly && k.indexOf(bucketFilter + ":") === 0))
+          match.add(k);
+      }
+      if (!laneOnly) match.add(bucketFilter);
+      bucketWords = new Uint32Array(W);
+      for (let i = 0; i < N; i++) {
+        if (match.has(bucketKeys[i])) bucketWords[i >> 5] |= 1 << (i & 31);
+      }
+    }
+    let eraWords = null;
+    if (eraFilter) {
+      const code = TOWER_ERAS.findIndex((e) => e.id === eraFilter) + 1;
+      eraWords = new Uint32Array(W);
+      for (let i = 0; i < N; i++) {
+        if (eraCodes[i] === code) eraWords[i >> 5] |= 1 << (i & 31);
+      }
+    }
+    const bec = towerData.bucketEraCounts || {};
+    // --- era counts within bucket ∧ member -------------------------
+    const eraMap = {};
+    {
+      const within = andWords(bucketWords, member);
+      if (!within) {
+        for (const e of TOWER_ERAS)
+          eraMap[e.id] = bucketFilter
+            ? bec[bucketFilter + "|" + e.id] || 0
+            : towerData.eraCounts[e.id] || 0;
+      } else {
+        for (const e of TOWER_ERAS) eraMap[e.id] = 0;
+        for (let w = 0; w < W; w++) {
+          let word = within[w];
+          while (word) {
+            const b = word & -word;
+            const i = (w << 5) + (31 - Math.clz32(b));
+            const ec = eraCodes[i];
+            if (ec) eraMap[TOWER_ERAS[ec - 1].id]++;
+            word ^= b;
+          }
+        }
+      }
+    }
+    // --- lane + subcategory counts within era ∧ member -------------
+    const laneMap = {};
+    const subMap = {};
+    if (!member) {
+      for (const k of Object.keys(towerData.subCounts || {})) {
+        const n = eraFilter
+          ? bec[k + "|" + eraFilter] || 0
+          : towerData.subCounts[k] || 0;
+        subMap[k] = n;
+        const lane = k.split(":")[0];
+        laneMap[lane] = (laneMap[lane] || 0) + n;
+      }
+      if (!eraFilter) {
+        for (const c of Object.keys(towerData.counts || {}))
+          if (laneMap[c] === undefined) laneMap[c] = towerData.counts[c] || 0;
+      }
+    } else {
+      const within = andWords(eraWords, member);
+      for (let w = 0; w < W; w++) {
+        let word = within[w];
+        while (word) {
+          const b = word & -word;
+          const i = (w << 5) + (31 - Math.clz32(b));
+          const bk = bucketKeys[i];
+          subMap[bk] = (subMap[bk] || 0) + 1;
+          const lane = bk.split(":")[0];
+          laneMap[lane] = (laneMap[lane] || 0) + 1;
+          word ^= b;
+        }
+      }
+    }
+    // --- curated rows within bucket ∧ era ∧ shelf ------------------
+    const curatedMap = {};
+    if (collData) {
+      const group = collData.groups.find((g) => g.id === collGroup);
+      if (group) {
+        const other = andWords(andWords(bucketWords, eraWords), shelfBits);
+        for (const c of group.collections) {
+          curatedMap[c.key] = c.bits
+            ? other
+              ? andPop(c.bits, other)
+              : c.count
+            : c.ids
+              ? (() => {
+                  // Hub-Set fallback descriptors: count set members
+                  // inside the other axes via the id index.
+                  if (!other) return c.count;
+                  let n = 0;
+                  for (let w = 0; w < W; w++) {
+                    let word = other[w];
+                    while (word) {
+                      const b = word & -word;
+                      const i = (w << 5) + (31 - Math.clz32(b));
+                      if (c.ids.has(artifacts[i].artifact_id)) n++;
+                      word ^= b;
+                    }
+                  }
+                  return n;
+                })()
+              : c.count;
+        }
+      }
+    }
+    // --- Books shelves within bucket ∧ era ∧ curated ---------------
+    const shelfMap = {};
+    if (
+      collData &&
+      collData.booksShelves &&
+      collData.booksShelves.length &&
+      (bucketFilter.split(":")[0] === "BOOKS" || shelfKey)
+    ) {
+      const other = andWords(andWords(bucketWords, eraWords), collMemberBits);
+      for (const s of collData.booksShelves) {
+        shelfMap[s.key] = other ? andPop(s.bits, other) : s.count;
+      }
+    }
+    // --- Papers fields/subfields/types within the other axes -----
+    // Field and subfield rows count within bucket ∧ era ∧ curated ∧
+    // shelf ∧ type (the paper axis itself excluded, the type axis
+    // included); type rows count within the same set with the field
+    // selection included and the type axis excluded — the same
+    // other-axes rule every axis above follows.
+    const paperMap = {};
+    const paperTypeMap = {};
+    if (
+      collData &&
+      collData.papersFields &&
+      collData.papersFields.length &&
+      (bucketFilter.split(":")[0] === "PAPERS" || paperKey || paperTypeKey)
+    ) {
+      const paperOther = andWords(
+        andWords(bucketWords, eraWords),
+        andWords(collMemberBits, shelfBits)
+      );
+      const fieldBase = andWords(paperOther, paperTypeBits);
+      for (const f of collData.papersFields) {
+        paperMap[f.key] = f.bits
+          ? fieldBase
+            ? andPop(f.bits, fieldBase)
+            : f.count
+          : f.count;
+        for (const s of f.subs) {
+          paperMap[s.key] = s.bits
+            ? fieldBase
+              ? andPop(s.bits, fieldBase)
+              : s.count
+            : s.count;
+        }
+      }
+      const typeBase = andWords(paperOther, paperBits);
+      for (const t of collData.papersTypes || []) {
+        paperTypeMap[t.key] = t.bits
+          ? typeBase
+            ? andPop(t.bits, typeBase)
+            : t.count
+          : t.count;
+      }
+    }
+    return { eraMap, laneMap, subMap, curatedMap, shelfMap, paperMap, paperTypeMap };
+  }, [
+    countsReady,
+    towerData,
+    artifacts,
+    bucketFilter,
+    eraFilter,
+    memberBitsSel,
+    collBitsSel,
+    shelfBits,
+    paperBits,
+    paperTypeBits,
+    collSet,
+    collData,
+    collGroup,
+    paperKey,
+    paperTypeKey,
+  ]);
   // Browse filter engine job (2026-11-11, design §10): computes the
   // committed match list for the current selection ONCE per
   // (selection, sort order, catalog length) — chunked into ~7ms
@@ -2641,6 +3064,9 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           cur.sel.bucketFilter === p.bucketFilter &&
           cur.sel.eraFilter === p.eraFilter &&
           cur.sel.collKey === p.collKey &&
+          cur.sel.shelfKey === p.shelfKey &&
+          cur.sel.paperKey === p.paperKey &&
+          cur.sel.paperTypeKey === p.paperTypeKey &&
           cur.sel.collSet === p.collSet &&
           cur.sel.collBits === p.collBits &&
           cur.sel.order === p.order &&
@@ -2685,8 +3111,11 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       bucketFilter,
       eraFilter,
       collKey,
+      shelfKey,
+      paperKey,
+      paperTypeKey,
       collSet,
-      collBits: collBitsSel,
+      collBits: memberBitsSel,
       order: towerOrder,
       len: artifacts.length,
       // Derivation coverage (2026-11-13 arrival fix): the scan reads
@@ -2716,6 +3145,9 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       cur.sel.bucketFilter === sel.bucketFilter &&
       cur.sel.eraFilter === sel.eraFilter &&
       cur.sel.collKey === sel.collKey &&
+      cur.sel.shelfKey === sel.shelfKey &&
+      cur.sel.paperKey === sel.paperKey &&
+      cur.sel.paperTypeKey === sel.paperTypeKey &&
       cur.sel.collSet === sel.collSet &&
       cur.sel.collBits === sel.collBits &&
       cur.sel.order === sel.order;
@@ -2777,7 +3209,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     fx.pendingSel = null;
     filterLaunchRef.current(sel);
     return undefined;
-  }, [towerData, artifacts, towerOrder, bucketFilter, eraFilter, collSet, collBitsSel, collKey, query, fullIndexReady, streamKick]);
+  }, [towerData, artifacts, towerOrder, bucketFilter, eraFilter, collSet, memberBitsSel, collKey, shelfKey, paperKey, paperTypeKey, query, fullIndexReady, streamKick]);
   const { rankMap, matchCount, rankedIndices, blendedModel, browseIndices } = useMemo(() => {
     const map = new Map();
     if (!artifacts || !towerData)
@@ -2798,8 +3230,8 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     const passesCollection = (i) =>
       collSet
         ? collSet.has(artifacts[i].artifact_id)
-        : collBitsSel
-          ? (collBitsSel[i >> 5] & (1 << (i & 31))) !== 0
+        : memberBitsSel
+          ? (memberBitsSel[i >> 5] & (1 << (i & 31))) !== 0
           : true;
     // Era filter (2026-11-11): era codes were precomputed per record
     // in derivation phase 0, so this is one typed-array read. A record
@@ -2851,7 +3283,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       // precomputed counts cover the same resident prefix the scan
       // would, so the semantics are unchanged.)
       const knownCount =
-        !collSet && !collBitsSel && towerData.eraCounts
+        !collSet && !memberBitsSel && towerData.eraCounts
           ? eraFilter
             ? bucketFilter
               ? towerData.bucketEraCounts[bucketFilter + "|" + eraFilter] || 0
@@ -3247,7 +3679,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       if (items[k].index >= 0) map.set(items[k].key, k + 1);
     }
     return { rankMap: map, matchCount: total, rankedIndices: null, blendedModel, browseIndices: null };
-  }, [q, bucketFilter, eraFilter, sortId, towerOrder, artifacts, towerData, rowBudget, collSet, collBitsSel, deep, strictQuery, browseResult]);
+  }, [q, bucketFilter, eraFilter, sortId, towerOrder, artifacts, towerData, rowBudget, collSet, memberBitsSel, deep, strictQuery, browseResult]);
   // ---- Phase B: server-side catalog search (CUTOVER, 2026-10-29) -------
   // Server search is the DEFAULT: the SEARCH path routes to
   // /api/catalog-search and adapts its pages into the blendedModel shape
@@ -3429,7 +3861,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // entries the moment they arrive. Once counts are final a zero is
   // a true zero and the plain empty message returns.
   const awaitingArrival = (() => {
-    if (!bucketFilter || eraFilter || collSet || collBitsSel) return false;
+    if (!bucketFilter || eraFilter || collSet || memberBitsSel) return false;
     if (q && q.trim().length >= 2) return false;
     if (countsFinal || matchCount !== 0 || !towerData) return false;
     if (bucketFilter.indexOf(":") > -1) {
@@ -3677,7 +4109,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       DECLASSIFIED: 4, PODCASTS: 5, DOCUMENTS: 6,
     };
     const searching = !!(q && q.trim().length >= 2);
-    const anyFilter = !!(bucketFilter || collKey || eraFilter);
+    const anyFilter = !!(bucketFilter || collKey || shelfKey || paperKey || paperTypeKey || eraFilter);
     let state = null;
     if (!searching && !anyFilter) {
       state = { kind: "idle" };
@@ -3719,7 +4151,10 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           bs &&
           bs.bucketFilter === bucketFilter &&
           bs.eraFilter === eraFilter &&
-          bs.collKey === collKey
+          bs.collKey === collKey &&
+          bs.shelfKey === shelfKey &&
+          bs.paperKey === paperKey &&
+          bs.paperTypeKey === paperTypeKey
         ) {
           count = browseResult.count;
           // Array.from is load-bearing: browseResult.indices is a
@@ -3778,12 +4213,12 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         // facets are in hand; otherwise the focus/idle state above
         // stands, exactly as the scene behaved before reshape.
         const refined =
-          searching || !!collKey || !!eraFilter || (bucketFilter && bucketFilter.indexOf(":") > -1);
+          searching || !!collKey || !!shelfKey || !!paperKey || !!paperTypeKey || !!eraFilter || (bucketFilter && bucketFilter.indexOf(":") > -1);
         let reshapeState = null;
         if (refined && countsFinal && facetSource) {
           let facets = null;
           if (
-            eraFilter && !lane && !collKey && !searching &&
+            eraFilter && !lane && !collKey && !shelfKey && !paperKey && !paperTypeKey && !searching &&
             facetSource.indices && towerData && towerData.bucketEraCounts
           ) {
             // Era-only refinement (2026-11-14 crash fix): phase 0
@@ -3864,7 +4299,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
             // front-anchored reshape.
             let windows = null;
             if (
-              eraFilter && !searching && !collKey &&
+              eraFilter && !searching && !collKey && !shelfKey && !paperKey && !paperTypeKey &&
               (!bucketFilter || bucketFilter === lane) &&
               towerData && towerData.bucketEraCounts
             ) {
@@ -3950,7 +4385,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     try {
       api.setDisplay(state);
     } catch (e) { /* decorative layer — never disturb the page */ }
-  }, [q, bucketFilter, collKey, eraFilter, serverActive, serverModel, blendedModel, browseResult, artifacts, helixApiRef, countsFinal, activeFilterSummary]);
+  }, [q, bucketFilter, collKey, shelfKey, paperKey, paperTypeKey, eraFilter, serverActive, serverModel, blendedModel, browseResult, artifacts, helixApiRef, countsFinal, activeFilterSummary]);
   // Analytics: one search_performed per settled query (900ms debounce so
   // keystrokes don't flood it), with the result count the user saw.
   useEffect(() => {
@@ -4285,7 +4720,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                     {filtersOpen ? "−" : "+"}
                   </span>
                 </button>
-                {(collKey || bucketFilter || eraFilter) && (
+                {(collKey || shelfKey || paperKey || paperTypeKey || bucketFilter || eraFilter) && (
                   <button
                     type="button"
                     className="tf2-clear"
@@ -4295,7 +4730,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                   </button>
                 )}
               </div>
-              {(collKey || bucketFilter || eraFilter) && (
+              {(collKey || shelfKey || paperKey || paperTypeKey || bucketFilter || eraFilter) && (
                 <div className="tf2-pills" aria-label="Active filters">
                   {activeCollection && (
                     <button
@@ -4304,6 +4739,36 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                       onClick={() => selectCollection(collKey)}
                     >
                       {activeCollection.label}
+                      <span aria-hidden="true"> ×</span>
+                    </button>
+                  )}
+                  {activeShelf && (
+                    <button
+                      type="button"
+                      className="tf2-pill"
+                      onClick={() => selectShelf(shelfKey)}
+                    >
+                      {activeShelf.label}
+                      <span aria-hidden="true"> ×</span>
+                    </button>
+                  )}
+                  {activePaperSel && (
+                    <button
+                      type="button"
+                      className="tf2-pill"
+                      onClick={() => selectPaper(paperKey)}
+                    >
+                      {activePaperSel.label}
+                      <span aria-hidden="true"> ×</span>
+                    </button>
+                  )}
+                  {activePaperType && (
+                    <button
+                      type="button"
+                      className="tf2-pill"
+                      onClick={() => selectPaperType(paperTypeKey)}
+                    >
+                      {activePaperType.label}
                       <span aria-hidden="true"> ×</span>
                     </button>
                   )}
@@ -4404,7 +4869,9 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                               {(countsFinal || serverCounts) && (
                                 <span className="tf2-count">
                                   {(
-                                    (discoveryData || towerData).counts[c] || 0
+                                    facetCounts
+                                      ? facetCounts.laneMap[c] || 0
+                                      : (discoveryData || towerData).counts[c] || 0
                                   ).toLocaleString()}
                                 </span>
                               )}
@@ -4412,44 +4879,231 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                           );
                         })}
                       </div>
-                      {activeLane && activeSubs.length > 0 && (
+                      {activeLane === "BOOKS" &&
+                      collData &&
+                      collData.booksShelves &&
+                      collData.booksShelves.length > 0 ? (
                         <div
+                          ref={laneSubsRef}
                           className="tf2-subs"
                           role="group"
-                          aria-label={`${TOWER_TOP_LABELS[activeLane] || activeLane} subcategories`}
+                          aria-label="Books shelves"
                         >
-                          {activeSubs.map((s) => {
-                            const key = `${activeLane}:${s.id}`;
-                            const count = towerData.subCounts[key] || 0;
-                            // While streaming, a zero here only means
-                            // "not arrived yet" — hiding the row would
-                            // silently vanish real subcategories
-                            // (2026-11-13 load-state fix). Rows show
-                            // without counts until the derivation is
-                            // final; the zero-hide applies only to
-                            // final counts, as before.
-                            if (countsFinal && count === 0) return null;
-                            const subActive = bucketFilter === key;
+                          {/* Books shelves (2026-11-15 collections
+                              package): 61 multi-match shelves from
+                              the Books expansion design replace the
+                              three provenance buckets. The active
+                              shelf's blurb leads the slot, keyed by
+                              the selection so it swaps atomically
+                              (the ghost fix — see the curated axis).
+                              Every shelf renders, markers included:
+                              a zero here is an honest count within
+                              the current cross-selection, never a
+                              reason to vanish a designed shelf. */}
+                          {activeShelf && (
+                            <p
+                              key={activeShelf.key}
+                              className="tf2-note"
+                            >
+                              {activeShelf.blurb}{" "}
+                              <span>
+                                {activeShelf.count.toLocaleString()} works
+                              </span>
+                            </p>
+                          )}
+                          {collData.booksShelves.map((s, idx) => {
+                            const count = facetCounts
+                              ? facetCounts.shelfMap[s.key] || 0
+                              : s.count;
+                            const shelfActive = shelfKey === s.key;
+                            const wingHead =
+                              s.wing &&
+                              (idx === 0 ||
+                                collData.booksShelves[idx - 1].wing !== s.wing);
                             return (
-                              <button
-                                type="button"
-                                key={s.id}
-                                className={`tf2-sub${subActive ? " is-active" : ""}`}
-                                onClick={() =>
-                                  selectLane(subActive ? activeLane : key)
-                                }
-                                aria-pressed={subActive}
-                              >
-                                <span className="tf2-sub-label">{s.label}</span>
-                                {countsFinal && (
+                              <Fragment key={s.key}>
+                                {wingHead && (
+                                  <div className="tf2-wing" aria-hidden="true">
+                                    {s.wing}
+                                  </div>
+                                )}
+                                <button
+                                  type="button"
+                                  className={`tf2-sub${shelfActive ? " is-active" : ""}`}
+                                  onClick={() => selectShelf(s.key)}
+                                  aria-pressed={shelfActive}
+                                >
+                                  <span className="tf2-sub-label">{s.label}</span>
                                   <span className="tf2-count">
                                     {count.toLocaleString()}
                                   </span>
-                                )}
-                              </button>
+                                </button>
+                              </Fragment>
                             );
                           })}
                         </div>
+                      ) : activeLane === "PAPERS" &&
+                        collData &&
+                        collData.papersFields &&
+                        collData.papersFields.length > 0 ? (
+                        <div
+                          ref={laneSubsRef}
+                          className="tf2-subs"
+                          role="group"
+                          aria-label="Papers fields"
+                        >
+                          {/* Papers subject map (2026-11-15
+                              collections package): the design's
+                              two-level field/subfield taxonomy
+                              replaces the source labels the lane used
+                              to wear as subcategories. Selecting a
+                              field filters to it and expands its
+                              subfields beneath it; the type rows at
+                              the foot slice the same selection by
+                              publication type. The active field's
+                              blurb leads the slot, keyed by the
+                              selection so it swaps atomically (the
+                              ghost fix, as on the other axes). */}
+                          {activePaperField && (
+                            <p key={paperKey} className="tf2-note">
+                              {activePaperField.blurb}{" "}
+                              <span>
+                                {(
+                                  activePaperSel || activePaperField
+                                ).count.toLocaleString()}{" "}
+                                works
+                              </span>
+                            </p>
+                          )}
+                          {collData.papersFields.map((f) => {
+                            const fcount =
+                              facetCounts && facetCounts.paperMap
+                                ? facetCounts.paperMap[f.key] || 0
+                                : f.count;
+                            const expanded =
+                              activePaperField && activePaperField.id === f.id;
+                            const fieldActive = paperKey === f.key;
+                            return (
+                              <Fragment key={f.key}>
+                                <button
+                                  type="button"
+                                  className={`tf2-sub${fieldActive ? " is-active" : ""}`}
+                                  onClick={() => selectPaper(f.key)}
+                                  aria-pressed={fieldActive}
+                                >
+                                  <span className="tf2-sub-label">{f.label}</span>
+                                  <span className="tf2-count">
+                                    {fcount.toLocaleString()}
+                                  </span>
+                                </button>
+                                {expanded &&
+                                  f.subs.map((s) => {
+                                    const scount =
+                                      facetCounts && facetCounts.paperMap
+                                        ? facetCounts.paperMap[s.key] || 0
+                                        : s.count;
+                                    const subActive = paperKey === s.key;
+                                    return (
+                                      <button
+                                        type="button"
+                                        key={s.key}
+                                        className={`tf2-sub tf2-sub--deep${subActive ? " is-active" : ""}`}
+                                        onClick={() => selectPaper(s.key)}
+                                        aria-pressed={subActive}
+                                      >
+                                        <span className="tf2-sub-label">
+                                          {s.label}
+                                        </span>
+                                        <span className="tf2-count">
+                                          {scount.toLocaleString()}
+                                        </span>
+                                      </button>
+                                    );
+                                  })}
+                              </Fragment>
+                            );
+                          })}
+                          {collData.papersTypes &&
+                            collData.papersTypes.length > 0 && (
+                              <>
+                                <div className="tf2-wing" aria-hidden="true">
+                                  Paper types
+                                </div>
+                                {collData.papersTypes.map((t) => {
+                                  const tcount =
+                                    facetCounts && facetCounts.paperTypeMap
+                                      ? facetCounts.paperTypeMap[t.key] || 0
+                                      : t.count;
+                                  const typeActive = paperTypeKey === t.key;
+                                  return (
+                                    <button
+                                      type="button"
+                                      key={t.key}
+                                      className={`tf2-sub${typeActive ? " is-active" : ""}`}
+                                      onClick={() => selectPaperType(t.key)}
+                                      aria-pressed={typeActive}
+                                    >
+                                      <span className="tf2-sub-label">
+                                        {t.label}
+                                      </span>
+                                      <span className="tf2-count">
+                                        {tcount.toLocaleString()}
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </>
+                            )}
+                        </div>
+                      ) : (
+                        activeLane &&
+                        activeLane !== "BOOKS" &&
+                        activeLane !== "PAPERS" &&
+                        activeSubs.length > 0 && (
+                          <div
+                            className="tf2-subs"
+                            role="group"
+                            aria-label={`${TOWER_TOP_LABELS[activeLane] || activeLane} subcategories`}
+                          >
+                            {activeSubs.map((s) => {
+                              const key = `${activeLane}:${s.id}`;
+                              const count = facetCounts
+                                ? facetCounts.subMap[key] || 0
+                                : towerData.subCounts[key] || 0;
+                              // While streaming, a zero here only means
+                              // "not arrived yet" — hiding the row would
+                              // silently vanish real subcategories
+                              // (2026-11-13 load-state fix). Rows show
+                              // without counts until the derivation is
+                              // final; the zero-hide applies only to
+                              // final counts, as before. With facet
+                              // counts active the rows stay: a zero is
+                              // the truthful count within the current
+                              // cross-selection.
+                              if (countsFinal && count === 0 && !facetCounts)
+                                return null;
+                              const subActive = bucketFilter === key;
+                              return (
+                                <button
+                                  type="button"
+                                  key={s.id}
+                                  className={`tf2-sub${subActive ? " is-active" : ""}`}
+                                  onClick={() =>
+                                    selectLane(subActive ? activeLane : key)
+                                  }
+                                  aria-pressed={subActive}
+                                >
+                                  <span className="tf2-sub-label">{s.label}</span>
+                                  {countsFinal && (
+                                    <span className="tf2-count">
+                                      {count.toLocaleString()}
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )
                       )}
                     </div>
                   </div>
@@ -4482,7 +5136,11 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                           >
                             All collections
                           </button>
-                          {COLLECTION_GROUPS.map((g) => (
+                          {COLLECTION_GROUPS.filter(
+                            (g) =>
+                              !collData ||
+                              collData.groups.some((dg) => dg.id === g.id)
+                          ).map((g) => (
                             <button
                               key={g.id}
                               type="button"
@@ -4518,7 +5176,10 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                 selection change); the panel frame now
                                 never moves on a curated selection. */}
                             {activeCollection && (
-                              <p className="tf2-note">
+                              <p
+                                key={activeCollection.key}
+                                className="tf2-note"
+                              >
                                 {activeCollection.blurb}{" "}
                                 <span>
                                   {activeCollection.count.toLocaleString()}{" "}
@@ -4540,7 +5201,10 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                     {c.label}
                                   </span>
                                   <span className="tf2-count">
-                                    {c.count.toLocaleString()}
+                                    {(facetCounts
+                                      ? facetCounts.curatedMap[c.key] || 0
+                                      : c.count
+                                    ).toLocaleString()}
                                   </span>
                                 </button>
                               ))}
@@ -4566,9 +5230,11 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                         aria-labelledby="tf2-axis-era"
                       >
                         {TOWER_ERAS.map((e) => {
-                          const count = towerData.eraCounts
-                            ? towerData.eraCounts[e.id] || 0
-                            : 0;
+                          const count = facetCounts
+                            ? facetCounts.eraMap[e.id] || 0
+                            : towerData.eraCounts
+                              ? towerData.eraCounts[e.id] || 0
+                              : 0;
                           const on = eraFilter === e.id;
                           return (
                             <button
@@ -6106,7 +6772,14 @@ const LibraryResults = memo(function LibraryResults({
           ? totalHint
           : artifacts.length}{" "}
         {artifacts.length === 1 ? "entry" : "entries"}
-        {q ? ` matching “${q}”` : ""}
+        {/* "matching" is claimed only when a real search for this
+            exact query produced the list being counted (the blended
+            model carries its query) — never for a typed-but-not-yet-
+            searched query riding the browse list (2026-11-15 header
+            truth fix). */}
+        {q && blendedModel && blendedModel.query === q
+          ? ` matching “${q}”`
+          : ""}
       </p>
       {matchCount === 0 && (
         <p className="tower-empty-results">

@@ -88,6 +88,15 @@ export const TOWER_TOP_LABELS = {
 // (whole-collection) server search is unaffected.
 export const TOWER_CLIENT_ONLY_SUB_LANES = ["LAW", "REFERENCE"];
 
+// Individual subcategories with the same server-facet gap, named by
+// their full "COLLECTION:sub" key: the Pentagon Papers subcategory
+// joined the Declassified lane in the 2026-11-15 Declassified merge
+// (the retired "Declassified programmes" curated group's pentagon
+// shelf, unioned into the lane's own list), so the server facet
+// products — which predate it — hold no postings for it. Searches
+// under it run on the client pipeline until the next meta rebuild.
+export const TOWER_CLIENT_ONLY_SUB_KEYS = ["DECLASSIFIED:pentagon"];
+
 // Subcategory definitions per collection. `id` is collection-scoped and
 // stable (used in filter state as "COLLECTION:sub"). Order = display order
 // (largest first, like Internet Archive's top-N facet ordering).
@@ -107,6 +116,10 @@ export const TOWER_SUBS = {
     { id: "un", label: "United Nations" },
     { id: "nsa", label: "National Security Archive" },
     { id: "fbi", label: "FBI" },
+    // Pentagon Papers (2026-11-15 Declassified merge): the retired
+    // curated programme's shelf, unioned into the lane's own list —
+    // Declassified now lives in exactly one place.
+    { id: "pentagon", label: "Pentagon Papers" },
     { id: "other", label: "Other Releases" },
   ],
   BOOKS: [
@@ -211,6 +224,7 @@ export function towerSubIdForPrefix(col, p) {
       if (/^un-/.test(p)) return "un";
       if (/^(govdocs-nsarchive|nsa-)/.test(p)) return "nsa";
       if (/^fbi-vault/.test(p)) return "fbi";
+      if (/^pentagon-papers/.test(p)) return "pentagon";
       return "other";
     case "BOOKS":
       // The Tower's own curated shelf (tob-*) is sacred/religious/esoteric.

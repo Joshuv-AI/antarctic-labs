@@ -34,9 +34,19 @@ export async function onRequest(context) {
     return new Response("Not found", { status: 404 });
   }
 
+  // A caller may version a file whose content changed without a new
+  // dataset fingerprint — the curated bitsets, whose membership is a
+  // taxonomy, not catalog data (2026-11-15 collections package). The
+  // client passes ?v=<the file's manifest sha256>; the version joins
+  // the cache key so the immutable edge copy can never serve the
+  // previous taxonomy under the new manifest. Only a hex version is
+  // honored, and only into the key — the upstream file is unchanged.
+  const reqUrl = new URL(request.url);
+  const v = reqUrl.searchParams.get("v");
+  const versioned = v && /^[0-9a-f]{16,64}$/.test(v) ? `?v=${v}` : "";
   const cache = caches.default;
   const cacheKey = new Request(
-    new URL(`/tcb1/${fp}/${file}`, request.url).toString(),
+    new URL(`/tcb1/${fp}/${file}${versioned}`, request.url).toString(),
     { method: "GET" }
   );
   if (request.method === "GET") {
