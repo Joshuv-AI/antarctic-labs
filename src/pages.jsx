@@ -44,6 +44,8 @@ import {
   resumeCatalogBrowse,
   isBrowseComplete,
   isBrowseStreaming,
+  getBrowseStallAgeMs,
+  restartStalledBrowse,
   getCachedArtifacts,
   getFullArtifact,
   getDescription,
@@ -1649,7 +1651,9 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // counting note up indefinitely — the visitor's only recovery was
   // a reload. While the page is visible, a stopped-but-incomplete
   // stream resumes itself on a bounded backoff; a stream that is
-  // moving resets the budget.
+  // moving resets the budget. (2026-11-15: the tick also force-
+  // cycles a stream that is streaming but has stopped progressing —
+  // the early-tap strand, which never presents as stopped at all.)
   useEffect(() => {
     if (!artifacts || countsReady) return;
     let attempts = 0;
@@ -1667,6 +1671,20 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         }
       } else if (isBrowseStreaming()) {
         attempts = 0;
+        // Streaming but stalled (2026-11-15 early-tap fix): the
+        // stream can sit neither stopped nor progressing — a hidden
+        // sample during an append parks the worker on its ack
+        // window, a worker-side pause or dead decode loop presents
+        // identically — and the stopped-stream resume above can
+        // never see it. While visible, a stream with no commit
+        // progress for 45 s is force-cycled through stop + resume,
+        // which restarts both pipelines from the append frontier.
+        if (
+          document.visibilityState === "visible" &&
+          getBrowseStallAgeMs() > 45000
+        ) {
+          restartStalledBrowse();
+        }
       }
       timer = setTimeout(tick, delays[Math.min(attempts, delays.length - 1)]);
     };

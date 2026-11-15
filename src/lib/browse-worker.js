@@ -703,7 +703,13 @@ self.onmessage = (e) => {
       t.ackWaiters = [];
       for (const resolve of waiters) resolve();
       paused = false;
-      runTcb1(t, Math.floor(m.cursor / t.manifest.shard_size));
+      // A rejection here previously killed the decode loop silently:
+      // no "failed", no "error", the stream wedged in a state the
+      // main thread reads as streaming forever (2026-11-15 early-tap
+      // fix). Surface it as an error so the main thread takes over.
+      runTcb1(t, Math.floor(m.cursor / t.manifest.shard_size)).catch(() =>
+        post({ type: "error", stage: "tcb1-resume" })
+      );
     } else if (m.type === "reset") {
       // Resume after a failure stop: the main thread dropped every
       // buffered page at/after its append frontier, so the session

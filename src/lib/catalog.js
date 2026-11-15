@@ -1223,6 +1223,13 @@ function browsePublishNow(complete) {
   const st = browseState;
   if (!st || !st.store) return;
   st.lastPubAt = Date.now();
+  // Stall clock: a publish that carries a moved frontier or a grown
+  // store is progress; a republish of the same state is not.
+  if (st.progCount !== st.store.count || st.progCursor !== st.cursor) {
+    st.progCount = st.store.count;
+    st.progCursor = st.cursor;
+    st.progAt = st.lastPubAt;
+  }
   // Publish a view snapshot: the page's derivations key off identity,
   // and the columns keep growing between publishes — the view pins
   // the length it was published with, like the old array slice did.
@@ -1459,7 +1466,19 @@ function browseWaitAndLaunch(st) {
   if (st.timer) return;
   st.timer = setTimeout(() => {
     st.timer = null;
-    if (browseState === st && !st.stopped) browseLaunch(st);
+    if (browseState === st && !st.stopped) {
+      // Worker mode owns its fetch pipeline, but APPENDS are driven
+      // from this thread — and browseLaunch returns immediately in
+      // worker mode, so routing the retry there dead-ends the chain:
+      // a single hidden sample during an append used to strand the
+      // stream (and any mid-stream selection) permanently, because
+      // nothing ever called browseAppend again (2026-11-15 early-tap
+      // fix; the gate's frozen 496,944 Law count). Re-drive the
+      // append loop itself; while hidden it re-arms here at the same
+      // cadence and self-heals the moment visibility returns.
+      if (st.workerMode) browseAppend(st);
+      else browseLaunch(st);
+    }
   }, 1500);
 }
 
@@ -1740,6 +1759,13 @@ export function startCatalogBrowse() {
         timer: null,
         pubTimer: null,
         lastPubAt: 0,
+        // Stall detection (2026-11-15 early-tap fix): the last time
+        // the append frontier or the resident count actually moved.
+        // A stream can be neither stopped nor progressing (see
+        // getBrowseStallAgeMs) — this is the signal that finds it.
+        progAt: Date.now(),
+        progCount: -1,
+        progCursor: -1,
       };
       // Baked sort orders are DEFERRED (audit F3, above): arm what
       // discovery found; the 51 MB fetch waits for the stream to
@@ -1807,6 +1833,36 @@ export function resumeCatalogBrowse() {
     return;
   }
   browseLaunch(st);
+}
+
+// How long the live stream has gone without commit progress (the
+// append frontier and the resident count both unmoved), in ms — 0
+// when there is no stream, the stream is stopped (the failure-stop
+// path owns that case), or the catalog is complete. A stream can be
+// neither stopped nor progressing: a hidden sample during an append
+// parks the worker on its ack window with buffered chunks uncommitted
+// (the 2026-11-15 early-tap strand), and a worker-side pause or a
+// silently dead decode loop presents the same way. Every such state
+// reads "streaming" to isBrowseStreaming(), which is why the
+// pages.jsx watchdog needs this second signal.
+export function getBrowseStallAgeMs() {
+  const st = browseState;
+  if (!st || st.stopped || isBrowseComplete()) return 0;
+  return Date.now() - (st.progAt || 0);
+}
+
+// Force a streaming-but-stalled stream through the known-good
+// recovery cycle: stop it (pauses the worker, drops buffered chunks)
+// and immediately resume it (the worker reset clears its pause,
+// releases its ack waiters and restarts the decode loop at the
+// append frontier; the main-thread pipeline relaunches). Returns
+// false when there is no stalled stream to restart.
+export function restartStalledBrowse() {
+  const st = browseState;
+  if (!st || st.stopped || isBrowseComplete()) return false;
+  browseStop(st, false);
+  resumeCatalogBrowse();
+  return true;
 }
 
 // True while the browse stream is actively bringing the catalog in
