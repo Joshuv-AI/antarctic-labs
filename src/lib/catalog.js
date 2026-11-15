@@ -1579,7 +1579,20 @@ function browseAppend(st) {
     if (exhausted) {
       // Everything the server has is now resident: that IS the full
       // catalog for this page, so the final publish may say complete.
-      browseStop(st, st.total != null && st.store.count >= st.total);
+      // Exhaustion is completion, unconditionally (2026-11-14 crash
+      // fix): the old count comparison (resident unique >= server
+      // total) can never hold on a catalog whose dedupe drops records
+      // — this catalog's 5 duplicate ids leave the resident count at
+      // 2,557,918 against a 2,557,923 total — so every fully-loaded
+      // session stopped as "incomplete": the worker was only paused,
+      // pinning its TCB1 session (~190 MB) plus the store's dedupe
+      // table (~33 MB) under every post-load tap until iOS jetsam
+      // killed the page (Joshua's 2026-11-14 recording). Nothing can
+      // resume an exhausted stream (browseResume already no-ops on
+      // an exhausted cursor), so retiring the worker here loses no
+      // path. The page-failure and on-demand stops below keep
+      // complete=false — resume is real there.
+      browseStop(st, true);
       return;
     }
     if (st.onDemand && st.store.count >= st.stopAt) {

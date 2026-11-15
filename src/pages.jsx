@@ -3264,9 +3264,25 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // to build it (it upgrades the deferred object in place; the
   // "Indexing…" status shows while it builds). Plain queries never
   // set this: the server answers them.
+  //
+  // 2026-11-14 crash fix: filter state ALONE no longer triggers the
+  // build. Nothing reads the search layer without a query — the
+  // browse path serves filter selections from the scan (bucketKeys /
+  // eraCodes), and the results memo only touches haystacks when a
+  // query is present — so a bare era/curated/sub-lane tap paid the
+  // full phase-1 build (five full-length string arrays; measured on
+  // the phone profile at +219 MB persistent heap and a ~6 s main-
+  // thread task) for a layer it never used: the same jetsam family
+  // as the filter-tap crashes. The build now starts when a query
+  // actually engages the client pipeline (typed under a client-owned
+  // filter, or the strict path); until it lands, such a query
+  // browses in catalog order — the derivation's long-standing
+  // phase-0 contract.
   useEffect(() => {
     if (needSearchData || !serverFlag) return;
-    if (clientFiltersActive || (strictQuery && strictQuery === q))
+    const queryNeedsClient =
+      !!q && q.trim().length >= 2 && clientFiltersActive;
+    if (queryNeedsClient || (strictQuery && strictQuery === q))
       setNeedSearchData(true);
   }, [needSearchData, serverFlag, clientFiltersActive, strictQuery, q]);
   // Catalog total + per-collection counts from the hubs index (a
@@ -3331,15 +3347,23 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     if (sortId !== "title-asc") ensureBrowseOrders();
   }, [sortId]);
   // Stack counts in server mode: hubs counts override the derivation's
-  // partial collection counts until the derivation has completed over
-  // the full catalog (fullIndexReady && deriveFinal), after which
-  // towerData.counts is complete and authoritative. The override used
-  // to drop the moment fullIndexReady flipped — one publish before
-  // the final derivation landed — flashing partial counts at the
-  // completion boundary (2026-11-11 presentation-stability fix).
+  // partial collection counts while the catalog streams. The override
+  // used to drop the moment the derivation completed — but the two
+  // systems are NOT the same numbers: the hub file counts catalog
+  // RECORDS (2,557,923; Books 81,631) while the resident derivation
+  // counts UNIQUE ids (2,557,918; Books 81,626 — dedupe drops this
+  // catalog's 5 duplicate ids), so dropping the overlay flipped every
+  // chip at the completion boundary (Joshua's 2026-11-14 recording:
+  // All 2,557,923 -> 2,557,918, Books 81,631 -> 81,626 in one session).
+  // Single-truth rule (2026-11-14): the chips state the catalog's
+  // published counts in EVERY state, so the overlay now persists
+  // after completion too. Resident-exact numbers still govern where
+  // they are the truth of the thing shown: selection headers and
+  // result counts come from the scan, subcategory counts from
+  // towerData.subCounts — neither is overlaid.
   const countsFinal = countsReady;
   const discoveryData = useMemo(() => {
-    if (!towerData || !serverCounts || countsFinal) return towerData;
+    if (!towerData || !serverCounts) return towerData;
     const counts = { ...towerData.counts, ...serverCounts };
     return {
       ...towerData,
@@ -3354,16 +3378,19 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         (a, b) => counts[b] - counts[a] || (a < b ? -1 : a > b ? 1 : 0)
       ),
     };
-  }, [towerData, serverCounts, countsFinal]);
-  // "All entries" chip number (2026-11-13 load-state fix): while the
-  // catalog is still streaming, the chip states the library's true
-  // total (hub seed / browse manifest — the same truthful source as
-  // the stats strip above it), never the resident prefix count,
-  // which read as "the library has 20,000 entries" beside a header
-  // stating 2,557,923. Once the derivation is final the chip returns
-  // to the resident count, which is then the exact catalog count.
-  const allEntriesCount =
-    countsFinal || worksTotal == null ? displayCount : worksTotal;
+  }, [towerData, serverCounts]);
+  // "All entries" chip number (2026-11-13 load-state fix): the chip
+  // states the library's true total (hub seed / browse manifest — the
+  // same truthful source as the stats strip above it), never the
+  // resident prefix count, which read as "the library has 20,000
+  // entries" beside a header stating 2,557,923. It states that total
+  // in EVERY state (2026-11-14 single-truth fix): the resident count
+  // is NOT the exact catalog count — dedupe leaves it 5 under the
+  // total on this catalog — so the old "return to the resident count
+  // once final" rule flipped the chip 2,557,923 -> 2,557,918 at the
+  // completion boundary. The resident count remains the fallback only
+  // for the brief window before any total source has landed.
+  const allEntriesCount = worksTotal == null ? displayCount : worksTotal;
   // Zero-resident selection (2026-11-13 statusfix): a lane or
   // subcategory tap whose committed scan found ZERO resident matches
   // while the catalog is still arriving is not an empty result — it
@@ -3731,13 +3758,36 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         let reshapeState = null;
         if (refined && countsFinal && facetSource) {
           let facets = null;
-          if (facetSource.indices && lane && HELIX_BAND_OF[lane] !== undefined) {
+          if (
+            eraFilter && !lane && !collKey && !searching &&
+            facetSource.indices && towerData && towerData.bucketEraCounts
+          ) {
+            // Era-only refinement (2026-11-14 crash fix): phase 0
+            // already tallied every record into bucketEraCounts keyed
+            // "LANE|era", so the facets are seven lookups — exact by
+            // construction (every record's bucket lane is one of the
+            // seven collections). The generic tally below instead
+            // materialized a record facade for EVERY match through
+            // the column-store Proxy (542,487 for 1990–2009) in one
+            // synchronous task on the tap. Self-validating: the
+            // lookups are used only when they sum to the committed
+            // scan count; any drift falls through to the tally.
+            const bec = towerData.bucketEraCounts;
+            const f = {};
+            let sum = 0;
+            for (const ln of Object.keys(HELIX_BAND_OF)) {
+              const c = bec[ln + "|" + eraFilter] || 0;
+              if (c > 0) { f[HELIX_BAND_OF[ln]] = c; sum += c; }
+            }
+            if (sum > 0 && sum === count) facets = f;
+          }
+          if (!facets && facetSource.indices && lane && HELIX_BAND_OF[lane] !== undefined) {
             // Single-lane refinement (lane × era / sub / curated):
             // every match is in the lane by construction, so the
             // facets are exact with no tally pass at all.
             facets = {};
             facets[HELIX_BAND_OF[lane]] = count;
-          } else {
+          } else if (!facets) {
             // Exact tally over the full match set (2026-11-14: the
             // former 300k cap is removed — it silently demoted broad
             // refined selections, e.g. a big era spanning several
