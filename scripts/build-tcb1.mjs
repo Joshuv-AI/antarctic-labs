@@ -31,6 +31,19 @@
 // serving functions pin to the deployed commit, so the dataset and the
 // code that reads it must land in the same deploy.
 //
+// COUNT-DROP GUARD (2026-11-16, INVENTORY 96): a rebuild once ran in a
+// staging tree missing tcb1-data/curated-members.json and the previous
+// dataset (the carry-over inputs) and SILENTLY published a gutted
+// curated dataset — 233 collections / 2,141,612 members became 20 /
+// 5,933. This build therefore (a) preflights its staging inputs and
+// fails loudly when any is missing, and (b) before writing anything
+// over the previous dataset, compares the new curated counts against
+// that dataset (curated.bin.br, cross-checked against manifest.json)
+// and aborts — naming every dropped or shrunk collection — on any
+// drop not listed in COUNT_DROP_ALLOWLIST below. A build with no
+// previous dataset to guard against refuses to publish; a genuine
+// first-ever build sets TCB1_ALLOW_NO_BASELINE=1 (loudly logged).
+//
 // Format specs: TCB1/TCD1 in ~/workspace/tower-perf-data/FORMAT.md
 // (stage-1 reference implementation: tower-perf-data/src/). TCU1 is
 // specified inline below. Dictionary codes are first-appearance order
@@ -68,6 +81,48 @@ for (let i = 0; ; i++) {
   shardFiles.push(name);
 }
 if (!shardFiles.length) { console.error("no catalog-index shards in", srcDir); process.exit(1); }
+
+// ---------- preflight: staging inputs + guard baseline -----------------------
+// Fail fast, before any expensive pass, when the staging tree is
+// incomplete. Every input this build consumes must be present; a
+// missing one is a broken staging tree, never a silent skip (the
+// 2026-11-16 gutting happened exactly that way). The previous dataset
+// in outDir is ALSO an input: it is the carry-over source for the
+// position-baked groups and the count-drop guard's baseline.
+const membersFile = join(root, "tcb1-data/curated-members.json");
+const prevManifestFile = join(outDir, "manifest.json");
+const prevBrFile = join(outDir, "curated.bin.br");
+const allowNoBaseline = process.env.TCB1_ALLOW_NO_BASELINE === "1";
+if (!existsSync(hubFile)) {
+  console.error(`PREFLIGHT FAIL: hub index not found: ${hubFile}`);
+  process.exit(1);
+}
+if (!existsSync(membersFile)) {
+  console.error(
+    `PREFLIGHT FAIL: curated members file not found: ${membersFile}\n` +
+    "The staging tree is incomplete — refusing to build a curated dataset without its member lists."
+  );
+  process.exit(1);
+}
+const havePrevManifest = existsSync(prevManifestFile);
+const havePrevBr = existsSync(prevBrFile);
+if (havePrevManifest !== havePrevBr) {
+  console.error(
+    `PREFLIGHT FAIL: previous dataset in ${outDir} is incomplete ` +
+    `(manifest.json ${havePrevManifest ? "present" : "MISSING"}, curated.bin.br ${havePrevBr ? "present" : "MISSING"}) — ` +
+    "the carry-over and the count-drop guard need both. Refusing to build."
+  );
+  process.exit(1);
+}
+if (!havePrevManifest && !allowNoBaseline) {
+  console.error(
+    `PREFLIGHT FAIL: no previous dataset in ${outDir} to guard against — refusing to publish unguarded.\n` +
+    "For a genuine first-ever build, set TCB1_ALLOW_NO_BASELINE=1."
+  );
+  process.exit(1);
+}
+if (!havePrevManifest && allowNoBaseline)
+  console.warn("PREFLIGHT WARN: TCB1_ALLOW_NO_BASELINE=1 — building with NO count-drop baseline (first-ever build only)");
 
 // ---------- pass 1: fingerprint + dictionaries + stats ---------------------
 const srcHash = createHash("sha256");
@@ -240,13 +295,17 @@ function buildCurated() {
   // law:*/med:*/eng:* are baked by scripts/build-curated-bitsets.mjs
   // from the design runners and carried over when the catalog is
   // unchanged (see the carry-over guard below).
-  for (const [id, works] of Object.entries(hub.traditions || {})) push(`tradition:${id}`, id, works);
-  const membersFile = join(root, "tcb1-data/curated-members.json");
-  if (existsSync(membersFile)) {
-    const members = JSON.parse(readFileSync(membersFile, "utf8"));
-    for (const [key, ids] of Object.entries(members)) {
-      colls.push({ key, label: key.slice(key.indexOf(":") + 1), ids });
-    }
+  if (!hub.traditions || typeof hub.traditions !== "object")
+    throw new Error("hub index has no traditions group — the hub input is broken; refusing to build");
+  for (const [id, works] of Object.entries(hub.traditions)) push(`tradition:${id}`, id, works);
+  // membersFile's existence is a preflight gate (top of this script):
+  // it is a committed build input, so a missing one has already
+  // aborted the build — it is never silently skipped here.
+  const members = JSON.parse(readFileSync(membersFile, "utf8"));
+  if (!members || typeof members !== "object" || !Object.keys(members).length)
+    throw new Error(`curated members file ${membersFile} is empty — refusing to build a curated dataset with no member lists`);
+  for (const [key, ids] of Object.entries(members)) {
+    colls.push({ key, label: key.slice(key.indexOf(":") + 1), ids });
   }
   const idToColls = new Map();
   colls.forEach((c, ci) => {
@@ -311,15 +370,17 @@ function buildCurated() {
   // dropped with a loud warning: re-run the design runners and
   // scripts/build-curated-bitsets.mjs / build-papers-bitsets.mjs
   // before the dataset ships.
-  const prevBr = join(outDir, "curated.bin.br");
-  const prevManifestFile = join(outDir, "manifest.json");
-  if (existsSync(prevBr) && existsSync(prevManifestFile)) {
+  // Preflight guarantees the previous dataset is either fully present
+  // (manifest.json + curated.bin.br) or fully absent (a first-ever
+  // build under TCB1_ALLOW_NO_BASELINE=1) — never half-present, so the
+  // carry-over below never silently skips for a missing input.
+  if (havePrevBr) {
     const prevManifest = JSON.parse(readFileSync(prevManifestFile, "utf8"));
     const sameCatalog =
       prevManifest.source &&
       prevManifest.source.fingerprint_sha256_concat === fingerprint &&
       prevManifest.total_records === total;
-    const prevRaw = brotliDecompressSync(readFileSync(prevBr));
+    const prevRaw = brotliDecompressSync(readFileSync(prevBrFile));
     if (prevRaw.toString("latin1", 0, 4) === "TCU1") {
       const prevCount = prevRaw.readUInt32LE(8);
       const prevTotal = prevRaw.readUInt32LE(12);
@@ -355,6 +416,101 @@ function buildCurated() {
 const curated = buildCurated();
 writeFileSync(join(stageDir, "curated.bin"), curated.buf);
 console.log(`curated.bin ${curated.buf.length} bytes, ${curated.meta.length} collections`);
+
+// ---------- count-drop guard -------------------------------------------------
+// Compare the new curated counts against the PREVIOUS production
+// dataset — the curated.bin.br + manifest.json in outDir that this
+// build is about to replace. Both are committed and the serving
+// functions pin to the deployed commit, so those bytes ARE what
+// production serves; no network read could be more current or more
+// trustworthy. The .bin is ground truth (its counts are the stored
+// popcounts); the manifest's curated section must agree with it
+// exactly — the Papers lane's assertion — or the baseline itself is
+// untrustworthy and the build refuses to proceed on it.
+// Any missing or shrunk collection aborts the build BEFORE anything
+// is written over the previous dataset. The only bypass is an
+// explicit COUNT_DROP_ALLOWLIST entry (key + reason) added in the
+// same commit that intentionally retires or resizes a collection.
+const COUNT_DROP_ALLOWLIST = new Map([
+  // ["tradition:example", "retired by <change> — intentional"],
+]);
+function loadBaselineCounts() {
+  const prevRaw = brotliDecompressSync(readFileSync(prevBrFile));
+  if (prevRaw.toString("latin1", 0, 4) !== "TCU1")
+    throw new Error("baseline curated.bin.br: bad TCU1 magic");
+  const entryCount = prevRaw.readUInt32LE(8);
+  const prevTotal = prevRaw.readUInt32LE(12);
+  const bitsetBytes = Math.ceil(prevTotal / 8);
+  const binCounts = new Map();
+  let p = 16;
+  for (let e = 0; e < entryCount; e++) {
+    const kl = prevRaw.readUInt8(p); p += 1;
+    const key = prevRaw.toString("utf8", p, p + kl); p += kl;
+    const ll = prevRaw.readUInt8(p); p += 1;
+    p += ll; // label
+    binCounts.set(key, prevRaw.readUInt32LE(p)); p += 4;
+    p += bitsetBytes;
+  }
+  const prevManifest = JSON.parse(readFileSync(prevManifestFile, "utf8"));
+  const manCounts = new Map(
+    ((prevManifest.curated && prevManifest.curated.collections) || []).map((c) => [c.key, c.count])
+  );
+  const problems = [];
+  for (const [k, n] of binCounts) {
+    if (!manCounts.has(k)) problems.push(`${k}: in curated.bin (${n} members) but absent from manifest.json`);
+    else if (manCounts.get(k) !== n) problems.push(`${k}: curated.bin ${n} members != manifest.json ${manCounts.get(k)}`);
+  }
+  for (const k of manCounts.keys())
+    if (!binCounts.has(k)) problems.push(`${k}: in manifest.json but absent from curated.bin`);
+  if (problems.length) {
+    console.error(
+      "COUNT-DROP GUARD: the previous dataset is internally inconsistent " +
+        "(curated.bin.br vs manifest.json) — refusing to build on an untrustworthy baseline:\n  " +
+        problems.join("\n  ")
+    );
+    rmSync(stageDir, { recursive: true, force: true });
+    process.exit(1);
+  }
+  return binCounts;
+}
+if (havePrevManifest) {
+  const baseline = loadBaselineCounts();
+  const next = new Map(curated.meta.map((m) => [m.key, m.count]));
+  const sumOf = (m) => [...m.values()].reduce((a, b) => a + b, 0);
+  const baseMembers = sumOf(baseline), nextMembers = sumOf(next);
+  const violations = [], excused = [], added = [];
+  for (const [key, prevCount] of baseline) {
+    const reason = COUNT_DROP_ALLOWLIST.get(key);
+    if (!next.has(key)) {
+      const line = `${key}: MISSING from the new dataset (was ${prevCount} members)`;
+      if (reason) excused.push(`${line} — allowlisted: ${reason}`); else violations.push(line);
+    } else if (next.get(key) < prevCount) {
+      const line = `${key}: SHRANK ${prevCount} -> ${next.get(key)} members`;
+      if (reason) excused.push(`${line} — allowlisted: ${reason}`); else violations.push(line);
+    }
+  }
+  for (const key of next.keys()) if (!baseline.has(key)) added.push(key);
+  for (const line of excused) console.warn(`COUNT-DROP GUARD: ${line}`);
+  if (nextMembers < baseMembers && !violations.length)
+    violations.push(`total members dropped ${baseMembers} -> ${nextMembers} with no per-collection cause (guard inconsistency)`);
+  if (violations.length) {
+    console.error(
+      `COUNT-DROP GUARD FAIL: the new curated dataset drops collections/members vs the previous dataset ` +
+        `(collections ${baseline.size} -> ${next.size}, members ${baseMembers} -> ${nextMembers}):\n  ` +
+        violations.join("\n  ") +
+        "\nNothing was written over the previous dataset. If a drop is intentional, add the key to " +
+        "COUNT_DROP_ALLOWLIST in scripts/build-tcb1.mjs with a reason, in the same commit."
+    );
+    rmSync(stageDir, { recursive: true, force: true });
+    process.exit(1);
+  }
+  console.log(
+    `count-drop guard OK: collections ${baseline.size} -> ${next.size} (${added.length} added), members ${baseMembers} -> ${nextMembers}` +
+      (excused.length ? `, ${excused.length} allowlisted drop(s)` : "")
+  );
+} else {
+  console.warn("COUNT-DROP GUARD: skipped — no baseline dataset (TCB1_ALLOW_NO_BASELINE=1)");
+}
 
 // ---------- Brotli (q11) into the output dir ---------------------------------
 const brOpts = { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 11 } };
