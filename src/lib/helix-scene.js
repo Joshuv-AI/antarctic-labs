@@ -140,6 +140,9 @@ const SEED_COUNTS = {
 };
 const BAND_PANEL_TARGET = 15006; // all panels live in band segments
 const MIN_STATIONS = 12; // 72 panels — the minimum-segment floor
+const GROUP_LITERAL_MAX = 100; // curated-group coils at/below this
+                               // many entries render literally
+                               // (coil-count truth, 2026-11-16)
 // Label anchor positions along each band (fraction of its theta
 // span), staggered at build time so the big labels rarely sweep the
 // front together (Amendment L collision rule).
@@ -320,6 +323,72 @@ function allocateStationsArr(counts) {
       sum++;
       k++;
     }
+  }
+  return out;
+}
+// Curated-group layouts ONLY (2026-11-16, INVENTORY line 98): the
+// generic floor in allocateStationsArr gives every subcategory coil
+// at least 72 panels, so a 6-entry shelf rendered as a full coil —
+// the visual overstated where the visitor stands in the filter.
+// Group coils follow the truth rules directly instead: a
+// subcategory with at most GROUP_LITERAL_MAX entries renders
+// LITERALLY (one panel per entry, station-rounded; one station is
+// the smallest renderable segment, so 1–3 entries still occupy a
+// single 6-panel station); larger subcategories split the remaining
+// budget proportionally (largest remainder) with a one-station
+// visibility minimum, so a mid-size shelf inside a huge group reads
+// as a stub — never a full coil, and never vanished. Zero-count
+// coils keep zero stations (honest markers). The resting bands and
+// the shelf / lane-sub layouts keep the generic allocation above —
+// this function serves the curated-group re-coil alone.
+function allocateStationsGroup(counts) {
+  const n = counts.length;
+  const out = new Array(n).fill(0);
+  const target = BAND_PANEL_TARGET / ROWS;
+  const literal = [];
+  const pool = [];
+  for (let i = 0; i < n; i++) {
+    const c = Math.max(0, counts[i] || 0);
+    if (c === 0) continue;
+    if (c <= GROUP_LITERAL_MAX) literal.push(i);
+    else pool.push(i);
+  }
+  let used = 0;
+  for (const i of literal) {
+    out[i] = Math.max(1, Math.round(counts[i] / ROWS));
+    used += out[i];
+  }
+  if (!pool.length || used >= target) {
+    // No large coil to absorb the panel surplus (or a pathological
+    // literal overflow): the generic apportionment is the fallback.
+    // Unreachable for the six curated groups — every one has
+    // shelves far above the literal cap.
+    return allocateStationsArr(counts);
+  }
+  // One-station minimum for every pool coil, then a largest-
+  // remainder proportional split of what remains, so the layout
+  // total lands exactly on the panel budget.
+  let budget = target - used - pool.length;
+  for (const i of pool) out[i] = 1;
+  const poolCount = pool.reduce((s, i) => s + counts[i], 0);
+  const raw = pool.map((i) => ({
+    i,
+    v: (counts[i] * budget) / Math.max(1, poolCount),
+  }));
+  let sum = 0;
+  for (const r of raw) {
+    const f = Math.floor(r.v);
+    out[r.i] += f;
+    sum += f;
+  }
+  const byRem = raw
+    .slice()
+    .sort((a, b) => b.v - Math.floor(b.v) - (a.v - Math.floor(a.v)));
+  let k = 0;
+  while (sum < budget && byRem.length) {
+    out[byRem[k % byRem.length].i]++;
+    sum++;
+    k++;
   }
   return out;
 }
@@ -603,9 +672,14 @@ export function createHelixScene(canvas, opts = {}) {
       anchorFrac: ANCHOR_FRAC[i],
     }));
   }
-  function buildLayoutGeometry(defs) {
+  function buildLayoutGeometry(defs, groupTruth) {
     const counts = defs.map((d) => Math.max(0, Math.round(d.count || 0)));
-    const stationsArr = allocateStationsArr(counts);
+    // Curated-group layouts allocate by the truth rules (literal
+    // small coils); every other layout keeps the generic floor +
+    // largest-remainder apportionment.
+    const stationsArr = groupTruth
+      ? allocateStationsGroup(counts)
+      : allocateStationsArr(counts);
     // Panel-count invariant: the budget is exact by construction
     // (floors are pre-subtracted from it); the all-floored residue
     // is the one theoretical exception — fold it into the largest
@@ -2688,7 +2762,7 @@ export function createHelixScene(canvas, opts = {}) {
       }
     }
     if (mirrorSet.size) clearMirror();
-    buildLayoutGeometry(defs);
+    buildLayoutGeometry(defs, spec.kind === "group");
     layoutKey = spec.key;
     segFrozen = layoutKey !== "rest";
     resetInstanceCells();
