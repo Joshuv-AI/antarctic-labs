@@ -9,6 +9,13 @@
 // destinations already share the home-page visual grammar.
 import { useState, useEffect, useLayoutEffect, useMemo, useDeferredValue, useRef, useCallback, memo, Fragment } from "react";
 import { searchDeep, getSnippets } from "./lib/deep-search.js";
+import {
+  beginEntryFlight,
+  getEntryFlight,
+  markEntryFlightNavigated,
+  ENTRY_FLIGHT_MIN_MS,
+  ENTRY_FLIGHT_CAP_MS,
+} from "./lib/entry-flight.js";
 import { track } from "./lib/analytics.js";
 
 // Analytics de-dup guards: entry components do not remount on
@@ -250,6 +257,41 @@ function setCachedText(url, text) {
     const oldest = textCache.keys().next().value;
     textCache.delete(oldest);
   }
+}
+// Entry-open preload (2026-11-16, INVENTORY 37): at result-click time,
+// while the cover flight is on screen, fetch the entry's text and land
+// the COMPLETE text in the reader's LRU cache — when the reader mounts
+// it paints the whole text at once (its cache check runs before its
+// fetch effect) instead of streaming in behind a spinner. Mirrors
+// LibraryFullText's URL derivation (the record's own download_url,
+// else the pure id-derived local path for AVAILABLE entries) and its
+// HTML-shell rejection (a .txt answered with the SPA shell is an
+// error, never the book). Any failure resolves false; the flight's
+// gate then falls back to its cap and the reader fetches for itself,
+// exactly as it did before the flight existed.
+function preloadEntryText(a, signal) {
+  if (!a) return Promise.resolve(false);
+  const url =
+    a.download_url ||
+    (a.download_status === "AVAILABLE" && a.artifact_id
+      ? `/tower-of-babel/${a.artifact_id}.txt`
+      : undefined);
+  if (!url) return Promise.resolve(false);
+  if (getCachedText(url) !== undefined) return Promise.resolve(true);
+  return fetch(url, { signal })
+    .then(async (r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const ctype = (r.headers.get("content-type") || "").toLowerCase();
+      if (ctype.includes("text/html"))
+        throw new Error("unexpected HTML response");
+      const t = await r.text();
+      const head = t.replace(/^\s+/, "").slice(0, 16).toLowerCase();
+      if (head.startsWith("<!doctype") || head.startsWith("<html"))
+        throw new Error("unexpected HTML response");
+      setCachedText(url, t);
+      return true;
+    })
+    .catch(() => false);
 }
 // ----- Tower of Babel ------------------------------------------------------
 export function TowerOfBabel({ go, onReady }) {
@@ -1162,15 +1204,21 @@ function TowerCover({ a }) {
 
 // One cover card (grid results + rails). `wide` = 16:9 frame for podcast
 // episodes, whose covers are YouTube thumbnails.
-function TowerBookCard({ a, go, wide = false }) {
+function TowerBookCard({ a, go, wide = false, onOpen }) {
   if (!a) return null;
   const entryPath = `/tower-of-babel/library/${a.artifact_id}`;
+  // Entry-open flight (2026-11-16): when the library section supplies
+  // onOpen, the click starts the cover flight instead of navigating
+  // bare; everywhere else (retained discovery rails) go() is unchanged.
+  const open = onOpen
+    ? (e) => onOpen(a, entryPath, e)
+    : () => go(entryPath);
   return (
     <div className={`tower-book-card${wide ? " is-wide" : ""}`}>
       <button
         type="button"
         className="tower-book-coverbtn"
-        onClick={() => go(entryPath)}
+        onClick={open}
         aria-label={`Open ${a.title}`}
       >
         <span className="tower-book-cover">
@@ -1190,7 +1238,7 @@ function TowerBookCard({ a, go, wide = false }) {
       <button
         type="button"
         className="tower-read-btn"
-        onClick={() => go(entryPath)}
+        onClick={open}
       >
         {a.collection === "PODCASTS" ? "READ TRANSCRIPT" : "READ"}
       </button>
@@ -2277,6 +2325,120 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       /* private mode — the choice just won't persist */
     }
   };
+  // Entry-open transition (2026-11-16, INVENTORY 37; design locked by
+  // Joshua 2026-11-14 ~22:35–22:45, confirmed 2026-11-15): opening a
+  // result no longer raises the "Tower of Babel" title loader. The
+  // clicked cover survives a dissolve of the browse UI, lifts from its
+  // exact rendered rect and glides to center over the helix while the
+  // entry's text preloads into the reader cache; navigation fires when
+  // the glide has read AND the preload has settled — hard-capped, so
+  // the reader opens already loaded and never waits on a frozen frame.
+  // The flight state lives in lib/entry-flight.js; the app shell
+  // renders the overlay and suppresses the boot loader + page curtain
+  // for this navigation. Any failure to measure a cover falls back to
+  // the plain go() the result used before.
+  const openEntry = useCallback(
+    (a, to, ev) => {
+      if (!a || getEntryFlight()) {
+        go(to);
+        return;
+      }
+      const btn = ev && ev.currentTarget;
+      const scope =
+        btn && btn.closest
+          ? btn.closest(".tower-book-card, .tower-row")
+          : null;
+      const coverEl = scope
+        ? scope.querySelector(".tower-book-cover, .tower-row-cover")
+        : null;
+      if (!coverEl) {
+        go(to);
+        return;
+      }
+      const rect = coverEl.getBoundingClientRect();
+      if (!(rect.width > 4 && rect.height > 4)) {
+        go(to);
+        return;
+      }
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const wide = rect.width > rect.height * 1.25;
+      let targetW = wide
+        ? Math.min(vw * 0.82, 460)
+        : Math.min(vw * 0.52, 248);
+      targetW = Math.max(targetW, rect.width);
+      let scale = targetW / rect.width;
+      if (scale > 3.4) scale = 3.4;
+      // The centered cover must also fit the viewport height.
+      if (rect.height * scale > vh * 0.62) scale *= (vh * 0.62) / (rect.height * scale);
+      const dx = vw / 2 - (rect.left + rect.width / 2);
+      const dy = vh * 0.46 - (rect.top + rect.height / 2);
+      const reduced = !!(
+        window.matchMedia &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      );
+      const flight = beginEntryFlight({
+        to,
+        toPath: to.split("?")[0],
+        html: coverEl.innerHTML,
+        cls: coverEl.className,
+        rect: {
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          height: rect.height,
+        },
+        dx,
+        dy,
+        scale,
+        reduced,
+      });
+      // FLIP etiquette: the original cover hides instantly — the clone
+      // IS the cover now — while everything around it dissolves.
+      coverEl.style.visibility = "hidden";
+      const main = btn.closest("main.tower-combined");
+      if (main) main.classList.add("entry-flying");
+      const ctrl = new AbortController();
+      const t0 = performance.now();
+      const minMs = reduced ? 140 : ENTRY_FLIGHT_MIN_MS;
+      const capMs = reduced ? 900 : ENTRY_FLIGHT_CAP_MS;
+      let settled = false;
+      let navigated = false;
+      let minTimer = 0;
+      let capTimer = 0;
+      const cleanup = () => {
+        clearTimeout(minTimer);
+        clearTimeout(capTimer);
+      };
+      const navigate = () => {
+        if (navigated) return;
+        navigated = true;
+        cleanup();
+        markEntryFlightNavigated();
+        go(to);
+      };
+      const maybe = () => {
+        if (settled && performance.now() - t0 >= minMs) navigate();
+      };
+      minTimer = setTimeout(maybe, minMs);
+      capTimer = setTimeout(navigate, capMs);
+      preloadEntryText(a, ctrl.signal).then(() => {
+        settled = true;
+        maybe();
+      });
+      flight.cancel = () => {
+        cleanup();
+        try {
+          ctrl.abort();
+        } catch {
+          /* already aborted */
+        }
+        coverEl.style.visibility = "";
+        if (main) main.classList.remove("entry-flying");
+      };
+    },
+    [go]
+  );
   // ONE search (Workstream D, 2026-10-27): there is no mode any more.
   // Every query searches titles/creators AND the full text of every work
   // together, and the results render as a single interleaved list ranked
@@ -5975,6 +6137,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
               q={q}
               rawQuery={query}
               go={go}
+              onOpen={openEntry}
               viewMode={viewMode}
               searching={!!q && q.trim().length >= 2}
             />
@@ -7019,7 +7182,7 @@ function highlightText(text, tokens) {
 // (auto for the first rows, on demand for the rest) and shows at most 2
 // passages, each ≤200 chars, each linking into the reader at the exact
 // passage (?at=<offset>&hl=<start>-<end> — the reader's share-link scheme).
-function SnippetBlock({ item, go, auto }) {
+function SnippetBlock({ item, go, auto, onOpen }) {
   const [snips, setSnips] = useState(null);
   const [wanted, setWanted] = useState(auto);
   useEffect(() => {
@@ -7060,11 +7223,14 @@ function SnippetBlock({ item, go, auto }) {
           <button
             type="button"
             className="tower-snippet"
-            onClick={() =>
-              go(
-                `/tower-of-babel/library/${item.key}?at=${s.markStart}&hl=${s.markStart}-${s.markEnd}`
-              )
-            }
+            onClick={(e) => {
+              // Passage opens ride the same cover flight; the ?at=&hl=
+              // target rides along verbatim so the share-landing logic
+              // in the reader applies exactly as a bare go() did.
+              const to = `/tower-of-babel/library/${item.key}?at=${s.markStart}&hl=${s.markStart}-${s.markEnd}`;
+              if (onOpen) onOpen(item.artifact, to, e);
+              else go(to);
+            }}
             dangerouslySetInnerHTML={{ __html: s.html }}
             aria-label={`Read this passage in ${item.artifact.title}`}
           />
@@ -7075,7 +7241,7 @@ function SnippetBlock({ item, go, auto }) {
 }
 
 // One row of the unified search list.
-const UnifiedRow = memo(function UnifiedRow({ item, rank, go, tokens, autoSnippets }) {
+const UnifiedRow = memo(function UnifiedRow({ item, rank, go, tokens, autoSnippets, onOpen }) {
   const a = item.artifact;
   const entryPath = `/tower-of-babel/library/${item.key}`;
   const badges = [];
@@ -7095,7 +7261,7 @@ const UnifiedRow = memo(function UnifiedRow({ item, rank, go, tokens, autoSnippe
         <button
           type="button"
           className="tower-row-title-btn"
-          onClick={() => go(entryPath)}
+          onClick={(e) => (onOpen ? onOpen(a, entryPath, e) : go(entryPath))}
         >
           <span className="tower-row-title">{highlightText(a.title, tokens)}</span>
         </button>
@@ -7117,7 +7283,7 @@ const UnifiedRow = memo(function UnifiedRow({ item, rank, go, tokens, autoSnippe
           )}
         </span>
         {item.text ? (
-          <SnippetBlock item={item} go={go} auto={autoSnippets} />
+          <SnippetBlock item={item} go={go} auto={autoSnippets} onOpen={onOpen} />
         ) : a.description ? (
           <span className="tower-row-desc">{a.description}</span>
         ) : null}
@@ -7156,6 +7322,7 @@ const LibraryResults = memo(function LibraryResults({
   q,
   rawQuery,
   go,
+  onOpen,
   viewMode,
   searching,
 }) {
@@ -7374,6 +7541,7 @@ const LibraryResults = memo(function LibraryResults({
                   item={item}
                   rank={k + 1}
                   go={go}
+                  onOpen={onOpen}
                   tokens={model.tokens}
                   autoSnippets={k < 10}
                 />
@@ -7489,6 +7657,7 @@ const LibraryResults = memo(function LibraryResults({
                   key={a.artifact_id}
                   a={a}
                   go={go}
+                  onOpen={onOpen}
                   wide={a.collection === "PODCASTS"}
                 />
               );
@@ -7518,6 +7687,7 @@ const LibraryResults = memo(function LibraryResults({
                   a={a}
                   index={rankMap.get(a.artifact_id)}
                   go={go}
+                  onOpen={onOpen}
                 />
               );
             })}
@@ -7548,11 +7718,12 @@ const LibraryResults = memo(function LibraryResults({
 // reference and `go` is stable across keystrokes, so a row re-renders only
 // when its own rank actually changes. Only matching rows are mounted (see
 // LibraryResults), so there is no per-row visibility flag.
-const TowerRow = memo(function TowerRow({ a, index, go }) {
+const TowerRow = memo(function TowerRow({ a, index, go, onOpen }) {
+  const entryPath = `/tower-of-babel/library/${a.artifact_id}`;
   return (
     <button
       className="tower-row reveal"
-      onClick={() => go(`/tower-of-babel/library/${a.artifact_id}`)}
+      onClick={(e) => (onOpen ? onOpen(a, entryPath, e) : go(entryPath))}
     >
       <span className="tower-row-index">
         {index === undefined ? null : String(index).padStart(2, "0")}

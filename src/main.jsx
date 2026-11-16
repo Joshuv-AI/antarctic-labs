@@ -15,6 +15,13 @@ import "./shaders/threeui.css";
 import NewBackgroundVideo from "./components/NewBackgroundVideo.jsx";
 import StarfieldCanvas from "./components/StarfieldCanvas.jsx";
 import { initAnalytics, trackPageview } from "./lib/analytics.js";
+import {
+  getEntryFlight,
+  subscribeEntryFlight,
+  entryFlightFor,
+  cancelEntryFlight,
+  endEntryFlight,
+} from "./lib/entry-flight.js";
 // Silent recovery on chunk-load failure (2026-10-14, hardened 2026-10-17).
 // Deploys ship new hashed chunk filenames; a cached index.html (or an
 // interrupted fetch) can reference a chunk that no longer exists, which
@@ -460,6 +467,7 @@ function App() {
       setPath(target);
       dismissTowerBoot();
       dismissBrandBoot();
+      cancelEntryFlight();
       scrollToTopInstant();
     };
     window.addEventListener("popstate", onPop);
@@ -529,6 +537,13 @@ function App() {
     // Fires only on real navigation intent, never speculatively, so no
     // bandwidth is wasted.
     import("./pages.jsx").catch(() => {});
+    // Entry-open flight (2026-11-16, INVENTORY 37): a library result
+    // click starts a cover flight in pages.jsx and calls go() only when
+    // the flight's gate opens. That navigation gets NO Tower boot
+    // loader and NO page curtain — the flying cover is the transition.
+    // Any other navigation abandons a pending flight.
+    const flight = entryFlightFor(canonical);
+    if (!flight) cancelEntryFlight();
     // Entering the Tower of Babel (landing, library, donate, or any entry
     // page) from inside the app: raise the Tower loader so the transition
     // gets the same branded beat as the initial page load and the ENTER THE
@@ -540,18 +555,20 @@ function App() {
         canonical === "/tower-of-babel/donate" ||
         canonical.startsWith("/tower-of-babel/library/")) &&
       path !== canonical;
-    if (enteringTower) {
+    if (enteringTower && !flight) {
       dismissBrandBoot();
       raiseTowerBoot();
     } else {
       dismissTowerBoot();
     }
-    setTransitioning(true);
+    setTransitioning(!flight);
     // Tower routes get a shorter swap delay: the Tower boot overlay is
     // already covering the screen, so the full 520ms curtain beat is pure
     // added latency before the new page even starts mounting. Other routes
-    // keep the standard delay for their curtain choreography.
-    const swapDelay = enteringTower ? 150 : 520;
+    // keep the standard delay for their curtain choreography. A flight
+    // navigation swaps almost immediately — its cover is mid-air and the
+    // reader must paint beneath it without a beat of dissolved page.
+    const swapDelay = flight ? 60 : enteringTower ? 150 : 520;
     window.setTimeout(() => {
       window.history.pushState({}, "", canonical);
       // path state is a pathname everywhere else (initial state and the
@@ -615,6 +632,7 @@ function App() {
         label={pathLabel(path)}
       />
       {towerBoot && <TowerBoot />}
+      <EntryFlightOverlay path={path} />
       {brandBoot && <BrandLoader leaving={brandBootLeaving} />}
       {/* Route content + its background layers: one error boundary (fresh
           per path, so a failed route can't poison the next navigation) and
@@ -829,6 +847,80 @@ function TowerBoot() {
         <div className="tb-boot-rule" />
         <div className="tb-boot-sub">
           ENTERING THE LIBRARY
+        </div>
+      </div>
+    </div>
+  );
+}
+// Entry-open flight overlay (2026-11-16, INVENTORY 37): renders the
+// clicked result's cover — cloned markup captured by pages.jsx at the
+// click — starting at the cover's exact rendered rect, gliding to the
+// viewport center over the dissolving page (the helix shows through
+// beneath), holding with a gentle breath while the text preload
+// finishes, then dissolving as the reader paints beneath it. Lives in
+// the shell so it survives the route swap that unmounts the library.
+function EntryFlightOverlay({ path }) {
+  const [flight, setFlight] = useState(getEntryFlight);
+  const [glide, setGlide] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  useEffect(() => subscribeEntryFlight(setFlight), []);
+  // Commit the start rect for two frames before gliding, so the
+  // transition has a painted start state (a same-frame transform
+  // change would jump straight to center with no motion).
+  useEffect(() => {
+    if (!flight) {
+      setGlide(false);
+      setLeaving(false);
+      return;
+    }
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => setGlide(true));
+    });
+    // Absolute safety: a stranded overlay must never outlive its
+    // welcome, whatever the navigation did.
+    const safety = setTimeout(endEntryFlight, 7000);
+    return () => {
+      cancelAnimationFrame(raf1);
+      if (raf2) cancelAnimationFrame(raf2);
+      clearTimeout(safety);
+    };
+  }, [flight]);
+  // The reader route has mounted: the entry page paints beneath the
+  // centered cover, which holds a beat and then dissolves — the
+  // handoff from flight to reader.
+  useEffect(() => {
+    if (!flight || path !== flight.toPath) return;
+    const t1 = setTimeout(() => setLeaving(true), 200);
+    const t2 = setTimeout(endEntryFlight, 640);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [flight, path]);
+  if (!flight) return null;
+  const { rect } = flight;
+  return (
+    <div className="entry-flight" aria-hidden="true">
+      <div
+        className={`entry-flight-cover${leaving ? " is-leaving" : ""}`}
+        style={{
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          height: rect.height,
+          transform: glide
+            ? `translate(${flight.dx}px, ${flight.dy}px) scale(${flight.scale})`
+            : "translate(0px, 0px) scale(1)",
+          transitionDuration: flight.reduced ? "120ms, 300ms" : undefined,
+        }}
+      >
+        <div className="entry-flight-hold">
+          <div
+            className={`${flight.cls} entry-flight-clone`}
+            style={{ width: "100%", height: "100%" }}
+            dangerouslySetInnerHTML={{ __html: flight.html }}
+          />
         </div>
       </div>
     </div>
