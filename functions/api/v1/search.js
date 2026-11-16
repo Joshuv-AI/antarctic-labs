@@ -134,9 +134,12 @@ async function catalogSearch(q, limit) {
   const collected = [];
   let cursor = null;
   let exhausted = false;
-  // 10 compact shards / ≤2 parsed per searchWorks step ⇒ ≤5 steps to
-  // cover the index; the step cap is a hard bound, not an expectation.
-  for (let step = 0; step < 10 && collected.length < limit; step++) {
+  // ≤2 shards parsed per searchWorks step; the shard count is
+  // data-driven (api-search-shards/manifest.json — 25 shards at the
+  // 2,557,923-entry catalog), so the step cap is a generous hard bound
+  // (128 shards' worth), not an expectation: the walk normally ends on
+  // `exhausted` or a null cursor long before the cap.
+  for (let step = 0; step < 64 && collected.length < limit; step++) {
     const out = await searchWorks({
       query: q,
       field: "any",
