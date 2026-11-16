@@ -365,9 +365,9 @@ async function recordCachePut(id, value) {
 }
 
 // Small recency-refreshing memo for parsed JSON documents that repeat
-// across requests in a warm isolate (work-locate buckets, description
-// shards, the catalog bootstrap). Bounded so a long-lived isolate cannot
-// accumulate the whole catalog; least-recently-used entries evict first.
+// across requests in a warm isolate (work-locate buckets, entry-record
+// buckets). Bounded so a long-lived isolate cannot accumulate the whole
+// catalog; least-recently-used entries evict first.
 function boundedMemo(cap) {
   const map = new Map();
   return {
@@ -386,7 +386,6 @@ function boundedMemo(cap) {
   };
 }
 const locateMemo = boundedMemo(256);
-const descMemo = boundedMemo(8);
 const entryRecordMemo = boundedMemo(16);
 
 // One entry-record bucket file, classified for the caller (see the
@@ -565,20 +564,96 @@ export async function getRecordById(artifactId) {
   return { state: "missing" };
 }
 
+// Extract one entry's description string from a description shard's raw
+// text, without parsing the shard. The shard is a flat { id: string }
+// object; the entry's string literal is located by its key and parsed on
+// its own (escape aware), so the result is byte-identical to reading the
+// value out of the fully parsed shard. Returns the string, null when the
+// id provably does not occur in the text, or undefined when extraction is
+// not safe to trust (the caller then falls back to a full parse).
+function extractDescriptionFromText(text, artifactId) {
+  const id = String(artifactId || "");
+  if (!id || !text) return undefined;
+  // Ids containing characters JSON would escape may be stored escaped —
+  // mirror extractRecordFromText's escaping; the parse fallback and the
+  // absent-check below keep those ids correct.
+  const esc = id.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const needle = `"${esc}"`;
+  let from = 0;
+  for (;;) {
+    const at = text.indexOf(needle, from);
+    if (at === -1) {
+      // A plain-ASCII id needs no escaping anywhere in the file, so its
+      // absence from the text is proof it is not in this shard.
+      return /^[\x20-\x7e]+$/.test(id) ? null : undefined;
+    }
+    // A key's opening quote directly follows "{" or "," (modulo
+    // whitespace). An occurrence inside a string value is preceded by
+    // its escape backslash instead, so this check cannot mistake an id
+    // mentioned inside another entry's description for the entry's key.
+    let p = at - 1;
+    while (
+      p >= 0 &&
+      (text[p] === " " || text[p] === "\t" || text[p] === "\n" || text[p] === "\r")
+    )
+      p--;
+    if (p >= 0 && (text[p] === "{" || text[p] === ",")) {
+      let i = at + needle.length;
+      while (text[i] === " ") i++;
+      if (text[i] !== ":") return undefined;
+      i++;
+      while (text[i] === " ") i++;
+      if (text[i] !== '"') return undefined; // Non-string value: parse decides.
+      let j = i + 1;
+      let escaped = false;
+      for (; j < text.length; j++) {
+        const c = text[j];
+        if (escaped) escaped = false;
+        else if (c === "\\") escaped = true;
+        else if (c === '"') break;
+      }
+      if (j >= text.length) return undefined;
+      try {
+        const v = JSON.parse(text.slice(i, j + 1));
+        return typeof v === "string" ? v : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+    from = at + 1;
+  }
+}
+
 // The v2 (rewritten) description for an entry, if the sidecar has one.
 // Falls back to null; callers then use the catalog record's description.
-// Description shards are keyed by the id's last 2 chars, so the same few
-// files serve most lookups in a crawl burst; memoize the parsed shard per
-// isolate instead of re-fetching and re-parsing it on every entry render.
+// Description shards are keyed by the id's last 2 chars, so a crawl that
+// walks the catalog in order touches every shard within its first
+// minutes at a colo. This lookup therefore NEVER retains a parsed shard:
+// the previous flow memoized up to 8 parsed shards per isolate
+// (~3.5–3.8 MB of JSON text each, several times that as a parsed graph —
+// plausibly at or over the 128 MB isolate limit), and sustained
+// single-colo crawl traffic kept all 8 slots hot while entry requests
+// failed at 16–21% (diagnosis 2026-11-15:
+// research_notes/claudebot-diagnosis-20261115). Instead the shard is
+// fetched as TEXT through the same coalesced, edge-cached fetch the
+// catalog shards use (the edge cache absorbs the upstream read; the
+// text itself is transient) and the one entry's string is extracted
+// from it. The full parse survives only as a per-call fallback for ids
+// extraction cannot trust, and its result is never retained.
 export async function getDescriptionOverride(artifactId) {
-  const url = descShardUrl(artifactId);
-  let shard = descMemo.get(url);
-  if (shard === undefined) {
-    shard = await fetchJsonCached(url, 3600);
-    if (shard && typeof shard === "object") descMemo.set(url, shard);
+  const text = await fetchTextCoalesced(descShardUrl(artifactId), 3600);
+  if (!text) return null;
+  let d = extractDescriptionFromText(text, artifactId);
+  if (d === undefined) {
+    let shard = null;
+    try {
+      shard = JSON.parse(text);
+    } catch {
+      shard = null;
+    }
+    if (!shard || typeof shard !== "object") return null;
+    d = shard[artifactId];
   }
-  if (!shard || typeof shard !== "object") return null;
-  const d = shard[artifactId];
   return typeof d === "string" && d.trim() ? d : null;
 }
 

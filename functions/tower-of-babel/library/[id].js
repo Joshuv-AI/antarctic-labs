@@ -325,7 +325,14 @@ export async function onRequest(context) {
   const canonical = entryUrl(id);
   const cache = caches.default;
   const cacheKey = new Request(canonical, { method: "GET" });
-  const hit = await cache.match(cacheKey);
+  let hit = null;
+  try {
+    hit = await cache.match(cacheKey);
+  } catch {
+    // A Cache API failure reads as a miss: the render below can still
+    // serve the request, and a cache hiccup must never 500 it (the
+    // matching cache.put below is already .catch()-guarded).
+  }
   if (hit) return hit;
 
   const found = await getRecordById(id);
