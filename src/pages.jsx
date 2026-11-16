@@ -4558,9 +4558,9 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
             "#" +
             layout.coils.reduce((s, c, i) => (s + c.count * (i + 7)) % 1000000007, 0),
           // The layout kind rides along so the scene can allocate
-          // curated-group coils by the truth rules (literal small
-          // subcategories, 2026-11-16) while shelf / lane-sub
-          // layouts keep the generic allocation.
+          // curated-group and Books-shelf coils by the truth rules
+          // (literal small subcategories / shelves, 2026-11-16)
+          // while lane-sub layouts keep the generic allocation.
           kind: layout.kind,
           coils: layout.coils,
         }

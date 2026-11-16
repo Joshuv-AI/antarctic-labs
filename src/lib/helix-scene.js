@@ -140,8 +140,9 @@ const SEED_COUNTS = {
 };
 const BAND_PANEL_TARGET = 15006; // all panels live in band segments
 const MIN_STATIONS = 12; // 72 panels — the minimum-segment floor
-const GROUP_LITERAL_MAX = 100; // curated-group coils at/below this
-                               // many entries render literally
+const GROUP_LITERAL_MAX = 100; // truth-allocated coils (curated
+                               // groups + Books shelves) at/below
+                               // this many entries render literally
                                // (coil-count truth, 2026-11-16)
 // Label anchor positions along each band (fraction of its theta
 // span), staggered at build time so the big labels rarely sweep the
@@ -326,21 +327,23 @@ function allocateStationsArr(counts) {
   }
   return out;
 }
-// Curated-group layouts ONLY (2026-11-16, INVENTORY line 98): the
-// generic floor in allocateStationsArr gives every subcategory coil
-// at least 72 panels, so a 6-entry shelf rendered as a full coil —
-// the visual overstated where the visitor stands in the filter.
-// Group coils follow the truth rules directly instead: a
-// subcategory with at most GROUP_LITERAL_MAX entries renders
-// LITERALLY (one panel per entry, station-rounded; one station is
-// the smallest renderable segment, so 1–3 entries still occupy a
-// single 6-panel station); larger subcategories split the remaining
-// budget proportionally (largest remainder) with a one-station
-// visibility minimum, so a mid-size shelf inside a huge group reads
-// as a stub — never a full coil, and never vanished. Zero-count
-// coils keep zero stations (honest markers). The resting bands and
-// the shelf / lane-sub layouts keep the generic allocation above —
-// this function serves the curated-group re-coil alone.
+// Truth-allocated layouts (2026-11-16, INVENTORY lines 98 + 99):
+// the curated-group re-coil and the Books shelves layout. The
+// generic floor in allocateStationsArr gives every coil at least
+// 72 panels, so a 6-entry subcategory (or a 22-entry Books shelf)
+// rendered as a full coil — the visual overstated where the
+// visitor stands in the filter. These layouts follow the truth
+// rules directly instead: a coil with at most GROUP_LITERAL_MAX
+// entries renders LITERALLY (one panel per entry, station-rounded;
+// one station is the smallest renderable segment, so 1–3 entries
+// still occupy a single 6-panel station); larger coils split the
+// remaining budget proportionally (largest remainder) with a
+// one-station visibility minimum, so a mid-size shelf inside a
+// huge layout reads as a stub — never a full coil, and never
+// vanished. Zero-count coils keep zero stations (honest markers).
+// The resting bands and the lane-sub layouts keep the generic
+// allocation above — this function serves the group and shelf
+// layouts alone.
 function allocateStationsGroup(counts) {
   const n = counts.length;
   const out = new Array(n).fill(0);
@@ -361,8 +364,8 @@ function allocateStationsGroup(counts) {
   if (!pool.length || used >= target) {
     // No large coil to absorb the panel surplus (or a pathological
     // literal overflow): the generic apportionment is the fallback.
-    // Unreachable for the six curated groups — every one has
-    // shelves far above the literal cap.
+    // Unreachable for the six curated groups and the Books shelves
+    // — every one has coils far above the literal cap.
     return allocateStationsArr(counts);
   }
   // One-station minimum for every pool coil, then a largest-
@@ -672,12 +675,12 @@ export function createHelixScene(canvas, opts = {}) {
       anchorFrac: ANCHOR_FRAC[i],
     }));
   }
-  function buildLayoutGeometry(defs, groupTruth) {
+  function buildLayoutGeometry(defs, truthAlloc) {
     const counts = defs.map((d) => Math.max(0, Math.round(d.count || 0)));
-    // Curated-group layouts allocate by the truth rules (literal
-    // small coils); every other layout keeps the generic floor +
-    // largest-remainder apportionment.
-    const stationsArr = groupTruth
+    // Curated-group and Books-shelf layouts allocate by the truth
+    // rules (literal small coils); every other layout keeps the
+    // generic floor + largest-remainder apportionment.
+    const stationsArr = truthAlloc
       ? allocateStationsGroup(counts)
       : allocateStationsArr(counts);
     // Panel-count invariant: the budget is exact by construction
@@ -2762,7 +2765,11 @@ export function createHelixScene(canvas, opts = {}) {
       }
     }
     if (mirrorSet.size) clearMirror();
-    buildLayoutGeometry(defs, spec.kind === "group");
+    // Truth allocation serves the curated-group re-coil (line 98)
+    // and the Books shelves layout (line 99, Joshua's extension);
+    // lane-sub layouts and the resting rebuild keep the generic
+    // allocation.
+    buildLayoutGeometry(defs, spec.kind === "group" || spec.kind === "shelf");
     layoutKey = spec.key;
     segFrozen = layoutKey !== "rest";
     resetInstanceCells();
