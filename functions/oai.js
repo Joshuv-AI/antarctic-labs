@@ -10,15 +10,40 @@
 // ListIdentifiers straight from the existing catalog shards, one shard
 // per request, with per-shard resumption tokens.
 //
-// PER-SHARD TOKENS (v3): {v:3, i: shardIndex, o: offsetWithinShard,
-// s: set|null, k: "records"|"identifiers", f: from|null, u: until|null,
-// c: checksum}. The offset is WITHIN the current shard's filtered list
-// (the full shard for the unfiltered list, the set-filtered list for a
-// set list) — never a global offset, because a global offset cannot be
-// honored without walking every earlier shard to count matches. Pages
-// advance within a shard, then to the next shard. Page size is 100, as
-// the old code used, so one shard yields many pages and sparse sets
-// still progress.
+// 2026-11-16 EXTENSION (Step 5, CORE/OpenAIRE build — building only;
+// registration is a separate decision): a second metadata format,
+// oai_openaire (OpenAIRE Guidelines for Literature Repositories v4:
+// DataCite kernel-4 + COAR vocabularies + oaire fields), joins oai_dc.
+// oai_openaire records carry the aggregator provenance <about> block
+// OpenAIRE requires of aggregators (originDescription built from each
+// record's own source_url). Sets stay the catalog's collections, so an
+// OpenAIRE registration can scope to set=papers (the aggregator shape)
+// while the other collections remain exposable later with no rework.
+//
+// RIGHTS POLICY (2026-11-16 rights spot-audit; see the Step 5 ship
+// report): the catalog's rights_status vocabulary is exactly
+// PUBLIC_DOMAIN, CC_BY, CC0, EXTERNAL_SOURCE. The first three are
+// rights-clear for redistribution and their records link their hosted
+// full text (oai_dc dc:identifier + oai_openaire <file>). EXTERNAL_SOURCE
+// — every PODCASTS record, license "YouTube Standard License", rights
+// held by the original publishers — is NOT cleared: those records are
+// served metadata-only (entry-page identifier, no full-text link) and
+// oai_openaire marks them COAR restricted access with no license
+// condition. The policy fails CLOSED: any future rights_status outside
+// the cleared set is treated as not cleared.
+//
+// PER-SHARD TOKENS (v4): {v:4, i: shardIndex, o: offsetWithinShard,
+// s: set|null, k: "records"|"identifiers", m: metadataPrefix,
+// f: from|null, u: until|null, c: checksum}. The offset is WITHIN the
+// current shard's filtered list (the full shard for the unfiltered
+// list, the set-filtered list for a set list) — never a global offset,
+// because a global offset cannot be honored without walking every
+// earlier shard to count matches. Pages advance within a shard, then
+// to the next shard. Page size is 100, as the old code used, so one
+// shard yields many pages and sparse sets still progress. v4 adds the
+// metadata prefix to the token: resumptionToken is an exclusive
+// argument, so the format of a paged ListRecords must travel inside
+// the token or follow-up pages could not render the requested format.
 //
 // PARTIAL PAGES (the key spec point): when a shard yields fewer than
 // 100 matching records, the response returns that PARTIAL page together
@@ -31,7 +56,7 @@
 // a token is the mechanism the spec provides for exactly this case.
 // The same rule covers a shard with zero set matches: an empty page
 // with a token to the next shard (the harvester advances; the cost is
-// one cheap request per empty shard, bounded by the 25-shard count).
+// one cheap request per empty shard, bounded by the shard count).
 // No list request ever parses more than ONE catalog shard. If any case
 // below forced a second shard parse, that would be a design failure —
 // none does; the only multi-parse path in this file is GetRecord's
@@ -41,7 +66,7 @@
 // completeListSize and cursor are OMITTED from resumptionTokens, on
 // purpose. Both are optional attributes in the spec, and neither can
 // be computed honestly without a full catalog walk: the total for a
-// set list is the sum of that set's matches across all 25 shards, and
+// set list is the sum of that set's matches across all shards, and
 // a global cursor needs the same sum for every earlier shard. Emitting
 // a guessed total would be worse than omitting an optional attribute;
 // harvesters that need the end of the list use the empty token, which
@@ -58,10 +83,11 @@
 // the initial request and carried in the token and re-checked on
 // every token page.
 //
-// Tokens v1 (old code, {o, s}) and v2 (lane A, global offset) are
-// rejected with badResumptionToken: their offsets mean something
-// different here (global, not per-shard), so honoring one would skip
-// or repeat records. Per the spec, a harvester receiving
+// Tokens v1 (old code, {o, s}), v2 (lane A, global offset) and v3
+// (2026-10-25 shard paging, no format field) are rejected with
+// badResumptionToken: their offsets/formats mean something different
+// here, so honoring one would skip or repeat records or render the
+// wrong format. Per the spec, a harvester receiving
 // badResumptionToken restarts its harvest, which is the correct
 // recovery. Tokens carry a checksum (FNV-1a over the canonical
 // payload) so corrupted or hand-edited tokens are rejected instead
@@ -76,16 +102,22 @@
 // anything and cannot fail on a data fetch, as before.
 //
 // Verbs: Identify, ListMetadataFormats, ListSets, ListIdentifiers,
-// ListRecords, GetRecord. Metadata format: oai_dc only. Identifiers:
-// oai:antarctic-labs.com:<artifact_id>. Sets: the catalog's collections
-// (setSpec = lowercase collection name, e.g. "books").
+// ListRecords, GetRecord. Metadata formats: oai_dc and oai_openaire.
+// Identifiers: oai:antarctic-labs.com:<artifact_id>. Sets: the
+// catalog's collections (setSpec = lowercase collection name, e.g.
+// "books"; "papers" is the OpenAIRE aggregator registration set).
 //
 // Errors follow the spec: badVerb, badArgument, idDoesNotExist,
 // cannotDisseminateFormat, badResumptionToken, noRecordsMatch.
-// Descriptions are deliberately NOT exposed in oai_dc (same reason as
-// lane A: the catalog's legacy description field is being rewritten
-// library-wide; entry pages carry the current description). Rights
-// status IS exposed (dc:rights) from each record's own field.
+// Descriptions are NOT exposed in oai_dc (same reason as lane A: the
+// catalog's legacy description field is being rewritten library-wide;
+// entry pages carry the current description). oai_openaire DOES carry
+// dc:description from the record's own field, because the OpenAIRE
+// profile rates Description mandatory-if-applicable and the field is
+// populated library-wide; the same rewrite caveat applies to it.
+// Rights status IS exposed in both formats, mapped per format: oai_dc
+// gets a readable rights statement, oai_openaire gets the COAR access
+// rights URI + license condition per the rights policy above.
 
 import {
   SITE,
@@ -103,7 +135,7 @@ const PAGE = 100; // modest, as the old code used; one shard yields many pages
 // same cadence lane A's meta.json and tower-hubs.js's
 // CATALOG_SNAPSHOT_DATE already follow). Every record's datestamp is
 // this date; from/until are evaluated against it.
-const SNAPSHOT_DATE = "2026-10-24";
+const SNAPSHOT_DATE = "2026-11-16";
 const COLLECTIONS = ["PAPERS", "DECLASSIFIED", "LAW", "BOOKS", "REFERENCE", "DOCUMENTS", "PODCASTS"];
 const COLLECTION_LABELS = {
   PAPERS: "Papers",
@@ -114,6 +146,85 @@ const COLLECTION_LABELS = {
   DOCUMENTS: "Documents",
   PODCASTS: "Podcast transcripts",
 };
+
+// --- metadata formats ---
+const FORMATS = {
+  oai_dc: {
+    schema: "http://www.openarchives.org/OAI/2.0/oai_dc.xsd",
+    namespace: "http://www.openarchives.org/OAI/2.0/oai_dc/",
+  },
+  oai_openaire: {
+    schema: "https://www.openaire.eu/schema/repo-lit/4.0/openaire.xsd",
+    namespace: "http://namespace.openaire.eu/schema/oaire/",
+  },
+};
+const isFormat = (p) => Object.prototype.hasOwnProperty.call(FORMATS, p);
+
+// --- rights policy (see the header note) ---
+const RIGHTS_CLEARED = new Set(["PUBLIC_DOMAIN", "CC_BY", "CC0"]);
+const rightsCleared = (record) => RIGHTS_CLEARED.has(record && record.rights_status);
+const COAR_OPEN_ACCESS = "http://purl.org/coar/access_right/c_abf2";
+const COAR_RESTRICTED_ACCESS = "http://purl.org/coar/access_right/c_16ec";
+// Readable rights statement for oai_dc (the record's own license
+// string when it carries one, else a label derived from the status).
+function rightsLabel(record) {
+  const lic = record && typeof record.license === "string" ? record.license.trim() : "";
+  if (lic) return lic;
+  switch (record && record.rights_status) {
+    case "PUBLIC_DOMAIN": return "Public Domain";
+    case "CC_BY": return "CC BY 4.0";
+    case "CC0": return "CC0 1.0 Universal";
+    case "EXTERNAL_SOURCE": return "External source — rights held by the original publisher";
+    default: return String((record && record.rights_status) || "");
+  }
+}
+// oai_openaire licenseCondition per cleared status (null when the
+// status carries no licence we can name — never invent one).
+function licenseCondition(record) {
+  switch (record && record.rights_status) {
+    case "PUBLIC_DOMAIN":
+      return { uri: "https://creativecommons.org/publicdomain/mark/1.0/", label: "Public Domain Mark 1.0" };
+    case "CC_BY":
+      return { uri: "http://creativecommons.org/licenses/by/4.0/", label: "Creative Commons Attribution 4.0 International" };
+    case "CC0":
+      return { uri: "https://creativecommons.org/publicdomain/zero/1.0/", label: "CC0 1.0 Universal" };
+    default:
+      return null;
+  }
+}
+// COAR resource type per collection (uri, label, resourceTypeGeneral).
+// PAPERS splits on the record's source: arXiv records are preprints,
+// the rest are research articles. Mappings for collections outside
+// OpenAIRE's research scope exist so the format never breaks on them;
+// registration scoping (set=papers) is what governs exposure.
+function resourceType(record) {
+  switch (record && record.collection) {
+    case "PAPERS":
+      return record.source === "arXiv"
+        ? { uri: "http://purl.org/coar/resource_type/c_816b", label: "preprint", general: "literature" }
+        : { uri: "http://purl.org/coar/resource_type/c_2df8fbb1", label: "research article", general: "literature" };
+    case "BOOKS":
+    case "REFERENCE":
+      return { uri: "http://purl.org/coar/resource_type/c_2f33", label: "book", general: "literature" };
+    case "DECLASSIFIED":
+      return { uri: "http://purl.org/coar/resource_type/c_93fc", label: "report", general: "literature" };
+    case "LAW":
+    case "DOCUMENTS":
+    case "PODCASTS":
+      return { uri: "http://purl.org/coar/resource_type/c_18cf", label: "text", general: "literature" };
+    default:
+      return { uri: "http://purl.org/coar/resource_type/c_1843", label: "other", general: "other research product" };
+  }
+}
+// Publication year as a YYYY string, or null when the record's year
+// carries no usable 4-digit year (OpenAIRE date is then omitted —
+// never fabricated).
+function yearOf(record) {
+  const y = record && record.year;
+  if (y == null) return null;
+  const m = String(y).trim().match(/^(\d{4})(?:\D|$)/);
+  return m ? m[1] : null;
+}
 
 const xml = (s) => escapeXml(s == null ? "" : String(s));
 const nowUtc = () => new Date().toISOString().replace(/\.\d+Z$/, "Z");
@@ -144,11 +255,11 @@ function okResponse(body) {
   });
 }
 
-// --- resumption tokens v3 (per-shard) ---
+// --- resumption tokens v4 (per-shard, format-aware) ---
 // Canonical payload string for the checksum: fields in fixed order,
 // nulls as empty strings. FNV-1a 32-bit, hex.
 function checksumFor(st) {
-  const s = ["v3", st.i, st.o, st.s || "", st.k, st.f || "", st.u || ""].join("|");
+  const s = ["v4", st.i, st.o, st.s || "", st.k, st.m || "", st.f || "", st.u || ""].join("|");
   let h = 0x811c9dc5;
   for (let j = 0; j < s.length; j++) {
     h ^= s.charCodeAt(j);
@@ -157,7 +268,7 @@ function checksumFor(st) {
   return h.toString(16).padStart(8, "0");
 }
 function encodeToken(state) {
-  const st = { v: 3, i: state.i, o: state.o, s: state.s || null, k: state.k, f: state.f || null, u: state.u || null };
+  const st = { v: 4, i: state.i, o: state.o, s: state.s || null, k: state.k, m: state.m || "oai_dc", f: state.f || null, u: state.u || null };
   st.c = checksumFor(st);
   return btoa(JSON.stringify(st)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
@@ -165,15 +276,16 @@ function decodeToken(token, shardCount) {
   try {
     const b64 = token.replace(/-/g, "+").replace(/_/g, "/");
     const obj = JSON.parse(atob(b64));
-    if (obj.v !== 3) return null;
+    if (obj.v !== 4) return null;
     if (!Number.isInteger(obj.i) || obj.i < 0 || obj.i >= shardCount) return null;
     if (!Number.isInteger(obj.o) || obj.o < 0) return null;
     if (obj.s !== null && (typeof obj.s !== "string" || !COLLECTIONS.some((c) => c.toLowerCase() === obj.s))) return null;
     if (obj.k !== "records" && obj.k !== "identifiers") return null;
+    if (!isFormat(obj.m)) return null;
     if (obj.f !== null && (typeof obj.f !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(obj.f))) return null;
     if (obj.u !== null && (typeof obj.u !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(obj.u))) return null;
     if (obj.c !== checksumFor(obj)) return null;
-    return { i: obj.i, o: obj.o, s: obj.s, k: obj.k, f: obj.f, u: obj.u };
+    return { i: obj.i, o: obj.o, s: obj.s, k: obj.k, m: obj.m, f: obj.f, u: obj.u };
   } catch (e) {
     return null;
   }
@@ -195,11 +307,17 @@ function headerXml(record, snapshotDate) {
   ].join("\n");
 }
 
-function recordXml(record, snapshotDate) {
+function dcRecordXml(record, snapshotDate) {
   const entryUrl = `${SITE}/tower-of-babel/library/${record.artifact_id}`;
-  const ids = [`      <dc:identifier>${xml(entryUrl)}</dc:identifier>`];
-  const txt = textFileUrl(record);
+  const cleared = rightsCleared(record);
+  const txt = cleared ? textFileUrl(record) : null;
+  // CORE's harvesting guidelines: the FIRST dc:identifier is the
+  // direct full-text URL, the landing page follows. Records whose
+  // rights are not cleared carry the landing page only (metadata-only
+  // per the rights policy).
+  const ids = [];
   if (txt) ids.push(`      <dc:identifier>${xml(txt)}</dc:identifier>`);
+  ids.push(`      <dc:identifier>${xml(entryUrl)}</dc:identifier>`);
   const lines = [
     `    <record>`,
     headerXml(record, snapshotDate),
@@ -216,9 +334,99 @@ function recordXml(record, snapshotDate) {
     lines.push(`      <dc:relation>Tower of Babel collection: ${xml(record.collection)}</dc:relation>`);
   if (record.source_url && /^https?:\/\//i.test(record.source_url))
     lines.push(`      <dc:source>${xml(record.source_url)}</dc:source>`);
-  if (record.rights_status) lines.push(`      <dc:rights>${xml(record.rights_status)}</dc:rights>`);
+  const rights = rightsLabel(record);
+  if (rights) lines.push(`      <dc:rights>${xml(rights)}</dc:rights>`);
   lines.push(`      </oai_dc:dc>`, `    </metadata>`, `    </record>`);
   return lines.join("\n");
+}
+
+// OpenAIRE v4 (oai_openaire) rendering of one record, following the
+// element order of the guidelines' own sample record. Fields the
+// catalog cannot supply honestly are omitted, never invented: no
+// dc:language (the catalog carries no language data), no dc:publisher
+// (the catalog's source is a repository, not a publisher), no funding
+// (none exists), no subjects (the catalog's tags are pipeline
+// artifacts, not subject headings).
+function openaireRecordXml(record, snapshotDate) {
+  const entryUrl = `${SITE}/tower-of-babel/library/${record.artifact_id}`;
+  const cleared = rightsCleared(record);
+  const txt = cleared ? textFileUrl(record) : null;
+  const accessUri = cleared ? COAR_OPEN_ACCESS : COAR_RESTRICTED_ACCESS;
+  const accessLabel = cleared ? "open access" : "restricted access";
+  const rt = resourceType(record);
+  const year = yearOf(record);
+  const lines = [
+    `    <record>`,
+    headerXml(record, snapshotDate),
+    `    <metadata>`,
+    `      <resource xmlns="http://namespace.openaire.eu/schema/oaire/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:datacite="http://datacite.org/schema/kernel-4" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://namespace.openaire.eu/schema/oaire/ https://www.openaire.eu/schema/repo-lit/4.0/openaire.xsd">`,
+  ];
+  if (record.creator && String(record.creator).trim() !== "") {
+    lines.push(
+      `        <datacite:creators>`,
+      `          <datacite:creator>`,
+      `            <datacite:creatorName>${xml(record.creator)}</datacite:creatorName>`,
+      `          </datacite:creator>`,
+      `        </datacite:creators>`
+    );
+  }
+  lines.push(
+    `        <datacite:titles>`,
+    `          <datacite:title>${xml(record.title || record.artifact_id)}</datacite:title>`,
+    `        </datacite:titles>`
+  );
+  if (year) {
+    lines.push(
+      `        <datacite:dates>`,
+      `          <datacite:date dateType="Issued">${year}</datacite:date>`,
+      `        </datacite:dates>`
+    );
+  }
+  const desc = typeof record.description === "string" ? record.description.trim() : "";
+  if (desc && desc.length <= 8000) lines.push(`        <dc:description>${xml(desc)}</dc:description>`);
+  lines.push(
+    `        <resourceType resourceTypeGeneral="${rt.general}" uri="${rt.uri}">${rt.label}</resourceType>`,
+    `        <datacite:identifier identifierType="URL">${xml(entryUrl)}</datacite:identifier>`
+  );
+  if (record.source_url && /^https?:\/\//i.test(record.source_url))
+    lines.push(`        <dc:source>${xml(record.source_url)}</dc:source>`);
+  lines.push(`        <datacite:rights rightsURI="${accessUri}">${accessLabel}</datacite:rights>`);
+  const lic = cleared ? licenseCondition(record) : null;
+  if (lic) lines.push(`        <licenseCondition uri="${lic.uri}">${lic.label}</licenseCondition>`);
+  if (txt)
+    lines.push(`        <file accessRightsURI="${accessUri}" mimeType="text/plain" objectType="fulltext">${xml(txt)}</file>`);
+  lines.push(`      </resource>`, `    </metadata>`);
+  // Aggregator provenance (OpenAIRE Guidelines v4, aggregator path):
+  // where this record's metadata originally came from. altered="true"
+  // is the honest value — the catalog normalizes and cleans harvested
+  // metadata (titles, rights vocabulary) rather than republishing it
+  // byte-for-byte.
+  if (record.source_url && /^https?:\/\//i.test(record.source_url)) {
+    let origin = "";
+    try { origin = new URL(record.source_url).origin; } catch (e) { origin = ""; }
+    if (origin) {
+      lines.push(
+        `    <about>`,
+        `      <provenance xmlns="http://www.openarchives.org/OAI/2.0/provenance" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.openarchives.org/OAI/2.0/provenance http://www.openarchives.org/OAI/2.0/provenance.xsd">`,
+        `        <originDescription harvestDate="${snapshotDate}T00:00:00Z" altered="true">`,
+        `          <baseURL>${xml(origin)}</baseURL>`,
+        `          <identifier>${xml(record.source_url)}</identifier>`,
+        `          <datestamp>${snapshotDate}</datestamp>`,
+        `          <metadataNamespace>http://www.openarchives.org/OAI/2.0/oai_dc/</metadataNamespace>`,
+        `        </originDescription>`,
+        `      </provenance>`,
+        `    </about>`
+      );
+    }
+  }
+  lines.push(`    </record>`);
+  return lines.join("\n");
+}
+
+function recordXml(record, snapshotDate, format) {
+  return format === "oai_openaire"
+    ? openaireRecordXml(record, snapshotDate)
+    : dcRecordXml(record, snapshotDate);
 }
 
 // Window check shared by initial and token pages: all records carry
@@ -236,6 +444,7 @@ async function listResponse(params, verbAttrs, withMetadata) {
   let shardIdx = 0;
   let offset = 0;
   let setSpec = null;
+  let format = "oai_dc";
   let from = null;
   let until = null;
   if (tokenRaw) {
@@ -246,13 +455,14 @@ async function listResponse(params, verbAttrs, withMetadata) {
     if (!state || state.k !== kind) {
       return errorResponse(
         "badResumptionToken",
-        "The resumptionToken is invalid or expired. Tokens issued before the 2026-10-25 shard-paging OAI rebuild cannot be honored; restart the harvest.",
+        "The resumptionToken is invalid or expired. Tokens issued before the 2026-11-16 format-aware OAI rebuild cannot be honored; restart the harvest.",
         verbAttrs
       );
     }
     shardIdx = state.i;
     offset = state.o;
     setSpec = state.s;
+    format = state.m;
     from = state.f;
     until = state.u;
     // A token naming an unknown set can only be forged (decodeToken
@@ -264,8 +474,9 @@ async function listResponse(params, verbAttrs, withMetadata) {
     const prefix = params.get("metadataPrefix");
     if (withMetadata || prefix !== null) {
       if (!prefix) return errorResponse("badArgument", "metadataPrefix is required.", verbAttrs);
-      if (prefix !== "oai_dc")
-        return errorResponse("cannotDisseminateFormat", "Only the oai_dc metadata format is available.", verbAttrs);
+      if (!isFormat(prefix))
+        return errorResponse("cannotDisseminateFormat", "Only the oai_dc and oai_openaire metadata formats are available.", verbAttrs);
+      format = prefix;
     }
     const setParam = params.get("set");
     if (setParam) {
@@ -302,18 +513,18 @@ async function listResponse(params, verbAttrs, withMetadata) {
   let tokenOut;
   if (offset > filtered.length) {
     page = [];
-    tokenOut = lastShard ? `<resumptionToken></resumptionToken>` : `<resumptionToken>${encodeToken({ i: shardIdx + 1, o: 0, s: setSpec, k: kind, f: from, u: until })}</resumptionToken>`;
+    tokenOut = lastShard ? `<resumptionToken></resumptionToken>` : `<resumptionToken>${encodeToken({ i: shardIdx + 1, o: 0, s: setSpec, k: kind, m: format, f: from, u: until })}</resumptionToken>`;
   } else {
     page = filtered.slice(offset, offset + PAGE);
     const remaining = filtered.length - (offset + page.length);
     if (remaining > 0) {
-      tokenOut = `<resumptionToken>${encodeToken({ i: shardIdx, o: offset + page.length, s: setSpec, k: kind, f: from, u: until })}</resumptionToken>`;
+      tokenOut = `<resumptionToken>${encodeToken({ i: shardIdx, o: offset + page.length, s: setSpec, k: kind, m: format, f: from, u: until })}</resumptionToken>`;
     } else if (!lastShard) {
       // Shard exhausted (page may be partial or empty): token to the
       // next shard. Partial/empty pages with a token are spec-legal;
       // the harvester follows the token. No second shard is parsed
       // here to fill the page.
-      tokenOut = `<resumptionToken>${encodeToken({ i: shardIdx + 1, o: 0, s: setSpec, k: kind, f: from, u: until })}</resumptionToken>`;
+      tokenOut = `<resumptionToken>${encodeToken({ i: shardIdx + 1, o: 0, s: setSpec, k: kind, m: format, f: from, u: until })}</resumptionToken>`;
     } else {
       tokenOut = `<resumptionToken></resumptionToken>`;
     }
@@ -321,7 +532,7 @@ async function listResponse(params, verbAttrs, withMetadata) {
 
   const inner = [
     `  <${tag}>`,
-    ...page.map((r) => (withMetadata ? recordXml(r, SNAPSHOT_DATE) : headerXml(r, SNAPSHOT_DATE))),
+    ...page.map((r) => (withMetadata ? recordXml(r, SNAPSHOT_DATE, format) : headerXml(r, SNAPSHOT_DATE))),
     `    ${tokenOut}`,
     `  </${tag}>`,
   ].join("\n");
@@ -382,16 +593,18 @@ export async function onRequest(context) {
         if (found.state === "error")
           return errorResponse("idDoesNotExist", "The catalog is temporarily unavailable.", verbAttr);
       }
-      const inner = [
-        `  <ListMetadataFormats>`,
-        `    <metadataFormat>`,
-        `      <metadataPrefix>oai_dc</metadataPrefix>`,
-        `      <schema>http://www.openarchives.org/OAI/2.0/oai_dc.xsd</schema>`,
-        `      <metadataNamespace>http://www.openarchives.org/OAI/2.0/oai_dc/</metadataNamespace>`,
-        `    </metadataFormat>`,
-        `  </ListMetadataFormats>`,
-      ].join("\n");
-      return okResponse(envelope(verbAttr, inner));
+      const lines = [`  <ListMetadataFormats>`];
+      for (const [prefix, f] of Object.entries(FORMATS)) {
+        lines.push(
+          `    <metadataFormat>`,
+          `      <metadataPrefix>${prefix}</metadataPrefix>`,
+          `      <schema>${f.schema}</schema>`,
+          `      <metadataNamespace>${f.namespace}</metadataNamespace>`,
+          `    </metadataFormat>`
+        );
+      }
+      lines.push(`  </ListMetadataFormats>`);
+      return okResponse(envelope(verbAttr, lines.join("\n")));
     }
     case "ListSets": {
       const lines = [`  <ListSets>`];
@@ -411,8 +624,8 @@ export async function onRequest(context) {
       const prefix = params.get("metadataPrefix");
       if (!idParam || !prefix)
         return errorResponse("badArgument", "GetRecord requires identifier and metadataPrefix.", verbAttr);
-      if (prefix !== "oai_dc")
-        return errorResponse("cannotDisseminateFormat", "Only the oai_dc metadata format is available.", verbAttr);
+      if (!isFormat(prefix))
+        return errorResponse("cannotDisseminateFormat", "Only the oai_dc and oai_openaire metadata formats are available.", verbAttr);
       const m = idParam.match(/^oai:antarctic-labs\.com:(.+)$/);
       if (!m) return errorResponse("idDoesNotExist", "The identifier is not in this repository's namespace.", verbAttr);
       const found = await getRecordById(m[1]);
@@ -420,7 +633,7 @@ export async function onRequest(context) {
         return errorResponse("idDoesNotExist", "No record exists for that identifier.", verbAttr);
       if (found.state === "error")
         return errorResponse("idDoesNotExist", "The catalog is temporarily unavailable.", verbAttr);
-      const inner = [`  <GetRecord>`, recordXml(found.record, SNAPSHOT_DATE), `  </GetRecord>`].join("\n");
+      const inner = [`  <GetRecord>`, recordXml(found.record, SNAPSHOT_DATE, prefix), `  </GetRecord>`].join("\n");
       return okResponse(envelope(verbAttr, inner));
     }
     case "ListRecords":
