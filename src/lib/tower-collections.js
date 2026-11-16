@@ -196,12 +196,12 @@ let curatedPromise = null;
 // fails the magic check) — resolves null; the retry policy lives in
 // loadCuratedBitsets below.
 //
-// The URL carries &enc=3 alongside ?v=<curated sha256>: the marker
+// The URL carries &enc=4 alongside ?v=<curated sha256>: the marker
 // names the serving function's fixed encoding scheme, so edge copies
 // stored under the pre-fix URL (double-encoded, immutable one-year
 // TTL) are unreachable even where they linger.
 async function fetchCuratedBitsets(fp, version) {
-  const url = `/tcb1/${fp}/curated.bin${version ? `?v=${version}&enc=3` : "?enc=3"}`;
+  const url = `/tcb1/${fp}/curated.bin${version ? `?v=${version}&enc=4` : "?enc=4"}`;
   try {
     const r = await fetch(url);
     if (!r.ok) return null;

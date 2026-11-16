@@ -18,27 +18,23 @@
 // after inflation, so a wrong or truncated body can never reach
 // the decoder.
 //
-// ENCODING (2026-11-15 panel fix, round 3): the body leaves this
-// function double-brotli-encoded under a single "br" label — browsers
-// inflate one layer, receive the .br file itself, and every dataset
-// parse fails (the curated bitsets' "tcu1: bad magic" was the visible
-// symptom; the whole TCB1 stream silently fell back to JSON). Round 1
-// (identity Accept-Encoding on the subrequest) and round 2 (an "enc3"
-// cache-bust on the upstream URL, so no cached subrequest variant
-// could be responsible) both verified live in production and the body
-// was STILL double-encoded on guaranteed-cold paths at multiple
-// colos — so the extra layer is added in the live fetch/respond path
-// itself, not by any cache. Round 3 pulls every remaining lever at
-// once and instruments the result:
-//   - the subrequest drops its cf cache options entirely (no
-//     cacheEverything compression/cache interplay; the origin's own
-//     short cache headers govern, and this function's Cache API
-//     below still makes repeat reads edge-local),
-//   - the response carries Cache-Control "no-transform", which
-//     forbids any downstream layer from re-encoding the body,
-//   - the X-Tcb1-Upstream-* headers report what the subrequest
-//     actually received, so the path is observable from outside.
-// The Cache API scheme rotates to "enc4": earlier schemes hold
+// ENCODING (2026-11-15 panel fix, round 4): the body must leave this
+// function as the stored .br bytes under a single "br" label. Three
+// production-verified rounds established what the defect is NOT:
+// round 1 (identity Accept-Encoding on the subrequest), round 2 (an
+// upstream cache-bust, exonerating every cache layer on
+// guaranteed-cold paths), round 3 (no cf cache options on the
+// subrequest + "no-transform" on the response) — the body still left
+// double-encoded every time, and round 3's diagnostics proved the
+// subrequest delivers the .br bytes identity (X-Tcb1-Upstream-
+// Encoding: none). The extra layer is the Workers platform itself:
+// a Response built from a fetched body stream is treated as decoded
+// content, and when it declares a Content-Encoding the platform
+// encodes it once more to make the label true. The documented
+// countermeasure is the Response constructor's encodeBody option:
+// "manual" declares the body already encoded, so the platform passes
+// it through untouched. That is the round-4 fix, below. The Cache
+// API scheme rotates to "enc5": every earlier scheme holds
 // double-encoded bodies and must never be served again.
 const REPO = "Joshuv-AI/antarctic-labs";
 const FILE_RE = /^(dict\.bin|curated\.bin|shard-\d{4}\.tcb)$/;
@@ -72,7 +68,7 @@ export async function onRequest(context) {
   const versioned = v && /^[0-9a-f]{16,64}$/.test(v) ? `?v=${v}` : "";
   const cache = caches.default;
   const cacheKey = new Request(
-    new URL(`/tcb1-enc4/${fp}/${file}${versioned}`, request.url).toString(),
+    new URL(`/tcb1-enc5/${fp}/${file}${versioned}`, request.url).toString(),
     { method: "GET" }
   );
   if (request.method === "GET") {
@@ -100,6 +96,10 @@ export async function onRequest(context) {
   }
 
   const res = new Response(upstream.body, {
+    // encodeBody "manual" (round 4, see ENCODING note): the body is
+    // already brotli-encoded exactly once — the platform must not
+    // encode it again on the way out.
+    encodeBody: "manual",
     status: 200,
     headers: {
       "Content-Type": "application/octet-stream",
