@@ -1437157,7 +1437157,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2608-00096",
-    title: "Logographic Character Visual Pretraining via Semantic-based Contrastive Learning Thanks: Corresponding author: Xiaolei Diao",
+    title: "Logographic Character Visual Pretraining via Semantic-based Contrastive Learning",
     collection: "PAPERS",
     creator: "Daqian Shi, Wei Cao, Xiaoyu Zheng, Lida Shi, Xiaolei Diao, Cédric M. John",
     year: 2026,
@@ -1437349,7 +1437349,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2608-00136",
-    title: "A Nonparametric Test for Cross-Unit Spillovers Thanks: Acknowledgements : We are grateful to Marco Alfano, Aislinn Bohren, Arun Chandrasekhar, Ben Deaner, Guido Imbens, Áureo de Paula and Michael Vlassopoulos for helpful comments. We also thank audiences at UCL, Essex, Southampton, CFE London 2025, ISI Delhi ACEGD 2025, SEW/SEA Paris 2026 and the Celebrating James MacKinnon Conference Aarhus 2026. Comola acknowledges the financial support of the French National Research Agency (ANR-21-CE26-0002-01 and ANR-22-CE26-0001). Comunello and Gupta acknowledge the financial support of the Leverhulme Trust via grant RPG-2024-038. Gupta is supported in part by funding from the Social Sciences and Humanities Research Council of Canada.",
+    title: "A Nonparametric Test for Cross-Unit Spillovers",
     collection: "PAPERS",
     creator: "Margherita Comola, Camila Comunello, Abhimanyu Gupta",
     year: 2026,
@@ -1437989,7 +1437989,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2608-00230",
-    title: "PADRAIG : Precise Android Automated Input Generation Thanks: This work was supported, in part, by Science Foundation Ireland grant 13/RC/2094_P2 and co-funded under the European Regional Development Fund through the Southern & Eastern Regional Operational Programme to Lero - the Science Foundation Ireland Research Centre for Software ( www.lero.ie )",
+    title: "PADRAIG : Precise Android Automated Input Generation",
     collection: "PAPERS",
     creator: "Jordan Doyle, Thomas Laurent, and Anthony Ventresque",
     year: 2026,
@@ -1438021,7 +1438021,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2608-00236",
-    title: "Improving Mobile User Interface Testing with Model Driven Monkey Search Thanks: This work was supported, in part, by the Science Foundation Ireland grants 13/RC/2094_P2 and 17/RC-PhD/3485. Paolo Arcaini is supported by ERATO HASUO Metamathematics for Systems Design Project (No. JPMJER1603), JST; Funding Reference number: 10.13039/501100009024 ERATO.",
+    title: "Improving Mobile User Interface Testing with Model Driven Monkey Search",
     collection: "PAPERS",
     creator: "Jordan Doyle 1 , Takfarinas Saber 1 , Paolo Arcaini 2 , and Anthony Ventresque 1",
     year: 2026,
@@ -1438053,7 +1438053,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2608-00257",
-    title: "MDWD: A Street-Level Dataset for Municipal Solid Waste Detection in Dense Urban Environments Thanks: This work was conducted within the DAWL AI Lab at the University of Malta’s Department of Artificial Intelligence, as part of the project Application of AI and Computer Vision to Optimise Cleansing Operations in Malta (AICOM) , financed by the Government of Malta’s Cleansing and Maintenance Division (CMD).",
+    title: "MDWD: A Street-Level Dataset for Municipal Solid Waste Detection in Dense Urban Environments",
     collection: "PAPERS",
     creator: "Andrea Filiberto Lucas, Mark Bugeja, Carl James Debono, Dylan Seychell",
     year: 2026,
@@ -1438149,7 +1438149,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2608-00262",
-    title: "A Structural Matrix Autoregression Framework for International Spillovers Thanks: Ignacio Moreira Lara acknowledges financial support from TRR 391 Spatio-temporal Statistics for the Transition of Energy and Transport (520388526) by the Deutsche Forschungsgemeinschaft (DFG, German Research Foundation). Jan Prüser gratefully acknowledges the support of the German Research Foundation (DFG, 468814087)",
+    title: "A Structural Matrix Autoregression Framework for International Spillovers",
     collection: "PAPERS",
     creator: "Ignacio Moreira Lara, Jan Prüser, Christoph Hanck",
     year: 2026,
@@ -1438852,7 +1438852,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2608-00350",
-    title: "On Hoffman’s characterization theorem of parts Thanks: Partially supported by NSF grant no. 0649765",
+    title: "On Hoffman’s characterization theorem of parts",
     collection: "PAPERS",
     creator: "Jun-ichi Tanaka",
     year: 2026,
@@ -1439076,7 +1439076,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2608-00406",
-    title: "LOCUS-DT: Localization via Observation-Conditioned Uncertainty Scoring with Digital Twins Thanks: This work is supported in part by NSF grants 1952180, 2133662, 2236097, 2148293, and 1925079, the DARPA Prowess program, the NTIA, Tamkeen under the Research Institute NYUAD grant CG017, and industrial affiliates of NYU Wireless. Thanks: ∗ Corresponding author: Haozhe Lei (email: hl4155@nyu.edu).",
+    title: "LOCUS-DT: Localization via Observation-Conditioned Uncertainty Scoring with Digital Twins",
     collection: "PAPERS",
     creator: "Haozhe Lei ∗1 , Roberto Bomfin 2 , Marwa Chafii 1,2 , and Sundeep Rangan 1",
     year: 2026,
@@ -1439140,7 +1439140,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2608-00411",
-    title: "On the Robustness of Propagating Bound States in the Continuum Thanks: Submitted to the editors DATE.",
+    title: "On the Robustness of Propagating Bound States in the Continuum",
     collection: "PAPERS",
     creator: "Lijun Yuan, Ya Yan Lu",
     year: 2026,
@@ -1439572,7 +1439572,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2608-00457",
-    title: "Balanced Bismut torsion-parallel fourfold with constant holomorphic sectional curvature Thanks: Zheng is the corresponding author. He is partially supported by National Natural Science Foundations of China with the grant No.12471039 and 12141101, and is supported by the 111 Project D21024.",
+    title: "Balanced Bismut torsion-parallel fourfold with constant holomorphic sectional curvature",
     collection: "PAPERS",
     creator: "Qingsong Wang, Fangyang Zheng",
     year: 2026,
@@ -1440051,7 +1440051,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00177",
-    title: "Magnesium Silicate Clouds in the Atmosphere of HD 209458b from a Rule-Based Tree-Structured Data Reduction Facilities: JWST(MIRI) ExoTiC-LD ( 81 ) , ExoTiC-MIRI ( 80 ) , Eureka! ( 29 ) , batman ( 110 ) , ARCiS, PICASO ( 136 ) , Virga ( 27 ) , numpy ( 84 ) , SciPy ( 178 ) , matplotlib ( 98 ) , xarray ( 95 ; 96 ) , astropy ( 12 ; 11 ; 154 ) . https://exotic-ld.readthedocs.io/en/latest/ https://exotic-miri.readthedocs.io/en/latest/ https://eurekadocs.readthedocs.io/en/latest/ https://github.com/michielmin/ARCiS.git https://natashabatalha.github.io/picaso/ https://natashabatalha.github.io/virga/",
+    title: "Magnesium Silicate Clouds in the Atmosphere of HD 209458b from a Rule-Based Tree-Structured Data Reduction",
     collection: "PAPERS",
     creator: "Katy L. Chubb, David Grant, Hannah R. Wakeford, Sarah E. Moran, Natasha E. Batalha, Arika Egan, Charlotte Fairman, Diana Powell, Kevin B. Stevenson, Lili Alderson, Peter Gao, Tiffany Kataria, Nikole K. Lewis, Ryan J. MacDonald, Mark Marley, Elijah Mullens, David K. Sing, Jeff A. Valenti",
     year: 2026,
@@ -1440067,7 +1440067,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00175",
-    title: "Future global stability of Maxwell–Jüttner equilibria and vacuum for the massless Boltzmann equation on FLRW spacetimes Thanks: ‡ Partially supported by the NSF grant DMS-2408264 of the USA Thanks: † Partially supported through Royal Society Tata University Research Fellowship URF\\R1\\191409.",
+    title: "Future global stability of Maxwell–Jüttner equilibria and vacuum for the massless Boltzmann equation on FLRW spacetimes",
     collection: "PAPERS",
     creator: "Robert M. Strain ‡, Martin Taylor †, Renato Velozo Ruiz †",
     year: 2026,
@@ -1440227,7 +1440227,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00205",
-    title: "Ultraviolet diversity of Little Red Dots as a probe for direct-collapse black hole ages E-mail: elia.cenci@unige.ch",
+    title: "Ultraviolet diversity of Little Red Dots as a probe for direct-collapse black hole ages",
     collection: "PAPERS",
     creator: "Elia Cenci †, Melanie Habouzit †, Dale D. Kocevski ‡",
     year: 2026,
@@ -1440803,7 +1440803,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00247",
-    title: "An Upper Bound on Grothendieck’s Constant Thanks: Email: stevenmheilman@gmail.com Supported by NSF Grant CCF AF 2448108. MSC Classification: 15A60, 90C27, 42C10, 68Q17 Keywords: rounding scheme, Grothendieck constant, semidefinite programming Department of Mathematics, University of Southern California, Los Angeles, CA 90089",
+    title: "An Upper Bound on Grothendieck’s Constant",
     collection: "PAPERS",
     creator: "Steven Heilman",
     year: 2026,
@@ -1441123,7 +1441123,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00300",
-    title: "Halo stars harbour few wide ultracool companions Thanks:",
+    title: "Halo stars harbour few wide ultracool companions",
     collection: "PAPERS",
     creator: "J.-Y. Zhang, N. Lodieu, E. L. Martín",
     year: 2026,
@@ -1441267,7 +1441267,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00290",
-    title: "The inducibility of 𝟔 \\mathbf{6} -vertex graphs Thanks: (LB, JG, OP, SS): research supported by ERC Advanced Grant 101020255. Thanks: (JL): research supported by the Warwick Mathematics Institute Centre for Doctoral Training Thanks: (XL): research supported by the Excellent Young Talents Program (Overseas) of the National Natural Science Foundation of China",
+    title: "The inducibility of 𝟔 \\mathbf{6} -vertex graphs",
     collection: "PAPERS",
     creator: "Levente Bodnár, Jun Gao, Jared León, Xizhi Liu, Oleg Pikhurko, Shumin Sun",
     year: 2026,
@@ -1441315,7 +1441315,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00331",
-    title: "Hard X-ray Sources in Fermi UFOs HEAsoft ( https://heasarc.gsfc.nasa.gov/docs/software/lheasoft/ ), CIAO ( Fruscione et al. 2006 ) , Sherpa ( Freeman et al. 2001 ) , TOPCAT ( Taylor 2005 ) .",
+    title: "Hard X-ray Sources in Fermi UFOs",
     collection: "PAPERS",
     creator: "Alessandro Paggi, Ioannis Liodakis, John Antoniadis, Chien-Ting Chen, Steven R. Ehlert, Daniel Gruen, Philip Kaaret, Ignacio De La Calle Perez, Elena Jimenez Bailon, Mykhailo Ilin",
     year: 2026,
@@ -1441539,7 +1441539,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00354",
-    title: "Inequivalence of the various notions of completeness for Cartan geometries Thanks: This material is based upon work done while the first author was under the partial support of the National Science Foundation under Grant No. 2203493.",
+    title: "Inequivalence of the various notions of completeness for Cartan geometries",
     collection: "PAPERS",
     creator: "Jacob W. Erickson and Benjamin McKay",
     year: 2026,
@@ -1441587,7 +1441587,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00347",
-    title: "Empirical Approximation of L p L_{p} Norms Thanks: The first and third authors were partially supported by NSERC of Canada Discovery Grant RGPIN 2026-05667. The second author was supported by AEI grant RYC2023-043616-I and by the Spanish State Research Agency through the Severo Ochoa and María de Maeztu Program for Centers and Units of Excellence in R&D (CEX2020-001084-M). The second author also thanks CERCA Programme (Generalitat de Catalunya) for its institutional support.",
+    title: "Empirical Approximation of L p L_{p} Norms",
     collection: "PAPERS",
     creator: "Feng Dai, Egor Kosov, Noel Murasko",
     year: 2026,
@@ -1441635,7 +1441635,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00365",
-    title: "SPARQLe: S ub- P recision A ctivation R epresentation for Q uantized L LM Inferenc e Thanks: ∗ Purdue University, West Lafayette, IN, USA (email: amohanpa@purdue.edu, raghunathan@purdue.edu). Thanks: † Intel Corporation (email: soumendu.ghosh@intel.com,shamik.kundu@intel.com, arnab.raha@intel.com, souvikk.kundu@intel.com deepak.a.mathaikutty@intel.com). This work was supported in part by CoCoSys, one of seven centers in JUMP 2.0, a Semiconductor Research Corporation (SRC) Program sponsored by DARPA.",
+    title: "SPARQLe: S ub- P recision A ctivation R epresentation for Q uantized L LM Inferenc e",
     collection: "PAPERS",
     creator: "Aradhana Mohan Parvathy 1 , Soumendu Kumar Ghosh 2 , Shamik Kundu 2 , Arnab Raha 2 , Souvik Kundu 2 , Deepak A. Mathaikutty 2 , Anand Raghunathan 1 1 Purdue University , USA, 2 Intel Corporation , USA",
     year: 2026,
@@ -1442243,7 +1442243,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00459",
-    title: "Adaptive PD Gains for Energy-Conscious Control in Physical Human-Robot Interaction Thanks: The authors would like to acknowledge the support from the University of Calgary, the University of Waterloo RoboHub, as well has the help provided by Alexander Werner and Robert Wagner when carrying out hardware experiments.",
+    title: "Adaptive PD Gains for Energy-Conscious Control in Physical Human-Robot Interaction",
     collection: "PAPERS",
     creator: "Danyal Saqib, Francisco Andrade Chavez, Marie Charbonneau",
     year: 2026,
@@ -1442451,7 +1442451,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00471",
-    title: "MUSCLE-NET: Predicted-Multiscale-Aware Network for Pedestrian Trajectory Forecasting PubID: pubid: 1558-0016© 2024 IEEE. Personal use is permitted, but republication/redistribution requires IEEE permission. See https://www.ieee.org/publications/rights/index.html for more information.",
+    title: "MUSCLE-NET: Predicted-Multiscale-Aware Network for Pedestrian Trajectory Forecasting",
     collection: "PAPERS",
     creator: "Yu Liu, Ming Huang, Xiao Ren, Zhijie Liu, Youfu Li, He Kong",
     year: 2026,
@@ -1442483,7 +1442483,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00475",
-    title: "Verifiable Criteria and Properties for Interval B π R I B_{\\pi}^{R^{I}} -Tensors Thanks: The first author’s work was supported by the National Natural Science Foundation of P.R. China (Grant No.12171064).",
+    title: "Verifiable Criteria and Properties for Interval B π R I B_{\\pi}^{R^{I}} -Tensors",
     collection: "PAPERS",
     creator: "Li Ye, Yisheng Song",
     year: 2026,
@@ -1443633,7 +1443633,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00658",
-    title: "Collaborative Few-Step Distillation and Low-Bit Quantization for Wan2.2 Dual-Expert Video Diffusion Models Thanks: This technical report describes our submission to Sub-Challenge 1: W4A4 Quantization for Inference (HiF4 / MXFP4) of the GCC Low-Bit-width Large Model Quantization Challenge, an official challenge track of IEEE ICME 2026.",
+    title: "Collaborative Few-Step Distillation and Low-Bit Quantization for Wan2.2 Dual-Expert Video Diffusion Models",
     collection: "PAPERS",
     creator: "Jinyang Du, Shenghao Jin, Ziqian Xu, Ruihao Gong, Shiqiao Gu, Yang Yong, Jinyang Guo, and Xianglong Liu",
     year: 2026,
@@ -1444144,7 +1444144,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00744",
-    title: "Edge Detection Framework Utilizing SOT-MTJ Bit-Cell Arrays Thanks: This work was supported by the New Faculty Seed Grant(Grant Reference: N4/24/1005) by BITS Pilani K K Birla Goa Campus.",
+    title: "Edge Detection Framework Utilizing SOT-MTJ Bit-Cell Arrays",
     collection: "PAPERS",
     creator: "Kushagra Singh, Debasis Das",
     year: 2026,
@@ -1444288,7 +1444288,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00758",
-    title: "Statistical Testing on Directed Graphs by Surrogate Data Generation Thanks: CHM. Chan, A. Cionca and D. Van De Ville are with the Neuro-X Institute, Ecole polytechnique fédérale de Lausanne, and the Department of Radiology and Medical Informatics, University of Geneva, Switzerland. E-mail: chunheimichael.chan@epfl.ch; dimitri.vandeville@epfl.ch Thanks: This work was supported by the Swiss National Science Foundation, Sinergia project “Precision mapping of electrical brain network dynamics with application to epilepsy”, Grant number 209470. Thanks: Manuscript received XXX; revised XXX.",
+    title: "Statistical Testing on Directed Graphs by Surrogate Data Generation",
     collection: "PAPERS",
     creator: "Chun Hei Michael Chan, Alexandre Cionca",
     year: 2026,
@@ -1444896,7 +1444896,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00845",
-    title: "Conjunctive reducibilities and completeness Thanks: The fourth author is a member of GNSAGA",
+    title: "Conjunctive reducibilities and completeness",
     collection: "PAPERS",
     creator: "Irakli Chitaia, Keng Meng Ng, Roland Omanadze, Andrea Sorbi",
     year: 2026,
@@ -1445472,7 +1445472,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00900",
-    title: "Notes on Randomized Controlled Trials for Studying Social Media Harms Thanks: This is a restructured and extended version of an earlier paper that circulated under the title “Why Small Experimental Effects of Social Media Use are Compatible with Large Real-World Effects.” For comments on earlier drafts, I am grateful to Simone Zhang, Tyler VanderWeele, Brandon Stewart, Luke Miratrix, Ian Lundberg, Jon Haidt, and Han Choi. For helpful discussions related to the project, I thank Mara Ishihara Zinky, Noah Padgett, Dalton Conley, members of the Miratrix CARES Lab, and members of Jon Haidt’s social media lab. I owe special debts to Zach Rausch and Felix Elwert: Zach provided extremely thorough feedback on multiple drafts, and Felix both encouraged me to restructure the paper and offered invaluable guidance for doing so. Errors are mine.",
+    title: "Notes on Randomized Controlled Trials for Studying Social Media Harms",
     collection: "PAPERS",
     creator: "Chris Felton",
     year: 2026,
@@ -1445824,7 +1445824,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00936",
-    title: "One Channel to Rule Them All: Rethinking Input Representation for Visual Place Recognition Thanks: *Corresponding author. Affiliation: Timur Ismagilov*, Shakaiba Majeed, Michael Milford, Tan Viet Tuyen Nguyen Thanks: Timur Ismagilov, Tan Viet Tuyen Nguyen, Sarvapali D. Ramchurn and Shoaib Ehsan are with the School of Electronics and Computer Science, University of Southampton, SO17 1BJ Southampton, U.K. ti1e24@soton.ac.uk, tuyen.nguyen@soton.ac.uk, sdr1@soton.ac.uk, s.ehsan@soton.ac.uk Thanks: Shakaiba Majeed is with the Department of Computer Science and Engineering, Hanyang University, Seoul, South Korea. shakaiba33@hanyang.ac.kr Thanks: Michael Milford is with the QUT Centre for Robotics, School of Electrical Engineering and Robotics, Brisbane, QLD 4000, Australia. michael.milford@qut.edu.au Affiliation: Sarvapali D. Ramchurn, Shoaib Ehsan Thanks: Shoaib Ehsan is also with the School of Computer Science and Electronic Engineering, University of Essex, Colchester, CO4 3SQ, U.K. sehsan@essex.ac.uk",
+    title: "One Channel to Rule Them All: Rethinking Input Representation for Visual Place Recognition",
     collection: "PAPERS",
     year: 2026,
     source: "arXiv",
@@ -1446031,7 +1446031,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00977",
-    title: "Electromagnetic Digital Twin-Enabled Closed-Loop Beam Management in ISAC Systems Thanks: Y. Luo, T. Takahashi and H. Ochiai are with the Graduate School of Engineering, The University of Osaka, 2-1-Yamada-oka, Suita, 565-0871, Japan. (e-mail: y-luo@wcs.comm.eng.osaka-u.ac.jp, takahashi@comm.eng.osaka-u.ac.jp, ochiai@comm.eng.osaka-u.ac.jp.) Thanks: L. Yu, and J. Zhang are with the State Key Laboratory of Networking and Switching Technology, Beijing University of Posts and Telecommunications, Beijing 100876, China. (e-mail: li.yu@bupt.edu.cn; jhzhang@bupt.edu.cn.) Thanks: Z. Yang is with the Zhejiang Key Laboratory of Information Processing Communication and Networking, College of Information Science and Electronic Engineering, Zhejiang University. (e-mail: yang_zhaohui@zju.edu.cn.)",
+    title: "Electromagnetic Digital Twin-Enabled Closed-Loop Beam Management in ISAC Systems",
     collection: "PAPERS",
     creator: "Yubin Luo, Takumi Takahashi, Li Yu, Zhaohui Yang",
     year: 2026,
@@ -1446271,7 +1446271,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01008",
-    title: "FVSpec: Real-World Property-Based Tests as Lean Challenges Thanks: Work completed at Galois Inc",
+    title: "FVSpec: Real-World Property-Based Tests as Lean Challenges",
     collection: "PAPERS",
     creator: "Quinn Dougherty, Max von Hippel, Hazel Shackleton, Mike Dodds",
     year: 2026,
@@ -1446622,7 +1446622,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01060",
-    title: "MENTIS: What Belief Changes Under Alignment? Measuring Multi-Scale Latent Torsion in Language Models Thanks: This work does not relate to Amit Dhanda’s position at Amazon. Thanks: This work does not relate to Vinija Jain’s position at Meta. Thanks: This work does not relate to Aman Chadha’s position at Apple.",
+    title: "MENTIS: What Belief Changes Under Alignment? Measuring Multi-Scale Latent Torsion in Language Models",
     collection: "PAPERS",
     creator: "Partha Pratim Saha, Samarth Raina, Mayur Parvatikar, Amit Dhanda, Vinija Jain, Aman Chadha, Amitava Das, [4pt] Pragya Lab, BITS Pilani Goa, India",
     year: 2026,
@@ -1446782,7 +1446782,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01076",
-    title: "Exploiting Multiple Abstract Call Patterns for Optimizing Run-Time Checks Thanks: Partially funded by MICIU project CEX2024-001471-M María de Maeztu and by the European Union MSCA GA 101154447 NEAT. We would also like to thank the anonymous reviewers for their very useful and constructive feedback.",
+    title: "Exploiting Multiple Abstract Call Patterns for Optimizing Run-Time Checks",
     collection: "PAPERS",
     creator: "DANIELA FERREIRO, DANIEL JURJO-RIVAS, MARCO CICCALÈ and JOSE F. MORALES, PEDRO LÓPEZ-GARCÍA, MANUEL V. HERMENEGILDO",
     year: 2026,
@@ -1447614,7 +1447614,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01195",
-    title: "Efficient Numerical Modeling of Near-Field Diffraction in ORIS-Assisted Free-Space Optical Links Thanks: This work is supported in part by the JSPS KAKENHI (Grant 25K17607 and Grant 24K17272) and in part by the JST ASPIRE (Grant JPMJAP2345).",
+    title: "Efficient Numerical Modeling of Near-Field Diffraction in ORIS-Assisted Free-Space Optical Links",
     collection: "PAPERS",
     creator: "Tuan A. Hoang 1 , Phuc V. Trinh 2 , Shinya Sugiura 2 , Chuyen T. Nguyen 3 , Susumu Ishihara 4 , Thanh V. Pham 4",
     year: 2026,
@@ -1447758,7 +1447758,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01211",
-    title: "GPU Acceleration of Learning With Errors KEMs Using OpenACC for Post-Quantum Cryptography Thanks: Pre-print version of the manuscript submitted to NUMTA2026",
+    title: "GPU Acceleration of Learning With Errors KEMs Using OpenACC for Post-Quantum Cryptography",
     collection: "PAPERS",
     creator: "Tiziana Liberati, Nitin Shukla, Matteo Barbieri, Gabriella Bettonte, Elisabetta Boella, Simone Rizzo, Daniele Gregori, Marco Pedicini",
     year: 2026,
@@ -1448030,7 +1448030,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01263",
-    title: "Beyond the RF Paradigm: Rydberg Atomic Receivers for Next-Generation IoT Thanks: Q. Peng, Q. Luo, and P. Xiao are affiliated with 5G and 6G Innovation Centre, Institute for Communication Systems (ICS) of University of Surrey, Guildford, GU2 7XH, UK. (e-mail: {q.peng,q.u.luo,p.xiao}@surrey.ac.uk). Thanks: D. Xia, C. Pan, and J. Wang are with the National Mobile Communications Research Laboratory, Southeast University, Nanjing, China. (e-mail: {dnxia,cpan,j.z.wang}@seu.edu.cn). Thanks: Z. Zhang, Z. Zhang, and J. Wu are with State Key Laboratory of Quantum Optics Technologies and Devices, Institute of Laser Spectroscopy, Shanxi University, Taiyuan 030006, China (e-mail: {202412603032, 202422603017}@email.sxu.edu.cn;wujz@sxu.edu.cn). Thanks: K. Wang is with the Department of Computer Science, Brunel University of London, UB8 3PH London, U.K. (e-mail: Kezhi.Wang@brunel.ac.uk). Thanks: M. Elkashlan is with the School of Electronic Engineering and Computer Science, Queen Mary University of London, E1 4NS London, U.K.(e-mail: maged.elkashlan@qmul.ac.uk). Thanks: Derrick Wing Kwan Ng is with the School of Electrical Engineering and Telecommunications, University of New South Wales, Sydney, NSW 2052, Australia (e-mail: w.k.ng@unsw.edu.au). Thanks: T. Q. Duong is with the Faculty of Engineering and Applied Science, Memorial University, St. John’s, NL A1C 5S7, Canada. (e-mail: tduong@mun.ca.) Thanks: G. K. Karagiannidis is with the Department of Electrical and Computer Engineering, Aristotle University of Thessaloniki, 541 24 Thessaloniki, Greece (e-mail: geokarag@auth.gr).",
+    title: "Beyond the RF Paradigm: Rydberg Atomic Receivers for Next-Generation IoT",
     collection: "PAPERS",
     creator: "Qihao Peng, Qu Luo, Dongnan Xia, Zhehua Zhang, Zeyan Zhang, Jizhou Wu",
     year: 2026,
@@ -1448301,7 +1448301,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01300",
-    title: "ChronosAD: Leveraging Time Series Foundation Models for Accurate Anomaly Detection Thanks: This work is supported by the project “SUPREME: Sistemi Umano centrici per Prodotti e pRocEssi Manufatturieri Evoluti” [PR Veneto FESR 2021-2027, Action 1.1.1, DGR 792, CUP D19J24000810007].",
+    title: "ChronosAD: Leveraging Time Series Foundation Models for Accurate Anomaly Detection",
     collection: "PAPERS",
     creator: "Uzair Khan 1 , Luigi Capogrosso 2 , Francesco Biondani 1 , Michele Magno 3 2 , Franco Fummi 1 , Francesco Setti 1 , Marco Cristani 1",
     year: 2026,
@@ -1448365,7 +1448365,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01312",
-    title: "A Communication-Centric 6G–LLM Architecture for Scalable Tactical Autonomous Defense Vehicle Networks K. Khurshid is with the Department of Computer and Software Engineering, National University of Sciences and Technology (NUST), Islamabad, Pakistan (e-mail: kiran.khurshid@ceme.nust.edu.pk). S. Javaid is with the Department of Control Science and Engineering, College of Electronics and Information Engineering, Tongji University and National Key Laboratory of Autonomous Intelligent Unmanned Systems, Tongji University, China (e-mail: shumaila@tongji.edu.cn) N. Saeed is with Department of Electrical and Communication Engineering, UAE University, Al-Ain 15551, UAE (e-mail: mr.nasir.saeed@ieee.org).",
+    title: "A Communication-Centric 6G–LLM Architecture for Scalable Tactical Autonomous Defense Vehicle Networks",
     collection: "PAPERS",
     year: 2026,
     source: "arXiv",
@@ -1448412,7 +1448412,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01309",
-    title: "Multiagent Matroid Upgrading: Greedy is Fair and Efficient Thanks: All authors (ordered alphabetically) have equal contributions and are corresponding authors.",
+    title: "Multiagent Matroid Upgrading: Greedy is Fair and Efficient",
     collection: "PAPERS",
     creator: "Qingwen Ma, Chao Peng, Changfeng Xu, Chenyang Xu, Ruilong Zhang",
     year: 2026,
@@ -1448476,7 +1448476,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01319",
-    title: "A note on csc Bergman metric Thanks: Xiaojun Huang is partially supported by NSF DMS-2247151 Thanks: Xiaoshan Li is supported in part by NSFC (12361131577, 12271411)",
+    title: "A note on csc Bergman metric",
     collection: "PAPERS",
     creator: "Xiaojun Huang, Xiaoshan Li",
     year: 2026,
@@ -1448972,7 +1448972,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01385",
-    title: "Bridging Requirements and Architecture: Multi-Agent Orchestration with External Knowledge and Hierarchical Memory Thanks: This research is supported by the National Natural Science Foundation of China (NSFC) with Grant No. 92582203 and 62402348; National Research Foundation, Prime Minister’s Office, Singapore under the Campus for Research Excellence and Technological Enterprise (CREATE) Programme; the National Research Foundation, Singapore, and DSO National Laboratories under the AI Singapore Programme (AISG Award No: AISG2-GC-2023-008). The authors would also like to thank the architects who participated in the interviews in this study. Journal: TOSEM Volume: 0 0 0 0 CCS: Software and its engineering Software development techniques CCS: Software and its engineering Designing software",
+    title: "Bridging Requirements and Architecture: Multi-Agent Orchestration with External Knowledge and Hierarchical Memory",
     collection: "PAPERS",
     creator: "Ruiyin Li, Yiran Zhang, Xiyu Zhou, Yangxiao Cai, Peng Liang, Weisong Sun, Jifeng Xuan, Zhi Jin, Yang Liu",
     year: 2026,
@@ -1449068,7 +1449068,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01398",
-    title: "A Sonar-Visual Dataset for Cross-Modal Underwater Robot Perception Thanks: This work was supported by the Research Council of Norway under Project No. 328193. Thanks: 1 Weitung Chen is with the Massachusetts Institute of Technology (MIT), Cambridge, MA, USA (email: weitung@mit.edu ). Thanks: 2 Phil Tinn, Per Gunnar Auran, and Peter Halland Haro are with SINTEF, Trondheim, Norway (email: phil.tinn@sintef.no , per.gunnar.auran@sintef.no , and peter.haro@sintef.no ). Thanks: 3 Martin Ludvigsen is with the Department of Marine Technology, Norwegian University of Science and Technology (NTNU), Trondheim, Norway (email: martin.ludvigsen@ntnu.no ).",
+    title: "A Sonar-Visual Dataset for Cross-Modal Underwater Robot Perception",
     collection: "PAPERS",
     creator: "Weitung Chen, Phil Tinn, Per Gunnar Auran, Martin Ludvigsen, Peter Halland Haro",
     year: 2026,
@@ -1449228,7 +1449228,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01421",
-    title: "Target localization, identification and sensing using latent symmetries Thanks: Submitted to the editors August 10, 2026.",
+    title: "Target localization, identification and sensing using latent symmetries",
     collection: "PAPERS",
     creator: "David Dukov, Malte Röntgen, Bryn Davies",
     year: 2026,
@@ -1449276,7 +1449276,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01424",
-    title: "TECHNOLOGY SPEED LIMITS Thanks: First version: 1st Feb 2026; this version: August 9, 2026. Koh: MIT Department of Economics; ajkoh@mit.edu ; Sanguanmoo: MIT Department of Economics; sanguanm@mit.edu . We are grateful to Drew Fudenberg, Stephen Morris, Phillip Strack, and seminar participants at Berkeley, Columbia, LSE, and Yale for helpful comments.",
+    title: "TECHNOLOGY SPEED LIMITS",
     collection: "PAPERS",
     creator: "ANDREW KOH, SIVAKORN SANGUANMOO",
     year: 2026,
@@ -1449452,7 +1449452,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01447",
-    title: "Constructing Discontinuous but Locally Bounded Rational Functions using Łojasiewicz Inequalities Thanks: ORCID 0000-0002-1437-7525",
+    title: "Constructing Discontinuous but Locally Bounded Rational Functions using Łojasiewicz Inequalities",
     collection: "PAPERS",
     creator: "Adam Coffman, Yifei Pan",
     year: 2026,
@@ -1449500,7 +1449500,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01426",
-    title: "Efficient and Expressive Boundary Conditions in Quantum Lattice Boltzmann Methods Thanks: Version of May 31st, 2026.",
+    title: "Efficient and Expressive Boundary Conditions in Quantum Lattice Boltzmann Methods",
     collection: "PAPERS",
     creator: "Călin A. Georgescu, Matthias Möller",
     year: 2026,
@@ -1449931,7 +1449931,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01495",
-    title: "CART: Context-Anchored Recurrent Transformer A Parameter-Efficient Architecture with Learned Stability Thanks: Code, training scripts, and the experiment database are available at https://github.com/ccapps42/CART .",
+    title: "CART: Context-Anchored Recurrent Transformer A Parameter-Efficient Architecture with Learned Stability",
     collection: "PAPERS",
     creator: "Chad A. Capps",
     year: 2026,
@@ -1450570,7 +1450570,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01559",
-    title: "Asymptotic stability of strong rarefaction waves to a parabolic-hyperbolic system arising from chemotaxis 0 0 footnotetext: *Corresponding author. 0 0 footnotetext: E-mail addresses: liust533@nenu.edu.cn (S. Liu), lijy645@nenu.edu.cn (J. Li)",
+    title: "Asymptotic stability of strong rarefaction waves to a parabolic-hyperbolic system arising from chemotaxis",
     collection: "PAPERS",
     creator: "Sitong Liu, Jingyu Li[2mm] School of Mathematics and Statistics, Northeast Normal University,Changchun 130024, PR China",
     year: 2026,
@@ -1450602,7 +1450602,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01586",
-    title: "Connectivities for k k -knitted graphs and for minimal counterexamples to Hadwiger’s Conjecture Thanks: Research partly supported by Japan Society for the Promotion of Science, Grant-in-Aid for Scientific Research, by C & C Foundation and by Kayamori Foundation. Thanks: Research supported in part by the NSA grant H98230-12-1-0226.",
+    title: "Connectivities for k k -knitted graphs and for minimal counterexamples to Hadwiger’s Conjecture",
     collection: "PAPERS",
     creator: "Ken-ichi Kawarabayashi, Gexin Yu",
     year: 2026,
@@ -1451177,7 +1451177,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01678",
-    title: "Why Do Self-Harm Prediction Models Struggle to Generalise? Lexical and Semantic Variations in Emergency Department Triage Notes Thanks: This paper has been accepted to the Workshop on Computational Linguistics and Clinical Psychology (CLPsych 2026).",
+    title: "Why Do Self-Harm Prediction Models Struggle to Generalise? Lexical and Semantic Variations in Emergency Department Triage Notes",
     collection: "PAPERS",
     creator: "Liuliu Chen, Mike Conway, Jo Robinson, Vlada Rozova",
     year: 2026,
@@ -1451401,7 +1451401,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01706",
-    title: "Higher-Order Debiased Estimators for General Treatment Models LL and ZZ co-advised the project, are listed in alphabetical order (equal contribution), and serve as co-corresponding authors. The authors would like to thank the Co-Editor, Matias Cattaneo, the Associate Editor and two reviewers for their helpful comments that significantly improved our paper. The authors are also grateful for insightful discussions with Jamie Robins, Matteo Bonvini (on dose-response estimation) and with Zijian Guo (on computation). The research related to this paper is supported by funds from the National Key R&D Program of China [grant number 2022YFA1008300] (Zheng Zhang), NSFC Grant No. 12471274 (Lin Liu), the Fundamental Research Funds for the Central Universities, and the Research Funds of Renmin University of China [project number 23XNA025] (Zheng Zhang), and Science and Technology Talent and Platform Program of Yunnan Province Grant No. 202605AF350070 (Lin Liu).",
+    title: "Higher-Order Debiased Estimators for General Treatment Models",
     collection: "PAPERS",
     creator: "Yulin Zhang, Lin Liu, Zheng Zhang",
     year: 2026,
@@ -1451833,7 +1451833,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01771",
-    title: "On Santaló’s Problem Thanks: This research was supported by the Dr. and Mrs. Milton Leong Fellowships in Science and an ISM Graduate Scholarship.",
+    title: "On Santaló’s Problem",
     collection: "PAPERS",
     creator: "Fang Hong",
     year: 2026,
@@ -1452888,7 +1452888,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01932",
-    title: "Spatial Capture-Recapture With Penalized Regression Splines to Flexibly Model Wildlife Density and Distribution Thanks: Present address: Copernicus Institute of Sustainable Development, Utrecht University, the Netherlands",
+    title: "Spatial Capture-Recapture With Penalized Regression Splines to Flexibly Model Wildlife Density and Distribution",
     collection: "PAPERS",
     creator: "Andrew E. Seaton",
     year: 2026,
@@ -1453000,7 +1453000,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01941",
-    title: "Secure RSMA-based Visible Light Networks under Spatial Correlation Hung K. Hoang and Chuyen T. Nguyen are with the Hanoi University of Science and Technology, Hanoi, Vietnam (e-mail: hungtpls2003@gmail.com, chuyen.nguyenthanh@hust.edu.vn). Thang K. Nguyen is an independent researcher, Hanoi, Vietnam (email: khacthang250999@gmail.com). Thanh V. Pham is with Shizuoka University, Shizuoka, Japan (email: pham.van.thanh@shizuoka.ac.jp). Anh T. Pham is with The University of Aizu, Fukushima, Japan (e-mail: pham@u-aizu.ac.jp). Part of this paper has been presented at the 2024 IEEE Conference on Wireless Communications and Networking (WCNC) [ 31 ]",
+    title: "Secure RSMA-based Visible Light Networks under Spatial Correlation",
     collection: "PAPERS",
     creator: "Hung K. Hoang, Chuyen T. Nguyen, Thang K. Nguyen, Thanh V. Pham, Senior Member, IEEE , and Anh T. Pham, Senior Member, IEEE",
     year: 2026,
@@ -1453112,7 +1453112,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01958",
-    title: "Are Economists Open to AI? Text as Data as Survey on Professional Sentiment and Academic Research Trends Thanks: We appreciate the comments of Iván Blanco Sánchez, Pedro Alberto Chauffaille Saffi, Carlo Chiarella, John Coah, Eric Duca, Pablo García Estévez, Sergio Javier García Saiz, Salomón García Villegas, Juan Pedro Gomez, Manuel López Martín de Blas and seminar participants at CUNEF university for generous conversations, careful suggestions, and encouragement at different stages of this project. Their comments helped sharpen the paper’s framing and exposition. All remaining errors are our own.",
+    title: "Are Economists Open to AI? Text as Data as Survey on Professional Sentiment and Academic Research Trends",
     collection: "PAPERS",
     creator: "Yi Wang, Lei Ge",
     year: 2026,
@@ -1453463,7 +1453463,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02026",
-    title: "Jordan types for pairs of commuting nilpotent matrices: A survey Thanks: The author acknowledges financial support from the Slovenian Research and Innovation Agency (research core funding No. P1-0448 until December 31, 2025, and research core funding P1-0222 and research project No. J1-50002 after January 1, 2026).",
+    title: "Jordan types for pairs of commuting nilpotent matrices: A survey",
     collection: "PAPERS",
     creator: "Tomaž Košir",
     year: 2026,
@@ -1453911,7 +1453911,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-01986",
-    title: "Generalised eigenvector expansion of infinite Toeplitz matrices with absolutely/completely monotone entries Thanks: Work supported by the National Science Centre, Poland, grant no. 2023/49/B/ST1/04303",
+    title: "Generalised eigenvector expansion of infinite Toeplitz matrices with absolutely/completely monotone entries",
     collection: "PAPERS",
     creator: "Mateusz Kwaśnicki, Jacek Wszoła",
     year: 2026,
@@ -1454517,7 +1454517,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02166",
-    title: "EEG-FuseFormer: A Transformer-Driven Feature Fusion Framework for Seizure Onset Prediction Thanks: * Vigneshwar Hariharan and Chithra Reghuvaran are co-first authors.",
+    title: "EEG-FuseFormer: A Transformer-Driven Feature Fusion Framework for Seizure Onset Prediction",
     collection: "PAPERS",
     creator: "Vigneshwar Hariharan 1∗ , Chithra Reghuvaran 2∗ , Arlene John 3 , Nhat Pham 4 , Omer Rana 4 , Deepu John 2 , Ganesh Neelakanta Iyer 1",
     year: 2026,
@@ -1454565,7 +1454565,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02172",
-    title: "Closing the Alignment-Maturity Gap in Federated Prototype Learning Thanks: Work funded by Project PID2023-147404OB-I00 (MICIU/AEI/10.13039/501100011033; ERDF/EU; ESF+/EU), Horizon Europe (GA 101070381), the Ministry for Digital Transformation and Civil Service and Next-GenerationEU/PRTR (TSI-100925-2023-1) and by the Competitive Reference Groups of the Xunta de Galicia (grant ED431C 2026/38). CITIC, as a member of the CIGUS Network, receives subsidies from the “Xunta de Galicia” and from the ERDF Operational Programme Galicia 2021-2027 (Grant ED431G 2023/01).",
+    title: "Closing the Alignment-Maturity Gap in Federated Prototype Learning",
     collection: "PAPERS",
     creator: "Mario Casado-Diez, Alejandro Dopico-Castro, Verónica Bolón-Canedo, Bertha Guijarro-Berdiñas",
     year: 2026,
@@ -1455587,7 +1455587,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02342",
-    title: "Detecting Pen-In-Air States from Video: A Proof-of-Concept Toward Complementary Handwriting Analysis Thanks: This work was funded by IMT Mines Ales and the Occitanie Region, France, through the AVIAREPTE doctoral project, as part of the Emergence 2025 program.",
+    title: "Detecting Pen-In-Air States from Video: A Proof-of-Concept Toward Complementary Handwriting Analysis",
     collection: "PAPERS",
     creator: "Lauren Sismeiro 1 , Rémy Plastre 4 , Binbin Xu 1 , Frédéric Puyjarinet 1 , Gérard Dray 1",
     year: 2026,
@@ -1455699,7 +1455699,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02334",
-    title: "Less Is More? When Dataset Context Hurts LLM-Generated Dataset Descriptions Thanks: Funded by Siemens AG and the Technical University of Munich – Institute for Advanced Study (TUM-IAS), Germany.",
+    title: "Less Is More? When Dataset Context Hurts LLM-Generated Dataset Descriptions",
     collection: "PAPERS",
     creator: "Anonymous Author(s), 1 st Lisa-Yao Gan, 2 nd Arunav Das, 3 rd Johanna Walker, 4 th Klaus Diepold, 5 th Elena Simperl",
     year: 2026,
@@ -1455811,7 +1455811,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02324",
-    title: "Cyclotomic factors of rational necklace functions Thanks: Our group is supported by the Vietnam Institute for Advanced Study in Mathematics (VIASM) through the REU 2025 (Research Experience for Undergraduates) program. TTN is partially supported by an AMS-Simons Travel Grant. NDT is partially supported by the Vietnam National Foundation for Science and Technology Development (NAFOSTED) under grant number 101.04-2023.21",
+    title: "Cyclotomic factors of rational necklace functions",
     collection: "PAPERS",
     creator: "Nguyen Cao Minh, Nguyen Vu Hoang Minh, Dung Nguyen Tung T. Nguyen, Nguyen Duy Tan, Duong Tran",
     year: 2026,
@@ -1456083,7 +1456083,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02378",
-    title: "When Do Attention Circuits Form? Developmental Trajectories of Capability and Attention-Sink Emergence Across Three 1B-Class Architectures Thanks: Correspondence: abbyxu@gmail.com . Code, data, and reproducibility scripts: https://github.com/skydancerosel/spectral-probe-circuits",
+    title: "When Do Attention Circuits Form? Developmental Trajectories of Capability and Attention-Sink Emergence Across Three 1B-Class Architectures",
     collection: "PAPERS",
     creator: "Yongzhong Xu",
     year: 2026,
@@ -1456835,7 +1456835,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02494",
-    title: "Monitoring Agentic Systems Before They’re Reliable Conference: Workshop on Agentic Software Engineering; May 26, 2026; San Jose, CA, USA Workshop on Agentic Software Engineering (AgenticSE), co-located with ACM CAIS 2026 Thanks: Accepted to the Workshop on Agentic Software Engineering (AgenticSE), co-located with ACM CAIS 2026.",
+    title: "Monitoring Agentic Systems Before They’re Reliable",
     collection: "PAPERS",
     creator: "Marisa Ferrara Boston, Glen Hanson, Effi Georgala, JD Hudgens, Heather Frase",
     year: 2026,
@@ -1456867,7 +1456867,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02491",
-    title: "MORPHOS: Autoregressive 4D Generation with Temporal Structured Latents Thanks: : Corresponding author",
+    title: "MORPHOS: Autoregressive 4D Generation with Temporal Structured Latents",
     collection: "PAPERS",
     creator: "Minkyung Kwon, Jinhyeok Choi, Youngjin Shin, Jaeyeong Kim, JongMin Lee",
     year: 2026,
@@ -1457139,7 +1457139,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02532",
-    title: "Improving Combined Detection and Classification of TEM Defects via Mask-Conditioned Latent Diffusion Augmentation Thanks: Citation : Authors. Title. Pages…. DOI:000000/11111.",
+    title: "Improving Combined Detection and Classification of TEM Defects via Mask-Conditioned Latent Diffusion Augmentation",
     collection: "PAPERS",
     creator: "Ni Li, Nuohao Liu, Ryan Jacobs, Ajay Annamareddy, Maciej P. Polak, Kevin Field, Izabela Szlufarska, Dane Morgan 1. University of Wisconsin-Madison, Madison, WI2. University of Michigan-Ann Arbor, Ann Arbor, MI",
     year: 2026,
@@ -1457155,7 +1457155,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02523",
-    title: "FigSIM: A Dataset for Fine-grained Suicide Severity and Figurative Language in Suicide Memes Thanks: This paper has been accepted to Findings of the Association for Computational Linguistics: ACL 2026.",
+    title: "FigSIM: A Dataset for Fine-grained Suicide Severity and Figurative Language in Suicide Memes",
     collection: "PAPERS",
     creator: "Liuliu Chen, Elise R. Carrotte, Brian E. Chapman, Jo Robinson, Mike Conway",
     year: 2026,
@@ -1457747,7 +1457747,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02600",
-    title: "High-Dimensional Latents Should Be Diagnosed Through Phase Structure Thanks: School of Electrical Engineering and Robotics, Faculty of Engineering, − Queensland -\\;\\,\\,\\,\\text{Queensland} University of Technology, Brisbane, Queensland, Australia",
+    title: "High-Dimensional Latents Should Be Diagnosed Through Phase Structure",
     collection: "PAPERS",
     year: 2026,
     source: "arXiv",
@@ -1457762,7 +1457762,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02606",
-    title: "ReLoRA : Knowledge-Reusing Adaptation for Fast Rollout of Evolving LLM Services This article is supported by the National Science Foundation of China (NSFC) under Grants XXXXXXXX, XXXXXXX, and XXXXXXX. Y. Xu, Z. Xu, H. Xu, Y. Liao, Z. Yao, and X. Fu are with the School of Computer Science and Technology, University of Science and Technology of China, Hefei, Anhui, China, 230027, and also with Suzhou Institute for Advanced Research, University of Science and Technology of China, Suzhou, Jiangsu, China, 215123. E-mails: xuyangcs@ustc.edu.cn; zihuaixu@mail.ustc.edu.cn; xuhongli@ustc.edu.cn; ymliao98@mail.ustc.edu.cn; zhiweiyao@mail.ustc.edu.cn; xt1310632375@mail.ustc.edu.cn. H. Xu is the corresponding author.",
+    title: "ReLoRA : Knowledge-Reusing Adaptation for Fast Rollout of Evolving LLM Services",
     collection: "PAPERS",
     creator: "Yang Xu, Zihuai Xu, *Hongli Xu, Yunming Liao, Zhiwei Yao, Xitong Fu",
     year: 2026,
@@ -1458210,7 +1458210,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02655",
-    title: "Coherent Swap Regret and Channel-Proof Learning Thanks: University of Toronto. Email: sohail.sarkar@mail.utoronto.ca .",
+    title: "Coherent Swap Regret and Channel-Proof Learning",
     collection: "PAPERS",
     creator: "Sohail (Neel) Sarkar",
     year: 2026,
@@ -1458562,7 +1458562,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02687",
-    title: "Euclid : Disky titans – surprisingly high star formation efficiency in two brightest group galaxies at z ∼ \\sim 0.75 Thanks: This paper is published on behalf of the Euclid Consortium.",
+    title: "Euclid : Disky titans – surprisingly high star formation efficiency in two brightest group galaxies at z ∼ \\sim 0.75",
     collection: "PAPERS",
     creator: "F. Gentile, E. Daddi, D. Elbaz, A. Enia, F. Vito, P.-A. Duc, M. Franco, H. Fu, R. Giuffrida, D. Roberts, F. Shankar, S. Lu, P. Awad, J-B. Billand, M. Baes, L. Bisigello, E. Duran-Camacho, G. Castignani, O. Cucciati, G. De Lucia, C. D’Eugenio, D. Donevski, M. Fossati, M. Fumagalli, R. Gobat, C. Gruppioni, M. Magliocchetti, B. Magnelli, G. Papini, L. Pozzetti, V. Sangalli, J. G. Sorce, L. Spinoglio, V. Strazzullo, M. Tarrasse, G. Toni, G. Zamorani, B. Altieri, S. Andreon, N. Auricchio, C. Baccigalupi, M. Baldi, S. Bardelli, P. Battaglia, A. Biviano, E. Branchini, M. Brescia, S. Camera, V. Capobianco, C. Carbone, J. Carretero, M. Castellano, S. Cavuoti, A. Cimatti, C. Colodro-Conde, G. Congedo, L. Conversi, Y. Copin, F. Courbin, H. M. Courtois, M. Cropper, H. Degaudenzi, H. Dole, F. Dubath, X. Dupac, M. Farina, R. Farinelli, F. Faustini, S. Ferriol, S. Fotopoulou, M. Frailis, E. Franceschi, M. Fumana, S. Galeotta, K. George, B. Gillis, C. Giocoli, J. Gracia-Carpio, A. Grazian, F. Grupp, S. Gwyn, S. V. H. Haugan, H. Hoekstra, W. Holmes, I. M. Hook, F. Hormuth, A. Hornstrup, K. Jahnke, M. Jhabvala, B. Joachimi, S. Kermiche, A. Kiessling, B. Kubik, M. Kümmel, M. Kunz, H. Kurki-Suonio, A. M. C. Le Brun, S. Ligori, P. B. Lilje, V. Lindholm, I. Lloro, G. Mainetti, O. Mansutti, O. Marggraf, M. Martinelli, N. Martinet, F. Marulli, R. J. Massey, E. Medinaceli, S. Mei, M. Melchior, M. Meneghetti, E. Merlin, G. Meylan, A. Mora, M. Moresco, L. Moscardini, R. Nakajima, C. Neissner, S.-M. Niemi, C. Padilla, S. Paltani, F. Pasian, K. Pedersen, W. J. Percival, V. Pettorino, G. Polenta, M. Poncet, L. A. Popa, F. Raison, A. Renzi, J. Rhodes, G. Riccio, E. Romelli, M. Roncarelli, H. J. A. Rottgering, B. Rusholme, R. Saglia, Z. Sakr, D. Sapone, P. Schneider, T. Schrabback, A. Secroun, E. Sihvola, P. Simon, C. Sirignano, G. Sirri, J. Skottfelt, L. Stanco, P. Tallada-Crespí, A. N. Taylor, H. I. Teplitz, I. Tereno, S. Toft, R. Toledo-Moreo, F. Torradeflot, I. Tutusaus, J. Valiviita, T. Vassallo, G. Verdoes Kleijn, A. Veropalumbo, Y. Wang, J. Weller, F. M. Zerbi, E. Zucca, M. Bolzonella, M. Huertas-Company, M. Sereno",
     year: 2026,
@@ -1459570,7 +1459570,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02836",
-    title: "Fast Transformer Inference on ARM-Based HMPSoCs Thanks: This work was supported by the European Commission, under the CASTOR project; Grant Agreement no. 101167904.",
+    title: "Fast Transformer Inference on ARM-Based HMPSoCs",
     collection: "PAPERS",
     creator: "Hang Xu, Yixian Shen, Thanassis Giannetsos, Anuj Pathania",
     year: 2026,
@@ -1460050,7 +1460050,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02898",
-    title: "Canonical reconstruction and forcing absoluteness of standard structures Thanks: IM CAS (RVO 67985840).",
+    title: "Canonical reconstruction and forcing absoluteness of standard structures",
     collection: "PAPERS",
     creator: "Tomasz Kania",
     year: 2026,
@@ -1460066,7 +1460066,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02887",
-    title: "A Nonmonotone Gradient-Based Algorithm for Symmetric Nonnegative Matrix Factorization and Graph Clustering Thanks: Submitted to the editors Spring/Summer 2026.",
+    title: "A Nonmonotone Gradient-Based Algorithm for Symmetric Nonnegative Matrix Factorization and Graph Clustering",
     collection: "PAPERS",
     creator: "Ryan Swart, Johannes J. Brust",
     year: 2026,
@@ -1460226,7 +1460226,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02922",
-    title: "From Clouâtre-Ostermann-Ransford to Okubo-Ando Thanks: M.H. was partially supported by the Emmy Noether Program of the German Research Foundation (DFG Grant 466012782) Thanks: J.M. partially supported by National Science Foundation Grant DMS 2554487",
+    title: "From Clouâtre-Ostermann-Ransford to Okubo-Ando",
     collection: "PAPERS",
     creator: "Michael Hartz, John E. M c Carthy",
     year: 2026,
@@ -1460418,7 +1460418,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02952",
-    title: "Maximal inequalities for derivatives of spherical means Thanks: Work supported by the National Science Centre, Poland, grant no. 2023/49/B/ST1/04303",
+    title: "Maximal inequalities for derivatives of spherical means",
     collection: "PAPERS",
     creator: "Mateusz Kwaśnicki",
     year: 2026,
@@ -1460657,7 +1460657,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-02973",
-    title: "Chatbots Output Meaningful (but Problematic) Language Thanks: Versions of this work have been presented at the Annual Philosophy of Linguistics and Language Conference at the Interuniversity Center in Dubrovnik (2023), SLIME 4 at UCLA (2025), the Ranch Metaphysics Workshop at Tucson, AZ (2026), the Conference on Semantics as Natural Science at the University of Parma (2026), and in talks at the School of Advanced Study, University of London (2023), University of Barcelona (2025), Cambridge Semantics, Pragmatics and Philosophy Research Group at the University of Cambridge (2026), and colloqium talks at the University of Pittsburgh (2026) and Franklin and Marshall College (2026). We are grateful to audiences there for feedback, and especially to commentators Rosa Cao and Justin Khoo, as well as to detailed discussions with Malihe Alikhani, Doug DeCarlo, Lauren Goodlad, Nick Kroll, Ernie Lepore, and Aneta Stojnić. This work has been supported by NSF awards 2021628, 2119265, and 2427646, and NEH award RZ-292740-23. Any opinions, findings, and conclusions or recommendations expressed in this material are those of the authors and do not necessarily reflect the views of the National Science Foundation or those of the National Endowment for the Humanities.",
+    title: "Chatbots Output Meaningful (but Problematic) Language",
     collection: "PAPERS",
     creator: "Matthew Stone, Una Stojnić",
     year: 2026,
@@ -1461137,7 +1461137,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03033",
-    title: "Local and Global Contraction Principles for MCMC Mixing Thanks: A. Daeijavad and S. Asoodeh are with the Department of Computing and Software, McMaster University, Hamilton, ON L8S 4K1, Canada (email: daeijava, asoodehs@mcmaster.ca).",
+    title: "Local and Global Contraction Principles for MCMC Mixing",
     collection: "PAPERS",
     creator: "Alireza Daeijavad and Shahab Asoodeh",
     year: 2026,
@@ -1461760,7 +1461760,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03125",
-    title: "Rethinking Neural Width for Alternating Current Optimal Power Flow Proxies † Equal Contributions. ⋆ Corresponding Author: pareek@ee.iitr.ac.in This work was supported by the ANRF PM Early Career Research Grant (ANRF/ECRG/2024/001962/ENS) and the IIT Roorkee Faculty Initiation Grant (IITR/SRIC/1431/FIG-101078) along with IIT Roorkee’s SPARK Internship Program which supported Dhruvi’s internship in the summer of 2025.",
+    title: "Rethinking Neural Width for Alternating Current Optimal Power Flow Proxies",
     collection: "PAPERS",
     creator: "Dhruvi Khandelwal † 1 {{}^{\\dagger}}^{1} , Anurag Basistha † 2 {{}^{\\dagger}}^{2} , Ayushi Jolotia 3 , and Parikshit Pareek ⋆ 3 {{}^{\\star}}^{3} 1 Department of Electrical Engineering, National Institute of Technology Kurukshetra, India. 2 Indraprastha Institute of Information Technology Delhi, India. 3 Department of Electrical Engineering, Indian Institute of Technology Roorkee, India",
     year: 2026,
@@ -1463533,7 +1463533,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03388",
-    title: "A nonlinear heat transfer equation in turbulent media: symmetry classification, recursion operators, and exact solutions Thanks: Partially supported by the RSF Grant 25-71-20008",
+    title: "A nonlinear heat transfer equation in turbulent media: symmetry classification, recursion operators, and exact solutions",
     collection: "PAPERS",
     creator: "I.S. Krasil’shchik",
     year: 2026,
@@ -1464077,7 +1464077,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03448",
-    title: "georgilasgeo@phys.uoa.gr, vspanos@phys.uoa.gr",
+    title: "Gravitino Freeze-In Dark Matter with an Additional Scalar Field",
     collection: "PAPERS",
     year: 2026,
     source: "arXiv",
@@ -1464188,7 +1464188,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03466",
-    title: "On the Charged Fragments Tagging in the ATLAS Detector during the 2025 Oxygen Campaign Thanks: Presented at XXXII Cracow Epiphany Conference on the recent results from Heavy Ion Physics, 13–17 January 2025, Kraków, Poland.",
+    title: "On the Charged Fragments Tagging in the ATLAS Detector during the 2025 Oxygen Campaign",
     collection: "PAPERS",
     creator: "Weronika Sobień Maciej Trzebiński on behalf of the ATLAS Collaboration",
     year: 2026,
@@ -1464508,7 +1464508,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03505",
-    title: "Secrecy Sum Rate Maximization for OIRS-Aided Visible Light Communications with Confidential Messages Trinh K. Nguyen, Hung K. Hoang, and Chuyen T. Nguyen are with Hanoi University of Science and Technology, Hanoi, Vietnam (e-mail: trinh2k5vd@gmail.com, hungtpls2003@gmail.com, chuyen.nguyenthanh@hust.edu.vn). Thanh V. Pham is with Shizuoka University, Shizuoka, Japan (email: pham.van.thanh@shizuoka.ac.jp).",
+    title: "Secrecy Sum Rate Maximization for OIRS-Aided Visible Light Communications with Confidential Messages",
     collection: "PAPERS",
     creator: "Trinh K. Nguyen, Hung K. Hoang, Thanh V. Pham, Senior Member, IEEE and Chuyen T. Nguyen",
     year: 2026,
@@ -1465627,7 +1465627,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03674",
-    title: "Deterministic Distance Approximation in MPC via Improved Hitting Sets This research was funded in whole or in part by the Austrian Science Fund (FWF) https://doi.org/10.55776/P36280 and https://doi.org/10.55776/I6915 . For open access purposes, the author has applied a CC BY public copyright license to any author-accepted manuscript version arising from this submission. This research was supported by the Israel Science Foundation (grant No. 2829/25).",
+    title: "Deterministic Distance Approximation in MPC via Improved Hitting Sets",
     collection: "PAPERS",
     creator: "Kyungjin Cho, Michal Dory, Yannic Maus, Tijn de Vos",
     year: 2026,
@@ -1465723,7 +1465723,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03690",
-    title: "On Secure EKF-enhanced UAV-ISAC Systems Thanks: Manuscript received.",
+    title: "On Secure EKF-enhanced UAV-ISAC Systems",
     collection: "PAPERS",
     creator: "Hongjiang Lei, Heng Jin, Ki-Hong Park, Jia Ye, Liang Yang, Gaofeng Pan, Yun Li",
     year: 2026,
@@ -1465771,7 +1465771,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03701",
-    title: "Polyhedral norms and smooth Hahn-Banach extension Thanks: The author thanks Professor Vladimir Kadets for a helpful discussion.",
+    title: "Polyhedral norms and smooth Hahn-Banach extension",
     collection: "PAPERS",
     creator: "Saikat Roy",
     year: 2026,
@@ -1465883,7 +1465883,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03706",
-    title: "Modular inequalities and Alexander polynomials of pencil type conic-line arrangements Thanks: ∗ Partially supported by the project ”Singularities and Applications” - CF 132/31.07.2023 funded by the European Union - NextGenerationEU - through Romania’s National Recovery and Resilience Plan.",
+    title: "Modular inequalities and Alexander polynomials of pencil type conic-line arrangements",
     collection: "PAPERS",
     creator: "Anca Măcinic ∗",
     year: 2026,
@@ -1465979,7 +1465979,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03721",
-    title: "Wasserstein stability and the nonsingular Borel lifting problem Thanks: The research was supported by the Wallenberg Foundation (KAW 2021.0258) and the ISF (grants No. 1180/22 and 957/25). It was initiated during the authors’ visit to Brännö Island in the southern Gothenburg archipelago.",
+    title: "Wasserstein stability and the nonsingular Borel lifting problem",
     collection: "PAPERS",
     creator: "Nachi Avraham-Re’em, George Peterzil",
     year: 2026,
@@ -1466186,7 +1466186,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03753",
-    title: "The impact of source and survey modelling on the connection between [O iii ] emitters and Ly α \\alpha forest transmission at z ∼ 6 {z}\\sim 6 ⋆ E-mail: luke.conaboy@nottingham.ac.uk",
+    title: "The impact of source and survey modelling on the connection between [O iii ] emitters and Ly α \\alpha forest transmission at z ∼ 6 {z}\\sim 6",
     collection: "PAPERS",
     creator: "Luke Conaboy 1,⋆, James S. Bolton 1, Laura C. Keating 2, Martin G. Haehnelt 3, Girish Kulkarni 4, Ewald Puchwein 5",
     year: 2026,
@@ -1466282,7 +1466282,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03762",
-    title: "Tool-Aware Optimization with Entropy Guidance for Efficient Agentic Reinforcement Learning Thanks: Hongye Cao, Nuo Yan, Tianpei Yang, Jing Huo, and Yang Gao are with the National Key Laboratory for Novel Software Technology, Nanjing University, Nanjing 210093, China (e-mail: hongyecao528@gmail.com; ynpromise222@163.com; tianpei.yang@nju.edu.cn; huojing@nju.edu.cn; gaoy@nju.edu.cn). Thanks: Haoyuan Deng, and Ziwei Wang are with Nanyang Technological University, Singapore (e-mail: haoyuan.deng@ntu.edu.sg; ziwei.wang@ntu.edu.sg). Thanks: Yuyao Zhang is with China Mobile NineVerse Artificial Intelligence Technology (Beijing) Co., Ltd., and Institute of Artificial Intelligence, NineVerse, Beijing 100032, China (e-mail: zhangyuyao@cmjt.chinamobile.com).",
+    title: "Tool-Aware Optimization with Entropy Guidance for Efficient Agentic Reinforcement Learning",
     collection: "PAPERS",
     creator: "Hongye Cao, Nuo Yan, Haoyuan Deng, Ziwei Wang, Tianpei Yang, Jing Huo",
     year: 2026,
@@ -1466314,7 +1466314,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03767",
-    title: "Trading Frictions in Dynamic Cap-and-Trade Markets Nicola Borri, LUISS University, email: nborri@luiss.it. Yukun Liu, University of Rochester, email: yliu229@ur.rochester.edu. Aleh Tsyvinski, Department of Economics at Yale University, email: a.tsyvinski@yale.edu. Xi Wu, University of California, Berkeley, email: xiwu@berkeley.edu. The empirical analysis in this paper subsumes that of “Inefficiencies of Carbon Trading Markets” first posted on arXiv on August 12, 2024. We thank Bruno Biais, Felix Bierbrauer, and Lasse Pedersen for comments.",
+    title: "Trading Frictions in Dynamic Cap-and-Trade Markets",
     collection: "PAPERS",
     creator: "Nicola Borri, Yukun Liu, Aleh Tsyvinski, Xi Wu",
     year: 2026,
@@ -1466506,7 +1466506,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03775",
-    title: "HK manifolds of Type K ​ 3 [ a 2 + 1 ] K3^{[a^{2}+1]} as moduli spaces of projective bundles on HK manifolds of Type K ​ 3 [ 2 ] K3^{[2]} Thanks: Partially supported by PRIN 2017YRA3LK",
+    title: "HK manifolds of Type K ​ 3 [ a 2 + 1 ] K3^{[a^{2}+1]} as moduli spaces of projective bundles on HK manifolds of Type K ​ 3 [ 2 ] K3^{[2]}",
     collection: "PAPERS",
     creator: "Kieran G. O’Grady",
     year: 2026,
@@ -1466617,7 +1466617,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03802",
-    title: "Template Collapse and Information-Theoretic Limits in Camera rPPG Pulse Morphology Restoration Thanks: All experimental results, figures, and architecture implementations presented in this manuscript are fully reproducible. The source code is publicly available at github.com/baachraf/rppg-morphology-restore .",
+    title: "Template Collapse and Information-Theoretic Limits in Camera rPPG Pulse Morphology Restoration",
     collection: "PAPERS",
     creator: "Achraf Ben Ahmed, PlesmoSense SARL",
     year: 2026,
@@ -1466921,7 +1466921,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03830",
-    title: "Constrained Pinching Antenna Array Design for Sum-Rate Maximization in Multi-User PASS Thanks: Minghao Jin, Anna Li and Qiang Ni are with the School of Computing and Communications, Lancaster University, Lancaster LA1 4WA, U.K. (e-mail: m.jin6@lancaster.ac.uk; a.li16@lancaster.ac.uk; q.ni@lancaster.ac.uk). Thanks: Tianwei Hou is with the School of Electronic and Information Engineering, Beijing Jiaotong University, Beijing 100044, China (e-mail: twhou@bjtu.edu.cn). Thanks: Arumugam Nallanathan is with the School of Electronic Engineering and Computer Science, Queen Mary University of London, E1 4NS London, U.K., and also with the Department of Electronic Engineering, Kyung Hee University, Yongin-si, Gyeonggi-do 17104, South Korea (e-mail: a.nallanathan@qmul.ac.uk).",
+    title: "Constrained Pinching Antenna Array Design for Sum-Rate Maximization in Multi-User PASS",
     collection: "PAPERS",
     creator: "Minghao Jin, Anna Li, Tianwei Hou",
     year: 2026,
@@ -1466969,7 +1466969,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03840",
-    title: "On a system of semilinear damped σ \\sigma -evolution equations with different damping types in the critical case Thanks: ∗ Corresponding author: Tuan Anh Dao",
+    title: "On a system of semilinear damped σ \\sigma -evolution equations with different damping types in the critical case",
     collection: "PAPERS",
     year: 2026,
     source: "arXiv",
@@ -1467910,7 +1467910,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-03973",
-    title: "A remark on the majorizing measures theorem for general processes Thanks: RP gratefully acknowledges support from the NSF under grant DMS-2503579.",
+    title: "A remark on the majorizing measures theorem for general processes",
     collection: "PAPERS",
     creator: "Reese Pathak, Nikita Zhivotovskiy",
     year: 2026,
@@ -1468213,7 +1468213,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04016",
-    title: "Witness-split + window-cardinality refinement for r 3 ⁡ ( N ) \\rsymb_{3}(N) : architecture, empirical results, and a structural hard pocket Thanks: ORCID: 0000-0001-6627-3667 .",
+    title: "Witness-split + window-cardinality refinement for r 3 ⁡ ( N ) \\rsymb_{3}(N) : architecture, empirical results, and a structural hard pocket",
     collection: "PAPERS",
     creator: "Mehmet Ergezer",
     year: 2026,
@@ -1468469,7 +1468469,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04041",
-    title: "A A -Generalized Hessian pre-Lie algebras and A A -Generalized Yang–Baxter Equations Thanks: *Corresponding author. Thanks: This work is supported by NNSF of China (No. 12271085)",
+    title: "A A -Generalized Hessian pre-Lie algebras and A A -Generalized Yang–Baxter Equations",
     collection: "PAPERS",
     creator: "Yining Sun, Zeyu Hao, Ziyi Zhang, Liangyun Chen ∗",
     year: 2026,
@@ -1596594,7 +1596594,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04060",
-    title: "Weakly Supervised Incremental Segmentation via Semantic Anchors and Spatial Arbitration Thanks: Guangyu Gao is the corresponding author. This work was supported by the National Natural Science Foundation of China (Grant 62472033, 61972036).",
+    title: "Weakly Supervised Incremental Segmentation via Semantic Anchors and Spatial Arbitration",
     collection: "PAPERS",
     creator: "Zhonggai Wang, Kai Fang, and Guangyu Gao",
     year: 2026,
@@ -1596834,7 +1596834,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04093",
-    title: "The Origin of Da Scaling: Suppressed Cooling in Fast-Cooling Mixing Layers Journal: ApJ scipy ( 44 ) , numpy ( 19 ) , matplotlib ( 20 ) , adstex ( https://github.com/yymao/adstex )",
+    title: "The Origin of Da Scaling: Suppressed Cooling in Fast-Cooling Mixing Layers",
     collection: "PAPERS",
     creator: "Lachlan Lancaster, Drummond Fielding, Rajsekhar Mohapatra, Greg L. Bryan",
     year: 2026,
@@ -1596866,7 +1596866,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04087",
-    title: "Ceci n’est pas une Couche de Mélange: The Meaning of Resolved Turbulent Radiative Mixing Journal: ApJ scipy ( 65 ) , numpy ( 25 ) , matplotlib ( 26 ) , adstex ( https://github.com/yymao/adstex )",
+    title: "Ceci n’est pas une Couche de Mélange: The Meaning of Resolved Turbulent Radiative Mixing",
     collection: "PAPERS",
     creator: "Lachlan Lancaster, Rajsekhar Mohapatra, Drummond B. Fielding, Greg L. Bryan",
     year: 2026,
@@ -1597186,7 +1597186,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04135",
-    title: "Stationarity-Aware Retrieval-Augmented Time Series Forecasting Thanks: © Shiqiao Zhou, Holger Schöner, Zipeng Wu, Edouard Fouché, IAG Wilson, and Shuo Wang | ACM 2026. This is the authors’ accepted version of a paper accepted to KDD 2026. The definitive Version of Record will be published at: http://doi.org/10.1145/3770855.3817813. CCS: Information systems Information retrieval CCS: Applied computing Forecasting",
+    title: "Stationarity-Aware Retrieval-Augmented Time Series Forecasting",
     collection: "PAPERS",
     creator: "Shiqiao Zhou, Holger Schöner, Zipeng Wu, Edouard Fouché, IAG Wilson, Shuo Wang",
     year: 2026,
@@ -1597202,7 +1597202,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04142",
-    title: "Who Counts as Young? Matching Rules for Social Discounting Thanks: I used Refine.ink , developed by Ben Golub and Yann Calvó López, to audit notational consistency and proof clarity. All remaining errors are my own. Replication files for the quantitative exercise are available in the project’s GitHub repository at https://github.com/sbuhai/current-cell-matching-project .",
+    title: "Who Counts as Young? Matching Rules for Social Discounting",
     collection: "PAPERS",
     creator: "I. Sebastian Buhai",
     year: 2026,
@@ -1597602,7 +1597602,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04198",
-    title: "Spatial Artifact Coherence Determines Codec Robustness in Patch-Based rPPG Thanks: All experimental results, figures, and algorithm implementations presented in this manuscript are fully reproducible. The source code is publicly available at github.com/baachraf/patchpca-codec-rppg .",
+    title: "Spatial Artifact Coherence Determines Codec Robustness in Patch-Based rPPG",
     collection: "PAPERS",
     creator: "Achraf Ben Ahmed, PlesmoSense SARL",
     year: 2026,
@@ -1597650,7 +1597650,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04207",
-    title: "Integrated Real-Time Testbed for Wideband RFID and Wireless Power Transfer Thanks: The financial support by the European Union’s Horizon Europe research and innovation program under Grant No. 101192113 is gratefully acknowledged.",
+    title: "Integrated Real-Time Testbed for Wideband RFID and Wireless Power Transfer",
     collection: "PAPERS",
     creator: "Lukas D’Angelo 1, Daniel Pöhl 2, Benjamin Deutschmann 1, Erik Leitinger 1, Klaus Witrisal 1",
     year: 2026,
@@ -1597762,7 +1597762,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04190",
-    title: "Sampling and reconstruction of convex functions Thanks: This research was supported in part by the NSF Grants DMS-2409807 (AB), DMS-2513112 (WD), DMS-2245097 (WD), DMS-2038080 (WD), DMS-2134140 (RD, GP), DMS-2424305 (JWS), by the Foundation Sciences Mathématiques de Paris (AC), by the German Research Foundation grant CRC 1481 (WD), and by the ONR MURI Grant N00014-20-1-2787 (RD, GP, JWS).",
+    title: "Sampling and reconstruction of convex functions",
     collection: "PAPERS",
     creator: "Andrea Bonito, Albert Cohen, Wolfgang Dahmen, Ronald DeVore, Guergana Petrova, Jonathan W. Siegel",
     year: 2026,
@@ -1597842,7 +1597842,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04239",
-    title: "State Observers for Linear Systems with Prescribed Residual Bounds The author is with the Department of Mechanical and Aerospace Engineering, Missouri University of Science and Technology, Rolla, MO, USA Corresponding author: Nilay Kant (email: nilaykant@mst.edu)",
+    title: "State Observers for Linear Systems with Prescribed Residual Bounds",
     collection: "PAPERS",
     creator: "Nilay Kant 1",
     year: 2026,
@@ -1599264,7 +1599264,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04356",
-    title: "Sequential algorithm for structural estimations with equilibrium constraints Thanks: The current study builds on my prior study titled “Sequential algorithm for estimating structural models without using analytical derivatives.” I thank Victor Aguirregabiria, Adam Dearing, Tianyi Li, Katsumi Shimotsu, and participants at APIOC 2024, 2025 DSE conference at Hong Kong, 2026 IIOC, and Kansai econometrics conference, Spring Meeting of the Operations Research Society of Japan, 2026 Spring Meeting of the Japanese Statistical Association, and 2026 Spring Meeting of the Japanese Economic Association for helpful discussions and comments.",
+    title: "Sequential algorithm for structural estimations with equilibrium constraints",
     collection: "PAPERS",
     creator: "Takeshi Fukasawa",
     year: 2026,
@@ -1599376,7 +1599376,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04398",
-    title: "Arveson’s Gauss-Bonnet-Chern Formula for Hilbert Modules in the Multiplier-Algebra Framework Thanks: This work is supported by National Natural Science Foundation of China : (12271298 and 11871308).",
+    title: "Arveson’s Gauss-Bonnet-Chern Formula for Hilbert Modules in the Multiplier-Algebra Framework",
     collection: "PAPERS",
     creator: "Penghui Wang, Ruoyu Zhang and Zeyou Zhu",
     year: 2026,
@@ -1599408,7 +1599408,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04411",
-    title: "Pepper: High-bandwidth and Scalable Anonymous Broadcast with Cryptographic Privacy Thanks: An abridged version of this work has been accepted for publication in IFIP SEC 2026.",
+    title: "Pepper: High-bandwidth and Scalable Anonymous Broadcast with Cryptographic Privacy",
     collection: "PAPERS",
     creator: "Chenghao Li, Haoyuan Wang, Xianghang Mi",
     year: 2026,
@@ -1599856,7 +1599856,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04482",
-    title: "On hyperbolic and functional analogues of questions of Grünbaum and Loewner Thanks: All authors were supported in part by NSERC",
+    title: "On hyperbolic and functional analogues of questions of Grünbaum and Loewner",
     collection: "PAPERS",
     creator: "Yu Huang, Sergii Myroshnychenko, Kateryna Tatarko, and Vladyslav Yaskin",
     year: 2026,
@@ -1600301,7 +1600301,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04578",
-    title: "Cosmography of the Sloan Basin of Attraction and Neighborhood ⋆ E-mail:pomarede@cea.fr",
+    title: "Cosmography of the Sloan Basin of Attraction and Neighborhood",
     collection: "PAPERS",
     creator: "Daniel Pomarède 1,⋆, R. Brent Tully 2, Aurélien Valade 3, Noam Libeskind 4, and Yehuda Hoffman 5",
     year: 2026,
@@ -1600541,7 +1600541,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04631",
-    title: "Analisys of 0 − 0^{-} excitations in 16 O from inelastic scattering of polarized protons of intermediate energy E-mail: onegin@thd.pnpi.spb.ru",
+    title: "Analisys of 0 − 0^{-} excitations in 16 O from inelastic scattering of polarized protons of intermediate energy",
     collection: "PAPERS",
     year: 2026,
     source: "arXiv",
@@ -1600828,7 +1600828,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04638",
-    title: "Mixed potential for nonlinear RLC circuits with memristors Thanks: M. Di Marco, M. Forti and L. Pancioni are with the Department of Information Engineering and Mathematics, University of Siena, v. Roma 56 - 53100 Siena, Italy, e–mail: mauro.dimarco@unisi.it, mauro.forti@unisi.it, luca.pancioni@unisi.it . G. Innocenti and A. Tesi are with the Department of Information Engineering, University of Florence, via S. Marta 3 - 50139 Firenze, Italy, e–mail: giacomo.innocenti@unifi.it,alberto.tesi@unifi.it .",
+    title: "Mixed potential for nonlinear RLC circuits with memristors",
     collection: "PAPERS",
     creator: "Mauro Di Marco, Mauro Forti, Luca Pancioni",
     year: 2026,
@@ -1600844,7 +1600844,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04644",
-    title: "Well-posedness and finite element approximation of the electrostatic shear Alfvén wave equations Thanks: Submitted to the editors August 10, 2026.",
+    title: "Well-posedness and finite element approximation of the electrostatic shear Alfvén wave equations",
     collection: "PAPERS",
     creator: "Annalisa Buffa, Timon Miehling, Marco Picasso, Markus Renoldner",
     year: 2026,
@@ -1601084,7 +1601084,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04682",
-    title: "L 2 L^{2} -boundedness of the n n -th Calderón commutator on Lipschitz graphs Thanks: Joan Hernández and Laura Prat have been supported by PID2024-165107NB-I00 and Joan Mateu by PID2024-155320NB-I00 (Ministerio de Ciencia e Innovación, Spain).",
+    title: "L 2 L^{2} -boundedness of the n n -th Calderón commutator on Lipschitz graphs",
     collection: "PAPERS",
     creator: "Joan Hernández, Joan Mateu and Laura Prat",
     year: 2026,
@@ -1601340,7 +1601340,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04733",
-    title: "Contrastive Learning and Correlation Clustering for Sequences of Network Telescope Data Thanks: This work was funded by the German Federal Ministry of Research, Technology and Space under grant number 16KIS2332K.",
+    title: "Contrastive Learning and Correlation Clustering for Sequences of Network Telescope Data",
     collection: "PAPERS",
     creator: "Jannik Presberger 1 , 🖂 ⋅ \\cdot Alexander Männel 1 , 🖂 ⋅ \\cdot Maynard Koch 1 , 🖂 Thomas C. Schmidt 2 , 🖂 ⋅ \\cdot Matthias Wählisch 1 , 🖂 ⋅ \\cdot Bjoern Andres 1,3 , 🖂",
     year: 2026,
@@ -1601740,7 +1601740,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04785",
-    title: "Entropic solutions to the 1D pressureless Euler system with nonlocal interactions Thanks: Acknowledgment. TL is partially supported by NSF grant DMS-2408585. CT is partially supported by NSF grant DMS-2238219.",
+    title: "Entropic solutions to the 1D pressureless Euler system with nonlocal interactions",
     collection: "PAPERS",
     creator: "Trevor M. Leslie, Changhui Tan",
     year: 2026,
@@ -1602603,7 +1602603,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04899",
-    title: "DisT-FL : Enhancing Security for TEE-based Aggregation in Federated Learning Thanks: Guanlong Wu, Ju Yang, Jianyu Niu, and Yinqian Zhang are with the Research Institute of Trustworthy Autonomous Systems and the Department of Computer Science and Engineering, Southern University of Science and Technology, Shenzhen, China. Email: Santiscowgl@gmail.com, 12431264@mail.sustech.edu.cn, niujy@sustech.edu.cn, and yinqianz@acm.org. Zhen Huang and Guoxing Chen are with the School of Computer Science, Shanghai Jiao Tong University, Shanghai, China. Email: xmhuangzhen@sjtu.edu.cn and guoxingchen@sjtu.edu.cn. Jianzong Wang is with Ping An Technology (Shenzhen) Co., Ltd., Shenzhen, China. Email: jzwang@188.com. Thanks: *Both authors contributed equally to this research.",
+    title: "DisT-FL : Enhancing Security for TEE-based Aggregation in Federated Learning",
     collection: "PAPERS",
     creator: "Guanlong Wu*, Ju Yang*, Zhen Huang, Jianyu Niu, Guoxing Chen",
     year: 2026,
@@ -1602715,7 +1602715,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04903",
-    title: "Provably Auditable and Safe LLM Agents from Human-Authored Ontologies Thanks: A supporting repository with code for the Agentic Redux kernel and all Problem Domain examples can be found at https://github.com/Thistleseeds/agentic-redux",
+    title: "Provably Auditable and Safe LLM Agents from Human-Authored Ontologies",
     collection: "PAPERS",
     creator: "Aaron Sterling",
     year: 2026,
@@ -1602731,7 +1602731,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04890",
-    title: "Welfare Maximization in Bilateral Trade: Improved Approximation Guarantees Beyond the Fixed Price Barrier Thanks: This was supported by Israel Science Foundation Grant 3129/25 and a BSF-NSF grant (BSF number: 2024785, NSF number: 2513504). The work of A. Shaulker was also supported by the Israel Science Foundation grant No. 301/24 and grant number 505/23.",
+    title: "Welfare Maximization in Bilateral Trade: Improved Approximation Guarantees Beyond the Fixed Price Barrier",
     collection: "PAPERS",
     creator: "Shahar Dobzinski, Ariel Shaulker",
     year: 2026,
@@ -1602875,7 +1602875,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04929",
-    title: "Sequential Data Poisoning in LLM Post-Training Authors GK and YL are listed in alphabetical order. JS’s work was done during an internship at the Vector Institute. † Corresponding author: yiwei.lu@uottawa.ca .",
+    title: "Sequential Data Poisoning in LLM Post-Training",
     collection: "PAPERS",
     creator: "Jack Sanderson, Yihan Wang, Xiaoqian Lu, Gautam Kamath, Yiwei Lu, [0.6em] University of Chicago",
     year: 2026,
@@ -1602923,7 +1602923,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-04944",
-    title: "Dual-Stream MLP is All You Need for CTR Prediction Thanks: ♠ \\spadesuit Corresponding author. Thanks: This work was supported by the National Natural Science Foundation of China No. 92470205 and Beijing Major Science and Technology Project No. Z251100008425002. Journal: TKDD Volume: 1 1 1 DOI: 10.1145/3819238 CCS: Information systems Recommender systems",
+    title: "Dual-Stream MLP is All You Need for CTR Prediction",
     collection: "PAPERS",
     creator: "Kesha Ou, Zhen Tian, Wayne Xin Zhao ♠, Long Zhang, Sheng Chen, Ji-Rong Wen",
     year: 2026,
@@ -1603674,7 +1603674,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05051",
-    title: "Universal Assembly and Cellular Loop Spaces on Regular CW Complexes Thanks: This work was supported by grants VEGA 1/0425/25, UK 1162/2024, UK UK/304/2023. Parts of this work will be included in the PhD thesis of S.D",
+    title: "Universal Assembly and Cellular Loop Spaces on Regular CW Complexes",
     collection: "PAPERS",
     creator: "S. Dylda, T. Macko",
     year: 2026,
@@ -1603722,7 +1603722,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05069",
-    title: "Federating Governance: How Community Rules Scale with Mastodon Instances DOI: XXXXXXX.XXXXXXX Conference: ACM SIGCHI Conference on Computer-Supported Cooperative Work & Social Computing; October 2026; USA ISBN: 978-1-4503-XXXX-X/2026 Note: Our repository, including code and data, is available at https://github.com/Rasikamurali/MastodonModeration . CCS: Human-centered computing Collaborative and social computing",
+    title: "Federating Governance: How Community Rules Scale with Mastodon Instances",
     collection: "PAPERS",
     creator: "Rasika Muralidharan, Yong-Yeol Ahn, Bao Tran Truong",
     year: 2026,
@@ -1604792,7 +1604792,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05211",
-    title: "The Euclidean algorithm, lotuses and singularities Thanks: Acknowledgments. I acknowledge the support of the CDP C2EMPI, together with the French State under the France-2030 programme, the University of Lille, the Initiative of Excellence of the University of Lille, the European Metropolis of Lille for their funding and support of the R-CDP-24-004-C2EMPI project. This research was funded in part by l’Agence Nationale de la Recherche (ANR), project ANR-22-CE40-0014 SINTROP. I am grateful to Bernard Teissier for having recommended me Fowler’s book when I was his PhD student, to Evelia García Barroso and Pedro González Pérez for our long and fruitful collaboration around lotuses of plane curve singularities, and to Jessica Carter and Cecilia Neve Jiménez for our philosophical and historical discussions. Moreover, I thank them all, as well as Karine Chemla, Isaac González Rodríguez and Paul-Emmanuel Timotei, for their comments on previous versions of this text.",
+    title: "The Euclidean algorithm, lotuses and singularities",
     collection: "PAPERS",
     creator: "Patrick Popescu-Pampu",
     year: 2026,
@@ -1604888,7 +1604888,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05218",
-    title: "Counting Votes with Multisets Thanks: Version of August 10, 2026 Affiliation: Radboud University Nijmegen, The Netherlands",
+    title: "Counting Votes with Multisets",
     collection: "PAPERS",
     creator: "Bart Jacobs, Michael Johnson Richard Buckland",
     year: 2026,
@@ -1606006,7 +1606006,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05378",
-    title: "Pattern Selectivity is Not Task-Causal Structure: A Cross-Architecture Mechanistic Study of Composed-Task Circuits in 1B-Class Language Models Thanks: Correspondence: abbyxu@gmail.com . Code, data, and reproducibility scripts: https://github.com/skydancerosel/spectral-probe-circuits",
+    title: "Pattern Selectivity is Not Task-Causal Structure: A Cross-Architecture Mechanistic Study of Composed-Task Circuits in 1B-Class Language Models",
     collection: "PAPERS",
     creator: "Yongzhong Xu",
     year: 2026,
@@ -1606118,7 +1606118,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05381",
-    title: "Generalized TV– ℓ p \\ell_{p} Structured Priors for Bayesian T 1 T_{1} Mapping DOI: https://doi.org/10.59275/j.melba.2026-g41g Volume: 2026",
+    title: "Generalized TV--$\\ell_p$ Structured Priors for Bayesian $T_1$ Mapping",
     collection: "PAPERS",
     creator: "\\firstname Disi \\surname Lin \\aff 1 \\orcid 0009-0001-9691-6042, \\firstname Martin \\surname Berggren \\aff 1 \\orcid 0000-0003-0473-3263, \\firstname Tommy \\surname Löfstedt \\aff 1 \\orcid 0000-0001-7119-7646",
     year: 2026,
@@ -1606150,7 +1606150,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05372",
-    title: "Efficient Computation of Distance Functions for Navigation Vector Fields in Lie Groups Thanks:",
+    title: "Efficient Computation of Distance Functions for Navigation Vector Fields in Lie Groups",
     collection: "PAPERS",
     creator: "Vinicius M. Gonçalves, João Baião, Felipe Bartelt, Douglas G. Macharet, Gustavo M. Freitas",
     year: 2026,
@@ -1606660,7 +1606660,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05430",
-    title: "On a random matrix proof of a bipartite Harer-Zagier formula Thanks: The authors gratefully acknowledge support from the Fondation de l’École polytechnique, as well as from the Agence Nationale de la Recherche: ANR-25-CE40-5672 and ANR-25-CE40-1380.",
+    title: "On a random matrix proof of a bipartite Harer-Zagier formula",
     collection: "PAPERS",
     creator: "Guillaume Dubach, Hai An Mai",
     year: 2026,
@@ -1606916,7 +1606916,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05456",
-    title: "The computable functional calculus Thanks: 1 Supported by NSERC Discovery Grant RGPIN-2021-02459",
+    title: "The computable functional calculus",
     collection: "PAPERS",
     creator: "Christopher J. Eagle 1, Timothy H. McNicholl",
     year: 2026,
@@ -1606996,7 +1606996,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05477",
-    title: "Robust interpolation inequalities via Chebyshev-type integral inequalities Thanks: Financial support from the Deutsche Forschungsgemeinschaft (DFG) through the Walter Benjamin Programme (project FO 1699/1-1) is gratefully acknowledged.",
+    title: "Robust interpolation inequalities via Chebyshev-type integral inequalities",
     collection: "PAPERS",
     creator: "Guy Foghem",
     year: 2026,
@@ -1607571,7 +1607571,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05595",
-    title: "Passively synchronized dual-color mode-locked fiber lasers based on nonlinear amplifying loop mirrors Journal: ol DOI: http://dx.doi.org/10.1364/XX.XX.XXXXXX",
+    title: "Passively synchronized dual-color mode-locked fiber lasers based on nonlinear amplifying loop mirrors",
     collection: "PAPERS",
     creator: "Jing Zeng, Bowen Li, Qiang Hao, Ming Yan, Kun Huang, Heping Zeng",
     year: 2026,
@@ -1607699,7 +1607699,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05520",
-    title: "Cohomology of Trivial Linear Cycle Sets Thanks: This study was funded by the Vicerrectorado de Investigación (VRI) at the Pontificia Universidad Católica del Perú through grant CAP 2025 - PI1273",
+    title: "Cohomology of Trivial Linear Cycle Sets",
     collection: "PAPERS",
     creator: "Jorge A. Guccione 1, Juan J. Guccione 1, Christian Valqui 1",
     year: 2026,
@@ -1607747,7 +1607747,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05612",
-    title: "Controlled generation of ultrafast vector vortex beams from a mode-locked fiber laser Journal: ol DOI: http://dx.doi.org/10.1364/XX.XX.XXXXXX",
+    title: "Controlled generation of ultrafast vector vortex beams from a mode-locked fiber laser",
     collection: "PAPERS",
     creator: "Kun Huang, Jing Zeng, Jiwei Gan, Qiang Hao, Heping Zeng",
     year: 2026,
@@ -1607843,7 +1607843,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05554",
-    title: "An Irrelevance Theorem for Risk Aversion and Time-Varying Risk Thanks: We thank Anthony Diercks, Mohammad Jahan-Parvar, Jae Sim, Hiro Tanaka, Paco Vazquez-Grande, and seminar participants at the Federal Reserve Board, 2018 Latin American Meetings of the Econometric Society, and 2018 Southern Economic Association Meetings for helpful comments. The views expressed herein are those of the authors and do not necessarily reflect the position of the Board of Governors of the Federal Reserve or the Federal Reserve System.",
+    title: "An Irrelevance Theorem for Risk Aversion and Time-Varying Risk",
     collection: "PAPERS",
     creator: "Andrew Y. Chen, Francisco Palomino",
     year: 2026,
@@ -1609059,7 +1609059,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05735",
-    title: "Arithmetic Wavefront Set and Microlocal Structure of Harish-Chandra Character Thanks: The work of D.J. is partially supported by the Simons Grant: SFI-MPS-TSM-00013449. The work of D.L. is partially supported by National Natural Science Foundation of China No. 12171421. The work of L.Z. is supported by AcRF Tier 1 grant A-8002960-00-00 and Tier 2 grant T2EP20225-0047 of National University of Singapore.",
+    title: "Arithmetic Wavefront Set and Microlocal Structure of Harish-Chandra Character",
     collection: "PAPERS",
     creator: "Dihua Jiang, Dongwen Liu, Zhikang Luo, Jia-Jun Ma, Lei Zhang",
     year: 2026,
@@ -1609187,7 +1609187,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05790",
-    title: "Strong colorings based on oscillations Thanks: 2010 MSC . 03E02, 03E10 Key words and phrases. walks on ordinals, strong colorings, square bracket operations, elementary submodels, oscillation. The research on this paper is partially supported by grants from NSERC(455916), CNRS(UMR7586) and SFRS(7750027-SMART)",
+    title: "Strong colorings based on oscillations",
     collection: "PAPERS",
     creator: "Stevo Todorcevic and Jing Zhang",
     year: 2026,
@@ -1609379,7 +1609379,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05831",
-    title: "Local Weyl modules and skew Howe duality Thanks: 1. Partially supported by China NSF grant (No. 12471029) and Xiamen NSF grant (No. 3502Z202473005) Thanks: 2. Partially supported by China NSF grant (No. 12526548) Thanks: 3. Partially supported by China NSF grant (No. 12131018)",
+    title: "Local Weyl modules and skew Howe duality",
     collection: "PAPERS",
     creator: "Fulin Chen 1, Xin Huang 2, Siyi Niu, Shaobin Tan 3",
     year: 2026,
@@ -1609411,7 +1609411,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05827",
-    title: "Ulrich wildness of some decomposable threefold scrolls over 𝔽 a \\mathbb{F}_{a} Thanks: The authors would like to deeeply thank the organizers (F. Catanese and J.H. Keum) of the “46th Frontier Scientists Workshop: New trends in Algebraic and Complex Geometry” , Ischia (Na)-Italy, 18-20 October 2025, in the framework of Accademia Nazionale dei Lincei and Korean Academy of Science and Technology, for the invitation of the second author as speaker at the workshop. The authors also thank F. Malaspina and J. Pons-Llopis for some useful conversations. The second author is member of INdAM-GNSAGA. The second author has been partially supported by MIUR Excellence Department Project MatMod@TOV, MIUR CUP-E83C23000330006, 2023-2027, awarded to the Department of Mathematics, University of Rome Tor Vergata.",
+    title: "Ulrich wildness of some decomposable threefold scrolls over 𝔽 a \\mathbb{F}_{a}",
     collection: "PAPERS",
     creator: "Maria Lucia Fania, Flaminio Flamini",
     year: 2026,
@@ -1609779,7 +1609779,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05871",
-    title: "Compositional Boundaries for Density Fusion Thanks: Funded by the Deutsche Forschungsgemeinschaft (DFG) - Project number 471687386",
+    title: "Compositional Boundaries for Density Fusion",
     collection: "PAPERS",
     creator: "Ratan Bahadur Thapa, Ali Darijani, Jürgen Beyerer, Steffen Staab",
     year: 2026,
@@ -1610499,7 +1610499,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-05990",
-    title: "A Pohozaev-type neck proof of a conditional Harnack inequality in the critical p p -Laplacian setting Thanks: Both of the authors are funded by the National Key R&D Program of China Grant No. 2025YFA1018400. The second author is also funded by the National Key R&D Program of China Grant No. 2021YFA1003100, NSFC Grant No. 12288201 & No. 12571128, the Chinese Academy of Sciences, and CAS Project for Young Scientists in Basic Research, Grant No. YSBR-031.",
+    title: "A Pohozaev-type neck proof of a conditional Harnack inequality in the critical p p -Laplacian setting",
     collection: "PAPERS",
     creator: "Guolin Qin, Yi Ru-Ya Zhang",
     year: 2026,
@@ -1610595,7 +1610595,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06010",
-    title: "Adaptive Oscillatory-State Alignment for Time Series Forecasting Thanks:",
+    title: "Adaptive Oscillatory-State Alignment for Time Series Forecasting",
     collection: "PAPERS",
     creator: "Zhangyao Song 1 , Chaofeng Qu 1 , Chao Zha 2 , Xiaoyu Zhao 1 , Yinfei Xu 3 , Tao Guo 1 🖂",
     year: 2026,
@@ -1610899,7 +1610899,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06051",
-    title: "Commutant lifting and interpolation on quotients of bounded symmetric domains Thanks: Support for the work of the author was provided in the form of a Prime Minister’s Research Fellowship (PMRF / 2502827).",
+    title: "Commutant lifting and interpolation on quotients of bounded symmetric domains",
     collection: "PAPERS",
     creator: "Milan Kumar Mal",
     year: 2026,
@@ -1610947,7 +1610947,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06078",
-    title: "Knowledge Distillation for Visual Autoregressive Models Thanks: Qualcomm AI Research is an initiative of Qualcomm Technologies, Inc.",
+    title: "Knowledge Distillation for Visual Autoregressive Models",
     collection: "PAPERS",
     creator: "Elia Peruzzo, Aritra Bhowmik, Guillaume Sautiere, Yuki M Asano, Amirhossein Habibian",
     year: 2026,
@@ -1611187,7 +1611187,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06106",
-    title: "WebKnoGraph: GNN-Powered Internal Linking CCS: Information systems World Wide Web Web searching and information discovery Web search engines Page and site ranking CCS: Computing methodologies Machine Learning Machine learning approaches Neural networks Thanks: M.M. is also affiliated with the Complexity Science Hub, Vienna, Austria. E.Gj. was also affiliated with WordLift and Kalicube.",
+    title: "WebKnoGraph: GNN-Powered Internal Linking",
     collection: "PAPERS",
     creator: "Emilija Gjorgjevska, Georgina Mirceva, Miroslav Mirchev",
     year: 2026,
@@ -1611283,7 +1611283,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06122",
-    title: "The stable Andrews-Curtis conjecture and thickenable presentations of the trivial group Thanks: The author was partially supported by EPSRC grant EP/Y004256/1. For the purpose of open access, the author has applied a CC BY public copyright licence to any author accepted manuscript arising from this submission.",
+    title: "The stable Andrews-Curtis conjecture and thickenable presentations of the trivial group",
     collection: "PAPERS",
     creator: "Marc Lackenby",
     year: 2026,
@@ -1611683,7 +1611683,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06183",
-    title: "Revisiting Lexicon Evaluation in Unsupervised Word Discovery Thanks: Simon Malan is supported through a Google Africa PhD Fellowship. The financial assistance of the South African National Research Foundation (NRF) towards this research is hereby acknowledged.",
+    title: "Revisiting Lexicon Evaluation in Unsupervised Word Discovery",
     collection: "PAPERS",
     creator: "Simon Malan, Danel Slabbert, Herman Kamper",
     year: 2026,
@@ -1611699,7 +1611699,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06172",
-    title: "Small deformations of a near cylindrical tube for the Canham-Helfrich Energy with applications to biological membranes Thanks: The work of CME was partially supported by the Royal Society via a Wolfson Research Merit Award. Thanks: This research has been supported by Deutsche Forschungsgemeinschaft (DFG) through the grant CRC 1114: “Scaling Cascades in Complex Systems”, Project Number 235221301, Project A07 ”Langevin dynamics of particles in membranes”.",
+    title: "Small deformations of a near cylindrical tube for the Canham-Helfrich Energy with applications to biological membranes",
     collection: "PAPERS",
     creator: "Charles M. Elliott, Carsten Gräser, Philip J. Herbert",
     year: 2026,
@@ -1611763,7 +1611763,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06207",
-    title: "Unsupervised Pattern Analysis in Japanese Veterinary Toxicology: A Regulatory-Compliant Framework for Cross-Species Risk Assessment *Corresponding Author: mkawahara@grp.tohoku.ac.jp",
+    title: "Unsupervised Pattern Analysis in Japanese Veterinary Toxicology: A Regulatory-Compliant Framework for Cross-Species Risk Assessment",
     collection: "PAPERS",
     creator: "Yukiko Kawakami 1 , Mohammad Shirazi 2 , Ryo Shimizuwa 1 , Saito Shinoda 3 , Alireza Mortazavi 2 , Matsumoto Kawahara 1,*",
     year: 2026,
@@ -1611971,7 +1611971,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06206",
-    title: "Local and global properties of solutions of an elliptic equation involving exponential and gradient reaction Departamento de Matematicas, Pontifica Universidad Catolica de Chile Casilla 307, Correo 2, Santiago de Chile. E-mail: mgarcia@mat.puc.cl Laboratoire de Mathématiques et Physique Théorique, UMR 7013, Université de Tours, 37200 Tours, France. E-mail: veronl@univ-tours.fr",
+    title: "Local and global properties of solutions of an elliptic equation involving exponential and gradient reaction",
     collection: "PAPERS",
     creator: "Marie-Françoise Bidaut-Véron",
     year: 2026,
@@ -1612243,7 +1612243,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06270",
-    title: "Research Note: Ghostly DLAs in SDSS DR16 ∗ E-mail: petitjean@iap.fr",
+    title: "Research Note: Ghostly DLAs in SDSS DR16",
     collection: "PAPERS",
     creator: "Patrick Petitjean 1",
     year: 2026,
@@ -1613507,7 +1613507,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06441",
-    title: "Leveraging External Controls for Treatment Switching in Randomized Controlled Trials: A Weighted Causal Inference Framework for Overall Survival Thanks: Includes work completed while A.S. was an intern and R.L. was employed at Genentech/Roche.",
+    title: "Leveraging External Controls for Treatment Switching in Randomized Controlled Trials: A Weighted Causal Inference Framework for Overall Survival",
     collection: "PAPERS",
     creator: "Andy A. Shen, Chenqi Fu, Ray Lin",
     year: 2026,
@@ -1613539,7 +1613539,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06422",
-    title: "Free Reductive Lie Algebra Pairs of Lie-Yamaguti algebras Thanks: martin.bordemann@uha.fr Thanks: Friedrich.Wagemann@univ-nantes.fr",
+    title: "Free Reductive Lie Algebra Pairs of Lie-Yamaguti algebras",
     collection: "PAPERS",
     creator: "Saïd Benayadi ,",
     year: 2026,
@@ -1613811,7 +1613811,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06367",
-    title: "Reversible double cyclic codes over a chain ring Thanks: ∗ Corresponding author",
+    title: "Reversible double cyclic codes over a chain ring",
     collection: "PAPERS",
     creator: "Mohd Anwar, Mohd Arif Raza, Mohd Rashid, Muzibur Rahman Mozumder ∗",
     year: 2026,
@@ -1613891,7 +1613891,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06426",
-    title: "A Robust Framework for Model Order Selection in Correlated Large-Dimensional CES Noise Eugénie Terreaux is with DEMR, ONERA, Université Paris-Saclay, F-91120 Palaiseau, France (e-mail: eugenie.terreaux@onera.fr). Emmanuelle Jay is with LBP AM, 36 Quai Henri IV, F75004, Paris, France (e-mail: emmanuelle.jay@@lbpam.com). Frédéric Pascal is with L2S, CentraleSupélec, Université Paris-Saclay, F91190 Gif-sur-Yvette, France (e-mail: frederic.pascal@centralesupelec.fr). Jean-Philippe Ovarlez is with SONDRA, CentraleSupélec, Université Paris-Saclay, F91190, Gif-sur-Yvette, France and also with DEMR, ONERA, Université Paris-Saclay, F-91123, Palaiseau, France (jean-philippe.ovarlez@onera.fr).",
+    title: "A Robust Framework for Model Order Selection in Correlated Large-Dimensional CES Noise",
     collection: "PAPERS",
     creator: "Eugénie Terreaux, Emmanuelle Jay, Frédéric Pascal, Jean-Philippe Ovarlez",
     year: 2026,
@@ -1615426,7 +1615426,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06661",
-    title: "Convergence of sparse square-summable NLFT Thanks: This research was supported by NSF grant DMS-2450716, the Simons Fellowship in Mathematics, the Simons Travel Support for Mathematicians Award, and the Van Vleck Professorship Research Award.",
+    title: "Convergence of sparse square-summable NLFT",
     collection: "PAPERS",
     creator: "Sergey A. Denisov",
     year: 2026,
@@ -1615442,7 +1615442,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06667",
-    title: "The Piggyback Hypothesis of Generalization: Explaining and Mitigating Emergent Misalignment Thanks: Corresponding author: zhao.jiach@northeastern.edu .",
+    title: "The Piggyback Hypothesis of Generalization: Explaining and Mitigating Emergent Misalignment",
     collection: "PAPERS",
     creator: "Jiachen Zhao, Zhengxuan Wu, Aryaman Arora, Yiyou Sun, David Bau, Weiyan Shi",
     year: 2026,
@@ -1615762,7 +1615762,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06701",
-    title: "Vanishing coefficients in products of quintuple products Thanks: Dongxi Ye was supported by the Guangdong Basic and Applied Basic Research Foundation (Grant No. 2024A1515030222) and the BNBU Start-up Research Fund (Grant No. R0700157-26).",
+    title: "Vanishing coefficients in products of quintuple products",
     collection: "PAPERS",
     creator: "Taylor Daniels, Tim Huber, James McLaughlin and Dongxi Ye",
     year: 2026,
@@ -1616258,7 +1616258,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06750",
-    title: "Linear poroelasticity with solid incompressibility: consistent formulation and scalable numerical solution Thanks: This work has been supported by Center for Mathematical Modeling (CMM), Proyecto Basal FB210005, by FONDECYT Postdoctoral Grant 3230326, by the Australian Research Council through the Future Fellowship grant FT220100496 and Discovery Project grant DP22010316, and by the Center of Advanced Study (CAS) at the Norwegian Academy of Science and Letters under the program Mathematical Challenges in Brain Mechanics .",
+    title: "Linear poroelasticity with solid incompressibility: consistent formulation and scalable numerical solution",
     collection: "PAPERS",
     creator: "Nicolás A. BarnafiAndrés E. RubianoRicardo Ruiz-Baier",
     year: 2026,
@@ -1616498,7 +1616498,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06807",
-    title: "Halving the original Kalton–Roberts upper bound for nearly additive set functions Thanks: RVO: 67985840.",
+    title: "Halving the original Kalton–Roberts upper bound for nearly additive set functions",
     collection: "PAPERS",
     creator: "Boon Suan Ho, Tomasz Kania",
     year: 2026,
@@ -1617090,7 +1617090,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-06905",
-    title: "An Explicit O ⁡ ( r ​ log ⁡ r ) O(r\\log r) Threshold for Attaining the Semple–Steel Bound with r r -State Characters Thanks: Submitted to the editors June 5, 2026.",
+    title: "An Explicit O ⁡ ( r ​ log ⁡ r ) O(r\\log r) Threshold for Attaining the Semple–Steel Bound with r r -State Characters",
     collection: "PAPERS",
     creator: "Peng Li, Yangjing Long",
     year: 2026,
@@ -1618081,7 +1618081,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07062",
-    title: "CATEKAPPA: An R Shiny Application for Design and Analysis of Consistency Tests Based on the Kappa Statistic for Categorical Responses Thanks: Email: z2118778229@163.com ; Email: 2700753941@qq.com ; Email: 2312055564@qq.com ; Email: 1581729526@qq.com",
+    title: "CATEKAPPA: An R Shiny Application for Design and Analysis of Consistency Tests Based on the Kappa Statistic for Categorical Responses",
     collection: "PAPERS",
     creator: "Zheng Gai, Li Xincheng, Jiang Wangyingjie, Zhao Panwei",
     year: 2026,
@@ -1618176,7 +1618176,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07009",
-    title: "Fast Bounded-Independence Functions and Their Duals Thanks: This is a full version of [ 10 ] .",
+    title: "Fast Bounded-Independence Functions and Their Duals",
     collection: "PAPERS",
     creator: "Martijn Brehm, Yuval Ishai, Nicolas Resch",
     year: 2026,
@@ -1618368,7 +1618368,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07109",
-    title: "Museums as Policy Tools: The Behavioral Impact of Cultural Experiences Thanks: We are deeply indebted to Debora Barbagli and Nora Giordano, without whose generous support this experiment could not have taken place. We are grateful to the Fondazione Antico Ospedale Santa Maria della Scala and Comune di Siena, Luca Corazzini, Pierpaolo Parrotta, Marco Stimolo, all participants to BEEN 2024 in Turin, and all participants to Soleto 2024 for their helpful comments before and after the implementation of the design. We acknowledge funds from PRIN grants P20228SXNF and 2022389MRW financed by the Italian Ministry of Research. We further acknowledge the Leverhulme International Professorship [grant number LIP-2022-001]. [ Pre-registration ] [ Video Repository ]",
+    title: "Museums as Policy Tools: The Behavioral Impact of Cultural Experiences",
     collection: "PAPERS",
     creator: "Paolo Pin, Roberto Rozzi, Alessandro Stringhi",
     year: 2026,
@@ -1619967,7 +1619967,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07326",
-    title: "AnchorWorld: Embodied Egocentric World Simulation with View-based Evolution Customization Thanks: This work was conducted during the author’s internship at Kling Team, Kuaishou Technology.",
+    title: "AnchorWorld: Embodied Egocentric World Simulation with View-based Evolution Customization",
     collection: "PAPERS",
     creator: "Menghan Xia, Gongye Liu, Xintao Wang, Conglang Zhang, Lei Ke, Yuxuan Lin, Ruihang Chu, Pengfei Wan, Kun Gai, Yujiu Yang",
     year: 2026,
@@ -1620783,7 +1620783,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00084",
-    title: "SentimentLens: Reconciling Sentiment and Ratings via Dual-Modality in the Hospitality Sector Thanks:",
+    title: "SentimentLens: Reconciling Sentiment and Ratings via Dual-Modality in the Hospitality Sector",
     collection: "PAPERS",
     creator: "Dineth Jayakody, Pasindu Thenahandi, Sampath Jayarathna",
     year: 2026,
@@ -1620863,7 +1620863,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-00078",
-    title: "Flow-Based Generative Modeling for Optimizing Sampling Policies in Compressed Sensing Applications Thanks: Citation : Authors. Title. Pages…. DOI:000000/11111.",
+    title: "Flow-Based Generative Modeling for Optimizing Sampling Policies in Compressed Sensing Applications",
     collection: "PAPERS",
     creator: "Roman Pavelkin, Luis A. Zavala-Mondragon, Christiaan G. A. Viviers, Fons van der Sommen",
     year: 2026,
@@ -1621294,7 +1621294,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07329",
-    title: "Twisted Moments of Rankin-Selberg L L -functions in the Prime-Power Level Aspect Thanks: This work was partially funded by the PIMS Collaborative Research Group L L -functions in Analytic Number Theory . Fatma Çiçek was supported by a Pacific Institute for the Mathematical Sciences (PIMS) postdoctoral fellowship at the University of Northern British Columbia. The research of Alia Hamieh is supported by an NSERC discovery grant.",
+    title: "Twisted Moments of Rankin-Selberg L L -functions in the Prime-Power Level Aspect",
     collection: "PAPERS",
     creator: "Fatma Çiçek and Alia Hamieh",
     year: 2026,
@@ -1621566,7 +1621566,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07407",
-    title: "Structured Matrix Factorization Length Thanks: *Corresponding author",
+    title: "Structured Matrix Factorization Length",
     collection: "PAPERS",
     creator: "Jeong-Hoon Ju, Taehyeong Kim*",
     year: 2026,
@@ -1621726,7 +1621726,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07476",
-    title: "Physiologically Constrained Musculoskeletal Neural Network for Multi-DoF Joint Kinematics Estimation from Partially Observed sEMG Thanks: Corresponding Author (email:zhenhong.li@manchester.ac.uk)",
+    title: "Physiologically Constrained Musculoskeletal Neural Network for Multi-DoF Joint Kinematics Estimation from Partially Observed sEMG",
     collection: "PAPERS",
     creator: "Wending Heng, Mingming Zhang, Glen Cooper, Zhenhong Li",
     year: 2026,
@@ -1621742,7 +1621742,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07452",
-    title: "The Western Jet of SS 433/W50: Hard X-ray Emission, Spectral Evolution, and Comparison to the Eastern Jet Journal: ApJ Facilities: NuSTAR, XMM, CXO HEASoft (v6.28; https://heasarc.gsfc.nasa.gov/docs/software/lheasoft/ ), XMM-SAS (v19.1.0; https://www.cosmos.esa.int/web/xmm-newton/sas ), CIAO (v4.12; 17 ), NuSTARDAS (v2.0.0; https://heasarc.gsfc.nasa.gov/docs/nustar/analysis/ ), SAOImage DS9 ( https://sites.google.com/cfa.harvard.edu/saoimageds9 ), XSPEC (v12.11.1; 5 )",
+    title: "The Western Jet of SS 433/W50: Hard X-ray Emission, Spectral Evolution, and Comparison to the Eastern Jet",
     collection: "PAPERS",
     creator: "Brydyn Mac Intyre, Samar Safi-Harb, Dmitry Khangulyan, Shuhan Zhang, Kaya Mori, Naomi Tsuji, Felix Aharonian, Laura Olivera-Nieto",
     year: 2026,
@@ -1621854,7 +1621854,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07417",
-    title: "An optimal local theory for reaction-diffusion equations driven by non-trace-class noise Thanks: The first author is a member of GNAMPA (INdAM). The second and third authors have received funding from the VICI subsidy VI.C.212.027 of the Netherlands Organisation for Scientific Research (NWO)",
+    title: "An optimal local theory for reaction-diffusion equations driven by non-trace-class noise",
     collection: "PAPERS",
     creator: "Antonio Agresti, Fabian Germ, Mark Veraar",
     year: 2026,
@@ -1622013,7 +1622013,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07514",
-    title: "UniSHARP: Universal Sharp Monocular View Synthesis Thanks: indicates corresponding author.",
+    title: "UniSHARP: Universal Sharp Monocular View Synthesis",
     collection: "PAPERS",
     creator: "Meixi Song, Dizhe Zhang, Hao Ren, Ruiyang Zhang, Bo Du, Ming-Hsuan Yang, Insta360 Research",
     year: 2026,
@@ -1622221,7 +1622221,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07512",
-    title: "M e m D r e a m e r : Decoupling Perception and Reasoning for Long Video Understanding via Hierarchical Graph Memory and Agentic Retrieval Mechanism Thanks: Equal Contribution. † Corresponding Author.",
+    title: "M e m D r e a m e r : Decoupling Perception and Reasoning for Long Video Understanding via Hierarchical Graph Memory and Agentic Retrieval Mechanism",
     collection: "PAPERS",
     creator: "Cong Chen 1,2,∗, Guo Gan 2,∗, Kaixiang Ji 1,∗, ZhaoYang Zhang 1 , 3 {}^{1},^{3}, Zhen Yang 4, Guangming Yao 1, Hao Chen 2, Jingdong Chen 1, Yi Yuan 1, Chunhua Shen 5,2,1†",
     year: 2026,
@@ -1622573,7 +1622573,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07578",
-    title: "MST-Direct at Scale: Multivariate and Conditional Geostatistical Simulation via Sinkhorn Optimal Transport Thanks: Follow-up to the author’s prior work (arXiv:2603.18036), which introduced MST-Direct in the bivariate, unconditional, small-grid setting; this paper contributes the scalable, multivariate, and conditional extensions.",
+    title: "MST-Direct at Scale: Multivariate and Conditional Geostatistical Simulation via Sinkhorn Optimal Transport",
     collection: "PAPERS",
     creator: "Tcharlies Bachmann Schmitz",
     year: 2026,
@@ -1622781,7 +1622781,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07600",
-    title: "Reachability and Asymptotics of Gaussian Transformer Dynamics Thanks: Submitted to the editors DATE.",
+    title: "Reachability and Asymptotics of Gaussian Transformer Dynamics",
     collection: "PAPERS",
     creator: "Albert Alcalde, Zhengping Ji, Enrique Zuazua",
     year: 2026,
@@ -1623709,7 +1623709,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07709",
-    title: "Are We Lost in the Woods? Detecting Silent Semantic Faults for Random Forest Classifiers with Data-informed Static Analysis Thanks: This work was partially supported by the Wallenberg AI, Autonomous Systems and Software Program (WASP) funded by the Knut and Alice Wallenberg Foundation, and was in collaboration with Software Center Project 61 and Vinnova CoDig competence center. We thank the WARA-OPS for their computing resources.",
+    title: "Are We Lost in the Woods? Detecting Silent Semantic Faults for Random Forest Classifiers with Data-informed Static Analysis",
     collection: "PAPERS",
     creator: "Willem Meijer, Louis Ohl, Kristian Sandahl, Dániel Varró",
     year: 2026,
@@ -1624348,7 +1624348,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07792",
-    title: "MOLOT System Card: Malicious Operational Logic Observation Transformer Thanks: Corresponding author: M. Mitrofanov, False Positive Community, falseposi@yandex.com . Thanks: 1 These authors contributed equally to this work.",
+    title: "MOLOT System Card: Malicious Operational Logic Observation Transformer",
     collection: "PAPERS",
     creator: "Daniil Lopatkin 1, Maksim Mitrofanov 1, Stanislav Rakovsky, Aleksandr Khalikov",
     year: 2026,
@@ -1624668,7 +1624668,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07828",
-    title: "Jas: AI-Paired Engineering as a Revival of N-Version Programming Thanks: Work performed on personal time, independent of the author’s employer. Views and opinions are the author’s own and do not represent any organization.",
+    title: "Jas: AI-Paired Engineering as a Revival of N-Version Programming",
     collection: "PAPERS",
     creator: "Jason Hickey",
     year: 2026,
@@ -1624876,7 +1624876,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07840",
-    title: "A Divergence-Free Scott-Vogelius Finite Element Method for the Surface Stokes Problem Thanks: This work was supported in part by the NSF, grant no. DMS-2309425",
+    title: "A Divergence-Free Scott-Vogelius Finite Element Method for the Surface Stokes Problem",
     collection: "PAPERS",
     creator: "Yerim Kone, Michael Neilan, David Poling",
     year: 2026,
@@ -1625420,7 +1625420,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07912",
-    title: "On Improved Statistical Accuracy of Low-Order Polynomial Chaos Approximations Thanks: Funding: This work was funded by the National Science Foundation (NSF) under contract no. 1762825.",
+    title: "On Improved Statistical Accuracy of Low-Order Polynomial Chaos Approximations",
     collection: "PAPERS",
     creator: "Vedang M. Deshpande, Raktim Bhattacharya",
     year: 2026,
@@ -1625595,7 +1625595,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07920",
-    title: "Combining Reinforcement Learning with Arc-search Interior-Point Method for Path Planning Thanks: This paper is based on work performed at the Air Force Research Laboratory (AFRL) Control Science Center and is supported by AFOSR LRIR #24RQCOR002 (funded by Dr. Frederick Leve). DISTRIBUTION STATEMENT A. Approved for public release: distribution is unlimited AFRL-2026-1808 Cleared 13 APR 2026.",
+    title: "Combining Reinforcement Learning with Arc-search Interior-Point Method for Path Planning",
     collection: "PAPERS",
     creator: "Yaguang Yang, Qiang Le, Isaac E. Weintraub",
     year: 2026,
@@ -1625819,7 +1625819,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-07984",
-    title: "Lagrange multipliers in Maximum likelihood estimations and Least squares problems with Constraints Thanks: An earlier version of this paper was presented at 2026 Kansai econometrics conference, Spring Meeting of the Operations Research Society of Japan, and Spring Meeting of the Japanese Statistical Association. I am grateful to the participants for their valuable comments and suggestions.",
+    title: "Lagrange multipliers in Maximum likelihood estimations and Least squares problems with Constraints",
     collection: "PAPERS",
     creator: "Takeshi Fukasawa",
     year: 2026,
@@ -1626075,7 +1626075,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08033",
-    title: "Balancing Real and Synthetic Data for CNN-based Masonry Crack Detection A Preprint Thanks: Preprint. This paper has been accepted for presentation at ARTISTE 2025.",
+    title: "Balancing Real and Synthetic Data for CNN-based Masonry Crack Detection",
     collection: "PAPERS",
     creator: "Mattia Forlesi, Alfonso Esposito, Ivan Zyrianoff, Alessandro Marzani, Marco Di Felice",
     year: 2026,
@@ -1626219,7 +1626219,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08051",
-    title: "How Small Can You Go? LoRA Fine-Tuning 270M–8B Models for Merchant Information Extraction in Financial Transactions *Corresponding author: zxwang@smu.edu.sg",
+    title: "How Small Can You Go? LoRA Fine-Tuning 270M–8B Models for Merchant Information Extraction in Financial Transactions",
     collection: "PAPERS",
     creator: "Donghao Huang 1,3 , Tomáš Drietomský 2 , Benjamin Barrett 1 , Zhaoxia Wang 3,*",
     year: 2026,
@@ -1626331,7 +1626331,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08054",
-    title: "A solution to Csikvári’s conjecture and the largest matching root of k k -graphs Thanks: Supported by the National Natural Science Foundation of China (No. 12331012, 12571360)",
+    title: "A solution to Csikvári’s conjecture and the largest matching root of k k -graphs",
     collection: "PAPERS",
     creator: "Jiang-Chao Wan, Yi Wang",
     year: 2026,
@@ -1626619,7 +1626619,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08072",
-    title: "Distance, Normals and Double Normals for real plane Curves with Singularities Thanks: The author acknowledges support from the project ‘‘Singularities and Applications’’ - CF 132/31.07.2023 funded by the European Union - NextGenerationEU - through Romania’s National Recovery and Resilience Plan, and support by the grant CNRS-INSMI-IEA-329.",
+    title: "Distance, Normals and Double Normals for real plane Curves with Singularities",
     collection: "PAPERS",
     creator: "Dirk Siersma",
     year: 2026,
@@ -1627003,7 +1627003,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08101",
-    title: "Automatic actions I. Bounded automata and orbits Thanks: The author gratefully acknowledges partial support from the SNSF grant TMAG-2_216487/1",
+    title: "Automatic actions I. Bounded automata and orbits",
     collection: "PAPERS",
     creator: "Laurent Bartholdi",
     year: 2026,
@@ -1627051,7 +1627051,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08125",
-    title: "Arithmetic exceptionality of generalized Chebyshev polynomials of the second kind Thanks: This study was supported by The Scientific and Technological Research Council of Türkiye (TÜBİTAK) under Project No. 124F146.",
+    title: "Arithmetic exceptionality of generalized Chebyshev polynomials of the second kind",
     collection: "PAPERS",
     creator: "Derya Acar, Metİn Azmaz, Vural Cam, Ömer Küçüksakallı",
     year: 2026,
@@ -1627211,7 +1627211,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08161",
-    title: "AttentionCap: Transformer Based Capacitance Matrix Learning Toward Full-Chip Extraction Conference: 63rd ACM/IEEE Design Automation Conference; July 26–29, 2026; Long Beach, CA, USA 63rd ACM/IEEE Design Automation Conference (DAC ’26), July 26–29, 2026, Long Beach, CA, USA DOI: 10.1145/3770743.3804115 ISBN: 979-8-4007-2254-7/2026/07 Thanks: This work is supported by National Science and Technology Major Project (2021ZD0114703) and the MIND project (MINDXZ202406). ∗ Corresponding author.",
+    title: "AttentionCap: Transformer Based Capacitance Matrix Learning Toward Full-Chip Extraction",
     collection: "PAPERS",
     creator: "Jiechen Huang 1 , Hector R. Rodriguez 1 , Dingcheng Yang 1 , Zuochang Ye 2 , Yibo Lin 3 , Wenjian Yu 1∗",
     year: 2026,
@@ -1627403,7 +1627403,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08183",
-    title: "Effective quasianalytic Remez inequalities on tame sets Thanks: This research was funded in whole or in part by the Austrian Science Fund (FWF) DOI 10.55776/PAT1381823. For open access purposes, the authors have applied a CC BY public copyright license to any author-accepted manuscript version arising from this submission. Thanks: 0000-0003-3825-3313",
+    title: "Effective quasianalytic Remez inequalities on tame sets",
     collection: "PAPERS",
     creator: "Armin Rainer",
     year: 2026,
@@ -1627451,7 +1627451,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08201",
-    title: "Uniqueness of addition in Lie rings 𝔤 ​ 𝔩 n ​ ( K ) \\mathfrak{gl}_{n}(K) and 𝔰 ​ 𝔩 n ​ ( K ) \\mathfrak{sl}_{n}(K) Thanks: This article is an output of a research project (HSE-BR-2025-22) implemented as part of the Basic Research Program at HSE University.",
+    title: "Uniqueness of addition in Lie rings 𝔤 ​ 𝔩 n ​ ( K ) \\mathfrak{gl}_{n}(K) and 𝔰 ​ 𝔩 n ​ ( K ) \\mathfrak{sl}_{n}(K)",
     collection: "PAPERS",
     creator: "Gennadiy Sosnov",
     year: 2026,
@@ -1627611,7 +1627611,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08199",
-    title: "Birkhoff genericity on affine subspaces in horospheres Thanks: Pengyu Yang is supported by National Key R&D Program of China 2022YFA1007500 and NSFC grant 22AAA00245.",
+    title: "Birkhoff genericity on affine subspaces in horospheres",
     collection: "PAPERS",
     creator: "Nimish A. Shah, Pengyu Yang",
     year: 2026,
@@ -1628779,7 +1628779,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08398",
-    title: "Regime-Switching Models for Disaggregated Data Thanks: This paper is based on the first chapter of Anlong Qin’s PhD dissertation at Boston University (Qin, 2022). We thank Pierre Perron, Hiro Kaido, Ivan Fernandez-Val, Jean-Jacques Forneron for their comments and suggestions.",
+    title: "Regime-Switching Models for Disaggregated Data",
     collection: "PAPERS",
     creator: "Anlong Qin Ningbo University of Finance and Economics Zhongjun Qu Boston University",
     year: 2026,
@@ -1629802,7 +1629802,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08534",
-    title: "A Taxonomy of Real-World Asset Tokenization for Blockchain-Based Financial Infrastructure Thanks: Omitted for a double blind review.",
+    title: "A Taxonomy of Real-World Asset Tokenization for Blockchain-Based Financial Infrastructure",
     collection: "PAPERS",
     creator: "1 st Giorgio Vella, 2 nd Luca Pennella, 3 rd Mark C. Ballandies",
     year: 2026,
@@ -1629962,7 +1629962,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08556",
-    title: "From Generalized Poincaré to Poincaré-Sobolev Inequalities via Self-Improving Methods Thanks: A. Claros is supported by the Basque Government through the BERC 2022-2025 program, by the Ministry of Science and Innovation through Grant PRE2021-099091 funded by BCAM Severo Ochoa accreditation CEX2021-001142-S/MICIN/AEI/10.13039/501100011033 and by ESF+, and by the project PID2023-146646NB-I00 funded by MICIU/AEI/10.13039/501100011033 and by ESF+. C. Pérez is supported by the Spanish government through the grant PID2023-146646NB-I00 and by Severo Ochoa accreditation CEX2021-001142-S, both at BCAM, and also by the Basque Government through grant IT1615-22 at the University of the Basque Country and by the BERC program 2022-2025 at BCAM. L. Zheng is supported by the National Key R & D Program of China (Grant No. 2021YFA1002500) and China Scholarship Council.",
+    title: "From Generalized Poincaré to Poincaré-Sobolev Inequalities via Self-Improving Methods",
     collection: "PAPERS",
     creator: "Alejandro Claros, Carlos Pérez, Linfei Zheng",
     year: 2026,
@@ -1630362,7 +1630362,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08570",
-    title: "Newton–Okounkov bodies of partial flag varieties via cluster algebras Thanks: The research of Y. Cho was supported by the National Research Foundation of Korea(NRF) grant funded by the Korea government (MSIT) (RS-2025-00572980 and RS-2020-NR049535) and Samsung Science and Technology Foundation (SSTF-BA2402-01). Thanks: The research of M. Kim was supported by the National Research Foundation of Korea(NRF) grant funded by the Korea government (MSIT) (NRF-2020R1A5A1016126). Thanks: The research of Y. Kim was supported by the National Research Foundation of Korea(NRF) grant funded by the Korea government (MSIT) (RS-2025-16069532 and NRF-2020R1A5A1016126). Thanks: The research of E. Park was supported by the National Research Foundation of Korea(NRF) grant funded by the Korea government (MSIT) (RS-2023-00273425 and NRF-2020R1A5A1016126).",
+    title: "Newton–Okounkov bodies of partial flag varieties via cluster algebras",
     collection: "PAPERS",
     creator: "Yunhyung Cho, Myungho Kim, Yoosik Kim, Euiyong Park",
     year: 2026,
@@ -1630634,7 +1630634,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08648",
-    title: "On Brézis’ Open Problem 3.1 Thanks: The research of J. Wei is partially supported by GRF grant of HK RGC entitled \"On critical and supercritical Fujita equations\". X. Huang was supported by the National Natural Science Foundation of China (Grant No. 12371206). We thank Dr. Yifu Zhou and Dr. Liming Sun for many useful discussions.",
+    title: "On Brézis’ Open Problem 3.1",
     collection: "PAPERS",
     creator: "Qi Guo, Xueping Huang, Yi C. Huang, Fanghua Lin, Juncheng Wei",
     year: 2026,
@@ -1630650,7 +1630650,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08651",
-    title: "The Four-Point Picard Theorem for Quaternionic Slice Regular Functions Thanks: Corresponding author: Xin Zhao.",
+    title: "The Four-Point Picard Theorem for Quaternionic Slice Regular Functions",
     collection: "PAPERS",
     creator: "Guangbin Ren, Xin Zhao",
     year: 2026,
@@ -1631833,7 +1631833,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08845",
-    title: "Energy-Efficient Satellite Wake-Up via Bosonic Identification: The Role of Synchronization Emmy-Noether Group Theoretical Quantum Systems Design , Technical University of Munich, Munich, Germany , { gokhan.elmas,janis.noetzel } @tum.de Thanks: This work was financed by the DFG via grant NO 1129/2-1 and by the Federal Ministry of Education and Research of Germany via grants 16KIS1598K, 16KISQ093, 16KISQ077 and 16KIS2604. The generous support of the state of Bavaria via the 6GQT project is greatly appreciated. Finally, the authors acknowledge the financial support by the Federal Ministry of Education and Research of Germany in the programme of “Souverän. Digital. Vernetzt.”. Joint project 6G-life, project identification number: 16KISK002.",
+    title: "Energy-Efficient Satellite Wake-Up via Bosonic Identification: The Role of Synchronization",
     collection: "PAPERS",
     creator: "Gökhan Elmas, Janis Nötzel, Member, IEEE",
     year: 2026,
@@ -1631945,7 +1631945,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08876",
-    title: "RO-LiDAR GeoQuickView: A Web Platform for Exploring Public LiDAR-Derived Elevation Data in Romania Thanks: Platform access. RO-LiDAR GeoQuickView is publicly available through the interactive web application: Access the RO-LiDAR GeoQuickView platform .",
+    title: "RO-LiDAR GeoQuickView: A Web Platform for Exploring Public LiDAR-Derived Elevation Data in Romania",
     collection: "PAPERS",
     creator: "Alexandru Hegyi",
     year: 2026,
@@ -1632521,7 +1632521,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08944",
-    title: "LongRTL: Graph-Similarity-Guided LLM-driven Long Context RTL Optimization Thanks: Corresponding author. Thanks: This work is partially supported by The Research Grants Council of Hong Kong SAR (No. CUHK14211824 and No. CUHK14210723).",
+    title: "LongRTL: Graph-Similarity-Guided LLM-driven Long Context RTL Optimization",
     collection: "PAPERS",
     creator: "Yuyang Ye, Che-Kuan Shen, Xiangfei Hu, Yuchen Liu, Shuo Yin, Xufeng Yao, Bei Yu, Tsung-Yi Ho",
     year: 2026,
@@ -1632777,7 +1632777,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08961",
-    title: "Rapid intermediate-mass black hole formation via runaway mergers of black holes petar ( 157 , Version 1425gwkick_307e, https://github.com/lwang-astro/PeTar), sdar ( 158 , Version 1425gwkick_307e, https://github.com/lwang-astro/SDAR), fdps ( 73 ; 72 ; 109 , Version 7.0, https://github.com/FDPS/FDPS), sse/bse ( 68 ; 69 ; 21 ), galpy ( 30 , modified version: https://github.com/lwang-astro/galpy), TwoPlummer (private communication with Holger Baumgardt), Precession ( 45 ) , numpy ( 61 ), matplotlib ( 67 ), astropy ( 17 ; 15 ; 16 )",
+    title: "Rapid intermediate-mass black hole formation via runaway mergers of black holes",
     collection: "PAPERS",
     creator: "Yining Sun, Long Wang",
     year: 2026,
@@ -1632921,7 +1632921,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-08987",
-    title: "The origin of WHAM Point Source 46 KCWI DRP https://kcwi-drp.readthedocs.io/en/latest/",
+    title: "The origin of WHAM Point Source 46",
     collection: "PAPERS",
     creator: "S. R. Kulkarni, Zeren Lin, Charles Beichman, Alex S. Hill, Xihan Deng, Tryston Raecke, Mateusz Matuszewski, Drew M. Miles, Marty Anderson, D. Christopher Martin",
     year: 2026,
@@ -1633273,7 +1633273,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09066",
-    title: "Tight Upper Bounds on Color Reversal by Local Inversions Thanks: Supported by ANRF MATRICS Grant MTR/2022/000692: “Algorithmic study on hereditary graph properties”. A preliminary version of this paper has been accepted to IWOCA 2026.",
+    title: "Tight Upper Bounds on Color Reversal by Local Inversions",
     collection: "PAPERS",
     creator: "Hitendra Kumar, Kumud Singh Porte, R. B. Sandeep",
     year: 2026,
@@ -1633353,7 +1633353,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09067",
-    title: "On the Constant and Extremal Function for Weighted Hardy Inequality in L p L_{p} Thanks: This study is financed by the Bulgarian National Research Fund through Contract KP-06-N62/4",
+    title: "On the Constant and Extremal Function for Weighted Hardy Inequality in L p",
     collection: "PAPERS",
     creator: "Ivan Gadjev",
     year: 2026,
@@ -1633529,7 +1633529,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09113",
-    title: "Towards Intelligent Wireless Networks: The Synergy of Generative AI and Digital Twins Thanks: The authors are with the Interdisciplinary Research Center for Communication Systems and Sensing (IRC-CSS), Department of Electrical Engineering, King Fahd University of Petroleum and Minerals (KFUPM), Dhahran 31261, Saudi Arabia (e-mail: afan.ali@kfupm.edu.sa; anasir@kfupm.edu.sa; naveediqbal@kfupm.edu.sa; danielbcosta@ieee.org). PubID: pubid:",
+    title: "Towards Intelligent Wireless Networks: The Synergy of Generative AI and Digital Twins",
     collection: "PAPERS",
     creator: "Afan Ali, Ali Arshad Nasir, Naveed Iqbal",
     year: 2026,
@@ -1634489,7 +1634489,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09173",
-    title: "Uniform-in-time Strong Error Estimates of Tamed-FEM to Superlinear SPDEs driven by Multiplicative Noise Thanks: The authors are supported by the National Natural Science Foundation of China (NNSFC), No. 12101296, Basic and Applied Basic Research Foundation of Guangdong Province, No. 2024A1515012348, and Shenzhen Basic Research Special Project (Natural Science Foundation) Basic Research (General Project), No. JCYJ20240813094919026.",
+    title: "Uniform-in-time Strong Error Estimates of Tamed-FEM to Superlinear SPDEs driven by Multiplicative Noise",
     collection: "PAPERS",
     creator: "Jingjing CAI, Zhihui LIU",
     year: 2026,
@@ -1634553,7 +1634553,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09158",
-    title: "The Size of the Intersection of q q -ary Hamming Balls Thanks: The authors were funded in part by the Research Council of Finland grants 338797 and 358718. Some of the results in this paper can be found in the conference articles of the 2025 IEEE Information Theory Workshop (ITW2025) [ 1 ] and of the 2026 IEEE International Symposium on Information Theory (ISIT2026) [ 2 ] .",
+    title: "The Size of the Intersection of q q -ary Hamming Balls",
     collection: "PAPERS",
     creator: "Ville Junnila, Tero Laihonen, Tuomo Lehtilä and Pavan Padavu Devaraj",
     year: 2026,
@@ -1634665,7 +1634665,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09264",
-    title: "A Block-Term Decomposition Approach to Blind Multi-trial Functional Ultrasound Unmixing Thanks: The work of S.-E. Kotti has been supported by the TU Delft AI Labs programme. The work of E. Kofidis has been partly supported by the University of Piraeus Research Center.",
+    title: "A Block-Term Decomposition Approach to Blind Multi-trial Functional Ultrasound Unmixing",
     collection: "PAPERS",
     creator: "Sofia-Eirini Kotti 1 , Eleftherios Kofidis 2 , and Borbála Hunyadi 1,3",
     year: 2026,
@@ -1634937,7 +1634937,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09293",
-    title: "One Model, Multiple Goals: Adaptive Multi-Objective Learning for E-commerce Dialogue Systems Conference: Proceedings of the 32nd ACM SIGKDD Conference on Knowledge Discovery and Data Mining V.2; August 09–13, 2026; Jeju Island, Republic of Korea Proceedings of the 32nd ACM SIGKDD Conference on Knowledge Discovery and Data Mining V.2 (KDD ’26), August 09–13, 2026, Jeju Island, Republic of Korea DOI: 10.1145/3770855.3818454 ISBN: 979-8-4007-2259-2/2026/08 Thanks: † \\dagger Corresponding author. CCS: Computing methodologies Natural language generation CCS: Information systems Dialogue systems",
+    title: "One Model, Multiple Goals: Adaptive Multi-Objective Learning for E-commerce Dialogue Systems",
     collection: "PAPERS",
     creator: "Mingzhe Li, Jing Xiang, Enguo Zhou, Lang Gao, Tai Li, Qishen Zhang, Xiangliang Zhang, Xiuying Chen †",
     year: 2026,
@@ -1635225,7 +1635225,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09334",
-    title: "How Far Can Prompting Go for Minimal-Edit Ukrainian Grammatical Error Correction? Thanks: This paper has been accepted for publication at The Fifth Ukrainian Natural Language Processing Conference UNLP 2026, https://unlp.org.ua/ .",
+    title: "How Far Can Prompting Go for Minimal-Edit Ukrainian Grammatical Error Correction",
     collection: "PAPERS",
     creator: "Kateryna Karpo, Artem Chernodub",
     year: 2026,
@@ -1635289,7 +1635289,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09328",
-    title: "Parameter estimation in generalized fractional neuronal models Thanks: P. Ilmonen and M. Laurikkala gratefully acknowledge support from the Research Council of Finland via Finnish Centre of Excellence in Randomness and Structures (decision number 346308). M. Laurikkala gratefully acknowledges support from Emil Aaltonen Foundation (grant number 250110 K1).",
+    title: "Parameter estimation in generalized fractional neuronal models",
     collection: "PAPERS",
     creator: "Pauliina Ilmonen, Milla Laurikkala, Enrica Pirozzi, Luigia Caputo, Lauri Viitasaari",
     year: 2026,
@@ -1635897,7 +1635897,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09447",
-    title: "AliyunConsoleAgent: Training Web Agents in Real-World Cloud Environments via Distillation and Reinforcement Learning Thanks: * Equal contribution. † Corresponding authors: rongbojie.rbj@alibaba-inc.com , shenzheyu.szy@alibaba-inc.com .",
+    title: "AliyunConsoleAgent: Training Web Agents in Real-World Cloud Environments via Distillation and Reinforcement Learning",
     collection: "PAPERS",
     creator: "Bojie Rong *† , Zheyu Shen *† , Qiaoping Wang, Pengfei Kang, Yang Xu, Yawen Wei, Hanyu Wu, Zhi Zhao, Leihao Pei, Linquan Jiang",
     year: 2026,
@@ -1636153,7 +1636153,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09498",
-    title: "Self-Harness: Harnesses That Improve Themselves Thanks: Corresponding Authors",
+    title: "Self-Harness: Harnesses That Improve Themselves",
     collection: "PAPERS",
     creator: "Hangfan Zhang, Shao Zhang, Kangcong Li, Chen Zhang",
     year: 2026,
@@ -1637575,7 +1637575,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09680",
-    title: "On de Branges–Rovnyak Kernels Admitting a Complete Pick Factor Thanks: The author was supported by the Anusandhan National Research Foundation (ANRF), Government of India, under the Mathematical Research Impact-Centric Support (MATRICS) scheme (Grant No. ANRF/ARGM/2025/000573/MTR)",
+    title: "On de Branges–Rovnyak Kernels Admitting a Complete Pick Factor",
     collection: "PAPERS",
     creator: "Haripada Sau",
     year: 2026,
@@ -1638021,7 +1638021,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09761",
-    title: "ℤ \\mathbb{Z} -Ramsey ultrafilters Thanks: The first author’s research has been supported by Secihti, scholarship 298332, and by PAPIIT grant IN104419. The research of the second author was partially supported by grants SIP-20253559 and SIP-20260817 from IPN, as well as by grant CBF2023-2024-334 from Secihti. The third named author was partially supported by PAPIIT grants IN104419 and IN116225.",
+    title: "ℤ \\mathbb{Z} -Ramsey ultrafilters",
     collection: "PAPERS",
     creator: "J. A. Corona-García, D. J. Fernández-Bretón, U. A. Ramos-García",
     year: 2026,
@@ -1638053,7 +1638053,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09688",
-    title: "A space–time sparse-grid method for the wave equation Funding: AM and CP acknowledge support from the PRIN project “ASTICE” (202292JW3F) funded by the European Union – NextGenerationEU. This research was also funded in part by the Austrian Science Fund (FWF) project 10.55776/F65. MF, AM, and CP are members of the Gruppo Nazionale Calcolo Scientifico-Istituto Nazionale di Alta Matematica (GNCS-INdAM).",
+    title: "A space–time sparse-grid method for the wave equation",
     collection: "PAPERS",
     creator: "Matteo Ferrari, Andrea Moiola, Chiara Perinati, Ilaria Perugia",
     year: 2026,
@@ -1638181,7 +1638181,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09673",
-    title: "Uniformly recurrent subalgebras in finite von Neumann algebras Thanks: P.F. is partially supported by the CNRS IEA GAOA and ANR CroCQG Thanks: Y.J. is partially supported by NSFC, grant No.12471118",
+    title: "Uniformly recurrent subalgebras in finite von Neumann algebras",
     collection: "PAPERS",
     creator: "Tattwamasi Amrutam, Pierre Fima, Yongle Jiang",
     year: 2026,
@@ -1638197,7 +1638197,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09792",
-    title: "End-to-End Optimization of Incoherent Imaging for Classification Under Detector-Limited Readout Archer Wang, Joshua Chen, Sachin Vaidya, and Marin Soljačić are with the Research Laboratory of Electronics, Massachusetts Institute of Technology, Cambridge, MA 02139 USA (e-mail: archerdw@mit.edu; chenjosh@mit.edu; svaidya1@mit.edu; soljacic@mit.edu). Marin Soljačić is also with the Department of Physics, Massachusetts Institute of Technology, Cambridge, MA 02139 USA.",
+    title: "End-to-End Optimization of Incoherent Imaging for Classification Under Detector-Limited Readout",
     collection: "PAPERS",
     creator: "Archer Wang, Joshua Chen, Sachin Vaidya, Marin Soljačić",
     year: 2026,
@@ -1638213,7 +1638213,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09687",
-    title: "Codifferential Calculi on Quantum Homogeneous Spaces Thanks: The author acknowledges support by MSCA-DN CaLiForNIA - 101119552, and is grateful for the hospitality offered by the Korteweg de-Vries Institute of Mathematics of the University of Amsterdam.",
+    title: "Codifferential Calculi on Quantum Homogeneous Spaces",
     collection: "PAPERS",
     creator: "Julius Benner",
     year: 2026,
@@ -1638564,7 +1638564,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09807",
-    title: "Pathological function spaces and an unsolved Analysis I problem Thanks: Research supported by NSERC Discovery Grant RGPIN-2026-04565",
+    title: "Pathological function spaces and an unsolved Analysis I problem",
     collection: "PAPERS",
     creator: "Thomas Ransford",
     year: 2026,
@@ -1638883,7 +1638883,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09876",
-    title: "Calibrating Overconfidence Without Sacrificing Confidence: Probe-Conditioned Head Intervention for LLMs Thanks: These authors contributed equally.",
+    title: "Calibrating Overconfidence Without Sacrificing Confidence: Probe-Conditioned Head Intervention for LLMs",
     collection: "PAPERS",
     creator: "Chongzhe Zhang, Zifan Zeng, Feng Liu, Qunli Zhang, Zheng Hu",
     year: 2026,
@@ -1639075,7 +1639075,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09902",
-    title: "The Whale That Outswam Evolution: Swarm Intelligence Maximises Memory in Connectome Reservoirs Thanks: Corresponding author: A. Guragain (anmol.g@upm.es). Code and data: https://github.com/Anmol2059/connectome-reservoir-optimisation",
+    title: "The Whale That Outswam Evolution: Swarm Intelligence Maximises Memory in Connectome Reservoirs",
     collection: "PAPERS",
     creator: "Anmol Guragain , Savvas Kakalis, and Juan Ignacio Godino-Llorente",
     year: 2026,
@@ -1639554,7 +1639554,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-09957",
-    title: "Data-aware Static Analysis: Improving Detection of Semantic Faults in Machine Learning Code Using Data Characteristics Thanks: This work was partially supported by the Wallenberg AI, Autonomous Systems and Software Program (WASP) funded by the Knut and Alice Wallenberg Foundation, and was in collaboration with Software Center Project 61 and Vinnova CoDig competence center.",
+    title: "Data-aware Static Analysis: Improving Detection of Semantic Faults in Machine Learning Code Using Data Characteristics",
     collection: "PAPERS",
     creator: "Willem Meijer, Kristian Sandahl, Dániel Varró",
     year: 2026,
@@ -1640274,7 +1640274,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10048",
-    title: "Human Walking Sensing and Pose Estimation in the 6 GHz Band Using Amplitude and Phase CSI Thanks: This work is supported by MSCA TMA DN SMARTTEST. This project has received funding from the European Union’s Horizon Europe - Research and Innovation program - under grant agreement no. 101167834.",
+    title: "Human Walking Sensing and Pose Estimation in the 6 GHz Band Using Amplitude and Phase CSI",
     collection: "PAPERS",
     creator: "Zhaorui Yin, Mattia Brambilla, Monica Nicoli",
     year: 2026,
@@ -1641458,7 +1641458,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10165",
-    title: "The frog model with death and drift on free products of complete graphs Thanks: This study was financed by the São Paulo Research Foundation (FAPESP), Brazil. Processes Number #2023/13453-5 and #2025/04134-9.",
+    title: "The frog model with death and drift on free products of complete graphs",
     collection: "PAPERS",
     creator: "Nancy Lopes Garcia, Elcio Lebensztayn, Jaime Utria",
     year: 2026,
@@ -1641858,7 +1641858,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10201",
-    title: "Game-Theoretic Area Coverage Control with Cooperative-Adversarial Multi-Agent Systems Thanks: Preprint submitted to Automatica.",
+    title: "Game-Theoretic Area Coverage Control with Cooperative-Adversarial Multi-Agent Systems",
     collection: "PAPERS",
     creator: "Ruiming Zheng, Mohammad Pirani, Davide Spinello",
     year: 2026,
@@ -1642050,7 +1642050,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10193",
-    title: "A Modular Structure Theorem for Minimal Periodic Decompositions and Periodicity of Configurations with P η ​ ( 4 , n ) ≤ 4 ​ n P_{\\eta}(4,n)\\leq 4n Thanks: E. Garibaldi was partially supported by AMSUD240026, CAPES MathAmSud 88881.985536/2024-01, ANR-22-CE40-3348 THERMOGAMAS, FAPESP 24/04685-2. C. F. Colle was partially supported by FAPESP 24/15612-6.",
+    title: "A Modular Structure Theorem for Minimal Periodic Decompositions and Periodicity of Configurations with P η ​ ( 4 , n ) ≤ 4 ​ n P_{\\eta}(4,n)\\leq 4n",
     collection: "PAPERS",
     creator: "Cleber Fernando Colle 1 & Eduardo Garibaldi 2",
     year: 2026,
@@ -1642770,7 +1642770,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10344",
-    title: "Koopman Modeling and Stabilization of Discrete-Time Nonlinear Control Systems: Bilinearity on a Reproducing Kernel Hilbert Space Thanks: The work is supported by NSF under CBET Award #2414369. All simulation codes for the numerical experiments in this paper are available at this hyperlinked GitHub repository .",
+    title: "Koopman Modeling and Stabilization of Discrete-Time Nonlinear Control Systems: Bilinearity on a Reproducing Kernel Hilbert Space",
     collection: "PAPERS",
     creator: "Jarod Morris, Xiuzhen Ye, Wentao Tang",
     year: 2026,
@@ -1643472,7 +1643472,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10458",
-    title: "Minimum Distortion Quantization with Specified Output Distribution Thanks: xuaolin@gmail.com",
+    title: "Minimum Distortion Quantization with Specified Output Distribution",
     collection: "PAPERS",
     creator: "Aolin Xu",
     year: 2026,
@@ -1643648,7 +1643648,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10438",
-    title: "Sequential Search with Planning Thanks: We are grateful to Deepak Kumar, Jason Lepore, Kevin Reffett, and Santanu Roy for their helpful suggestions at various stages of this work. The authors are listed in random order, following the proposal of 12 .",
+    title: "Sequential Search with Planning",
     collection: "PAPERS",
     creator: "Ruhi Sonal, Saptarshi Mukherjee, Abhinaba Lahiri, Aniruddha Ghosh",
     year: 2026,
@@ -1643744,7 +1643744,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10499",
-    title: "MoE Enhanced Federated Learning for Spatiotemporal Prediction ISBN: 978-1-4503-XXXX-X/2018/06 Thanks: + + Corresponding author. Email: hahahenha@gmail.com CCS: Information systems Spatial-temporal systems CCS: Applied computing Transportation",
+    title: "MoE Enhanced Federated Learning for Spatiotemporal Prediction",
     collection: "PAPERS",
     creator: "Zhehao Dai ∗1 , Xiao Han ∗2+ , Zhaolin Deng ∗3 , Zijian Zhang †4 , Xiangyu Zhao Δ5 , Guojiang Shen ∗6 , Xiangjie Kong ∗7",
     year: 2026,
@@ -1643888,7 +1643888,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10503",
-    title: "The two-sided peak polynomial Thanks: This work was supported by the Swedish Research Council (VR), grant 2022-03875, and the Knut and Alice Wallenberg Foundation.",
+    title: "The two-sided peak polynomial",
     collection: "PAPERS",
     creator: "Alperen Özdemir",
     year: 2026,
@@ -1644224,7 +1644224,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10425",
-    title: "Well-posedness of second-order evolution equations with non-integrable and degenerate coefficients in weighted L p \\mathrm{L}_{p} -spaces Thanks: This work was supported by the National Research Foundation of Korea(NRF) grant funded by the Korea government(MSIT) (RS-2025-16065358) Thanks: This work was supported by the National Research Foundation of Korea(NRF) grant funded by the Korea government(MSIT) (RS-2025-00556160)",
+    title: "Well-posedness of second-order evolution equations with non-integrable and degenerate coefficients in weighted L p \\mathrm{L}_{p} -spaces",
     collection: "PAPERS",
     creator: "Ildoo Kim, Kyeong-Hun Kim",
     year: 2026,
@@ -1644272,7 +1644272,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10600",
-    title: "Toward Proactive RF Charging Scheduling: Generative AI for Decision Support Amirhossein Azarbahram, Osmel M. Rosabal, David Ernesto Ruiz-Guirola, and Onel L. A. López are with the Centre for Wireless Communications (CWC), University of Oulu, Finland (e-mails: {amirhossein.azarbahram, osmel.martinezrosabal, david.ruizguirola, onel.alcarazlopez}@oulu.fi). Melike Erol-Kantarci is with the School of Electrical Engineering and Computer Science, University of Ottawa, Ottawa, Canada (e-mail: melike.erolkantarci@uottawa.ca). Kaibin Huang is with the Department of Electrical and Electronic Engineering, The University of Hong Kong, Hong Kong (e-mail: huangkb@eee.hku.hk). This work is partially supported by the Research Council of Finland (Grants 348515, 369116 (6G Flagship), and 362782 (ECO-LITE)); by the European Commission through the Horizon Europe/JU SNS project AMBIENT-6G (Grant 101192113); by the Research Grants Council of the Hong Kong Special Administrative Region, China under a fellowship award (HKU RFS2122-7S04), NSFC/RGC CRS (CRS-HKU702/24); and by the Canada Research Chairs program.",
+    title: "Toward Proactive RF Charging Scheduling: Generative AI for Decision Support",
     collection: "PAPERS",
     creator: "Amirhossein Azarbahram, , Osmel M. Rosabal, , David Ernesto Ruiz-Guirola, , Melike Erol-Kantarci, , Kaibin Huang, , Onel L. A. López",
     year: 2026,
@@ -1644783,7 +1644783,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10663",
-    title: "Reconstructing OPC UA Address Spaces from Time-Series Databases Thanks: This is the authors’ accepted version of a paper accepted at AI4IP 2026 (workshop at DEXA 2026). The final authenticated version will appear in the Springer CCIS series; the version of record will be available via its DOI once published. Affiliation: Josef Ressel Centre for Intelligent and Secure Industrial Automation,",
+    title: "Reconstructing OPC UA Address Spaces from Time-Series Databases",
     collection: "PAPERS",
     creator: "Lukas Lürzer, Hannes Unger, Stefan Huber",
     year: 2026,
@@ -1645071,7 +1645071,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10670",
-    title: "On the Complexity of Signed Domination Thanks: Extended abstract of this paper has appeared in IWOCA 2026 [ 14 ] . Affiliation: School of Computer and Information Sciences,",
+    title: "On the Complexity of Signed Domination",
     collection: "PAPERS",
     creator: "Sangam Balchandar Reddy",
     year: 2026,
@@ -1645199,7 +1645199,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10708",
-    title: "High-Speed Generation of Periodic Traffic Patterns on P4TG for DDoS and Burst-Load Evaluation The authors acknowledge the funding by the Deutsche Forschungsgemeinschaft (DFG) under grant 503231190, and the use of Claude Sonnet 4.5 to assist in developing scripts for experiment automation.",
+    title: "High-Speed Generation of Periodic Traffic Patterns on P4TG for DDoS and Burst-Load Evaluation",
     collection: "PAPERS",
     creator: "Fabian Ihle, Etienne Zink, and Michael Menth",
     year: 2026,
@@ -1645391,7 +1645391,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10664",
-    title: "Commitment and the dynamics of household labor supply: new tests and evidence from Europe Thanks: Chiappori: Department of Economics, Columbia University; pc2167@columbia.edu . Theloudis: Department of Econometrics & OR, Tilburg University; a.theloudis@gmail.com . Velilla: IEDIS, University of Zaragoza; jvelilla@unizar.es . Giménez-Nadal: IEDIS, University of Zaragoza; ngimenez@unizar.es . Molina: IEDIS, University of Zaragoza; jamolina@unizar.es . We are grateful to Robert A. Pollak, who provided inspiration when writing this article, and to participants in the conference in his honor for helpful feedback. We also thank participants to the ERC Equiprice - Family Economics & Matching conference at Sciences Po and especially Jean-Marc Robin for comments and suggestions. This work was supported by the Government of Aragón Project S32_23R.",
+    title: "Commitment and the dynamics of household labor supply: new tests and evidence from Europe",
     collection: "PAPERS",
     creator: "Pierre-André Chiappori, Alexandros Theloudis, Jorge Velilla, J. Ignacio Giménez-Nadal, José Alberto Molina",
     year: 2026,
@@ -1645455,7 +1645455,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10758",
-    title: "Anchoring the Unknown: Open-Set Model Attribution via Proxy-Anchor Learning Thanks: This work was in part supported by a grant of the Ministry of Research, Innovation and Digitization, CCCDI - UEFISCDI, project number PN-IV-P7-7.1-PTE-2024-0600, within PNCDI IV. This work was also partially supported by the European Union – NextGenerationEU, through the National Recovery and Resilience Plan (PNRR), Component 9, Investment 4, under project SENSE, THINK @ POLITEHNICA BUCUREȘTI (SENTHIPoli) No. RUE 6.PI/I4/C9. The content of this material does not necessarily represent the official position of the European Union or the Government of Romania.",
+    title: "Anchoring the Unknown: Open-Set Model Attribution via Proxy-Anchor Learning",
     collection: "PAPERS",
     creator: "Cristian-Teodor Neamtu 1 , Serban Mihalache 1 , Stefan Smeu 2 , Dan Oneata 1, 2 , Horia Cucu 1 , Dragos Burileanu 1",
     year: 2026,
@@ -1645599,7 +1645599,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10630",
-    title: "Critical quasi-linear Schrödinger system with p p -Laplacian Thanks: Wei Dai is supported by the NNSF of China (No. 12222102 & No. 12571113), the National Science and Technology Major Project (2022ZD0116401) and the Fundamental Research Funds for the Central Universities. Zhao Liu is supported by the NNSF of China (No. 12261041) and the Natural Science Foundation of Jiangxi Province (No. 20232ACB211002).",
+    title: "Critical quasi-linear Schrödinger system with p p -Laplacian",
     collection: "PAPERS",
     creator: "Neng cheng, Wei Dai, Zhao Liu",
     year: 2026,
@@ -1645743,7 +1645743,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10781",
-    title: "Recovering the Zipfian Distribution in Unsupervised Term Discovery Thanks: This work is supported by the Het Jan Marais Fonds.",
+    title: "Recovering the Zipfian Distribution in Unsupervised Term Discovery",
     collection: "PAPERS",
     creator: "Danel Slabbert, Simon Malan, Herman Kamper",
     year: 2026,
@@ -1646543,7 +1646543,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10870",
-    title: "Finite free convolution via reproducing kernels and squarefree algebras Thanks: The author was partially supported by NSF grant DMS-2055155.",
+    title: "Finite free convolution via reproducing kernels and squarefree algebras",
     collection: "PAPERS",
     creator: "Thomas Sinclair",
     year: 2026,
@@ -1646591,7 +1646591,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10932",
-    title: "Density Field State Space Models: 1-Bit Distillation, Efficient Inference, and Knowledge Organization in Mamba-2 Thanks: Code available at https://github.com/cs-cmyk/df-ssm .",
+    title: "Density Field State Space Models: 1-Bit Distillation, Efficient Inference, and Knowledge Organization in Mamba-2",
     collection: "PAPERS",
     creator: "Chirag Shinde",
     year: 2026,
@@ -1646607,7 +1646607,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10918",
-    title: "Task Robustness via Re-Labelling Vision-Action Robot Data Thanks: Mila — Quebec AI Institute, Université de Montréal, The University of British Columbia, For correspondence and questions: artur.kuramshin@mila.quebec Affiliation: Artur Kuramshin, Özgür Aslan, Cyrus Neary, Glen Berseth",
+    title: "Task Robustness via Re-Labelling Vision-Action Robot Data",
     collection: "PAPERS",
     year: 2026,
     source: "arXiv",
@@ -1646766,7 +1646766,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-10941",
-    title: "Spectral Koopman Approach for Reconstructing State-space Geometry of Cislunar Restricted 3-Body Problem Thanks: S. Sinha is with Pacific Northwest National Laboratory, Richland, WA, USA - 99354. S. Narayanan and U. Vaidya are with Clemson University, Clemson, SC, USA - 29634. R. Bhattacharya is with Texas A& M University, College Station, TX, USA - 88840. email: subhrajit.sinha@pnnl.gov@pnnl.gov",
+    title: "Spectral Koopman Approach for Reconstructing State-space Geometry of Cislunar Restricted 3-Body Problem",
     collection: "PAPERS",
     creator: "Subhrajit Sinha, Sriram S. K. S. Narayanan, Raktim Bhattacharya, Umesh Vaidya",
     year: 2026,
@@ -1647405,7 +1647405,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11011",
-    title: "Weighted partitions with interval restrictions: exact formulas and a bivariate master identity Thanks: The first author is partially supported by Simons Foundation Grant 633284.",
+    title: "Weighted partitions with interval restrictions: exact formulas and a bivariate master identity",
     collection: "PAPERS",
     creator: "George E. Andrews, Mohamed El Bachraoui, Aritram Dhar, Ankush Goswami, Runqiao Li",
     year: 2026,
@@ -1647437,7 +1647437,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11049",
-    title: "Free Parametrization of ℒ 2 \\mathcal{L}_{2} -Bounded Structured State-Space Controllers for Nonlinear Control with Stability Guarantees footnoteinfo This work is funded by the Swiss National Science Foundation (grant no. 200021-204962), NCCR Automation, a National Centre of Competence in Research, funded by the Swiss National Science Foundation (grant no. 51NF40_225155), and the NECON project (grant no. 200021-219431). † \\dagger The authors contributed equally. Corresponding authors: muhammad.zakwan@inspire.ch , and l.massai@epfl.ch",
+    title: "Free Parametrization of ℒ 2 \\mathcal{L}_{2} -Bounded Structured State-Space Controllers for Nonlinear Control with Stability Guarantees",
     collection: "PAPERS",
     creator: "Muhammad Zakwan † \\dagger, Leonardo Massai † \\dagger, Efe C. Balta, Giancarlo Ferrari-Trecate",
     year: 2026,
@@ -1647581,7 +1647581,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11030",
-    title: "Cellular generation revisited Thanks: The first author is supported by NSF grant DMS-2154141. The second author is supported by Marie Skłodowska-Curie grant number 101130801.",
+    title: "Cellular generation revisited",
     collection: "PAPERS",
     creator: "Sean Cox, Mark Kamsma, and Jiří Rosický",
     year: 2026,
@@ -1647613,7 +1647613,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11053",
-    title: "Revealing information – or not – in a social network of traders This research was supported by the Italian Ministry of Education Progetti di Rilevante Interesse Nazionale (PRIN) grants P20228SXNF and 2022389MRW. We thank participants at seminars at Antwerp, Cambridge, Carlos III, IMT Lucca, Siena, Virginia Tech and Wisconsin, as well as participants at the CEPET 2023, 9 t ​ h 9^{th} Conference on Network Science and Economics, SAET 2024, SENA Workshop, and Workshop on Games on Networks in Singapore.",
+    title: "Revealing information – or not – in a social network of traders",
     collection: "PAPERS",
     creator: "Patrick Allmis, Paolo Pin, Fernando Vega Redondo",
     year: 2026,
@@ -1648077,7 +1648077,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11100",
-    title: "On the Positivity of a Class of Cauchy-Like Matrices Thanks: This work was partially supported by the Italian Ministry of University and Research under the PRIN project “Extracting essential information and dynamics from complex networks”, grant no. 2022MBC2EZ.",
+    title: "On the Positivity of a Class of Cauchy-Like Matrices",
     collection: "PAPERS",
     creator: "Augusto Ferrante",
     year: 2026,
@@ -1648125,7 +1648125,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11166",
-    title: "Flaws in the LLM Automation Narrative Thanks: Citation : Perrett, G., Elliott, J., Hill, J., & Scott, M. (2026). Flaws in the LLM Automation Narrative.",
+    title: "Flaws in the LLM Automation Narrative",
     collection: "PAPERS",
     creator: "George Perrett, Javae Elliott, Jennifer Hill, Marc Scott",
     year: 2026,
@@ -1648444,7 +1648444,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11203",
-    title: "LatticeBridge: Rare-Event Sequential Inference for Faithful Structured Sequence Synthesis Thanks: Code and benchmark files: https://github.com/farukalpay/latticebridge .",
+    title: "LatticeBridge: Rare-Event Sequential Inference for Faithful Structured Sequence Synthesis",
     collection: "PAPERS",
     creator: "Faruk Alpay, Bugra Kilictas",
     year: 2026,
@@ -1648556,7 +1648556,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11215",
-    title: "The Environmental Cost of LLMs in AIED: Reporting and Practices Thanks: Paper Accepted for Blue Sky Track of 27th International Conference on AI in Education (2026)",
+    title: "The Environmental Cost of LLMs in AIED: Reporting and Practices",
     collection: "PAPERS",
     creator: "Sabrina C. Eimler, Lukas Erle, Daniel Flood, Aditi Haiman, Luca Häckert, André Helgert, Lachlan McGinness, Büsra Yapici",
     year: 2026,
@@ -1648796,7 +1648796,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11159",
-    title: "Unidirectional Entropic Solutions of the Pressureless Euler Alignment System Thanks: Acknowledgment. JA and TL are supported in part by NSF grant DMS-2408585 (PI: Leslie). Both authors thank Changhui Tan for helpful comments on an earlier draft of the manuscript.",
+    title: "Unidirectional Entropic Solutions of the Pressureless Euler Alignment System",
     collection: "PAPERS",
     creator: "Joshua O. Adeleke, Trevor M. Leslie",
     year: 2026,
@@ -1648988,7 +1648988,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11264",
-    title: "OmniBioTwin: A System-of-Twinned-Systems Framework for Health Digital Twins Thanks: * Both authors contributed equally to this research.",
+    title: "OmniBioTwin: A System-of-Twinned-Systems Framework for Health Digital Twins",
     collection: "PAPERS",
     creator: "Zhaohui Wang *, Yu Huang *, Jiang Bian",
     year: 2026,
@@ -1649356,7 +1649356,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11320",
-    title: "Semantic Segmentation of Node and Edge Diagrams for Assistive Technology Thanks: We acknowledge the support of the Natural Sciences and Engineering Research Council of Canada (NSERC), funding reference number 2020-04401.",
+    title: "Semantic Segmentation of Node and Edge Diagrams for Assistive Technology",
     collection: "PAPERS",
     creator: "Michael Cormier, Yichun Zhao, Laura Paul, Cameron Swift, Duc Tri Dang, Miguel Nacenta",
     year: 2026,
@@ -1650028,7 +1650028,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11393",
-    title: "Scaling Limits for the Discretization of the Martingale Representation Theorem Thanks: Partially supported by the ISF grant 305/25.",
+    title: "Scaling Limits for the Discretization of the Martingale Representation Theorem",
     collection: "PAPERS",
     creator: "Yan Dolinksy",
     year: 2026,
@@ -1650268,7 +1650268,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11419",
-    title: "A Modular Dual-Camera Pipeline for Micro-Inspection Using Aerial Robots Thanks: This work was partly supported by the Netherlands Organization for Scientific Research (NWO) via SIA RAAK-Public project (Van bestrijden naar beheersen van de EPR, No.10.015) and SIA RAAK-MKB project (Smart Greenhouses, No.17.014).",
+    title: "A Modular Dual-Camera Pipeline for Micro-Inspection Using Aerial Robots",
     collection: "PAPERS",
     creator: "Seyed Hojat Mirtajadini 1 , Nils Rublein 2 , Rahul Moongayil Ramakrishnan 3 , Gerjen ter Maat 4 , Mohammad Aldibaja 5 , Abeje Yenehun Mersha 6",
     year: 2026,
@@ -1650556,7 +1650556,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11421",
-    title: "Second-Order Least Squares as a Special Case of the Polynomial Maximization Method Thanks: Preprint, 2026.",
+    title: "Second-Order Least Squares as a Special Case of the Polynomial Maximization Method",
     collection: "PAPERS",
     creator: "Serhii Zabolotnii",
     year: 2026,
@@ -1651370,7 +1651370,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11515",
-    title: "Exponential Adaptive Smoothing and Importance sampling for optimization of the conditional value-at-risk Thanks: Submitted to the editors August 10, 2026.",
+    title: "Exponential Adaptive Smoothing and Importance sampling for optimization of the conditional value-at-risk",
     collection: "PAPERS",
     creator: "Will Asness, Brendan Keith, Boyan Lazarov, Anton Malandii, Stan Uryasev",
     year: 2026,
@@ -1651770,7 +1651770,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11603",
-    title: "A Two-Sided Sketching Algorithm for Low-rank Tensor-Train Approximation Thanks: Submitted to the editors DATE.",
+    title: "A Two-Sided Sketching Algorithm for Low-rank Tensor-Train Approximation",
     collection: "PAPERS",
     creator: "Gaohang Yu, Yihao Pan, Ailun Jian, xiaohao Cai",
     year: 2026,
@@ -1652298,7 +1652298,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11650",
-    title: "Structure-Preserving Neural Surrogates with Tractable Uncertainty Quantification Thanks:",
+    title: "Structure-Preserving Neural Surrogates with Tractable Uncertainty Quantification",
     collection: "PAPERS",
     creator: "Handi Zhang, Adrienne M. Propp, Brooks Kinch, Houman Owhadi, Nathaniel Trask",
     year: 2026,
@@ -1652314,7 +1652314,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11694",
-    title: "The stability of Margulis space-times with parabolic holonomy elements Thanks: This work was supported by the National Research Foundation of Korea(NRF) grant funded by the Korea government (MEST) (No. NRF-2022R1A2C3003162).",
+    title: "The stability of Margulis space-times with parabolic holonomy elements",
     collection: "PAPERS",
     creator: "Suhyoung Choi",
     year: 2026,
@@ -1652346,7 +1652346,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11684",
-    title: "τ \\tau -tilting modules, depth and delooping level Thanks: ∗ The corresponding author Thanks: Email: mfxu123@163.com, xjzhang@jsnu.edu.cn",
+    title: "τ \\tau -tilting modules, depth and delooping level",
     collection: "PAPERS",
     creator: "Mingfei Xu and Xiaojin Zhang ∗",
     year: 2026,
@@ -1652458,7 +1652458,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11740",
-    title: "UniReason-Med: A Shared Grounded Reasoning Interface for 2D-to-3D Transfer in Medical VQA Thanks: Corresponding author",
+    title: "UniReason-Med: A Shared Grounded Reasoning Interface for 2D-to-3D Transfer in Medical VQA",
     collection: "PAPERS",
     creator: "Mengzhuo Chen Yan Shu Chi Liu",
     year: 2026,
@@ -1653032,7 +1653032,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11828",
-    title: "Feature-Aligned Speech Watermarking for Robustness to Reconstruction Distortions Thanks: 1 These authors contributed equally. Thanks: 2 Corresponding authors. Thanks: Demo and code: https://hyli-research.github.io/AlignMark/",
+    title: "Feature-Aligned Speech Watermarking for Robustness to Reconstruction Distortions",
     collection: "PAPERS",
     creator: "Haiyun Li 1,2, 1 , Shuhai Peng 1, 1 , Zhisheng Zhang 1 , Jingran Xie 1 , Xiaofeng Xie 3 , Hanyang Peng 2, 2 , Zhiyong Wu 1, 2",
     year: 2026,
@@ -1653416,7 +1653416,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11861",
-    title: "Extreme, transient bursts of energy in the auroral ionosphere. II. A magnetotail dipolarization event Thanks: Contact: magnus.fagernes@gmail.com",
+    title: "Extreme, transient bursts of energy in the auroral ionosphere. II. A magnetotail dipolarization event",
     collection: "PAPERS",
     year: 2026,
     source: "arXiv",
@@ -1654149,7 +1654149,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11948",
-    title: "Robust Tuning of Model Predictive Control for MMC-Based High-Voltage Power Systems Thanks: All the authors are associated with Intelligent Electrical Power Grids group, Electrical Sustainable Energy department, Delft University of Technology, Netherlands, e-mail:v.d.reyesdreke@tudelft.com. Thanks: The work is supported by Horizon Europe project PROSECCO, under grant agreement 101160687, and by NWO Veni project SAFE-GRID, with project number 20248.",
+    title: "Robust Tuning of Model Predictive Control for MMC-Based High-Voltage Power Systems",
     collection: "PAPERS",
     creator: "Victor Daniel Reyes Dreke, Rahul Rane",
     year: 2026,
@@ -1654213,7 +1654213,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11957",
-    title: "Scalar Curvature, Sharp Bottom Spectrum and Geometric Rigidity Thanks: The first author is partially supported by NSFC 12501169. Thanks: The second author is partially supported by NSFC 12501066.",
+    title: "Scalar Curvature, Sharp Bottom Spectrum and Geometric Rigidity",
     collection: "PAPERS",
     creator: "Jinmin Wang, Bo Zhu",
     year: 2026,
@@ -1654309,7 +1654309,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11971",
-    title: "Cooperative Switched Formation Control of Autonomous Vehicles: An Event-triggered Approach to Input Saturation and Time-delay Challenges Thanks: Corresponding author: Ziming Wang. Thanks: Ziming Wang and Apostolos I. Rikos are with the Artificial Intelligence Thrust, The Hong Kong University of Science and Technology (Guangzhou), Guangzhou, China. Apostolos I. Rikos is also affiliated with the Department of Computer Science and Engineering, The Hong Kong University of Science and Technology, Clear Water Bay, Hong Kong. E-mails: zwang216@connect.hkust-gz.edu.cn , apostolosr@hkust-gz.edu.cn . Thanks: Guanxuan Jiang is with the Computational Media and Arts Thrust, The Hong Kong University of Science and Technology (Guangzhou), Guangzhou, China. E-mail: gjiang240@connect.hkust-gz.edu.cn . Thanks: Yihuai Zhang is with the Intelligent Transportation Thrust, The Hong Kong University of Science and Technology (Guangzhou), Guangzhou, China. E-mail: yzhang169@connect.hkust-gz.edu.cn . Thanks: Karl H. Johansson is with the Division of Decision and Control Systems, KTH Royal Institute of Technology, SE-100 44 Stockholm, Sweden. He is also affiliated with Digital Futures. E-mail: kallej@kth.se . Thanks: The work of A.I.R. was supported by the Guangdong Provincial Project (Grant No. 2024QN11G109).",
+    title: "Cooperative Switched Formation Control of Autonomous Vehicles: An Event-triggered Approach to Input Saturation and Time-delay Challenges",
     collection: "PAPERS",
     creator: "Ziming Wang, Guanxuan Jiang, Yihuai Zhang, Karl H. Johansson",
     year: 2026,
@@ -1654421,7 +1654421,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11943",
-    title: "Continuum-wise hyperbolicity is exactly the pseudo-Anosov dynamics with spine singularities Thanks: 2020 Mathematics Subject Classification : Primary 37B45; Secondary 37D10.",
+    title: "Continuum-wise hyperbolicity is exactly the pseudo-Anosov dynamics with spine singularities",
     collection: "PAPERS",
     creator: "Rodrigo Arruda, Bernardo Carvalho, Piotr Oprocha, and Alberto Sarmiento",
     year: 2026,
@@ -1654533,7 +1654533,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12006",
-    title: "Tabular Foundation Models for Clinical Survival Analysis via Survival-Aware Adaptation Thanks: Accepted for publication at AIiH 2026.",
+    title: "Tabular Foundation Models for Clinical Survival Analysis via Survival-Aware Adaptation",
     collection: "PAPERS",
     creator: "Minh-Khoi Pham, Luca Cotugno, Alina Sîrbu, Tai Tan Mai, Martin Crane, Marija Bezbradica",
     year: 2026,
@@ -1654756,7 +1654756,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-11992",
-    title: "On the hitting time of Hamiltonicity in bipartite Dirac graphs Thanks: Yiting Wang is supported by the European Research Council (ERC), via grant agreement “RANDSTRUCT” No. 101076777.",
+    title: "On the hitting time of Hamiltonicity in bipartite Dirac graphs",
     collection: "PAPERS",
     creator: "Yiting Wang",
     year: 2026,
@@ -1654836,7 +1654836,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12021",
-    title: "Adaptive spatial blocking for scalable clustering inference with applications to high-throughput spatial proteomics Thanks: The author acknowledges the support of the National Research Foundation of Korea (NRF) grant funded by the Korea government(MSIT) (RS-2022-NR068758 and RS-2026-25471551).",
+    title: "Adaptive spatial blocking for scalable clustering inference with applications to high-throughput spatial proteomics",
     collection: "PAPERS",
     creator: "Mingyu Go",
     year: 2026,
@@ -1655538,7 +1655538,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12160",
-    title: "A Controlled Study of Decoding-Time Truthfulness Methods on Instruction-Tuned LLMs Thanks: Accepted at the International Conference on Artificial Neural Networks (ICANN 2026). Affiliation: Independent Researcher",
+    title: "A Controlled Study of Decoding-Time Truthfulness Methods on Instruction-Tuned LLMs",
     collection: "PAPERS",
     creator: "Ao Sun, ao.sun@outlook.com",
     year: 2026,
@@ -1655794,7 +1655794,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12184",
-    title: "Threshold Regression for Fixed- T T Panel Data with Interactive Fixed Effects Thanks: The authors would like to thank Heino Bohn Nielsen (Editor), and two anonymous referees for valuable comments and suggestions. Thank you also to the Knut and Alice Wallenberg Foundation for financial support through a Wallenberg Academy Fellowship.",
+    title: "Threshold Regression for Fixed- T T Panel Data with Interactive Fixed Effects",
     collection: "PAPERS",
     creator: "Jan Ditzen, Yiannis Karavias, Joakim Westerlund",
     year: 2026,
@@ -1656242,7 +1656242,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12206",
-    title: "Stable homology of complex braid groups Thanks: The second author acknowledges INdAM/GNSAGA Thanks: The fourth author acknowledges the MUR Excellence Project MatMod@TOV awarded to the Department of Mathematics, University of Roma Tor Vergata, CUP E83C18000100006.",
+    title: "Stable homology of complex braid groups",
     collection: "PAPERS",
     creator: "Andrea Bianchi, Filippo Callegaro, Luigi Caputi, Paolo Salvatore",
     year: 2026,
@@ -1656562,7 +1656562,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12283",
-    title: "A Non-trivial index difference on Surfaces of genus at least 3 3 Thanks: ∗ Funded by the Deutsche Forschungsgemeinschaft (DFG, German Research Foundation) – Project numbers 224262486; 313840899",
+    title: "A Non-trivial index difference on Surfaces of genus at least 3",
     collection: "PAPERS",
     creator: "Samuel Lockman ∗",
     year: 2026,
@@ -1656978,7 +1656978,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12339",
-    title: "Fast-SDE: Efficient Single-Microphone Sound Source Distance Estimation in Reverberant Environments Thanks: This work was supported by JST BOOST, Grant No. JPMJBS2430.",
+    title: "Fast-SDE: Efficient Single-Microphone Sound Source Distance Estimation in Reverberant Environments",
     collection: "PAPERS",
     creator: "Jiang Wang, Runwu Shi, Yaozhong Kang, Benjamin Yen, Takeshi Ashizawa, Kazuhiro Nakadai",
     year: 2026,
@@ -1657010,7 +1657010,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12350",
-    title: "Nonslop: A Gamified Experiment in Human–AI Collaborative Writing Thanks: © 2026 IEEE. Personal use of this material is permitted. Permission from IEEE must be obtained for all other uses, in any current or future media, including reprinting/republishing this material for advertising or promotional purposes, creating new collective works, for resale or redistribution to servers or lists, or reuse of any copyrighted component of this work in other works. PubID: pubid: 979-8-3315-9476-3/26/$31.00 ©2026 IEEE",
+    title: "Nonslop: A Gamified Experiment in Human–AI Collaborative Writing",
     collection: "PAPERS",
     creator: "Maria Edwards, Julian Togelius",
     year: 2026,
@@ -1657778,7 +1657778,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12380",
-    title: "Forbidden Intersection Theorems for Matrix Spaces Thanks: This project has received funding from the European Union’s Horizon 2020 research and innovation programme under grant agreement No 802020-ERC-HARMONIC. The work of the third author is partially supported by the European Research Council (StG no. 101163794)",
+    title: "Forbidden Intersection Theorems for Matrix Spaces",
     collection: "PAPERS",
     creator: "Esty Kelman, Nathan Lindzey, Ohad Sheinfeld",
     year: 2026,
@@ -1658369,7 +1658369,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12506",
-    title: "On the universal commuting dilation constant Thanks: The author was partially supported by an NSERC Postdoctoral Fellowship.",
+    title: "On the universal commuting dilation constant",
     collection: "PAPERS",
     creator: "Ian Thompson",
     year: 2026,
@@ -1658641,7 +1658641,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12581",
-    title: "Graph Reduction in Multirelational Networks: A Spreading-Oriented Reduction Benchmark Thanks: Corresponding author: Mateusz Stolarski (email: mateusz.stolarski@pwr.edu.pl) Thanks: The source code will be released after the review process.",
+    title: "Graph Reduction in Multirelational Networks: A Spreading-Oriented Reduction Benchmark",
     collection: "PAPERS",
     creator: "Mateusz Stolarski, Michał Czuba, Piotr Bielak, Piotr Bródka",
     year: 2026,
@@ -1658657,7 +1658657,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12585",
-    title: "Revisiting the ABCs of Working with AI: A Replication with Radiologists Thanks: I thank Alex Moehring for helpful comments and the Sloan Foundation for support under the “Cognitive Economics at Work” grant.",
+    title: "Revisiting the ABCs of Working with AI: A Replication with Radiologists",
     collection: "PAPERS",
     creator: "Daniel Martin",
     year: 2026,
@@ -1658753,7 +1658753,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12576",
-    title: "Helping Figures Tell their Story! Paper-Grounded Video Generation Explaining Complex Scientific Figures Thanks: Equal Contribution",
+    title: "Helping Figures Tell their Story! Paper-Grounded Video Generation Explaining Complex Scientific Figures",
     collection: "PAPERS",
     year: 2026,
     source: "arXiv",
@@ -1658800,7 +1658800,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12571",
-    title: "Cross-Validation Equilibrium Thanks: We acknowledge financial support from UKRI Frontier Research Grant no. EP/Y033361/1. We thank participants at the 5th Southeast Theory Festival and the referees at EC2026, for helpful comments.",
+    title: "Cross-Validation Equilibrium",
     collection: "PAPERS",
     creator: "Ran Spiegler and Stephan Waizmann",
     year: 2026,
@@ -1659420,7 +1659420,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12666",
-    title: "CAPED: Context-Aware Privacy Exposure Defense for Mobile GUI Agents Thanks: Artifact availability: We plan to release the CAPED artifact in a future public version.",
+    title: "CAPED: Context-Aware Privacy Exposure Defense for Mobile GUI Agents",
     collection: "PAPERS",
     creator: "Siyu Shen, Fenghao Xu, Wenrui Diao, Kehuan Zhang",
     year: 2026,
@@ -1660043,7 +1660043,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12663",
-    title: "Remarks on the Ionescu–Wainger multiplier theorem Thanks: Dariusz Kosz was partially supported by the National Science Centre of Poland grant SONATA BIS 2022/46/E/ST1/00036. Mariusz Mirek was partially supported by the NSF CAREER grant DMS-2236493. Wojciech Słomian was partially supported by AMS–Simons Travel Grant No. 00008780 and by the Foundation for Polish Science scholarship START 068.2023. For the purpose of Open Access the authors have applied a CC BY public copyright license to any Author Accepted Manuscript version arising from this submission.",
+    title: "Remarks on the Ionescu–Wainger multiplier theorem",
     collection: "PAPERS",
     creator: "Dariusz Kosz, Mariusz Mirek, Wojciech Słomian, Jianghao Zhang",
     year: 2026,
@@ -1660650,7 +1660650,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12834",
-    title: "Fantastic Scientific Agents and How to Build Them: AgentBuild for Rietveld Refinement Thanks: This manuscript has been authored in part by UT-Battelle, LLC, under contract DE-AC05-00OR22725 with the US Department of Energy (DOE). The publisher, by accepting the article for publication, acknowledges that the U.S. Government retains a non-exclusive, paid up, irrevocable, world-wide license to publish or reproduce the published form of the manuscript, or allow others to do so, for U.S. Government purposes. The DOE will provide public access to these results in accordance with the DOE Public Access Plan (http://energy.gov/downloads/doe-public-access-plan).",
+    title: "Fantastic Scientific Agents and How to Build Them: AgentBuild for Rietveld Refinement",
     collection: "PAPERS",
     creator: "Woong Shin , Craig A. Bridges , Marshall T. McDonnell , and Rafael Ferreira da Silva",
     year: 2026,
@@ -1661034,7 +1661034,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12858",
-    title: "JSCGC: Joint Source-Channel-Generation Coding for Wireless Generative Communications Thanks: Part of this work is to appear at IEEE ISIT-W 2026 [ 23 ] . Thanks: The authors are with the Cooperative Medianet Innovation Center, the School of Information Science and Electronic Engineering, Shanghai Jiao Tong University, Shanghai 200240, China (Email: {wu_tong, zhiyongchen, luguo2014, song_li, yangfeng, mxtao, zhangwenjun}@sjtu.edu.cn). (Corresponding author: Zhiyong Chen.)",
+    title: "JSCGC: Joint Source-Channel-Generation Coding for Wireless Generative Communications",
     collection: "PAPERS",
     creator: "Tong Wu, Zhiyong Chen, Senior Member, IEEE, Guo Lu, Member, IEEE, Li Song, Senior Member, IEEE",
     year: 2026,
@@ -1661225,7 +1661225,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12729",
-    title: "Quadrilateral Mutations and Symplectic Embeddings Thanks: NM thanks the NSF for their support under the agreement DMS-2402169",
+    title: "Quadrilateral Mutations and Symplectic Embeddings",
     collection: "PAPERS",
     creator: "Nicki Magill",
     year: 2026,
@@ -1661671,7 +1661671,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12964",
-    title: "Orthonormal Spectral Cluster Bounds on Manifolds with Nonpositive Curvature Thanks: © 2026 by the authors. This paper may be reproduced, in its entirety, for non-commercial purposes.",
+    title: "Orthonormal Spectral Cluster Bounds on Manifolds with Nonpositive Curvature",
     collection: "PAPERS",
     creator: "Jean-Claude Cuenin, Ngoc Nhi Nguyen, Xiaoyan Su",
     year: 2026,
@@ -1661751,7 +1661751,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12982",
-    title: "A note on uniform finiteness in weakly o-minimal theories Thanks: The first and second authors were partially supported by ISF grant No. 555/21. The third author was supported by ISF grant No. 290/19.",
+    title: "A note on uniform finiteness in weakly o-minimal theories",
     collection: "PAPERS",
     creator: "Yatir Halevi, Assaf Hasson, Ya’acov Peterzil",
     year: 2026,
@@ -1661783,7 +1661783,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-12977",
-    title: "Efficient, Robust, and Anti-Collusion Fingerprinting of Image Diffusion Models Thanks: Jianwei Fei and Alessandro Piva are with the University of Florence, Florence, Italy (e-mail: fei_jianwei@163.com; alessandro.piva@unifi.it); Yunshu Dai and Xiaochun Cao are with the Shenzhen Campus of Sun Yat-sen University, Shenzhen, China (e-mail: daiyunshu0102@163.com; caoxiaochun@mail.sysu.edu.cn); Zhihua Xia is with the College of Cyber Security, Jinan University, Guangzhou, China (e-mail: xia_zhihua@163.com); Jiantao Zhou is with the State Key Laboratory of Internet of Things for Smart City, and also with the Department of Computer and Information Science, Faculty of Science and Technology, University of Macau (e-mail: jtzhou@um.edu.mo); Benedetta Tondi is with the University of Siena, Siena, Italy (e-mail: benedetta.tondi@unisi.it). This work was supported in part by Macau Science and Technology Development Fund under 001/2024/SKL, 0119/2024/RIB2 and 0110/2025/R1B2; in part by Research Committee at University of Macau under MYRG-CRG2025-00031-FST and MYRG-GRG2025-00086-FST; in part by the Guangdong Basic and Applied Basic Research Foundation under Grant 2024A1515012536. This work was also supported in part by the National Natural Science Foundation of China under Grant 625B2187, U23B2023, and 62472199, in part by Guangdong S&T Program under 2026B0101100003, by Guangdong Key Laboratory of Data Security and Privacy Preserving under 2023B1212060036, Guangdong Hong Kong Joint Laboratory for Data Security and Privacy Protection under 2023B1212120007, by the basic and Applied Basic Research Foundation of Guangdong Province under 2025A1515011097, and by the Outstanding Youth Project of Guangdong Basic and Applied Basic Research Foundation under 2023B1515020064. Corresponding author: Jiantao Zhou",
+    title: "Efficient, Robust, and Anti-Collusion Fingerprinting of Image Diffusion Models",
     collection: "PAPERS",
     creator: "Jianwei Fei, Yunshu Dai, Zhihua Xia",
     year: 2026,
@@ -1662503,7 +1662503,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-13126",
-    title: "MiniPIC: Flexible Position-Independent Caching in <100LOC Thanks: Code available at https://github.com/IBM/vllm , from commit 6631ff3 onwards",
+    title: "MiniPIC: Flexible Position-Independent Caching in <100LOC",
     collection: "PAPERS",
     creator: "Nathan Ordonez, Thomas Parnell",
     year: 2026,
@@ -1663142,7 +1663142,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-13208",
-    title: "A Polynomial-Decay and Pinhole-Imaging Whale Optimization Algorithm for UAV Relay Communication Deployment Thanks: ∗ Corresponding authors: Junhao Wei (p2312195@mpu.edu.mo) and Yapeng Wang (yapengwang@mpu.edu.mo).",
+    title: "A Polynomial-Decay and Pinhole-Imaging Whale Optimization Algorithm for UAV Relay Communication Deployment",
     collection: "PAPERS",
     creator: "Zhenhong Peng, Junhao Wei ∗, Baili Lu, Yanxiao Li, Yifu Zhao, Haochen Li, Dexing Yao, Xu Yang, Yapeng Wang ∗",
     year: 2026,
@@ -1663318,7 +1663318,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-13248",
-    title: "Q-Backbone: A Quantum-Enhanced Control Plane for Future Communication Networks Mahdi Chehimi and Nour Dehaini are with the Department of Electrical and Computer Engineering, American University of Beirut, Beirut, 1107 2020, Lebanon. Emails: {mc127,nad29}@aub.edu.lb. Nikos A. Mitsiou and Ioannis Krikidis are with the Department of Electrical and Computer Engineering, University of Cyprus, Nicosia, Cyprus. Emails: {nmitsi02,krikidis}@ucy.ac.cy. Gan Zheng is with the School of Engineering, University of Warwick, Coventry, CV4 7AL, UK. Email: gan.zheng@warwick.ac.uk.",
+    title: "Q-Backbone: A Quantum-Enhanced Control Plane for Future Communication Networks",
     collection: "PAPERS",
     creator: "Mahdi Chehimi, Nour Dehaini, Nikos A. Mitsiou, Ioannis Krikidis, Gan Zheng",
     year: 2026,
@@ -1663894,7 +1663894,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-13314",
-    title: "The Privilege of Exposure: Caste and Generative AI in India’s Graduate Labour Market Thanks: [Acknowledgements. Funding. Disclaimer.] The occupation-level exposure crosswalk and construction code are available at github.com/Kpmishra1998/nco2015-ai-exposure .",
+    title: "The Privilege of Exposure: Caste and Generative AI in India’s Graduate Labour Market",
     collection: "PAPERS",
     creator: "Kaibalyapati Mishra",
     year: 2026,
@@ -1664134,7 +1664134,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-13165",
-    title: "Iterated Whitehead products in the homotopy groups of polyhedral products Thanks: The work of T. Panov and F. Vylegzhanin was performed at the Steklov International Mathematical Center and supported by the Ministry of Science and Higher Education of the Russian Federation (agreement no. 075-15-2025-303).",
+    title: "Iterated Whitehead products in the homotopy groups of polyhedral products",
     collection: "PAPERS",
     creator: "Taras Panov, Stephen Theriault, Fedor Vylegzhanin",
     year: 2026,
@@ -1664166,7 +1664166,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-13367",
-    title: "Extended Frege proofs, circuits and rewriting Thanks: Sokolovská 83, Prague, 186 75, The Czech Republic, jan.krajicek@protonmail.com",
+    title: "Extended Frege proofs, circuits and rewriting",
     collection: "PAPERS",
     creator: "Jan Krajíček",
     year: 2026,
@@ -1664901,7 +1664901,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-13335",
-    title: "Sharp stability of Alexandrov’s theorem for C 1 C^{1} domains in the small-excess regime Thanks: The second author is funded by the National Key R&D Program of China (Grant No. 2025YFA1018400 & No. 2021YFA1003100), NSFC Grant No. 12288201 & No. 12571128, the Chinese Academy of Sciences, and CAS Project for Young Scientists in Basic Research, Grant No. YSBR-031.",
+    title: "Sharp stability of Alexandrov’s theorem for C 1 C^{1} domains in the small-excess regime",
     collection: "PAPERS",
     creator: "Alessio Figalli, Yi Ru-Ya Zhang",
     year: 2026,
@@ -1665253,7 +1665253,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-13533",
-    title: "OneRetrieval: Unifying Multi-Branch E-commerce Retrieval with an Editable Generative Model DOI: XXXXXXX.XXXXXXX Conference: Make sure to enter the correct conference title from your rights confirmation email; June 03–05, 2018; Woodstock, NY ISBN: 978-1-4503-XXXX-X/2018/06 Thanks: ∗ Equal contribution. Thanks: † Corresponding author. CCS: Information systems Retrieval models and ranking",
+    title: "OneRetrieval: Unifying Multi-Branch E-commerce Retrieval with an Editable Generative Model",
     collection: "PAPERS",
     creator: "Xuxin Zhang ∗ , Ben Chen ∗† , Yue Lv, Siyuan Wang, Yupeng Li, Yufei Ma, Zihan Liang, Tong Zhao Ying Yang, Huangyu Dai, Lingtao Mao, Zhipeng Qian, Xinyu Sun, Chenyi Lei, Wenwu Ou, Kun Gai",
     year: 2026,
@@ -1665413,7 +1665413,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-13506",
-    title: "Skill vs Education Types of Labour Mismatch and Their Association with Earnings Thanks: I thank Arnab Bhattacharjee, Atanas Christev, Erkal Ersoy, Rachel Forshaw, David Jaeger, Lindsey Macmillan, Agnese Romiti, Rachel Scarfe, Mark Schaffer, Cristina Tealdi, and Gill Wyness for insightful comments. I also thank participants at the SGPE Conference 2023 and the Third Scotland and Northern England Conference in Applied Microeconomics for valuable feedback.",
+    title: "Skill vs Education Types of Labour Mismatch and Their Association with Earnings",
     collection: "PAPERS",
     creator: "Vsevolod Iakovlev",
     year: 2026,
@@ -1665429,7 +1665429,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-13518",
-    title: "Weak order: Alternating sign matrices, monotone triangles, and bumpless pipe dreams Thanks: LE was partially funded by NSF CAREER grant DMS-2142656, DMS-2521270. PK was partially funded by NSF grant DMS-2246962 and by the Travel Support for Mathematicians gift MP-TSM-00002939 from the Simons Foundation. AW was partially funded by NSF grant DMS-2344764. PK worked on this project while she was a member at the Institute for Advanced Study with support from the Bob Moses Fund. She thanks the IAS for its hospitality and support. She also worked on this project while she was a long-term visitor at the Fields Institute, which she also thanks for its hospitality and support.",
+    title: "Weak order: Alternating sign matrices, monotone triangles, and bumpless pipe dreams",
     collection: "PAPERS",
     creator: "Laura Escobar, Patricia Klein, Anna Weigandt",
     year: 2026,
@@ -1666084,7 +1666084,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-13619",
-    title: "Split primes and the Elekes-Rónyai problem Thanks: Department of Mathematics, Emory University, Atlanta, USA. Research supported by NSF grant DMS-2246659. Email: cosmin.pohoata@emory.edu",
+    title: "Split primes and the Elekes-Rónyai problem",
     collection: "PAPERS",
     creator: "Cosmin Pohoata",
     year: 2026,
@@ -1666196,7 +1666196,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-13628",
-    title: "A near-quadratic lower bound on the border determinantal complexity of ∑ i x i n \\sum_{i}x_{i}^{n} via conormal specialization Journal: computational complexity Thanks: LinkedIn: https://www.linkedin.com/in/karthik-sheshadri-0624ab150/ .",
+    title: "A near-quadratic lower bound on the border determinantal complexity of ∑ i x i n \\sum_{i}x_{i}^{n} via conormal specialization",
     collection: "PAPERS",
     creator: "Karthik Sheshadri",
     year: 2026,
@@ -1666676,7 +1666676,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-13698",
-    title: "Active Inference for Adaptive Traffic Signal Control in Noisy Nonstationary IoT Environments Thanks: 2 Authors contributed equally to this work.",
+    title: "Active Inference for Adaptive Traffic Signal Control in Noisy Nonstationary IoT Environments",
     collection: "PAPERS",
     creator: "Dénes Toth 2 , George Ambroladze 2 , Edwin Sundberg, Ali Beikmohammadi, and Alfreds Lapkovskis",
     year: 2026,
@@ -1666996,7 +1666996,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-13759",
-    title: "A Tutorial on IEEE 802.11bn Multi-AP Coordination for Wi-Fi 8: From Standardization to Performance Evaluation Thanks: Francesc Wilhelmi, Boris Bellalta, and Aleksandra Kijanka are with Universitat Pompeu Fabra (Spain). Giovanni Geraci is with Nokia (Spain) and Universitat Pompeu Fabra (Spain). Lorenzo Galati-Giordano is with Nokia Bell Labs (Germany). Francesca Meneghello is with Northeastern University (USA). Iñaki Val is with MaxLinear (Spain). David López-Pérez is with Universitat Politècnica de València (Spain). PubID: pubid: 0000–0000/00$00.00 © 2021 IEEE PubID: pubid: 0000–0000/00$00.00 © 2021 IEEE",
+    title: "A Tutorial on IEEE 802.11bn Multi-AP Coordination for Wi-Fi 8: From Standardization to Performance Evaluation",
     collection: "PAPERS",
     creator: "Francesc Wilhelmi, Boris Bellalta, Giovanni Geraci, Lorenzo Galati-Giordano, Francesca Meneghello",
     year: 2026,
@@ -1667220,7 +1667220,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-13758",
-    title: "Language Acceptors with a Pushdown: Characterizations and Complexity Thanks: Electronic version of an article published as International Journal of Foundations of Computer Science , Vol. 36, No. 03, 2025, pp. 345–370 © copyright World Scientific Publishing Company .",
+    title: "Language Acceptors with a Pushdown: Characterizations and Complexity",
     collection: "PAPERS",
     creator: "Oscar H. Ibarra, Ian McQuillan",
     year: 2026,
@@ -1667795,7 +1667795,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-13840",
-    title: "Multi-Agent Embodied Autonomous Driving: From V2X Information Exchange to Shared World Models Thanks: The research work described in this paper was conducted in the JC STEM Lab of Smart City funded by The Hong Kong Jockey Club Charities Trust under Contract 2023-0108. The work was supported in part by the Hong Kong SAR Government under the Global STEM Professorship and Research Talent Hub. The work of S. Hu was supported in part by the Hong Kong Innovation and Technology Commission under InnoHK Project CIMDA. Thanks: Senkang Hu, Zhengru Fang, Yihang Tao, Zihan Fang, and Yuguang Fang are with Hong Kong JC STEM Lab of Smart City and the Department of Computer Science, City University of Hong Kong, Kowloon, Hong Kong. (Email: senkang.forest@my.cityu.edu.hk, zhefang4-c@my.cityu.edu.hk, yihang.tommy@my.cityu.edu.hk, zihanfang3-c@my.cityu.edu.hk, my.Fang@cityu.edu.hk) Thanks: Sam Tak Wu Kwong is with Lingnan University, Hong Kong. (Email: samkwong@ln.edu.hk)",
+    title: "Multi-Agent Embodied Autonomous Driving: From V2X Information Exchange to Shared World Models",
     collection: "PAPERS",
     creator: "Senkang Hu, Zhengru Fang, Yihang Tao, Zihan Fang",
     year: 2026,
@@ -1668275,7 +1668275,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-13922",
-    title: "Explicit Homology Representation for Finite Groups Acting on Riemann Surfaces Thanks: ∗ Corresponding author Thanks: Acknowledgements. LDH is grateful to Josh Fogg for their consultation on the efficiency of sparse matrix methods. Thanks: Data Availability. The datasets generated during the current study and the code for their creation/analysis are openly available at https://github.com/DisneyHogg/homology_representation/ . Thanks: Statements and Declarations. The authors have no relevant financial or non-financial interests to disclose.",
+    title: "Explicit Homology Representation for Finite Groups Acting on Riemann Surfaces",
     collection: "PAPERS",
     creator: "S. Allen Broughton 1 ID, Linden Disney-Hogg 2,∗ ID",
     year: 2026,
@@ -1669587,7 +1669587,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14110",
-    title: "Artin-Schreier Root Stacks and lifts of group actions Thanks: Address 1 : Department of Mathematics, Indian Institute of Science Education and Research Tirupati, Andhra Pradesh - 517619, India. Thanks: Email address 1 : sujoy.cmi@gmail.com Thanks: Address 2 : Department of Mathematics, Indian Institute of Science Education and Research Tirupati, Andhra Pradesh - 517619, India. Thanks: Email address 2 : souradeep@iisertirupati.ac.in",
+    title: "Artin-Schreier Root Stacks and lifts of group actions",
     collection: "PAPERS",
     creator: "Sujoy Chakraborty 1, Souradeep Majumder 2",
     year: 2026,
@@ -1669651,7 +1669651,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14102",
-    title: "Theory and Applications of Convolution-Based short time offset linear canonical transform Thanks: Corresponding author: Manab Kundu",
+    title: "Theory and Applications of Convolution-Based short time offset linear canonical transform",
     collection: "PAPERS",
     creator: "Gita Rani Mahato, Manab Kundu, Alit Elsa Xavier",
     year: 2026,
@@ -1669667,7 +1669667,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14082",
-    title: "Inverse Hessian Curvature Flow in Minkowski Space I: Cocompact Hypersurfaces Thanks: The second author is supported by NSFC Grant No.12141105.",
+    title: "Inverse Hessian Curvature Flow in Minkowski Space I: Cocompact Hypersurfaces",
     collection: "PAPERS",
     creator: "Dake Li, Zhizhang Wang, Shiqi Yin",
     year: 2026,
@@ -1669891,7 +1669891,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14147",
-    title: "Agon: A Semi-Supervised Framework for Robust Satellite Interference Detection Thanks: A preliminary version of this work appeared in part at IEEE/CIC ICCC 2025 [ 52 ] . This work was supported by the National Natural Science Foundation of China under Grant U25A20396. Boyu Yang is with the College of Computer Science and Artificial Intelligence, Fudan University, Shanghai 200438, China, and also with the Space Internet Research Institute, Fudan University, Shanghai 200438, China.(Corresponding author: Kun Qiu.) (email: 24110240144@m.fudan.edu.cn). Thanks: Zhe Chen, Kun Qiu and Yue Gao are with the Space Internet Research Institute, Fudan University, Shanghai 200438, China. (email: zhechen@fudan.edu.cn; qkun@fudan.edu.cn; gao.yue@fudan.edu.cn). Thanks: Chunyu Yang is with the College of Computer Science and Artificial Intelligence, Fudan University, Shanghai 200438, China (email: 22307140114@m.fudan.edu.cn).",
+    title: "Agon: A Semi-Supervised Framework for Robust Satellite Interference Detection",
     collection: "PAPERS",
     creator: "Boyu Yang, Chunyu Yang, Zhe Chen",
     year: 2026,
@@ -1670643,7 +1670643,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14270",
-    title: "Robust Fall Recovery for Armless Bipedal-Wheeled Robots via Force - Guided Learning Thanks: Manuscript received: January 28, 2026; Revised: March 24, 2026; Accepted: May 14, 2026. Thanks: This paper was recommended for publication by Editor Lucia Pallottino upon evaluation of the Associate Editor and Reviewers comments. Thanks: This work was supported in part by the National Natural Science Foundation of China under Grant 52575004, and in part by the Beijing Natural Science Foundation under Grants L252015 and L243004. Thanks: The authors are with the School of Mechatronical Engineering, Beijing Institute of Technology, Beijing 100081, China (e-mail: houhaidong@bit.edu.cn; corresponding author: yuzg@bit.edu.cn). Thanks: Digital Object Identifier (DOI): see top of this page.",
+    title: "Robust Fall Recovery for Armless Bipedal-Wheeled Robots via Force - Guided Learning",
     collection: "PAPERS",
     creator: "Haidong Hou, Zhangguo Yu, Tao Han, Hengbo Qi, Khaleel Ghazal, Yu Zhang",
     year: 2026,
@@ -1671027,7 +1671027,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14247",
-    title: "Time-asymptotic stability of viscous shocks for the outflow problem of one-dimensional compressible fluids of Korteweg type Thanks: Acknowledgment. S. Han and H. Oh were partially supported by the National Research Foundation of Korea (RS-2024-00361663 and NRF-2019R1A5A1028324), and S. Han was additionally supported by the Doomyung Fellowship. J. Kim was supported by Samsung Science and Technology Foundation under Project Number SSTF-BA2401-01. The authors thank Professor Moon-Jin Kang for his valuable comments.",
+    title: "Time-asymptotic stability of viscous shocks for the outflow problem of one-dimensional compressible fluids of Korteweg type",
     collection: "PAPERS",
     creator: "Sungho Han, Jeongho Kim, HyeonSeop Oh",
     year: 2026,
@@ -1671251,7 +1671251,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14377",
-    title: "Shadows of Transparency: Signaling Transparency-Impeding Behavior Using Public Data Thanks: Accepted manuscript on May 5, 2026, to the 25th IFIP International Conference on Electronic Government (EGOV 2026). Affiliation: Utrecht University, Princetonplein 5, 3584 CC Utrecht, The Netherlands E-mail a.j.h.zuijderwijk@uu.nl",
+    title: "Shadows of Transparency: Signaling Transparency-Impeding Behavior Using Public Data",
     collection: "PAPERS",
     creator: "Jos Zuijderwijk (✉), Iris Beerepoot, Thomas Martens, Eva Knies, Tanja van der Lippe, Hajo A. Reijers",
     year: 2026,
@@ -1671394,7 +1671394,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14335",
-    title: "Recovery thresholds for hidden weighted sparse graphs Thanks: Accepted for presentation at the Conference on Learning Theory (COLT) 2026.",
+    title: "Recovery thresholds for hidden weighted sparse graphs",
     collection: "PAPERS",
     creator: "Zhe Hou, Jingcheng Liu",
     year: 2026,
@@ -1671633,7 +1671633,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14289",
-    title: "Operator Calculus for Population-Based Optimization: A Mean-Field Convergence Theory Thanks: 1 Aalto University, Department of Information and Service Management, Finland Thanks: 2 Aalto University, Department of Information and Communications Engineering, Finland Thanks: 3 Indian Institute of Management Ahmedabad, Operations and Decision Sciences, India Thanks: 4 University of Helsinki, Department of Economics and Management, Finland",
+    title: "Operator Calculus for Population-Based Optimization: A Mean-Field Convergence Theory",
     collection: "PAPERS",
     creator: "Pekka Malo 1, Lauri Viitasaari 1, Patrik Nummi 2, Antti Suominen 1, Ankur Sinha 3, Olli Tahvonen 4",
     year: 2026,
@@ -1671857,7 +1671857,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14463",
-    title: "EM-NeSy: Expectation Maximization for Neurosymbolic Learning Thanks: Code will be released upon publication.",
+    title: "EM-NeSy: Expectation Maximization for Neurosymbolic Learning",
     collection: "PAPERS",
     creator: "Annegret Seibt, Luc De Raedt, Giuseppe Marra",
     year: 2026,
@@ -1671953,7 +1671953,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14442",
-    title: "Minimal covering bodies and Brunn-Minkowski type inequalities for the covering radius Thanks: G. Codenotti and A. Freyer are funded by the Deutsche Forschungsgemeinschaft (DFG, German Research Foundation) - 539867386. K. Krivokuća is funded by the DFG under Germany´s Excellence Strategy– The Berlin Mathematics Research Center MATH+ (EXC-2046/2, project ID: 390685689).",
+    title: "Minimal covering bodies and Brunn-Minkowski type inequalities for the covering radius",
     collection: "PAPERS",
     creator: "Giulia Codenotti, Ansgar Freyer, Katarina Krivokuća",
     year: 2026,
@@ -1672049,7 +1672049,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14446",
-    title: "Decay of periodic entropy solutions to Euler-alignment systems with non-constant kernel Thanks: Acknowledgments. The first and the third author acknowledge the support by the INdAM - GNAMPA Project with title “Analisi e controllo per alcuni problemi di evoluzione”, codice CUP E53C25002010001. They also acknowledge the support and the kind hospitality of the University of Cyprus, where part of this research was done. The second author also acknowledges the support by the Internal Grant with title “Hyperbolic Conservation Laws: Theory and Applications” (HypConLaes) from University of Cyprus.",
+    title: "Decay of periodic entropy solutions to Euler-alignment systems with non-constant kernel",
     collection: "PAPERS",
     creator: "Debora Amadori, Cleopatra Christoforou, Gianmarco Cipollone",
     year: 2026,
@@ -1672097,7 +1672097,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14492",
-    title: "Recipe-Controlled Decoder Audit for Structural Knowledge-Graph Completion Thanks: Code and artifacts are available at github.com/AndyShan11/kgc-decoder-audit .",
+    title: "Recipe-Controlled Decoder Audit for Structural Knowledge-Graph Completion",
     collection: "PAPERS",
     creator: "Xihang Shan, Ye Luo",
     year: 2026,
@@ -1672321,7 +1672321,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14505",
-    title: "Hölder regularity up to the boundary for the g-Laplacian on Reifenberg flat domains Universidade Federal do Ceará. Departamento de Matemática. Fortaleza - CE, Brazil. E-mail address: alanpio@ufc.br",
+    title: "Hölder regularity up to the boundary for the g-Laplacian on Reifenberg flat domains",
     collection: "PAPERS",
     creator: "by",
     year: 2026,
@@ -1672767,7 +1672767,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14557",
-    title: "Private Information Retrieval for Large-Scale DNA-Based Data Storage 1 equal contribution; 2 School of Computation, Information and Technology, Technical University of Munich; 3 Department of Mathematics, Universität Zürich; 4 Faculty of Computer Science, Technion; and 5 School of Computer Science, Reichman University. Emails: {gokberk.erdogan, rawad.bitar, antonia.wachter-zeh}@tum.de, daniella.bar-lev@math.uzh.ch, zohary@cs.technion.ac.il This work was initiated during the Dagstuhl Seminar 24511 on “Coding Theory and Algorithms for Emerging Technologies in Synthetic Biology\". This work was funded by the European Union (DiDAX, 101115134). Views and opinions expressed are however those of the author(s) only and do not necessarily reflect those of the European Union or the European Research Council Executive Agency. Neither the European Union nor the granting authority can be held responsible for them. The work of D. Bar-Lev was also supported by Schmidt Sciences and by the Swiss National Science Foundation under grant number 212865. Fig. 1 -Fig. were created in BioRender. Bar-Lev, D. (2026).",
+    title: "Private Information Retrieval for Large-Scale DNA-Based Data Storage",
     collection: "PAPERS",
     creator: "Gökberk Erdoğan 1 2 , Daniella Bar-Lev 1 3 , Rawad Bitar 2 , Antonia Wachter-Zeh 2 , Zohar Yakhini 4 5",
     year: 2026,
@@ -1672895,7 +1672895,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14604",
-    title: "A Comparative Study of Deep Learning Architectures for Multi-Horizon Behavioural Forecasting for Mobile Health Thanks: Email: {nicolaou.pavlos, malialis.kleanthis, kontou.artemis, kolios.panayiotis}@ucy.ac.cy Thanks: ORCID: 0000-0001-8520-0105 (PN), 0000-0003-3432-7434 (KM), 0000-0003-0480-0796 (AK), 0000-0003-3981-993X (PK) Thanks: This work was supported by the European Union’s Horizon 2020 research and innovation programme under grant agreement No 739551 (KIOS CoE TEAMING) and from the Republic of Cyprus through the Deputy Ministry of Research, Innovation and Digital Policy. It was also supported by the CIPHIS (Cyprus Innovative Public Health ICT System) project of the NextGenerationEU programme under the Republic of Cyprus Recovery and Resilience Plan under grant agreement C1.1l2.",
+    title: "A Comparative Study of Deep Learning Architectures for Multi-Horizon Behavioural Forecasting for Mobile Health",
     collection: "PAPERS",
     creator: "Pavlos Nicolaou a , Kleanthis Malialis a , Artemis Kontou a , and Panayiotis Kolios a, b",
     year: 2026,
@@ -1673071,7 +1673071,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14621",
-    title: "Evaluating the Impact of Rhode Island’s Self-Sustaining Reemployment Services and Eligibility Assessment (RESEA) Program on Employment Outcomes Thanks: School of Public Policy, University of Maryland, College Park Thanks: School of Data Science and Society, University of North Carolina at Chapel Hill",
+    title: "Evaluating the Impact of Rhode Island’s Self-Sustaining Reemployment Services and Eligibility Assessment (RESEA) Program on Employment Outcomes",
     collection: "PAPERS",
     creator: "Harrison H Li",
     year: 2026,
@@ -1673262,7 +1673262,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14627",
-    title: "Algebraic Operations on Tensor Trains Thanks: This work was supported by the Czech Science Foundation through the project No. 25-18070S.",
+    title: "Algebraic Operations on Tensor Trains",
     collection: "PAPERS",
     creator: "Petr Tichavský",
     year: 2026,
@@ -1673758,7 +1673758,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14630",
-    title: "Parameter-robust well-posedness and discretisation for coupled Darcy–Forchheimer and advection-diffusion-reaction equations Thanks: Updated: August 10, 2026. Funding: This work has been partially supported by the Australian Research Council through the Future Fellowship grant FT220100496, and by the Center of Advanced Study (CAS) at the Norwegian Academy of Science and Letters under the program Mathematical Challenges in Brain Mechanics . RD acknowledges support from the Industrial Research and Consultancy Centre (IRCC), IIT Bombay (grant no. RI/0519-10001788-001). HH acknowledges financial support from the Anusandhan National Research Foundation (ANRF), Government of India (grant no. ANRF/ARG/2025/011989/MS).",
+    title: "Parameter-robust well-posedness and discretisation for coupled Darcy–Forchheimer and advection-diffusion-reaction equations",
     collection: "PAPERS",
     creator: "Rishi Das, Harsha Hutridurga, Amiya K. Pani, Ricardo Ruiz-Baier",
     year: 2026,
@@ -1674653,7 +1674653,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14804",
-    title: "Mapping Mathematical Hardness: Machine-Assisted Conjecture Discovery and the Quantification of Non-Triviality Thanks: Email: md2147@cam.ac.uk Department of Computer Science and Technology, University of Cambridge, Cambridge CB3 0FD, UK.",
+    title: "Mapping Mathematical Hardness: Machine-Assisted Conjecture Discovery and the Quantification of Non-Triviality",
     collection: "PAPERS",
     creator: "Madhuparna Das",
     year: 2026,
@@ -1675309,7 +1675309,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14943",
-    title: "Simplifying the Modeling of Arbitrary Conditionals in Natural Language Thanks: Equal contribution. Correspondence to: {yinhan.lu,eric.elmoznino,guillaume.lajoie}@mila.quebec .",
+    title: "Simplifying the Modeling of Arbitrary Conditionals in Natural Language",
     collection: "PAPERS",
     creator: "Yinhan Lu, Eric Elmoznino, Léo Gagnon, Sarthak Mittal, Tejas Kasetty, Guillaume Lajoie",
     year: 2026,
@@ -1675581,7 +1675581,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-14884",
-    title: "Collective Optimization on Riemannian manifolds with bounded curvature Thanks: Acknowledgment. The work of H. Huang was supported by the starting grant from Hunan University. The work of D. Kim was supported by National Research Foundation of Korea (NRF) grant funded by the Korea government (MSIT) (RS-2024-00454452). The work of H. Park was supported by the National Science and Technology Council (NSTC), Taiwan (Grant No. NSTC 115-2115-M-007-001-MY3).",
+    title: "Collective Optimization on Riemannian manifolds with bounded curvature",
     collection: "PAPERS",
     creator: "Hui Huang, Dohyun Kim, Hansol Park",
     year: 2026,
@@ -1675901,7 +1675901,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15028",
-    title: "An Autonomous Subgram SMA-Based Swimmer Thanks: The research presented in this article was partially funded by the Washington State University (WSU) Foundation and the Palouse Club through a Cougar Cage Award to N. O. P.-A. ; and, the Koerner Family Foundation (KFF) through a graduate fellowship to C. K. T. . Additional funding was provided by the WSU Voiland College of Engineering and Architecture through a start-up fund to N. O. P.-A. . Thanks: The authors are with the School of Mechanical and Materials Engineering, Washington State University (WSU), Pullman, WA 99164, USA. Corresponding authors’ e-mail: conor.trygstad@wsu.edu (C. K. T.); n.perezarancibia@wsu.edu (N. O. P.-A.).",
+    title: "An Autonomous Subgram SMA-Based Swimmer",
     collection: "PAPERS",
     creator: "Conor K. Trygstad, Francisco M. F. R. Gonçalves, Néstor O. Pérez-Arancibia",
     year: 2026,
@@ -1676317,7 +1676317,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15068",
-    title: "Design and Fabrication of a Spin Coater with In-Situ Optical Measurement for Soft Thin Films Thanks: The Japan Steel Works, LTD.",
+    title: "Design and Fabrication of a Spin Coater with In-Situ Optical Measurement for Soft Thin Films",
     collection: "PAPERS",
     creator: "1 st Daniel Gliksberg, 2 nd Jiajie Qiu, 3 rd Jun Suzuki, 4 th Kamal Youcef-Toumi",
     year: 2026,
@@ -1676381,7 +1676381,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15042",
-    title: "Joint 3D Trajectory Design and Resource Allocation for Secure Dual-UAV-aided Underlay Systems Thanks: This work was supported by the National Key Research and Development Program of China under Grant 2024YFC3306801, National Natural Science Foundation of China under Grant 62571045, and Natural Science Foundation of Chongqing under Grant (cstc2024ycjh-bgzxm003, CSTB2025NSCQ-LZX0053). (Corresponding author: Hongjiang Lei .) Thanks: Hongjiang Lei and Xiaqiu Wu are with the School of Communications and Information Engineering, Chongqing University of Posts and Telecommunications, Chongqing 400065, China (e-mail: leihj@cqupt.edu.cn, cquptwxq@163.com). Thanks: Ki-Hong Park is with the CEMSE Division, King Abdullah University of Science and Technology (KAUST), Thuwal 23955-6900, Saudi Arabia (e-mail: kihong.park@kaust.edu.sa). Thanks: Gaojie Chen is with the School of Flexible Electronics (SoFE), Sun Yat-sen University, Shenzhen, Guangdong 518107, China (e-mail: gaojie.chen@ieee.org). Thanks: Gaofeng Pan is with the School of Cyberspace Science and Technology, Beijing Institute of Technology, Beijing 100081, China (e-mail: gfpan@bit.edu.cn).",
+    title: "Joint 3D Trajectory Design and Resource Allocation for Secure Dual-UAV-aided Underlay Systems",
     collection: "PAPERS",
     creator: "Hongjiang Lei, Xiaqiu Wu, Ki-Hong Park",
     year: 2026,
@@ -1677005,7 +1677005,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15192",
-    title: "OpTI-Mouse: Optimization for Targeted Temporal Interference Stimulation in the Mouse Brain Thanks: This work was supported by the National Key R&D Program of China (2025YFC3410000), National Natural Science Foundation of China (62472206, 3254100307), Shenzhen Science and Technology Innovation Committee (RCYX20231211090405003, JCYJ20220818100213029), Guangdong Provincial Key Laboratory of Advanced Biomaterials (2022B1212010003), and the open research fund of the Guangdong Provincial Key Laboratory of Mathematical and Neural Dynamical Systems, the Center for Computational Science and Engineering at Southern University of Science and Technology. We would like to thank ZMT Zurich MedTech AG for providing Sim4Life software. Thanks: Accepted for publication in Proc. IEEE EMBC 2026 .",
+    title: "OpTI-Mouse: Optimization for Targeted Temporal Interference Stimulation in the Mouse Brain",
     collection: "PAPERS",
     creator: "Jingsheng Tang 1 2 , Zhengkang Zhou 1 2 , Yingyue Xin 1 , Zihan Ning 1 , Pengfei Wei 2 , Mo Wang 1 1 , Quanying Liu 1 1",
     year: 2026,
@@ -1677324,7 +1677324,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15196",
-    title: "Structural complexity vs. computational complexity Thanks: The authors would like to thank the Erwin Schrödinger International Institute for Mathematics and Physics (ESI) in Vienna for its hospitality and support during the thematic program ‘Reverse Mathematics’. The first author was supported in part by Simons Foundation Collaboration Grant #420806, which also provided travel support to the second author. The work of the second author was supported by the Austrian Science Fund (FWF) 10.55776/PIN1878224 and 10.55776/PAT4699225. The third author was supported by the Royal Society of New Zealand through the Marsden grant 23-VUW-118.",
+    title: "Structural complexity vs. computational complexity",
     collection: "PAPERS",
     creator: "Johanna N.Y. Franklin, Dino Rossegger, Dan Turetsky",
     year: 2026,
@@ -1677404,7 +1677404,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15223",
-    title: "A Staggered Discontinuous Galerkin Method for linear elasticity problem on Polytopal Meshes Thanks: Submitted to the editors DATE.",
+    title: "A Staggered Discontinuous Galerkin Method for linear elasticity problem on Polytopal Meshes",
     collection: "PAPERS",
     creator: "Long Chen, Xuehai Huang, Ruishu Wang, Ran Zhang",
     year: 2026,
@@ -1677452,7 +1677452,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15205",
-    title: "Scott Analysis below the Vaught Ordinal Thanks: The authors would like to thank the Erwin Schrödinger International Institute for Mathematics and Physics (ESI) in Vienna for its hospitality and support during the thematic program ’Reverse Mathematics’. The first and second authors would like to thank the Hausdorff Research Institute for Mathematics (HIM) in Bonn for its hospitality during the Trimester Program ’Definability, Decidability, and Computability’. This work was supported by the Hausdorff Center for Mathematics, funded by the Deutsche Forschungsgemeinschaft (DFG, German Research Foundation) under Germany’s Excellence Strategy – 390685813. The work of the second author was supported by the Austrian Science Fund (FWF) 10.55776/PIN1878224 and 10.55776/PAT4699225. The work of the third author was supported by the Royal Society of New Zealand through the Marsden grant 23-VUW-118.",
+    title: "Scott Analysis below the Vaught Ordinal",
     collection: "PAPERS",
     creator: "David Gonzalez, Dino Rossegger, Dan Turetsky",
     year: 2026,
@@ -1677916,7 +1677916,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15330",
-    title: "OneBar: An End-to-End Content-Grounded Generative Query Recommendation Framework for E-Commerce Video Feeds Thanks: ∗ Equal contribution. Thanks: † Corresponding author. CCS: Information systems Recommender systems CCS: Information systems Retrieval models and ranking CCS: Information systems Search interfaces CCS: Computing methodologies Natural language generation",
+    title: "OneBar: An End-to-End Content-Grounded Generative Query Recommendation Framework for E-Commerce Video Feeds",
     collection: "PAPERS",
     creator: "Yao Tang 1 * , Ying Yang 2 * , Ben Chen 2 * † , Yufei Ma 2 , Zihan Liang 2 , Chenyi Lei 2 Wenwu Ou 2 , Jian Liu 1 1 Zhejiang University, 2 Kuaishou Technology benchen4395@gmail.com",
     year: 2026,
@@ -1678076,7 +1678076,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15352",
-    title: "Chroma-gated, differentiable OKLCH interpolation: Continuous Oklab fallback for color-cast reduction Thanks: Licensed under CC BY 4.0.",
+    title: "Chroma-gated, differentiable OKLCH interpolation: Continuous Oklab fallback for color-cast reduction",
     collection: "PAPERS",
     creator: "Naoyuki Uchida, naoyuki.uchida.DNF@gmail.com",
     year: 2026,
@@ -1678588,7 +1678588,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15392",
-    title: "Ring-induced localizations of nilpotent groups Thanks: The third author was supported by the Basic Research Program of the National Research University Higher School of Economics.",
+    title: "Ring-induced localizations of nilpotent groups",
     collection: "PAPERS",
     creator: "Sergei O. Ivanov, Georgii Kadantsev, Aleksandr Krasilnikov",
     year: 2026,
@@ -1679068,7 +1679068,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15462",
-    title: "A full p 4 ​ r p^{4r} supercongruence tower for a level-three symmetric-cube hypergeometric sequence Thanks: ORCID: 0009-0005-9802-379X",
+    title: "A full p 4 ​ r p^{4r} supercongruence tower for a level-three symmetric-cube hypergeometric sequence",
     collection: "PAPERS",
     creator: "Alex Shvets",
     year: 2026,
@@ -1679580,7 +1679580,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15498",
-    title: "Inclusion graph of annihilators in a commutative ring Thanks: Key Words : Inclusion graph; Annihilator; Annihilator graph; Diameter; Girth 2010 Mathematics Subject Classification : 13A15, 13B99, 05C99.",
+    title: "Inclusion graph of annihilators in a commutative ring",
     collection: "PAPERS",
     creator: "Hana Safari, Farzad Shaveisi, Reza Nikandish",
     year: 2026,
@@ -1679660,7 +1679660,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15539",
-    title: "Two-variable Parity Polynomial for Virtual Knotoids Thanks: F. Lei supported in part by a grant of NSFC (No. 12331003); F. Li supported by the Fundamental Research Funds for the Central Universities (No. DUT25LAB302); A. V. supported by the Ministry of Sciences and Higher Education of Russia (agreement no. 075-02-2026-1339).",
+    title: "Two-variable Parity Polynomial for Virtual Knotoids",
     collection: "PAPERS",
     creator: "Siqi Ding, Suo Gao, Fengchun Lei, Fengling Li*, Andrei Vesnin",
     year: 2026,
@@ -1680075,7 +1680075,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15560",
-    title: "Quadratic one-forms on logarithmic Higgs moduli Thanks: E-mail: sumit.roy061@gmail.com Thanks: Address: Stat-Math Unit, Indian Statistical Institute, 203 B.T. Road, Kolkata 700 108, India.",
+    title: "Quadratic one-forms on logarithmic Higgs moduli",
     collection: "PAPERS",
     creator: "Sumit Roy",
     year: 2026,
@@ -1680491,7 +1680491,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15627",
-    title: "Strong Marker Sets for Arbitrary Generating Sets Thanks: The authors acknowledge the partial support of their research by the Fundamental Research Funds for the Central Universities and by the National Natural Science Foundation of China (NSFC) grant 12271263.",
+    title: "Strong Marker Sets for Arbitrary Generating Sets",
     collection: "PAPERS",
     creator: "Su Gao, Tianhao Wang",
     year: 2026,
@@ -1681066,7 +1681066,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15748",
-    title: "Estimating Demand for a New Product Thanks: The author would like to thank seminar participants of College of Business Law and Governance, James Cook University, and University of Tasmania for the comments and suggestions. All errors remain the author’s.",
+    title: "Estimating Demand for a New Product",
     collection: "PAPERS",
     creator: "Sizhong Sun",
     year: 2026,
@@ -1681130,7 +1681130,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15710",
-    title: "Scalar curvature rigidity for products of convex hypersurfaces Thanks: Funded by the Deutsche Forschungsgemeinschaft (DFG, German Research Foundation) – Project numbers 224262486; 313840899 (Lockman) – 523079177; 427320536; 390685587 (Zeidler) Thanks: (Zeidler) Funded by the European Union (ERC Starting Grant 101116001 – COMSCAL). Views and opinions expressed are however those of the author(s) only and do not necessarily reflect those of the European Union or the European Research Council. Neither the European Union nor the granting authority can be held responsible for them.",
+    title: "Scalar curvature rigidity for products of convex hypersurfaces",
     collection: "PAPERS",
     creator: "Samuel Lockman, Rudolf Zeidler",
     year: 2026,
@@ -1681993,7 +1681993,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15823",
-    title: "Minimization of the inradius of convex bodies for prescribed diameter and circumradius in Minkowski spaces Thanks: 2020 Mathematics Subject Classification. 52A40 ; 52A10, 52A15, 52A20 . This research has been funded by the PID2022-136320NB-I00 project / AEI/10.13039/501100011033/ FEDER, UE",
+    title: "Minimization of the inradius of convex bodies for prescribed diameter and circumradius in Minkowski spaces",
     collection: "PAPERS",
     creator: "René Brandenberg, Bernardo González Merino, Mia Runge",
     year: 2026,
@@ -1682296,7 +1682296,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15910",
-    title: "Calibrated Triage, Not Autonomy: Confidence Estimation for Medical Vision-Language Models Thanks: 1 Corresponding author. 2 Shared senior authorship.",
+    title: "Calibrated Triage, Not Autonomy: Confidence Estimation for Medical Vision-Language Models",
     collection: "PAPERS",
     creator: "Reza Khanmohammadi 1, Kundan Thind 2, Mohammad M. Ghassemi 2",
     year: 2026,
@@ -1682360,7 +1682360,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15907",
-    title: "Rigidity and flexibility of discrete conjugate nets with flexible 3 × 3 3\\times 3 -subnets Thanks: This research was funded in whole or in part by the Austrian Science Fund (FWF) 10.55776/F77. For open access purposes, the authors have applied a CC BY public copyright license to any author accepted manuscript version arising from this submission.",
+    title: "Rigidity and flexibility of discrete conjugate nets with flexible 3 × 3 3\\times 3 -subnets",
     collection: "PAPERS",
     creator: "Ivan Izmestiev, Georg Nawratil, Sobhan Samareh Rad, Kiumars Sharifmoghaddam",
     year: 2026,
@@ -1682616,7 +1682616,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15959",
-    title: "Quantifying the Impact of Lossy Compression on Neural Generative Surrogate Modeling Thanks: LLNL-CONF-2007282",
+    title: "Quantifying the Impact of Lossy Compression on Neural Generative Surrogate Modeling",
     collection: "PAPERS",
     creator: "Zhimin Li, Harshitha Menon, Charles Jekel, Valerio Pascucci, Peter Lindstrom",
     year: 2026,
@@ -1683175,7 +1683175,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15960",
-    title: "Chaining Tasks, Redefining Work: A Theory of AI Automation Thanks: We thank Seyed Mahdi Hosseini Maasoum, Guy Lichtinger, Anand Shah, Philip Trammell, Michael Zhao, and seminar participants at the Economics of AI Reading Group and Social Analytics Lab at MIT for helpful discussions.",
+    title: "Chaining Tasks, Redefining Work: A Theory of AI Automation",
     collection: "PAPERS",
     creator: "Mert Demirer, John J. Horton, Nicole Immorlica, Brendan Lucier, Peyman Shahidi",
     year: 2026,
@@ -1683383,7 +1683383,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15970",
-    title: "The Exact Reach of Conormal Invariants in Determinantal Complexity: a Quadratic No-Go Theorem Thanks: San Jose, CA. [karthiksheshadri217@gmail.com] .",
+    title: "The Exact Reach of Conormal Invariants in Determinantal Complexity: a Quadratic No-Go Theorem",
     collection: "PAPERS",
     creator: "Karthik Sheshadri",
     year: 2026,
@@ -1683591,7 +1683591,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15832",
-    title: "SILAGE: Memory-Efficient, Full-Gradient-Free Nonconvex Optimization for Nested Finite Sums Thanks: Center of Excellence for Generative AI, King Abdullah University of Science and Technology (KAUST), Thuwal, Saudi Arabia. Correspondence to: Igor Sokolov <igor.sokolov.1@kaust.edu.sa> .",
+    title: "SILAGE: Memory-Efficient, Full-Gradient-Free Nonconvex Optimization for Nested Finite Sums",
     collection: "PAPERS",
     creator: "Igor Sokolov, Laurent Condat, Peter Richtárik",
     year: 2026,
@@ -1684326,7 +1684326,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16180",
-    title: "To forget is to preserve: Machine Unlearning for 3D medical image segmentation Thanks: Thanks: * Both 1 st and 2 nd author contributed equally.",
+    title: "To forget is to preserve: Machine Unlearning for 3D medical image segmentation",
     collection: "PAPERS",
     creator: "1 st Nitesh Kumar Singh, 2 nd Akhilesh Singh, 3 rd Arjun Arora",
     year: 2026,
@@ -1684390,7 +1684390,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16081",
-    title: "On reduction and gluing technique of simple-minded systems over self-injective algebras Thanks: The authors are supported by NSFC (No. 12031014 and No.12301044).",
+    title: "On reduction and gluing technique of simple-minded systems over self-injective algebras",
     collection: "PAPERS",
     creator: "Zhen Zhang",
     year: 2026,
@@ -1684470,7 +1684470,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16174",
-    title: "Decoupling and Discrete Strichartz Estimates for Dispersive Equations on the Torus Thanks: This work was conceived and written while the author was visiting the Department of Mathematics at UC Berkeley.",
+    title: "Decoupling and Discrete Strichartz Estimates for Dispersive Equations on the Torus",
     collection: "PAPERS",
     creator: "Yuda Chen",
     year: 2026,
@@ -1684502,7 +1684502,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16085",
-    title: "A construction of simple-minded systems over domestic Brauer graph algebras II: the 1-domestic case Thanks: The research work is supported by NSFC ( No.12301044).",
+    title: "A construction of simple-minded systems over domestic Brauer graph algebras II: the 1-domestic case",
     collection: "PAPERS",
     creator: "Zhen Zhang",
     year: 2026,
@@ -1684710,7 +1684710,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-15847",
-    title: "Integral Hamiltonian Floer Theory: Foundations Thanks: The first author is supported by NSF DMS-2404843 Thanks: The second author is supported by NSF DMS-2345030, NSF DMS-2506403, and Simons Foundation’s Travel Support for Mathematicians.",
+    title: "Integral Hamiltonian Floer Theory: Foundations",
     collection: "PAPERS",
     creator: "Shaoyun Bai, Guangbo Xu",
     year: 2026,
@@ -1685110,7 +1685110,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16247",
-    title: "Improved Join Order Optimization for Database Queries using Hybrid Quantum-Classical Approaches for QUBO Problems Thanks: Both authors contributed equally to this research. CCS: Hardware Hardware reliability screening CCS: Computer systems organization System on a chip CCS: Theory of computation Probabilistic computation CCS: Theory of computation Quantum query complexity CCS: Mathematics of computing Nonlinear equations CCS: Information systems Query optimization CCS: Information systems Structured Query Language CCS: Computing methodologies Combinatorial algorithms CCS: Computing methodologies Nonalgebraic algorithms CCS: Computing methodologies Optimization algorithms CCS: General and reference Reference works",
+    title: "Improved Join Order Optimization for Database Queries using Hybrid Quantum-Classical Approaches for QUBO Problems",
     collection: "PAPERS",
     creator: "Nitin Nayak, Tobias Winker, Umut Çalıkyılmaz, Jinghua Groppe, Sven Groppe",
     year: 2026,
@@ -1685270,7 +1685270,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16303",
-    title: "An Adjoint-based Neural Regulator for Real-Time Optimal Control with State Constraints Thanks: Department of Mechanical Engineering, University of Michigan, Ann Arbor, Michigan, USA. agboola@umich.edu, yuxinton@umich.edu, udiinyang@umich.edu",
+    title: "An Adjoint-based Neural Regulator for Real-Time Optimal Control with State Constraints",
     collection: "PAPERS",
     creator: "Isaiah A. Agboola, Yuxin Tong, Uduak Inyang-Udoh",
     year: 2026,
@@ -1685350,7 +1685350,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16238",
-    title: "Global well-posedness for the compressible Navier–Stokes equations with vacuum and smallness on coefficient-coupled scaling invariant quantity Thanks: This research was partially supported by National Natural Science Foundation of China (Nos. 12301287 and 12371227).",
+    title: "Global well-posedness for the compressible Navier–Stokes equations with vacuum and smallness on coefficient-coupled scaling invariant quantity",
     collection: "PAPERS",
     creator: "Hao Xu, Xin Zhong",
     year: 2026,
@@ -1685430,7 +1685430,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16237",
-    title: "The Backward Stochastic Partial Differential Integral Equations: Solvability and Comparison Principle Thanks: This paper is supported by the National Key R&D Program of China (No. 2022YFA1006101), the National Natural Science Foundation of China (Nos. 12271158 and 12371445), and the State Key Laboratory of Cryptography and Digital Economy Security, Shandong University (No. KFZD2505).",
+    title: "The Backward Stochastic Partial Differential Integral Equations: Solvability and Comparison Principle",
     collection: "PAPERS",
     creator: "Qingxin Meng, Qi Zhang",
     year: 2026,
@@ -1685478,7 +1685478,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16306",
-    title: "Graph Diffusion-Advection Operator for Directed Graph Signal Processing Thanks: CHM. Chan, A. Cionca, V. Škultéty and D. Van De Ville are with the Neuro-X Institute, Ecole polytechnique fédérale de Lausanne, and the Department of Radiology and Medical Informatics, University of Geneva, Switzerland. E-mail: chunheimichael.chan@epfl.ch, dimitri.vandeville@epfl.ch Thanks: This work was supported by the Swiss National Science Foundation, Sinergia project “Precision mapping of electrical brain network dynamics with application to epilepsy”, Grant number 209470. Thanks: Manuscript received XXX; revised XXX.",
+    title: "Graph Diffusion-Advection Operator for Directed Graph Signal Processing",
     collection: "PAPERS",
     creator: "Chun Hei Michael Chan, Alexandre Cionca",
     year: 2026,
@@ -1685637,7 +1685637,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16350",
-    title: "A Zalcman–Pang type rescaling result for φ \\varphi -normal harmonic mappings and applications Thanks: ∗ Corresponding author: Nikhil Bharti",
+    title: "A Zalcman–Pang type rescaling result for φ \\varphi -normal harmonic mappings and applications",
     collection: "PAPERS",
     creator: "Kuldeep Singh Charak, Pratiksha, Nikhil Bharti ∗",
     year: 2026,
@@ -1686180,7 +1686180,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16361",
-    title: "Monoidal categorification of generalized cluster algebras and conjectures of Fraser and Gleitz Thanks: † {\\dagger} Corresponding author",
+    title: "Monoidal categorification of generalized cluster algebras and conjectures of Fraser and Gleitz",
     collection: "PAPERS",
     creator: "Xiao-Juan An, Jian-Rong Li, and Yan-Feng Luo †",
     year: 2026,
@@ -1687251,7 +1687251,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16609",
-    title: "On stability of outliers from the circular law Thanks: The authors gratefully acknowledge support from the Fondation de l’Ecole polytechnique, as well as from the Agence Nationale de la Recherche: ANR-25-CE40-5672 and ANR-25-CE40-1380.",
+    title: "On stability of outliers from the circular law",
     collection: "PAPERS",
     creator: "Guillaume Dubach, Aniss Fares, Lilou Thomas",
     year: 2026,
@@ -1687363,7 +1687363,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16668",
-    title: "CraBERT: Efficient Phoneme Encoder Pre-Training via Cascade Fusion of Subword Representations for Text-to-Speech Thanks: This work was supported by JST Moonshot Grant Number JPMJMS2011 and JST SPRING Grant Number JPMJSP2108.",
+    title: "CraBERT: Efficient Phoneme Encoder Pre-Training via Cascade Fusion of Subword Representations for Text-to-Speech",
     collection: "PAPERS",
     creator: "\\authorblockN Dong Yang, Yuki Saito, Wataru Nakata, and Hiroshi Saruwatari \\authorblockA The University of Tokyo, Japan E-mail: ydqmkkx@gmail.com",
     year: 2026,
@@ -1687635,7 +1687635,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16619",
-    title: "Expanding the rough Heston model in H H Thanks: The authors thank the participants of the Rough Volatility Day in Nov 2025 for their feedback and insightful comments. Especially, they are grateful to Jim Gatheral for encouraging them to also look at expansions around H 0 = 0 H_{0}=0 . Dörte Kreher acknowledges funding by the Deutsche Forschungsgemeinschaft (DFG, German Research Foundation) – CRC/TRR 388 \"Rough Analysis, Stochastic Dynamics and Related Fields“ – Project ID 516748464 (Project B02).",
+    title: "Expanding the rough Heston model in H",
     collection: "PAPERS",
     creator: "Paul P. Hager, Dörte Kreher",
     year: 2026,
@@ -1687891,7 +1687891,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16538",
-    title: "Pluripotential Operadic Calculus Thanks: Financial support from AGAUR, Govern de Catalunya, through the FI Program and from the Spanish State Research Agency through projects PID2020-117971GB-C22, PID2024-155646NB-I00 and EUR2023-143450.",
+    title: "Pluripotential Operadic Calculus",
     collection: "PAPERS",
     creator: "Anna Sopena-Gilboy",
     year: 2026,
@@ -1688289,7 +1688289,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16807",
-    title: "Connecting Speech to Words through Images Thanks: This work was supported in part by two grants of the Ministry of Research, Innovation and Digitization, CNCS-UEFISCDI, project numbers PN-IV-P2-2.1-TE-2023-1632 and PN-IV-P7-7.1-PTE-2024-054, within PNCDI IV.",
+    title: "Connecting Speech to Words through Images",
     collection: "PAPERS",
     creator: "Gabriel Pirlogeanu, Dan Oneata, Horia Cucu, Herman Kamper",
     year: 2026,
@@ -1688464,7 +1688464,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16773",
-    title: "Generative Predictive Distributions for Time Series Thanks: The authors thank Ministerio de Ciencia, Innovación y Universidades through grant CEX2021-001181-M (Llorens-Terrazas) and the Research Council of Finland (Meitz) for financial support, and CSC – IT Center for Science, Finland, for computational resources during early stages of this research. We would also like to thank Caio Almeida, Dante Amengual, Giovanni Ballarin, Christian Brownlees, Valentina Corradi, Juan Carlos Escanciano, Gustavo Freire, Lyudmila Grigoryeva, Stefán Guðmundsson, Daniel Gutknecht, Adam Lee, Alessandra Luati, Eduardo Fonseca Mendes, Rasmus Søndergaard Pedersen, Anders Rahbek, Alessio Sancetta, André B.M. Souza, Jesper Riis-Vestergaard Sørensen, Emilio Zanetti Chini, and Stefan Voigt for useful discussions and for providing numerous helpful comments, and Christian Dahl and Emil Sørensen for sharing their code with us. Contact addresses: Jordi Llorens-Terrazas, Department of Economics, Universidad Carlos III de Madrid, 28903 Getafe (Madrid); e-mail: jordi.llorens@uc3m.es. Mika Meitz, Discipline of Economics, University of Helsinki, P. O. Box 17, FI–00014 University of Helsinki, Finland; e-mail: mika.meitz@helsinki.fi.",
+    title: "Generative Predictive Distributions for Time Series",
     collection: "PAPERS",
     creator: "Jordi Llorens-Terrazas, Mika Meitz",
     year: 2026,
@@ -1688752,7 +1688752,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16833",
-    title: "Oxygen in the protostellar clump OMC-2 FIR4 Thanks: Based on observations made with the NASA/DLR Stratospheric Observatory for Infrared Astronomy (SOFIA). SOFIA is jointly operated by the Universities Space Research Association, Inc. (USRA), under NASA contract NNA17BF53C , and the Deutsches SOFIA Institut (DSI) under DLR contract 50 OK 2002 to the University of Stuttgart. The publication uses data collected with the Atacama Pathfinder Experiment (APEX, programme ID 0105.C-0281A-2020). The APEX Project is led by the Max Planck Institute for Radio Astronomy at the ESO La Silla Paranal Observatory.",
+    title: "Oxygen in the protostellar clump OMC-2 FIR4",
     collection: "PAPERS",
     creator: "J. Harju, P. Caselli, R. Güsten, H. Wiesemeyer, S. Brünken, M. Mertens, O. Sipilä, J. Stutzki, F. Wyrowski",
     year: 2026,
@@ -1688848,7 +1688848,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16820",
-    title: "Augmented Lagrangian Method for Mathematical Programs with Second-Order Cone Complementarity Constraints Thanks: This work was supported in part by the National Natural Science Foundation of China (Grant No. 12571324) and Natural Science Foundation of Henan Province (Grant No. 262300421849) and Henan Provincial Selective Research Funding Program for Returned Scholars Studying Abroad (Grant No. HNLX202609).",
+    title: "Augmented Lagrangian Method for Mathematical Programs with Second-Order Cone Complementarity Constraints",
     collection: "PAPERS",
     creator: "Yan-Chao Liang, Chen-Yuan Zhu, Sheng-Jie Zhang, Gui-Hua Lin, Xide Zhu",
     year: 2026,
@@ -1689568,7 +1689568,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16895",
-    title: "Entire groups generated by fractional powers of operators Thanks: This first author has been partially supported the project PTA2024-024763-I, of MICIU/AEI/10.13039/501100011033 and FSE+. The second author is supported by PID2022-137294NB-I00, DGI-FEDER, of the MCEI and Project E48-20R, Gobierno de Aragón, Spain",
+    title: "Entire groups generated by fractional powers of operators",
     collection: "PAPERS",
     creator: "Rodrigo Barberán and Pedro J. Miana",
     year: 2026,
@@ -1689632,7 +1689632,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16937",
-    title: "Combinatorial covering properties in an uncountable setting: canonical examples Thanks: The research of Michał Pawlikowski and Piotr Szewczak was funded by the National Science Center, Poland Weave-UNISONO call in the Weave programme Project: Set-theoretic aspects of topological selections 2021/03/Y/ST1/00122. This research has been completed while Michał Pawlikowski was the Doctoral Candidate in the Interdisciplinary Doctoral School at the Łódź University of Technology, Poland. The research of Lyubomyr Zdomskyy was funded in whole by the Austrian Science Fund (FWF) [10.55776/I5930 and 10.55776/PAT5730424].",
+    title: "Combinatorial covering properties in an uncountable setting: canonical examples",
     collection: "PAPERS",
     creator: "Ayelet Amsalem, Adi Jarden, Michał Pawlikowski, Piotr Szewczak, Boaz Tsaban, Lyubomyr Zdomskyy",
     year: 2026,
@@ -1689951,7 +1689951,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17013",
-    title: "Exploding and vanishing gradients in deep neural networks: the effect of residual connections Thanks: Work of VSB was supported by a grant from Google Research India and a National Science Chair from the Government of India.",
+    title: "Exploding and vanishing gradients in deep neural networks: the effect of residual connections",
     collection: "PAPERS",
     creator: "Vivek S Borkar",
     year: 2026,
@@ -1690111,7 +1690111,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17041",
-    title: "Benchmarking LLM Agents on Meta-Analysis Articles from Nature Portfolio DOI: XXXXXXX.XXXXXXX Conference: arXiv Preprint; ; ISBN: 978-1-4503-XXXX-X/26/07 Thanks: Code: https://github.com/THUIR/MetaSyn ; Dataset: https://huggingface.co/datasets/THUIR/MetaSyn . CCS: Computing methodologies Information retrieval CCS: Computing methodologies Natural language processing CCS: Computing methodologies Evaluation of retrieval results CCS: Information systems Digital libraries and archives CCS: Human-centered computing Interactive systems and tools",
+    title: "Benchmarking LLM Agents on Meta-Analysis Articles from Nature Portfolio DOI: XXXXXXX.XXXXXXX Conference: arXiv Preprint; ; ISBN: 978-1-4503-XXXX-X/26/07",
     collection: "PAPERS",
     creator: "Anzhe Xie, Weihang Su, Yujia Zhou, Yiqun Liu, Qingyao Ai",
     year: 2026,
@@ -1690479,7 +1690479,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16983",
-    title: "Grassmannian Quantum cohomology in the infinite limit and total positivity Thanks: Inés Chung-Halpern is funded by a London School of Geometry and Number Theory–King’s College London PhD studentship, which is supported by the Engineering and Physical Sciences Research Council [EP/S021590/1]",
+    title: "Grassmannian Quantum cohomology in the infinite limit and total positivity",
     collection: "PAPERS",
     creator: "Inés Chung-Halpern and Konstanze Rietsch",
     year: 2026,
@@ -1690495,7 +1690495,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17052",
-    title: "Nitsche-based FEM for the Laplace eigenvalue problem: spectral approximation and a posteriori error analysis Thanks: Submitted to the editors DATE.",
+    title: "Nitsche-based FEM for the Laplace eigenvalue problem: spectral approximation and a posteriori error analysis",
     collection: "PAPERS",
     creator: "Arbaz Khan, David Mora, Jesus Vellojin",
     year: 2026,
@@ -1690511,7 +1690511,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-16955",
-    title: "Canonical Ramsey theorem for graphs with clean intersections Thanks: The first author was supported by ANID and DAAD under ANID-PFCHA/Doctorado Acuerdo Bilateral DAAD Becas Chile/2023-62230021. The fourth author was supported by NSF grant DMS 2300347. The fifth author was supported by ANID Becas/Doctorado Nacional 21221049.",
+    title: "Canonical Ramsey theorem for graphs with clean intersections",
     collection: "PAPERS",
     creator: "Matías Azócar Carvajal, Ayush Basu, Christian Reiher, Vojtěch Rödl, Giovanne Santos, Mathias Schacht",
     year: 2026,
@@ -1691279,7 +1691279,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17188",
-    title: "Not Truly Multilingual: Script Consistency as a Missing Dimension in VLM Evaluation Thanks: Data and code is available at https://github.com/prabhjotschugh/Not-Truly-Multilingual-PuMVR .",
+    title: "Not Truly Multilingual: Script Consistency as a Missing Dimension in VLM Evaluation",
     collection: "PAPERS",
     creator: "Prabhjot Singh, Bhushan Pawar, Madhu Reddiboina, Rajvee Sheth",
     year: 2026,
@@ -1692079,7 +1692079,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17238",
-    title: "Vector peakon equations and isospectral flows in Clifford algebras Thanks: e-mail: szmigiel@math.usask.ca",
+    title: "Vector peakon equations and isospectral flows in Clifford algebras",
     collection: "PAPERS",
     creator: "A.N.W. Hone",
     year: 2026,
@@ -1692159,7 +1692159,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17247",
-    title: "Large-scale Tunable Liquid Lens-assisted VLC Systems under Random Receiver Orientation Thanks: K. W. S. Palitharathna and I. Krikidis are with the IRIDA Research Centre for Communication Technologies, Department of Electrical and Computer Engineering, University of Cyprus, 1678 Nicosia, Cyprus (e-mails: {palitharathna.kapila, krikidis}@ucy.ac.cy). Thanks: C. Psomas is with the Department of Computer Science and Engineering, European University Cyprus, Nicosia, Cyprus (email: c.psomas@euc.ac.cy). Thanks: G. Pan is with School of Cyberspace Science and Technology, Beijing Institute of Technology, Beijing 100081, China (e-mail: gfpan@bit.edu.cn).",
+    title: "Large-scale Tunable Liquid Lens-assisted VLC Systems under Random Receiver Orientation",
     collection: "PAPERS",
     creator: "Kapila W. S. Palitharathna, Constantinos Psomas",
     year: 2026,
@@ -1692175,7 +1692175,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17282",
-    title: "Non-isomorphic restricted Lie algebras with isomorphic restricted enveloping algebras Thanks: This work was supported by the project PID2024-155502NB-I00 granted by MICIU/AEI/10.13039/501100011033 and by Xunta de Galicia through the Competitive Reference Groups (GRC), ED431C 2023/31.",
+    title: "Non-isomorphic restricted Lie algebras with isomorphic restricted enveloping algebras",
     collection: "PAPERS",
     creator: "Xabier García-Martínez",
     year: 2026,
@@ -1692927,7 +1692927,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17405",
-    title: "Treatment Response Optimized Clinical Decision Support AI System via Digital Twin Simulation ∗ Corresponding author: Lu Wang (lwang71@central.uh.edu).",
+    title: "Treatment Response Optimized Clinical Decision Support AI System via Digital Twin Simulation",
     collection: "PAPERS",
     creator: "Xinyu Qin † , Anil K. Sood ‡ , Ruiheng Yu † , Sara Corvigno ‡ , Elaine Stur ‡ , and Lu Wang †,††,∗",
     year: 2026,
@@ -1693103,7 +1693103,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17398",
-    title: "SoK: AI-Augmented Binary Reversing Corresponding author: Hyungjoon Koo (kevin.koo@skku.edu)",
+    title: "SoK: AI-Augmented Binary Reversing",
     collection: "PAPERS",
     creator: "Yujeong Kwon † Yiyue Zhang † Shakhzod Yuldoshkhujaev † Kexin Pei ‡ Dokyung Song § Hyungjoon Koo †",
     year: 2026,
@@ -1693375,7 +1693375,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17465",
-    title: "Perron–Frobenius Operator Matching for Generative Modeling footnoteinfo This work was supported in part by the Hong Kong RGC under Project CityU 11203321, CityU 11213322, CityU 11207823. XQ acknowledges the support from U.S. National Science Foundation (NSF) grants SHF-2215573 and IIS-2212419.",
+    title: "Perron–Frobenius Operator Matching for Generative Modeling",
     collection: "PAPERS",
     creator: "Shiqi Zhang, Wuwei Wu, Jaemin Oh, Jie Chen, Xiaoning Qian",
     year: 2026,
@@ -1693535,7 +1693535,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17483",
-    title: "Existence and Stability of Solutions of the Dirichlet Problem for the p p -Poisson Equation in Metric Measure Spaces Thanks: Part of the research was done while L.C. visited Aalto University. The visit was supported by the Research Council of Finland project 360184. Thanks: T.T. was funded by the Finnish Cultural Foundation.",
+    title: "Existence and Stability of Solutions of the Dirichlet Problem for the p p -Poisson Equation in Metric Measure Spaces",
     collection: "PAPERS",
     creator: "Luis Castillo, Timo Takala",
     year: 2026,
@@ -1693566,7 +1693566,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17434",
-    title: "Littlewood-Paley and Carleson measure characterizations of Lipschitz spaces adapted to Schrödinger operators Thanks: 1 School of Mathematics and Statistics, Jiangxi Normal University, Nanchang, Jiangxi 330022, China Thanks: ∗ Corresponding author, Email: hugr@mail.ustc.edu.cn Thanks: The first author is supported by the National Natural Science Foundation of China (Grant No. 12361017) and the Natural Science Foundation of Jiangxi Province (Grant No. 20242BAB25002). The third author is supported by the National Natural Science Foundation of China (Grant No. 12461018)",
+    title: "Littlewood-Paley and Carleson measure characterizations of Lipschitz spaces adapted to Schrödinger operators",
     collection: "PAPERS",
     creator: "Qing Hong 1, Yanfang Xu 1, Guorong Hu 1∗",
     year: 2026,
@@ -1693678,7 +1693678,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17557",
-    title: "Universal Image Restoration via Internalized Chain-of-Thought Reasoning Thanks: Yu Guo and Zhengru Fang contributed equally to this work. Thanks: Yu Guo, Zhengru Fang, Senkang Hu, Yihang Tao, and Yuguang Fang are with the Hong Kong JC Lab of Smart City and the Department of Computer Science, City University of Hong Kong. Email: {yu.guo, zhefang4-c, senkang.forest, yihang.tommy}@my.cityu.edu.hk, my.fang@cityu.edu.hk. Thanks: Shengfeng He is with the School of Computing and Information Systems, Singapore Management University. Email: shengfenghe@smu.edu.sg. Thanks: Phone Lin is with the Computer Science and Information Engineering, National Taiwan University. Email: plin@csie.ntu.edu.tw.",
+    title: "Universal Image Restoration via Internalized Chain-of-Thought Reasoning",
     collection: "PAPERS",
     creator: "Yu Guo, Zhengru Fang, Shengfeng He, Senior Member, IEEE, Senkang HuYihang Tao, Phone Lin, Fellow, IEEE , Yuguang Fang, Fellow, IEEE",
     year: 2026,
@@ -1693870,7 +1693870,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17492",
-    title: "The horizontal Laplacian of a Riemannian submersion with totally geodesic fibers and an integrable horizontal distribution Thanks: The author is partially supported by JSPS KAKENHI Grant Number 23K25769, 24K06703.",
+    title: "The horizontal Laplacian of a Riemannian submersion with totally geodesic fibers and an integrable horizontal distribution",
     collection: "PAPERS",
     creator: "Tatsuya Tate",
     year: 2026,
@@ -1694493,7 +1694493,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17597",
-    title: "Projective Infinities and b b -Calculus Thanks: This work was funded in part by the Austrian Science Fund (FWF): 10.55776/P33559. For open access purposes, the authors have applied a CC BY public copyright license to any author-accepted manuscript version arising from this submission. A.Č. thanks University of Auckland for hospitality. Both authors gratefully acknowledge support from the Royal Society of New Zealand via Marsden Grants 19-UOA-008 and 24-UOA-005 and from thematic program “Differential Complexes: Theory, Discretization, and Applications” at the Erwin Schrödinger Institute (ESI). This article is based upon work from COST Action CaLISTA CA21109 supported by COST (European Cooperation in Science and Technology). https://www.cost.eu.",
+    title: "Projective Infinities and b b -Calculus",
     collection: "PAPERS",
     creator: "Andreas Čap and A. Rod Gover",
     year: 2026,
@@ -1694781,7 +1694781,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17716",
-    title: "DPDS: A DPDK-Based Packet Delayer and Spacer The authors acknowledge funding in part by the Deutsche Forschungsgemeinschaft (DFG) under grant 503231190, and in part by the Open Access Publishing Fund of the University of Tübingen. Furthermore, the authors acknowledge the use of Claude Opus 4.8 to assist in developing scripts for experiment automation and data visualization presented in this paper.",
+    title: "DPDS: A DPDK-Based Packet Delayer and Spacer",
     collection: "PAPERS",
     creator: "Etienne Zink {}^{\\hrefhttps://orcid.org/0009-0001-0879-535X} , Fabian Ihle {}^{\\hrefhttps://orcid.org/0009-0005-3917-2402 } , and Michael Menth {}^{\\hrefhttps://orcid.org/0000-0002-3216-1015}",
     year: 2026,
@@ -1695117,7 +1695117,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17738",
-    title: "Sobolev extensions, interpolation inequalities and consequences Thanks: The first author acknowledges partial support through US National Science Foundation grant DMS-1954995, as well as through the German Research Foundation through EXC-2111-390814868 and TRR 352-Project-ID 470903074. The second and third authors have been supported by the Academy of Finland via Centre of Excellence in Analysis and Dynamics Research (Project number 323960).",
+    title: "Sobolev extensions, interpolation inequalities and consequences",
     collection: "PAPERS",
     creator: "Rupert L. Frank, Pekka Koskela, Riddhi Mishra",
     year: 2026,
@@ -1695341,7 +1695341,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17773",
-    title: "Quantum Routers: A Switching-Fabric Framework for Quantum-Native Forwarding Thanks: The authors are with the www.QuantumInternet.it research group, University of Naples Federico II, Naples, 80125 Italy. Thanks: This work has been funded by the European Union under Horizon Europe ERC-CoG grant QNattyNet, n.101169850. Views and opinions expressed are however those of the author(s) only and do not necessarily reflect those of the European Union or the European Research Council Executive Agency. Neither the European Union nor the granting authority can be held responsible for them. A preliminary conference version of this work has been accepted in the Proceedings of IEEE ICC’26 [ 19 ]",
+    title: "Quantum Routers: A Switching-Fabric Framework for Quantum-Native Forwarding",
     collection: "PAPERS",
     creator: "Jessica Illiano, Caterina De Risi",
     year: 2026,
@@ -1695421,7 +1695421,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17811",
-    title: "UMB: A Unified Markov Binary Format for Probabilistic Model Checking (extended version) Thanks: The authors are ordered alphabetically. This work was initiated by Dagstuhl Meeting 24134 “Towards A Unified Interface For Modern Probabilistic Model Checking Tools” .",
+    title: "UMB: A Unified Markov Binary Format for Probabilistic Model Checking (extended version",
     collection: "PAPERS",
     creator: "Roman Andriushchenko, Arnd Hartmanns, Joshua Jeppson, Sebastian Junges, Tobias Meggendorfer, David Parker, Tim Quatmann, Maximilian Weininger",
     year: 2026,
@@ -1695692,7 +1695692,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17747",
-    title: "The volume of tubes in Lie groups Thanks: A.B. was supported by DFG grant BE 2484/10-1. Thanks: D.F. was supported by an NSERC Discovery grant and ISF grant No. 1750/20 Thanks: J.K. was supported by CU grants PRIMUS/24/SCI/009 and UNCE/24/SCI/022.",
+    title: "The volume of tubes in Lie groups",
     collection: "PAPERS",
     creator: "Andreas Bernig, Dmitry Faifman, Jan Kotrbatý",
     year: 2026,
@@ -1695916,7 +1695916,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17864",
-    title: "Weak and strong q q -analogs of the Laguerre–Pólya class Thanks: Corresponding author: Boris Shapiro, shapiro@math.su.se .",
+    title: "Weak and strong q q -analogs of the Laguerre–Pólya class",
     collection: "PAPERS",
     creator: "Dimitar K. Dimitrov, Boris Shapiro",
     year: 2026,
@@ -1696364,7 +1696364,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-17884",
-    title: "Naive atoms of blowups: examples Thanks: For the purpose of open access, the authors have applied a Creative Commons Attribution (CC BY) licence to any Author Accepted Manuscript version arising from this submission.",
+    title: "Naive atoms of blowups: examples",
     collection: "PAPERS",
     creator: "Christian Böhning, Hans-Christian Graf von Bothmer, Zac Su’a",
     year: 2026,
@@ -1696924,7 +1696924,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-18045",
-    title: "Transit timing and starspot-induced transit depth variations in the ∼ \\sim 17 Myr old HIP 67522 system Thanks: This study uses CHEOPS data observed as part of the Guest Observers (GO) programmes CH_PR240017 (PI Chakraborty) and CH_PR240004 (PI Ilin).",
+    title: "Transit timing and starspot-induced transit depth variations in the ∼ \\sim 17 Myr old HIP 67522 system",
     collection: "PAPERS",
     creator: "H. Chakraborty, M. Lendl, A. Nigioni, J. A. Egger, J.M. Almenara, M. P. Battley, A. G. M. Pietrow, J. Venturini, A. Heitzmann, B. Akinsanmi, I. Apergis, D. Bayliss, J. P. Faria, A. D. Feinstein, J. F. Fernández, E. Fontanet, E. Gillen, E. Ilin, T. Jestin, J. S. Jenkins, E. J. Lößnitz, J. McCormac, C. Modrasini, F. Neiradiaz, H. P. Osborn, D. J. M. Petit dit de la Roche, S. Saha, A. M. S. Smith, S. Ulmer-Moll, P. J. Wheatley",
     year: 2026,
@@ -1697324,7 +1697324,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-18047",
-    title: "Analysis of the asymmetric shelf shuffle Thanks: I thank Prof. Persi Diaconis for his encouraging comments and for suggesting several useful references. I also thank Prof. Jason Fulman for answering some questions regarding [ 9 ] .",
+    title: "Analysis of the asymmetric shelf shuffle",
     collection: "PAPERS",
     creator: "Raghavendra Tripathi",
     year: 2026,
@@ -1699994,7 +1699994,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-18437",
-    title: "Impact of inhomogeneous curvature on growth rate measurements from magnitude fluctuations ∗ E-mail: andnguyen@swin.edu.au",
+    title: "Impact of inhomogeneous curvature on growth rate measurements from magnitude fluctuations",
     collection: "PAPERS",
     creator: "A. Nguyen 1,2,∗, C. Blake 1,2, H. J. Macpherson 3,4",
     year: 2026,
@@ -1700569,7 +1700569,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-18505",
-    title: "On locally distinguishing Sierpiński dynamical systems Thanks: Supported by NSF grant DMS-2247364.",
+    title: "On locally distinguishing Sierpiński dynamical systems",
     collection: "PAPERS",
     creator: "Sergei Merenkov",
     year: 2026,
@@ -1701336,7 +1701336,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-18618",
-    title: "A Note on the Matched Asymptotic Structure of Weak Shock Reflection at Nearly Glancing Incidence Justin Kin Jun Hew 1 1 Australia’s Climate Simulator (ACCESS-NRI), Australian National University, ACT 2601, Canberra, Australia justinkinjun.hew@anu.edu.au",
+    title: "A Note on the Matched Asymptotic Structure of Weak Shock Reflection at Nearly Glancing Incidence",
     collection: "PAPERS",
     year: 2026,
     source: "arXiv",
@@ -1701463,7 +1701463,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-18627",
-    title: "PACT: Preserving Anchored Cores in Task-vectors for Model Merging Thanks: ⋆ \\star Equal contribution. † \\dagger Corresponding author.",
+    title: "PACT: Preserving Anchored Cores in Task-vectors for Model Merging",
     collection: "PAPERS",
     creator: "Ningyuan Shi, Zhipeng Zhou, Hao Wang, Chunyan Miao, Peilin Zhao",
     year: 2026,
@@ -1701607,7 +1701607,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-18719",
-    title: "Reassessing the role of intermediaries in exports Thanks: We thank the Spanish Tax Agency’s Department of Customs and Excise (AEAT) for customs data. We thank participants at the Deusto Business School Brown Bag Seminar and XXVIII Encuentro de Economía Aplicada for their comments and suggestions. This research was conducted as part of Project PID2021-122133NB-I00 financed by MCIN/AEI/10.13039/501100011033/FEDER, EU. We also gratefully acknowledge financial support from the Basque Government Department of Education (IT1429-22 and IT1793-26).",
+    title: "Reassessing the role of intermediaries in exports",
     collection: "PAPERS",
     creator: "Aitor Garmendia-Lazcano, Raúl Mínguez, Asier Minondo",
     year: 2026,
@@ -1701751,7 +1701751,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-18684",
-    title: "How firms export: direct and indirect exporting, intermediaries, and hybrid firms Thanks: We thank the Spanish Tax Agency’s Department of Customs and Excise (AEAT) for customs data and Aitor Garmendia for SABI data. We also thank the comments and suggestions from Ignacio Berasategui, Pedro Bom, Francisco Requena, and Martin Stojanovik and participants at XXVII Conference on International Economics. This research was conducted as part of the Project PID2021-122133NB-I00 financed by MCIN/AEI/10.13039/501100011033/FEDER, EU. We also gratefully acknowledge financial support from the Basque Government Department of Education (IT1429-22 and IT1793-26).",
+    title: "How firms export: direct and indirect exporting, intermediaries, and hybrid firms",
     collection: "PAPERS",
     creator: "Raúl Mínguez, Asier Minondo",
     year: 2026,
@@ -1702055,7 +1702055,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-18695",
-    title: "Global existence, blow-up behavior, and numerical simulations for a class of chemotaxis-driven fish-mussel systems Thanks: ∗ Corresponding author",
+    title: "Global existence, blow-up behavior, and numerical simulations for a class of chemotaxis-driven fish-mussel systems",
     collection: "PAPERS",
     creator: "Gnanasekaran Shanmugasundaram, Jitraj Saha ∗",
     year: 2026,
@@ -1702551,7 +1702551,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-18823",
-    title: "Discovery of a 24-millisecond pulsar in a very long orbit with the Murchison Widefield Array Facilities: MWA, MeerKAT astropy ( 3 ; 1 ; 2 ) , presto ( 61 ; 34 ) , dspsr ( 77 ) , psrchive ( 78 ) , peasoup ( 57 ) , SeeKAT ( 4 ) , Mosaic ( 11 ) , pulsar_spectra ( 69 ) , scintools ( 62 ; 63 ) , PSRpy ( https://github.com/emmanuelfonseca/PSRpy ), emcee ( 19 ) , tempo ( 53 ) , dracula ( 20 ) .",
+    title: "Discovery of a 24-millisecond pulsar in a very long orbit with the Murchison Widefield Array",
     collection: "PAPERS",
     creator: "Chia Min Tan, N. D. Ramesh Bhat, Bradley W. Meyers, Christopher P. Lee, Ewan D. Barr, Vivek Venkatraman Krishnan, Paulo C. C. Freire, Garvit Grover, Samuel J. McSweeney, Nicholas A. Swainston, Qiuyang Fu, Mengyao Xue",
     year: 2026,
@@ -1703286,7 +1703286,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-18956",
-    title: "A Combinatorial Generalization of a Random-Player Game Thanks: fridyeh@post.bgu.ac.il",
+    title: "A Combinatorial Generalization of a Random-Player Game",
     collection: "PAPERS",
     creator: "Yehonatan Fridman",
     year: 2026,
@@ -1703302,7 +1703302,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-18920",
-    title: "Structured lattices and their applications to security Thanks: This work was supported in part by the Finnish Research Council (Grant #351271) and in part by the Business Finland Co-Innovation Consortium (Grant #5845483). R. Y. Njah Nchiwo was supported by the Magnus Ehrnrooth Foundation and the Finnish Academy of Science and Letters, Finland.",
+    title: "Structured lattices and their applications to security",
     collection: "PAPERS",
     creator: "Lenny Fukshansky, Camilla Hollanti, Rahinatou Y. Njah Nchiwo",
     year: 2026,
@@ -1703413,7 +1703413,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-18895",
-    title: "Symmetric and Isotypic Hilbert Series for Symmetric Ideals Thanks: This work has been supported by European Union’s HORIZON-MSCA-2023-DN-JD programme under the Horizon Europe (HORIZON) Marie Skłodowska-Curie Actions, grant agreement 101120296 (TENORS)",
+    title: "Symmetric and Isotypic Hilbert Series for Symmetric Ideals",
     collection: "PAPERS",
     creator: "Henri Breloer, Cordian Riener",
     year: 2026,
@@ -1703493,7 +1703493,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-18926",
-    title: "Dynamical blanket times Thanks: NJ was partially supported by a Leverhulme Early Career Fellowship (ECF-2021-385). MT was partially supported by the FCT (Fundação para a Ciência e a Tecnologia) project 2022.07167.PTDC and by his EPSRC grant UKRI1120. Thanks to Stephen Cantrell for reading an early draft of this paper and for useful discussions around the proof of Lemma 3.1 .",
+    title: "Dynamical blanket times",
     collection: "PAPERS",
     creator: "Natalia Jurga, Mike Todd",
     year: 2026,
@@ -1703733,7 +1703733,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-19006",
-    title: "On monomial resonance Thanks: The author have been partly funded by the project PNRR-III-C9-2022-I8 ”Cohomological Hall algebras of smooth surfaces and applications” - CF 44/14.11.2022. Thanks: The author would like to thank professor Marian Aprodu for suggesting the problem.",
+    title: "On monomial resonance",
     collection: "PAPERS",
     creator: "Călin Spiridon",
     year: 2026,
@@ -1704405,7 +1704405,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-19075",
-    title: "Random Schrödinger operators on manifolds and abstract bounds for multiplier-type operators Thanks: © 2026 by the authors. This paper may be reproduced, in its entirety, for non-commercial purposes. J.-C. C. acknowledges support through the Engineering & Physical Sciences Research Council (EP/X011488/1). E. S. acknowledges support through the Austrian Science Fund (FWF) [Grant-DOI 10.55776/P35322, 10.55776/PAT5120424, and 10.55776/PAT4632823].",
+    title: "Random Schrödinger operators on manifolds and abstract bounds for multiplier-type operators",
     collection: "PAPERS",
     creator: "Jean-Claude Cuenin, Konstantin Merz, Eduard Stefanescu",
     year: 2026,
@@ -1704837,7 +1704837,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-19167",
-    title: "Teaching Software Engineering with LLM and MCP Integration: From Classroom to Industry Practice Thanks: Xiaoxue Ma",
+    title: "Teaching Software Engineering with LLM and MCP Integration: From Classroom to Industry Practice",
     collection: "PAPERS",
     creator: "Kehui Chen 2 , Jacky Keung 2 , Weining Li 1 , Xiangbing Shao 1 , Yishu Li 3 , Xiaoxue Ma 3 , 1",
     year: 2026,
@@ -1704933,7 +1704933,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-19115",
-    title: "Finite free perpetuities Thanks: This research was funded in part by National Science Centre, Poland, 2023/51/B/ST1/01535. For the purpose of Open Access, the authors have applied a CC-BY public copyright licence to any Author Accepted Manuscript (AAM) version arising from this submission.",
+    title: "Finite free perpetuities",
     collection: "PAPERS",
     creator: "Julia Le Bihan, Bartosz Kołodziejek",
     year: 2026,
@@ -1705556,7 +1705556,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-19228",
-    title: "JWST-TST High Contrast: First Direct Spectroscopy of GJ 504 b reveals Clouds and Possible Metal Enrichment Facilities: JWST (NIRSpec) ( 61 ; 19 ) , MAST ( 87 ) SciPy ( 143 ) , NumPy ( 54 ) , matplotlib ( 59 ) , astropy ( 9 ; 7 ; 8 ) , corner ( 45 ) , STPSF ( 113 ; 112 ) , petitRADTRANS ( 98 ; 96 ) , jwst ( 25 ) , whereistheplanet, h5py, pandas ( 110 ) , astroquery ( 49 ) , BREADS ( 2 ) , species ( 136 ) , dynesty ( 135 ) , easyCHEM ( 75 ) https://whereistheplanet.com/ https://docs.h5py.org/",
+    title: "JWST-TST High Contrast: First Direct Spectroscopy of GJ 504 b reveals Clouds and Possible Metal Enrichment",
     collection: "PAPERS",
     creator: "Aneesh Baburaj, Jean-Baptiste Ruffio, Marshall Perrin, Jerry W. Xuan, William O. Balmer, Yayaati Chachan, Quinn M. Konopacky, Travis S. Barman, Mathilde Mâlin, Kielan K. W. Hoch, Emily Rickman, Kimberly Ward-Duong, Laurent Pueyo, Julien H. Girard, Isabel Rebollido, Alexis Bidot, Christine Chen, Kadin Worthen, Cicero Lu, Jens Kammerer, Roeland P. van der Marel, Nikole K. Lewis, Jeff Valenti, Sara Seager, Chris Stark, Rémi Soummer, Jay Anderson, Charles-Philippe Lajoie, Mark Clampin, C. Matt Mountain",
     year: 2026,
@@ -1705668,7 +1705668,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-19292",
-    title: "Risk Stratification for ICU Delirium using Pervasive Ambient Sensing Information Thanks: A.B. and P.R. were supported by NIH/NINDS R01 NS120924, NIH/NIBIB R01 EB029699. P.R. was also supported by NSF CAREER 1750192. ∗ Jiaqing Zhang and Sabyasachi Bandyopadhyay contributed equally to this work. † Parisa Rashidi is the corresponding author.",
+    title: "Risk Stratification for ICU Delirium using Pervasive Ambient Sensing Information",
     collection: "PAPERS",
     creator: "Jiaqing Zhang 1 ∗ , Sabyasachi Bandyopadhyay 2 ∗ , Miguel Contreras 3 , Jessica Sena 3 , Yuanfang Ren 4 , Andrea Davidson 4 , Ziyuan Guan 4 , Tezcan Ozrazgat-Baslanti 4 , Subhash Nerella 3 , Azra Bihorac 4 , Parisa Rashidi 3 †",
     year: 2026,
@@ -1705716,7 +1705716,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-19286",
-    title: "Correct Yourself, Keep My Trust: How Self-Correction and Social Connection Shape Credibility in Social Chatbots Thanks: NOTE: AI assistants were used for language editing, framing suggestions on author-drafted text, and generation of the chatbot avatar images used in the study. All research design, analysis, and claims are the authors’ own. CCS: Human-centered computing Empirical studies in HCI CCS: Human-centered computing Natural language interfaces CCS: Human-centered computing HCI design and evaluation methods",
+    title: "Correct Yourself, Keep My Trust: How Self-Correction and Social Connection Shape Credibility in Social Chatbots",
     collection: "PAPERS",
     creator: "Biswadeep Sen, Yi-Chieh Lee",
     year: 2026,
@@ -1706756,7 +1706756,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-19394",
-    title: "On Epimorphisms of Hypergraphic Automata and Input Symbol Semigroups Thanks: Corresponding author. J. Hamoud (hamoud.math@gmail.com)",
+    title: "On Epimorphisms of Hypergraphic Automata and Input Symbol Semigroups",
     collection: "PAPERS",
     creator: "J. Hamoud",
     year: 2026,
@@ -1706948,7 +1706948,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-19447",
-    title: "Reimagining SED Fitting with Cosmological Galaxy Simulations and Machine Learning ∗ e-mail: d.zimmerman@ufl.edu",
+    title: "Reimagining SED Fitting with Cosmological Galaxy Simulations and Machine Learning",
     collection: "PAPERS",
     creator: "Dhruv T. Zimmerman 1, Desika Narayanan 1,2",
     year: 2026,
@@ -1707044,7 +1707044,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-19455",
-    title: "X-Shooter survey of disk accretion in Upper Scorpius Thanks: Based on observations collected at the European Southern Observatory under ESO programmes 097.C-0378(A), 0101.C-0866(A), 113.26NN.001, 113.26NN.003, 115.27XL.001, and 105.2082.003.",
+    title: "X-Shooter survey of disk accretion in Upper Scorpius",
     collection: "PAPERS",
     creator: "A. Empey, C.F. Manara, R. Garcia Lopez, A. Natta, R. Claes, F. Zagaria, J.M. Alcalá, R. Anania, G. Beccari, J. Carpenter, S. Facchini, D. Fedele, G. Lodato, K. Mauco, A. Miotello, B. Nisini, I. Pascucci, L. Piscarreta, G. Rosotti, A. Scholz, L. Testi, M. Vioque",
     year: 2026,
@@ -1707476,7 +1707476,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-19476",
-    title: "Can In-Context Learning Support Intrinsic Curiosity? Thanks: Equal contribution. Correspondence to: {eric.elmoznino,guillaume.lajoie}@gmail.com , sangnie@google.com",
+    title: "Can In-Context Learning Support Intrinsic Curiosity",
     collection: "PAPERS",
     creator: "Eric Elmoznino, Sangnie Bhardwaj, Johannes von Oswald, Rajai Nasser, Blaise Agüera y Arcas, João Sacramento, Rif A. Saurous, Guillaume Lajoie",
     year: 2026,
@@ -1707652,7 +1707652,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-19500",
-    title: "On Cycles in Multiset Permutations, Parking Functions, and Related Structures Thanks: Key words and phrases : parking function, multiset permutation, cycle type, cyclic point, terminal closer, equivalence of ensembles Thanks: Funding : F. Burghart is supported by the Austrian Science Fund (FWF) [10.55776/F1002]. S. Wagner is supported by the Swedish research council (VR), grant 2022-04030. M. Yin is supported by the Simons Travel Support for Mathematicians Grant 00007227. Thanks: This manuscript has been accepted for publication in the proceedings of the 37th International Conference on Probabilistic, Combinatorial and Asymptotic Methods for the Analysis of Algorithms (AofA 2026).",
+    title: "On Cycles in Multiset Permutations, Parking Functions, and Related Structures",
     collection: "PAPERS",
     creator: "Calum Buchanan ∗, Fabian Burghart †, Stephan Wagner †,‡, Mei Yin ∗",
     year: 2026,
@@ -1708659,7 +1708659,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-19639",
-    title: "Mean-Field Control with a Common Hidden State under Decentralized Observations Thanks: E. Bayraktar is partially supported by the National Science Foundation under grant DMS-2507940 and by the Susan M. Smith chair.",
+    title: "Mean-Field Control with a Common Hidden State under Decentralized Observations",
     collection: "PAPERS",
     creator: "Erhan Bayraktar, Ali Devran Kara",
     year: 2026,
@@ -1708819,7 +1708819,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-19655",
-    title: "A Flat Connection: The Pooling Factor and the Geometry of Centring in Hierarchical MCMC Thanks: Code and package available at https://github.com/ABindoff/fibr .",
+    title: "A Flat Connection: The Pooling Factor and the Geometry of Centring in Hierarchical MCMC",
     collection: "PAPERS",
     creator: "Aidan D. Bindoff",
     year: 2026,
@@ -1710210,7 +1710210,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-19896",
-    title: "Optimal and Adaptive Bayesian Sampling for Non-Linear Parameter Estimation under White Noise Corresponding author: lennart.bosch@uni-ulm.de",
+    title: "Optimal and Adaptive Bayesian Sampling for Non-Linear Parameter Estimation under White Noise",
     collection: "PAPERS",
     creator: "Lennart H. Bosch, Martin B. Plenio",
     year: 2026,
@@ -1710370,7 +1710370,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-19811",
-    title: "Second Order Explicit Splitting Scheme for Fluid-Poroelastic Structure Interaction Problems Thanks: Submitted to the editors DATE.",
+    title: "Second Order Explicit Splitting Scheme for Fluid-Poroelastic Structure Interaction Problems",
     collection: "PAPERS",
     creator: "Yifan Wang, Jeonghun Lee, SunČica Čanić",
     year: 2026,
@@ -1710722,7 +1710722,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-19974",
-    title: "Interpreting Content and Speaker Characteristics in Factorised Self-Supervised Subspaces Thanks: This work was supported in part by the National Research Foundation of South Africa.",
+    title: "Interpreting Content and Speaker Characteristics in Factorised Self-Supervised Subspaces",
     collection: "PAPERS",
     creator: "Kyle Janse van Rensburg and Herman Kamper",
     year: 2026,
@@ -1711042,7 +1711042,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20013",
-    title: "A Regularized Nikaido–Isoda Function Approach to Multi-Leader–Follower Games Thanks: This work was supported by Japan Society for the Promotion of Science, and Grant-in-Aid for Early-Career Scientists (JP26K21172), Grant-in-Aid for Scientific Research (C) (JP25K15008, JP25K15002), and Grant-in-Aid for Scientific Research (B) (JP25K03082).",
+    title: "A Regularized Nikaido–Isoda Function Approach to Multi-Leader–Follower Games",
     collection: "PAPERS",
     creator: "Atsushi Hori, Takayuki Okuno, Ellen H. Fukuda",
     year: 2026,
@@ -1711266,7 +1711266,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20043",
-    title: "Improved bound on symmetric differences of intersecting families Lihua Feng was supported by the NSFC (Nos. 12271527 and 12471022) and NSF of Qinghai Province (No. 2025-ZJ-902T). Zejun Huang was supported by the NSFC (No. 12171323) and the Guangdong Basic and Applied Basic Research Foundation (No. 2022A1515011995) E-mail addresses: fenglh@163.com (L. Feng), zejunhuang@szu.edu.cn (L. Feng), jv01065499zai@163.com (Q. Wang), wuyjmath@163.com (Y. Wu).",
+    title: "Improved bound on symmetric differences of intersecting families",
     collection: "PAPERS",
     creator: "Lihua Feng, Zejun Huang, Qifan Wang, Yongjiang Wu, [2mm] School of Mathematics, Statistics, HNP-LAMA, Central South University Changsha, Hunan, 410083, China",
     year: 2026,
@@ -1712177,7 +1712177,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20126",
-    title: "Order embeddings of real matrix domains Thanks: The author was supported by grants N1-0368, J1-60025, and P1-0288 from ARIS, Slovenia.",
+    title: "Order embeddings of real matrix domains",
     collection: "PAPERS",
     creator: "Peter Šemrl",
     year: 2026,
@@ -1712592,7 +1712592,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20217",
-    title: "Existence of solutions for elliptic problems involving the ( 1 , q ) (1,q) -Laplacian operator and a discontinuous superlinear nonlinearity Thanks: Marcos A. V. Costa has been supported by FAPESP 2025/08701-5. Marcos T. O. Pimenta has been supported by FAPESP 2023/06617-1 and CNPq 303868/2024-4. Olimpio H. Miyagaki has been supported by FAPESP 2022/16407-1 and CNPq 303256/2022-2.",
+    title: "Existence of solutions for elliptic problems involving the ( 1 , q ) (1,q) -Laplacian operator and a discontinuous superlinear nonlinearity",
     collection: "PAPERS",
     creator: "Marcos A. V. Costa, Olímpio H. Miyagaki, Marcos T. O. Pimenta",
     year: 2026,
@@ -1712672,7 +1712672,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20186",
-    title: "Quasi-random graphs, subgraph counts and graph limits, again Thanks: Supported by the Knut and Alice Wallenberg Foundation and the Swedish Research Council",
+    title: "Quasi-random graphs, subgraph counts and graph limits, again",
     collection: "PAPERS",
     creator: "Svante Janson",
     year: 2026,
@@ -1712976,7 +1712976,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20307",
-    title: "The Hermitian-Yang-Mills Iteration on Stable Bundles Thanks: † Research supported in part by a Simons Fellowship and a grant from the Institute for Advanced Study School of Mathematics during the Spring 2026 term.",
+    title: "The Hermitian-Yang-Mills Iteration on Stable Bundles",
     collection: "PAPERS",
     creator: "Huai-Dong Cao † , Xiaofeng Sun, and Yingying Zhang",
     year: 2026,
@@ -1713231,7 +1713231,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20389",
-    title: "C o L I : A Reproducible Platform for C ontinuum R o bot L earning via Monolithic 3D Printing and I somorphic Teleoperation Thanks: This work was supported by the Natural Science Foundation of Shanghai (Grant No. 25ZR1402370), and partially by Shanghai Frontiers Science Center of Human-centered Artificial Intelligence (ShangHAI), MoE Key Laboratory of Intelligent Perception and Human-Machine Collaboration (KLIP-HuMaCo). Thanks: Open source resources of this paper are released at https://tangrobot.github.io/CoLI-website/ . Thanks: All authors are with the School of Information Science and Technology at ShanghaiTech University, Shanghai, China ( ∗ corresponding author, tangzy2022, xiaochx@shanghaitech.edu.cn ).",
+    title: "C o L I : A Reproducible Platform for C ontinuum R o bot L earning via Monolithic 3D Printing and I somorphic Teleoperation",
     collection: "PAPERS",
     creator: "Ziyuan Tang, Chenxi Xiao",
     year: 2026,
@@ -1713727,7 +1713727,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20439",
-    title: "Four-digit Kaprekar dynamics in odd bases Thanks: Richard E. Schwartz’s research is supported by NSF grant DMS-2505281.",
+    title: "Four-digit Kaprekar dynamics in odd bases",
     collection: "PAPERS",
     creator: "Evan Chen, Ken Ono, Richard E. Schwartz, Dinesh S. Thakur",
     year: 2026,
@@ -1713919,7 +1713919,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20435",
-    title: "Choosing A Headline Estimand from Matching, DID, and Hybrid Designs: A Minimax-Regret Approach Thanks: We are grateful to Isaiah Andrews and Jesse Shapiro for repeated feedback and guidance for this project. We also thank Jeff Smith and Petra Todd for repeated guidance on replicating their papers. We benefitted from useful comments by Chris Campos, Raj Chetty, Jamie Fogel, Hidehiko Ichimura, Sho Miyaji, Jon Roth, Matt Staiger, Davide Viviano, and Oscar Volpe. Angela Arora, Yannick Feussi, and Stefan Nicov provided excellent research assistance. All remaining errors are ours. Sasaki gratefully acknowledges the generous research support provided by Brian and Charlotte Grove.",
+    title: "Choosing A Headline Estimand from Matching, DID, and Hybrid Designs: A Minimax-Regret Approach",
     collection: "PAPERS",
     creator: "Yechan Park, Yuya Sasaki",
     year: 2026,
@@ -1714908,7 +1714908,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20571",
-    title: "Less is More: Lightweight Prompt Compression for Question Answering Applications on Edge Devices This article is supported in part by the National Science Foundation of China (NSFC) under Grants XXXXXXXX, XXXXXXXX, and XXXXXXXX; in part by the Fundamental Research Funds for the Central Universities (Grant No. WKXXXXXXXXXX). Z. Xu, R. Hou, Y. Xu, H. Xu, Y. Liao, and Y. Zhu are with the School of Computer Science and Technology, University of Science and Technology of China, Hefei, Anhui, China, 230027, and also with Suzhou Institute for Advanced Research, University of Science and Technology of China, Suzhou, Jiangsu, China, 215123. E-mails: zihuaixu@mail.ustc.edu.cn; xuyangcs@ustc.edu.cn; xuhongli@ustc.edu.cn; ymliao98@mail.ustc.edu.cn; zhiweiyao, {zhiweiyao, isaaczhu}@mail.ustc.edu.cn.",
+    title: "Less is More: Lightweight Prompt Compression for Question Answering Applications on Edge Devices",
     collection: "PAPERS",
     creator: "Zihuai Xu, Ruofei Hou, *Yang Xu, Hongli Xu, Yunming Liao, Ying Zhu",
     year: 2026,
@@ -1714940,7 +1714940,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20603",
-    title: "A Survey of Large Language Models for Perception and Measurement of Human Psychology Thanks: *Corresponding author: Linlin Shen (e-mail: llshen@szu.edu.cn).",
+    title: "A Survey of Large Language Models for Perception and Measurement of Human Psychology",
     collection: "PAPERS",
     creator: "Yudong Li, Xiaoyi Chen, Jiawei Cai, Zehao Zhong, Haoyang Yang, Huajin Tang, Linlin Shen",
     year: 2026,
@@ -1715036,7 +1715036,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20609",
-    title: "Understanding Privacy By Formalizing It Thanks: This work was supported by the Fonds National de la Recherche Luxembourg through the project Deontic Logic for Epistemic Rights (OPEN O20/14776480).",
+    title: "Understanding Privacy By Formalizing It",
     collection: "PAPERS",
     creator: "Réka Markovich, Truls Pedersen, Marija Slavkovik",
     year: 2026,
@@ -1715084,7 +1715084,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20612",
-    title: "Adolescence to Adulthood Online: Tracing Youth Digital Expression on Reddit Over 13 Years Thanks: Author 1: tlc373@drexel.edu Thanks: Author 2: kp3329@drexel.edu Thanks: Author 3: afsaneh.razi@drexel.edu Thanks: Author 4: sp3945@drexel.edu Thanks: Date submitted: 2026-04-07",
+    title: "Adolescence to Adulthood Online: Tracing Youth Digital Expression on Reddit Over 13 Years",
     collection: "PAPERS",
     creator: "Tyler Chang",
     year: 2026,
@@ -1715516,7 +1715516,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20667",
-    title: "A Quantum-Assisted Agentic Distributed Artificial Intelligence Framework for Deadline-Bounded Orchestration of Hybrid Renewable Microgrids Thanks: I. I. Ioannou is with the Department of Computer Science, Philips University, Nicosia, Cyprus and also with the Department of Computer Science, University of Cyprus and the CYENS Centre of Excellence, Nicosia, Cyprus (e-mail: ioannou.iacovos@ucy.ac.cy). Thanks: S. Javaid and Y. Tan are with the School of Information Science, Japan Advanced Institute of Science and Technology, Nomi, Ishikawa, Japan. Thanks: M. Bezha and N. Nagaoka are with the International Infrastructure System Research Center, Doshisha University, Kyoto, Japan. Thanks: V. Vassiliou is with the Department of Computer Science, University of Cyprus and the CYENS Centre of Excellence, Nicosia, Cyprus.",
+    title: "A Quantum-Assisted Agentic Distributed Artificial Intelligence Framework for Deadline-Bounded Orchestration of Hybrid Renewable Microgrids",
     collection: "PAPERS",
     creator: "Iacovos I. Ioannou, Saher Javaid, Minella Bezha",
     year: 2026,
@@ -1715660,7 +1715660,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20673",
-    title: "NeuroShield: A Device-Agnostic Foundation Model for EEG Authentication Code and pretrained model: https://github.com/kit-ps/NeuroShield-FM",
+    title: "NeuroShield: A Device-Agnostic Foundation Model for EEG Authentication",
     collection: "PAPERS",
     creator: "Matin Fallahi 1 , Patricia Arias-Cabarcos 2 , and Thorsten Strufe 1",
     year: 2026,
@@ -1716106,7 +1716106,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20755",
-    title: "UNSEEN: Uncertainty-aware Navigation via Sparse Estimation in Unknown Environments Thanks: All authors are with the University of Trento, Italy. Email: { \\{ tommaso.faraci, marco.camurri, daniele.fontanelli, luigi.palopoli } \\} @unitn.it. 1 Tommaso Faraci is a Ph.D. student.",
+    title: "UNSEEN: Uncertainty-aware Navigation via Sparse Estimation in Unknown Environments",
     collection: "PAPERS",
     creator: "1 st Tommaso Faraci 1, 2 nd Marco Camurri, 3 rd Daniele Fontanelli, 4 th Luigi Palopoli",
     year: 2026,
@@ -1716410,7 +1716410,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20829",
-    title: "Euclid : Quick Data Release (Q1) – LensMC shear measurement catalogue for cluster lensing science Thanks: This paper is published on behalf of the Euclid Consortium.",
+    title: "Euclid : Quick Data Release (Q1) – LensMC shear measurement catalogue for cluster lensing science",
     collection: "PAPERS",
     creator: "G. Congedo, M. Sereno, H. Miyatake, S. Guerrini, M. Kilbinger, M. Radovich, H. Jansen, F. Kleinebreil, T. Schrabback, A. N. Taylor, B. Altieri, L. Amendola, S. Andreon, N. Auricchio, C. Baccigalupi, M. Baldi, S. Bardelli, P. Battaglia, A. Biviano, R. P. Blake, E. Branchini, M. Brescia, S. Camera, V. Capobianco, C. Carbone, V. F. Cardone, J. Carretero, M. Castellano, G. Castignani, S. Cavuoti, A. Cimatti, C. Colodro-Conde, L. Conversi, Y. Copin, F. Courbin, H. M. Courtois, M. Cropper, H. Degaudenzi, G. De Lucia, C. Dolding, H. Dole, F. Dubath, X. Dupac, M. Farina, R. Farinelli, S. Ferriol, F. Finelli, P. Fosalba, S. Fotopoulou, M. Frailis, M. Fumana, L. Gabarra, S. Galeotta, K. George, B. Gillis, C. Giocoli, J. Gracia-Carpio, A. Grazian, F. Grupp, S. Hemmati, M. S. Holliman, W. Holmes, I. M. Hook, F. Hormuth, A. Hornstrup, K. Jahnke, M. Jhabvala, S. Kermiche, B. Kubik, M. Kümmel, M. Kunz, H. Kurki-Suonio, A. M. C. Le Brun, S. Ligori, P. B. Lilje, V. Lindholm, I. Lloro, M. Magliocchetti, G. Mainetti, O. Mansutti, O. Marggraf, M. Martinelli, N. Martinet, F. Marulli, R. J. Massey, E. Medinaceli, M. Meneghetti, E. Merlin, G. Meylan, A. Mora, M. Moresco, C. Moretti, L. Moscardini, E. Munari, R. Nakajima, C. Neissner, R. C. Nichol, S.-M. Niemi, C. Padilla, S. Paltani, F. Pasian, W. J. Percival, V. Pettorino, A. Pezzotta, S. Pires, G. Polenta, M. Poncet, L. A. Popa, F. Raison, A. Renzi, J. Rhodes, G. Riccio, E. Romelli, M. Roncarelli, C. Rosset, B. Rusholme, R. Saglia, Z. Sakr, A. G. Sánchez, D. Sapone, M. Schirmer, P. Schneider, A. Secroun, E. Sihvola, C. Sirignano, G. Sirri, L. Stanco, P. Tallada-Crespí, I. Tereno, S. Toft, R. Toledo-Moreo, F. Torradeflot, I. Tutusaus, E. A. Valentijn, J. Valiviita, T. Vassallo, Y. Wang, J. Weller, A. Zacchei, G. Zamorani, F. M. Zerbi, E. Zucca, T. Castro",
     year: 2026,
@@ -1716521,7 +1716521,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20847",
-    title: "LLM-Driven Heuristic Frame-Level Quantization Parameter Adaptation for VVenC ∗ \\ast equal contributions. ‡ \\ddagger corresponding: shiqwang@cityu.edu.hk",
+    title: "LLM-Driven Heuristic Frame-Level Quantization Parameter Adaptation for VVenC",
     collection: "PAPERS",
     creator: "Liqiang He 1∗ , Yingwen Zhang 1∗ , Riyu Lu 1,2 , Meng Wang 3 , Shiqi Wang 1‡",
     year: 2026,
@@ -1716648,7 +1716648,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20857",
-    title: "SignVLA: Real-Time Sign Language-Guided Robotic Manipulation via Attention LSTM and Vision-Language-Action Models 1 Department of Computer Science, University College London. Correspondence: zezhi.tang@ucl.ac.uk",
+    title: "SignVLA: Real-Time Sign Language-Guided Robotic Manipulation via Attention LSTM and Vision-Language-Action Models",
     collection: "PAPERS",
     creator: "Ningwei Bai 1 , Xinyu Tan 1 , Harry Gardner 1 , Zhengyang Zhong 1 , Liuhaichen Yang 1 Luoyu Zhang 1 , Zhekai Duan 1 , Monkgogi Galeitsiwe 1 , Zezhi Tang 1∗",
     year: 2026,
@@ -1717256,7 +1717256,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20938",
-    title: "The Parity of Invariant Characteristics Thanks: Acknowledgements. LDH is grateful to Harry Braden for discussions on the proofs in the paper. Thanks: Statements and Declarations. The authors have no relevant financial or non-financial interests to disclose.",
+    title: "The Parity of Invariant Characteristics",
     collection: "PAPERS",
     creator: "Linden Disney-Hogg ID",
     year: 2026,
@@ -1717752,7 +1717752,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21012",
-    title: "Asynchronous Multi-Channel USF: Modified CRT for Modulo Unfolding Thanks: This work is supported by the European Research Council’s Starting Grant for “CoSI-Fold” (101166158). Further details on Unlimited Sensing and materials on reproducible research are available via https://bit.ly/USF-Link .",
+    title: "Asynchronous Multi-Channel USF: Modified CRT for Modulo Unfolding",
     collection: "PAPERS",
     creator: "Ruiming Guo, Ayush Bhandari",
     year: 2026,
@@ -1717912,7 +1717912,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-20908",
-    title: "On Itô-Stratonovich formula for rough sheets Thanks: AMS 2020 Mathematics Subject Classification: Primary: 60L10, 60L20, 60L70; Secondary: 60L90.",
+    title: "On Itô-Stratonovich formula for rough sheets",
     collection: "PAPERS",
     creator: "Youssef Hakiki and Samy Tindel",
     year: 2026,
@@ -1718711,7 +1718711,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21050",
-    title: "Triage Score: A Counterfactual Risk Assessment Instrument Thanks: We acknowledge partial financial support from Arnold Ventures and the Impact Labs at Harvard Kennedy School.",
+    title: "Triage Score: A Counterfactual Risk Assessment Instrument",
     collection: "PAPERS",
     creator: "Kosuke Imai, Sooahn Shin, D. James Greiner, Ryan Halen",
     year: 2026,
@@ -1719974,7 +1719974,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21273",
-    title: "Locales in presheaf toposes vs. presheaves of locales Department of Mathematics and Statistics, Faculty of Sciences, Masaryk University, Kotlářská 2, 611 37 Brno, Czech Republic, wrigley@math.muni.cz",
+    title: "Locales in presheaf toposes vs. presheaves of locales",
     collection: "PAPERS",
     creator: "Vasileios Aravantinos-Sotiropoulos, Panagis Karazeris",
     year: 2026,
@@ -1720182,7 +1720182,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21325",
-    title: "L ∞ L^{\\infty} -metrics on tori and Schoen’s conjecture Thanks: The second author is partially supported by NSFC 12501169.",
+    title: "L ∞ L^{\\infty} -metrics on tori and Schoen’s conjecture",
     collection: "PAPERS",
     creator: "Jian Wang, Jinmin Wang, Zhizhang Xie",
     year: 2026,
@@ -1720454,7 +1720454,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21280",
-    title: "Parabolic induction for modular finite 𝑾 W -algebras Thanks: 2010 Mathematics Subject Classification : 17B10, 17B20, 17B45, 17B50.",
+    title: "Parabolic induction for modular finite 𝑾 W -algebras",
     collection: "PAPERS",
     creator: "Simon M. Goodwin, Lewis Topley and Matthew Westaway",
     year: 2026,
@@ -1720502,7 +1720502,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21405",
-    title: "Geometry Calibration in Tomography with a Differentiable Ray-Based Model Thanks: Y. Haouchat, P. Thévenaz, and M. Unser are with the Biomedical Imaging Group at EPFL, Switzerland (email: youssef. haouchat@epfl.ch). A. Boquet-Pujadas is with the SDSC hub at PSI, Switzerland (email: aleix.boquet-i-pujadas@psi.ch). S. Kashani is with the Center for Imaging at EPFL, Switzerland. Corresponding author: A. Boquet-Pujadas. This work was supported in part by the European Research Council (ERC-2020-AdG FunLearn-101020573) and by the Swiss National Science Foundation (Sinergia Grant CRSII5 198569).",
+    title: "Geometry Calibration in Tomography with a Differentiable Ray-Based Model",
     collection: "PAPERS",
     creator: "Youssef Haouchat, Aleix Boquet-Pujadas, Sepand Kashani, Philippe Thévenaz",
     year: 2026,
@@ -1720518,7 +1720518,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21391",
-    title: "Extreme points and faces in the moment problem Thanks: CRediT: D. Henrion and M. Kružík contributed to Funding acquisition, Project administration, Conceptualization, Supervision, Writing - Review & Editing; S. Weis is accountable for Methodology, Investigation, Formal Analysis, Visualization, and Writing - Original Draft",
+    title: "Extreme points and faces in the moment problem",
     collection: "PAPERS",
     creator: "Didier Henrion †,‡ , Martin Kružík §,# , and Stephan Weis †",
     year: 2026,
@@ -1720662,7 +1720662,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21448",
-    title: "Fast-TurboQuant A Multiplier-Free Online Vector Quantization Approach This work was funded in part by CNPq (Grant Nos. 302085/2025-4 and 306199/2025-4), by Minas Gerais Research Foundation (FAPEMIG) (Grant Nos. PPE-00124-23, APQ-04523-23, APQ-05305-23, RED-00194-23, and APQ-03162-24), by the Brasil 6G project (01245.020548/2021-07), supported by RNP and MCTI, and by the projects XGM-AFCCT-2024-2-5-1 and XGM-AFCCT-2024-9-1-1 supported by xGMobile – EMBRAPII-Inatel Competence Center on 5G and 6G Networks, with financial resources from the PPI IoT/Manufatura 4.0 from MCTI grant number 052/2023, signed with EMBRAPII, and by FINEP (nº 1060/2 contract 01.25.0883.00). The authors are with the National Institute of Telecommunications (Inatel), Santa Rita do Sapucaí, MG 37536-001, Brazil (pedro.marcio@inatel.br; felipe.figueiredo@inatel.br; rausley@inatel.br).",
+    title: "Fast-TurboQuant A Multiplier-Free Online Vector Quantization Approach",
     collection: "PAPERS",
     creator: "Pedro Pereira, Felipe de Figueiredo, Rausley de Souza",
     year: 2026,
@@ -1721252,7 +1721252,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21516",
-    title: "State-Space Abstractions for Parametric Timed Games Thanks: This work was supported by the CNRS International Research Network CLoVe and Innovationsfonden Danmark’s DIREC project SIoT (Secure Internet of Things). Thanks: This is the full version of the paper under the same title accepted to QEST+FORMATS 2026.",
+    title: "State-Space Abstractions for Parametric Timed Games",
     collection: "PAPERS",
     creator: "Mikael Bisgaard Dahlsen-Jensen ✉, Laure Petrucci, Jaco van de Pol",
     year: 2026,
@@ -1722547,7 +1722547,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21709",
-    title: "Cancelling CR singularities of 3-manifolds in complex threefolds Thanks: The first author was supported by the European Union through the ERC Advanced Grant HPDR, grant agreement No. 101053085, awarded to Franc Forstnerič, and by the research program P1-0291 and research project J1-70033 of ARIS, Republic of Slovenia. The second author was supported by the research program P1-0288 of ARIS, Republic of Slovenia.",
+    title: "Cancelling CR singularities of 3-manifolds in complex threefolds",
     collection: "PAPERS",
     creator: "Marko Slapar, Sašo Strle",
     year: 2026,
@@ -1722707,7 +1722707,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21698",
-    title: "Correct and Complete Symbolic Execution for Free Thanks: This research is partially supported by the NWO grant No. OCENW.M20.053, ERC grant Autoprobe (no. 101002697) and a Royal Society Wolfson fellowship.",
+    title: "Correct and Complete Symbolic Execution for Free",
     collection: "PAPERS",
     creator: "Erik Voogd ✉, Einar Broch Johnsen, Åsmund Aqissiaq Arild Kløvstad, Jurriaan Rot, Alexandra Silva",
     year: 2026,
@@ -1722739,7 +1722739,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21728",
-    title: "Embedding Linear Equality Constraints in Probabilistic Neural Networks for Dynamic Modelling footnoteinfo Correspondence to a.del-rio-chanona@imperial.ac.uk",
+    title: "Embedding Linear Equality Constraints in Probabilistic Neural Networks for Dynamic Modelling",
     collection: "PAPERS",
     creator: "Matthew Marsh, Benoît Chachuat, Antonio del Rio Chanona",
     year: 2026,
@@ -1722995,7 +1722995,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21739",
-    title: "On the path correspondences of quantum graphs Thanks: The second author was partially supported by Seed Grant (No. RD/0525-IRCCSH0-022) from the IRCC at IIT Bombay. He also thanks Professor Debashish Goswami for stimulating discussions.",
+    title: "On the path correspondences of quantum graphs",
     collection: "PAPERS",
     creator: "Sourav Khatua, Sutanu Roy",
     year: 2026,
@@ -1723475,7 +1723475,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21816",
-    title: "Bartnik Mass of CMC surfaces under a Spectral non-negativity condition Thanks: 1 Research partially supported by NSERC grant no. #327637-06",
+    title: "Bartnik Mass of CMC surfaces under a Spectral non-negativity condition",
     collection: "PAPERS",
     creator: "Albert Chau 1, Luke Kuo Han",
     year: 2026,
@@ -1723923,7 +1723923,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21761",
-    title: "Discretisation and independent resolutions of ample groupoids Thanks: This project has received funding from the European Research Council (ERC) under the European Union’s Horizon 2020 research and innovation programme (grant agreement No. 817597). The first author was supported by the Independent Research Fund Denmark through Grant 1054-00094B and by the Research Foundation Flanders (FWO) through Project 1212126N",
+    title: "Discretisation and independent resolutions of ample groupoids",
     collection: "PAPERS",
     creator: "Xin Li, Alistair Miller",
     year: 2026,
@@ -1724563,7 +1724563,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21927",
-    title: "Some Symmetric Sign Patterns Requiring Full P P -vertices Thanks: Corresponding Author: Partha Rana.",
+    title: "Some Symmetric Sign Patterns Requiring Full P P -vertices",
     collection: "PAPERS",
     creator: "Partha Rana",
     year: 2026,
@@ -1724610,7 +1724610,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21997",
-    title: "Failure of local equi-Lipschitzness for families of Lorentz distances to Cauchy surface foliations Departments of Mathematics and Economics, University of Toronto, Toronto, ON, Canada. mccann@math.toronto.edu Department of Mathematics, University of Toronto, Toronto, ON, Canada. argam.ohanyan@utoronto.ca",
+    title: "Failure of local equi-Lipschitzness for families of Lorentz distances to Cauchy surface foliations",
     collection: "PAPERS",
     creator: "Gregory J. Galloway",
     year: 2026,
@@ -1724882,7 +1724882,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21909",
-    title: "Heat Kernel and Resurgence Thanks: S. Li: Yau Mathematical Sciences Center, Tsinghua University, Beijing, China. Email: sili@mail.tsinghua.edu.cn . Thanks: Y. Li: Beijing Institute of Mathematical Sciences and Applications, Beijing, China. Email: liyong@bimsa.cn . Thanks: X. Tang: Beijing Institute of Mathematical Sciences and Applications, Beijing, China. Email: tangxinxing@bimsa.cn .",
+    title: "Heat Kernel and Resurgence",
     collection: "PAPERS",
     creator: "Si Li, Yong Li, Xinxing Tang",
     year: 2026,
@@ -1724898,7 +1724898,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22062",
-    title: "How Should a Simulation-to-Reality Transfer Budget Be Spent? Thanks: ∗ These authors contributed equally and share first authorship. Submitted to the First Workshop on Sim2Real and Classical Control: From Rigorous Theory to Data-Driven Robotics, IROS 2026.",
+    title: "How Should a Simulation-to-Reality Transfer Budget Be Spent",
     collection: "PAPERS",
     creator: "Syed Hamzah Rizvi ∗, Yash Vardhan Tomar ∗",
     year: 2026,
@@ -1724962,7 +1724962,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21918",
-    title: "Finite-dimensional reduction of a Wasserstein gradient flow and sharp decay rates Thanks: Acknowledgment. The work of D. Kim was supported by the National Research Foundation of Korea (NRF) grant funded by the Korean government (MSIT) (RS-2024-00454452), and the work of H. Park was supported by the National Science and Technology Council (NSTC), Taiwan (Grant No. NSTC 115-2115-M-007-001-MY3).",
+    title: "Finite-dimensional reduction of a Wasserstein gradient flow and sharp decay rates",
     collection: "PAPERS",
     creator: "Dohyun Kim, Hansol Park, Woojoo Shim",
     year: 2026,
@@ -1725042,7 +1725042,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22001",
-    title: "Evolutionary Entropy Shapes Reproductive Lifespan in Age-Structured Populations Thanks: Jorge Buescu, Departamento de Matemática, Faculdade de Ciências da Universidade de Lisboa, Centro de Estudos Matemáticos, Universidade de Lisboa, Portugal Thanks: Saber N. Elaydi, Department of Mathematics, Trinity University, San Antonio, Texas, USA Thanks: Henrique M. Oliveira, Corresponding author, Departamento de Matemática, Instituto Superior Técnico, Universidade de Lisboa, Centro de Análise Matemática, Geometria e Sistemas Dinâmicos, Universidade de Lisboa, Portugal Thanks: The third author acknowledges partial support by Fundação para a Ciência e a Tecnologia, UIDB/04459/2020 and UIDP/04459/2020",
+    title: "Evolutionary Entropy Shapes Reproductive Lifespan in Age-Structured Populations",
     collection: "PAPERS",
     creator: "Jorge Buescu, Saber N. Elaydi, Henrique M. Oliveira",
     year: 2026,
@@ -1725250,7 +1725250,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-21976",
-    title: "Probabilistic Model Checking via Families of Deterministic and Unambiguous Finite Automata Thanks: Authors are ordered alphabetically.",
+    title: "Probabilistic Model Checking via Families of Deterministic and Unambiguous Finite Automata",
     collection: "PAPERS",
     creator: "Christel Baier, Sascha Klüppelholz, Timm Spork",
     year: 2026,
@@ -1725266,7 +1725266,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22059",
-    title: "Failure of zero extension in parabolic Sobolev spaces Thanks: J. Choi was supported by the National Research Foundation of Korea (NRF) grant funded by the Korea government (MSIT) (RS-2026-25477708). Thanks: D. Kim was supported by the National Research Foundation of Korea (NRF) grant funded by the Korea government (MSIT) (RS-2025-16065192) and by a Korea University Grant. Thanks: K. Woo was supported by SNF Project 212573 FLUTURA – Fluids, Turbulence, Advection.",
+    title: "Failure of zero extension in parabolic Sobolev spaces",
     collection: "PAPERS",
     creator: "Jongkeun Choi, Doyoon Kim, Kwan Woo",
     year: 2026,
@@ -1725329,7 +1725329,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22114",
-    title: "An elastic model of confined hydrogel particles with competing entropic and energetic networks Thanks: This work is dedicated to the memory of Stefan Sokołowski, whose insightful molecular-dynamics studies of granular matter continue to inspire research on collective behavior in soft and particulate systems.",
+    title: "An elastic model of confined hydrogel particles with competing entropic and energetic networks",
     collection: "PAPERS",
     creator: "A. Huerta ? {}^{\\textsf{\\footnotesize{\\mbox{?}}}}, L. A. Pérez ? {}^{\\textsf{\\footnotesize{\\mbox{?}}}}, A. Trokhymchuk ? {}^{\\textsf{\\footnotesize{\\mbox{?}}}}",
     year: 2026,
@@ -1725409,7 +1725409,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22116",
-    title: "DeformX: A Versatile Co-Simulation Framework for Deformable Linear Objects Project Page: deformx.github.io Thanks: Equal contribution; each reserves the right to be listed first. Thanks: The Robotics Institute, Carnegie Mellon University, 5000 Forbes Ave, Pittsburgh, PA 15213 USA. Thanks: Department of Mechanical Engineering, Carnegie Mellon University, 5000 Forbes Ave, Pittsburgh, PA 15213 USA. Thanks: School of Ocean and Civil Engineering, Shanghai Jiao Tong University, 800 Dongchuan Rd, Minhang District, Shanghai, China. Thanks: Zhiyuan College, Shanghai Jiao Tong University, 800 Dongchuan Rd, Minhang District, Shanghai, China. Thanks: John A. Paulson School of Engineering and Applied Sciences, Harvard University, 29 Oxford Street, Cambridge, MA 02138 USA.",
+    title: "DeformX: A Versatile Co-Simulation Framework for Deformable Linear Objects",
     collection: "PAPERS",
     creator: "Yi Yang, Xiang Fei, Lehong Wang, Chenhao Li, Zilin Dai, Henry Kou",
     year: 2026,
@@ -1725537,7 +1725537,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22083",
-    title: "Second-order H 1 H^{1} -norm error analysis for time-fractional advection-dispersion equations based on the fast averaged L1 method Thanks: † Division of Mathematical Sciences, School of Physical and Mathematical Sciences, Nanyang Technological University, 637371, Singapore. (LHUANG037@e.ntu.edu.sg). ‡ School of Mathematics and Physics, University of South China, Hengyang 421001, China (lilinmath@usc.edu.cn). § Applied Mathematics and Computational Research Division, Lawrence Berkeley National Laboratory, 1 Cyclotron Road, Berkeley, 94720, CA, USA (pxie@lbl.gov). ∗ Corresponding author.",
+    title: "Second-order H 1 H^{1} -norm error analysis for time-fractional advection-dispersion equations based on the fast averaged L1 method",
     collection: "PAPERS",
     creator: "Liangcai Huang † , Lin Li ‡,∗ , and PENGCHENG XIE §,∗",
     year: 2026,
@@ -1726065,7 +1726065,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22182",
-    title: "Dual-Stream EEG Decoding for 3D Visual Perception \\titletag Thanks: Accepted to the Symmetry and Geometry in Neural Representations Workshop (NeurReps) at NeurIPS 2025. To appear in Proceedings of Machine Learning Research (PMLR).",
+    title: "Dual-Stream EEG Decoding for 3D Visual Perception",
     collection: "PAPERS",
     creator: "Ninon Lizé Masclef, Taisija Demcenko, Antonella Catanzaro, Nataliya Kosmyna",
     year: 2026,
@@ -1726193,7 +1726193,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22199",
-    title: "A Converse Mean-Value Property Thanks: Research of M. Moravik supported by GA CR grant no. 25-18042S.",
+    title: "A Converse Mean-Value Property",
     collection: "PAPERS",
     creator: "Matěj Moravík, El Hassan Youssfi",
     year: 2026,
@@ -1726817,7 +1726817,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22103",
-    title: "Quantitative homogenization of convex Hamilton–Jacobi equations in The Wasserstein space Thanks: I. Ekren is partially supported by the NSF grant DMS-2406240.",
+    title: "Quantitative homogenization of convex Hamilton–Jacobi equations in The Wasserstein space",
     collection: "PAPERS",
     creator: "Zhiyan Ding, Ibrahim Ekren, Yuxi Han, Antonios Zitridis",
     year: 2026,
@@ -1727295,7 +1727295,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22288",
-    title: "Affine deformations of cotangent groupoids Thanks: Ni is supported by the Natural Science Foundation of Henan Province (No. 252300421766). Qi’s research is partially supported by the National Science Foundation (award DMS-2302447).",
+    title: "Affine deformations of cotangent groupoids",
     collection: "PAPERS",
     creator: "Dadi Ni, Kaichuan Qi",
     year: 2026,
@@ -1727343,7 +1727343,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22393",
-    title: "HFORD: Hybrid Forward Optimization and Reverse Design Method and Its Applications to On-Chip Millimeter-Wave Inductive Elements Thanks: Manuscript received June 11, 2026; revised **** **, ****; accepted **** **, ****. Date of publication ***** **, ****; date of current **** **, ****. This work was supported in part by the National Key Research and Development Program of China under Grant 2023YFB4404803, and in part by the National Natural Science Foundation of China under Grants 62371120 and 62574040. ( Corresponding authors: Haiming Wang and Qi Wu. ) Thanks: Yuzhen Song, Yifan Wang, Guqiao Chen, and Hanyu Liu are with the State Key Laboratory of Millimeter Waves and the School of Information Science and Engineering, Southeast University, Nanjing 211189, China, and also with the R&D Department, National Center of Technology Innovation for EDA, Nanjing 210031, China (e-mail: yuzhensong@seu.edu.cn; yifanwang@seu.edu.cn; chenguqiao@seu.edu.cn; hyliu2021@seu.edu.cn). Thanks: Guangyi Lu is with the School of Integrated Circuits, Southeast University, Nanjing 211189, China, and also with the R&D Department, National Center of Technology Innovation for EDA, Nanjing 210031, China (e-mail: guangyilu@seu.edu.cn). Thanks: Qi Wu, Haiming Wang, and Wei Hong are with the State Key Laboratory of Millimeter Waves and the School of Information Science and Engineering, Southeast University, Nanjing 211189, China, and also with the Pervasive Communication Research Center, Purple Mountain Laboratories, Nanjing 211111, China (e-mail: qiwu@seu.edu.cn; hmwang@seu.edu.cn; weihong@seu.edu.cn). Thanks: Color versions of one or more of the figures in this paper are available online at http://ieeexplore.ieee.org . Thanks: Digital Object Identifier",
+    title: "HFORD: Hybrid Forward Optimization and Reverse Design Method and Its Applications to On-Chip Millimeter-Wave Inductive Elements",
     collection: "PAPERS",
     creator: "Yuzhen Song, Yifan Wang",
     year: 2026,
@@ -1727455,7 +1727455,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22417",
-    title: "Code Isn’t Memory: A Structural Codebase Index Inside a Coding Agent Thanks: Code and data: https://github.com/TransformerOptimus/supercoder-eval",
+    title: "Code Isn’t Memory: A Structural Codebase Index Inside a Coding Agent",
     collection: "PAPERS",
     creator: "Ishaan Bhola, Adithyan Krishnan, Sravanth Kurmala, Mukunda NS",
     year: 2026,
@@ -1727759,7 +1727759,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22464",
-    title: "PAPR Reduction for AFDM by Affine-Domain Circular Shift without Side Information Thanks: T. K. Nguyen and E. Bedeer are with the Department of Electrical and Computer Engineering, University of Saskatchewan, Saskatoon, Canada S7N5A9. Emails: {khai.nguyen, e.bedeer}@usask.ca. Thanks: This work was supported by the NSERC/Cisco Industrial Research Chair.",
+    title: "PAPR Reduction for AFDM by Affine-Domain Circular Shift without Side Information",
     collection: "PAPERS",
     creator: "The Khai Nguyen and Ebrahim Bedeer",
     year: 2026,
@@ -1727807,7 +1727807,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22451",
-    title: "Exact Nonnegative Matrix Factorization via Cone-Ray Witnesses: Obtuseness Ranking, Saturation Curves, and an Augmented Alt-LP Breakthrough Thanks: Software drafts and prose for this manuscript were prepared with the assistance of Anthropic’s Claude, an AI coding assistant. The author bears full responsibility for the content.",
+    title: "Exact Nonnegative Matrix Factorization via Cone-Ray Witnesses: Obtuseness Ranking, Saturation Curves, and an Augmented Alt-LP Breakthrough",
     collection: "PAPERS",
     creator: "Mithil Ramteke",
     year: 2026,
@@ -1727967,7 +1727967,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22510",
-    title: "Fed-CausalDiff: Decoupled Synchronization for Federated Do-Simulation and Policy Evaluation Thanks: This work was funded by the Akademiaavtalen project ASPIRE.",
+    title: "Fed-CausalDiff: Decoupled Synchronization for Federated Do-Simulation and Policy Evaluation",
     collection: "PAPERS",
     creator: "pengfei li, Mohammad Khalil",
     year: 2026,
@@ -1728415,7 +1728415,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22534",
-    title: "LAWNs Meet SWIPT: Beamforming and Power Splitting Optimization for Predictive Control This work of Weijie Yuan was supported in part by the National Natural Science Foundation of China under Grants 62471208 and U25A20389; in part by the Guangdong Provincial Natural Science Foundation under Grant 2026B1515020041; in part by the Shenzhen Science and Technology Program under Grant JCYJ20240813094627037. This work of Nanchi Su was supported in part by the National Natural Science Foundation of China under Grants 62401181. ( Corresponding author: Weijie Yuan ) J. Wu, W. Liu, and W. Yuan are with the School of Automation and Intelligent Manufacturing, Southern University of Science and Technology, Shenzhen 518055, China (email: wuj2021@mail.sustech.edu.cn; wc.liu@foxmail.com; yuanwj@sustech.edu.cn ) N. Su is with the Guangdong Provincial Key Laboratory of Aerospace Communication and Networking Technology, Harbin Institute of Technology (Shenzhen), Shenzhen 518055, China (e-mail: sunanchi@hit.edu.cn).",
+    title: "LAWNs Meet SWIPT: Beamforming and Power Splitting Optimization for Predictive Control",
     collection: "PAPERS",
     creator: "Jun Wu, Wenchao Liu, , Weijie Yuan, , Nanchi Su",
     year: 2026,
@@ -1728606,7 +1728606,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22576",
-    title: "What Characterizes Pairwise Modular Smells? Thanks: Chenxing Zhong and Wei Song are with the Nanjing University of Science and Technology, Nanjing 210094, China. Email: chenxingzhong@njust.edu.cn; wsong@njust.edu.cn Daniel Feitosa and Paris Avgeriou are with the University of Groningen, Groningen 9700AB, the Netherlands. Email: d.feitosa@rug.nl; p.avgeriou@rug.nl Huang Huang is with State Grid Nanjing Power Supply Company, Nanjing 210000, China. Email: sgcc.huang.huang@gmail.com He Zhang is with the State Key Laboratory for Novel Software Technology, Nanjing University, Nanjing 210093, China. E-mail: hezhang@nju.edu.cn Thanks: Manuscript received June 30, 2025. Thanks: (Corresponding author: Wei Song, He Zhang) PubID: pubid: 0000–0000/00$00.00 © 2021 IEEE",
+    title: "What Characterizes Pairwise Modular Smells",
     collection: "PAPERS",
     creator: "Chenxing Zhong, Daniel Feitosa, Paris Avgeriou, Huang Huang, Wei Song, He Zhang",
     year: 2026,
@@ -1729006,7 +1729006,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22587",
-    title: "Jacobian algebras and variation of hyperplane sections Thanks: The third author was partially supported by CNPq grant no. 302774/2025-4, FAEPEX grant no. 3485/25, and FAPESP grant no. 2024/00923-6.",
+    title: "Jacobian algebras and variation of hyperplane sections",
     collection: "PAPERS",
     creator: "Giovanna Ilardi, Abbas Nasrollah Nejad, Saeed Tafazolian",
     year: 2026,
@@ -1729230,7 +1729230,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22646",
-    title: "On Sharp Estimates of Derivatives of Even Order in Sobolev Spaces Thanks: This work was supported by the Russian Foundation for Basic Research under grant 19-01-00240 (Secs. 2–4) and by the Russian Science Foundation under grant ???? (Secs. 5–6).",
+    title: "On Sharp Estimates of Derivatives of Even Order",
     collection: "PAPERS",
     creator: "T. A. Garmanova and I. A. Sheipak",
     year: 2026,
@@ -1729310,7 +1729310,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22612",
-    title: "Convex Polygons with Parallel Opposite Sides: Convergence, Reconstruction, and Isoperimetric Inequalities Thanks: \\pentagram {}^{\\pentagram} Corresponding author",
+    title: "Convex Polygons with Parallel Opposite Sides: Convergence, Reconstruction, and Isoperimetric Inequalities",
     collection: "PAPERS",
     creator: "Izabella Konicer 1 , Bartłomiej Murawski 2 , Bruno Rogala 3 , Tomasz Wieczorek 4 , and Michał Zwierzyński 5 , \\pentagram {}^{5,\\pentagram}",
     year: 2026,
@@ -1729710,7 +1729710,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22715",
-    title: "Invariant subspaces for operators with spectrum containing the boundary of the numerical range Thanks: The research was supported by GA CR/NCN grant 25-15444K. The first author was supported by the Czech Academy of Sciences (RVO:67985840). The second author was supported by the NCN grant Weave-Unisono, 2024/06/Y/ST1/00044. The second author was also partially supported by the NCN grant UMO-2023/49/B/ST1/01961 and the NAWA/NSF grant BPN/NSF/2023/1/00001.",
+    title: "Invariant subspaces for operators with spectrum containing the boundary of the numerical range",
     collection: "PAPERS",
     creator: "Vladimir Müller, Yuri Tomilov",
     year: 2026,
@@ -1730206,7 +1730206,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22693",
-    title: "Numerical and essential numerical ranges on ℓ p \\ell_{p} Thanks: The research was supported by GA CR/NCN grant 25-15444K. The first author was supported by the Czech Academy of Sciences (RVO:67985840). The second author was supported by the NCN grant Weave-Unisono, 2024/06/Y/ST1/00044. The second author was also partially supported by the NCN grant UMO-2023/49/B/ST1/01961 and the NAWA/NSF grant BPN/NSF/2023/1/00001.",
+    title: "Numerical and essential numerical ranges on ℓ p \\ell_{p}",
     collection: "PAPERS",
     creator: "Vladimir Müller, Yuri Tomilov",
     year: 2026,
@@ -1730637,7 +1730637,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22815",
-    title: "On the Yamabe flow in a bounded domain This study was supported by the Key Program of the National Natural Science Foundation of China (Grant No. 12231016.) and the Program of the National Natural Science Foundation of China (Grant No. 12571117.) Corresponding author. Email: tanloy2026@126.com",
+    title: "On the Yamabe flow in a bounded domain",
     collection: "PAPERS",
     creator: "Fei Fang",
     year: 2026,
@@ -1730972,7 +1730972,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-22908",
-    title: "Cyclic Graphs and Memoization in Pure λ \\lambda -Calculus Journal: PACMPL Thanks: The author completed this work independently and outside the scope of employment at Figure AI. No Figure AI time, funding, or other resources were used in support of this work. CCS: Theory of computation Lambda calculus CCS: Theory of computation Operational semantics CCS: Software and its engineering General programming languages CCS: Theory of computation Program analysis",
+    title: "Cyclic Graphs and Memoization in Pure λ \\lambda -Calculus Journal: PACMPL",
     collection: "PAPERS",
     creator: "Bo Yang",
     year: 2026,
@@ -1731900,7 +1731900,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23020",
-    title: "The Bojanov–Naidenov inequality for quartics and second derivatives Thanks: Technische Universität Dresden, Institute of Numerical Mathematics, 01062 Dresden, Germany ( gentian.zavalani@tu-dresden.de ).",
+    title: "The Bojanov–Naidenov inequality for quartics and second derivatives",
     collection: "PAPERS",
     creator: "Gentian Zavalani",
     year: 2026,
@@ -1732060,7 +1732060,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23058",
-    title: "Three-Step Hierarchical Transformer for Multi-Pedestrian Trajectory Prediction Thanks: This is the authors’ preprint version. The final authenticated version will appear in the ICPR 2026 proceedings published by Springer.",
+    title: "Three-Step Hierarchical Transformer for Multi-Pedestrian Trajectory Prediction",
     collection: "PAPERS",
     creator: "Raphaël Delécluse, Hazem Wannous, Laurent Grisoni, Laurent Guimas",
     year: 2026,
@@ -1732124,7 +1732124,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23073",
-    title: "Integrating Sensing into Covert Communications: Opportunities and Challenges ( Corresponding Author: Tse-Tin Chan .) J. Wu and T.-T. Chan are with the Department of Mathematics and Information Technology, The Education University of Hong Kong, Hong Kong, China (e-mail: wjun@eduhk.hk; tsetinchan@eduhk.hk). X. Zhang is with the School of Electrical and Data Engineering, University of Technology Sydney, Sydney, 2007, Australia (e-mail: Xiaoqi.Zhang@student.uts.edu.au). H. Pan is with the College of Computer Science and Software Engineering, Shenzhen University, Shenzhen, China (e-mail: hypan@szu.edu.cn). G. Zhao and D. I. Kim are with the Department of Electrical and Computer Engineering, Sungkyunkwan University, Suwon 16419, South Korea (e-mail: {gaosheng, dongin}@skku.edu).",
+    title: "Integrating Sensing into Covert Communications: Opportunities and Challenges",
     collection: "PAPERS",
     creator: "Jun Wu, Xiaoqi Zhang, Haoyuan Pan, , Gaosheng Zhao, Dong In Kim, , and Tse-Tin Chan",
     year: 2026,
@@ -1732428,7 +1732428,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23071",
-    title: "Understanding the Stealthy BGP Hijacking Risk in the ROV Era PubID: pubid: Network and Distributed System Security (NDSS) Symposium 2026 23 - 27 February 2026 , San Diego, CA, USA ISBN 979-8-9919276-8-0 https://dx.doi.org/10.14722/ndss.2026.230097 www.ndss-symposium.org",
+    title: "Understanding the Stealthy BGP Hijacking Risk in the ROV Era",
     collection: "PAPERS",
     creator: "Yihao Chen 4 2 , Qi Li 3 2 , Ke Xu 5 2 , Zhuotao Liu 3 2 , Jianping Wu 3 2",
     year: 2026,
@@ -1732476,7 +1732476,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23152",
-    title: "ShotcreteDepth: A Bi-modal Dataset for Robust Robotic Depth Perception in Shotcrete Construction Environments Thanks: 1 Technical University of Denmark, Department of Electrical and Photonics Engineering. 2 Pioneer Centre for AI, Copenhagen, Denmark. 3 Christiansen & Essenbæk A/S. * Corresponding author jagre@dtu.dk. This work has been funded and supported by the EU Horizon Europe project “RoBétArmé” under the Grant Agreement 101058731. We express our gratitude to Søren Beyer Nielsen for designing and 3D printing the dust-proof sensor housing.",
+    title: "ShotcreteDepth: A Bi-modal Dataset for Robust Robotic Depth Perception in Shotcrete Construction Environments",
     collection: "PAPERS",
     creator: "Jakub Gregorek, Lars Arnold Dethlefsen, Patrick Schmidt, Mads Essenbæk, Jonas Flink Bentzen, Lazaros Nalpantidis",
     year: 2026,
@@ -1732556,7 +1732556,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23150",
-    title: "A missed opportunity? Labor demand and workforce diversity Thanks: Acknowledgments: This research was funded by the Deutsche Forschungsgemeinschaft (DFG, German Research Foundation) under Germany’s Excellence Strategy - EXC 2126/2-390838866. Boelmann gratefully acknowledges further support by the DFG through CRC TR 224 (Project A02) and by the Center for Social and Economic Behavior (C-SEB) of the University of Cologne. Bindler gratefully acknowledges further support through the DFG Research Unit “Labour Market Transformation: Scarcity, Mismatch, and Policy” (FOR 5675). The authors would like to thank Kathryn Herndon, Benedikt Hüls, Benedetta Muraro, Larissa Ruff, Marina Talantceva, and Joost Zickler for their excellent research assistance. We express our gratitude to Anita Krätzner-Ebert for generously sharing her expert knowledge regarding the historical context surrounding the transition of East German universities. We thank discussants and participants at various seminars and conferences for their very helpful comments and discussions. All remaining errors are our own. Authors: Anna Bindler - DIW Berlin, University of Potsdam and Berlin School of Economics; CEPA and RFBerlin Fellow, CEPR Affiliate. Email: abindler@diw.de. Barbara Boelmann - University of Cologne; RWI Essen; RFBerlin and IZA@LISER Affiliate. Email: barbara.boelmann@uni-koeln.de. Lena Janys - University of Konstanz; IZA@LISER Fellow. Email: lena.janys@uni-konstanz.de. Luisa H. Santiago Wolf - University of Cologne; DIW Affiliate. Email: santiago-wolf@wiso.uni-koeln.de.",
+    title: "A missed opportunity? Labor demand and workforce diversity",
     collection: "PAPERS",
     creator: "Anna Bindler Barbara Boelmann Lena Janys Luisa H. Santiago Wolf",
     year: 2026,
@@ -1732652,7 +1732652,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23149",
-    title: "On the gain of entrainment in stable linear control systems with a nonlinear output Thanks: RM and MM are with the School of ECE, Tel Aviv University, Tel Aviv 69978, Israel. This research is partially supported by the Israel Science Foundation (grant number 221/24). Correspondence: michaelm@tauex.tau.ac.il",
+    title: "On the gain of entrainment in stable linear control systems with a nonlinear output",
     collection: "PAPERS",
     creator: "Ram Massas, Michael Margaliot",
     year: 2026,
@@ -1733292,7 +1733292,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23241",
-    title: "“When Suspicion Becomes Detection”: Folk Deception Cues and Detection Strategies in Online Dating Romance Scams DOI: https://doi.org/10.1145/3821700 Conference: Make sure to enter the correct conference title from your rights confirmation emai; August, 2026; Swansee, Wales, UK ISBN: 978-1-4503-XXXX-X/18/06 Journal: PACMHCI Volume: 10 5 MHCI8950 8 DOI: 10.1145/3821700 CCS: Security and privacy Social aspects of security and privacy",
+    title: "“When Suspicion Becomes Detection”: Folk Deception Cues and Detection Strategies in Online Dating Romance Scams",
     collection: "PAPERS",
     creator: "Sima Amirkhani, Jana Krüger, Dave Randall, Gunnar Stevens, Douglas Zytko",
     year: 2026,
@@ -1733324,7 +1733324,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23230",
-    title: "Privacy-Preserving Person Re-Identification from Temporal Sequences with Transformer and Hungarian Optimization Thanks: This is the authors’ preprint version. The final authenticated version will appear in the FG 2025 proceedings published by IEEE.",
+    title: "Privacy-Preserving Person Re-Identification from Temporal Sequences with Transformer and Hungarian Optimization",
     collection: "PAPERS",
     creator: "Raphaël Delécluse, Hazem Wannous, Laurent Guimas IMT Nord Europe, University of Lille, CNRS UMR 9189 - CRIStAL, F-59000 Lille, France Explain, F-59000 Lille, France",
     year: 2026,
@@ -1733436,7 +1733436,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23268",
-    title: "On Ulam’s Segment Motion Problem Thanks: The second named author was partially supported by the Bulgarian National Science Fund, Ministry of Education and Science of Bulgaria under contract KP-06-N82/6.",
+    title: "On Ulam’s Segment Motion Problem",
     collection: "PAPERS",
     creator: "Dragomir Grozev, Nikolai Nikolov",
     year: 2026,
@@ -1734411,7 +1734411,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23397",
-    title: "High-Order Invariant-Domain Preserving Continuous Finite Elements via Graph-Poisson Convex Limiting Thanks: Submitted to the editors August 10, 2026.",
+    title: "High-Order Invariant-Domain Preserving Continuous Finite Elements via Graph-Poisson Convex Limiting",
     collection: "PAPERS",
     creator: "Murtazo Nazarov",
     year: 2026,
@@ -1734651,7 +1734651,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23440",
-    title: "The Expected Number of Pairwise Stable Networks Thanks: We would like to thank Philippe Bich, Marcus Pivato, Marco Scarsini and Xavier Venel for helpful discussions. Excellent research assistance by Deniz Savaş is gratefully acknowledged.",
+    title: "The Expected Number of Pairwise Stable Networks",
     collection: "PAPERS",
     creator: "P. Jean–Jacques Herings, Arkadi Predtetchinski, Christian Seel",
     year: 2026,
@@ -1734779,7 +1734779,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23426",
-    title: "Binary binomial equivalence via hyperplane arrangements Thanks: Supported by the FNRS Research grant T.196.23 (PDR) Thanks: The author is grateful to Michel Rigo for valuable comments and suggestions on an earlier version of this paper",
+    title: "Binary binomial equivalence via hyperplane arrangements",
     collection: "PAPERS",
     creator: "Mehdi Golafshan",
     year: 2026,
@@ -1735323,7 +1735323,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23542",
-    title: "AwakeForest: An Interactive Geospatial Platform for Large-Scale Forest Imagery Thanks: To appear at IJCAI-ECAI 2026 (Demo Track).",
+    title: "AwakeForest: An Interactive Geospatial Platform for Large-Scale Forest Imagery",
     collection: "PAPERS",
     creator: "Suraj Prasai, Kangning Cui, Rongkun Zhu, Sarra Alqahtani, Ying Zhang, Victor Paul Pauca, Miles R. Silman, Fan Yang",
     year: 2026,
@@ -1735835,7 +1735835,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23549",
-    title: "Exponential stability of abstract boundary-coupled positive systems Thanks: MSC2020 : 34G10, 47B65, 47D06, 37L15, 35B35, 35M30 Keywords : boundary-coupled systems, positive systems, stability, linear systems, semigroup theory, resolvent positive operators 1 School of Mathematics, Southwest Jiaotong University, Chengdu, 611756, Sichuan, China. 2 Research Center for Complex Systems, Aalen University, Germany. Emails : elgantouhyassine@gmail.com , m.mahinzaeim@web.de . ∗ Corresponding author.",
+    title: "Exponential stability of abstract boundary-coupled positive systems",
     collection: "PAPERS",
     creator: "Yassine El Gantouh 1,∗, Mahyar Mahinzaeim 2",
     year: 2026,
@@ -1736427,7 +1736427,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23649",
-    title: "The EDGE-CALIFA Survey: Star Formation Efficiency and Galaxy Quenching across 62 Main Sequence, Green Valley, and Red Galaxies Facilities: GBT spectral-cube ( 41 ) , matplotlib ( 48 ) , numpy ( 46 ) , scipy ( 128 ) , astropy ( 6 ) , ipython ( 82 ) , Pipe3D ( 108 ; 109 ) , reproject ( 89 ) , edge-pydb ( 132 ) , gbtpipe ( https://github.com/GBTSpectroscopy/gbtpipe ), degas ( https://github.com/GBTSpectroscopy/degas ), GBT-EDGE ( https://github.com/teuben/GBT-EDGE ), gbt-edge-analysis ( https://github.com/ElthaTeng/gbt-edge-analysis ; https://doi.org/10.5281/zenodo.20707910 (catalog doi:10.5281/zenodo.20707910) )",
+    title: "The EDGE-CALIFA Survey: Star Formation Efficiency and Galaxy Quenching across 62 Main Sequence, Green Valley, and Red Galaxies",
     collection: "PAPERS",
     creator: "Yu-Hsuan Teng, Alberto D. Bolatto, Peter J. Teuben, Erik Rosolowsky, David T. Frayer, Amanda A. Kepley, Sebastian F. Sanchez, Tony Wong, Adam K. Leroy, Dario Colombo, Serena A. Cronin, K. Decker French, Veselina Kalinova, Rebecca C. Levy, Karin M. Sandstrom, Vicente Villanueva, Jorge K. Barrera-Ballesteros, Zein Bazzi, Yixian Cao, Alex Green, Rodrigo Herrera-Camus, Eduardo A. D. Lacerda, Jialu Li, Alejandra Z. Lugo-Aranda, Jocabed Martinez-Lopez, Elizabeth Tarantino, Akshat Tripathi, Carolyn G. Volpert, Di Wen",
     year: 2026,
@@ -1737962,7 +1737962,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23877",
-    title: "JupOtter: Cell-Level Bug Detection in Jupyter Notebooks Thanks: This work was supported by the Natural Sciences and Engineering Research Council of Canada (NSERC).",
+    title: "JupOtter: Cell-Level Bug Detection in Jupyter Notebooks",
     collection: "PAPERS",
     creator: "Lukas Ottenhof, Thibaud Lutellier",
     year: 2026,
@@ -1738298,7 +1738298,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23853",
-    title: "The Measurable Majority Thanks: ( ∗ \\ast ) The authors are grateful to Sam Alexander, Clint Davis-Stober, Michael Grossberg, Conor Mayo-Wilson, Kris Patel, Rohit Parikh, Marcus Pivato, Andrew Powell, David Schrittesser, Jack Stecher, and Max Stinchcombe, as well as participants of the Indiana University Logic Seminar , for valuable comments and discussion on the subject matter of this paper.",
+    title: "The Measurable Majority",
     collection: "PAPERS",
     creator: "Lawrence S. Moss †, Arthur Paul Pedersen ‡ ⁣ ∗ {}^{\\ddagger\\,\\ast}",
     year: 2026,
@@ -1738314,7 +1738314,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23882",
-    title: "Order restricted estimation of the parameter functions in an additive hazard model manel-elbatoul.merai@doc.umc.edu.dz",
+    title: "Order restricted estimation of the parameter functions in an additive hazard model",
     collection: "PAPERS",
     creator: "Dragi Anevski, Center for Mathematical Sciences, Lund University",
     year: 2026,
@@ -1738442,7 +1738442,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23907",
-    title: "New variations on the theme of Baer’s theorem Thanks: The first and the second authors are members of GNSAGA (INdAM) and of AGTA – Advances in Group Theory and Applications ( www.advgrouptheory.com ), and their work was supported by GNSAGA (INdAM). The work of the third author was supported by FAPDF and CNPq. The first and second authors wish to thank the University of Brasília for its kind hospitality during the visit in which this work was prepared.",
+    title: "New variations on the theme of Baer’s theorem",
     collection: "PAPERS",
     creator: "Martina Capasso, Liliana Lancellotti, Pavel Shumyatsky",
     year: 2026,
@@ -1738490,7 +1738490,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-23842",
-    title: "On the geometry of unbounded wandering domains Thanks: The author was supported by the research program P1-0291 from ARIS, Republic of Slovenia 2020 Mathematics Subject Classification: Primary 37F10; Secondary 30D05, 30D20, 30E10 Key words and phrases: Complex dynamics, wandering domains, Arakelian approximation, geometry of wandering domains",
+    title: "On the geometry of unbounded wandering domains",
     collection: "PAPERS",
     creator: "Beno Učakar",
     year: 2026,
@@ -1739770,7 +1739770,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24114",
-    title: "Kepler Image-Subtracted Light Curves and Variable Star Catalog of NGC 6819 Facilities: NASA-ADS Abstract Service; Gaia ( 29 ) ; Kepler ( 14 ) ; Mikulski Archive for Space Telescopes ( 53 ) ; WIYN/Hydra Astrobase ( 13 ) ; Astropy ( 9 ; 7 ; 8 ) ; astroquery ( 33 ) ; FITSH ( 63 ) ; LcTools ( 77 ; 78 ) ; Lightkurve ( 48 ) ; Matplotlib ( 39 ) ; MESA ( 64 ; 65 ; 66 ; 67 ) , MIST ( 23 ) ; ; Pandas ( 56 ) ; ; ; VARTOOLS ( 36 ) ; VizieR catalogue access tool ( 62 ) https://sites.google.com/a/lctools.net/lctools",
+    title: "Kepler Image-Subtracted Light Curves and Variable Star Catalog of NGC 6819",
     collection: "PAPERS",
     creator: "Melinda Soares-Furtado, Rianna Kuenzi, Rachel Lee McClure, Nicholas T. Marston, Evan Linck, Robert D. Mathieu, Andrew Vanderburg, Joel D. Hartman, Kyle Cudworth, Robert Gagliano, Thomas Jacobs, Martti H. Kristiansen, Mark Omohundro, Hans Martin Schwengeler",
     year: 2026,
@@ -1740298,7 +1740298,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24213",
-    title: "Kops : Safely Extending the eBPF Compilation Pipeline with Native Operations DOI: XXXXXXX.XXXXXXX Conference: 2026 ACM SIGOPS Annual Technical Conference; November 16–18, 2026; Shatin, Hong Kong ISBN: 978-1-4503-XXXX-X/2026/11 Thanks: ∗ Equal contribution. CCS: Software and its engineering Just-in-time compilers CCS: Software and its engineering Formal language definitions CCS: Computer systems organization Embedded systems CCS: Software and its engineering Compilers",
+    title: "Kops : Safely Extending the eBPF Compilation Pipeline with Native Operations",
     collection: "PAPERS",
     creator: "Yusheng Zheng 1∗ , Zhengjie Ji 2∗ , Weichen Tao 3 , Hao Sun 4 , Wei Zhang 5 , Dan Williams 2 , Andi Quinn 1",
     year: 2026,
@@ -1740314,7 +1740314,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24193",
-    title: "SkyChain Intelligence: A Blockchain-Secured Multi-Agent DRL Framework for Low-Altitude Embodied Artificial Intelligence Thanks: H. Luo is with the WeBank-NTU Joint Research Institute on Fintech, Nanyang Technological University, Singapore 639798, and also with the College of Computing and Data Science, Nanyang Technological University, Singapore 639798 (e-mail:haoxiang.luo@ntu.edu.sg). T. Jiang is with the School of Science and Engineering, The Chinese University of Hong Kong, Shenzhen 518172, China (e-mail: tikyttqq@gmail.com). R. Zhang and Y. Liu are with the College of Computing and Data Science, Nanyang Technological University, Singapore 639798 (e-mail: ruichen.zhang@ntu.edu.sg; yinqiu001@e.ntu.edu.sg. G. Sun (Corresponding Author) and H. Yu are with the School of Information and Communication Engineering, University of Electronic Science and Technology of China, Chengdu 611731, China (e-mail: {gangsun, yuhf}@uestc.edu.cn). A. Jamalipour is with the School of Electrical and Computer Engineering, University of Sydney, Australia, and with the Graduate School of Information Sciences, Tohoku University, Japan (e-mail: a.jamalipour@ieee.org). D. I. Kim is with the Department of Electrical and Computer Engineering, Sungkyunkwan University, Suwon 16419, South Korea (e-mail: dongin@skku.edu).",
+    title: "SkyChain Intelligence: A Blockchain-Secured Multi-Agent DRL Framework for Low-Altitude Embodied Artificial Intelligence",
     collection: "PAPERS",
     creator: "Haoxiang Luo, Tianqi Jiang, Ruichen Zhang, Yinqiu Liu, Gang Sun",
     year: 2026,
@@ -1740346,7 +1740346,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24190",
-    title: "Dynamical low-rank methods for the Wigner equation I: separable difference potential Thanks: Submitted to the editors DATE.",
+    title: "Dynamical low-rank methods for the Wigner equation I: separable difference potential",
     collection: "PAPERS",
     creator: "Sihong Shao, Yuehan Shao",
     year: 2026,
@@ -1740682,7 +1740682,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24207",
-    title: "Quasi-Monte Carlo for SDE Simulation: Error Analysis and Dimensionality Reduction Thanks: Submitted to the editors DATE.",
+    title: "Quasi-Monte Carlo for SDE Simulation: Error Analysis and Dimensionality Reduction",
     collection: "PAPERS",
     creator: "Du Ouyang, Zexin Pan, Zhijian He",
     year: 2026,
@@ -1740714,7 +1740714,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24268",
-    title: "The 4-move kills the Alexander polynomial Thanks: I started this paper in October of 2020 as a response to the Covid-19 lockdown imposed at the time. I worked on it for about a month back then, as a distraction from working in a lockdown. I picked it up again in October 2025 in my last month at the Institute of Labor Economics. As I realize five years later the proof was practically finished back in 2020.",
+    title: "The 4-move kills the Alexander polynomial",
     collection: "PAPERS",
     creator: "Nikos Askitas",
     year: 2026,
@@ -1740954,7 +1740954,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24287",
-    title: "On Simply Connected Simple Lie Skew Braces with Nilpotent Multiplicative Group Thanks: The authors are supported by INdAM and GNSAGA - Gruppo Nazionale per le Strutture Algebriche, Geometriche e le loro Applicazioni; the research was also supported by ProBiki of Fondazione di Sardegna.",
+    title: "On Simply Connected Simple Lie Skew Braces with Nilpotent Multiplicative Group",
     collection: "PAPERS",
     creator: "Marco Damele, Andrea Loi",
     year: 2026,
@@ -1741514,7 +1741514,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24339",
-    title: "Toward a classification of tropical complete intersection number one Thanks: linxuan.li@qmul.ac.uk",
+    title: "Toward a classification of tropical complete intersection number one",
     collection: "PAPERS",
     creator: "Linxuan Li",
     year: 2026,
@@ -1741530,7 +1741530,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24413",
-    title: "The Space Debris Tracking and Surveillance program of the IAC80 telescope DOI: https://www.astroscu.unam.mx/rmaa/RMxAA..XX-X",
+    title: "The Space Debris Tracking and Surveillance program of the IAC80 telescope",
     collection: "PAPERS",
     creator: "Olga Zamora",
     year: 2026,
@@ -1741546,7 +1741546,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24345",
-    title: "Explicit confidence bands and intervals for distribution functions and their derivatives via random Weierstrass-type operators e-mail: csangues@unizar.es, Orcid ID: 0000-0002-7099-7665",
+    title: "Explicit confidence bands and intervals for distribution functions and their derivatives via random Weierstrass-type operators",
     collection: "PAPERS",
     creator: "José A. Adell, J. T. Alcalá",
     year: 2026,
@@ -1741578,7 +1741578,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24274",
-    title: "The endomorphism tower of a finite symmetric group Thanks: Throughout this work, the second author was funded by Portuguese national funds through the FCT – Fundação para a Ciência e a Tecnologia, I.P., under the scope of the projects UID/00297/2025 ( https://doi.org/10.54499/UID/00297/2025 ) and UID/PRR/00297/2025 ( https://doi.org/10.54499/UID/PRR/00297/2025 ) (Center for Mathematics and Applications – NOVA Math).",
+    title: "The endomorphism tower of a finite symmetric group",
     collection: "PAPERS",
     creator: "Victoria Gould, Ambroise Grau, Marianne Johnson, Jamie Smith",
     year: 2026,
@@ -1741754,7 +1741754,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24424",
-    title: "Explainable AI for Next-Generation Wireless Physical Layer: Basics, State-of-the-Art, and Open Challenges Thanks: B. Xiao, Z. Zhai, and X. Wang are with the Key Laboratory of EMW Information (MoE), College of Future Information Technology, Fudan University, Shanghai 200433, China (e-mail: {22110720061, 22110720067}@m.fudan.edu.cn, xwang11@fudan.edu.cn). S. Hu is with the College of Electronics and Information Engineering, Tongji University, Shanghai 201804, China (e-mail: syhu@tongji.edu.cn). X. Chen is with the Key Laboratory of Specialty Fiber Optics and Optical Access Networks, Shanghai University, Shanghai 200444, China (e-mail: jodiechen@shu.edu.cn). B. Li is with the Department of Computer Science at ETH Zurich, 8092 Zürich, Switzerland (email: bingcong.li@inf.ethz.ch). W. Ni is with the School of Engineering, Edith Cowan University, Perth, WA 6027, Australia (e-mail: wei.ni@ieee.org). E. Hossain is with the Department of Electrical and Computer Engineering, University of Manitoba, Winnipeg, MB R3T 2N2, Canada (e-mail: ekram.hossain@umanitoba.ca).",
+    title: "Explainable AI for Next-Generation Wireless Physical Layer: Basics, State-of-the-Art, and Open Challenges",
     collection: "PAPERS",
     creator: "Bingnan Xiao, Shuyan Hu, Xiaojing Chen, Zhiyuan Zhai, Bingcong Li",
     year: 2026,
@@ -1741930,7 +1741930,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24457",
-    title: "Lite Any Stereo V2: Faster and Stronger Efficient Zero-Shot Stereo Matching Thanks: J. Jing, R. Zuo, Z. Shen, S. Zhou, R. A. Potamias, S. Zafeiriou, K. Mikolajczyk, and J. Deng are with Imperial College London, London SW7 2AZ, United Kingdom. E-mail: {j.jing23; r.zuo; zhelun.shen25; s.zhou1; r.potamias; k.mikolajczyk; s.zafeiriou; j.deng16}@imperial.ac.uk. Thanks: Corresponding author: Jiankang Deng",
+    title: "Lite Any Stereo V2: Faster and Stronger Efficient Zero-Shot Stereo Matching",
     collection: "PAPERS",
     creator: "Junpeng Jing, Ronglai Zuo, Zhelun Shen, Shangchen Zhou, Rolandos Alexandros Potamias",
     year: 2026,
@@ -1742026,7 +1742026,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24493",
-    title: "Trade-off Invariance for Weighted Scalarizations in Multi-objective Optimization Thanks: 1 CIT School, Technical University of Munich, Garching bei München, Germany. Thanks: 2 Munich Center for Machine Learning (MCML), Munich, Germany. Thanks: Email addresses: jona.klemenc@tum.de , scag@ma.tum.de .",
+    title: "Trade-off Invariance for Weighted Scalarizations in Multi-objective Optimization",
     collection: "PAPERS",
     creator: "Jona Klemenc 1,2, Alessandro Scagliotti 1,2",
     year: 2026,
@@ -1742169,7 +1742169,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24515",
-    title: "Reinforcement Learning for Computer-Use Agents with Autonomous Evaluation Thanks: Accepted to the 4th International Workshop on Generalizing from Limited Resources in the Open World (GLOW @ IJCAI 2026): https://glow-ijcai-2026.github.io/glow-ijcai-2026/ .",
+    title: "Reinforcement Learning for Computer-Use Agents with Autonomous Evaluation",
     collection: "PAPERS",
     creator: "Marta Sumyk, Oleksandr Kosovan",
     year: 2026,
@@ -1742185,7 +1742185,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24498",
-    title: "VistaRef: Boosting Visual Spatial Orientation Awareness for Pointing-to-Object Detection DOI: XXXXXXX.XXXXXXX Conference: Make sure to enter the correct conference title from your rights confirmation email; June 03–05, 2018; Woodstock, NY ISBN: 978-1-4503-XXXX-X/2018/06 4751 Thanks: Code: https://github.com/lingli1724/VistaRef CCS: Computing methodologies Object detection CCS: Computing methodologies Interest point and salient region detections CCS: Computing methodologies Spatial and physical reasoning CCS: Computing methodologies Information extraction",
+    title: "VistaRef: Boosting Visual Spatial Orientation Awareness for Pointing-to-Object Detection",
     collection: "PAPERS",
     creator: "Ling Li, Zhizhen Cai, Xinkun Wu, Ziyu Zhu, Jiaqing Lyu, Bowen Liu, Zhidong Deng",
     year: 2026,
@@ -1742473,7 +1742473,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24539",
-    title: "PointVG-R: Internalizing Geometric Reasoning in MLLMs for Precise Pointing Localization via Visual Chain of Thought DOI: XXXXXXX.XXXXXXX Conference: Make sure to enter the correct conference title from your rights confirmation email; June 03–05, 2018; Woodstock, NY ISBN: 978-1-4503-XXXX-X/2018/06 4701 Thanks: Code: https://github.com/lingli1724/PointVG-R CCS: Computing methodologies Artificial intelligence CCS: Computing methodologies Object detection CCS: Computing methodologies Spatial and physical reasoning CCS: Computing methodologies Computer vision",
+    title: "PointVG-R: Internalizing Geometric Reasoning in MLLMs for Precise Pointing Localization via Visual Chain of Thought",
     collection: "PAPERS",
     creator: "Ling Li, Bowen Liu, Zinuo Zhan, Jianhui Zhong, Ziyu Zhu, Bingcai Wei, Kenglun Chang, Zhidong Deng",
     year: 2026,
@@ -1742505,7 +1742505,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24266",
-    title: "Semi-nonparametric estimation of spatial dynamic panel data models with nonparametric spatial weights Thanks: Gupta’s research was supported in part by the Social Science and Humanities Research Council of Canada. Qu’s research was supported by the National Natural Science Foundation of China via grant 72595872. Zhang’s research was supported by the National Natural Science Foundation of China via grant 72503134.",
+    title: "Semi-nonparametric estimation of spatial dynamic panel data models with nonparametric spatial weights",
     collection: "PAPERS",
     creator: "Abhimanyu Gupta, Xi Qu, Jiajun Zhang",
     year: 2026,
@@ -1743272,7 +1743272,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24660",
-    title: "Extended pseudo-spectral physics-informed neural networks for phase-field models Thanks: Submitted to the SIAM Journal on Scientific Computing (August 10, 2026)",
+    title: "Extended pseudo-spectral physics-informed neural networks for phase-field models",
     collection: "PAPERS",
     creator: "Callum Marsh, Radek Erban, Andreas Münch",
     year: 2026,
@@ -1744151,7 +1744151,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24788",
-    title: "Finite Spectral-Band Optimal Control of Acoustic Waves via Subwavelength Point-Like Resonant Actuators Thanks: The work of M. Sini is partially supported by the Austrian Science Fund (FWF): P 32660 and P: 36942.",
+    title: "Finite Spectral-Band Optimal Control of Acoustic Waves via Subwavelength Point-Like Resonant Actuators",
     collection: "PAPERS",
     creator: "Arpan Mukherjee, Mourad Sini",
     year: 2026,
@@ -1744407,7 +1744407,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24839",
-    title: "Grading the Grader: Lessons from Evaluating an Agentic Data Analysis System Thanks: Code and data available at GitHub: https://github.com/TZstats-Columbia/STAI-X-Grade-The-Grader .",
+    title: "Grading the Grader: Lessons from Evaluating an Agentic Data Analysis System",
     collection: "PAPERS",
     creator: "Tian Zheng, Kai-Tai Hsu",
     year: 2026,
@@ -1744423,7 +1744423,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24732",
-    title: "Interpolating Schur Algebras Thanks: JRK was supported in part by Simons Foundation Grant SFI-MPS-TSM-00014272.",
+    title: "Interpolating Schur Algebras",
     collection: "PAPERS",
     creator: "Addison Day, Jonathan R. Kujawa",
     year: 2026,
@@ -1744663,7 +1744663,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24851",
-    title: "Real vs. Complex Spectral Bases for Neural Operators: The Role of Green’s Function Alignment Thanks: Code available at https://github.com/jaysulk/hartley-neural-operator",
+    title: "Real vs. Complex Spectral Bases for Neural Operators: The Role of Green’s Function Alignment",
     collection: "PAPERS",
     creator: "Jason Sulskis jason.sulskis@gtri.gatech.edu, Sathya Ravi sathya@uic.edu",
     year: 2026,
@@ -1744791,7 +1744791,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24867",
-    title: "Bounds for Standard Errors in Combined Data Thanks: We thank Isaiah Andrews, Pol Antrás, Michal Kolesár, Mikkel Plagborg-Møller, Elie Tamer, and participants of the 2023 New York Camp Econometrics, the 2025 Canadian Econometric Study Group, and the Princeton Econometrics Workshop for their valuable comments. This work is based on merging “Bounds for Standard Errors from Interdependent Data” by Jooyoung Cha and Yuya Sasaki with “Top to Bottom: Best-case Standard Errors for Calibrated Model Parameters” by Nelson Matthew P. Tan. All remaining errors are our own. Yuya Sasaki gratefully acknowledges generous funding from Brian and Charlotte Grove.",
+    title: "Bounds for Standard Errors in Combined Data",
     collection: "PAPERS",
     creator: "Jooyoung Cha, Yuya Sasaki, Nelson Matthew P. Tan",
     year: 2026,
@@ -1744935,7 +1744935,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24912",
-    title: "Velocity Prediction in Automatic Guitar Transcription Thanks: This work is supported by Innovate UK (Project no. 10105279) and the UKRI Centre for Doctoral Training in Artificial Intelligence and Music (Grant no. EP/S022694/1). This research utilised Queen Mary’s Apocrita HPC facility, supported by QMUL Research-IT. http://doi.org/10.5281/zenodo.438045",
+    title: "Velocity Prediction in Automatic Guitar Transcription",
     collection: "PAPERS",
     creator: "Jackson Loth, Xavier Riley, Simon Dixon and Emmanouil Benetos",
     year: 2026,
@@ -1745031,7 +1745031,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-24908",
-    title: "On common values of F n F_{n} and Nathanson’s totient function Φ ⁡ ( m ) \\Phi(m) Thanks: ∗ The author is financially supported by the University Grants Commission (UGC), Government of India, through the award of the Junior Research Fellowship (JRF) with ref. No. 241620111598.",
+    title: "On common values of F n F_{n} and Nathanson’s totient function Φ ⁡ ( m ) \\Phi(m)",
     collection: "PAPERS",
     creator: "Sagar Mandal ∗",
     year: 2026,
@@ -1746359,7 +1746359,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25055",
-    title: "Pseudoshattering Pairs Thanks: Research supported in part by NSF grants DMS-2154082 and DMS-2349013",
+    title: "Pseudoshattering Pairs",
     collection: "PAPERS",
     creator: "Noga Alon, Varun Sivashankar",
     year: 2026,
@@ -1746583,7 +1746583,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25113",
-    title: "Lie symmetry analysis of a (2+1)-dimensional flux-limited Keller–Segel system Thanks: E-mails: ahmedgon1234567@gmail.com, mostafabazghandi2001@gmail.com",
+    title: "Lie symmetry analysis of a (2+1)-dimensional flux-limited Keller–Segel system",
     collection: "PAPERS",
     creator: "Ahmed Abbas Jaber Al-Furaiji, Ghorbanali Haghighatdoost, Mustafa Bazghandi",
     year: 2026,
@@ -1746663,7 +1746663,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25086",
-    title: "Training for the Model You Return: Improving Optimization for Iterate-Averaged Language Models Thanks: The code used to run our evaluations can be found at https://github.com/leonou2010/pace-optimizer .",
+    title: "Training for the Model You Return: Improving Optimization for Iterate-Averaged Language Models",
     collection: "PAPERS",
     creator: "Kwok Chun Au, Adam Block",
     year: 2026,
@@ -1747191,7 +1747191,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25187",
-    title: "Migration of silting objects via adjoint pairs Thanks: This work was supported by a grant of the Ministry of Research, Innovation and Digitization, CNCS-UEFISCDI, project number PN-IV-P1-PCE-2023-0060, within PNCDI IV",
+    title: "Migration of silting objects via adjoint pairs",
     collection: "PAPERS",
     creator: "Simion Breaz, Andrei Mărcuş and George Ciprian Modoi",
     year: 2026,
@@ -1747607,7 +1747607,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25290",
-    title: "A note on ded κ \\kappa and the part-whole principle Thanks: The author thanks Nicholas Ramsey, Joel David Hamkins, and Gabriel Goldberg for discussion. Forthcoming in Philosophy of Science .",
+    title: "A note on ded κ \\kappa and the part-whole principle",
     collection: "PAPERS",
     creator: "Yuanshan Li",
     year: 2026,
@@ -1748055,7 +1748055,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25305",
-    title: "Metric results for dyadic approximation on the middle-third Cantor set Thanks: 2010 Mathematics Subject Classification : 11J83, 11K60, 28A80",
+    title: "Metric results for dyadic approximation on the middle-third Cantor set",
     collection: "PAPERS",
     creator: "Xin-Rong Dai, Bing Li, Bo Wang, Yu-Feng Wu",
     year: 2026,
@@ -1748263,7 +1748263,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25355",
-    title: "Primal-Dual Halpern-PAGE Algorithm for Constrained Stochastic Weakly Convex Optimization Thanks: Supported by National Key R&D Program of China under project number 2022YFA1004000,the Major Program of National Natural Science Foundation of China (Nos. 72192830 and 72192831), National Natural Science Foundation of China (No.12371298) and the 111 Project (B16009).",
+    title: "Primal-Dual Halpern-PAGE Algorithm for Constrained Stochastic Weakly Convex Optimization",
     collection: "PAPERS",
     creator: "Lixin Tang, Xingyu Wang, and, Liwei Zhang",
     year: 2026,
@@ -1748771,7 +1748771,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25485",
-    title: "Prescribed lifts of 2-dimensional representations Thanks: ME was supported in part by the NSF grants DMS-1902307, DMS-1952705, DMS-2201242 and DMS-2502609. TG was supported in part by an ERC Advanced grant. This project has received funding from the European Research Council (ERC) under the European Union’s Horizon 2020 research and innovation programme (grant agreement No. 884596). ME and TG were both supported in part by the Simons Collaboration on Perfection in Algebra, Geometry and Topology. LP was supported in part by a Sloan Research Fellowship. XZ was supported by NSF grant DMS-2200940. For the purpose of open access, the authors have applied a CC BY public copyright licence to any author accepted manuscript arising from this submission.",
+    title: "Prescribed lifts of 2-dimensional representations",
     collection: "PAPERS",
     creator: "Matthew Emerton, Toby Gee, Lue Pan, Xinwen Zhu",
     year: 2026,
@@ -1748899,7 +1748899,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25500",
-    title: "Probing the ubiquity of complex ices in protostars with JWST: the first systematic quantification of weak ice bands between 6.8 and 7.9 µm NumPy ( 15 ) , Matplotlib ( 18 ) , SciPy ( 40 ) , LMFIT 24 , OpTool ( 7 ) , VSCode ( https://code.visualstudio.com/ ), ChatGPT ( https://chat.openai.com/ ), GitHub Copilot ( https://github.com/features/copilot ).",
+    title: "Probing the ubiquity of complex ices in protostars with JWST: the first systematic quantification of weak ice bands between 6.8 and 7.9 micron",
     collection: "PAPERS",
     creator: "Yuan Chen, Ewine F. van Dishoeck, Katerina Slavicinska, Łukasz Tychoniec, Martijn L. van Gelder, Logan Francis, Adwin C. A. Boogert, Mayank Narang, Charlotte A. F. Schravendijk, Henrik Beuther, Alessio Caratti o Garatti, Eyze K. H. Eenhorst, Caroline Gieser, Thomas Henning, Manuel Güdel, Valentin J. M. Le Gouellec, Melissa K. McClure, Pooneh Nazari, Simon D. Reyes, Mees Tolman, Yao-Lun Yang",
     year: 2026,
@@ -1749219,7 +1749219,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25544",
-    title: "Commutants of complex symmetric weighted composition operators on Fock space Thanks: The author is thankful to DST(India) for WISE-PDF (File no. DST/WISE-PDF/PM-46/2023. 1 The corresponding author",
+    title: "Commutants of complex symmetric weighted composition operators on Fock space",
     collection: "PAPERS",
     creator: "1 Aakriti Sharma",
     year: 2026,
@@ -1749651,7 +1749651,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25633",
-    title: "Complex symmetric generalized product type operators on weighted Bergman space Thanks: The first author is thankful to DST(India) for WISE-PDF (File no. DST/WISE-PDF/PM-46/2023.",
+    title: "Complex symmetric generalized product type operators on weighted Bergman space",
     collection: "PAPERS",
     creator: "Aakriti Sharma",
     year: 2026,
@@ -1749699,7 +1749699,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25625",
-    title: "Euclid : Precise inference of defocus wavefront error from image diffraction spike measurements Thanks: This paper is published on behalf of the Euclid Consortium.",
+    title: "Euclid : Precise inference of defocus wavefront error from image diffraction spike measurements",
     collection: "PAPERS",
     creator: "D. Neumann, L. Miller, H. Hoekstra, K. Kuijken, I. H. Whittam, N. E. Chisari, R. Nakajima, B. Altieri, A. Amara, S. Andreon, N. Auricchio, C. Baccigalupi, M. Baldi, S. Bardelli, A. Basset, P. Battaglia, A. Biviano, E. Branchini, M. Brescia, S. Camera, G. Cañas-Herrera, V. Capobianco, C. Carbone, J. Carretero, M. Castellano, G. Castignani, S. Cavuoti, K. C. Chambers, A. Cimatti, C. Colodro-Conde, G. Congedo, C. J. Conselice, L. Conversi, Y. Copin, F. Courbin, H. M. Courtois, M. Cropper, H. Degaudenzi, G. De Lucia, H. Dole, F. Dubath, X. Dupac, M. Farina, R. Farinelli, S. Farrens, S. Ferriol, S. Fotopoulou, N. Fourmanoit, M. Frailis, E. Franceschi, M. Fumana, S. Galeotta, K. George, B. Gillis, C. Giocoli, P. Gómez-Alvarez, J. Gracia-Carpio, A. Grazian, F. Grupp, S. V. H. Haugan, W. Holmes, F. Hormuth, A. Hornstrup, K. Jahnke, M. Jhabvala, B. Joachimi, S. Kermiche, A. Kiessling, M. Kilbinger, R. Kohley, B. Kubik, M. Kunz, H. Kurki-Suonio, R. Laureijs, A. M. C. Le Brun, S. Ligori, P. B. Lilje, V. Lindholm, I. Lloro, G. Mainetti, O. Mansutti, O. Marggraf, M. Martinelli, N. Martinet, F. Marulli, R. J. Massey, E. Medinaceli, S. Mei, M. Meneghetti, E. Merlin, G. Meylan, A. Mora, M. Moresco, C. Moretti, L. Moscardini, C. Neissner, R. C. Nichol, S.-M. Niemi, C. Padilla, S. Paltani, F. Pasian, K. Pedersen, W. J. Percival, V. Pettorino, A. Pezzotta, S. Pires, G. Polenta, M. Poncet, L. A. Popa, G. D. Racca, F. Raison, A. Renzi, J. Rhodes, G. Riccio, E. Romelli, M. Roncarelli, R. Saglia, Z. Sakr, D. Sapone, B. Sartoris, M. Schirmer, P. Schneider, T. Schrabback, A. Secroun, E. Sihvola, P. Simon, C. Sirignano, G. Sirri, A. Spurio Mancini, L. Stanco, P. Tallada-Crespí, A. N. Taylor, I. Tereno, N. Tessore, S. Toft, R. Toledo-Moreo, F. Torradeflot, I. Tutusaus, L. Valenziano, J. Valiviita, T. Vassallo, A. Veropalumbo, Y. Wang, J. Weller, G. Zamorani, F. M. Zerbi, A. Gregorio, A. Loureiro, M. Sereno",
     year: 2026,
@@ -1750083,7 +1750083,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25705",
-    title: "GUI agent: Guided Exploration of User-Sensitive Screens Thanks: Presented at the IJCAI-ECAI 2026 RobustifAI workshop",
+    title: "GUI agent: Guided Exploration of User-Sensitive Screens",
     collection: "PAPERS",
     creator: "Aradhana Nayak, Mussadiq Nazeer, Wang Peng, Feng Liu",
     year: 2026,
@@ -1750195,7 +1750195,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25715",
-    title: "Gap-Aware Exact Nonnegative Matrix Factorization: A Two-Sided SVD Gauge and a Three-Regime W W -Rank Taxonomy Thanks: Software drafts and prose for this manuscript were prepared with the assistance of Anthropic’s Claude, an AI coding assistant. The author bears full responsibility for the content.",
+    title: "Gap-Aware Exact Nonnegative Matrix Factorization: A Two-Sided SVD Gauge and a Three-Regime W W -Rank Taxonomy",
     collection: "PAPERS",
     creator: "Mithil Ramteke",
     year: 2026,
@@ -1750243,7 +1750243,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25722",
-    title: "MAP-Based Task-Oriented Precoding for Multiuser Communication Thanks: This work of M. J. Ahmadi and R. F. Schaefer have been supported in part by the German Federal Ministry of Research, Technology and Space (BMFTR) through the transfer hub 6G-life under Grant 16KIS2413K and in part by the German Research Foundation (DFG) as part of Germany’s Excellence Strategy EXC 2050/2 – Project ID 390696704 – Cluster of Excellence “Centre for Tactile Internet with Human-in-the-Loop” (CeTI) and within the Priority Programme SPP 2378 “Resilient Worlds” – Project ID 503657103. The work of H. V. Poor was supported in part by an Innovation Grant from Princeton NextG. Thanks: M. J. Ahmadi and R. F. Schaefer are with the Chair of Information Theory and Machine Learning, Technische Universität Dresden, 01062 Dresden, Germany and also with the Cluster of Excellence “CeTI”, Technische Universität Dresden, 01062 Dresden, Germany (e-mail: {mohammad_javad.ahmadi, rafael.schaefer}@tu-dresden.de). Thanks: H. V. Poor is with the Department of Electrical and Computer Engineering, Princeton University (e-mail: poor@princeton.edu).",
+    title: "MAP-Based Task-Oriented Precoding for Multiuser Communication",
     collection: "PAPERS",
     creator: "Mohammad Javad Ahmadi, Rafael F. Schaefer",
     year: 2026,
@@ -1750787,7 +1750787,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25812",
-    title: "The PAU Survey and Euclid : Analysing photometric redshifts from realistically simulated narrow-band photometry with Flagship 2 Thanks: This paper is published on behalf of the Euclid Consortium.",
+    title: "The PAU Survey and Euclid : Analysing photometric redshifts from realistically simulated narrow-band photometry with Flagship 2",
     collection: "PAPERS",
     creator: "A. Wittje, H. Hildebrandt, D. Navarro-Gironés, E. J. Gonzalez, J. L. van den Busch, E. Gaztanaga, M. Eriksen, A. H. Wright, R. Casas, J. Carretero, F. J. Castander, E. Fernandez, P. Fosalba, J. García-Bellido, H. Hoekstra, R. Miquel, C. Padilla, P. Renard, E. Sanchez, I. Sevilla-Noarbe, P. Tallada-Crespí, B. Altieri, S. Andreon, N. Auricchio, C. Baccigalupi, M. Baldi, S. Bardelli, P. Battaglia, A. Biviano, M. Bolzonella, E. Branchini, M. Brescia, S. Camera, G. Cañas-Herrera, V. Capobianco, C. Carbone, V. F. Cardone, M. Castellano, G. Castignani, S. Cavuoti, A. Cimatti, C. Colodro-Conde, G. Congedo, L. Conversi, Y. Copin, F. Courbin, H. M. Courtois, M. Crocce, H. Degaudenzi, G. De Lucia, H. Dole, F. Dubath, C. A. J. Duncan, X. Dupac, S. Escoffier, M. Farina, R. Farinelli, S. Farrens, F. Faustini, S. Ferriol, F. Finelli, S. Fotopoulou, N. Fourmanoit, M. Frailis, M. Fumana, S. Galeotta, K. George, B. Gillis, C. Giocoli, J. Gracia-Carpio, A. Grazian, F. Grupp, S. V. H. Haugan, W. Holmes, F. Hormuth, A. Hornstrup, K. Jahnke, M. Jhabvala, B. Joachimi, S. Kermiche, A. Kiessling, M. Kilbinger, B. Kubik, M. Kümmel, H. Kurki-Suonio, A. M. C. Le Brun, S. Ligori, P. B. Lilje, V. Lindholm, I. Lloro, G. Mainetti, O. Mansutti, O. Marggraf, M. Martinelli, N. Martinet, F. Marulli, R. J. Massey, E. Medinaceli, S. Mei, M. Melchior, M. Meneghetti, E. Merlin, G. Meylan, A. Mora, M. Moresco, L. Moscardini, R. Nakajima, C. Neissner, S.-M. Niemi, S. Paltani, F. Pasian, K. Pedersen, V. Pettorino, A. Pezzotta, S. Pires, G. Polenta, M. Poncet, L. A. Popa, L. Pozzetti, F. Raison, A. Renzi, J. Rhodes, G. Riccio, E. Romelli, M. Roncarelli, R. Saglia, Z. Sakr, A. G. Sánchez, D. Sapone, B. Sartoris, P. Schneider, T. Schrabback, A. Secroun, E. Sefusatti, E. Sihvola, P. Simon, C. Sirignano, G. Sirri, A. N. Taylor, H. I. Teplitz, I. Tereno, N. Tessore, S. Toft, R. Toledo-Moreo, F. Torradeflot, I. Tutusaus, J. Valiviita, T. Vassallo, G. Verdoes Kleijn, A. Veropalumbo, Y. Wang, J. Weller, G. Zamorani, F. M. Zerbi, E. Zucca, A. Montoro, M. Sereno",
     year: 2026,
@@ -1751218,7 +1751218,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25848",
-    title: "On the Moser Trick for Lie Subalgebras and Foliations Thanks: Part of this work was carried out during the author’s PhD studies at the University of Göttingen, partially funded by a GSSP-DAAD fellowship and by RTG 2491 (Göttingen).",
+    title: "On the Moser Trick for Lie Subalgebras and Foliations",
     collection: "PAPERS",
     creator: "Ilias Ermeidis",
     year: 2026,
@@ -1751346,7 +1751346,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25805",
-    title: "Global Strichartz Estimates for Wave Equations with time-dependent structured Lipschitz coefficients Thanks: Funded by the Deutsche Forschungsgemeinschaft (DFG, German Research Foundation) – Project-ID 258734477 – SFB 1173",
+    title: "Global Strichartz Estimates for Wave Equations with time-dependent structured Lipschitz coefficients",
     collection: "PAPERS",
     creator: "Dorothee Frey, Yonas Mesfun",
     year: 2026,
@@ -1751521,7 +1751521,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25909",
-    title: "General Equilibrium Effects of Carbon Offsets iglobusharris@colgate.edu, 13 Oak Drive, Hamilton, NY 13346, USA. karney@ohio.edu, 1 President St., Athens, OH 45701, USA.",
+    title: "General Equilibrium Effects of Carbon Offsets",
     collection: "PAPERS",
     creator: "Isla Globus-Harris, Daniel H. Karney",
     year: 2026,
@@ -1751537,7 +1751537,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25944",
-    title: "Dispersion Suppression for Wedge-Based Final Cooling at a 10 TeV Muon Collider Thanks: Endorsed by the International Muon Collider Collaboration.",
+    title: "Dispersion Suppression for Wedge-Based Final Cooling at a 10 TeV Muon Collider",
     collection: "PAPERS",
     creator: "I. Karaaslan, K. DiPetrillo, University of Chicago, Chicago, IL, USA D. Neuffer, D. Stratakis, K. Yonehara, Fermi National Accelerator Laboratory, Batavia, IL, USA",
     year: 2026,
@@ -1751553,7 +1751553,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-25949",
-    title: "The Dependency Black Hole Thanks: This research was supported by KK foundation through the KK-Hög project 2024/0140 and KKS Profile project SERT 2018/010 at Blekinge Institute of Technology, Sweden.",
+    title: "The Dependency Black Hole",
     collection: "PAPERS",
     creator: "Ehsan Zabardast 1 2 , Bhuwan Paudel 1 , Javier Gonzalez-Huerta 1",
     year: 2026,
@@ -1752560,7 +1752560,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-26033",
-    title: "Actions with a strong fundamental domain and Sigma invariants of groups. Thanks: Partially supported by the Spanish Government PID2021-126254NB-I00 and PID2024-155800NB-C32. The first named author is also supported by Universidad Pública de Navarra (grant code: Plan de promoción de grupos. “Álgebra. Aplicaciones”). The second and third named authors are also supported by Departamento de Ciencia, Universidad y Sociedad del Conocimiento del Gobierno de Aragón (grant code: E22-23R: “Álgebra y Geometría”)",
+    title: "Actions with a strong fundamental domain and Sigma invariants of groups",
     collection: "PAPERS",
     creator: "Peio Ardaiz Galé, Marcos Escartín Ferrer, Conchita Martínez Pérez",
     year: 2026,
@@ -1753311,7 +1753311,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-26161",
-    title: "Refusal Lives Downstream of Persona in Chat Models Thanks: Accepted to the ICML 2026 Mechanistic Interpretability Workshop.",
+    title: "Refusal Lives Downstream of Persona in Chat Models",
     collection: "PAPERS",
     creator: "Viola Zhong, Qirui Li",
     year: 2026,
@@ -1753726,7 +1753726,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-26219",
-    title: "Connecting Stellar Population Surveys to Stellar Evolution with Delay-time Distributions: Application to LMC Classical Cepheids ∗ Corresponding Author: ssarbad1@jh.edu .",
+    title: "Connecting Stellar Population Surveys to Stellar Evolution with Delay-time Distributions: Application to LMC Classical Cepheids",
     collection: "PAPERS",
     creator: "Sumit K. Sarbadhicary 1,∗",
     year: 2026,
@@ -1755053,7 +1755053,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-26402",
-    title: "Smoothly Time-Varying Continuous Time Markov Chains in Phylogenetics Thanks: Corresponding author: msuchard@ucla.edu",
+    title: "Smoothly Time-Varying Continuous Time Markov Chains in Phylogenetics",
     collection: "PAPERS",
     creator: "Pratyusa Datta",
     year: 2026,
@@ -1756269,7 +1756269,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-26521",
-    title: "The Suda–Tanaka-Tokushige conjecture for 𝐩 \\mathbf{p} -biased intersecting families Lihua Feng was supported by the NSFC (Nos. 12271527 and 12471022) and NSF of Qinghai Province (No. 2025-ZJ-902T). E-mail addresses: wuyjmath@163.com (Y. Wu), fenglh@163.com (L. Feng).",
+    title: "The Suda–Tanaka-Tokushige conjecture for 𝐩 \\mathbf{p} -biased intersecting families",
     collection: "PAPERS",
     creator: "Yongjiang Wu, Lihua Feng",
     year: 2026,
@@ -1756989,7 +1756989,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-26498",
-    title: "Mean-Field PhiBE: Continuous-Time Mean-Field Reinforcement Learning from Discrete-Time Data Thanks: 1 Department of Mathematics, University of Michigan, Ann Arbor, MI, USA Thanks: 2 Department of Statistics and Data Science, University of California, Los Angeles, CA, USA Thanks: 3 Program in Applied and Computational Mathematics, Princeton University, Princeton, NJ, USA Thanks: * Corresponding author ( martinh@ucla.edu ).",
+    title: "Mean-Field PhiBE: Continuous-Time Mean-Field Reinforcement Learning from Discrete-Time Data",
     collection: "PAPERS",
     creator: "Erhan Bayraktar 1, Martin Hernandez 2,*, Qinxin Yan 3, Yuhua Zhu 2",
     year: 2026,
@@ -1757596,7 +1757596,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-26766",
-    title: "Effective Resistance-Based Graph Sparsification and Community Detection Thanks: Submitted to the editors DATE.",
+    title: "Effective Resistance-Based Graph Sparsification and Community Detection",
     collection: "PAPERS",
     creator: "Jayanta Pari, Pratibha Bhandari, Soumyendu Raha",
     year: 2026,
@@ -1758428,7 +1758428,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-26907",
-    title: "Qwen-Image-Agent: Bridging the Context Gap in Real-World Image Generation Thanks: Corresponding Author.",
+    title: "Qwen-Image-Agent: Bridging the Context Gap in Real-World Image Generation",
     collection: "PAPERS",
     creator: "Zekai Zhang, Jiahao Li, Jie Zhang, Kaiyuan Gao, Kun Yan, Lihan Jiang",
     year: 2026,
@@ -1759083,7 +1759083,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-26993",
-    title: "Deterministic and Efficient Ideal Arithmetic via Two-Element Representations We thank the U. S. National Science Foundation for their support through the grant CCF-2530361 .",
+    title: "Deterministic and Efficient Ideal Arithmetic via Two-Element Representations",
     collection: "PAPERS",
     creator: "Qi Cheng",
     year: 2026,
@@ -1759882,7 +1759882,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27114",
-    title: "Cross-Head Attention Uplift Network with Inverse Propensity Score under Unobserved Confounding DOI: XXXXXXX.XXXXXXX Conference: Make sure to enter the correct conference title from your rights confirmation email; June 03–05, 2018; Woodstock, NY ISBN: 978-1-4503-XXXX-X/2018/06 Thanks: ∗ Corresponding author. CCS: Information systems Information systems applications",
+    title: "Cross-Head Attention Uplift Network with Inverse Propensity Score under Unobserved Confounding",
     collection: "PAPERS",
     creator: "Haoran Zhang, Chuanpu Li, Yuxin Fu, Bin Tong, Guan Wang, Bo Zheng, Feng Zhou ∗",
     year: 2026,
@@ -1759914,7 +1759914,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27128",
-    title: "FlameVQA: A Physically-Grounded UAV Wildfire VQA Benchmark with Radiometric Thermal Supervision Thanks: This material is based upon work supported by the National Science Foundation under Grant Nos. CNS-2232048 and CNS-2204445, and by NASA under award No. 80NSSC23K1393.",
+    title: "FlameVQA: A Physically-Grounded UAV Wildfire VQA Benchmark with Radiometric Thermal Supervision",
     collection: "PAPERS",
     creator: "Mobin Habibpour, John Spodnik, Niloufar Alipour Talemi, Fatemeh Afghah",
     year: 2026,
@@ -1760026,7 +1760026,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27085",
-    title: "Average Distortion of Commensurators of Hyperbolic Groups Thanks: NL was partially supported by the Israeli Science Foundation (grant no. 1576/23). SKMS was supported by the Israeli Science Foundation (grant no. 1226/19) at the Technion, an annual research grant of Ashoka University, and by an ANRF-MATRICS grant (ANRF/ARGM/2025/000741/MTR). MM was supported by the Department of Atomic Energy, Government of India, under project no.12-R& D-TFR-5.01-0500 as also by an endowment of the Infosys Foundation.",
+    title: "Average Distortion of Commensurators of Hyperbolic Groups",
     collection: "PAPERS",
     creator: "Nir Lazarovich, Suraj Krishna M S, Mahan Mj",
     year: 2026,
@@ -1760425,7 +1760425,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27141",
-    title: "Bilinear rough singular integrals under a fractional geometric condition Thanks: The authors were partly supported by the National Key R&D Program of China (No. 2020YFA0712900) and NNSF of China (No. 12271041). Thanks: ∗ Corresponding author, e-mail address: qyxue@bnu.edu.cn",
+    title: "Bilinear rough singular integrals under a fractional geometric condition",
     collection: "PAPERS",
     creator: "BinWei Dan, Moyan Qin, Qingying Xue ∗",
     year: 2026,
@@ -1760521,7 +1760521,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27197",
-    title: "On some components of L ⁡ ( ρ ) ⊗ L ⁡ ( ρ ) L(\\rho)\\otimes L(\\rho) associated with rooted trees for symmetrizable Kac-Moody algebras Thanks: This work started when the second-named author (P.P.) visited the first at NISER Bhubaneswar, during the period May 19 to June 6, 2026, and was completed shortly after the first-named author (R.B.) visited the second at CMI, during the period June 8-13, 2026. Both authors thank both Institutions for their hospitality and propitious conditions of collaborative work.",
+    title: "On some components of L ⁡ ( ρ ) ⊗ L ⁡ ( ρ ) L(\\rho)\\otimes L(\\rho) associated with rooted trees for symmetrizable Kac-Moody algebras",
     collection: "PAPERS",
     creator: "Rekha Biswal, Patrick Polo",
     year: 2026,
@@ -1760761,7 +1760761,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27243",
-    title: "NOVA: A Verification-Aware Agent Harness for Architecture Evolution in Industrial Recommender Systems Thanks: ∗ Equal contribution. Thanks: † Corresponding author. CCS: Information systems Recommender systems",
+    title: "NOVA: A Verification-Aware Agent Harness for Architecture Evolution in Industrial Recommender Systems",
     collection: "PAPERS",
     creator: "Shaohua Liu ∗ , Liang Fang ∗ , Yilong Sun ∗ , Shudong Huang ∗† , Qingsong Luo, Shaoxin Liu, Xiaoyang Chen, Dongqiang Liu, Chuangang Ma, Zhenzhen Chai, Henghuan Wang, Shijie Quan, Changyuan Cui, Zhangbin Zhu, Peng Chen, Wei Xu, Lei Xiao, Haijie Gu, Jie Jiang Tencent Inc. {jimmyshliu,franklfang,elonsun,ericdhuang,qsongluo,orionsxliu,noreenchen, dongcialiu,chuangangma,njzzchai,asherwang,justinquan,shoncui,defyzhu, pengchen,davidxu,shawnxiao,jerrickgu,zeus}@tencent.com",
     year: 2026,
@@ -1760841,7 +1760841,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27138",
-    title: "Welterweight Go: Boxing, Structural Subtyping, and Generics (Extended Version) 1 1 footnotemark: 1 Note: This is an extended version of the paper published in the Proceedings of the ACM on Programming Languages, Volume 10, Issue POPL (January 2026), Article 79. https://doi.org/10.1145/3776721 . CCS: Theory of computation Program semantics CCS: Theory of computation Type structures CCS: Software and its engineering Polymorphism",
+    title: "Welterweight Go: Boxing, Structural Subtyping, and Generics (Extended Version",
     collection: "PAPERS",
     creator: "Raymond Hu, Julien Lange, Bernardo Toninho, Philip Wadler, Robert Griesemer, Keith Randall",
     year: 2026,
@@ -1760937,7 +1760937,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27284",
-    title: "\"Everyone Says Them\": Deception Typologies, Probabilistic Trust, and Grassroots Safety Knowledge Among Gay Dating App Users in China Thanks: *These authors contributed equally to this work.",
+    title: "\"Everyone Says Them\": Deception Typologies, Probabilistic Trust, and Grassroots Safety Knowledge Among Gay Dating App Users in China",
     collection: "PAPERS",
     creator: "Yibo Meng*, Lyumanshan Ye*, Yingfangzhong Sun*, Bingyi Liu, Huidi Lu, Xiaolan Ding",
     year: 2026,
@@ -1761320,7 +1761320,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27300",
-    title: "Automated Galerkin time stepping in Irksome Thanks:",
+    title: "Automated Galerkin time stepping in Irksome",
     collection: "PAPERS",
     creator: "Boris D. Andrews, Pablo Brubeck, Patrick E. Farrell, Robert C. Kirby, Scott P. MacLachlan",
     year: 2026,
@@ -1761496,7 +1761496,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27350",
-    title: "CHIA: An open-source framework for principled, agentic AI-driven hardware/software co-design research Thanks: * Equal Contribution Conference: ; ;",
+    title: "CHIA: An open-source framework for principled, agentic AI-driven hardware/software co-design research",
     collection: "PAPERS",
     creator: "Angela Cui*, Ferran Hermida-Rivera*, Jack Toubes*, Raghav Gupta, Jim Fang, Chengyi Lux Zhang, Ella Schwarz, Junha Kim, Yakun Sophia Shao, Borivoje Nikolić, Christopher W. Fletcher, Sagar Karandikar",
     year: 2026,
@@ -1761816,7 +1761816,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27394",
-    title: "Forecasting Technological Directions in Wireless Networks and Mobile Computing via AutoML Framework Thanks: Identify applicable funding agency here. If none, delete this.",
+    title: "Forecasting Technological Directions in Wireless Networks and Mobile Computing via AutoML Framework",
     collection: "PAPERS",
     creator: "Ahmed Abolfadl 1 , Marwa Mahmoud 2 , Basma Afifi 1 , Mervat Abu-Elkheir 1 , Maggie Mashaly 2",
     year: 2026,
@@ -1762152,7 +1762152,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27426",
-    title: "Too shy to spin? Cosmic wallflowers as proto-globular clusters Thanks: Wallflower (noun) : a person who has no one to dance with or who feels shy, awkward, or excluded at a party. 2026 Too shy to spin? Cosmic wallflowers as proto-globular clusters – 7",
+    title: "Too shy to spin? Cosmic wallflowers as proto-globular clusters",
     collection: "PAPERS",
     creator: "Floor van Donkelaar, Lucio Mayer, Pedro R. Capelo",
     year: 2026,
@@ -1762280,7 +1762280,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27323",
-    title: "Amplified moments of the Riemann zeta function Thanks: BD gratefully acknowledges support from the Heilbronn Institute for Mathematical Research. We thank Emma Bailey, Hung Bui, Chris Hughes and Andrew Pearce-Crump for their helpful comments and conversations, which have significantly improved the paper.",
+    title: "Amplified moments of the Riemann zeta function",
     collection: "PAPERS",
     creator: "Benjamin Durkan, Timothy Page",
     year: 2026,
@@ -1762472,7 +1762472,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27455",
-    title: "Directed Graph Topology Inference via Graph Filter Identification ∗ The first two authors contributed equally. Work in this paper was supported in part by the NSF awards CCF-1750428 and CCF-2340481; the Spanish AEI (AEI/10.13039/501100011033) grant PID2022-136887NB-I00; and the Community of Madrid via IDEA-CM (TEC-2024/COM-89) and the Ellis Madrid Unit. R. Shafipour is with NVIDIA. A. Buciulea and A. G. Marques are with the Dept. of Signal Theory and Comms., King Juan Carlos University. S. Segarra is with the Dept. of Electrical and Computer Eng., Rice University. G. Mateos is with the Dept. of Electrical and Computer Eng., University of Rochester. Emails: rashafipour@gmail.com, andrei.buciulea@urjc.es, segarra@rice.edu, antonio.garcia.marques@urjc.es, and gmateosb@ece.rochester.edu. Part of the results in this paper were presented at the 2018 IEEE Data Science Workshop [ 35 ] .",
+    title: "Directed Graph Topology Inference via Graph Filter Identification",
     collection: "PAPERS",
     creator: "Rasoul Shafipour ∗ , Andrei Buciulea ∗ , Member, IEEE , Santiago Segarra, Senior Member, IEEE, Antonio G. Marques, Senior Member, IEEE, and Gonzalo Mateos, Senior Member, IEEE",
     year: 2026,
@@ -1763142,7 +1763142,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27566",
-    title: "Spacecraft Fiducial Marker for Autonomous Rendezvous, Proximity Operations, and Docking Authors are with the Department of Cybernetics, Faculty of Electrical Engineering, Czech Technical University in Prague, Karlovo Namesti 13, 121 35 Prague 2, Czechia. *Corresponding author: ravi.thakur@cvut.cz",
+    title: "Spacecraft Fiducial Marker for Autonomous Rendezvous, Proximity Operations, and Docking",
     collection: "PAPERS",
     creator: "Ravi Kumar Thakur*, Matouš Vrba, Martin Saska",
     year: 2026,
@@ -1763158,7 +1763158,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27516",
-    title: "Sharp Bounds for Moments of the Dedekind Zeta Function Thanks: 2020 Mathematics Subject Classification. 11M50, 11R42, 11S40 (primary)",
+    title: "Sharp Bounds for Moments of the Dedekind Zeta Function",
     collection: "PAPERS",
     creator: "Nilmoni Karak, Kamalakshya Mahatab",
     year: 2026,
@@ -1763334,7 +1763334,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27496",
-    title: "Commutative algebras satisfying univariate identities with vanishing Peirce polynomial Thanks: D.J.F. has been partially supported by Project PID2024-156578NB-I00 funded by MICIU /AEI /10.13039/501100011033 / FEDER, EU Thanks: V.G.T. has been supported by the Stiftelsen Längmanska kulturfonden, Grant BA26-2924.",
+    title: "Commutative algebras satisfying univariate identities with vanishing Peirce polynomial",
     collection: "PAPERS",
     creator: "Daniel J. F. Fox, Vladimir G. Tkachev",
     year: 2026,
@@ -1763382,7 +1763382,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27528",
-    title: "Generalising a Theorem of Lichtman Thanks: The second named author is partially supported by the Spanish Government PID2021-126254NB-I00 and PID2024-155800NB-C32 and also by Departamento de Ciencia, Universidad y Sociedad del Conocimiento del Gobierno de Aragón (grant code: E22-23R: “Álgebra y Geometría”). The first and third named authors are members of the Gruppo Nazionale per le Strutture Algebriche, Geometriche e le loro Applicazioni (GNSAGA), which is part of the Istituto Nazionale di Alta Matematica (INdAM)",
+    title: "Generalising a Theorem of Lichtman",
     collection: "PAPERS",
     creator: "Giorgio Leoni, Conchita Martínez Pérez, Thomas Weigel",
     year: 2026,
@@ -1763462,7 +1763462,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27593",
-    title: "Odyssey : Constructing Verifiable, Local Truth-Preserving Foundation Models Thanks: Paper to be presented as a 2.5 hour tutorial at ICML 2026, July 6, Seoul, South Korea.",
+    title: "Odyssey : Constructing Verifiable, Local Truth-Preserving Foundation Models",
     collection: "PAPERS",
     creator: "Sridhar Mahadevan",
     year: 2026,
@@ -1763574,7 +1763574,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27609",
-    title: "Training Observable Control Policies to Expose Agent State Through Actions Estimating System State from the Actions of a Reinforcement Learning Agent, AIAA 2023-2657, Session: Autonomy V, Published Online:19 Jan 2023https://doi.org/10.2514/6.2023-2657, AIAA Scitech 2023 Forum, 23-27 January 2023, National Harbor, MD & Online Enabling Inter-Vehicle Coordination Through Observable Control Policies, AIAA 2024-0989, Session: Autonomy, Published Online: 4 Jan 2024https://doi.org/10.2514/6.2024-0989, AIAA Scitech 2024 Forum, 8-12 January 2024, Orlando, FL",
+    title: "Training Observable Control Policies to Expose Agent State Through Actions",
     collection: "PAPERS",
     creator: "Andres Enriquez Fernandez, John J. Bird",
     year: 2026,
@@ -1764053,7 +1764053,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27645",
-    title: "Uniform large deviations and long-time dynamics for the 2D anisotropic Navier-Stokes equations on the torus Thanks: Corresponding author, Hui Liu (ss_liuhui@ujn.edu.cn)",
+    title: "Uniform large deviations and long-time dynamics for the 2D anisotropic Navier-Stokes equations on the torus",
     collection: "PAPERS",
     creator: "Chengfeng Sun 1, Hao Yu 1, Hui Liu 2",
     year: 2026,
@@ -1764805,7 +1764805,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27821",
-    title: "Parameter-Efficient Quantum-Inspired Fast Weight Programmers for Traffic-Matrix Forecasting Thanks: The views expressed in this article are those of the authors and do not represent the views of Wells Fargo. This article is for informational purposes only. Nothing contained in this article should be construed as investment advice. Wells Fargo makes no express or implied warranties and expressly disclaims all legal, tax, and accounting implications related to this article.",
+    title: "Parameter-Efficient Quantum-Inspired Fast Weight Programmers for Traffic-Matrix Forecasting",
     collection: "PAPERS",
     creator: "Kuo-Chung Peng 1,2, , Jiun-Cheng Jiang 1,2 1 , Chun-Hua Lin 1,2 , Tai-Yue Li 2 , Nan-Yow Chen 2, 2 , Samuel Yen-Chi Chen 3, 3",
     year: 2026,
@@ -1764949,7 +1764949,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27816",
-    title: "On ideals in the semilattice of coarse equivalence classes of metrics Thanks: The author acknowledges support by the Russian Science Foundation grant No. 25-11-00018.",
+    title: "On ideals in the semilattice of coarse equivalence classes of metrics",
     collection: "PAPERS",
     creator: "V. Manuilov",
     year: 2026,
@@ -1765045,7 +1765045,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27852",
-    title: "Mass-Ratio Reversal as an Alternative to Hierarchical Mergers for GW241011 COMPAS ( 50 ; 58 ; 31 ; 55 ; 54 , version 03.27.02;) ; Python , https://www.python.org , NumPy ( 19 ) , Matplotlib ( 22 ) , seaborn ( 61 ) .",
+    title: "Mass-Ratio Reversal as an Alternative to Hierarchical Mergers for GW241011",
     collection: "PAPERS",
     creator: "Rui-Chong Hu, Ying Qin, Bing Zhang",
     year: 2026,
@@ -1765061,7 +1765061,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27822",
-    title: "An ACA map of a molecular cloud interacting with supernova remnant W28 Facilities: ALMA, MeerKAT Astropy ( 4 ; 5 ) , Spectral-cube ( 33 ) , Matplotlib ( https://matplotlib.org ), lmfit ( https://lmfit.github.io/lmfit-py/ ), emcee ( 27 )",
+    title: "An ACA map of a molecular cloud interacting with supernova remnant W28",
     collection: "PAPERS",
     creator: "Tian-Yu Tu (涂天宇), Wenjin Yang (杨文锦), Siyi Feng (冯思轶), Valentine Wakelam, Yang Chen (陈阳), Ping Zhou (周平), Qian-Qian Zhang (张芊千)",
     year: 2026,
@@ -1765237,7 +1765237,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27892",
-    title: "Co-Optimization of Analog Kolmogorov-Arnold Networks for Low-Power Function Approximation in Flexible Electronics Thanks: This work has been supported by the European Research Council (ERC) (Grant No. 101052764). (Corresponding author: Paula Carolina Lozano Duarte). Thanks: P. C. Lozano Duarte and M. Tahoori are with the Dept. of Computer Science, Karlsruhe Institute of Technology, Karlsruhe 76131, Germany. (e-mail: paula.duarte@kit.edu; mehdi.tahoori@kit.edu) Thanks: G. Zervakis is with the School of Electrical and Computer Engineering, National Technical University of Athens, Greece. (e-mail: zervakis@ece.ntua.gr) Thanks: S. Nassif is with Radyalis LLC, USA (e-mail: srn@radyalis.com)",
+    title: "Co-Optimization of Analog Kolmogorov-Arnold Networks for Low-Power Function Approximation in Flexible Electronics",
     collection: "PAPERS",
     creator: "Paula Carolina Lozano Duarte, Georgios Zervakis, Mehdi Tahoori",
     year: 2026,
@@ -1765381,7 +1765381,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27721",
-    title: "Learning to Reason with Curriculum II: Compositional Generalization Thanks: Microsoft Research, New York, NY. schapire@microsoft.com",
+    title: "Learning to Reason with Curriculum II: Compositional Generalization",
     collection: "PAPERS",
     creator: "Nived Rajaraman, Audrey Huang, Miroslav Dudík, Dylan Foster, Akshay Krishnamurthy",
     year: 2026,
@@ -1765781,7 +1765781,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27943",
-    title: "New approaches to remote points Thanks: The research of the first named author was funded in whole by the Austrian Science Fund FWF [10.55776/ESP399]. Second named author was supported by the Slovak Research and Development Agency under the Contract no. APVV-20-0045 and by the grant 1/0657/22 of Slovak Grant Agency VEGA",
+    title: "New approaches to remote points",
     collection: "PAPERS",
     creator: "Serhii Bardyla, Jaroslav Šupina",
     year: 2026,
@@ -1765861,7 +1765861,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27912",
-    title: "Polar homogeneous foliations on symmetric spaces of rank one Thanks: The authors have been supported by grant PID2022-138988NB-I00 funded by MICIU/AEI/10.13039/501100011033 and by ERDF, EU, and by project ED431C 2023/31 (Xunta de Galicia, Spain).",
+    title: "Polar homogeneous foliations on symmetric spaces of rank one",
     collection: "PAPERS",
     creator: "José Carlos Díaz-Ramos, Juan Manuel Lorenzo-Naveiro",
     year: 2026,
@@ -1765877,7 +1765877,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27972",
-    title: "A finite element method for fluctuating Navier–Stokes equations Thanks:",
+    title: "A finite element method for fluctuating Navier–Stokes equations",
     collection: "PAPERS",
     creator: "Dimitrios Gourzoulidis, Mirko Gallo, Soumaya Elkantassi, Toby Kay, Serafim Kalliadasis",
     year: 2026,
@@ -1765941,7 +1765941,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-28001",
-    title: "DIAGNOSING GHOST BUNCHES WITH THE UPSTREAM EXTINCTION MONITOR IN THE Mu2e EXPERIMENT Thanks: This work was supported by the U.S. Department of Energy, Office of Science, Office of High Energy Physics under Award Number DE-SC0009999. Thanks: Fermilab Report Number: FERMILAB-CONF-26-0327-PPD",
+    title: "DIAGNOSING GHOST BUNCHES WITH THE UPSTREAM EXTINCTION MONITOR IN THE Mu2e EXPERIMENT",
     collection: "PAPERS",
     creator: "R. Hensley, E. Prebys, University of California, Davis, Davis, United States A. Gaponenko, Fermi National Accelerator Laboratory, Batavia, United States",
     year: 2026,
@@ -1765989,7 +1765989,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27961",
-    title: "Transversal Difference Numbers in Finite Abelian Quotients Thanks: This work was supported by the project “Group schemes, root systems, and related representations” funded by the European Union - NextGenerationEU through Romania’s National Recovery and Resilience Plan (PNRR) call no. PNRR-III-C9-2023- I8, Project CF159/31.07.2023, and coordinated by the Ministry of Research, Innovation and Digitalization (MCID) of Romania. All authors are also supported by certSign Research and Innovation.",
+    title: "Transversal Difference Numbers in Finite Abelian Quotients",
     collection: "PAPERS",
     creator: "Mugurel Barcau and Vicenţiu Paşol, George C. Ţurcaş",
     year: 2026,
@@ -1766005,7 +1766005,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27901",
-    title: "Zonal Spherical Functions of Quantum Symmetric Pairs Thanks: My thanks to Stein Meereboer whom I could always bounce ideas off of. This work is funded by grant OCENW.M20.108 of the Dutch Research Council.",
+    title: "Zonal Spherical Functions of Quantum Symmetric Pairs",
     collection: "PAPERS",
     creator: "Philip Schlösser",
     year: 2026,
@@ -1766260,7 +1766260,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-28017",
-    title: "A Toolkit for the Study of Treatment-Effect Discontinuities Thanks: This research received no specific grant from any funding agency.",
+    title: "A Toolkit for the Study of Treatment-Effect Discontinuities",
     collection: "PAPERS",
     creator: "Alessandro Baldi Antognini, Paolo Verme",
     year: 2026,
@@ -1766372,7 +1766372,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-27898",
-    title: "Quantitative CLT s for Geometric Statistics of Dependent Marked Point Processes School of Mathematics and Statistics, The University of Melbourne, VIC 3010, Australia. E-mail: aihuaxia@unimelb.edu.au. Work supported in part by Australian Research Council Grant No DP220102666. Department of Mathematics, Lehigh University, Bethlehem, PA 18015, USA. E-mail: joseph.yukich@lehigh.edu. Work supported in part by a Simons Research grant.",
+    title: "Quantitative CLT s for Geometric Statistics of Dependent Marked Point Processes",
     collection: "PAPERS",
     creator: "Tianshu Cong",
     year: 2026,
@@ -1766548,7 +1766548,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-28040",
-    title: "High-Order Asymptotic-Preserving Schemes for Kinetic Equations from Rarefied to Incompressible Regimes Thanks: The work of Theresa Köfler has been supported by the European Union’s Horizon Europe research and innovation programme under grant agreement No. 101086214 (DATAHYKING project). The work of Axel Klar and Tiwari Sudarshan has been supported by German Research Foundation (DFG) through grant KL-1105-34, “Asymptotic preserving higher-order meshfree schemes for kinetic equations”. The work of Lorenzo Pareschi was partially supported by the Royal Society under the Wolfson Fellowship “Uncertainty quantification, data-driven simulations and learning of multiscale complex systems governed by PDEs” and by the FIS2023-01334 Advanced Grant “Tackling complexity: advanced numerical approaches for multiscale systems with uncertainties” (ADAMUS). The work of Giacomo Dimarco has been supported by by the Italian Ministry of University and Research (MUR) through the PRIN 2022 project (No. 2022KKJP4X) “Advanced numerical methods for time dependent parametric partial differential equations with applications”. This work has been written within the activities of GNFM and GNCS groups of INdAM (Italian National Institute of High Mathematics). Program codes can be found on https://github.com/theresakoefler/AP_schemes_kinetic_equs.git .",
+    title: "High-Order Asymptotic-Preserving Schemes for Kinetic Equations from Rarefied to Incompressible Regimes",
     collection: "PAPERS",
     creator: "Giacomo Dimarco, Axel Klar, Theresa Köfler, Lorenzo Pareschi, Tiwari Sudarshan",
     year: 2026,
@@ -1766612,7 +1766612,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-28063",
-    title: "How to deal with machine learning bias in economic history Thanks: We want to thank Alexandra de Pleijt for thoughtful comments. We further want to thank participants at the “Big Data and Machine Learning in Economic History” workshop at the Uppsala History of Inequality and Labor Lab. All code to reproduce results included in this manuscript is available on github.com/juliuskoschnick/Machine-learning-and-bias-in-economic-history",
+    title: "How to deal with machine learning bias in economic history",
     collection: "PAPERS",
     creator: "Torben S. D. Johansen, Julius Koschnick, Christian Vedel (University of Southern Denmark)",
     year: 2026,
@@ -1767058,7 +1767058,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-28144",
-    title: "Monocular Avatar Reconstruction via Cascaded Diffusion Priors and UV-Space Differentiable Shading https://www.blender.org/ https://www.3dscanstore.com. https://github.com/fpgaminer/joycaption https://www.3dscanstore.com.",
+    title: "Monocular Avatar Reconstruction via Cascaded Diffusion Priors and UV-Space Differentiable Shading",
     collection: "PAPERS",
     creator: "Hong Li, Minqi Meng, Yanjun Liang, Chongjie Ye, Houyuan Chen, Weiqing Xiao, Xianda Guo †, Guojun Lei, Xuhui Liu, Chaojie Yang, Yanlun Peng, Hao Zhao, Baochang Zhang ‡",
     year: 2026,
@@ -1767122,7 +1767122,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-28124",
-    title: "Reservoir Zero-Coordinatewise Projected Subspace Search for Minimization Over Sparse Symmetric Sets in Machine Learning Thanks: M. Kimiaei acknowledges financial support of the Austrian Science Foundation under https://doi.org/10.55776/PAT2747625 . Thanks: S. Shabani and M. Breuß acknowledge funding from the Federal Ministry of Research, Technology and Space (BMFTR), Germany, through the project “Digital GreenTech (DGT) – Environmental Technology Meets Robotics” (grant number 68542).",
+    title: "Reservoir Zero-Coordinatewise Projected Subspace Search for Minimization Over Sparse Symmetric Sets in Machine Learning",
     collection: "PAPERS",
     creator: "Morteza Kimiaei, Shima Shabani, Michael Breuß",
     year: 2026,
@@ -1767778,7 +1767778,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-28274",
-    title: "Parameter Efficient Hybrid Transformer (PEHT) for Network Traffic Prediction via Dynamic Urban Congestion Integration Thanks: This work was supported in part by the National Science Foundation (NSF) under Grant No. CNS-2543209; by the U.S. Department of Transportation (USDOT) Tier-1 University Transportation Center (UTC), Transportation Cybersecurity Center for Advanced Research and Education (CYBER-CARE), under Grant No. 69A3552348332; and by the NVIDIA Academic Grant Program, which provided GPU resources used in this research.",
+    title: "Parameter Efficient Hybrid Transformer (PEHT) for Network Traffic Prediction via Dynamic Urban Congestion Integration",
     collection: "PAPERS",
     creator: "1 st Abdolazim Rezaei, 2 nd Mehdi Sookhak, 3 rd Mahboobeh Haghparast",
     year: 2026,
@@ -1769088,7 +1769088,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-28439",
-    title: "PLAA: Packet-level Adversarial Attacks in Network Traffic Detection Thanks: This work is supported by National Key Research and Development Program of China (grant No. 2024YFC3015300), Beijing Natural Science Foundation (grant No.4244084), Fundamental Research Funds for the Central Universities (grants No.2024ZCJH04, 530224004, 2024PTB-009), National Natural Science Foundation of China (grants No.62401075, 62394322, 92167204, 62072030). Thanks: *Corresponding author: Zan Zhou (zan.zhou@bupt.edu.cn)",
+    title: "PLAA: Packet-level Adversarial Attacks in Network Traffic Detection",
     collection: "PAPERS",
     creator: "1 st Jinhao You, 2 nd Zan Zhou *, 3 rd Shujie Yang, 4 th Yi Sun, 5 th Lei Zhang, 6 th Changqiao Xu",
     year: 2026,
@@ -1769200,7 +1769200,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-28441",
-    title: "Learning to Distributedly Estimate under Partially Known Dynamics: A Covariance-Agnostic Neural Kalman Consensus Filter Thanks: The authors are with the Department of Informatics and Telecommunications, National and Kapodistrian University of Athens, Panepistimiopolis Ilissia, 16122 Athens, Greece. (e-mails: {georgestamat, kstylianop alexandg}@di.uoa.gr). Thanks: This work has been supported by the SNS JU project 6G-DISAC under the European Union’s Horizon Europe research and innovation programme under Grant Agreement No 101139130. G. Stamatelis was supported by the Hellenic Foundation for Research and Innovation (HFRI) under the 5th Call for HFRI PhD Fellowships (Fellowship Number: 21080).",
+    title: "Learning to Distributedly Estimate under Partially Known Dynamics: A Covariance-Agnostic Neural Kalman Consensus Filter",
     collection: "PAPERS",
     creator: "George Stamatelis, Kyriakos Stylianopoulos",
     year: 2026,
@@ -1769487,7 +1769487,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-28504",
-    title: "Euclid : The convective-transition gap of 47 Tuc Thanks: This paper is published on behalf of the Euclid Consortium",
+    title: "Euclid : The convective-transition gap of 47 Tuc",
     collection: "PAPERS",
     creator: "M. Libralato, M. Griggio, R. Gerasimov, L. R. Bedin, I. McDonald, B. Altieri, J. Anderson, F. Annibali, E. Balbinot, G. Battaglia, A. Bellini, P. Casenove, J.-C. Cuillandre, E. Dalessandro, A. M. N. Ferguson, H. R. A. Jones, K. Kuijken, F. Z. Majidi, D. Massari, A. Mohandasan, F. Niederhofer, G. Polenta, J. D. Sakowska, F. Soldano, C. Zerbinati, S. Andreon, N. Auricchio, H. Aussel, C. Baccigalupi, M. Baldi, A. Balestra, P. Battaglia, A. Biviano, E. Branchini, M. Brescia, S. Camera, V. Capobianco, C. Carbone, J. Carretero, M. Castellano, G. Castignani, S. Cavuoti, K. C. Chambers, A. Cimatti, C. Colodro-Conde, G. Congedo, C. J. Conselice, L. Conversi, Y. Copin, F. Courbin, H. M. Courtois, M. Cropper, H. Degaudenzi, G. De Lucia, H. Dole, F. Dubath, X. Dupac, M. Farina, R. Farinelli, F. Faustini, S. Ferriol, M. Frailis, E. Franceschi, S. Galeotta, K. George, B. Gillis, C. Giocoli, J. Gracia-Carpio, A. Grazian, F. Grupp, S. V. H. Haugan, H. Hoekstra, W. Holmes, I. M. Hook, F. Hormuth, A. Hornstrup, K. Jahnke, M. Jhabvala, S. Kermiche, A. Kiessling, B. Kubik, M. Kümmel, M. Kunz, H. Kurki-Suonio, A. M. C. Le Brun, S. Ligori, P. B. Lilje, V. Lindholm, I. Lloro, O. Mansutti, O. Marggraf, M. Martinelli, N. Martinet, F. Marulli, R. J. Massey, E. Medinaceli, S. Mei, M. Meneghetti, E. Merlin, G. Meylan, A. Mora, L. Moscardini, R. Nakajima, R. C. Nichol, S.-M. Niemi, C. Padilla, S. Paltani, F. Pasian, W. J. Percival, V. Pettorino, M. Poncet, L. A. Popa, F. Raison, A. Renzi, J. Rhodes, G. Riccio, F. Rizzo, E. Romelli, M. Roncarelli, R. Saglia, Z. Sakr, D. Sapone, M. Schirmer, P. Schneider, T. Schrabback, A. Secroun, E. Sihvola, P. Simon, C. Sirignano, G. Sirri, L. Stanco, P. Tallada-Crespí, A. N. Taylor, I. Tereno, S. Toft, R. Toledo-Moreo, F. Torradeflot, I. Tutusaus, J. Valiviita, T. Vassallo, Y. Wang, J. Weller, D. Scott",
     year: 2026,
@@ -1769950,7 +1769950,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-28560",
-    title: "Depth-Staggered Fibonacci Spacing for Sparse Attention: Static Schedules Beat Learned Dilation and Extrapolate Where Dense Attention Fails Thanks: Code, the paper source, and the experiment database are available at https://github.com/ccapps42/scaled-fibonacci-attention .",
+    title: "Depth-Staggered Fibonacci Spacing for Sparse Attention: Static Schedules Beat Learned Dilation and Extrapolate Where Dense Attention Fails",
     collection: "PAPERS",
     creator: "Chad A. Capps",
     year: 2026,
@@ -1771773,7 +1771773,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-28849",
-    title: "On the Monotonicity of Higher-Fold Representation Functions Thanks: The first author is supported by the NKFIH Grants No. K129335, KKP 144059 and the Lendület “Momentum” program of the Hungarian Academy of Sciences (MTA). The second author is supported by the National Natural Science Foundation of China, Grant No. 12371005.",
+    title: "On the Monotonicity of Higher-Fold Representation Functions",
     collection: "PAPERS",
     creator: "Csaba Sándor, Quan-Hui Yang",
     year: 2026,
@@ -1772029,7 +1772029,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-28844",
-    title: "A solution to Ditor’s problem Thanks: This research was funded in whole or in part by the Austrian Science Fund (FWF) 10.55776/ESP1829225 . For open access purposes, the author has applied a CC BY public copyright license to any author accepted manuscript version arising from this submission.",
+    title: "A solution to Ditor’s problem",
     collection: "PAPERS",
     creator: "Lorenzo Notaro",
     year: 2026,
@@ -1772380,7 +1772380,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-28948",
-    title: "Estimating Available Traction Power in Multi-Train AC Railway Networks from a Distance-Dependent Power Envelope The authors are with the Birmingham Centre for Railway Research and Education (BCRRE), Department of Electronic, Electrical and Systems Engineering, University of Birmingham, Birmingham, U.K. (e-mail: m.l.ambrus@bham.ac.uk).",
+    title: "Estimating Available Traction Power in Multi-Train AC Railway Networks from a Distance-Dependent Power Envelope",
     collection: "PAPERS",
     creator: "Márton László Ambrus, Xiao Liu, Stuart Hillmansen, and Zhongbei Tian",
     year: 2026,
@@ -1772651,7 +1772651,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-28936",
-    title: "Hydrodynamic limit from nonlinear Fokker–Planck to barotropic Euler equations Thanks: Acknowledgment. JAC was supported by the Advanced Grant Nonlocal-CPD (Nonlocal PDEs for Complex Particle Dynamics: Phase Transitions, Patterns and Synchronization) of the European Research Council Executive Agency (ERC) under the European Union Horizon 2020 research and innovation programme (grant agreement No. 883363) and partially supported by the EPSRC EP/V051121/1. JAC was partially supported by the “Maria de Maeztu” Excellence Unit IMAG, reference CEX2020-001105-M, funded by MCIN/AEI /10.13039/501100011033/. DK was supported by NRF grant no. 2022R1A2C1002820, RS-2024-00406821, and RS-2025-02312778.",
+    title: "Hydrodynamic limit from nonlinear Fokker–Planck to barotropic Euler equations",
     collection: "PAPERS",
     creator: "José A. Carrillo, Dowan Koo",
     year: 2026,
@@ -1772763,7 +1772763,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-28919",
-    title: "Topping Up and Optimal Redistribution We are especially indebted to Laura Doval, Paul Milgrom, Marcin Pęski, and Andy Skrzypacz for illuminating discussions. We thank Piotr Dworczak, Liran Einav, Marina Halac, Caroline Hoxby, Ravi Jagadeesan, Rishabh Kirpalani, Anton Kolotilin, Simon Loertscher, Guillaume Roger, Ilya Segal, Xianwen Shi, Philipp Strack, Satoru Takahashi, Filip Tokarski, and Kai Hao Yang for comments and suggestions. We gratefully acknowledge the support of the Center of Mathematical Sciences and Applications at Harvard University (Kang) and the Koret Fellowship, the Ric Weiland Graduate Fellowship, and the Gale and Steve Kohlhagen Fellowship in Economics at Stanford University (Watt). This paper subsumes and extends our previous two working papers circulated under the titles of “Optimal In-Kind Redistribution” and “Optimal Redistribution Through Subsidies.” Refine.ink was used to check the paper for consistency and clarity.",
+    title: "Topping Up and Optimal Redistribution",
     collection: "PAPERS",
     creator: "Zi Yang Kang Mitchell Watt",
     year: 2026,
@@ -1772795,7 +1772795,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-28740",
-    title: "Some applications of the real strict order property hierarchy Thanks: This project was supported by the NSF under Grant No. DMS-2303034.",
+    title: "Some applications of the real strict order property hierarchy",
     collection: "PAPERS",
     creator: "Scott Mutchnik",
     year: 2026,
@@ -1773147,7 +1773147,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-29002",
-    title: "Gregory Nested Picard Iteration Schemes for Open Quantum Systems Governed by the Lindblad Equation Thanks: Submitted to the SISC Special Section on Quantum Computing on August 10, 2026.",
+    title: "Gregory Nested Picard Iteration Schemes for Open Quantum Systems Governed by the Lindblad Equation",
     collection: "PAPERS",
     creator: "Jiuhua Hu, Daniel Appelö, Yingda Cheng",
     year: 2026,
@@ -1774297,7 +1774297,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-29229",
-    title: "Circular operators and their strong circularity Thanks: The work of the first named is supported by ARG-MATRICS grant by the ANRF (File No: ANRF/ARGM/2025/001583/MTR) and INSPIRE Faculty Fellowship (DST/INSPIRE/04/2021/002555). The work of the second named author was partially supported by an IRG Grant (Ref. No. ANRF/IRG/2024/000432/MS) from the Anusandhan National Research Foundation (ANRF). The work of the third author is supported through the OPERA (FR/SCM/03-Nov-2022/MATH), funded by BITS Pilani.",
+    title: "Circular operators and their strong circularity",
     collection: "PAPERS",
     creator: "Soumitra Ghara, Surjit Kumar, Shailesh Trivedi",
     year: 2026,
@@ -1774728,7 +1774728,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-29295",
-    title: "A Schur–Zassenhaus Theorem for Finite Skew Braces Thanks: Dipartimento di Matematica, Università di Cagliari, Via Ospedale 72, 09124 Cagliari, Italy; marco.damele@unica.it ; ORCID 0009-0008-3088-5766",
+    title: "A Schur–Zassenhaus Theorem for Finite Skew Braces",
     collection: "PAPERS",
     creator: "Marco Damele",
     year: 2026,
@@ -1774888,7 +1774888,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-29299",
-    title: "Bayesian Optimization on the Equilibrium Manifold Thanks: I thank seminar participants at the PHBS UK Conference on the Frontiers of AI in Economics and in particular Tom Sargent and Simon Scheidegger for their comments. I used Claude Opus 4.8 for coding assistance. I thank the SNF for financial support.",
+    title: "Bayesian Optimization on the Equilibrium Manifold",
     collection: "PAPERS",
     creator: "Felix Kübler",
     year: 2026,
@@ -1774936,7 +1774936,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-29361",
-    title: "A sharp 5 / 8 5/8 bound for an Erdős–Sós pairwise-sums problem Thanks: This manuscript was written by GPT-5.5 Pro from a proof developed by Ricky Cipollini together with GPT-5.5 Pro. The associated Lean formalization was carried out with Aristotle.",
+    title: "A sharp 5 / 8 5/8 bound for an Erdős–Sós pairwise-sums problem",
     collection: "PAPERS",
     creator: "Ricky Cipollini",
     year: 2026,
@@ -1774952,7 +1774952,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-29309",
-    title: "Enumerating Toric-Colorable Seeds of Picard Number Five via Binary Matroids Thanks: Computational resources have been provided by the Consortium des Équipements de Calcul Intensif (CÉCI), funded by the Fonds de la Recherche Scientifique de Belgique (F.R.S.-FNRS) under Grant No. 2.5020.11 and by the Walloon Region. This work was also supported by the National Research Foundation of Korea Grant funded by the Korean Government (RS-2025-00521982)",
+    title: "Enumerating Toric-Colorable Seeds of Picard Number Five via Binary Matroids",
     collection: "PAPERS",
     creator: "Suyoung Choi, Mathieu Vallée",
     year: 2026,
@@ -1776359,7 +1776359,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-29552",
-    title: "Improving the Precision of Line-by-Line Radial Velocities: A Data-Driven Iterative Algorithm for Spectral Line Selection Journal: one of the AAS Journals Facilities: WIYN (NEID) EchelleCCFs.jl v0.2.9 ( https://github.com/RvSpectML/EchelleCCFs.jl ), EchelleInstruments.jl v0.2.11 ( https://github.com/RvSpectML/EchelleInstruments.jl ), RvLineList.jl ( https://github.com/RvSpectML/RvLineList.jl ), RvSpectML.jl v0.2.8 ( https://github.com/RvSpectML/RvSpectML.jl )",
+    title: "Improving the Precision of Line-by-Line Radial Velocities: A Data-Driven Iterative Algorithm for Spectral Line Selection",
     collection: "PAPERS",
     creator: "Kanishk Pandey, Eric Ford, Joseph M. Salzer, Jessi Cisewski-Kehe, Lily L. Zhao, Arvind F. Gupta, Michael L. Palumbo III, Ryan C. Terrien, Evan Fitzmaurice, Brady Barth, Jason T. Wright, Cullen H. Blake, Suvrath Mahadevan, Arpita Roy, Joe P. Ninan, Gudmundur Stefansson, Paul Robertson, Christian Schwab, Daniel M. Krolikowski, Leonardo A. Paredes",
     year: 2026,
@@ -1776567,7 +1776567,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-29505",
-    title: "Asymptotic stability of Stationary solutions to 3D incompressible flow in porous media with diffusion Thanks: The author was supported by FAPERJ Nota 10 grant 203.710/2025, and CAPES PROEX grant 88887.901672/2023-00",
+    title: "Asymptotic stability of Stationary solutions to 3D incompressible flow in porous media with diffusion",
     collection: "PAPERS",
     creator: "Juan Sebastián Ángel-Echeverry",
     year: 2026,
@@ -1777623,7 +1777623,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-29748",
-    title: "Rethinking Generative Reconstruction Attacks against Graph Neural Network Models Thanks: † \\dagger Corresponding author.",
+    title: "Rethinking Generative Reconstruction Attacks against Graph Neural Network Models",
     collection: "PAPERS",
     creator: "Adebayo Keji 4 , Sayanton Dibbo † \\dagger 5",
     year: 2026,
@@ -1777751,7 +1777751,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-29730",
-    title: "Topological Complexity and Finite Domination Thanks: Supported by Youth Scientists Fund of NSFC (grant No. 11901261) and the Fundamental Research Funds for the Central Universities (grant No. lzujbky-2017-26) and NSFC (grant No. 12271225).",
+    title: "Topological Complexity and Finite Domination",
     collection: "PAPERS",
     creator: "Lizhi Chen",
     year: 2026,
@@ -1778198,7 +1778198,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-29603",
-    title: "Global periodic-data rigidity for irreducible toral automorphisms Thanks: 1 Based on research supported by NSF grant DMS-2452194 Thanks: Key words and phrases: Hyperbolic toral automorphism, conjugacy, global rigidity, linear cocycle",
+    title: "Global periodic-data rigidity for irreducible toral automorphisms",
     collection: "PAPERS",
     creator: "Zhenqi Jenny Wang 1",
     year: 2026,
@@ -1778326,7 +1778326,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-29867",
-    title: "RoAd-RL: A Unified Library and Benchmark for Robust Adversarial Reinforcement Learning Thanks: This work was supported by Hightech-Agenda Bayern",
+    title: "RoAd-RL: A Unified Library and Benchmark for Robust Adversarial Reinforcement Learning",
     collection: "PAPERS",
     creator: "1 st Adithya Mohan, 2 nd Daniel Kriegl, 3 rd Torsten Schön",
     year: 2026,
@@ -1779828,7 +1779828,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30035",
-    title: "Consensus Clustering of Free-Viewing Gaze Data: New Insights into Human-Information Interaction Thanks: Codebase: https://github.com/GVCL/EnsembleGaze",
+    title: "Consensus Clustering of Free-Viewing Gaze Data: New Insights into Human-Information Interaction",
     collection: "PAPERS",
     creator: "Beryl Gnanaraj, Jaya Sreevalsan-Nair, Saqib Alam Ansari, Maanasa Rajaraman",
     year: 2026,
@@ -1779844,7 +1779844,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30002",
-    title: "Effective results on projective normality of the first and second secant varieties Thanks: D.C. was supported by a KIAS individual grant from Korea Institute for Advanced Study (MG105101). J.P. was partially supported by the National Research Foundation (NRF) funded by the Korea government (MSIT) (RS-2026-25478877).",
+    title: "Effective results on projective normality of the first and second secant varieties",
     collection: "PAPERS",
     creator: "Doyoung Choi, Jinhyung Park",
     year: 2026,
@@ -1780370,7 +1780370,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30129",
-    title: "The Impact of Non-Gaussian Line Spread Functions on Stellar Kinematic Recovery: Consequences for Dynamical Models ∗ E-mail: davidsimon@westlake.edu.cn",
+    title: "The Impact of Non-Gaussian Line Spread Functions on Stellar Kinematic Recovery: Consequences for Dynamical Models",
     collection: "PAPERS",
     creator: "David A. Simon 1,2∗",
     year: 2026,
@@ -1781026,7 +1781026,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30208",
-    title: "On a two-color partition series and its companions Thanks: First author partially supported by Simons Foundation Grant 633284",
+    title: "On a two-color partition series and its companions",
     collection: "PAPERS",
     creator: "George E. Andrews and Mohamed El Bachraoui",
     year: 2026,
@@ -1781313,7 +1781313,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30213",
-    title: "Solitary waves for a higher order Boussinesq system: Stability and numerical experiments Thanks: *Corresponding author: roberto.capistranofilho@ufpe.br",
+    title: "Solitary waves for a higher order Boussinesq system: Stability and numerical experiments",
     collection: "PAPERS",
     creator: "Roberto de A. Capistrano–Filho*, Juan Carlos Muñoz, José Raul Quintero",
     year: 2026,
@@ -1781408,7 +1781408,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30287",
-    title: "On the Probability a Weighted Bernoulli Sum Exceeds Its Mean Thanks: Department of Mathematics, ETH Zürich, Switzerland. Email: {aleksa.milojevic, benjamin.sudakov}@math.ethz.ch . Research supported in part by SNSF grant 200021-228014.",
+    title: "On the Probability a Weighted Bernoulli Sum Exceeds Its Mean",
     collection: "PAPERS",
     creator: "Aleksa Milojević, Benny Sudakov",
     year: 2026,
@@ -1781824,7 +1781824,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30257",
-    title: "Homogeneous hypersurfaces of the four-dimensional Thurston geometries Sol 1 4 \\mathrm{Sol}_{1}^{4} , Sol m , n 4 \\mathrm{Sol}_{m,n}^{4} and Nil 4 \\mathrm{Nil}^{4} Thanks: X. Zhang is the corresponding author",
+    title: "Homogeneous hypersurfaces of the four-dimensional Thurston geometries Sol 1 4 \\mathrm{Sol}_{1}^{4} , Sol m , n 4 \\mathrm{Sol}_{m,n}^{4} and Nil 4 \\mathrm{Nil}^{4}",
     collection: "PAPERS",
     creator: "Xiaoge Lu, Zeke Yao and Xi Zhang",
     year: 2026,
@@ -1782256,7 +1782256,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30372",
-    title: "Using Large Language Models as Low-Cost Statistical Estimators for Human-Response Data Thanks: This preprint has not undergone professional peer review. If you find any errors or have concerns, please contact the corresponding author.",
+    title: "Using Large Language Models as Low-Cost Statistical Estimators for Human-Response Data",
     collection: "PAPERS",
     creator: "Haobo Yang",
     year: 2026,
@@ -1782272,7 +1782272,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30400",
-    title: "What to Expect When You’re Expecting Thanks: Acknowledgements. Dedicated to KS. I thank Joseph Whitmeyer for his comments. I used ChatGPT as one would an RA and solicited feedback from refine.ink .",
+    title: "What to Expect When You’re Expecting",
     collection: "PAPERS",
     creator: "Mark Whitmeyer",
     year: 2026,
@@ -1782384,7 +1782384,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30440",
-    title: "Transformer Architectures as Complete Bayes Processes: A Formal Proof in the Measure-Theoretic Kernel Framework Thanks: This preprint has not undergone professional peer review. If you find any errors or have concerns, please contact the corresponding author.",
+    title: "Transformer Architectures as Complete Bayes Processes: A Formal Proof in the Measure-Theoretic Kernel Framework",
     collection: "PAPERS",
     creator: "Haobo Yang",
     year: 2026,
@@ -1782688,7 +1782688,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30469",
-    title: "Structure-preserving dynamical low-rank approximation for parametric elastic guided waves Thanks: Submitted to the editors DATE.",
+    title: "Structure-preserving dynamical low-rank approximation for parametric elastic guided waves",
     collection: "PAPERS",
     creator: "Dimitri Goutaudier",
     year: 2026,
@@ -1783088,7 +1783088,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30542",
-    title: "A Lightweight Post-Quantum Authentication Framework for 5G Base Station Bootstrapping 1 Saleh Darzi and Attila A Yavuz are with the Bellini College of AI, Cybersecurity and Computing, University of South Florida; Email: salehdarzi@usf.edu; attilaayavuz@usf.edu 2 Mirza Masfiqur Rahman and Elisa Bertino are with the Department of Computer Science, Purdue University, Email:rahman75@purdue.edu; bertino@purdue.edu 3 Imtiaz Karim is with the Department of Computer Science, University of Texas at Dallas, Email:imtiaz.karim@utdallas.edu 4 Rouzbeh Behnia is with the School of Information Systems at University of South Florida, Email:behnia@usf.edu",
+    title: "A Lightweight Post-Quantum Authentication Framework for 5G Base Station Bootstrapping",
     collection: "PAPERS",
     creator: "Saleh Darzi 1 , Mirza Masfiqur Rahman 2 , Imtiaz Karim 3 , Rouzbeh Behnia 4 , Attila A Yavuz 1 , and Elisa Bertino 2",
     year: 2026,
@@ -1783264,7 +1783264,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30496",
-    title: "From some Pisot numerations to topological groups Thanks: The first author was supported by the Agence Nationale de la Recherche through the project “SymDynAr” (ANR-23-CE40-0024-01).",
+    title: "From some Pisot numerations to topological groups",
     collection: "PAPERS",
     creator: "Olivier Carton, Jake Sudbery, Reem Yassawi",
     year: 2026,
@@ -1783472,7 +1783472,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30558",
-    title: "Cohomology rings and p p -local behavior of even Artin groups. Thanks: The first and third authors are partially supported by the Spanish Government PID2021-126254NB-I00 and PID2024-155800NB-C32 and also by Departamento de Ciencia, Universidad y Sociedad del Conocimiento del Gobierno de Aragón (grant code: E22-23R: “Álgebra y Geometría”)",
+    title: "Cohomology rings and p p -local behavior of even Artin groups.",
     collection: "PAPERS",
     creator: "Marcos Escartín Ferrer, Giorgio Leoni, Conchita Martínez Pérez",
     year: 2026,
@@ -1783647,7 +1783647,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30538",
-    title: "Measure-valued valuations on star bodies Thanks: Research partially supported by grants PID2020-116398GB-I00, PID2024-162214NB-I00 and CEX2023-001347-S funded by MCIN/AEI/10.13039/501100011033. The first author has also received financial support from Ministerio de Ciencia, Innovación y Universidades through an FPU Grant FPU22/02055. The second author was funded in part by the Austrian Science Fund (FWF) DOI:10.55776/P34446.",
+    title: "Measure-valued valuations on star bodies",
     collection: "PAPERS",
     creator: "Jorge S. Ibáñez-Marcos, Monika Ludwig, Pedro Tradacete, Ignacio Villanueva",
     year: 2026,
@@ -1784079,7 +1784079,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30651",
-    title: "Can Physician Expertise Improve Machine Learning Identification of Delirium? ∗ Corresponding author: Lu Wang (lwang71@central.uh.edu).",
+    title: "Can Physician Expertise Improve Machine Learning Identification of Delirium",
     collection: "PAPERS",
     creator: "Xinyu Qin † , Vicky Ye ‡ , Ruiheng Yu † , and Lu Wang †,††,∗",
     year: 2026,
@@ -1784687,7 +1784687,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30711",
-    title: "Little Red Dots as Intermediate Mass, Super-Eddington Engines: Insights from Type IIn Supernovae and The 1837-1856 Great Eruption of η \\eta Carinae ∗ E-mail: rohan.naidu@hawaii.edu † \\dagger NASA Hubble Fellow, Pappalardo Fellow ‡ \\ddagger Clay Fellow",
+    title: "Little Red Dots as Intermediate Mass, Super-Eddington Engines: Insights from Type IIn Supernovae and The 1837-1856 Great Eruption of η \\eta Carinae",
     collection: "PAPERS",
     creator: "Rohan P. Naidu 1,2,∗,†, Jorryt Matthee 3, Anna de Graaff 4,5,‡, Alberto Torralba 3, Chris Ashall 2, Harley Katz 6,7, John Chisholm 8,9, Gabriel Brammer 10,11, Luc Dessart 12,13, Anna-Christina Eilers 1, Raphael E. Hviding 5, David O. Jones 14, Vasily Kokorev 8,9, Joel Leja 15,16,17, Hanpu Liu 18, Zhaoran Liu 1, Devesh Nandal 4, Pascal A. Oesch 19,10,11, Conor L. Ransome 20, Robert A. Simcoe 1, Wendy Q. Sun 1, Andrea Weibel 19, Mengyuan Xiao 19",
     year: 2026,
@@ -1784990,7 +1784990,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30780",
-    title: "Detecting Audio Deepfakes on the Edge: Lightweight SSL-Based Detection in a Browser Plugin Thanks: This work was supported by the EU Horizon project AI4TRUST (No. 101070190) and by a grant of the Ministry of Research, Innovation and Digitization, CNCS/CCCDI - UEFISCDI, project number PN-IV-P7-7.1-PTE-2024-0600, within PNCDI IV. PubID: pubid: 979-8-3315-7486-4/25/$31.00 ©2025 IEEE",
+    title: "Detecting Audio Deepfakes on the Edge: Lightweight SSL-Based Detection in a Browser Plugin",
     collection: "PAPERS",
     creator: "Octavian Pascu 1 , Dan Oneata 1 , Horia Cucu 1 , Nicolas M. Müller 2",
     year: 2026,
@@ -1785054,7 +1785054,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30752",
-    title: "Wrinkles in Time. II. Stellar Age Trends in Kinematic Signatures from Transient Spiral Structure Facilities: Gaia ( 48 ) , AAT GALAH Survey ( 32 ) , Sloan APOGEE Survey ( 79 ) , TESS ( 103 ) this work made use of astropy : a community-developed core Python package and an ecosystem of tools and resources for astronomy ( 6 ; 4 ; 5 ) . All tracer particle models were built using galpy (v.1.7, 21 ), a Python package used for the study of Galactic dynamics. This work also utilized scipy ( 132 ) , numpy ( 55 ) , and matplotlib ( 60 ) . http://www.astropy.org http://github.com/jobovy/galpy",
+    title: "Wrinkles in Time. II. Stellar Age Trends in Kinematic Signatures from Transient Spiral Structure",
     collection: "PAPERS",
     creator: "Amy Smock, Kathryne J. Daniel, Rayna Rampalli, Elisabeth R. Newton, Olivia McAuley, Sóley Hyman, Lipika Chatur",
     year: 2026,
@@ -1786252,7 +1786252,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30826",
-    title: "On the structure of optimal free Dirichlet regions in mass transportation problems Thanks: The author’s work was supported by an internal fellowship from the Massachusetts Institute of Technology School of Science. ©August 10, 2026",
+    title: "On the structure of optimal free Dirichlet regions in mass transportation problems",
     collection: "PAPERS",
     creator: "Lucas D. O’Brien",
     year: 2026,
@@ -1786747,7 +1786747,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30882",
-    title: "Algorithms and complexity for geodetic sets on interval and chordal graphs Thanks: This research was supported by the IFCAM project “Applications of graph homomorphisms” (MA/IFCAM/18/39), the ERC grant titled PARAPATH, the IDEX-ISITE initiative CAP 20-25 (ANR-16-IDEX-0001), the International Research Center “Innovation Transportation and Production Systems” of the I-SITE CAP 20-25, and the ANR project GRALMECO (ANR-21-CE48-0004). This work was partially carried out while Harmender Gahlawat was employed at G-SCOP, Grenoble-INP and Université Clermont Auvergne and Ben-Gurion University of the Negev. This paper contains the full versions of parts of an extended abstract from the proceedings of ISAAC 2020 [ 7 ] . The other results of [ 7 ] were published in a journal [ 10 ] , but are completely disjoint from the results in the present paper.",
+    title: "Algorithms and complexity for geodetic sets on interval and chordal graphs",
     collection: "PAPERS",
     creator: "Dibyayan Chakraborty, Sandip Das, Florent Foucaud, Harmender Gahlawat, Dimitri Lajou",
     year: 2026,
@@ -1786843,7 +1786843,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-30987",
-    title: "Measuring Judgment Quality in Natural-Language Explanations: Evidence from Forecasting Tournaments Thanks: Karvetski and Huang are joint first authors. This research was funded by a grant from Open Philanthropy (now known as Coefficient Giving). The views expressed in this paper do not necessarily reflect the views of the Federal Reserve Bank of Chicago or the Federal Reserve System. We thank Jimmy Ba, David Budescu, Yueh-Han Chen, Roger Grosse, Zhijing Jin, Sanmi Koyejo, Hugo Larochelle, Paul Milgrom, Long Phan, Jason Plaks, and Alex Spangher for helpful discussions. Any remaining errors are our own. Corresponding author: Ezra Karger, ezra.karger@chi.frb.org .",
+    title: "Measuring Judgment Quality in Natural-Language Explanations: Evidence from Forecasting Tournaments",
     collection: "PAPERS",
     creator: "Christopher W. Karvetski, Sheldon S. Huang, Simas Kučinskas, Nadja Flechner, Jingyu Hu, Philip Tetlock, Ezra Karger",
     year: 2026,
@@ -1786986,7 +1786986,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31041",
-    title: "A Semantic-Layer-Mediated Agent for Natural Language to SQL over Heterogeneous Enterprise Databases Ha Jeong Kim and Saksonita Khoeurn contributed equally to this work. Corresponding author: Saksonita Khoeurn (saksonita@chungbuk.ac.kr).",
+    title: "A Semantic-Layer-Mediated Agent for Natural Language to SQL over Heterogeneous Enterprise Databases",
     collection: "PAPERS",
     creator: "1 st Ha Jeong Kim, 2 nd Saksonita Khoeurn, 3 rd Ye Ji Yoon",
     year: 2026,
@@ -1787178,7 +1787178,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31034",
-    title: "Practical Linear-Time Computation of Smallest Suffixient Sets Thanks: Funded by Basal Funds FB0001 and Fondecyt grant 1260080, ANID, Chile.",
+    title: "Practical Linear-Time Computation of Smallest Suffixient Sets",
     collection: "PAPERS",
     creator: "Francisco Olivares, Gonzalo Navarro",
     year: 2026,
@@ -1787226,7 +1787226,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31030",
-    title: "Optimal-Time Contextual Pattern Matching in Compressed Space Thanks: Funded by Basal Funds FB0001 and AFB240001, and Fondecyt Grant 1260080, ANID, Chile. Affiliation: Centre for Biotechnology and Bioengineering, Chile",
+    title: "Optimal-Time Contextual Pattern Matching in Compressed Space",
     collection: "PAPERS",
     creator: "Gonzalo Navarro and Francisco Olivares",
     year: 2026,
@@ -1787354,7 +1787354,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31055",
-    title: "Reference-Based Prosody and Rhythm Evaluation for Spoken Dialogue Systems Thanks: This work was supported by the SPEAR project. Add full funding acknowledgments before submission.",
+    title: "Reference-Based Prosody and Rhythm Evaluation for Spoken Dialogue Systems",
     collection: "PAPERS",
     creator: "Ashish Hallur 1 , Thomas Thebaud 1 , Georgi Tinchev 2 , Venkatesh Ravichandran 2 , Laureano Moro-Velazquez 1",
     year: 2026,
@@ -1787450,7 +1787450,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31075",
-    title: "Random partition for Tokushige’s r r -wise intersecting conjecture Lihua Feng was supported by the NSFC (Nos. 12271527 and 12471022) and NSF of Qinghai Province (No. 2025-ZJ-902T). E-mail addresses: wuyjmath@163.com (Y. Wu), fenglh@163.com (L. Feng).",
+    title: "Random partition for Tokushige’s r r -wise intersecting conjecture",
     collection: "PAPERS",
     creator: "Yongjiang Wu, Lihua Feng",
     year: 2026,
@@ -1787466,7 +1787466,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31084",
-    title: "Accelerating Merge with Motion Vector Difference via Filter Difference Analysis for VVenC Thanks: This work was supported by Hupan Laboratory through Hupan Laboratory Research Intern Program.",
+    title: "Accelerating Merge with Motion Vector Difference via Filter Difference Analysis for VVenC",
     collection: "PAPERS",
     creator: "double-blind submission, Xinmin Feng 1 , Shengyang Xu 2 , Jianhua Chen 2 , Li Li 1 , Dong Liu 1,† , Feng Wu 1",
     year: 2026,
@@ -1787882,7 +1787882,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31128",
-    title: "UniSAE: Unified Speech Attribute Editing on Speaker, Emotion and Low-Level Content via Discrete Phonetic Posteriorgram Modelling Thanks: * Corresponding authors.",
+    title: "UniSAE: Unified Speech Attribute Editing on Speaker, Emotion and Low-Level Content via Discrete Phonetic Posteriorgram Modelling",
     collection: "PAPERS",
     creator: "Chuanbo Zhu, Wuyou Zhou, Rongxiu Zhong, Shilei Zhang, Kun Qian, Yike Guo ∗, Wei Xue ∗",
     year: 2026,
@@ -1788090,7 +1788090,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31156",
-    title: "One Retrieval to Cover Them All: Co-occurrence-Aware Knowledge Base Reorganization for Session-Level RAG Thanks: Accepted to the Towards Knowledgeable Foundation Models (KnowFM) Workshop @ ACL 2026.",
+    title: "One Retrieval to Cover Them All: Co-occurrence-Aware Knowledge Base Reorganization for Session-Level RAG",
     collection: "PAPERS",
     creator: "Shivam Ratnakar, Yixuan Zhu, Cecilia Cheng, Chaya Vijayakumar",
     year: 2026,
@@ -1788490,7 +1788490,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31207",
-    title: "Towards Inclusive Mobility Modeling: Characterizing and Evaluating Elderly Trajectory Patterns in Urban Systems Thanks: To appear in 7th International Conference on Social Computing (ICSC)",
+    title: "Towards Inclusive Mobility Modeling: Characterizing and Evaluating Elderly Trajectory Patterns in Urban Systems",
     collection: "PAPERS",
     creator: "Zhengxuan Wang ⋆, Haohan He ⋆, Mengying Zhou †",
     year: 2026,
@@ -1788650,7 +1788650,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31216",
-    title: "Information-Aided DVL Calibration 1 Corresponding author: Zeev Yampolsky, zyampols@campus.haifa.ac.il",
+    title: "Information-Aided DVL Calibration",
     collection: "PAPERS",
     creator: "Zeev Yampolsky 1 , , and Itzik Klein,",
     year: 2026,
@@ -1789448,7 +1789448,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31367",
-    title: "Evidence Triangulation for Multimodal Fact-Checking in the Wild Thanks: Accepted at the 2026 European Conference on Computer Vision (ECCV).",
+    title: "Evidence Triangulation for Multimodal Fact-Checking in the Wild",
     collection: "PAPERS",
     creator: "Stefanos-Iordanis Papadopoulos, Zacharias Chrysidis, Christos Koutlis, Symeon Papadopoulos, Panagiotis C. Petrantonakis",
     year: 2026,
@@ -1789896,7 +1789896,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31344",
-    title: "Spatial Model Checking of Images via Minimised Models and Branching Bisimilarity Thanks: The authors are listed in alphabetical order as they equally contributed to the work presented in this paper. The present paper has been produced without the help of any AI system.",
+    title: "Spatial Model Checking of Images via Minimised Models and Branching Bisimilarity",
     collection: "PAPERS",
     creator: "Vincenzo Ciancia ORCID:0000-0003-1314-0574, Jan Friso Groote ORCID:0000-0003-2196-6587, Diego Latella ORCID:0000-0002-3257-9059, Mieke Massink ORCID:0000-0001-5089-002X, Erik P. de Vink ORCID:0000-0001-9514-2260",
     year: 2026,
@@ -1790200,7 +1790200,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31460",
-    title: "ILPU: Iterative Laplace-Based Phase Unwrapping via Bi-Level Optimization Thanks: Funding by German Research Foundation (DFG) projects 513752256 FOR5628, CRC1340, GRK2260 BIOQIC, CRC 1540 EBM, GU 172614-1, German Federation of Industrial Research Associations (AIF) project KK5611902 BM4, and Medical Scientist Pilot Program of the Charité is greatly appreciated. These sponsors had no role in the study design, collection, analysis and interpretation of data, writing of this manuscript or the decision to submit the article for publication. Thanks: All the authors are with Department of Radiology, Charité – Universitatsmedizin Berlin, 10117, Berlin, Germany (email:hossein.aghamiry@charite.de)",
+    title: "ILPU: Iterative Laplace-Based Phase Unwrapping via Bi-Level Optimization",
     collection: "PAPERS",
     creator: "Michael Fedders, Jakob Schattenfroh, Yanglei Wu, Noah Jaitner, Tom Meyer, Jakob Jordan",
     year: 2026,
@@ -1790232,7 +1790232,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31459",
-    title: "Classification of Fuchsian groups with torsion Thanks: The research was supported by the ISF (grant No. 957/25).",
+    title: "Classification of Fuchsian groups with torsion",
     collection: "PAPERS",
     creator: "George Peterzil",
     year: 2026,
@@ -1790615,7 +1790615,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31537",
-    title: "Da ta Ev olver : Self-Evolving Multi-Agent Data Construction for Text-Rich Image Generation Thanks: Equal contribution. Thanks: Corresponding author. Affiliation: The Hong Kong University of Science and Technology[0.45em] Project Page: https://github.com/CSU-JPG/DataEvolver",
+    title: "Da ta Ev olver : Self-Evolving Multi-Agent Data Construction for Text-Rich Image Generation",
     collection: "PAPERS",
     creator: "[0.35em] Central South University",
     year: 2026,
@@ -1790647,7 +1790647,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31544",
-    title: "The classification of real quadratic fields which satisfy Hammarhjelm’s condition Thanks: This research was supported by the Israel Science Foundation (grant No. 2860/24).",
+    title: "The classification of real quadratic fields which satisfy Hammarhjelm’s condition",
     collection: "PAPERS",
     creator: "Zeév Rudnick",
     year: 2026,
@@ -1791047,7 +1791047,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31613",
-    title: "Robust Autonomous UAV Landing on Maritime Platforms via Multimodal Agentic AI and Active Wave Compensation Thanks: ∗ Authors have contributed equally to this work. This project has received funding from the European Union’s Horizon Europe research and innovation programme under Grant Agreement No. 101189723 (AEROSUB); The study was supported by Fundação Para a Ciência e a Tecnologia (FN: 2024.01361.BD and PP: 2022.11442.BD ( doi.org/10.54499/2022.11442.BD ).",
+    title: "Robust Autonomous UAV Landing on Maritime Platforms via Multimodal Agentic AI and Active Wave Compensation",
     collection: "PAPERS",
     creator: "Francisco S. Neves*, Pedro N. Pereira*, Raul D.S.G. Campilho Andry M. Pinto",
     year: 2026,
@@ -1791574,7 +1791574,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31662",
-    title: "Positivity-preserving dynamical low-rank methods for the Vlasov equation Thanks: Authors are listed alphabetically.",
+    title: "Positivity-preserving dynamical low-rank methods for the Vlasov equation",
     collection: "PAPERS",
     creator: "Katharina Kormann, Murtazo Nazarov, Junjie Wen",
     year: 2026,
@@ -1792181,7 +1792181,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31739",
-    title: "Electric Field Attenuation Techniques for Inductive Wireless Charging of Medical Implants Thanks: This research was funded by Flanders Innovation and Entrepreneurship (VLAIO), grant number HBC.2021.0797 and Cochlear Technology Centre.",
+    title: "Electric Field Attenuation Techniques for Inductive Wireless Charging of Medical Implants",
     collection: "PAPERS",
     creator: "Samuelle Boeckx, Pieterjan Polfliet, Lieven De Strycker, and Liesbet Van der Perre",
     year: 2026,
@@ -1793684,7 +1793684,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31890",
-    title: "Uniform Lyndon Interpolation via Non-wellfounded Proofs Thanks: Research supported by the Swiss National Science Foundation project 200021_214820. Affiliation: University of Bern Bern, Switzerland",
+    title: "Uniform Lyndon Interpolation via Non-wellfounded Proofs",
     collection: "PAPERS",
     creator: "Borja Sierra Miranda, Thomas Studer",
     year: 2026,
@@ -1794179,7 +1794179,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-32011",
-    title: "Competition and Anomalies Redux: Evidence from U.S. Auto Dealers Thanks: Huffman: Cornell University, SC Johnson College of Business and IZA ( dbh234@cornell.edu ), Pierce: Washington University in St. Louis ( pierce@wustl.edu ), Rees-Jones: University of Pennsylvania, Wharton School and NBER ( alre@wharton.upenn.edu ), Reyes: Middlebury College and IZA ( greyes@middlebury.edu ). We are grateful to Maritz, LLC for providing the data necessary for this project. No authors accepted compensation from any party for conducting this research. We thank Zamir Ticknor for excellent research assistance.",
+    title: "Competition and Anomalies Redux: Evidence from U.S. Auto Dealers",
     collection: "PAPERS",
     creator: "David Huffman, Lamar Pierce, Alex Rees-Jones, Germán Reyes",
     year: 2026,
@@ -1794339,7 +1794339,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-32018",
-    title: "Automated Background Swapping for Robustness against Spurious Backgrounds Thanks: Work partly done while at Johannes Kepler University Linz, Austria",
+    title: "Automated Background Swapping for Robustness against Spurious Backgrounds",
     collection: "PAPERS",
     creator: "Cesar Roder, Kajetan Schweighofer",
     year: 2026,
@@ -1794451,7 +1794451,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2606-31949",
-    title: "On the ℓ \\ell -adic homotopy type of configuration spaces Thanks: J. Cirici acknowledges financial support from Govern de Catalunya (Serra Húnter Program) and the Spanish State Research Agency (CEX2020-001084-M and PID2024-155646NB-I00). G. Horel acknowledges financial support from Agence Nationale pour la Recherche through project ANR-25-CE40-28616 Kash.",
+    title: "On the ℓ \\ell -adic homotopy type of configuration spaces",
     collection: "PAPERS",
     creator: "Joana Cirici, Geoffroy Horel",
     year: 2026,
@@ -1794786,7 +1794786,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00047",
-    title: "A revised and extended version of McShane-Whitney extensions for fuzzy Lipschitz maps Thanks: Last author’s research is part of the project PID2022-139248NB-I00 funded by MICIU/AEI/10.13039/501100011033 and ERDF/EU",
+    title: "A revised and extended version of McShane-Whitney extensions for fuzzy Lipschitz maps",
     collection: "PAPERS",
     creator: "Eduardo Jiménez-Fernández, Jesús Rodríguez-López, Aurora Sánchez-Martín-Orozco, Enrique A. Sánchez-Pérez",
     year: 2026,
@@ -1795362,7 +1795362,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00138",
-    title: "Cylinders and the zero locus of the plinth ideal Thanks: The study was implemented in the framework of the Basic Research Program at HSE University (HSE-BR-2025-84).",
+    title: "Cylinders and the zero locus of the plinth ideal",
     collection: "PAPERS",
     creator: "Kirill Shakhmatov",
     year: 2026,
@@ -1795602,7 +1795602,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00150",
-    title: "Negative spectrum of non-local operators with periodic potential Thanks: The study of S. A. Pirogov was supported by the Russian Science Foundation (project 24-11-00123, https://rscf.ru/ en/project/24-11-00123/)",
+    title: "Negative spectrum of non-local operators with periodic potential",
     collection: "PAPERS",
     creator: "S. Pirogov, E. Zhizhina",
     year: 2026,
@@ -1796001,7 +1796001,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00223",
-    title: "Extinction law and stellar mass in the Nuclear Bulge from kinematically-selected red clump stars Thanks: The full version of Table 6 is only available in electronic form at the CDS via anonymous ftp to cdsarc.cds.unistra.fr () or via https://cdsarc.cds.unistra.fr/viz-bin/cat/J/A+A/VOL/PAGE.",
+    title: "Extinction law and stellar mass in the Nuclear Bulge from kinematically-selected red clump stars",
     collection: "PAPERS",
     creator: "Á. Valenzuela Navarro ,, M. Zoccali, E. Valenti, R. Contreras Ramos, A. Rojas-Arriagada, A. Luna, R. Albarracín, C. Gallart, J. Olivares Carvajal, F. Gran, C. Salvo-Guajardo, G. Nandakumar, A. Renzini",
     year: 2026,
@@ -1796241,7 +1796241,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00217",
-    title: "On logarithmic Poisson cohomology of a degenerate Poisson bivector in affine plane. Thanks: Sincerely, the authors dedicate this paper to the memory of Professor Joseph Dongho , who passed aways on 26 February 2026 as this work was nearing completion. His intellectual rigour, generosity and lasting influence continue to inspire us.",
+    title: "On logarithmic Poisson cohomology of a degenerate Poisson bivector in affine plane",
     collection: "PAPERS",
     creator: "Kamtila Kari, Iskamle Bruno, Diekouam Fotso L. E, Tcheka Calvin",
     year: 2026,
@@ -1797185,7 +1797185,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00405",
-    title: "BOLT: Online Lightweight Adaptation for Preparation-Free Heterogeneous Cooperative Perception Thanks: Preprint. Work under review.",
+    title: "BOLT: Online Lightweight Adaptation for Preparation-Free Heterogeneous Cooperative Perception",
     collection: "PAPERS",
     creator: "Kang Yang, Tianci Bu, Peng Wang, Deying Li, Yongcai Wang",
     year: 2026,
@@ -1797633,7 +1797633,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00439",
-    title: "Existence and uniqueness of weak solutions to quasilinear PDEs with critical data Thanks: This project has received funding from the European Union’s Horizon 2020 research and innovation programme under the Marie Skłodowska-Curie grant agreement No 101034255 . The second-named author thanks the CNRS IRL FAMSI for support. A CC-BY 4.0 https://creativecommons.org/licenses/by/4.0/ public copyright license has been applied by the authors to the present document and will be applied to all subsequent versions up to the Author Accepted Manuscript arising from this submission.",
+    title: "Existence and uniqueness of weak solutions to quasilinear PDEs with critical data",
     collection: "PAPERS",
     creator: "Pascal Auscher, Sebastian Bechtel",
     year: 2026,
@@ -1797777,7 +1797777,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00469",
-    title: "On 𝝅 {\\boldsymbol{\\pi}} -systems of symmetrizable Kac-Moody algebras Thanks: KNR and SV acknowledge support from DAE under a XII plan project. KR is partially supported by ISF grant no. 1221/17",
+    title: "On 𝝅 {\\boldsymbol{\\pi}} -systems of symmetrizable Kac-Moody algebras",
     collection: "PAPERS",
     creator: "K. N. Raghavan, Krishanu Roy, Sankaran Viswanath",
     year: 2026,
@@ -1798257,7 +1798257,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00518",
-    title: "Quantum fractional revival on zero-divisor graphs over ℤ n \\mathbb{Z}_{n} Thanks: *Corresponding Author",
+    title: "Quantum fractional revival on zero-divisor graphs over ℤ n \\mathbb{Z}_{n}",
     collection: "PAPERS",
     creator: "Bui Phuoc Minh 1,2 and Songpon Sriwongsa ∗",
     year: 2026,
@@ -1799598,7 +1799598,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00788",
-    title: "Repurposing Image Diffusion Models for Adversarial Synthetic Structured Data: A Case Study of Ground Truth Drift Thanks: An earlier version of this research was presented by Adam Arthur, “Repurposing Image Diffusion Architectures for Tabular Synthesis,” the Rochester Institute of Technology Undergraduate Research Symposium, Rochester, NY, July 31, 2025.",
+    title: "Repurposing Image Diffusion Models for Adversarial Synthetic Structured Data: A Case Study of Ground Truth Drift",
     collection: "PAPERS",
     creator: "Adam Arthur, Christopher Schwartz",
     year: 2026,
@@ -1799630,7 +1799630,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00793",
-    title: "Unsupervised Denoising of Real Clinical Low Dose Liver CT with Perceptual Attention Networks Thanks: Shenzhen Science and Technology Innovation Program, Grant Number: JCYJ20240813143102004 * He is the supervisor of this paper. # He is the corresponding author.",
+    title: "Unsupervised Denoising of Real Clinical Low Dose Liver CT with Perceptual Attention Networks",
     collection: "PAPERS",
     creator: "1 st Zhilin Guan, 2 nd Wei Zhang ∗,#",
     year: 2026,
@@ -1799678,7 +1799678,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00782",
-    title: "GeoContra: From Fluent GIS Code to Verifiable Spatial Analysis with Geography-Grounded Repair Thanks: This work was supported by the Guangdong Basic and Applied Basic Research Foundation (Grant No. 2025A1515010111, 2025A1515010513), Guangdong Natural Science Foundation (2024A1515012080), and the Third Batch of Special Entrusted Projects of Guangdong Philosophy and Social Sciences Innovation Project (GD25WTCXGC14).",
+    title: "GeoContra: From Fluent GIS Code to Verifiable Spatial Analysis with Geography-Grounded Repair",
     collection: "PAPERS",
     creator: "Yinhao Xiao, Rongbo Xiao, Yihan Zhang",
     year: 2026,
@@ -1799710,7 +1799710,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00688",
-    title: "Optimal Merton’s Problem under Multivariate Affine Volterra Models with Jumps The work of the first author is partially supported by Agence Nationale de la Recherche (ReLISCoP grant ANR-21-CE40-0001). The second author gratefully acknowledge support from Ecole Doctorale Sciences Mathematiques de Paris Centre .",
+    title: "Optimal Merton’s Problem under Multivariate Affine Volterra Models with Jumps",
     collection: "PAPERS",
     creator: "Sigui Brice Dro, Emmanuel Gnabeyeu",
     year: 2026,
@@ -1799886,7 +1799886,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00812",
-    title: "Univalence without function extensionality ALL Volume: NN Journal: Electronic Notes in Theoretical Informatics and Computer Science Volume: NN We thank Lorenzo Perticone for first (inadvertently) calling our attention to this question, and we thank the Gothenburg Logic and Types unit for many lunchtime discussions on the topic. We also thank András Kovács for his Agda formalization of the polynomial model, which was of great help to us in understanding the construction. Email: evan.cavallo@gu.se Email: hoferj@chalmers.se Supported by the Knut and Alice Wallenberg Foundation (KAW), Grant No. 2019.0116",
+    title: "Univalence without function extensionality",
     collection: "PAPERS",
     creator: "Evan Cavallo b myemail KAW, Jonas Höfer b coemail",
     year: 2026,
@@ -1800540,7 +1800540,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00897",
-    title: "SPAT: A Semantic Port-Aware Adaptive-Rate Transmission Protocol for Semantic Communication Thanks: This work was supported in part by the National Science and Technology Major Project-Mobile Information Networks under Grant No.2024ZD1300700, and in part by the Natural Science Foundation of China No.62293483. (Corresponding Author: Guangming Shi.) Thanks: Yunhao Wang is with the School of Electronic and Computer Engineering, Peking University, Shenzhen 518055, China (e-mail: yunhaowang@stu.pku.edu.cn). Thanks: Shuai Ma is with the Department of Networked Intelligence, Peng Cheng Laboratory, Shenzhen 518066, China (e-mail: mash01@pcl.ac.cn). Thanks: Bin Shen and Shouhan Shi are with the School of Information and Control Engineering, China University of Mining and Technology, Xuzhou, 221116, China (e-mail: {binshen, shishouhan}@cumt.edu.cn). Thanks: Youlong Wu is with the School of Information Science and Technology, ShanghaiTech University, Shanghai 201210, China (e-mail:wuyl1@shanghaitech.edu.cn). Thanks: Guangming Shi is with the Department of Networked Intelligence, Peng Cheng Laboratory, Shenzhen, 518066, China, and also with the School of Artificial Intelligence, Xidian University, Xi’an, Shaanxi 710071, China (e-mail: gmshi@pcl.ac.cn). Thanks: Xiang Cheng is with the State Key Laboratory of Photonics and Communications, School of Electronics, Peking University, Beijing 100871, China (e-mail: xiangcheng@pku.edu.cn). Thanks: The code will be released on https://github.com/WYHxuebi/SPAT .",
+    title: "SPAT: A Semantic Port-Aware Adaptive-Rate Transmission Protocol for Semantic Communication",
     collection: "PAPERS",
     creator: "Yunhao Wang, Shuai Ma",
     year: 2026,
@@ -1800556,7 +1800556,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00900",
-    title: "Floor Plan-Agnostic Detection of Gait Speed Drifts Using Ambient Sensors Thanks: This study is conducted as part of Innovate UK Knowledge Transfer Partnership project reference 10062173. The financial support from Legrand Care and Innovate UK is gratefully acknowledged.",
+    title: "Floor Plan-Agnostic Detection of Gait Speed Drifts Using Ambient Sensors",
     collection: "PAPERS",
     creator: "1 st Marina Vicini, 2 nd Martin Rudorfer, 3 rd Zhuangzhuang Dai, 4 th Ahmad Beltagui, 5 th Luis J. Manso",
     year: 2026,
@@ -1800876,7 +1800876,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00960",
-    title: "Energy-Based Constraint Networks: Learning Structural Coherence Across Modalities Thanks: Code: https://github.com/cs-cmyk/energy-constraint-networks",
+    title: "Energy-Based Constraint Networks: Learning Structural Coherence Across Modalities",
     collection: "PAPERS",
     creator: "Chirag Shinde",
     year: 2026,
@@ -1801148,7 +1801148,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-00952",
-    title: "Which Coherence Decoheres? Basis-Dependent Decoherence Rates in Symmetry-Broken Collective Spin Systems Stavros Mouslopoulos Faculty of Science and Engineering, University of Nottingham Ningbo China Ningbo 315100, China Stavros.Mouslopoulos@nottingham.edu.cn",
+    title: "Which Coherence Decoheres? Basis-Dependent Decoherence Rates in Symmetry-Broken Collective Spin Systems",
     collection: "PAPERS",
     year: 2026,
     source: "arXiv",
@@ -1802059,7 +1802059,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01105",
-    title: "Resolving the Unresolved Galactic Winds in Multi-phase Models. I. Methodology and Application Facilities: HST(COS) astropy ( 4 ; 2 ; 3 ) , Cloudy ( 17 ) , ChatGPT (OpenAI, 2023; https://chat.openai.com/chat )",
+    title: "Resolving the Unresolved Galactic Winds in Multi-phase Models. I. Methodology and Application",
     collection: "PAPERS",
     creator: "Xinfeng Xu, Drummond Fielding, Timothy Heckman, Greg L. Bryan, Alaina Henry, Karla Z. Arellano-Córdova, Cody Carr, John Chisholm, Claude-André Faucher-Giguère, Matthew Hayes, Mason Huberty, Michael Jennings, Crystal L. Martin, Claudia Scarlata, Allison L. Strom",
     year: 2026,
@@ -1802091,7 +1802091,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01053",
-    title: "Strict comparison holds in the uniform Roe algebra of a discrete amenable group Thanks: G.A.E. is supported by an NSERC Discovery Grant. Z.N. is supported by a Simons Foundation Grant (MP-TSM-00002606). J.Z. is supported by NSFC grants (Nos. 12271165, 12301154). Part of the work was carried out when Z.N. visited the Fields Institute during the spring break of 2026. He thanks the Fields Institute for the hospitality.",
+    title: "Strict comparison holds in the uniform Roe algebra of a discrete amenable group",
     collection: "PAPERS",
     creator: "George A. Elliott, Chun Guang Li, Zhuang Niu, Jianguo Zhang",
     year: 2026,
@@ -1802171,7 +1802171,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01132",
-    title: "Low-cost Ultra-low Noise DAC System-on-Module for Scalable Ion-Trap Electrode Control Thanks: This material is based upon work supported by the U.S. Department of Energy, Office of Science, National Quantum Information Science Research Centers, Quantum Systems Accelerator (Award No. DE-SCL0000121). Additional support is acknowledged from the National Science Foundation: Software-Tailored Architecture for Quantum Co-Design (STAQ) Award (PHY-2325080) and QLCI: Center for Robust Quantum Simulation (OMA-2120757).",
+    title: "Low-cost Ultra-low Noise DAC System-on-Module for Scalable Ion-Trap Electrode Control",
     collection: "PAPERS",
     creator: "1 st Mitchell G. Peaks, 2 nd Mia M. Kaarls, 3 rd Crystal Noel",
     year: 2026,
@@ -1802347,7 +1802347,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01114",
-    title: "A formal approach to variable selection in difference-in-differences Thanks: We thank Katherine Ianni, Alyssa Chen, Chi Zhang, Karim Chalak, Carlos Cinelli, Elias Bareinboim, Nima Hejazi and participants of the 2025 Society of Epidemiology Research (SER) conference, the 2025 International Conference on Health Policy Statistics (ICHPS) and the Health Economics seminar at Harvard’s Department of Health Care Policy for helpful discussions. This project was funded under grant number R01HS028985 from the Agency for Healthcare Research and Quality (AHRQ), U.S. Department of Health and Human Services (HHS). The authors are solely responsible for this document’s contents, findings, and conclusions, which do not necessarily represent the views of AHRQ.",
+    title: "A formal approach to variable selection in difference-in-differences",
     collection: "PAPERS",
     creator: "Daniela Rodrigues, Laura A. Hatfield",
     year: 2026,
@@ -1802395,7 +1802395,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01149",
-    title: "ADaPT: A daptive-window D ecoding for P ractical fault- T olerance ∗ Correspondence: toberoi@uchicago.edu",
+    title: "ADaPT: A daptive-window D ecoding for P ractical fault- T olerance",
     collection: "PAPERS",
     creator: "Tina Oberoi 1 , Joshua Viszlai 1 , Frederic T. Chong 1",
     year: 2026,
@@ -1802635,7 +1802635,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01173",
-    title: "Limiting the Impact of AI Data Centers on Fatigue Life of Thermal Turbine Generators in the Grid: A Frequency-Domain Approach Thanks: F. Hossain and N. R. Chaudhuri are with The School of Electrical Engineering and Computer Science, Penn State University, University Park, PA, USA e-mail: fbh5142@psu.edu, nuc88@psu.edu. Thanks: A. Sinha is with Department of Mechanical Engineering, Penn State University, University Park, PA, USA e-mail: axs22@psu.edu. Thanks: S. G. Vennelaganti and M. E. Nassar are with Tesla Inc., Palo Alto, CA, USA e-mail: svennelaganti@tesla.com, monassar@tesla.com. Thanks: Financial support from Tesla Inc. under agreement 304869 PSNDA-0003632 is gratefully acknowledged.",
+    title: "Limiting the Impact of AI Data Centers on Fatigue Life of Thermal Turbine Generators in the Grid: A Frequency-Domain Approach",
     collection: "PAPERS",
     creator: "Fiaz Hossain, Nilanjan Ray Chaudhuri, Alok Sinha",
     year: 2026,
@@ -1802907,7 +1802907,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01080",
-    title: "Principal-agent problems with adverse selection: A stochastic target problem formulation Thanks: The authors thank Nizar Touzi for fruitful conversations and Jakša Cvitanić for identifying an error in an earlier version of this manuscript, which led to the improved statement of Theorem 3 .",
+    title: "Principal-agent problems with adverse selection: A stochastic target problem formulation",
     collection: "PAPERS",
     creator: "Guillermo Alonso Alvarez, Ibrahim Ekren, Liwei Huang",
     year: 2026,
@@ -1803610,7 +1803610,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01275",
-    title: "Symplectic small covers in dimension four Thanks: This work was supported by the National Research Foundation of Korea Grant funded by the Korean Government (RS-2025-00521982).",
+    title: "Symplectic small covers in dimension four",
     collection: "PAPERS",
     creator: "Suyoung Choi",
     year: 2026,
@@ -1803626,7 +1803626,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01276",
-    title: "A class of low-rank short recurrences for nonsymmetric linear matrix equations Thanks: Version of August 10, 2026",
+    title: "A class of low-rank short recurrences for nonsymmetric linear matrix equations",
     collection: "PAPERS",
     creator: "Davide Palitta, Catherine E. Powell, Valeria Simoncini †",
     year: 2026,
@@ -1803690,7 +1803690,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01307",
-    title: "Spectral- and Energy-efficient Multi-BS Multi-RIS Pinching-antenna Systems: A GNN-based Approach Thanks: Changpeng He and Yang Lu are with the State Key Laboratory of Advanced Rail Autonomous Operation, and also with the School of Computer Science and Technology, Beijing Jiaotong University, Beijing 100044, China (e-mail: 25110135@bjtu.edu.cn, yanglu@bjtu.edu.cn). Thanks: Wei Chen and Bo Ai are with the School of Electronics and Information Engineering, Beijing Jiaotong University, Beijing 100044, China (e-mail: weich@bjtu.edu.cn, boai@bjtu.edu.cn). Thanks: Arumugam Nallanathan is with the School of Electronic Engineering and Computer Science, Queen Mary University of London, London and also with the Department of Electronic Engineering, Kyung Hee University, Yongin-si, Gyeonggi-do 17104, South Korea (e-mail: a.nallanathan@qmul.ac.uk). Thanks: Zhiguo Ding is with the School of Electrical and Electronic Engineering (EEE), Nanyang Technological University, Singapore 639798 (Zhiguo.ding@ntu.edu.sg).",
+    title: "Spectral- and Energy-efficient Multi-BS Multi-RIS Pinching-antenna Systems: A GNN-based Approach",
     collection: "PAPERS",
     creator: "Changpeng He, Yang Lu, Wei Chen, Bo Ai",
     year: 2026,
@@ -1804298,7 +1804298,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01395",
-    title: "Quasi-Static Control of Discrete Cosserat Rod Thanks:",
+    title: "Quasi-Static Control of Discrete Cosserat Rod",
     collection: "PAPERS",
     creator: "Srishti Siddharth, Domenico Campolo, Ravi Banavar",
     year: 2026,
@@ -1804378,7 +1804378,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01344",
-    title: "A Unified Lyapunov Method for ISS of PDEs: A Tutorial on Constructing Generalized Lyapunov Functionals for Parabolic and Hyperbolic Equations Thanks: Keywords : input-to-state stability; generalized Lyapunov functional; Lyapunov method; infinite-dimensional system; partial differential equation; boundary disturbance; parabolic equation; hyperbolic equation",
+    title: "A Unified Lyapunov Method for ISS of PDEs: A Tutorial on Constructing Generalized Lyapunov Functionals for Parabolic and Hyperbolic Equations",
     collection: "PAPERS",
     creator: "Jun Zheng & Guchuan Zhu",
     year: 2026,
@@ -1804506,7 +1804506,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01423",
-    title: "HepScript: A Dual-Use DSL for Human-AI Collaborative Data Analysis Workflows in High-Energy Physics Thanks: Corresponding author.",
+    title: "HepScript: A Dual-Use DSL for Human-AI Collaborative Data Analysis Workflows in High-Energy Physics",
     collection: "PAPERS",
     creator: "Junkun Jiao, Tong Liu, Weimin Song, Yipu Liao, Bolun Zhang Beijiang Liu Chang-Zheng Yuan Yue Sun",
     year: 2026,
@@ -1804969,7 +1804969,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01510",
-    title: "SwiftPie: Lightning-fast Subject-driven Image Personalization via One step Diffusion Thanks: Qualcomm AI Research is an initiative of Qualcomm Technologies, Inc.",
+    title: "SwiftPie: Lightning-fast Subject-driven Image Personalization via One step Diffusion",
     collection: "PAPERS",
     creator: "Huy Duong Trong-Tung Nguyen Cuong Pham Anh Tran Khoi Nguyen Minh Hoai",
     year: 2026,
@@ -1805273,7 +1805273,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01535",
-    title: "Bounded Continuous weak quasiregular mappings that fail to be quasiregular Thanks: The first author was supported by the grant GAČR P201/24-10505S. The last author is funded by the National Key R&D Program of China (Grant No. 2025YFA1018400 & No. 2021YFA1003100), NSFC grant No. 12288201 & No. 12571128, the Chinese Academy of Sciences, and CAS Project for Young Scientists in Basic Research, Grant No. YSBR-031.",
+    title: "Bounded Continuous weak quasiregular mappings that fail to be quasiregular",
     collection: "PAPERS",
     creator: "Stanislav Hencl and Yi Ru-Ya Zhang",
     year: 2026,
@@ -1805545,7 +1805545,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01588",
-    title: "Sparsity and Resolvability: Re-evaluating Channel Representations For Next Generation Networks The authors H. Haif, A. Arous, and H. Arslan, are with the Department of Electrical and Electronics Engineering, Istanbul Medipol University, Istanbul, 34810, Turkey, (e-mail: hamza.haif@std.medipol.edu.tr; abdelali.arous@std.medipol.edu.tr; huseyinarslan@medipol.edu.tr).",
+    title: "Sparsity and Resolvability: Re-evaluating Channel Representations For Next Generation Networks",
     collection: "PAPERS",
     creator: "Hamza Haif, , Abdelali Arous, , and Hüseyin Arslan",
     year: 2026,
@@ -1805688,7 +1805688,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01586",
-    title: "The Pearson IV distribution: Random variate generation and applications Thanks: † \\dagger School of Computer Science, McGill University, Montréal, Québec, Canada: lucdevroye@gmail.com. Supported by the Natural Sciences and Engineering Research Council of Canada (NSERC) under grant number RGPIN-2024-04164 Thanks: ‡ \\ddagger QBX Consulting, Austin, TX, USA: joehill.qbx@gmail.com",
+    title: "The Pearson IV distribution: Random variate generation and applications",
     collection: "PAPERS",
     creator: "Luc Devroye † \\dagger, Joe R. Hill ‡ \\ddagger",
     year: 2026,
@@ -1805768,7 +1805768,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01587",
-    title: "Channel-Aware Waveform Selection Criteria Across Different Waveform Domains The authors H. Haif, A. Arous, and H. Arslan, are with the Department of Electrical and Electronics Engineering, Istanbul Medipol University, Istanbul, 34810, Turkey, (e-mail: hamza.haif@std.medipol.edu.tr; abdelali.arous@std.medipol.edu.tr; huseyinarslan@medipol.edu.tr).",
+    title: "Channel-Aware Waveform Selection Criteria Across Different Waveform Domains",
     collection: "PAPERS",
     creator: "Hamza Haif, Abdelali Arous, and Hüseyin Arslan",
     year: 2026,
@@ -1806199,7 +1806199,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01673",
-    title: "Delayed Commitment for Representation Readiness in Stage-wise Audio-Visual Learning Thanks: Xinmeng Xu, Haoran Xie, and S. Joe Qin are with the Division of Artificial Intelligence, Lingnan University, Tuen Mun, Hong Kong SAR (e-mail: xinmengxu@ln.edu.hk; hrxie@ln.edu.hk; joeqin@ln.edu.hk). Lin Li is with the School of Computer Science and Artificial Intelligence, Wuhan University of Technology, Wuhan, China (email: cathylilin@whut.edu.cn). Xiaohui Tao is with the School of Mathematics, Physics and Computing, University of Southern Queensland, Toowoomba, Australia (email: xtao@usq.edu.au). Fu Lee Wang is with the School of Science and Technology, Hong Kong Metropolitan University, Ho Man Tin, Hong Kong SAR (email: pwang@hkmu.edu.hk). Thanks: ( Corresponding author: Haoran Xie. )",
+    title: "Delayed Commitment for Representation Readiness in Stage-wise Audio-Visual Learning",
     collection: "PAPERS",
     creator: "Xinmeng Xu, Haoran Xie, S. Joe Qin, Lin Li, Xiaohui Tao, Fu Lee Wang",
     year: 2026,
@@ -1806343,7 +1806343,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01658",
-    title: "The strong version of Nonlinear Carleson Conjecture fails Thanks: This research was supported by the grants NSF-DMS-2450716, Simons Fellowship in Mathematics, Simons Travel Support for Mathematicians Award, and the Van Vleck Professorship Research Award. The author gratefully acknowledges the hospitality of IHES where part of this work was done.",
+    title: "The strong version of Nonlinear Carleson Conjecture fails",
     collection: "PAPERS",
     creator: "Sergey A. Denisov",
     year: 2026,
@@ -1806919,7 +1806919,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01669",
-    title: "PRCD-MAP: Learning How Much to Trust Imperfect Priors in Causal Discovery Thanks: Code is available at https://github.com/AndyShan11/PRCD-MAP .",
+    title: "PRCD-MAP: Learning How Much to Trust Imperfect Priors in Causal Discovery",
     collection: "PAPERS",
     creator: "Xihang Shan, Da Zhou",
     year: 2026,
@@ -1806935,7 +1806935,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01709",
-    title: "Stability estimates for systems of nonlocal balance laws with memory Thanks:",
+    title: "Stability estimates for systems of nonlocal balance laws with memory",
     collection: "PAPERS",
     creator: "Aekta Aggarwal, N. K. Aswini, Sarvesh Kumar, Ganesh Vaidya",
     year: 2026,
@@ -1806951,7 +1806951,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01760",
-    title: "Two-place Laplacian matching root integral variations are impossible Thanks: Corresponding author. Yi Wang Thanks: Funding. Supported by the National Natural Science Foundation of China (No. 12331012, 12571360, 12471320)",
+    title: "Two-place Laplacian matching root integral variations are impossible",
     collection: "PAPERS",
     creator: "Sebastian M. Cioabă, LeLe Liu, Yi Wang",
     year: 2026,
@@ -1807175,7 +1807175,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01763",
-    title: "Integrating equity and productivity in health evaluation 1 1 1 We thank Odd Rune Straume, Ramses Abul Naga, as well as audiences at Universidad de Montevideo, Universidad de Chile, Kyoto University, and University of Granada, for helpful comments and suggestions. Financial support from the National Research Centre for the Working Environment (NFA), Copenhagen, Denmark, the Spanish Agencia Estatal de Investigación (AEI) via grant PID2023-146364NB-I00 funded by MCIU/AEI/10.13039/501100011033 and FSE+, and the Independent Research Fund Denmark (grant no. 4260-00050B), is gratefully acknowledged.",
+    title: "Integrating equity and productivity in health evaluation",
     collection: "PAPERS",
     creator: "Kristian S. Hansen, Juan D. Moreno-Ternero, Lars P. Østerdal",
     year: 2026,
@@ -1807415,7 +1807415,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01795",
-    title: "Factors with prescribed number of invariant subalgebras not arising from subgroups Thanks: *-corresponding author",
+    title: "Factors with prescribed number of invariant subalgebras not arising from subgroups",
     collection: "PAPERS",
     creator: "Yongle Jiang, Qinxuan Xu*",
     year: 2026,
@@ -1807623,7 +1807623,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01892",
-    title: "CyberAId: AI-Driven Cybersecurity for Financial Service Providers Thanks: This work was supported by the European Union under the DIGITAL EUROPE Programme, grant agreement No. 101249596 (CyberAId).",
+    title: "CyberAId: AI-Driven Cybersecurity for Financial Service Providers",
     collection: "PAPERS",
     creator: "George Fatouros 1 , Georgios Makridis 2 , John Soldatos 1 , Dimosthenis Kyriazis 2 , Pedro Malo 5 , George Kousiouris 3 , Giannis Ledakis 4 , Louiza Kachrimani 4 , Panagiotis Rizomiliotis 3 Bruno Almeida 5 , Despina Tomkou 1 , Kostas Metaxas 6 , Konstantinos Ilias 6 , Christos Gkizelis 7 , Ernstjan de Gooyert 8 , Amin Babazadeh 8 , Kostis Mavrogiorgos 2 , Pepi Paraskevoulakou 2 , Christos Xenakis 9 , Giannis Chouchoulis 9 , Konstantina Tripodi 10",
     year: 2026,
@@ -1807798,7 +1807798,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01898",
-    title: "Fast Newton methods for linear-quadratic dynamic games with application to autonomous vehicle platooning and intersection crossing Thanks: This work was partially supported by the Transport & Mobility Institute (TMI), TU Delft, and by the ERC under project ARGON.",
+    title: "Fast Newton methods for linear-quadratic dynamic games with application to autonomous vehicle platooning and intersection crossing",
     collection: "PAPERS",
     creator: "Reza Rahimi Baghbadorani, Sergio Grammatico",
     year: 2026,
@@ -1808070,7 +1808070,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01900",
-    title: "System driven out-of equilibrium by weak contacts with reservoirs. Thanks: Acknowledgments : At an early stage of this work, we have benefited of the hospitality of the Newton Institute in Cambridge during the 2024 program New Statistical Physics in Living Matter.",
+    title: "System driven out-of equilibrium by weak contacts with reservoirs",
     collection: "PAPERS",
     creator: "Thierry Bodineau †, Bernard Derrida ♣",
     year: 2026,
@@ -1808246,7 +1808246,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-01975",
-    title: "Molecular ISAC via Markov State–Space Modeling: Joint Distance Sensing and Data Detection This work was funded by the German Research Foundation (DFG, Deutsche Forschungsgemeinschaft) as part of Germany’s Excellence Strategy – EXC 2050/2 – Project ID 390696704 – Cluster of Excellence “Centre for Tactile Internet with Human-in-the-Loop” (CeTI) of Dresden University of Technology. The authors also acknowledge the financial support by the Federal Ministry of Research, Technology and Space (BMFTR) of Germany in the program “Souverän. Digital. Vernetzt.” Joint project 6G-life, project identification number 16KIS2413K, the program “Verbundprojekt: Disruptive Kommunikationsparadigmen für technologische Souveränität, Resilienz und Shared Prosperity - Translation in Industrie und Aufbau innovativer Technologiedemonstratoren - CommUnity,” project identification number 16KISS012K, and the project IoBNT, grant number 16KIS1994.",
+    title: "Molecular ISAC via Markov State–Space Modeling: Joint Distance Sensing and Data Detection",
     collection: "PAPERS",
     creator: "Ruifeng Zheng 1 , Pengjie Zhou 1 , Martín Schottlender 1 , Veronika Volkova 1 , Juan A. Cabrera 1 2 , Frank H. P. Fitzek 1 2 , and Pit Hofmann 1 2",
     year: 2026,
@@ -1808676,7 +1808676,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02033",
-    title: "Conventional Commit Classification using Large Language Models and Prompt Engineering * Corresponding author: bsse1209@iit.du.ac.bd",
+    title: "Conventional Commit Classification using Large Language Models and Prompt Engineering",
     collection: "PAPERS",
     creator: "Sakib Al Hasan * H. M. Sazzad Quadir Md. Nurul Ahad Tawhid",
     year: 2026,
@@ -1808708,7 +1808708,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02015",
-    title: "Robust and Explainable Divide-and-Conquer Learning for Intrusion Detection 1 University of Texas at Dallas, Richardson, TX, {yan.zhou2, hamlen, lkhan, bxt043000}@utdallas.edu 2 DEVCOM, Army Research Laboratory, Adelphi, MD {michael.j.delucia2.civ,ananthram.swami.civ}@army.mil 3 Department of Computer Science, Virginia Tech, Blacksburg, VA, muratk@vt.edu 4 University of California, Irvine, sharad@ics.uci.edu",
+    title: "Robust and Explainable Divide-and-Conquer Learning for Intrusion Detection",
     collection: "PAPERS",
     creator: "Yan Zhou 1 , Kevin Hamlen 1 , Michael De Lucia 2 , Murat Kantarcioglu 3 , Latifur Khan 1 , Sharad Mehrotra 4 , Ananthram Swami 2 , Bhavani Thuraisingham 1",
     year: 2026,
@@ -1809012,7 +1809012,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02034",
-    title: "Serrin’s overdetermined problem and sharp harmonic quadrature identities in the plane Thanks: The author is funded by the National Key R&D Program of China (Grant No. 2025YFA1018400 & No. 2021YFA1003100), NSFC Grant No. 12288201 & No. 12571128, the Chinese Academy of Sciences, and CAS Project for Young Scientists in Basic Research, Grant No. YSBR-031.",
+    title: "Serrin’s overdetermined problem and sharp harmonic quadrature identities in the plane",
     collection: "PAPERS",
     creator: "Yi Ru-Ya Zhang",
     year: 2026,
@@ -1809380,7 +1809380,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02074",
-    title: "Geometric Reductions of the G 2 G_{2} -Hilbert Functional via Circle Actions Thanks: ∗ Corresponding author: Julieth Saavedra",
+    title: "Geometric Reductions of the G 2 G_{2} -Hilbert Functional via Circle Actions",
     collection: "PAPERS",
     year: 2026,
     source: "arXiv",
@@ -1809618,7 +1809618,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02159",
-    title: "Combining Trained Models in Reinforcement Learning Thanks: This work was conducted as part of the MSc Autonomous Systems programme at Hochschule Bonn-Rhein-Sieg (H-BRS), Germany.",
+    title: "Combining Trained Models in Reinforcement Learning",
     collection: "PAPERS",
     creator: "Ujjwal Patil, Javad Ghofrani",
     year: 2026,
@@ -1809714,7 +1809714,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02147",
-    title: "Sampling-Based Control via Entropy-Regularized Optimal Transport Thanks: 2 Equal Contribution",
+    title: "Sampling-Based Control via Entropy-Regularized Optimal Transport",
     collection: "PAPERS",
     creator: "Vincent Pacelli, 2 Akash Ratheesh, 2 Evangelos A. Theodorou",
     year: 2026,
@@ -1809922,7 +1809922,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02176",
-    title: "Volumetric density estimates for nonlocal minimal surfaces Thanks: Work supported by the National Science Centre, Poland, grant no. 2023/49/B/ST1/04303",
+    title: "Volumetric density estimates for nonlocal minimal surfaces",
     collection: "PAPERS",
     creator: "Mateusz Kwaśnicki, Jack Thompson",
     year: 2026,
@@ -1809938,7 +1809938,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02124",
-    title: "Soft-to-Hard Routing in Sparse Mixture-of-Experts Models Thanks: reza.j.rastegar@gmail.com; Woodinville, WA",
+    title: "Soft-to-Hard Routing in Sparse Mixture-of-Experts Models",
     collection: "PAPERS",
     creator: "Reza Rastegar",
     year: 2026,
@@ -1810034,7 +1810034,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02213",
-    title: "Optimal Pilot Pattern Design for LMMSE Channel Estimation in OFDM Systems with Finite Block Size over Doubly Dispersive Channels Thanks: The work is partially supported by the National Natural Science Foundation of China (62571467, 62201162).",
+    title: "Optimal Pilot Pattern Design for LMMSE Channel Estimation in OFDM Systems with Finite Block Size over Doubly Dispersive Channels",
     collection: "PAPERS",
     creator: "Xuyao Yu, Zijun Gong, Zhilu Lai",
     year: 2026,
@@ -1810321,7 +1810321,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02257",
-    title: "Superposition of Harmonic Surfaces: Helical Motifs in Lamellar Structures Thanks: Priyank Vasu: priyank_2121ma16@iitp.ac.in",
+    title: "Superposition of Harmonic Surfaces: Helical Motifs in Lamellar Structures",
     collection: "PAPERS",
     creator: "Priyank Vasu",
     year: 2026,
@@ -1810337,7 +1810337,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02275",
-    title: "EdgeLPR: On the Deep Neural Network trade-off between Precision and Performance in LiDAR Place Recognition Thanks: *Computational resources provided by computing@unipi, a Computing Service provided by University of Pisa.",
+    title: "EdgeLPR: On the Deep Neural Network trade-off between Precision and Performance in LiDAR Place Recognition",
     collection: "PAPERS",
     creator: "Pierpaolo Serio, Hetian Wang, Zixiang Wei, Vincenzo Infantino, Lorenzo Gentilini, Lorenzo Pollini, Valentina Donzella",
     year: 2026,
@@ -1810656,7 +1810656,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02246",
-    title: "Weighted decoupling with lower-dimensional frequency localization Thanks: Supported in part by a grant from the Research Grants Council of the Hong Kong Administrative Region, China (Project No. CityU 11308924).",
+    title: "Weighted decoupling with lower-dimensional frequency localization",
     collection: "PAPERS",
     creator: "Jongchon Kim",
     year: 2026,
@@ -1810736,7 +1810736,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02328",
-    title: "Improving Imbalanced Multi-Label Chest X-Ray Diagnosis via CBAM-Enhanced CNN Backbones Thanks: An earlier version of this work was accepted at the FPT International Conference on Emerging Trends in Computing (FETC).",
+    title: "Improving Imbalanced Multi-Label Chest X-Ray Diagnosis via CBAM-Enhanced CNN Backbones",
     collection: "PAPERS",
     creator: "Nguyen Huu Duy, Hoang Khuong Duy, Huynh Cong Viet Ngu",
     year: 2026,
@@ -1811040,7 +1811040,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02372",
-    title: "Privacy Preserving Machine Learning Workflow: from Anonymization to Personalized Differential Privacy Budgets in Federated Learning Thanks: Accepted at the 2nd International Conference on Federated Learning and Intelligent Computing Systems (FLICS2026).",
+    title: "Privacy Preserving Machine Learning Workflow: from Anonymization to Personalized Differential Privacy Budgets in Federated Learning",
     collection: "PAPERS",
     creator: "1 st Judith Sáinz-Pardo Díaz, 2 nd Álvaro López García",
     year: 2026,
@@ -1811423,7 +1811423,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02408",
-    title: "Over-the-Air Computation via Segmented Waveguide-Enabled Pinching-Antenna Systems Thanks: S. Gu, H. Jiang, C. Ouyang, and A. Nallanathan are with the School of Electronic Engineering and Computer Science, Queen Mary University of London, London, E1 4NS, U.K. (e-mail: s.gu@se23.qmul.ac.uk; {hao.jiang, c.ouyang, a.nallanathan}@qmul.ac.uk). Thanks: D. Fan is with the China Academy of Information and Communications Technology, Beijing, 100191, China (email: fandian@caict.ac.cn). Thanks: Y. Liu is with the Department of Electrical and Electronic Engineering, The University of Hong Kong, Hong Kong (email: yuanwei@hku.hk).",
+    title: "Over-the-Air Computation via Segmented Waveguide-Enabled Pinching-Antenna Systems",
     collection: "PAPERS",
     creator: "Songnan Gu, Hao Jiang, Chongjun Ouyang, Dian Fan",
     year: 2026,
@@ -1811933,7 +1811933,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02502",
-    title: "GuardSec: A Multi-Modal Web Platform for Real-Time Digital Fraud Detection, Entity Verification, and Connection Security Analysis in the African Context Thanks: This work was conducted without external funding, supported solely by personal resources and a modest contribution from the Société Informatique du Congo (SIC) . The platform is publicly accessible at https://www.guardsec.io .",
+    title: "GuardSec: A Multi-Modal Web Platform for Real-Time Digital Fraud Detection, Entity Verification, and Connection Security Analysis in the African Context",
     collection: "PAPERS",
     creator: "Gilda Rech Bansimba, Regis Freguin Babindamana",
     year: 2026,
@@ -1812061,7 +1812061,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02414",
-    title: "Prior-Free Sample Size Design for Test-and-Roll Experiments Thanks: The authors gratefully acknowledge financial support from JSPS KAKENHI Grant (number 24K16342).",
+    title: "Prior-Free Sample Size Design for Test-and-Roll Experiments",
     collection: "PAPERS",
     creator: "Kentaro Kawato, Shosei Sakaguchi",
     year: 2026,
@@ -1812141,7 +1812141,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02513",
-    title: "Adaptive Gait Generation for Multi-Terrain Exoskeletons via Constrained Kernelized Movement Primitives Thanks: All authors are with the Department of Information Engineering, University of Padua, 35131 Padua, Italy. LT, EM and ST are also with the Padova Neuroscience Center, University of Padua (corresponding author: Stefano Tortora, e-mail: stefano.tortora@unipd.it).",
+    title: "Adaptive Gait Generation for Multi-Terrain Exoskeletons via Constrained Kernelized Movement Primitives",
     collection: "PAPERS",
     creator: "Edoardo Trombin, Miroljub Mihailovic, Matheus Henrique Ferreira Moura, Luca Tonin",
     year: 2026,
@@ -1812509,7 +1812509,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02564",
-    title: "Entanglement Generation During Distribution via Spatial Superposition Thanks: The authors are with the www.QuantumInternet.it research group, University of Naples Federico II, Naples, 80125 Italy. Thanks: A preliminary conference version of this work has been accepted in the Proc. of ICC’26 [ 43 ] . This work has been funded by the European Union under Horizon Europe ERC-CoG grant QNattyNet, n.101169850. Views and opinions expressed are however those of the author(s) only and do not necessarily reflect those of the European Union or the European Research Council Executive Agency. Neither the European Union nor the granting authority can be held responsible for them.",
+    title: "Entanglement Generation During Distribution via Spatial Superposition",
     collection: "PAPERS",
     creator: "Claudio Pellitteri, Rajiuddin Sk, Marcello Caleffi",
     year: 2026,
@@ -1812637,7 +1812637,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02582",
-    title: "Linear Decision Tree Policies for Integer Linear Programs Thanks: Submitted to the editors –/–/–.",
+    title: "Linear Decision Tree Policies for Integer Linear Programs",
     collection: "PAPERS",
     creator: "AAA Théo Guyard, Cleber Oliveira, Maximilian Schiffer, AAA Eduardo Uchoa, Thibaut Vidal",
     year: 2026,
@@ -1812941,7 +1812941,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02634",
-    title: "Accessibility and Gorenstein injective envelopes Thanks: S.E. was partly supported by grant 22004/PI/22 funded by Fundación Séneca, Agencia de Ciencia y Tecnología de la Región de Murcia and by grant PID2024-155576NB-I00 funded by MICIU/ AEI/10.13039/501100011033/FEDER, UE.",
+    title: "Accessibility and Gorenstein injective envelopes",
     collection: "PAPERS",
     creator: "Sergio Estrada, James Gillespie",
     year: 2026,
@@ -1813835,7 +1813835,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02765",
-    title: "U-Define : Designing User Workflows for Hard and Soft Constraints in LLM-Based Planning Thanks: This manuscript is currently under review. CCS: Human-centered computing Natural language interfaces CCS: Human-centered computing Empirical studies in interaction design CCS: Computing methodologies Natural language generation CCS: Theory of computation Formalisms CCS: Human-centered computing Interactive systems and tools",
+    title: "U-Define : Designing User Workflows for Hard and Soft Constraints in LLM-Based Planning",
     collection: "PAPERS",
     creator: "Christine P Lee, Xinyu Jessica Wang, Aws Albarghouthi, David Porfirio, Bilge Mutlu",
     year: 2026,
@@ -1814059,7 +1814059,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02756",
-    title: "Misspecified beliefs and the evolution of peer pressure Thanks: We are grateful to Pierpaolo Battigalli, Alberto Dalmazzo, Sebastiano Della Lena, and Philip Neary for helpful discussions and suggestions. We also thank seminar participants at the Psychology Seminar Series at Royal Holloway, University of London, for useful comments. Financial support from Leverhulme International Professorship (grant number LIP-2022-001) is gratefully acknowledged.",
+    title: "Misspecified beliefs and the evolution of peer pressure",
     collection: "PAPERS",
     creator: "Paolo Pin, Roberto Rozzi",
     year: 2026,
@@ -1814235,7 +1814235,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02713",
-    title: "Before and beyond the mixing time: New approximations for additive functionals of stationary Gauss-Markov processes Project funded by the Deutsche Forschungsgemeinschaft (DFG) – Project-ID 499552394 – CRC 1597 1 \\penalty\\ {}^{1} gabriele.bellerino@stochastik.uni-freiburg.de, 2 angelika.rohde@stochastik.uni-freiburg.de",
+    title: "Before and beyond the mixing time: New approximations for additive functionals of stationary Gauss-Markov processes",
     collection: "PAPERS",
     creator: "Gabriele Bellerino, Angelika RohdeMathematical Institute, University of Freiburg",
     year: 2026,
@@ -1814267,7 +1814267,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02781",
-    title: "Uniqueness of almost periodic outer flows on the hyperfinite type II 1 {\\rm II}_{1} factor Thanks: CH is supported by ERC Advanced Grant NET 101141693",
+    title: "Uniqueness of almost periodic outer flows on the hyperfinite type II 1 {\\rm II}_{1} factor",
     collection: "PAPERS",
     creator: "Cyril Houdayer, Amine Marrakchi",
     year: 2026,
@@ -1814714,7 +1814714,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02868",
-    title: "EvoPoC : Automated Exploit Synthesis for DeFi Smart Contracts via Hierarchical Knowledge Graphs PubID: pubid: Network and Distributed System Security (NDSS) Symposium 2026 23 - 27 February 2026 , San Diego, CA, USA ISBN 979-8-9919276-8-0 https://dx.doi.org/10.14722/ndss.2026.[23 | | 24]xxxx www.ndss-symposium.org",
+    title: "EvoPoC : Automated Exploit Synthesis for DeFi Smart Contracts via Hierarchical Knowledge Graphs",
     collection: "PAPERS",
     creator: "Ruichao Liang 1 , Jing Chen 2 , Xianglong Li 2 , Huangpeng Gu 2 , Yebo Feng 1 , Yue Xue 3 , Cong Wu 2 , Yang Liu 1",
     year: 2026,
@@ -1815129,7 +1815129,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02933",
-    title: "Relation Reasoning with LLMs in Expensive Optimization Thanks: This work has been submitted to the IEEE for possible publication. Copyright may be transferred without notice, after which this version may no longer be accessible.",
+    title: "Relation Reasoning with LLMs in Expensive Optimization",
     collection: "PAPERS",
     creator: "Ye Lu, Bingdong Li, Aimin Zhou, Hao Hao",
     year: 2026,
@@ -1815385,7 +1815385,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-02988",
-    title: "Shifted Lévy’s Dragon Curve and Directed Graph Mathematics Department, P.O. Box 311430, Denton, TX 76203-1430; e-mail:jonathanleung@my.unt.edu",
+    title: "Shifted Lévy’s Dragon Curve and Directed Graph",
     collection: "PAPERS",
     creator: "Jonathan Leung",
     year: 2026,
@@ -1816247,7 +1816247,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03092",
-    title: "Semantically Enriching Investor Micro-blogs for Opinion-Aware Emotion Analysis: A Practical Approach Thanks: This work was conducted with the financial support of Research Ireland under Grant Number SFI/12/RC/2289_P2 (Insight_2)",
+    title: "Semantically Enriching Investor Micro-blogs for Opinion-Aware Emotion Analysis: A Practical Approach",
     collection: "PAPERS",
     creator: "Gaurav Negi, Paul Buitelaar",
     year: 2026,
@@ -1817111,7 +1817111,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03215",
-    title: "Enwar 3.0 : An Agentic Multi-Modal LLM Orchestrator for Situation-Aware Beamforming, Blockage Prediction, and Handover Management Thanks: A. M. Nazar is with the Department of Electrical and Computer Engineering, Iowa State University (ISU), Ames, IA, 50014, USA, and with Gladiolus Technological Institute, USA Thanks: M. Y. Selim, and D. Qiao are with the Department of Electrical and Computer Engineering, ISU, Ames, IA, 50014, USA. Thanks: A. Celik, is with the School of Electronics and Computer Science, University of Southampton, Southampton SO17 1BJ, U.K. Thanks: A. Abdallah, and A. M. Eltawil are with Computer, Electrical, and Mathematical Sciences & Engineering (CEMSE) Division at King Abdullah University of Science and Technology (KAUST), Thuwal, 23955 KSA. Thanks: A conference version of this work is submitted to ASILOMAR Signal Processing Conference’25 [ 1 ] .",
+    title: "Enwar 3.0 : An Agentic Multi-Modal LLM Orchestrator for Situation-Aware Beamforming, Blockage Prediction, and Handover Management",
     collection: "PAPERS",
     creator: "Ahmad M. Nazar, Abdulkadir Celik",
     year: 2026,
@@ -1817175,7 +1817175,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03036",
-    title: "Pinned Jordan Decomposition of Characters and Depth-Zero Hecke Algebras Thanks: The second named author was partially supported by SERB Core Research Grant (CRG/2022/000415) and ANRF MATRICS Grant ANRF/ARGM/2025/000365/MTR.",
+    title: "Pinned Jordan Decomposition of Characters and Depth-Zero Hecke Algebras",
     collection: "PAPERS",
     creator: "Prashant Arote, Manish Mishra",
     year: 2026,
@@ -1817671,7 +1817671,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03094",
-    title: "Combinatorial aspects of normal ordering of 3-dimensional skew polynomial rings Thanks: The second author was supported by Faculty of Science, Universidad Nacional de Colombia–Sede Bogotá, Colombia [grant number 65488].",
+    title: "Combinatorial aspects of normal ordering of 3-dimensional skew polynomial rings",
     collection: "PAPERS",
     creator: "Andrés Rubiano, Armando Reyes",
     year: 2026,
@@ -1817735,7 +1817735,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03282",
-    title: "Externally Controlled Trials: A Review of Design and Borrowing Through a Causal Lens Thanks: The views expressed in this manuscript are those of the author(s) and do not necessarily represent the official views of, nor an endorsement, by the U.S. FDA, HHS, or the U.S. Government.",
+    title: "Externally Controlled Trials: A Review of Design and Borrowing Through a Causal Lens",
     collection: "PAPERS",
     creator: "Ke Zhu, Rima Izem, Peng Yang, Ying Yuan, Herbert Pang, Mark van der Laan, Lei Nie, Birol Emir, Pallavi Mishra-Kalyani, Hana Lee, Shu Yang",
     year: 2026,
@@ -1817910,7 +1817910,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03336",
-    title: "Centralizing Task-based Approach to Quantum Network Control Thanks: This material is based upon work supported by the U.S. Department of Energy, Office of Science, Advanced Scientific Computing Research (ASCR) program under contract number DE-AC02-06CH11357 as part of the InterQnet quantum networking project. R.H., J.C., and R.K. acknowledge support from the Argonne National Laboratory Directed Research and Development (LDRD) program.",
+    title: "Centralizing Task-based Approach to Quantum Network Control",
     collection: "PAPERS",
     creator: "Alexander Pirker 1 , Robert J. Hayek 2 , Alexander Kolar 2 3 , Igor Kadota 4 , Joaquin Chung 2 , Rajkumar Kettimuthu 2",
     year: 2026,
@@ -1818118,7 +1818118,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03351",
-    title: "VLMaxxing through FrameMogging Training-Free Anti-Recomputation for Video Vision-Language Models Thanks: Look, they said attention was all you needed, well we got your attention with this title.",
+    title: "VLMaxxing through FrameMogging Training-Free Anti-Recomputation for Video Vision-Language Models",
     collection: "PAPERS",
     creator: "JF Bastien, Sam D’Amico",
     year: 2026,
@@ -1818454,7 +1818454,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03405",
-    title: "TsallisPGD: Adaptive Gradient Weighting for Adversarial Attacks on Semantic Segmentation Thanks: Accepted to the 2026 IJCNN (author’s accepted version). © 2026 IEEE.",
+    title: "TsallisPGD: Adaptive Gradient Weighting for Adversarial Attacks on Semantic Segmentation",
     collection: "PAPERS",
     creator: "Alexander Matyasko, Xin Lou, Indriyati Atmosukarto, Wei Zhang",
     year: 2026,
@@ -1818534,7 +1818534,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03418",
-    title: "Identification of Clock Ensemble Noise Parameters Using Differential Measurement Analysis Thanks: This work was created with the support of the project ”R&D of Technologies for Advanced Digitization in the Pilsen Metropolitan Area (DigiTech)” No.: CZ.02.01.01/00/23_021/0008436 co-financed by the European Union. PubID: pubid: 979-8-3315-8115-2/26/$31.00 ©2026 IEEE",
+    title: "Identification of Clock Ensemble Noise Parameters Using Differential Measurement Analysis",
     collection: "PAPERS",
     creator: "Jindřich Duník, Ladislav Král, Ivo Punčochář, Oliver Kost, Ondřej Daniel, Simona Circiu, Bernardino Quaranta",
     year: 2026,
@@ -1818742,7 +1818742,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03434",
-    title: "Quantum Hierarchical Reinforcement Learning via Variational Quantum Circuits Thanks: The views expressed in this article are those of the authors and do not represent the views of Wells Fargo. This article is for informational purposes only. Nothing contained in this article should be construed as investment advice. Wells Fargo makes no express or implied warranties and expressly disclaims all legal, tax, and accounting implications related to this article.",
+    title: "Quantum Hierarchical Reinforcement Learning via Variational Quantum Circuits",
     collection: "PAPERS",
     creator: "Yu-Ting Lee 1 , Samuel Yen-Chi Chen 2 , Fu-Chieh Chang 1,3",
     year: 2026,
@@ -1819109,7 +1819109,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03415",
-    title: "A Proximal Augmented Lagrangian Method Based on Quadratic Approximations for Weakly Convex Optimization Thanks: Supported by National Key R&D Program of China under project number 2022YFA1004000, the Major Program of National Natural Science Foundation of China (72192830, 72192831), National Natural Science Foundation of China (No. 12371298) and the 111 Project (B16009 ).",
+    title: "A Proximal Augmented Lagrangian Method Based on Quadratic Approximations for Weakly Convex Optimization",
     collection: "PAPERS",
     creator: "Yule Zhang, Benqi Liu, Xiantao Xiao, Liwei Zhang",
     year: 2026,
@@ -1819125,7 +1819125,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03496",
-    title: "Bandits attack function optimization Thanks: Philippe Preux is with Université de Lille, LIFL (UMR 8022 CNRS), and INRIA, France. Rémi Munos and Michal Valko are with INRIA, and LIFL, Lille, France. (email: {philippe.preux,remi.munos,michal.valko}@inria.fr).",
+    title: "Bandits attack function optimization",
     collection: "PAPERS",
     creator: "Philippe Preux, Rémi Munos, Michal Valko",
     year: 2026,
@@ -1819157,7 +1819157,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03430",
-    title: "DynaTab: Dynamic Feature Ordering as Neural Rewiring for High-Dimensional Tabular Data Thanks: This paper has been accepted for archival publication in the PMLR proceedings of the AAAI 2026 Neuro for AI & AI for Neuro: Towards Multi-Modal Natural Intelligence (NeuroAI) Workshop, Code: https://github.com/zadid6pretam/DynaTab , PyPI: pip install dynatab .",
+    title: "DynaTab: Dynamic Feature Ordering as Neural Rewiring for High-Dimensional Tabular Data",
     collection: "PAPERS",
     creator: "Al Zadid Sultan Bin Habib, Gianfranco Doretto, Donald A. Adjeroh",
     year: 2026,
@@ -1819540,7 +1819540,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03533",
-    title: "A Near-Field Compatible Model for 2D Waveguide-Fed Metasurfaces Thanks: P. Gavriilidis acknowledges the support of the Fulbright Program and the Fulbright Foundation in Greece through a Fulbright Fellowship.",
+    title: "A Near-Field Compatible Model for 2D Waveguide-Fed Metasurfaces",
     collection: "PAPERS",
     creator: "Panagiotis Gavriilidis, George C. Alexandropoulos",
     year: 2026,
@@ -1819764,7 +1819764,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03591",
-    title: "Graph-Spectral Fusion of Wavelet Packets and Higher-Order Statistics for Anomaly Detection in Industrial IoT Networks Thanks: This work is supported by the US-Ireland R&D Partnership Programme Project “Resilient Networks” under Grant RI-SFI-23/US/3924, the EU MSCA Project “COALESCE” under Grant Number 101130739, and Research Ireland Grant 13/RC/2077_P2.",
+    title: "Graph-Spectral Fusion of Wavelet Packets and Higher-Order Statistics for Anomaly Detection in Industrial IoT Networks",
     collection: "PAPERS",
     creator: "Surya Jayakumar and Indrakshi Dey",
     year: 2026,
@@ -1819843,7 +1819843,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03532",
-    title: "Existence and stability of weak critical points of r r -energy functionals Thanks: The authors are members of the Italian National Group G.N.S.A.G.A. of INdAM. The work was partially supported by the Project PRoBIKI funded by Fondazione di Sardegna. The author A.S. was supported by a NRRP scholarship - funded by the European Union - NextGenerationEU - Mission 4, Component 1, Investment 3.4.",
+    title: "Existence and stability of weak critical points of r r -energy functionals",
     collection: "PAPERS",
     creator: "S. Montaldo, A. Ratto, A. Sanna",
     year: 2026,
@@ -1819923,7 +1819923,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03620",
-    title: "Leveraging Code Automorphisms for Improved Syndrome-Based Neural Decoding Thanks: This work has been funded by the French National Research Agency AI4CODE project (Grant ANR-21-CE25-0006). Part of it was performed using HPC resources from GENCI-IDRIS (Grant 2025-AD011016057)",
+    title: "Leveraging Code Automorphisms for Improved Syndrome-Based Neural Decoding",
     collection: "PAPERS",
     creator: "Raphaël Le Bidan, Ahmad Ismail, Elsa Dupraz, Charbel Abdel Nour",
     year: 2026,
@@ -1819987,7 +1819987,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03610",
-    title: "deSEO: Physics-Aware Dataset Creation for High-Resolution Satellite Image Shadow Removal Thanks: Accepted in the annals track at the ISPRS 2026 Congress.",
+    title: "deSEO: Physics-Aware Dataset Creation for High-Resolution Satellite Image Shadow Removal",
     collection: "PAPERS",
     creator: "Lorenzo Beltrame 1,4, Jules Salzinger 1, Filip Svoboda 2, Phillipp Fanta-Jende 1, Jasmin Lampert 1, Radu Timofte 3, Marco Körner 4,5,6",
     year: 2026,
@@ -1820099,7 +1820099,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03641",
-    title: "Jiao: Bridging Isolation and Customization in Mixed Criticality Robotics Thanks: ∗ These authors contributed equally to this work.",
+    title: "Jiao: Bridging Isolation and Customization in Mixed Criticality Robotics",
     collection: "PAPERS",
     creator: "James Yen *1 , Zhibai Huang *1 , Zhixiang Wei 1 , Tinghao Yi 2 , Shupeng Zeng 2 , Liang Pang 2 , Songtao Xue 1 , Zhengwei Qi 1",
     year: 2026,
@@ -1820787,7 +1820787,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03657",
-    title: "Heat equations driven by mixed local-nonlocal operators with exponential nonlinearity Thanks: Corresponding author: Vishvesh Kumar, email: vishvesh.mat@iitbhu.ac.in",
+    title: "Heat equations driven by mixed local-nonlocal operators with exponential nonlinearity",
     collection: "PAPERS",
     creator: "Dharmendra Kumar Chaurasia, Ahmad Z. Fino, Vishvesh Kumar",
     year: 2026,
@@ -1820835,7 +1820835,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03668",
-    title: "Quantitative stability for the Trudinger–Moser inequality Thanks: J.H.A. was partially supported by the São Paulo Research Foundation (FAPESP), grant #2023/15567-8, and by the National Council for Scientific and Technological Development (CNPq), grants #409764/2023-0, #443594/2023-6, #441922/2023-6, and #306014/2025-4. J.F.O. was partially supported by CNPq, grants #309491/2021-5 and #303443/2025-1. J.M.O. was partially supported by CNPq, grants #312340/2021-4, #409764/2023-0, and #443594/2023-6, by CAPES MATH AMSUD, grant #88887.878894/2023-00, and by the Paraíba State Research Foundation (FAPESQ), grant #3034/2021. A.C.M. was partially supported by CNPq, grants #443594/2023-6 and #441922/2023-6. J.R. was partially supported by the Deutsche Forschungsgemeinschaft (DFG), grant #561401741.",
+    title: "Quantitative stability for the Trudinger–Moser inequality",
     collection: "PAPERS",
     creator: "João Henrique Andrade, José Francisco de Oliveira, João Marcos do Ó, Abiel Costa Macedo, Jesse Ratzkin",
     year: 2026,
@@ -1820931,7 +1820931,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03727",
-    title: "The Parameterized Complexity of Scheduling with Precedence Delays: Shuffle Product and Directed Bandwidth Thanks: An extended abstract of this paper appears in the proceedings of the 37th International Workshop on Combinatorial Algorithms, IWOCA 2026.",
+    title: "The Parameterized Complexity of Scheduling with Precedence Delays: Shuffle Product and Directed Bandwidth",
     collection: "PAPERS",
     creator: "Hans L. Bodlaender, Maher Mallem (🖂)",
     year: 2026,
@@ -1821027,7 +1821027,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03788",
-    title: "Say the Mission, Execute the Swarm: Agent-Enhanced LLM Reasoning in the Web-of-Drones Thanks: This paper has been accepted for presentation at the 27th IEEE International Symposium on a World of Wireless, Mobile and Multimedia Networks (WoWMoM 2026)",
+    title: "Say the Mission, Execute the Swarm: Agent-Enhanced LLM Reasoning in the Web-of-Drones",
     collection: "PAPERS",
     creator: "Andrea Iannoli, Lorenzo Gigli, Luca Sciullo, Angelo Trotta, Marco Di Felice",
     year: 2026,
@@ -1821123,7 +1821123,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03741",
-    title: "PALEOS: Multiphase Equations of State and Mass–Radius Relations for Exoplanet Interiors Thanks: Available at https://github.com/maraattia/PALEOS Affiliation: Kapteyn Astronomical Institute, University of Groningen, 9747 AD Groningen, The Netherlands Email: m.attia@rug.nl",
+    title: "PALEOS: Multiphase Equations of State and Mass–Radius Relations for Exoplanet Interiors",
     collection: "PAPERS",
     creator: "Mara Attia, Tim Lichtenberg, Ema Jungová, Mariana Sastre",
     year: 2026,
@@ -1821171,7 +1821171,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03767",
-    title: "Did US Worker Retraining Reduce Participant Automation Exposure? Thanks: We thank Ben Ansell, David Autor, Stephanie Chan, Sebastien Krier, Fabien Curto Millet, Iason Gabriel, Alex Imas, Bouke Klein Teeselink, and David Rueda for their comments and feedback on this paper. The views expressed in this work do not necessarily reflect the views of the University of Oxford, Google DeepMind, or the Forecasting Research Institute.",
+    title: "Did US Worker Retraining Reduce Participant Automation Exposure",
     collection: "PAPERS",
     creator: "Julian Jacobs, Jordan Canedy",
     year: 2026,
@@ -1821474,7 +1821474,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-03780",
-    title: "Task Vector Geometry Underlies Dual Modes of Task Inference in Transformers Thanks: Code is available at https://github.com/ezyhdxm/mini-ICL .",
+    title: "Task Vector Geometry Underlies Dual Modes of Task Inference in Transformers",
     collection: "PAPERS",
     creator: "Hao Yan, Haolin Yang, Yiqiao Zhong",
     year: 2026,
@@ -1822833,7 +1822833,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04047",
-    title: "Sequential vs. Simultaneous Entanglement Swapping under Optimal Link-Layer Control Thanks: This work is supported by the U.S. Department of Energy, Office of Science, Advanced Scientific Computing Research (ASCR) program, for support under Award Number DE-SC0026264, and PQI Community Collaboration Awards.",
+    title: "Sequential vs. Simultaneous Entanglement Swapping under Optimal Link-Layer Control",
     collection: "PAPERS",
     creator: "Priyam Srivastava, Akshat R. Sabavat, Siddharth Jain, Alan Scheller-Wolf, Sridhar Tayur, David Tipper, Prashant Krishnamurthy, Amy Babay, Kaushik P. Seshadreesan, [1ex] Emails: prs216@pitt.edu, ARS789@pitt.edu, SIJ50@pitt.edu, awolf@andrew.cmu.edustayur@andrew.cmu.edu , tipperdavid@gmail.com , prashk@pitt.edu , babay@pitt.edu , kausesh@pitt.edu",
     year: 2026,
@@ -1823472,7 +1823472,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04117",
-    title: "From Individual-Based Models to Macroscopic Dynamics of Antimicrobial Resistance Thanks: giuseppe.toscani@unipv.it Thanks: mattia.zanella@unipv.it",
+    title: "From Individual-Based Models to Macroscopic Dynamics of Antimicrobial Resistance",
     collection: "PAPERS",
     creator: "Marco Menale",
     year: 2026,
@@ -1823520,7 +1823520,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04135",
-    title: "Frontier Lag: A Bibliometric Audit of Capability Misrepresentation in Academic AI Evaluation Thanks: Misrepresentation is used in the corpus-level sense of claim-scope mismatch, not as an allegation of intent or individual-author bad faith; the targets are reporting norms and structural incentives.",
+    title: "Frontier Lag: A Bibliometric Audit of Capability Misrepresentation in Academic AI Evaluation",
     collection: "PAPERS",
     creator: "David Gringras, Misha Salahshoor",
     year: 2026,
@@ -1823600,7 +1823600,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04174",
-    title: "A Transferable Machine Learning Approach to Predict Optimized Orbitals for Electronic Structure Problems Thanks: The research is part of the Munich Quantum Valley (MQV), which is supported by the Bavarian state government with funds from the Hightech Agenda Bayern Plus. Email address for correspondence: abhishek.yogendra.dubey@iis.fraunhofer.de",
+    title: "A Transferable Machine Learning Approach to Predict Optimized Orbitals for Electronic Structure Problems",
     collection: "PAPERS",
     creator: "Lucas van der Horst 1 , Maniraman Periyasamy 1 , Abhishek Y. Dubey 1 , Davide Bincoletto 2 , Jakob S. Kottmann 2 , and Daniel D. Scherer 1",
     year: 2026,
@@ -1824239,7 +1824239,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04251",
-    title: "Root-Cause-Driven Automated Vulnerability Repair Conference: ACM Conference on Computer and Communications Security; Due 19 May 2017; Dallas, Texas CCS: Security and privacy Use https://dl.acm.org/ccs.cfm to generate actual concepts section for your paper",
+    title: "Root-Cause-Driven Automated Vulnerability Repair",
     collection: "PAPERS",
     creator: "Hulin Wang, Zion Leonahenahe Basque, Jie Hu, Ati Priya Bajaj, Yibo Liu, Samuel Zhu, Giorgi Kobakhia, Nikhil Chapre, Will Rosenberg, Siddharth Mishra, Aditya Maheshbhai Gabani, Moritz Schloegel, Adam Doupé, Yan Shoshitaishvili, Ruoyu Wang, Tiffany Bao",
     year: 2026,
@@ -1824287,7 +1824287,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04246",
-    title: "Globally Solving Unbalanced Optimal Transport and Density Control for Gaussian Distributions Thanks: S. Ganguly is with \\faGroup Daniel Guggenheim School of Aerospace, Georgia Institute of Technology, Atlanta, USA. N. Nakashima and K. Kashima are with \\faGroup The Applied Mathematics and Physics Department, Graduate School of Informatics, Kyoto University, Kyoto, Japan. Thanks: Contact Information: (HN): nakashima.haruto.72v@st.kyoto-u.ac.jp, (SG) https://sites.google.com/view/siddhartha-ganguly , sganguly41@gatech.edu, (KK): kk@i.kyoto-u.ac.jp, https://www.bode.amp.i.kyoto-u.ac.jp/en/kk/ .",
+    title: "Globally Solving Unbalanced Optimal Transport and Density Control for Gaussian Distributions",
     collection: "PAPERS",
     creator: "Haruto Nakashima, Siddhartha Ganguly, Kenji Kashima",
     year: 2026,
@@ -1824654,7 +1824654,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04252",
-    title: "Tropical resolutions of configuration hypersurfaces Thanks: DB was supported by FWO grant #1282226N Thanks: GD was supported by NSERC of Canada Thanks: UW was supported by NSF grant DMS-2100288 and by Simons Foundation Collaboration Grant for Mathematicians #580839 and SFI-MPS-TSM-00012928",
+    title: "Tropical resolutions of configuration hypersurfaces",
     collection: "PAPERS",
     creator: "Daniel Bath, Graham Denham, Mathias Schulze, Uli Walther",
     year: 2026,
@@ -1825020,7 +1825020,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04376",
-    title: "GraphPI: Efficient Protein Inference with Graph Neural Networks Thanks: † Equal Contribution Thanks: ∗ Corresponding author",
+    title: "GraphPI: Efficient Protein Inference with Graph Neural Networks",
     collection: "PAPERS",
     creator: "Zheng Ma 1,†, Jiazhen Chen 2,†, Lei Xin 3, Ali Ghodsi 2,‡,",
     year: 2026,
@@ -1825228,7 +1825228,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04390",
-    title: "Local isomorphisms for families of projective non-unruled manifolds Thanks: The author is supported by NSFC (No. 12271073 and 12271412). Thanks: Keywords: locally isomorphic, smooth family, coarse moduli space Thanks: MSC(2010): 14D15, 14E30, 14J10",
+    title: "Local isomorphisms for families of projective non-unruled manifolds",
     collection: "PAPERS",
     creator: "Mu-lin Li",
     year: 2026,
@@ -1825276,7 +1825276,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04398",
-    title: "A characterization of the ellipsoid in terms of pairs of sections associated by a harmonic homology Thanks: I would like to thank to Jesús Jerónimo-Castro for the interesting conversations about this work.",
+    title: "A characterization of the ellipsoid in terms of pairs of sections associated by a harmonic homology",
     collection: "PAPERS",
     creator: "Efrén Morales-Amaya",
     year: 2026,
@@ -1825292,7 +1825292,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04340",
-    title: "Analysis of a Competitive Bivirus SIS Epidemic Model with Game theoretic social distancing Thanks: Submitted to the editors on August 10, 2026. A preliminary version of this paper has been accepted for publication in the proceedings of the 2026 2026 American Control Conference [ 8 ] .",
+    title: "Analysis of a Competitive Bivirus SIS Epidemic Model with Game theoretic social distancing",
     collection: "PAPERS",
     creator: "Benjamin Catalano, Keith Paarporn, Sebin Gracy",
     year: 2026,
@@ -1826123,7 +1826123,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04545",
-    title: "Z-Opt: A Near-Optimal Reduced-Complexity Two-Dimensional Grassmannian Constellation Thanks: K. Shigenaga and N. Ishikawa are with the Graduate School of Engineering Science, Yokohama National University, 240-8501 Kanagawa, Japan (e-mail: iskw@ieee.org). H. Iimori, Y. Hama, C. Pradhan, and S. Malomsoky are with Ericsson Research, Ericsson Japan K. K., Yokohama SYMPHOSTAGE West Tower 12F, 5-1-2 Minato Mirai, Yokohama, 220-0012, Japan (e-mail: [hiroki.iimori, yuto.hama, szabolcs.malomsoky]@ericsson.com).",
+    title: "Z-Opt: A Near-Optimal Reduced-Complexity Two-Dimensional Grassmannian Constellation",
     collection: "PAPERS",
     creator: "Kotaro Shigenaga, Hiroki Iimori, Yuto Hama",
     year: 2026,
@@ -1826235,7 +1826235,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04417",
-    title: "Fixed-point lifting and ghost periodic points for Chebyshev polynomials modulo odd prime powers Thanks: Corresponding author: Aram Tangboonduangjit, aram.tan@mahidol.ac.th .",
+    title: "Fixed-point lifting and ghost periodic points for Chebyshev polynomials modulo odd prime powers",
     collection: "PAPERS",
     creator: "Chatchawan Panraksa, Aram Tangboonduangjit",
     year: 2026,
@@ -1827242,7 +1827242,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04614",
-    title: "Counting Minimal Lagrangians via Mirzakhani Functions Thanks: The second author is partly supported by NSF-DMS-2506810 and a Simons Investigator Grant. The third author is partly supported by NSF-DMS-2005468 and a Simons Investigator Grant.",
+    title: "Counting Minimal Lagrangians via Mirzakhani Functions",
     collection: "PAPERS",
     creator: "Ben Lowe, Fernando C. Marques, and André Neves",
     year: 2026,
@@ -1827337,7 +1827337,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04716",
-    title: "Multiuser OTFS Channel Parameter Estimation Toward Grid-Independent Regime Thanks: This publication has emanated from research supported in part by research grants from Research Ireland under the US-Ireland R&D Partnership Programme Grant Numbers 24/US/4013 and 21/US/3757, and National Science Foundation under Grants NSF ECCS-2153875, CNS-2229562 and ECCS-2526413. For the purpose of Open Access, the authors have applied a CC BY public copyright license to any Author Accepted Manuscript version arising from this submission.",
+    title: "Multiuser OTFS Channel Parameter Estimation Toward Grid-Independent Regime",
     collection: "PAPERS",
     creator: "Hanning Wang 1 , Rong-Rong Chen 2 and Arman Farhang 1",
     year: 2026,
@@ -1827513,7 +1827513,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04751",
-    title: "Sequential Monte Carlo for Resilient Networks: Assessment, Mitigation, and Generative Modeling Thanks: The authors are with the University of Oulu, Finland. Emails: {onel.alcarazlopez, amirhossein.azarbahram}@oulu.fi. This work is supported in Finland by the Research Council of Finland (Grants 362782 and 369116 (6G Flagship)).",
+    title: "Sequential Monte Carlo for Resilient Networks: Assessment, Mitigation, and Generative Modeling",
     collection: "PAPERS",
     creator: "Onel L. A. López, IEEE Senior Member, Amirhossein Azarbahram, IEEE Member",
     year: 2026,
@@ -1828297,7 +1828297,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04843",
-    title: "Convergence analysis of Schwarz-like methods for degenerate elliptic-parabolic equations Thanks: The work of the first author was supported by the Swedish Research Council, grants 2023–03930 and 2023–04862. The work of the second author was supported by the Swedish Research Council, grant 2023–04862.",
+    title: "Convergence analysis of Schwarz-like methods for degenerate elliptic-parabolic equations",
     collection: "PAPERS",
     creator: "Monika Eisenmann, Eskil Hansen",
     year: 2026,
@@ -1828360,7 +1828360,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04880",
-    title: "A Harmonic Mean Formulation of Average Reward Reinforcement Learning in SMDPs Conference: Proc. of the Adaptive and Learning Agents Workshop (ALA 2026); May 25 – 26, 2026; Paphos, Cyprus, https://alaworkshop2026.github.io/ 57",
+    title: "A Harmonic Mean Formulation of Average Reward Reinforcement Learning in SMDPs",
     collection: "PAPERS",
     creator: "Erel Shtossel, Alicia Vidler, Uri Shaham, Gal A. Kaminka",
     year: 2026,
@@ -1828440,7 +1828440,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04817",
-    title: "Higher smooth surgery structure sets of complex projective spaces, part I Thanks: This work was supported by grants VEGA 1/0425/25, UK/1192/2025, UK/3116/2024 and UK/197/2023. Parts of this work will be included in the PhD thesis of S.K",
+    title: "Higher smooth surgery structure sets of complex projective spaces, part I",
     collection: "PAPERS",
     creator: "Samuel Kalužný, Tibor Macko",
     year: 2026,
@@ -1828840,7 +1828840,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04958",
-    title: "Fast Full-Wave Simulation of Indoor RSS Maps for Pre-Measurement Validation in Device-Free Localization Thanks: Funded by the European Union. Views and opinions expressed are however those of the author(s) only and do not necessarily reflect those of the European Union or European Innovation Council and SMEs Executive Agency (EISMEA). Neither the European Union nor the granting authority can be held responsible for them. Grant Agreement No: 101099491 (project HOLDEN).",
+    title: "Fast Full-Wave Simulation of Indoor RSS Maps for Pre-Measurement Validation in Device-Free Localization",
     collection: "PAPERS",
     creator: "Federica Fieramosca 1 , Anastasia Maiolli 1 , Alexander H. Paulus 2 , Stefano Savazzi 3 , Michele D’Amico 1",
     year: 2026,
@@ -1828984,7 +1828984,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04977",
-    title: "ICPR 2026 Competition on Privacy-Preserving Person Re-Identification from Top-View RGB-Depth Camera (TVRID) Thanks: Author preprint. The final authenticated version will appear in the ICPR 2026 proceedings published by Springer.",
+    title: "ICPR 2026 Competition on Privacy-Preserving Person Re-Identification from Top-View RGB-Depth Camera (TVRID",
     collection: "PAPERS",
     creator: "Raphaël Delécluse, Hazem Wannous, Laurent Guimas",
     year: 2026,
@@ -1829096,7 +1829096,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-04989",
-    title: "LOW-RANK ADAPTATION OF GEOSPATIAL FOUNDATION MODELS FOR WILDFIRE MAPPING USING SENTINEL-2 DATA Thanks: This research is part of the EO-AI4GlobalChange project funded by Digital Futures, Stockholm, Sweden.",
+    title: "LOW-RANK ADAPTATION OF GEOSPATIAL FOUNDATION MODELS FOR WILDFIRE MAPPING USING SENTINEL-2 DATA",
     collection: "PAPERS",
     creator: "Ali Shibli, Andrea Nascetti, Yifang Ban",
     year: 2026,
@@ -1829864,7 +1829864,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05080",
-    title: "The Pinocchio Dimension: Phenomenality of Experience as the Primary Axis of LLM Psychometric Differences Thanks: Code and data: https://github.com/hplisiecki/Pinocchio",
+    title: "The Pinocchio Dimension: Phenomenality of Experience as the Primary Axis of LLM Psychometric Differences",
     collection: "PAPERS",
     creator: "Hubert Plisiecki, Sabina Siudaj, Kacper Dudzic, Anna Sterna, Maciej Górski, Karolina Drożdż, Marcin Moskalewicz",
     year: 2026,
@@ -1830087,7 +1830087,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05093",
-    title: "Proximal Projection for Doubly Sparse Regularized Models Data used in preparation of this article were obtained from the Alzheimer’s Disease Neuroimaging Initiative (ADNI) database (adni.loni.usc.edu). As such, the investigators within the ADNI contributed to the design and implementation of ADNI and/or provided data but did not participate in analysis or writing of this report. A complete listing of ADNI investigators can be found at: http://adni.loni.usc.edu/wp-content/uploads/how_to_apply/ADNI_Acknowledgement_List.pdf",
+    title: "Proximal Projection for Doubly Sparse Regularized Models",
     collection: "PAPERS",
     creator: "Jia Wei He",
     year: 2026,
@@ -1830597,7 +1830597,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05183",
-    title: "Numerical study of the 2D Kaup-Broer-Kuperschmidt Boussinesq system Thanks: This work was supported by the ANR project ANR-17-EURE-0002 EIPHI and by the ANR project ISAAC-ANR-23-CE40-0015-01.",
+    title: "Numerical study of the 2D Kaup-Broer-Kuperschmidt Boussinesq system",
     collection: "PAPERS",
     creator: "Théo Gaudry, Christian Klein, Jean-Claude Saut, Nikola Stoilov",
     year: 2026,
@@ -1830964,7 +1830964,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05184",
-    title: "Boundaries of Baker domains of entire functions. A finer approach Thanks: The first author acknowledges financial support from the Spanish government grants PID2023-147252NB-I00 and FPI PRE2021-097372. The research of the second author was funded in whole or in part by the National Science Centre, Poland, grant no. 2023/49/B/ST1/03015.",
+    title: "Boundaries of Baker domains of entire functions. A finer approach",
     collection: "PAPERS",
     creator: "Anna Jové, Łukasz Pawelec",
     year: 2026,
@@ -1831107,7 +1831107,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05268",
-    title: "Quantum Proper Scoring Rules: Minimax Estimation and Resource-Theoretic Advantages Thanks: Email: mwalmasri2003@gmail.com",
+    title: "Quantum Proper Scoring Rules: Minimax Estimation and Resource-Theoretic Advantages",
     collection: "PAPERS",
     creator: "M.W. AlMasri",
     year: 2026,
@@ -1831331,7 +1831331,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05279",
-    title: "Quasi sdf-absorbing ideals in commutative rings Thanks: *Corresponding author: foteavioleta@gmail.com",
+    title: "Quasi sdf-absorbing ideals in commutative rings",
     collection: "PAPERS",
     creator: "Violeta Leoreanu-Fotea ∗, Ece Yetkin Celikel, Tarik Arabaci, Unsal Tekir",
     year: 2026,
@@ -1831395,7 +1831395,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05201",
-    title: "A Pinned Local Langlands Correspondence for Depth-Zero Supercuspidal Representations Thanks: The author was partially supported by SERB Core Research Grant (CRG/2022/000415) and ANRF MATRICS Grant ANRF/ARGM/2025/000365/MTR",
+    title: "A Pinned Local Langlands Correspondence for Depth-Zero Supercuspidal Representations",
     collection: "PAPERS",
     creator: "Manish Mishra",
     year: 2026,
@@ -1831731,7 +1831731,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05354",
-    title: "A Multi-Head Attention Approach for SLA Compliance Monitoring in Data Centers Thanks: Accepted for Publication in the 46th IEEE International Conference on Distributed Computing Systems. Aspects of this work are the subject of a pending patent application.",
+    title: "A Multi-Head Attention Approach for SLA Compliance Monitoring in Data Centers",
     collection: "PAPERS",
     creator: "Omanshu Thapliyal",
     year: 2026,
@@ -1832289,7 +1832289,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05368",
-    title: "Towards an Inferentialist Account of Information Through Proof-theoretic Semantics Thanks: ∗ Corresponding author.",
+    title: "Towards an Inferentialist Account of Information Through Proof-theoretic Semantics",
     collection: "PAPERS",
     creator: "Matthew Collinson ∗, Timo Eckhardt ∗, David Pym ∗",
     year: 2026,
@@ -1832625,7 +1832625,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05462",
-    title: "A note on the modal logic of symmetric extensions Thanks: No data are associated with this article. For the purpose of open access, the author has applied a Creative Commons Attribution (CC-BY) licence to any Author Accepted Manuscript version arising from this submission.",
+    title: "A note on the modal logic of symmetric extensions",
     collection: "PAPERS",
     creator: "Hope Duncan",
     year: 2026,
@@ -1832945,7 +1832945,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05508",
-    title: "Rigorous Interpretation Is a Form of Evaluation Thanks: Now at Google Deepmind.",
+    title: "Rigorous Interpretation Is a Form of Evaluation",
     collection: "PAPERS",
     creator: "Isabelle Lee, Emmy Liu, Cathy Jiao, Brihi Joshi, Dani Yogatama, Fazl Barez, Michael Saxon",
     year: 2026,
@@ -1833137,7 +1833137,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05451",
-    title: "Hybridizable discontinuous Galerkin methods for poroelastic wave propagation with symmetric stress approximation Thanks: J. J. Lee was supported by the National Science Foundation under Grant DMS-2110781. Thanks: M. A. Sánchez was partially supported by FONDECYT Regular grant N. 1221189 and by Centro Nacional de Inteligencia Artificial CENIA, FB210017, Basal ANID Chile.",
+    title: "Hybridizable discontinuous Galerkin methods for poroelastic wave propagation with symmetric stress approximation",
     collection: "PAPERS",
     creator: "Jeonghun J. Lee, Manuel A. Sánchez",
     year: 2026,
@@ -1833408,7 +1833408,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05561",
-    title: "BitCal-TTS : Bit-Calibrated Test-Time Scaling for Quantized Reasoning Models Thanks: Code: https://github.com/Saibabu7770/bitcal-tts",
+    title: "BitCal-TTS : Bit-Calibrated Test-Time Scaling for Quantized Reasoning Models",
     collection: "PAPERS",
     creator: "Sai Babu Patarlapalli, Surya Teja Avvaru",
     year: 2026,
@@ -1833552,7 +1833552,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05521",
-    title: "An Axiomatic Foundation for Decisions with Counterfactual Utility Thanks: We thank an anonymous reviewer of Harvard IQSS’s rapidPeer for posing the question this paper answers. We also thank Peter Buisseret, Philip Dawid, Andrew Gelman, Amanda Kowalski, Jonas Magdy Mikhaeil, Amit Sawant, Stephen Senn and Mats Julius Stensrud for helpful discussions.",
+    title: "An Axiomatic Foundation for Decisions with Counterfactual Utility",
     collection: "PAPERS",
     creator: "Benedikt Koch, Kosuke Imai, Tomasz Strzalecki",
     year: 2026,
@@ -1833968,7 +1833968,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05622",
-    title: "The formation of the C-19 progenitor: a primordial cluster heated by gas expulsion numpy ( 32 ), matplotlib ( 34 ), sdar ( 85 , https://github.com/lwang-astro/SDAR), petar ( 82 , https://github.com/lwang-astro/PeTar), mcluster ( 53 , https://github.com/lwang-astro/mcluster) Galpy ( 11 , https://github.com/jobovy/galpy)",
+    title: "The formation of the C-19 progenitor: a primordial cluster heated by gas expulsion",
     collection: "PAPERS",
     creator: "Zhen Wang (王震), Long Wang (王龙), Zhen Yuan (袁珍), Jiang Chang (常江)",
     year: 2026,
@@ -1834352,7 +1834352,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05692",
-    title: "CFE-PPAR: Compression-friendly encryption for privacy-preserving action recognition leveraging video transformers Thanks: This work was supported in part by JSPS KAKENHI under Grants JP25K07733 and JP25K07750. Affiliation: Graduate School of InformaticsChiba UniversityChiba, Japan",
+    title: "CFE-PPAR: Compression-friendly encryption for privacy-preserving action recognition leveraging video transformers",
     collection: "PAPERS",
     year: 2026,
     source: "arXiv",
@@ -1835135,7 +1835135,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05789",
-    title: "Stego Battlefield: Evaluating Image Steganography Attacks and Steganalysis Defenses Thanks: Corresponding author ( xinlei.he@whu.edu.cn ).",
+    title: "Stego Battlefield: Evaluating Image Steganography Attacks and Steganalysis Defenses",
     collection: "PAPERS",
     creator: "Zhen Sun, Zongmin Zhang, Leyi Sheng, Yule Liu, Yifan Liao",
     year: 2026,
@@ -1835743,7 +1835743,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05899",
-    title: "VisMMOE: Exploiting Visual-Expert Affinity for Efficient Visual-Language MoE Offloading DOI: XXXXXXX.XXXXXXX Conference: ; June 03–05, 2027; Woodstock, NY ISBN: 978-1-4503-XXXX-X/2018/06 Thanks: ∗ Corresponding authors.",
+    title: "VisMMOE: Exploiting Visual-Expert Affinity for Efficient Visual-Language MoE Offloading",
     collection: "PAPERS",
     creator: "Cheng Xu, Xiaofeng Hou ∗ , Jiacheng Liu, Chao Li ∗",
     year: 2026,
@@ -1836271,7 +1836271,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05943",
-    title: "A two-step approach to Chow quotients Thanks: Authors partially supported by INdAM–GNSAGA",
+    title: "A two-step approach to Chow quotients",
     collection: "PAPERS",
     creator: "Gianluca Occhetta, Luis E. Solá Conde",
     year: 2026,
@@ -1836430,7 +1836430,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-05976",
-    title: "Community-to-Vehicle: Integrating Electric Vehicles into Energy Communities – A Swiss Case Study Thanks: This research has received funding from the European Union’s Horizon Europe research and innovation programme under Grant Agreement for Project Nº 101235482 and the Swiss Secretariat for Education, Research, and Innovation (SERI) under contract Nº25.00325.",
+    title: "Community-to-Vehicle: Integrating Electric Vehicles into Energy Communities – A Swiss Case Study",
     collection: "PAPERS",
     creator: "Na Li 1 , Dong Liu 2 , Stavros Orfanoudakis 2 , Özge Okur 3 , N. K. Panda 2,4 , Pedro P. Vergara 2 , Binod Koirala 1",
     year: 2026,
@@ -1837342,7 +1837342,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06084",
-    title: "AMIEOD: Adaptive Multi-Experts Image Enhancement for Object Detection in Low-Illumination Scenes Thanks: This work was supported by the Open Fund of Key Laboratory of the Ministry of Education on Artificial Intelligence in Equipment [grant number 2024-AAIE-KF04-03]; by the Science and Technology Projects of Xizang Autonomous Region [grant number XZ202501ZY0064]; by the Police Integration Computing Key Laboratory of Sichuan Province [grant number No. JWRH202502002]; and by the TCL Science and Technology Innovation Fund.(Corresponding author: Honggang Chen). Thanks: Xiaochen Huang, Weicheng Zhang, Xiaobo Dai, Yongyi Li, Linbo Qing and Xiaohai He are with the College of Electronics and Information Engineering, Sichuan University, Chengdu 610065, China; (e-mail: xiaochen_huang@stu.scu.edu.cn; wczhang21@iflytek.com; 2023222055133 @stu.scu.edu.cn; Yongyi_Li@stu.scu.edu.cn; qing_lb@scu.edu.cn; hxh@scu. edu.cn). Thanks: Honggang Chen is with the College of Electronics and Information Engineering, Sichuan University, Chengdu 610065, China, also with the Police Integration Computing Key Laboratory of Sichuan Province, China (e-mail: honggang_chen@scu.edu.cn).",
+    title: "AMIEOD: Adaptive Multi-Experts Image Enhancement for Object Detection in Low-Illumination Scenes",
     collection: "PAPERS",
     creator: "Xiaochen Huang, Honggang Chen, Weicheng Zhang, Xiaobo Dai, Yongyi Li",
     year: 2026,
@@ -1837662,7 +1837662,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06090",
-    title: "A Sugawara–Legendre mechanism for the hyperelliptic Heisenberg algebra Thanks: Supported by FAPESP grant 2024/14914-9.",
+    title: "A Sugawara–Legendre mechanism for the hyperelliptic Heisenberg algebra",
     collection: "PAPERS",
     creator: "Felipe Albino dos Santos",
     year: 2026,
@@ -1838222,7 +1838222,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06198",
-    title: "Orthogonal Least Squares with Integrated Information Theoretic Criteria for Joint Number of Targets and DoA Estimation Thanks: This paper was submitted on the 07th of May, 2026. Martin Willame is with the Université Catholique de Louvain (UCLouvain) and the Université Libre de Bruxelles (ULB). Gilles Monnoyer and Jérôme Louveaux are with the UCLouvain (e-mails: { \\{ martin.willame, gilles.monnoyer, jerome.louveaux@uclouvain.be } \\} ). François Horlin is with the ULB (e-mails: francois.horlin@ulb.be } \\} ).",
+    title: "Orthogonal Least Squares with Integrated Information Theoretic Criteria for Joint Number of Targets and DoA Estimation",
     collection: "PAPERS",
     creator: "Martin Willame, Gilles Monnoyer",
     year: 2026,
@@ -1838350,7 +1838350,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06166",
-    title: "One Algorithm, Two Goals: Dual Scoring for Parameter and Data Selection in LLM Fine-Tuning Thanks: Corresponding author.",
+    title: "One Algorithm, Two Goals: Dual Scoring for Parameter and Data Selection in LLM Fine-Tuning",
     collection: "PAPERS",
     creator: "Xinrui Chen, Liu Yang",
     year: 2026,
@@ -1838670,7 +1838670,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06176",
-    title: "Stochastic Optimal Control for Jump Diffusion Models with Singular Drifts Thanks: This work was partially supported by a grant from the IMU-CDC and Simons Foundation",
+    title: "Stochastic Optimal Control for Jump Diffusion Models with Singular Drifts",
     collection: "PAPERS",
     creator: "Antoine-Marie Bogso, Edward Fuituh Kameh, Olivier Menoukeu Pamen, Felix Shu",
     year: 2026,
@@ -1839166,7 +1839166,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06163",
-    title: "The normal subgroup theorem for lattices on two-dimensional Euclidean buildings Thanks: J.L. was supported by ANR-24-CE40-3137 project PLAGE Thanks: S.W. was supported through the DFG Heisenberg project WI 4079/6.",
+    title: "The normal subgroup theorem for lattices on two-dimensional Euclidean buildings",
     collection: "PAPERS",
     creator: "Jean Lécureux, Stefan Witzel",
     year: 2026,
@@ -1839438,7 +1839438,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06330",
-    title: "Fine-Tuning Small Language Models for Solution-Oriented Windows Event Log Analysis Thanks: Corresponding author: Siraaj.Akhtar@hud.ac.uk",
+    title: "Fine-Tuning Small Language Models for Solution-Oriented Windows Event Log Analysis",
     collection: "PAPERS",
     creator: "Siraaj Akhtar, Saad Khan, Simon Parkinson",
     year: 2026,
@@ -1839486,7 +1839486,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06324",
-    title: "Gaming the Metric, Not the Harm: Certifying Safety Audits against Strategic Platform Manipulation Thanks: This work was supported by the Engineering and Physical Sciences Research Council (EPSRC) Centre for Doctoral Training in Cyber Secure Everywhere [grant number EP/Y035313/1].",
+    title: "Gaming the Metric, Not the Harm: Certifying Safety Audits against Strategic Platform Manipulation",
     collection: "PAPERS",
     creator: "Florian A. D. Burnat, Brittany I. Davidson",
     year: 2026,
@@ -1839582,7 +1839582,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06340",
-    title: "A Benchmark for Strategic Auditee Gaming Under Continuous Compliance Monitoring Thanks: We thank colleagues at the University of Bath for feedback on earlier drafts. The authors declare no competing interests.",
+    title: "A Benchmark for Strategic Auditee Gaming Under Continuous Compliance Monitoring",
     collection: "PAPERS",
     creator: "Florian A. D. Burnat, Brittany I. Davidson",
     year: 2026,
@@ -1839870,7 +1839870,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06378",
-    title: "The maximum number of k k -Cliques of 7-Connected 1-Planar Graphs Thanks: The work was supported by the National Natural Science Foundation of China (Grant Nos. 12271157 and 12371346). Thanks: Corresponding author: Licheng Zhang.",
+    title: "The maximum number of k k -Cliques of 7-Connected 1-Planar Graphs",
     collection: "PAPERS",
     creator: "Yuanqiu Huang, Licheng Zhang",
     year: 2026,
@@ -1840014,7 +1840014,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06382",
-    title: "Rethinking Vacuity for OOD Detection in Evidential Deep Learning Thanks: Accenture Labs Thanks: Trinity College Dublin.",
+    title: "Rethinking Vacuity for OOD Detection in Evidential Deep Learning",
     collection: "PAPERS",
     creator: "Claire McNamara",
     year: 2026,
@@ -1840365,7 +1840365,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06434",
-    title: "Knowledge Graphs, the Missing Link in Agentic AI-based Formal Verification Thanks: Under grant 101194371, Rigoletto is supported by Chips Joint Undertaking and its members, including top-up funding by the National Funding Authorities from involved countries. Rigoletto is also funded by the Federal Ministry of Research, Technology and Space under the funding code 16MEE0548S. The responsibility for the content of this publication lies with the author.",
+    title: "Knowledge Graphs, the Missing Link in Agentic AI-based Formal Verification",
     collection: "PAPERS",
     creator: "Vaisakh Naduvodi Viswambharan 1 , Keerthan Kopparam Radhakrishna 1 , Deepak Narayan Gadde 1 , Aman Kumar 2",
     year: 2026,
@@ -1840413,7 +1840413,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06406",
-    title: "Chemical composition and kinematics of ionised gas in low-mass star-forming galaxies with extremely high [O iii ]/[O ii ] ratios Thanks: Based on observations collected at the European Southern Observatory under ESO programme 0105.B-0772(A)",
+    title: "Chemical composition and kinematics of ionised gas in low-mass star-forming galaxies with extremely high [O iii ]/[O ii ] ratios",
     collection: "PAPERS",
     creator: "Y. I. Izotov, N. G. Guseva, D. Schaerer, R. O. Amorín",
     year: 2026,
@@ -1840541,7 +1840541,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06452",
-    title: "Tight Contraction Rates for Primitive Channels under Quantum f f -Divergences Thanks: MST acknowledges support from the NUS REx Grant. MT and IG were supported by the Ministry of Education, Singapore, through grant T2EP20124-0005. IG is supported by the National Research Foundation, Singapore under the NRF Postdoctoral award. MT is also supported by the NRF Investigatorship award (NRF-NRFI10-2024-0006).",
+    title: "Tight Contraction Rates for Primitive Channels under Quantum f f -Divergences",
     collection: "PAPERS",
     creator: "Matthew Simon Tan, Marco Tomamichel, Ian George",
     year: 2026,
@@ -1840669,7 +1840669,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06485",
-    title: "Litespark Inference on Consumer CPUs: Custom SIMD Kernels for Ternary Neural Networks Thanks: Correspondence to: research@mindbeam.ai",
+    title: "Litespark Inference on Consumer CPUs: Custom SIMD Kernels for Ternary Neural Networks",
     collection: "PAPERS",
     creator: "Nii Osae Osae Dade Tony Morri Moinul Hossain Rahat Sayandip Pal",
     year: 2026,
@@ -1841005,7 +1841005,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06471",
-    title: "Leap generators for composition schemes Thanks: ∗ LIGM, CNRS, Univ Gustave Eiffel, ESIEE Paris, F-77454 Marne-la-Vallée, France, eric.fusy@univ-eiffel.fr. Partially supported by ANR-23-CE48-0018 CartesEtPlus. + LIGM, CNRS, Univ Gustave Eiffel, ESIEE Paris, F-77454 Marne-la-Vallée, France, carine.pivoteau@univ-eiffel.fr. Partially supported by ANR-25-CE48-3555 Plasma.",
+    title: "Leap generators for composition schemes",
     collection: "PAPERS",
     creator: "Éric Fusy ∗ and Carine Pivoteau +",
     year: 2026,
@@ -1841277,7 +1841277,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06528",
-    title: "QUBO-Based Calibration for Regression Trees Thanks: Submitted to the editors DATE. Funding: The authors acknowledge financial support from the Natural Sciences and Engineering Research Council of Canada [grant number 2024-05794; 2025-04224], the Pôle de recherche en finance quantique, the Ministère de l’Économie, de l’Innovation et de l’Énergie du Québec, the Canada First Research Excellence Fund, and the Chaire Co-operators en analyse des risques actuariels.",
+    title: "QUBO-Based Calibration for Regression Trees",
     collection: "PAPERS",
     creator: "Iro René Kouarfate ; Maxime Dion ; Anne MacKay, Mathieu Pigeon",
     year: 2026,
@@ -1841869,7 +1841869,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06622",
-    title: "On the plasticity of the unit spheres of ℓ 1 \\ell_{1} , ℓ ∞ \\ell_{\\infty} , c c , and Hilbert spaces Thanks: The second author was supported by the National Research Foundation of Ukraine, project No. 2025.07/0369 ‘‘Qualitative methods of nonlinear analysis of heterogeneous structures’’.",
+    title: "On the plasticity of the unit spheres of ℓ 1 \\ell_{1} , ℓ ∞ \\ell_{\\infty} , c c , and Hilbert spaces",
     collection: "PAPERS",
     creator: "Maksym Levchenko, Olesia Zavarzina",
     year: 2026,
@@ -1842093,7 +1842093,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06630",
-    title: "Quantifying Trade-Offs Between Stability and Goal-Obfuscation Thanks: This research was supported in part by Air Force Office of Scientific Research award number FA9550-22-1-0429. Any opinions, findings and conclusions or recommendations expressed in this material are those of the author(s) and do not necessarily reflect the views of the sponsoring agency.",
+    title: "Quantifying Trade-Offs Between Stability and Goal-Obfuscation",
     collection: "PAPERS",
     creator: "Yixuan Wang, Dan P. Guralnik, Warren E. Dixon",
     year: 2026,
@@ -1842381,7 +1842381,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06690",
-    title: "State Representation and Termination for Recursive Reasoning Systems Thanks: S P Jain School of Global Management; sanjay.ds18dba008@spjain.org",
+    title: "State Representation and Termination for Recursive Reasoning Systems",
     collection: "PAPERS",
     creator: "Debashis Guha, Amritendu Mukherjee, Tarun Kumar",
     year: 2026,
@@ -1842461,7 +1842461,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06695",
-    title: "Sharp Bounds and Extremal Fuzzy Graphs for the Fuzzy Sombor Index Thanks: Corresponding author.",
+    title: "Sharp Bounds and Extremal Fuzzy Graphs for the Fuzzy Sombor Index",
     collection: "PAPERS",
     creator: "J. Hamoud",
     year: 2026,
@@ -1842477,7 +1842477,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06725",
-    title: "Blow-up trick in combinatorics Thanks: *Ho Chi Minh City; email: kyubivulpes@gmail.com",
+    title: "Blow-up trick in combinatorics",
     collection: "PAPERS",
     creator: "Veronica Phan*",
     year: 2026,
@@ -1842685,7 +1842685,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06693",
-    title: "A Quadratic-Form Representation of the Scalar Casimir Trace from Codimension-Three Riesz Reduction Thanks: Visiting Faculty under the UNDP TOKTEN programme.",
+    title: "A Quadratic-Form Representation of the Scalar Casimir Trace from Codimension-Three Riesz Reduction",
     collection: "PAPERS",
     creator: "Irshadullah Khan, Bilal Khan",
     year: 2026,
@@ -1844409,7 +1844409,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06971",
-    title: "Decentralized Time-Varying Optimization for Streaming Data via Temporal Weighting Thanks: This research has been funded in part by NSF under grant CNS-2129015. The work of E. G. Larsson was supported in part by ELLIIT, VR, and the KAW foundation.",
+    title: "Decentralized Time-Varying Optimization for Streaming Data via Temporal Weighting",
     collection: "PAPERS",
     creator: "Muhammad Faraz Ul Abrar, Nicolò Michelusi, Erik G. Larsson",
     year: 2026,
@@ -1844520,7 +1844520,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-06991",
-    title: "A Semi-smooth Newton Method for the Constrained Optimal Control of Continuous-Time Linear Systems footnoteinfo This material is based upon work supported by the National Science Foundation (Grant #2046212) and the Natural Sciences and Engineering Research Council of Canada (Reference # RGPIN-2023-03257). Corresponding author: marco.nicotra@colorado.edu",
+    title: "A Semi-smooth Newton Method for the Constrained Optimal Control of Continuous-Time Linear Systems",
     collection: "PAPERS",
     creator: "Simon J. Jones, Dominic Liao-McPherson, Marco M. Nicotra",
     year: 2026,
@@ -1845654,7 +1845654,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07166",
-    title: "Neurosymbolic Imitation Learning with Human Guidance: A Privileged Information Approach Thanks: Preprint.",
+    title: "Neurosymbolic Imitation Learning with Human Guidance: A Privileged Information Approach",
     collection: "PAPERS",
     creator: "Nikhilesh Prabhakar*, Varun Balaji*, Athresh Karanam, Kristian Kersting, Sriraam Natarajan",
     year: 2026,
@@ -1845702,7 +1845702,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07159",
-    title: "First Interstellar Detection of Methyl Carbamate: A New Observational Anchor for Glycine Chemistry Facilities: ALMA GILDAS ( http://www.iram.fr/IRAMFR/GILDAS )",
+    title: "First Interstellar Detection of Methyl Carbamate: A New Observational Anchor for Glycine Chemistry",
     collection: "PAPERS",
     creator: "Chunguo Duan, Fengwei Xu, Jun Kang, Qian Gou, Xuefang Xu, Laurent Pagani, Jiaxin Du, Xi Chen",
     year: 2026,
@@ -1846198,7 +1846198,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07207",
-    title: "Direct-to-Event Spiking Neural Network Transfer Nhan Trong Luu (luutn@ctu.edu.vn) is affiliated with College of ICT, Can Tho University, Vietnam and CECS, VinUniversity, Hanoi, Vietnam. Duong Trung Luu (luutd@ctu.edu.vn) is affiliated with Center of Digital Transformation and Communication, Can Tho University, Vietnam. Pham Ngoc Nam (nam.pn@vinuni.edu.vn) is affiliated with CECS, VinUniversity, Hanoi, Vietnam. Truong Cong Thang (thang@u-aizu.ac.jp) is affiliated with Department of Computer Science and Engineering, The University of Aizu, Japan. Corresponding to: Nhan Trong Luu.",
+    title: "Direct-to-Event Spiking Neural Network Transfer",
     collection: "PAPERS",
     creator: "Nhan Trong Luu , , Duong Trung Luu , Pham Ngoc Nam , and Truong Cong Thang",
     year: 2026,
@@ -1846502,7 +1846502,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07222",
-    title: "Don’t Learn the Shape: Forecasting Periodic Time Series by Rank-1 Decomposition Thanks: Code: https://github.com/TakatoHonda/FLAIR .",
+    title: "Don’t Learn the Shape: Forecasting Periodic Time Series by Rank-1 Decomposition",
     collection: "PAPERS",
     creator: "Takato Honda",
     year: 2026,
@@ -1846726,7 +1846726,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07280",
-    title: "Mask2Cause: Causal Discovery via Adjacency Constrained Causal Attention Thanks: Code is publicly available at: https://github.com/omar826/Mask2Cause",
+    title: "Mask2Cause: Causal Discovery via Adjacency Constrained Causal Attention",
     collection: "PAPERS",
     creator: "Omar Muhammad, Pasupuleti Dhruv Shivkant, Deepak N. Subramani",
     year: 2026,
@@ -1847014,7 +1847014,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07277",
-    title: "Bifurcation Models: Learning Set-Valued Solution Maps with Weight-Tied Dynamics Thanks: The authors are listed alphabetically. Corresponding author: Jialin Liu, jialin.liu@ucf.edu.",
+    title: "Bifurcation Models: Learning Set-Valued Solution Maps with Weight-Tied Dynamics",
     collection: "PAPERS",
     creator: "Caleb Jore, Jialin Liu",
     year: 2026,
@@ -1847126,7 +1847126,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07346",
-    title: "SoLAR: Error-Resilient Streamable Long-Horizon Free-Viewpoint Video Reconstruction with Anchor Activation and Latent Recalibration Thanks: H. Zhang, J. Zhang, S. Ma, and W. Gao are with the National Engineering Laboratory for Video Technology, School of Computer Science, Peking University, Beijing 100871, China (e-mail: htzhang25@stu.pku.edu.cn; {jqzhang, swma, wgao}@pku.edu.cn). Thanks: X. Mo, Y. Yu, G. Zhu, and J. Xue are with the School of Computer Science, Jilin University, Changchun 130012, China (e-mail: {moxu2123, yuyx1723, zhugh2424, xuejian2124}@mails.jlu.edu.cn). Thanks: T. Xu and Y. Wang are with Institute for AI Industry Research (AIR), Tsinghua University, Beijing 100084, China (e-mail: x.tongda@nyu.edu; wangyan@air.tsinghua.edu.cn).",
+    title: "SoLAR: Error-Resilient Streamable Long-Horizon Free-Viewpoint Video Reconstruction with Anchor Activation and Latent Recalibration",
     collection: "PAPERS",
     creator: "Haotian Zhang, Xu Mo, Yixin Yu, Guanhua Zhu, Jian Xue",
     year: 2026,
@@ -1847574,7 +1847574,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07365",
-    title: "Solving Convolution-type Integral Equations using Preconditioned Neural Operators Thanks: Submitted to the editors DATE.",
+    title: "Solving Convolution-type Integral Equations using Preconditioned Neural Operators",
     collection: "PAPERS",
     creator: "Raymond Hon-Fu Chan, Lingfeng Li",
     year: 2026,
@@ -1847910,7 +1847910,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07434",
-    title: "Adaptive Subspace Signal Detection and Performance Analysis in Nonzero-Mean Clutter Thanks: This work was supported by National Natural Science Foundation of China (Grant Nos. 62471485 and 62471450), Natural Science Foundation of Hubei Province (Grant No. 2025AFB873). Thanks: W. Liu, Z. Xu, and H. Chen are with Wuhan Electronic Information Institute, Wuhan 430019, China (e-mails: liuvjian@163.com, 1935620989@qq.com, and chhglr@sina.com). Thanks: J. Liu is with Department of Electronic Engineering and Information Science, University of Science and Technology of China, Hefei, 230027, China (e-mail: junliu@ustc.edu.cn). Thanks: Y. Liu is with the College of Electronic Science and Technology, National University of Defense Technology, Changsha 410073, China (e-mail: lyx_bible@sina.com). Thanks: Digital Object Identifier 10.1109/TSP.2026.3692130",
+    title: "Adaptive Subspace Signal Detection and Performance Analysis in Nonzero-Mean Clutter",
     collection: "PAPERS",
     creator: "Weijian Liu, Senior Member, IEEE, Zhenyu Xu, Jun Liu, Senior Member, IEEE, Hui Chen, and",
     year: 2026,
@@ -1848086,7 +1848086,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07505",
-    title: "LiteGUI: Distilling Compact GUI Agents with Reinforcement Learning Thanks: Corresponding author. tangyaohua28@gmail.com",
+    title: "LiteGUI: Distilling Compact GUI Agents with Reinforcement Learning",
     collection: "PAPERS",
     creator: "Yubin Wu Zicheng Cai Liping Ning Hua Wang",
     year: 2026,
@@ -1848262,7 +1848262,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07289",
-    title: "On the Complexity of the Matching Problem of Regular Expressions with Backreferences Thanks: This is the full version of the paper accepted to ICALP 2026.",
+    title: "On the Complexity of the Matching Problem of Regular Expressions with Backreferences",
     collection: "PAPERS",
     creator: "Soh Kumabe, Yuya Uezato",
     year: 2026,
@@ -1848805,7 +1848805,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07605",
-    title: "BrickCraft : Visuomotor Skill Composition with Situated Manual Guidance for Long-Horizon Interlocking Brick Assembly Thanks: Indicates equal contribution.",
+    title: "BrickCraft : Visuomotor Skill Composition with Situated Manual Guidance for Long-Horizon Interlocking Brick Assembly",
     collection: "PAPERS",
     creator: "Jichuan Yu, Bowei Li, Zhenran Tang, Guanxing Lu, Chuxiong Hu, Ruixuan Liu, Changliu Liu",
     year: 2026,
@@ -1848933,7 +1848933,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07609",
-    title: "Solvability and Rigidity for Topological Skew Braces Thanks: The authors are supported by INdAM and GNSAGA – Gruppo Nazionale per le Strutture Algebriche, Geometriche e le loro Applicazioni.",
+    title: "Solvability and Rigidity for Topological Skew Braces",
     collection: "PAPERS",
     creator: "Marco Damele, Andrea Loi",
     year: 2026,
@@ -1849237,7 +1849237,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07636",
-    title: "M eromorphic functions and linearization phenomena in partial differential equations Thanks: Typeset by AmS- L a T e X",
+    title: "M eromorphic functions and linearization phenomena in partial differential equations",
     collection: "PAPERS",
     creator: "Sujoy Majumder 1 , Debabrata Pramanik 2 and Jhilik Banerjee 3 ∗",
     year: 2026,
@@ -1849397,7 +1849397,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07663",
-    title: "Quotient Semivalues for False-Name-Resistant Data Attribution Thanks: Working-paper version of the NeurIPS 2026 submission. Acknowledgements: TODO — funders, collaborators, compute.",
+    title: "Quotient Semivalues for False-Name-Resistant Data Attribution",
     collection: "PAPERS",
     creator: "Florian A. D. Burnat, Brittany I. Davidson",
     year: 2026,
@@ -1849540,7 +1849540,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07674",
-    title: "Differentially Private Auditing Under Strategic Response Thanks: TODO: acknowledgements and funding information.",
+    title: "Differentially Private Auditing Under Strategic Response",
     collection: "PAPERS",
     creator: "Florian A. D. Burnat, Brittany I. Davidson",
     year: 2026,
@@ -1849924,7 +1849924,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07750",
-    title: "Accelerating Precise End-to-End Simulation: Latency-Sensitive Many-core System Modeling Thanks: This work has received funding from the Swiss State Secretariat for Education, Research, and Innovation (SERI) under the SwissChips initiative. © This work has been submitted to the IEEE for possible publication. Copyright may be transferred without notice, after which this version may no longer be accessible.",
+    title: "Accelerating Precise End-to-End Simulation: Latency-Sensitive Many-core System Modeling",
     collection: "PAPERS",
     creator: "Yinrong Li 1 , Zexin Fu 1 , Yichao Zhang 1 , Germain Haugou 1 , Chi Zhang 1 , Marco Bertuletti 1 , Bowen Wang 1 , Luca Benini 1 2",
     year: 2026,
@@ -1850580,7 +1850580,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07774",
-    title: "Beyond Brooks: ( Δ − 1 ) (\\Delta-1) -Coloring in Semi-Streaming Thanks: M. Flin was supported in part by the Research Council of Finland, Grants 359104 and 363558. Part of this work was done while the first author was working at Reykjavik University, funded by the Icelandic Research Fund, Grant 2310015-053. M.M. Halldórsson was supported by the Icelandic Research Fund, Grant 2511609.",
+    title: "Beyond Brooks: ( Δ − 1 ) (\\Delta-1) -Coloring in Semi-Streaming",
     collection: "PAPERS",
     creator: "Maxime Flin, Magnús M. Halldórsson",
     year: 2026,
@@ -1850596,7 +1850596,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07801",
-    title: "Sampling-based Model Predictive Control Using Trust Regions Thanks: This work is part of the German Research Foundation (DFG) AI Research Unit 5339 regarding the combination of physics-based simulation with AI-based methodologies for the fast maturation of manufacturing processes. Thanks: Markus Walker, Marcel Reith-Braun, Daniel Frisch and Uwe D. Hanebeck are with the Intelligent Sensor-Actuator-Systems Laboratory (ISAS), Institute for Anthropomatics and Robotics, Karlsruhe Institute of Technology, Germany (e-mail: { firstname.lastname } @kit.edu ).",
+    title: "Sampling-based Model Predictive Control Using Trust Regions",
     collection: "PAPERS",
     creator: "Markus Walker, Marcel Reith-Braun, Daniel Frisch, Uwe D. Hanebeck",
     year: 2026,
@@ -1850980,7 +1850980,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07872",
-    title: "Video Understanding Reward Modeling: A Robust Benchmark and Performant Reward Models DOI: XXXXXXX.XXXXXXX Conference: Make sure to enter the correct conference title from your rights confirmation email; June 03–05, 2018; Woodstock, NY ISBN: 978-1-4503-XXXX-X/2018/06 Thanks: * Equal contribution. Thanks: † \\dagger Corresponding author. Thanks: § \\lx@sectionsign Project leader. Thanks: wyc528813339@gmail.com Thanks: https://github.com/wyclike/VURM CCS: Computing methodologies Natural language processing CCS: Computing methodologies Computer vision CCS: General and reference Evaluation",
+    title: "Video Understanding Reward Modeling: A Robust Benchmark and Performant Reward Models",
     collection: "PAPERS",
     creator: "Yuancheng Wei ♡,∗ Linli Yao ⋄,∗ Lei Li ♠,∗ Haojie Zhang ♡ Hao Zhou ‡,§ Fandong Meng ‡ Xu Sun ⋄,†",
     year: 2026,
@@ -1851044,7 +1851044,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07813",
-    title: "On generalized imaginary Spin c -Killing spinors Thanks: JLCJ has been supported by the PNRR-III-C9-2023-I8 grant CF 149/31.07.2023 Conformal Aspects of Geometry and Dynamics and by the project PID2021-126124NB-I00 (Spain).",
+    title: "On generalized imaginary Spin c -Killing spinors",
     collection: "PAPERS",
     creator: "José Luis CARMONA JIMÉNEZ",
     year: 2026,
@@ -1851236,7 +1851236,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07842",
-    title: "Stable phase retrieval from short-time linear canonical transforms of signals in Gaussian shift-invariant spaces Thanks: This project is partially supported by National Key RD Program of China (No. 2024YFA1013703), National Natural Science Foundation of China (12171490, 12371104), China Scholarship Council (202306380270, 202506380227), and the Guangdong Province Key Laboratory of Computational Science, China.",
+    title: "Stable phase retrieval from short-time linear canonical transforms of signals in Gaussian shift-invariant spaces",
     collection: "PAPERS",
     creator: "Cheng Cheng, Baixiang Wu, Jun Xian",
     year: 2026,
@@ -1851444,7 +1851444,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07882",
-    title: "Touring a Sequence of Orthogonal Polygons Eindhoven University of Technology, the Netherlands.. Email: j.s.k.lamme@tue.nl . POSTECH, South Korea. Email: eunjin.oh@postech.ac.kr . Supported by Institute of Information & Communications Technology Planning & Evaluation (IITP) grant funded by the Korea government (MSIT) (No.RS-2024-00440239, Sublinear Scalable Algorithms for Large-Scale Data Analysis) and the National Research Foundation of Korea (NRF) grant funded by the Korea government (MSIT) (No.RS-2024-00358505). ETH Zürich, Switzerland. Email: yanheng.wang@inf.ethz.ch . Part of this work was finished at Saarland University, Saarbrücken, Germany. It was part of the project TIPEA that has received funding from the European Research Council (ERC) under the European Unions Horizon 2020 research and innovation programme (grant agreement No. 850979).",
+    title: "Touring a Sequence of Orthogonal Polygons",
     collection: "PAPERS",
     creator: "Katrin Casel Sándor Kisfaludi-Bak Linda Kleist",
     year: 2026,
@@ -1851588,7 +1851588,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07911",
-    title: "Blow-up of solutions to semilinear parabolic equations driven by mixed local-nonlocal operators with large initial data Thanks: The Authors are member of the Gruppo Nazionale per l’Analisi Matematica, la Probabilità e le loro Applicazioni (GNAMPA) of the Istituto Nazionale di Alta Matematica (INdAM). S.B. and E.V. are partially supported by the Indam-GNAMPA project Esistenza, regolarità e studio delle proprietà qualitative per problemi nonlineari .",
+    title: "Blow-up of solutions to semilinear parabolic equations driven by mixed local-nonlocal operators with large initial data",
     collection: "PAPERS",
     creator: "Stefano Biagi, Fabio Punzo, Eugenio Vecchi",
     year: 2026,
@@ -1852388,7 +1852388,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-07959",
-    title: "Convergent Stochastic Training of Attention and Understanding L O RA Thanks: ⋆ Corresponding Author",
+    title: "Convergent Stochastic Training of Attention and Understanding L O RA",
     collection: "PAPERS",
     creator: "Zhengkai Sun, Dibyakanti Kumar, Alejandro F Frangi, Anirbit Mukherjee ⋆, Mingfei Sun",
     year: 2026,
@@ -1852516,7 +1852516,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08016",
-    title: "Planarizing Gadgets for ( k , l ) (k,l) -tight Graphs Do Not Exist Thanks: Partially supported by DFG grant TH 472/5-2 and SERB MATRICS grant MTR2022/001009",
+    title: "Planarizing Gadgets for ( k , l ) (k,l) -tight Graphs Do Not Exist",
     collection: "PAPERS",
     creator: "Archit Chauhan, Rohit Gurjar, Kilian Rothmund, Thomas Thierauf",
     year: 2026,
@@ -1852995,7 +1852995,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08095",
-    title: "A characterization of monoid graded semihereditary rings Thanks: 2020 Mathematics Subject Classification: 16W50, 16D40, 16E60, 13F05 Thanks: Key Words and Phrases: Graded left semihereditary ring, graded-Prüfer domain, graded flat module, graded weak dimension, graded coherent ring",
+    title: "A characterization of monoid graded semihereditary rings",
     collection: "PAPERS",
     creator: "Parviz Sahandi and Nematollah Shirmohammadi",
     year: 2026,
@@ -1853155,7 +1853155,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08096",
-    title: "Additive preservers of mutual strong Birkhoff-James orthogonality on finite-dimensional C ∗ C^{\\ast} -algebras Thanks: This work is supported in part by the Slovenian Research Agency (research program P1-0285 and research projects J1-50000, N1-0296, N1-0428, J1-70047, and J1-70046) and by the Ministry of Science, Technological Development and Innovation of Republic of Serbia: grant number 451-03-47/2023-1/200104 with Faculty of Mathematics.",
+    title: "Additive preservers of mutual strong Birkhoff-James orthogonality on finite-dimensional C ∗ C^{\\ast} -algebras",
     collection: "PAPERS",
     creator: "Bojan Kuzma, Srdjan Stefanović",
     year: 2026,
@@ -1853235,7 +1853235,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08108",
-    title: "The structure of lim 1 \\displaystyle{\\lim}^{1} -groups Thanks: Research funded by the Hellenic Foundation for Research and Innovation (H.F.R.I.) under the ”3rd Call for H.F.R.I. Research Projects to Support Faculty Members and Researchers”, project number 24921",
+    title: "The structure of lim 1 \\displaystyle{\\lim}^{1} -groups",
     collection: "PAPERS",
     creator: "Ioannis Emmanouil",
     year: 2026,
@@ -1853251,7 +1853251,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08119",
-    title: "Feature Repulsion and Spectral Lock-in: An Empirical Study of Two-Layer Network Grokking Thanks: Code at https://github.com/skydancerosel/grokking-integrability/tree/main/tian_eigengap .",
+    title: "Feature Repulsion and Spectral Lock-in: An Empirical Study of Two-Layer Network Grokking",
     collection: "PAPERS",
     creator: "Yongzhong Xu",
     year: 2026,
@@ -1853970,7 +1853970,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08190",
-    title: "Synergistic Simplex: Cooperative Runtime Assurance for Safety-Critical Autonomous Systems Thanks: ⋆ \\star Equal contribution. This material is based upon work supported by the National Aeronautics and Space Administration (NASA) under the cooperative agreement 80NSSC20M0229 and University Leadership Initiative grant no. 80NSSC22M0070, and the National Science Foundation (NSF) under grant no. CNS 1932529 and ECCS 2311085. Any opinions, findings, conclusions or recommendations expressed in this material are those of the authors and do not necessarily reflect the views of the sponsors.",
+    title: "Synergistic Simplex: Cooperative Runtime Assurance for Safety-Critical Autonomous Systems",
     collection: "PAPERS",
     creator: "Ayoosh Bansal ⋆ \\star ,1 Mikael Yeghiazaryan ⋆ \\star ,1 Artyom Khachatryan 2 Tianyi Zhu 3 Hunmin Kim 4 Naira Hovakimyan 1 Lui Sha 1",
     year: 2026,
@@ -1855232,7 +1855232,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08367",
-    title: "Canonical parameters on marginally trapped surfaces in the Minkowski 4-space Thanks: 2020 Mathematics Subject Classification : Primary 53A07; Secondary 53B20",
+    title: "Canonical parameters on marginally trapped surfaces in the Minkowski 4-space",
     collection: "PAPERS",
     creator: "Miroslav Maksimović and Velichka Milousheva",
     year: 2026,
@@ -1855248,7 +1855248,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08360",
-    title: "Embeddings for Preferences, Not Semantics Thanks: Code: https://github.com/cartgr/Embeddings-for-Preferences Model: https://huggingface.co/cartgr/embeddings-for-preferences-st5-xl",
+    title: "Embeddings for Preferences, Not Semantics",
     collection: "PAPERS",
     creator: "Carter Blair, Ariel D. Procaccia, Milind Tambe",
     year: 2026,
@@ -1856319,7 +1856319,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08521",
-    title: "Geometric Flood Depth Estimation: Fusing Transformer-Based Segmentation with Digital Elevation Models Thanks: *Corresponding author",
+    title: "Geometric Flood Depth Estimation: Fusing Transformer-Based Segmentation with Digital Elevation Models",
     collection: "PAPERS",
     creator: "Nhut Le, Ehsan Karimi, Maryam Rahnemoonfar *",
     year: 2026,
@@ -1856351,7 +1856351,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08464",
-    title: "The Geometric Structure of Models Learning Sparse Data Thanks: Now at Google Research",
+    title: "The Geometric Structure of Models Learning Sparse Data",
     collection: "PAPERS",
     creator: "Thomas Walker, T. Mitchell Roddenberry, Ahmed Imtiaz Humayun, Randall Balestriero, Richard Baraniuk",
     year: 2026,
@@ -1856799,7 +1856799,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08507",
-    title: "Equisingularity in families of double point curves 0 0 footnotetext: 2020 Mathematics Subject Classification . 14B07 (Primary) 14H20, 14J17, 32S50 (Secondary). otoniel@ufu.br, Universidade Federal de Uberlândia, 38408-144, Uberlândia, MG, Brazil. mmsj@academico.ufpb.br, Universidade Federal da Paraíba, 58.051-900, João Pessoa, PB, Brazil.",
+    title: "Equisingularity in families of double point curves",
     collection: "PAPERS",
     year: 2026,
     source: "arXiv",
@@ -1856830,7 +1856830,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08473",
-    title: "Characterization of weights for the variable fractional maximal operator and weighted inequalities for variable fractional rough operators Thanks: The authors are partially supported by CONICET and SECYT-UNC",
+    title: "Characterization of weights for the variable fractional maximal operator and weighted inequalities for variable fractional rough operators",
     collection: "PAPERS",
     creator: "Rodrigo M. Pastrana, M. Silvina Riveros, Raúl E. Vidal",
     year: 2026,
@@ -1856973,7 +1856973,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08599",
-    title: "What Will Happen Next: Large Models-Driven Deduction for Emergency Instances Journal: Nuclear Physics B Corresponding author: Corresponding author. E-mail: chendongai@zzu.edu.cn, iexumingliang@zzu.edu.cn",
+    title: "What Will Happen Next: Large Models-Driven Deduction for Emergency Instances",
     collection: "PAPERS",
     creator: "Zhengqing Hu, Dong Chen \\cormark [1], Junkun Yuan, Liang Liu, Hua Wang, Zhao Jin, Yingchaojie Feng, Wei Chen, Mingliang Xu \\cormark [1]",
     year: 2026,
@@ -1857627,7 +1857627,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08624",
-    title: "On the sum-of-digits measures and Cusick’s conjecture via stopped random walks Thanks: E-mail addresses: dawid.tarlowski@uj.edu.pl ; dawid.tarlowski@gmail.com",
+    title: "On the sum-of-digits measures and Cusick’s conjecture via stopped random walks",
     collection: "PAPERS",
     creator: "Dawid Tarłowski, ORCID 0000-0002-6824-4568; Faculty of Mathematics and Computer Science, Jagiellonian University, Łojasiewicza 6, 30-348 Kraków, Poland",
     year: 2026,
@@ -1857946,7 +1857946,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08713",
-    title: "REAP: Reinforcement-Learning End-to-End Autonomous Parking with Gaussian Splatting Simulator for Real2Sim2Real Transfer Thanks: Changze Li, Zhe Chen, Yijian Li, Ming Yang and Tong Qin are with Shanghai Jiao Tong University, Shanghai, China. Shaoyu Chen, Lisen Mu, Yuelong Yu, Qian Zhang and Qing Su are with Horizon Robotics Technology Research and Development Co., Ltd.",
+    title: "REAP: Reinforcement-Learning End-to-End Autonomous Parking with Gaussian Splatting Simulator for Real2Sim2Real Transfer",
     collection: "PAPERS",
     creator: "Changze Li, Zhe Chen, Shaoyu Chen, Lisen Mu, Yijian Li, Yuelong Yu",
     year: 2026,
@@ -1858026,7 +1858026,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08573",
-    title: "On the Existence of Boundary Layer Separation for Incompressible Fluid Flow in the Half-Space Thanks:",
+    title: "On the Existence of Boundary Layer Separation for Incompressible Fluid Flow in the Half-Space",
     collection: "PAPERS",
     creator: "TongKeun Chang, KyungKeun Kang",
     year: 2026,
@@ -1858554,7 +1858554,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08760",
-    title: "FedGMI: Generative Model-Driven Federated Learning for Probabilistic Mixture Inference 1 Pingyi Fan is the corresponding author, e-mail: fpy@tsinghua.edu.cn. This work was supported by the National Key Research and Development Program of China (Grant NO.2021YFA1000500(4)). 4 Khaled B. Letaief was supported in part by Hong Kong Research Grants Council under the Areas of Excellence scheme grant AoE/E-601/22-R.",
+    title: "FedGMI: Generative Model-Driven Federated Learning for Probabilistic Mixture Inference",
     collection: "PAPERS",
     creator: "Qijun Hou 2 , Yuchen Shi 2 , Pingyi Fan 1 2 , and Khaled B. Letaief 4",
     year: 2026,
@@ -1858810,7 +1858810,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08748",
-    title: "U niqueness of entire functions sharing two values with their partial derivative operators Thanks: Typeset by AmS- L a T e X",
+    title: "U niqueness of entire functions sharing two values with their partial derivative operators",
     collection: "PAPERS",
     creator: "Sujoy Majumder, Debabrata Pramanik and Shantanu Panja ∗",
     year: 2026,
@@ -1859193,7 +1859193,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08865",
-    title: "Some Omega results for Dirichlet L L -functions Thanks: † {\\dagger} Corresponding author. 1 School of Mathematics and Statistics, Henan Normal University, Xinxiang, 453007, People’s Republic of China, E-mail address: qyyang.must@gmail.com. 2 School of Mathematical Sciences, Key Laboratory of Intelligent Computing and Applications(Ministry of Education), Tongji University, Shanghai 200092, China, E-mail address: shengbozhao@hotmail.com.",
+    title: "Some Omega results for Dirichlet L L -functions",
     collection: "PAPERS",
     creator: "Qiyu Yang 1, Shengbo Zhao 2,†",
     year: 2026,
@@ -1859433,7 +1859433,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08848",
-    title: "Ramsey-type � \\chi -bounds for � \\chi -bounded graph classes Thanks: The first author was supported by a Titchmarsh Research Fellowship and a Christ Church Research Centre Grant. The second author was supported by the Institute for Basic Science (IBS-R029-C1).",
+    title: "Ramsey-type � \\chi -bounds for � \\chi -bounded graph classes",
     collection: "PAPERS",
     creator: "Tung H. Nguyen, Sang-il Oum",
     year: 2026,
@@ -1859689,7 +1859689,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08908",
-    title: "HyDRA: Deadline and Reuse-Aware Cacheability for Hardware Accelerators Thanks: This paper is an extended version of a manuscript accepted for publication in IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems (IEEE TCAD). It includes additional experiments, analyses, and evaluation details omitted from the published version due to page limitations. A research grant from the R Systems Center of Excellence on Sustainable Artificial Intelligence supported this work.",
+    title: "HyDRA: Deadline and Reuse-Aware Cacheability for Hardware Accelerators",
     collection: "PAPERS",
     creator: "Ayushi Agarwal 1, Anannya Mathur 1, Preeti Ranjan Panda 1, 2]",
     year: 2026,
@@ -1859769,7 +1859769,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08867",
-    title: "Picard-Lefschetz theory and alien calculus: a case study Thanks: S. Li: Yau Mathematical Sciences Center, Tsinghua University, Beijing, China. Email: sili@mail.tsinghua.edu.cn . Thanks: Y. Li: Beijing Institute of Mathematical Sciences and Applications, Beijing, 101408, China. Email: liyong@bimsa.cn . Thanks: X. Tang: Beijing Institute of Mathematical Sciences and Applications, Beijing, 101408, China. Email: tangxinxing@bimsa.cn .",
+    title: "Picard-Lefschetz theory and alien calculus: a case study",
     collection: "PAPERS",
     creator: "Si Li, Yong Li, Xinxing Tang",
     year: 2026,
@@ -1859833,7 +1859833,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08878",
-    title: "Why Do Aligned LLMs Remain Jailbreakable: Refusal-Escape Directions, Operator-Level Sources, and Safety–Utility Trade-off Thanks: Corresponding author.",
+    title: "Why Do Aligned LLMs Remain Jailbreakable: Refusal-Escape Directions, Operator-Level Sources, and Safety–Utility Trade-off",
     collection: "PAPERS",
     creator: "Yu Chen, Yuanhao Liu",
     year: 2026,
@@ -1860089,7 +1860089,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08963",
-    title: "Survey-aware Machine Learning: A Guideline for Valid Population Health Inference based on Scoping Review Thanks: Corresponding Author",
+    title: "Survey-aware Machine Learning: A Guideline for Valid Population Health Inference based on Scoping Review",
     collection: "PAPERS",
     creator: "YongKyung Oh, Henry W. Zheng, Jeffrey Feng, Alex A. T. Bui",
     year: 2026,
@@ -1860105,7 +1860105,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-08984",
-    title: "Hardware-Accelerated Line-Rate Bitstream Screening for Secure FPGA Reconfiguration Thanks: This work was supported by the McNair Junior Fellowship and the Office of Undergraduate Research at the University of South Carolina.",
+    title: "Hardware-Accelerated Line-Rate Bitstream Screening for Secure FPGA Reconfiguration",
     collection: "PAPERS",
     creator: "Rye Stahle-Smith, Carter Antley, Jason D. Bakos, and Rasha Karakchi",
     year: 2026,
@@ -1861718,7 +1861718,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09174",
-    title: "Ortho-Positronium Three-Photon Decays: Physics Constraints and a Closed-Form Energy Method for Annihilation Vertex Reconstruction Thanks: B. C. Hiesmayr is with the IT:U Interdisciplinary Transformation University, Freistädter Strasse 400, 4040 Linz, and University of Vienna, Faculty of Physics, Währingerstrasse 17, 1090 Vienna, Austria.",
+    title: "Ortho-Positronium Three-Photon Decays: Physics Constraints and a Closed-Form Energy Method for Annihilation Vertex Reconstruction",
     collection: "PAPERS",
     creator: "L. Raczyński, W. Krzemień, A. Coussat",
     year: 2026,
@@ -1861814,7 +1861814,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09155",
-    title: "A curve and its abstract generalized Jacobian Thanks: BC was supported by NSF grant DMS-2452735. Thanks: ID was supported by ISF grant number 621/21. Political disclaimer: ID asks not to be considered responsible for the actions of any government that does not fully embrace the principles of democracy. Thanks: AH was supported by ISF grant number 555/21",
+    title: "A curve and its abstract generalized Jacobian",
     collection: "PAPERS",
     creator: "Benjamin Castle, Ishai Dan-Cohen, Assaf Hasson",
     year: 2026,
@@ -1862166,7 +1862166,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09230",
-    title: "An elegant model of the geodesic flow on the modular surface Thanks: It is a pleasure to thank Pascal Hubert for discussion, and the referees for suggestions and corrections.",
+    title: "An elegant model of the geodesic flow on the modular surface",
     collection: "PAPERS",
     creator: "Pierre Arnoux, Thomas A. Schmidt",
     year: 2026,
@@ -1862358,7 +1862358,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09178",
-    title: "On centerless unimodular contact Lie algebras. Thanks: This work was partially supported by CONICET and SECyT-UNC (Argentina)",
+    title: "On centerless unimodular contact Lie algebras",
     collection: "PAPERS",
     creator: "Agustín Garrone",
     year: 2026,
@@ -1862966,7 +1862966,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09329",
-    title: "Test-Time Speculation † † footnotetext: Corresponding author: avinkumar@utexas.edu",
+    title: "Test-Time Speculation",
     collection: "PAPERS",
     creator: "Avinash Kumar, Sujay Sanghavi, Poulami Das",
     year: 2026,
@@ -1863061,7 +1863061,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09300",
-    title: "C ausal stability selection Thanks: ⋆ \\star Equal contribution",
+    title: "C ausal stability selection",
     collection: "PAPERS",
     creator: "F alco J . B argagli- S toffi 1, ⋆ \\star, O mar M elikechi 2, ⋆ \\star",
     year: 2026,
@@ -1863237,7 +1863237,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09357",
-    title: "Split CNN Inference on Networked Microcontrollers Thanks: This work is partially supported by the Strategic Priority Research Program of the Chinese Academy of Sciences (Grant no. 2023YFC3321401) and the EU’s Horizon Europe HarmonicAI project under the HORIZON-MSCA-2022-SE-01 scheme with grant agreement number 101131117. Part of the work was done when B. Li was a visiting PhD student at TU Delft.",
+    title: "Split CNN Inference on Networked Microcontrollers",
     collection: "PAPERS",
     creator: "Junyu Lu, Shashwath Suresh, Hao Liu, Qi Hong, Qing Wang",
     year: 2026,
@@ -1863781,7 +1863781,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09372",
-    title: "Sharp weighted norm estimates for martingale square functions Thanks: This paper was supported by the National Key R & \\& D Program of China (No.2023YFA1010800), the NSFC (Nos.11971419, 12125109, W2411005, 12361131578), the Provincial Natural Science Foundation of Hunan (Nos.2024JJ1010, 2025ZYJ002, 2024RC1016).",
+    title: "Sharp weighted norm estimates for martingale square functions",
     collection: "PAPERS",
     creator: "Wei Chen, Yong Jiao, Xingyan Quan, Lian Wu",
     year: 2026,
@@ -1863845,7 +1863845,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09354",
-    title: "On the spectral radius of operator tuples Thanks: The work of E. Shamovich is partially supported by BSF grant no. 2022235.",
+    title: "On the spectral radius of operator tuples",
     collection: "PAPERS",
     creator: "Marcel Scherer, Orr Moshe Shalit, Eli Shamovich",
     year: 2026,
@@ -1863987,7 +1863987,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09489",
-    title: "𝑆𝐵 ⁡ ( 3 , n ) \\mathit{SB}(3,n) has no Hamiltonian cycle when n n is even A sign-of-permutation proof, with extension to all odd m ≡ 3 ( mod 4 ) m\\equiv 3\\pmod{4} Thanks: Resolution of Exercise 7.2.2.4–224 in D. E. Knuth, The Art of Computer Programming , Volume 4, Pre-Fascicle 8a (draft of 10 April 2026) [ 12 ] . Knuth ranks problem difficulty on a 0–50 scale; [46] denotes a research-level problem.",
+    title: "𝑆𝐵 ⁡ ( 3 , n ) \\mathit{SB}(3,n) has no Hamiltonian cycle when n n is even A sign-of-permutation proof, with extension to all odd m ≡ 3 ( mod 4 ) m\\equiv 3\\pmod{4}",
     collection: "PAPERS",
     creator: "Shisheng Li",
     year: 2026,
@@ -1864099,7 +1864099,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09504",
-    title: "Position: AI Security Policy Should Target Systems, Not Models Thanks: Preprint. Under review at NeurIPS 2026.",
+    title: "Position: AI Security Policy Should Target Systems, Not Models",
     collection: "PAPERS",
     creator: "Michael A. Riegler, Inga Strümke",
     year: 2026,
@@ -1864195,7 +1864195,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09507",
-    title: "Uncertainty-Aware and Decoder-Aligned Learning for Video Summarization Thanks: This work has been accepted for presentation at the 2026 International Joint Conference on Neural Networks (IJCNN 2026).",
+    title: "Uncertainty-Aware and Decoder-Aligned Learning for Video Summarization",
     collection: "PAPERS",
     creator: "1 st Omer Tariq, 2 nd Syed Muhammad Raza, 3 rd Jeongbae Son",
     year: 2026,
@@ -1864387,7 +1864387,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09437",
-    title: "On the tangent degree and the degree of the tangent variety of a projective variety Thanks: *Both authors were partially supported by the PRIN 2022 Birational geometry of moduli spaces and special varieties . The second author is a member of the G.N.S.A.G.A. of INDAM",
+    title: "On the tangent degree and the degree of the tangent variety of a projective variety",
     collection: "PAPERS",
     creator: "Jordi Hernandez Gomez, Francesco Russo*",
     year: 2026,
@@ -1864723,7 +1864723,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09512",
-    title: "Varieties of bicommutative algebras with identity of degree three Thanks: The second author was supported by the Science Committee of the Ministry of Science and Higher Education of the Republic of Kazakhstan (Grant No. AP26199089)",
+    title: "Varieties of bicommutative algebras with identity of degree three",
     collection: "PAPERS",
     creator: "Vesselin Drensky, Bekzat Zhakhayev",
     year: 2026,
@@ -1864899,7 +1864899,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09583",
-    title: "The comaximal Graph of a finite-dimensional Lie Algebra Thanks: …",
+    title: "The comaximal Graph of a finite-dimensional Lie Algebra",
     collection: "PAPERS",
     creator: "David A. Towers, Yesneri Zuleta, Ismael Gutierrez",
     year: 2026,
@@ -1865027,7 +1865027,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09582",
-    title: "Topology and Category for Singular Product Spaces Thanks: The second author was funded by the Austrian Science Fund (FWF) [grants PAT8484324 and P33895] during the writing of this article.",
+    title: "Topology and Category for Singular Product Spaces",
     collection: "PAPERS",
     creator: "Yusuke Hayashi, Tristan van der Vlugt",
     year: 2026,
@@ -1865507,7 +1865507,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09719",
-    title: "Distilling 3D Spatial Reasoning into a Lightweight Vision-Language Model with CoT Thanks:",
+    title: "Distilling 3D Spatial Reasoning into a Lightweight Vision-Language Model with CoT",
     collection: "PAPERS",
     creator: "Alaa Asfour, Christopher Indris, Leihan Chen, Tejas Vyas, Guanghui Wang",
     year: 2026,
@@ -1865699,7 +1865699,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09718",
-    title: "Learning stochastic multiscale models through normalizing flows Thanks: This research was supported in part by NSF grant DMS-2246815 and by the Simons Foundation through the Travel Support for Mathematicians program.",
+    title: "Learning stochastic multiscale models through normalizing flows",
     collection: "PAPERS",
     creator: "Anan Saha, Arnab Ganguly",
     year: 2026,
@@ -1866035,7 +1866035,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09763",
-    title: "Cyclic subgroups of Belk-Hyde-Matucci group V ​ 𝒜 V\\!\\mathcal{A} Thanks: The first author thanks the Spanish Ministry MICINN through grant PID2021-126851NB-I00P for their support.",
+    title: "Cyclic subgroups of Belk-Hyde-Matucci group V ​ 𝒜 V\\!\\mathcal{A}",
     collection: "PAPERS",
     creator: "José Burillo, Marc Felipe",
     year: 2026,
@@ -1866258,7 +1866258,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09747",
-    title: "The Matching Function: A Unified Look into the Black Box Thanks: Angelis, georgios.angelis@glasgow.ac.uk: University of Glasgow; Bramoullé, yann.bramoulle@univ-amu.fr: Aix-Marseille University, CNRS, Aix-Marseille School of Economics. We are grateful to Jim Albrecht for his fruitful discussion of the paper at the 2024 Australasian Search and Matching Workshop, and to Matt Elliott, Manolis Galenianos, Sanjeev Goyal, Yannis Ioannides, Leo Kaas, Philip Kircher, Francis Kramarz, Mihai Manea, Sephorah Mangin, Pascal Michaillat, Roland Rathelot, Alireza Tahbaz-Salehi, Andreas Tryphonides, colleagues and seminar participants for very constructive comments and suggestions. Part of this work was conducted while Angelis was based in Aix-Marseille School of Economics and Bocconi University, IGIER; he thanks them both for the excellent work conditions. This work was supported by the French National Research Agency through Grant ANR-17-EURE-0020 and the Excellence Initiative of Aix-Marseille University, A*MIDEX.",
+    title: "The Matching Function: A Unified Look into the Black Box",
     collection: "PAPERS",
     creator: "Georgios Angelis, Yann Bramoullé",
     year: 2026,
@@ -1866354,7 +1866354,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09776",
-    title: "Uniqueness of Flotation and Buoyancy Surfaces for Convex Polytopes Thanks: The first author is supported by the FAPA funds from Vicerrectoría de Investigaciones de la Universidad de los Andes (INV-2019-63-1699). Thanks: The third author is supported in part by NSERC RGPIN-2024-05044.",
+    title: "Uniqueness of Flotation and Buoyancy Surfaces for Convex Polytopes",
     collection: "PAPERS",
     creator: "S. Dann, O. Herscovici, S. Myroshnychenko",
     year: 2026,
@@ -1867808,7 +1867808,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-09992",
-    title: "Attention Drift: What Autoregressive Speculative Decoding Models Learn Thanks: Code: https://github.com/Dogacel/Attention-Drift",
+    title: "Attention Drift: What Autoregressive Speculative Decoding Models Learn",
     collection: "PAPERS",
     creator: "Doğaç Eldenk, Payal Mohapatra, Yigitcan Comlek, Kaan Oktay, Hongyang Zhang, Stephen Xia",
     year: 2026,
@@ -1868544,7 +1868544,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-10037",
-    title: "Stabilization for a Cascaded ODE-Wave Equation with Boundary Nonlinear Disturbances Thanks: This work was supported by the Natural Science Foundation of Shaanxi Province, China (grant no. 2023-JC-YB-044), and the Fundamental Research Funds for the Central Universities (grant no. xzy012024070).",
+    title: "Stabilization for a Cascaded ODE-Wave Equation with Boundary Nonlinear Disturbances",
     collection: "PAPERS",
     creator: "Zhan-Dong Mei, Lan-Xi Tang",
     year: 2026,
@@ -1868704,7 +1868704,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-10042",
-    title: "A Statistical Framework for Learning Preferences from the Past Thanks: The first author is partially supported by an IMU Breakout Graduate Fellowship.",
+    title: "A Statistical Framework for Learning Preferences from the Past",
     collection: "PAPERS",
     creator: "Tamojit Sadhukhan, Moulinath Banerjee, Krishanu Maulik, Parthanil Roy",
     year: 2026,
@@ -1868992,7 +1868992,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-10060",
-    title: "Skill Premia and Pre-Marital Investments in Marriage Markets Kuvalekar: University of Essex and Indian School of Business, email: a.kuvalekar@essex.ac.uk . I am grateful to Nageeb Ali, Deepal Basak, Joyee Deb, Maitreesh Ghatak, Hugo Hopenhayn, Elliot Lipnowski, Dileep Mookherjee, Andrew Newman, Sabareesh Ramachandran, Debraj Ray, and participants in ThReD 2025 for helpful comments. Refine.ink was used to check the paper for consistency and clarity.",
+    title: "Skill Premia and Pre-Marital Investments in Marriage Markets",
     collection: "PAPERS",
     creator: "Aditya Kuvalekar",
     year: 2026,
@@ -1869024,7 +1869024,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-10148",
-    title: "MicroViTv2: Beyond the FLOPS for Edge Energy-Friendly Vision Transformers Thanks: Novendra Setyawan, Mao-Hsiu Hsu and Wen-Kai Kuo are with Department of Electro-Optics, National Formosa University, Taiwan; Novendra Setyawan also with Department of Electrical Engineering University of Muhammadiyah Malang, Indonesia; Chi-Chia Sun is with Department of Electrical Engineering, National Taipei University, Taiwan; Jun-Wei Hsieh is with College of Artificial Intelligence and Green Energy, National Yang Ming Chiao Tung University, Taiwan; Corresponding Author is Chi-Chia Sun ( E-mail: chichiasun@gm.ntpu.edu.tw ); This work was supported by the National Science and Technology Council, Taiwan under Grant NSTC-113-2221-E-305-018-MY3.",
+    title: "MicroViTv2: Beyond the FLOPS for Edge Energy-Friendly Vision Transformers",
     collection: "PAPERS",
     creator: "Novendra Setyawan, Chi-Chia Sun",
     year: 2026,
@@ -1869280,7 +1869280,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-10048",
-    title: "Generalized i i -boson model and boxed BUC plane partitions Thanks: *Corresponding author. Email: yanzw@imu.edu.cn (Z.W. Yan)",
+    title: "Generalized i i -boson model and boxed BUC plane partitions",
     collection: "PAPERS",
     creator: "Shengyu Zhang, Denghui Li and Zhaowen Yan ∗",
     year: 2026,
@@ -1870368,7 +1870368,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-10205",
-    title: "Unveiling High-Probability Generalization in Decentralized SGD Thanks: Corresponding Author.",
+    title: "Unveiling High-Probability Generalization in Decentralized SGD",
     collection: "PAPERS",
     creator: "Jiahuan Wang wangjiahuan@nudt.edu.cn",
     year: 2026,
@@ -1870576,7 +1870576,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-10350",
-    title: "Signal-Dependent Shot Noise Modeling of Rydberg Atomic Quantum Receivers: A Design Perspective Thanks: Q. Peng, Q. Luo, and P. Xiao are affiliated with 5G and 6G Innovation Centre, Institute for Communication Systems (ICS) of the University of Surrey, Guildford, GU2 7XH, UK. (e-mail: {q.peng, q.u.luo, p.xiao}@surrey.ac.uk). Thanks: N. Ye is with the School of Cyberspace Science and Technology, Beijing Institute of Technology, Beijing 100081, China (email: ianye@bit.edu.cn). Thanks: J. Wu is with State Key Laboratory of Quantum Optics Technologies and Devices, Institute of Laser Spectroscopy, Shanxi University, Taiyuan 030006, China (e-mail: wujz@sxu.edu.cn). Thanks: C. Pan and J. Wang are with the National Mobile Communications Research Laboratory, Southeast University, Nanjing, China. (e-mail: cpan@seu.edu.cn;j.z.wang@seu.edu.cn). Thanks: T. Gong and C. Yuen are with the School of Electrical and Electronics Engineering, Nanyang Technological University, Singapore 639798 (e-mail: trgTerry1113@gmail.com, chau.yuen@ntu.edu.sg). Thanks: M. Elkashlan is with the School of Electronic Engineering and Computer Science, Queen Mary University of London, E1 4NS London, U.K.(e-mail: maged.elkashlan@qmul.ac.uk). Thanks: George K. Karagiannidis is with the Department of Electrical and Computer Engineering, Aristotle University of Thessaloniki, 541 24 Thessaloniki, Greece (e-mail: geokarag@auth.gr).",
+    title: "Signal-Dependent Shot Noise Modeling of Rydberg Atomic Quantum Receivers: A Design Perspective",
     collection: "PAPERS",
     creator: "Qihao Peng, Qu Luo, Tierui Gong, Neng Ye, Jizhou Wu",
     year: 2026,
@@ -1870672,7 +1870672,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-10402",
-    title: "Every Finite Group Admits a Just Finite Presentation Thanks: The author was partially supported by EPSRC grant EP/Y004256/1. For the purpose of open access, the author has applied a CC BY public copyright licence to any author accepted manuscript arising from this submission. Significant assistance was provided by the Google DeepMind AI co-mathematician tool. See the Methodology section for more details.",
+    title: "Every Finite Group Admits a Just Finite Presentation",
     collection: "PAPERS",
     creator: "Marc Lackenby",
     year: 2026,
@@ -1870704,7 +1870704,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-10411",
-    title: "High-speed single-photoelectron detection for Cherenkov astronomy Thanks: This work was supported by the Swiss National Foundation FLARE grant 20FL21 201539. Thanks: L. Giangrande, is with Département de Physique Nucléaire et Corpusculaire, Faculté de Science, University of Geneva (e-mail: luca.giangrande@unige.ch). Thanks: M. Heller, is with Département de Physique Nucléaire et Corpusculaire, Faculté de Science, University of Geneva (e-mail: matthieu.heller@unige.ch). Thanks: T. Montaruli, is with Département de Physique Nucléaire et Corpusculaire, Faculté de Science, University of Geneva (e-mail: teresa.montaruli@unige.ch).",
+    title: "High-speed single-photoelectron detection for Cherenkov astronomy",
     collection: "PAPERS",
     creator: "Luca Giangrande, Matthieu Heller, Teresa Montaruli",
     year: 2026,
@@ -1871487,7 +1871487,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-10496",
-    title: "M 2 E-UAV: A Benchmark and Analysis for Onboard M otion-on- M otion E vent-Based Tiny UAV Detection Thanks: Meta was not involved in conducting the data collection or experiments discussed in this paper.",
+    title: "M 2 E-UAV: A Benchmark and Analysis for Onboard M otion-on- M otion E vent-Based Tiny UAV Detection",
     collection: "PAPERS",
     creator: "Weiqi Yan, Lixin Chen, Xiangrui Hou, Zhipeng Cai, Youbiao Wang, Yangyang Shi, Yu Zang, Cheng Wang, [0.5em] Fujian Key Laboratory of Urban Intelligent Sensing, Computing, School of InformaticsXiamen University, Xiamen, China",
     year: 2026,
@@ -1872015,7 +1872015,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-10600",
-    title: "Generate “Normal”, Edit Poisoned: Branding Injection via Hint Embedding in Image Editing PubID: pubid: Network and Distributed System Security (NDSS) Symposium 2026 23 - 27 February 2026 , San Diego, CA, USA ISBN 979-8-9919276-8-0 https://dx.doi.org/10.14722/ndss.2026.[23 | | 24]xxxx www.ndss-symposium.org",
+    title: "Generate “Normal”, Edit Poisoned: Branding Injection via Hint Embedding in Image Editing",
     collection: "PAPERS",
     creator: "Desen Sun, Jason Hon, Howe Wang, Saarth Rajan, Meng Xu, and Sihang Liu",
     year: 2026,
@@ -1872237,7 +1872237,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-10626",
-    title: "Sparse Signal Recovery using Log-Sum Regularization and Adaptive Smoothing Thanks: This work has been submitted for consideration to the 2026 International Symposium on Information Theory and Its Applications (ISITA 2026).",
+    title: "Sparse Signal Recovery using Log-Sum Regularization and Adaptive Smoothing",
     collection: "PAPERS",
     creator: "Keisuke Morita, Masayuki Ohzeki",
     year: 2026,
@@ -1872461,7 +1872461,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-10643",
-    title: "A Single-Layer Model Can Do Language Modeling Thanks: Code: https://github.com/steve-z-wang/grounded-prediction-network",
+    title: "A Single-Layer Model Can Do Language Modeling",
     collection: "PAPERS",
     creator: "Zanmin Wang",
     year: 2026,
@@ -1872493,7 +1872493,7 @@ export const artifacts = [
   }),
   artifact({
     artifact_id: "arxiv-2605-10591",
-    title: "On the rational solutions of generalized Abel equations Thanks: * Corresponding author Thanks: Both authors are partially supported by the project PID2023-151974NB-I00 funded by MICIU/ AEI/10.13039/ 501100011033/FEDER, UE. This work has been partially funded by the Junta de Extremadura through projects GR24042 (L-A.C.) and GR24068 (I.O.), partially funded by the European Regional Development Fund (ERDF) “A way to make Europe”.",
+    title: "On the rational solutions of generalized Abel equations",
     collection: "PAPERS",
     creator: "L.A. Calderón*, I. Ojeda",
     year: 2026,
@@ -2036100,7 +2036100,7 @@ export const artifacts = [
     checksum: "18def94ef77b0d42cef7fa1132a560479cbcff14276caad8f575599c89f0b54a",
   }),
   artifact({
-    artifact_id: "the-radio-amateur-s-hand-book-a-complete-authentic-and-infor",
+    artifact_id: "the-radio-amateur-s-hand-book-a-complete-authentic-and-infor-pg6934",
     title: "The Radio Amateur's Hand Book A Complete, Authentic and Informative Work on Wireless Telegraphy and Telephony",
     collection: "BOOKS",
     creator: "A. Frederick (Archie Frederick) Collins",
@@ -2036550,7 +2036550,7 @@ export const artifacts = [
     checksum: "ac008f91b3f69a84fb9a2b770597662d8ca01a3d424f7ce89a36116462f4d22a",
   }),
   artifact({
-    artifact_id: "the-history-of-the-reign-of-ferdinand-and-isabella-the-catho",
+    artifact_id: "the-history-of-the-reign-of-ferdinand-and-isabella-the-catho-pg6968",
     title: "The History of the Reign of Ferdinand and Isabella the Catholic — Volume 3",
     collection: "BOOKS",
     creator: "William Hickling Prescott",
@@ -2037060,7 +2037060,7 @@ export const artifacts = [
     checksum: "d8367adc16f9afe6e6c3ad94e811f8b2d2f4d93f9cf3f6b49cf4d97a825f8c56",
   }),
   artifact({
-    artifact_id: "personal-narrative-of-travels-to-the-equinoctial-regions-of",
+    artifact_id: "personal-narrative-of-travels-to-the-equinoctial-regions-of-pg7014",
     title: "Personal Narrative of Travels to the Equinoctial Regions of America, During the Year 1799-1804 — Volume 2",
     collection: "BOOKS",
     creator: "Alexander von Humboldt",
@@ -2038440,7 +2038440,7 @@ export const artifacts = [
     checksum: "c93b386f63ba13afef9cf95a19495b53a68ec8eff6a921cdea23c42fb029e6b4",
   }),
   artifact({
-    artifact_id: "the-coral-island-a-tale-of-the-pacific-ocean",
+    artifact_id: "the-coral-island-a-tale-of-the-pacific-ocean-pg7124",
     title: "The Coral Island: A Tale of the Pacific Ocean",
     collection: "BOOKS",
     creator: "R. M. (Robert Michael) Ballantyne",
@@ -2042130,7 +2042130,7 @@ export const artifacts = [
     checksum: "491581bb3c3120030e47b0f9ddb9d433367da101b3c5a50486657811f2dda209",
   }),
   artifact({
-    artifact_id: "the-principal-navigations-voyages-traffiques-and-discoveries",
+    artifact_id: "the-principal-navigations-voyages-traffiques-and-discoveries-pg7466",
     title: "The Principal Navigations, Voyages, Traffiques and Discoveries of the English Nation — Volume 02",
     collection: "BOOKS",
     creator: "Richard Hakluyt",
