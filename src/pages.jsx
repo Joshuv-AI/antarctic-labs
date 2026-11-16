@@ -1597,6 +1597,337 @@ function TowerDiscovery({ artifacts, towerData, countsFinal, go, onBrowse, onShe
   );
 }
 
+// Minimal slot-scroll adjustment (2026-11-16 curated-vanish fix):
+// after a within-list selection change in one of the filter panel's
+// fixed-height subcategory slots, move the slot's scrollTop by the
+// smallest amount that leaves the active row fully inside the
+// visible window. A row already in view moves nothing; with no
+// active row (a deselect) the scroll position is left exactly as
+// the visitor left it.
+function keepSlotRowInView(slot) {
+  if (!slot || typeof slot.querySelector !== "function") return;
+  const row = slot.querySelector(".tf2-sub.is-active");
+  if (!row) return;
+  const slotRect = slot.getBoundingClientRect();
+  const rowRect = row.getBoundingClientRect();
+  if (rowRect.top < slotRect.top) {
+    slot.scrollTop -= slotRect.top - rowRect.top;
+  } else if (rowRect.bottom > slotRect.bottom) {
+    slot.scrollTop += rowRect.bottom - slotRect.bottom;
+  }
+}
+
+// Dynamic facet tallies as a chunked job (2026-11-16 curated-vanish
+// fix). This is the exact computation the synchronous facetCounts
+// useMemo used to run on the render path — every axis counting
+// within the selection formed by the OTHER axes, from the same
+// per-record data the results list and the spiral read — restructured
+// as a generator that yields whenever its ~7ms slice budget (the
+// filter engine's slice size) runs out, so no single task on the
+// tap's critical path exceeds a few milliseconds. The driver below
+// runs the steps off-render and commits the finished tallies
+// atomically; until a commit lands, the panel keeps showing the
+// previous committed tallies, exactly as the browse engine keeps
+// showing the previous committed results while a rescan runs.
+function* facetCountSteps(input) {
+  const {
+    towerData,
+    artifacts,
+    bucketFilter,
+    eraFilter,
+    memberBitsSel,
+    collBitsSel,
+    shelfBits,
+    paperBits,
+    paperTypeBits,
+    collSet,
+    collData,
+    collGroup,
+  } = input;
+  let sliceStart = performance.now();
+  const over = () => performance.now() - sliceStart >= 7;
+  const resetClock = () => {
+    sliceStart = performance.now();
+  };
+  const collMemberBits =
+    collBitsSel ||
+    (collSet && towerData.idIndex
+      ? buildMembershipBitset(
+          towerData.idIndex,
+          collSet,
+          towerData.bucketKeys.length
+        )
+      : null);
+  const member = memberBitsSel || collMemberBits;
+  if (!bucketFilter && !eraFilter && !member) return null;
+  const bucketKeys = towerData.bucketKeys;
+  const eraCodes = towerData.eraCodes;
+  const N = bucketKeys.length;
+  const W = Math.ceil(N / 32);
+  const pop32 = (x) => {
+    x -= (x >> 1) & 0x55555555;
+    x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+    x = (x + (x >> 4)) & 0x0f0f0f0f;
+    return (x * 0x01010101) >> 24;
+  };
+  const andPop = (a, b) => {
+    let n = 0;
+    const lim = Math.min(a.length, b.length, W);
+    for (let w = 0; w < lim; w++) n += pop32(a[w] & b[w]);
+    return n;
+  };
+  const andWords = (a, b) => {
+    if (!a) return b;
+    if (!b) return a;
+    const out = new Uint32Array(W);
+    const lim = Math.min(a.length, b.length, W);
+    for (let w = 0; w < lim; w++) out[w] = a[w] & b[w];
+    return out;
+  };
+  // Bucket mask from the few distinct bucket keys the filter can
+  // match (exact key, or the lane prefix for a lane selection).
+  let bucketWords = null;
+  if (bucketFilter) {
+    const laneOnly = bucketFilter.indexOf(":") < 0;
+    const match = new Set();
+    for (const k of Object.keys(towerData.subCounts || {})) {
+      if (k === bucketFilter || (laneOnly && k.indexOf(bucketFilter + ":") === 0))
+        match.add(k);
+    }
+    if (!laneOnly) match.add(bucketFilter);
+    bucketWords = new Uint32Array(W);
+    for (let i = 0; i < N; i++) {
+      if (match.has(bucketKeys[i])) bucketWords[i >> 5] |= 1 << (i & 31);
+      if ((i & 65535) === 65535 && over()) {
+        yield;
+        resetClock();
+      }
+    }
+  }
+  let eraWords = null;
+  if (eraFilter) {
+    const code = TOWER_ERAS.findIndex((e) => e.id === eraFilter) + 1;
+    eraWords = new Uint32Array(W);
+    for (let i = 0; i < N; i++) {
+      if (eraCodes[i] === code) eraWords[i >> 5] |= 1 << (i & 31);
+      if ((i & 65535) === 65535 && over()) {
+        yield;
+        resetClock();
+      }
+    }
+  }
+  const bec = towerData.bucketEraCounts || {};
+  // --- era counts within bucket ∧ member -------------------------
+  const eraMap = {};
+  {
+    const within = andWords(bucketWords, member);
+    if (!within) {
+      for (const e of TOWER_ERAS)
+        eraMap[e.id] = bucketFilter
+          ? bec[bucketFilter + "|" + e.id] || 0
+          : towerData.eraCounts[e.id] || 0;
+    } else {
+      for (const e of TOWER_ERAS) eraMap[e.id] = 0;
+      for (let w = 0; w < W; w++) {
+        let word = within[w];
+        while (word) {
+          const b = word & -word;
+          const i = (w << 5) + (31 - Math.clz32(b));
+          const ec = eraCodes[i];
+          if (ec) eraMap[TOWER_ERAS[ec - 1].id]++;
+          word ^= b;
+        }
+        if ((w & 4095) === 4095 && over()) {
+          yield;
+          resetClock();
+        }
+      }
+    }
+  }
+  // --- lane + subcategory counts within era ∧ member -------------
+  const laneMap = {};
+  const subMap = {};
+  if (!member) {
+    for (const k of Object.keys(towerData.subCounts || {})) {
+      const n = eraFilter
+        ? bec[k + "|" + eraFilter] || 0
+        : towerData.subCounts[k] || 0;
+      subMap[k] = n;
+      const lane = k.split(":")[0];
+      laneMap[lane] = (laneMap[lane] || 0) + n;
+    }
+    if (!eraFilter) {
+      for (const c of Object.keys(towerData.counts || {}))
+        if (laneMap[c] === undefined) laneMap[c] = towerData.counts[c] || 0;
+    }
+  } else {
+    const within = andWords(eraWords, member);
+    for (let w = 0; w < W; w++) {
+      let word = within[w];
+      while (word) {
+        const b = word & -word;
+        const i = (w << 5) + (31 - Math.clz32(b));
+        const bk = bucketKeys[i];
+        subMap[bk] = (subMap[bk] || 0) + 1;
+        const lane = bk.split(":")[0];
+        laneMap[lane] = (laneMap[lane] || 0) + 1;
+        word ^= b;
+      }
+      if ((w & 4095) === 4095 && over()) {
+        yield;
+        resetClock();
+      }
+    }
+  }
+  // --- curated rows within bucket ∧ era ∧ shelf ------------------
+  const curatedMap = {};
+  if (collData) {
+    const group = collData.groups.find((g) => g.id === collGroup);
+    if (group) {
+      const other = andWords(andWords(bucketWords, eraWords), shelfBits);
+      for (const c of group.collections) {
+        if (c.bits) {
+          curatedMap[c.key] = other ? andPop(c.bits, other) : c.count;
+        } else if (c.ids) {
+          // Hub-Set fallback descriptors: count set members
+          // inside the other axes via the id index.
+          if (!other) {
+            curatedMap[c.key] = c.count;
+          } else {
+            let n = 0;
+            for (let w = 0; w < W; w++) {
+              let word = other[w];
+              while (word) {
+                const b = word & -word;
+                const i = (w << 5) + (31 - Math.clz32(b));
+                if (c.ids.has(artifacts[i].artifact_id)) n++;
+                word ^= b;
+              }
+              if ((w & 4095) === 4095 && over()) {
+                yield;
+                resetClock();
+              }
+            }
+            curatedMap[c.key] = n;
+          }
+        } else {
+          curatedMap[c.key] = c.count;
+        }
+        if (over()) {
+          yield;
+          resetClock();
+        }
+      }
+    }
+  }
+  // --- Books shelves within bucket ∧ era ∧ curated ---------------
+  const shelfMap = {};
+  if (
+    collData &&
+    collData.booksShelves &&
+    collData.booksShelves.length &&
+    (bucketFilter.split(":")[0] === "BOOKS" || input.shelfKey)
+  ) {
+    const other = andWords(andWords(bucketWords, eraWords), collMemberBits);
+    for (const s of collData.booksShelves) {
+      shelfMap[s.key] = other ? andPop(s.bits, other) : s.count;
+      if (over()) {
+        yield;
+        resetClock();
+      }
+    }
+  }
+  // --- Papers fields/subfields/types within the other axes -------
+  // Field and subfield rows count within bucket ∧ era ∧ curated ∧
+  // shelf ∧ type (the paper axis itself excluded, the type axis
+  // included); type rows count within the same set with the field
+  // selection included and the type axis excluded — the same
+  // other-axes rule every axis above follows.
+  const paperMap = {};
+  const paperTypeMap = {};
+  if (
+    collData &&
+    collData.papersFields &&
+    collData.papersFields.length &&
+    (bucketFilter.split(":")[0] === "PAPERS" || input.paperKey || input.paperTypeKey)
+  ) {
+    const paperOther = andWords(
+      andWords(bucketWords, eraWords),
+      andWords(collMemberBits, shelfBits)
+    );
+    const fieldBase = andWords(paperOther, paperTypeBits);
+    for (const f of collData.papersFields) {
+      paperMap[f.key] = f.bits
+        ? fieldBase
+          ? andPop(f.bits, fieldBase)
+          : f.count
+        : f.count;
+      for (const s of f.subs) {
+        paperMap[s.key] = s.bits
+          ? fieldBase
+            ? andPop(s.bits, fieldBase)
+            : s.count
+          : s.count;
+      }
+      if (over()) {
+        yield;
+        resetClock();
+      }
+    }
+    const typeBase = andWords(paperOther, paperBits);
+    for (const t of collData.papersTypes || []) {
+      paperTypeMap[t.key] = t.bits
+        ? typeBase
+          ? andPop(t.bits, typeBase)
+          : t.count
+        : t.count;
+      if (over()) {
+        yield;
+        resetClock();
+      }
+    }
+  }
+  return { eraMap, laneMap, subMap, curatedMap, shelfMap, paperMap, paperTypeMap };
+}
+
+// Facet job driver: steps the generator on macrotasks until it
+// returns, then commits through onCommit. Latest-wins is the
+// caller's job (cancel the previous job when inputs change); a
+// cancelled job never commits. A throwing tally commits nothing —
+// the previous committed counts stay standing rather than the
+// panel going down with the computation.
+function startFacetJob(input, onCommit) {
+  const gen = facetCountSteps(input);
+  let timer = null;
+  let cancelled = false;
+  const job = {
+    cancel() {
+      cancelled = true;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    },
+  };
+  const step = () => {
+    timer = null;
+    if (cancelled) return;
+    let r;
+    try {
+      r = gen.next();
+    } catch (err) {
+      return;
+    }
+    if (r.done) {
+      onCommit(r.value);
+      return;
+    }
+    timer = setTimeout(step, 0);
+  };
+  timer = setTimeout(step, 0);
+  return job;
+}
+
 function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // Stability (2026-10-27): the +6s shard-manifest warm that used to live
   // here is REMOVED — it parsed a ~16MB manifest on every landing-page
@@ -2195,22 +2526,51 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     collBitsState === "failed";
   // The active collection's blurb renders INSIDE the fixed-height
   // subs slot (see the curated axis markup) so selecting a shelf
-  // never resizes the panel; scroll the slot back to its top on a
-  // selection change so the blurb is the first thing seen, exactly
-  // as it was when it rendered below the slot. Layout effect, not a
-  // passive one (2026-11-15 ghost fix): the reset must land BEFORE
-  // the browser paints the new selection — with a passive effect the
-  // new blurb first painted at the slot's old scroll position and
-  // then jumped to the top over the incoming rows, the description
-  // ghost in Joshua's 2026-11-14/15 recordings. The blurb element is
-  // also keyed by the selection (see the markup), so a stale
-  // description can never co-render with the incoming shelf's rows.
+  // never resizes the panel. Slot scroll discipline (2026-11-16
+  // curated-vanish fix, replacing the 2026-11-15 ghost-fix rule):
+  // the old rule scrolled the slot back to its top on EVERY
+  // selection change — with 16–45 rows in a 220px slot that yanked
+  // the visible window to the blurb + first rows on any deep-row
+  // tap, scrolling the tapped row and its neighbours out of view
+  // so the other collections appeared to vanish (Joshua's
+  // 2026-11-16 phone report; nothing was ever removed from the
+  // DOM). Now the slot resets to its top only when the LIST itself
+  // changes — a different curated group, or the other lane's slot.
+  // A selection change inside the same list preserves scrollTop
+  // and adjusts it the minimum amount that keeps the active row
+  // inside the visible window (the blurb mounting or unmounting
+  // above the rows shifts them by its height; the adjustment
+  // absorbs exactly that). The ghost protection the reset used to
+  // provide lives in the blurb element itself: it is keyed by the
+  // selection (see the markup), so a stale description can never
+  // co-render with the incoming rows at any scroll position.
+  // Layout effects, not passive ones: the adjustment must land
+  // BEFORE the browser paints the new selection.
+  const collSlotGroupRef = useRef(null);
   useLayoutEffect(() => {
-    if (collSubsRef.current) collSubsRef.current.scrollTop = 0;
+    const prevGroup = collSlotGroupRef.current;
+    collSlotGroupRef.current = collGroup;
+    const el = collSubsRef.current;
+    if (!el) return;
+    if (prevGroup !== collGroup) {
+      el.scrollTop = 0;
+      return;
+    }
+    keepSlotRowInView(el);
   }, [collKey, collGroup]);
+  const laneSlotLaneRef = useRef(null);
   useLayoutEffect(() => {
-    if (laneSubsRef.current) laneSubsRef.current.scrollTop = 0;
-  }, [shelfKey, paperKey]);
+    const lane = bucketFilter ? bucketFilter.split(":")[0] : "";
+    const prevLane = laneSlotLaneRef.current;
+    laneSlotLaneRef.current = lane;
+    const el = laneSubsRef.current;
+    if (!el) return;
+    if (prevLane !== lane) {
+      el.scrollTop = 0;
+      return;
+    }
+    keepSlotRowInView(el);
+  }, [shelfKey, paperKey, bucketFilter]);
   const collSet = activeCollection ? activeCollection.ids : null;
   // Curated bitsets (Phase 2A, design §12): when the collection's
   // descriptor came from the TCU1 bitsets, membership is the packed
@@ -2308,26 +2668,46 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // logic, counts and click-to-clear are unchanged.
   const filterAnchor = useRef(null);
   // The anchor now also carries the selection the tap PRODUCES
-  // (filter perf fix, design §10): the layout effect keeps correcting
-  // the panel offset on every render until that selection's own
-  // filter-engine result has committed — hub-index data landing, a
-  // subchip row mounting, the results window re-measuring can all
-  // shift the panel AFTER the tap's first re-render, and the old
-  // one-shot correction had already spent itself by then (the scroll
-  // bounce in Joshua's 2026-11-11 recording). A generous safety
-  // expiry retires an anchor whose commit never comes (e.g. a
-  // selection the server-search path owns), and a deliberate scroll
-  // gesture retires it at once.
+  // (filter perf fix, design §10): the layout effect corrects the
+  // panel offset after the tap so rows mounting or unmounting
+  // inside the panel never move what the visitor is looking at.
+  // Corrections are BOUNDED (2026-11-16 curated-vanish fix): the
+  // anchor retires ~600ms after the tap, or once the panel's top
+  // has held stable across two consecutive renders, or when the
+  // tap's own selection commits — whichever comes first — and a
+  // deliberate scroll gesture retires it at once. The old rule
+  // corrected on every render until the engine commit landed,
+  // which mid-stream could take seconds: the page kept being
+  // pulled back to the panel while the visitor was trying to
+  // interact with it (the neighbour-row mis-taps and the
+  // "deselect doesn't take" feel in Joshua's 2026-11-16 report).
+  // A deselect-to-empty never anchors at all: its commit is the
+  // engine's zero-predicate fast path, so there is no settle
+  // window to absorb.
   const noteFilterAnchor = useCallback((sel) => {
     if (typeof window === "undefined") return;
     const prev = filterAnchor.current;
     if (prev && prev.release) prev.release();
+    filterAnchor.current = null;
+    if (
+      sel &&
+      !sel.bucketFilter &&
+      !sel.eraFilter &&
+      !sel.collKey &&
+      !sel.shelfKey &&
+      !sel.paperKey &&
+      !sel.paperTypeKey
+    ) {
+      return;
+    }
     const el = filterPanelRef.current;
     const anchor = {
       y: window.scrollY || 0,
       top: el ? el.getBoundingClientRect().top : null,
       sel: sel || null,
       at: Date.now(),
+      prevTop: null,
+      stable: 0,
       release: null,
     };
     // A deliberate scroll gesture retires the anchor immediately —
@@ -2348,10 +2728,35 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   useLayoutEffect(() => {
     const anchor = filterAnchor.current;
     if (!anchor) return;
+    const retire = () => {
+      if (anchor.release) anchor.release();
+      if (filterAnchor.current === anchor) filterAnchor.current = null;
+    };
+    // Bounded corrections (2026-11-16 curated-vanish fix): past
+    // ~600ms the anchor never corrects again — the tap's own
+    // aftermath is over by then, and anything still settling
+    // belongs to the visitor, not the anchor.
+    if (Date.now() - anchor.at > 600) {
+      retire();
+      return;
+    }
     const el = filterPanelRef.current;
+    let stable = false;
     if (el && anchor.top !== null && typeof window !== "undefined") {
-      const delta = el.getBoundingClientRect().top - anchor.top;
+      const nowTop = el.getBoundingClientRect().top;
+      const delta = nowTop - anchor.top;
       if (delta) window.scrollTo(0, Math.max(0, window.scrollY + delta));
+      // Stability exit: the panel's top holding the same position
+      // across two consecutive renders means the tap's layout
+      // shifts have landed; further corrections could only fight
+      // the visitor.
+      if (anchor.prevTop !== null && Math.abs(nowTop - anchor.prevTop) < 0.5) {
+        anchor.stable += 1;
+      } else {
+        anchor.stable = 0;
+      }
+      anchor.prevTop = nowTop;
+      stable = anchor.stable >= 1;
     }
     const committed =
       anchor.sel &&
@@ -2362,16 +2767,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       browseResult.sel.shelfKey === anchor.sel.shelfKey &&
       browseResult.sel.paperKey === anchor.sel.paperKey &&
       browseResult.sel.paperTypeKey === anchor.sel.paperTypeKey;
-    // Safety expiry is generous (15s): the hub-index load that a
-    // first curated tap can trigger takes seconds on a throttled
-    // phone, and its panel growth is exactly what the anchor must
-    // outlive (measured in the storm harness, design §10.4). The
-    // commit match and the scroll-gesture retirement above are the
-    // normal exits.
-    if (committed || Date.now() - anchor.at > 15000) {
-      if (anchor.release) anchor.release();
-      filterAnchor.current = null;
-    }
+    if (committed || stable) retire();
   }, [collGroup, collKey, shelfKey, paperKey, paperTypeKey, bucketFilter, filtersOpen, eraFilter, browseResult]);
   const selectCollGroup = (g) => {
     noteFilterAnchor({ bucketFilter, eraFilter, collKey: "", shelfKey, paperKey, paperTypeKey });
@@ -2826,210 +3222,74 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // is active (the panel then uses the global sources, as before) or
   // while the derivation is not final (prefix counts are never
   // dressed as finals — the panel shows no numbers in that state).
-  const facetCounts = useMemo(() => {
+  //
+  // The tally itself runs OFF the render path (2026-11-16
+  // curated-vanish fix): it used to be a synchronous useMemo whose
+  // bitset walks landed on every selection tap — and re-ran on
+  // post-completion derivation publishes — freezing the panel for
+  // the length of the walk exactly when the visitor was tapping.
+  // It now runs as the chunked job in facetCountSteps (above),
+  // latest-wins like the browse engine: the effect below (re)starts
+  // it when the tally's inputs change, and the finished counts
+  // commit atomically into state. Until a commit lands the panel
+  // keeps showing the previous committed tallies — the same
+  // committed pattern the results list follows. One case deserves
+  // a note: the curated axis's own counts provably do not depend on
+  // the curated member (they are computed within bucket ∧ era ∧
+  // shelf), so a curated-only tap cannot invalidate the numbers
+  // the curated rows are already showing while the job re-runs.
+  const [facetCounts, setFacetCounts] = useState(null);
+  const facetJobRef = useRef(null);
+  useEffect(() => {
     // countsReady, not its countsFinal alias: the alias is declared
     // further down the component (TDZ — referencing it here crashed
     // the page on first render, 2026-11-15).
-    if (!countsReady || !towerData || !towerData.bucketKeys || !towerData.eraCodes)
-      return null;
-    const collMemberBits =
-      collBitsSel ||
-      (collSet && towerData.idIndex
-        ? buildMembershipBitset(towerData.idIndex, collSet, towerData.bucketKeys.length)
-        : null);
-    const member = memberBitsSel || collMemberBits;
-    if (!bucketFilter && !eraFilter && !member) return null;
-    const bucketKeys = towerData.bucketKeys;
-    const eraCodes = towerData.eraCodes;
-    const N = bucketKeys.length;
-    const W = Math.ceil(N / 32);
-    const pop32 = (x) => {
-      x -= (x >> 1) & 0x55555555;
-      x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
-      x = (x + (x >> 4)) & 0x0f0f0f0f;
-      return (x * 0x01010101) >> 24;
-    };
-    const andPop = (a, b) => {
-      let n = 0;
-      const lim = Math.min(a.length, b.length, W);
-      for (let w = 0; w < lim; w++) n += pop32(a[w] & b[w]);
-      return n;
-    };
-    const andWords = (a, b) => {
-      if (!a) return b;
-      if (!b) return a;
-      const out = new Uint32Array(W);
-      const lim = Math.min(a.length, b.length, W);
-      for (let w = 0; w < lim; w++) out[w] = a[w] & b[w];
-      return out;
-    };
-    // Bucket mask from the few distinct bucket keys the filter can
-    // match (exact key, or the lane prefix for a lane selection).
-    let bucketWords = null;
-    if (bucketFilter) {
-      const laneOnly = bucketFilter.indexOf(":") < 0;
-      const match = new Set();
-      for (const k of Object.keys(towerData.subCounts || {})) {
-        if (k === bucketFilter || (laneOnly && k.indexOf(bucketFilter + ":") === 0))
-          match.add(k);
-      }
-      if (!laneOnly) match.add(bucketFilter);
-      bucketWords = new Uint32Array(W);
-      for (let i = 0; i < N; i++) {
-        if (match.has(bucketKeys[i])) bucketWords[i >> 5] |= 1 << (i & 31);
-      }
-    }
-    let eraWords = null;
-    if (eraFilter) {
-      const code = TOWER_ERAS.findIndex((e) => e.id === eraFilter) + 1;
-      eraWords = new Uint32Array(W);
-      for (let i = 0; i < N; i++) {
-        if (eraCodes[i] === code) eraWords[i >> 5] |= 1 << (i & 31);
-      }
-    }
-    const bec = towerData.bucketEraCounts || {};
-    // --- era counts within bucket ∧ member -------------------------
-    const eraMap = {};
-    {
-      const within = andWords(bucketWords, member);
-      if (!within) {
-        for (const e of TOWER_ERAS)
-          eraMap[e.id] = bucketFilter
-            ? bec[bucketFilter + "|" + e.id] || 0
-            : towerData.eraCounts[e.id] || 0;
-      } else {
-        for (const e of TOWER_ERAS) eraMap[e.id] = 0;
-        for (let w = 0; w < W; w++) {
-          let word = within[w];
-          while (word) {
-            const b = word & -word;
-            const i = (w << 5) + (31 - Math.clz32(b));
-            const ec = eraCodes[i];
-            if (ec) eraMap[TOWER_ERAS[ec - 1].id]++;
-            word ^= b;
-          }
-        }
-      }
-    }
-    // --- lane + subcategory counts within era ∧ member -------------
-    const laneMap = {};
-    const subMap = {};
-    if (!member) {
-      for (const k of Object.keys(towerData.subCounts || {})) {
-        const n = eraFilter
-          ? bec[k + "|" + eraFilter] || 0
-          : towerData.subCounts[k] || 0;
-        subMap[k] = n;
-        const lane = k.split(":")[0];
-        laneMap[lane] = (laneMap[lane] || 0) + n;
-      }
-      if (!eraFilter) {
-        for (const c of Object.keys(towerData.counts || {}))
-          if (laneMap[c] === undefined) laneMap[c] = towerData.counts[c] || 0;
-      }
-    } else {
-      const within = andWords(eraWords, member);
-      for (let w = 0; w < W; w++) {
-        let word = within[w];
-        while (word) {
-          const b = word & -word;
-          const i = (w << 5) + (31 - Math.clz32(b));
-          const bk = bucketKeys[i];
-          subMap[bk] = (subMap[bk] || 0) + 1;
-          const lane = bk.split(":")[0];
-          laneMap[lane] = (laneMap[lane] || 0) + 1;
-          word ^= b;
-        }
-      }
-    }
-    // --- curated rows within bucket ∧ era ∧ shelf ------------------
-    const curatedMap = {};
-    if (collData) {
-      const group = collData.groups.find((g) => g.id === collGroup);
-      if (group) {
-        const other = andWords(andWords(bucketWords, eraWords), shelfBits);
-        for (const c of group.collections) {
-          curatedMap[c.key] = c.bits
-            ? other
-              ? andPop(c.bits, other)
-              : c.count
-            : c.ids
-              ? (() => {
-                  // Hub-Set fallback descriptors: count set members
-                  // inside the other axes via the id index.
-                  if (!other) return c.count;
-                  let n = 0;
-                  for (let w = 0; w < W; w++) {
-                    let word = other[w];
-                    while (word) {
-                      const b = word & -word;
-                      const i = (w << 5) + (31 - Math.clz32(b));
-                      if (c.ids.has(artifacts[i].artifact_id)) n++;
-                      word ^= b;
-                    }
-                  }
-                  return n;
-                })()
-              : c.count;
-        }
-      }
-    }
-    // --- Books shelves within bucket ∧ era ∧ curated ---------------
-    const shelfMap = {};
     if (
-      collData &&
-      collData.booksShelves &&
-      collData.booksShelves.length &&
-      (bucketFilter.split(":")[0] === "BOOKS" || shelfKey)
+      !countsReady ||
+      !towerData ||
+      !towerData.bucketKeys ||
+      !towerData.eraCodes ||
+      (!bucketFilter &&
+        !eraFilter &&
+        !memberBitsSel &&
+        !collBitsSel &&
+        !collSet)
     ) {
-      const other = andWords(andWords(bucketWords, eraWords), collMemberBits);
-      for (const s of collData.booksShelves) {
-        shelfMap[s.key] = other ? andPop(s.bits, other) : s.count;
+      if (facetJobRef.current) {
+        facetJobRef.current.cancel();
+        facetJobRef.current = null;
       }
+      setFacetCounts(null);
+      return;
     }
-    // --- Papers fields/subfields/types within the other axes -----
-    // Field and subfield rows count within bucket ∧ era ∧ curated ∧
-    // shelf ∧ type (the paper axis itself excluded, the type axis
-    // included); type rows count within the same set with the field
-    // selection included and the type axis excluded — the same
-    // other-axes rule every axis above follows.
-    const paperMap = {};
-    const paperTypeMap = {};
-    if (
-      collData &&
-      collData.papersFields &&
-      collData.papersFields.length &&
-      (bucketFilter.split(":")[0] === "PAPERS" || paperKey || paperTypeKey)
-    ) {
-      const paperOther = andWords(
-        andWords(bucketWords, eraWords),
-        andWords(collMemberBits, shelfBits)
-      );
-      const fieldBase = andWords(paperOther, paperTypeBits);
-      for (const f of collData.papersFields) {
-        paperMap[f.key] = f.bits
-          ? fieldBase
-            ? andPop(f.bits, fieldBase)
-            : f.count
-          : f.count;
-        for (const s of f.subs) {
-          paperMap[s.key] = s.bits
-            ? fieldBase
-              ? andPop(s.bits, fieldBase)
-              : s.count
-            : s.count;
-        }
+    const input = {
+      towerData,
+      artifacts,
+      bucketFilter,
+      eraFilter,
+      memberBitsSel,
+      collBitsSel,
+      shelfBits,
+      paperBits,
+      paperTypeBits,
+      collSet,
+      collData,
+      collGroup,
+      shelfKey,
+      paperKey,
+      paperTypeKey,
+    };
+    const job = startFacetJob(input, (result) => {
+      if (facetJobRef.current === job) {
+        facetJobRef.current = null;
+        setFacetCounts(result);
       }
-      const typeBase = andWords(paperOther, paperBits);
-      for (const t of collData.papersTypes || []) {
-        paperTypeMap[t.key] = t.bits
-          ? typeBase
-            ? andPop(t.bits, typeBase)
-            : t.count
-          : t.count;
-      }
-    }
-    return { eraMap, laneMap, subMap, curatedMap, shelfMap, paperMap, paperTypeMap };
+    });
+    facetJobRef.current = job;
+    return () => {
+      job.cancel();
+      if (facetJobRef.current === job) facetJobRef.current = null;
+    };
   }, [
     countsReady,
     towerData,
@@ -3044,6 +3304,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     collSet,
     collData,
     collGroup,
+    shelfKey,
     paperKey,
     paperTypeKey,
   ]);
