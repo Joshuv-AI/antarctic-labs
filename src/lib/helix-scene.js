@@ -1688,7 +1688,29 @@ export function createHelixScene(canvas, opts = {}) {
         instHomePage[i] = instPage[i];
       } else {
         scratchFocus[i] = 0.30;
-        instCell[i] = homeCellOf(i);
+        if (homePageOf(i) === instPage[i]) {
+          instCell[i] = homeCellOf(i);
+        } else {
+          // Purity fix (INVENTORY 100): the panel's home page is
+          // its segment page (that segment is active), but this
+          // panel samples a different page — in a re-coiled layout
+          // every panel sits on the starter page by design, and a
+          // panel can also outlive its segment's active window on
+          // the segment page itself. Dealing homeCellOf() here put
+          // a cell index from the HOME page's pool onto the SAMPLED
+          // page, so the panel rendered whatever cover sits at
+          // that index in the sampled page's layout — a cover from
+          // another collection's pool. Deal the home-equivalent
+          // cell on the page actually sampled (the same
+          // pure-function deal the lit branches above use) and sync
+          // the home record to the sampled page, exactly as those
+          // branches do. When home page and sampled page agree the
+          // homeCellOf() path above is byte-identical to this deal.
+          const c = cellFor(instPage[i], band, rankOnPage(i, instPage[i]));
+          instCell[i] = c >= 0 ? c : instBaseCell[i];
+          instHomeCell[i] = instCell[i];
+          instHomePage[i] = instPage[i];
+        }
       }
     }
     const domWindow = windows[dom]
