@@ -15,7 +15,11 @@
 // under the same internal "audiences" id, per its design). The Books
 // lane's subcategories are the 61-shelf Books expansion, delivered as
 // `bookshelf:` bitsets and rendered in the Collections axis' sub slot
-// (multi-match shelves cannot be a prefix partition). Removed and
+// (multi-match shelves cannot be a prefix partition). The Papers
+// lane's subcategories are the subject-enrichment taxonomy (12 fields,
+// 70 subfields, 10 publication types), delivered as `paperfield:` /
+// `papersub:` / `papertype:` bitsets and rendered in the same sub
+// slot (shipped 2026-11-16; see buildCollectionsFromBitsets). Removed and
 // never returning: the "Declassified programmes" curated group (its
 // subcategories merged into the Declassified lane's own subcategory
 // list — see tower-taxonomy.js) and "Course primary sources" (entries
@@ -59,6 +63,8 @@ import {
   CONSPIRACY_COLLECTIONS,
   MATHSCI_SHELVES,
   BOOKS_SHELVES,
+  PAPER_FIELDS,
+  PAPER_TYPES,
 } from "./tower-collections-data.js";
 
 // id -> {label, blurb} lookup for one taxonomy table.
@@ -260,6 +266,9 @@ export function buildCollectionsFromBitsets(parsed) {
   if (!parsed || !parsed.collections) return null;
   const byGroup = new Map();
   const booksShelves = [];
+  const paperFieldBits = new Map(); // field id -> TCU1 entry
+  const paperSubBits = new Map(); // "field:sub" -> TCU1 entry
+  const paperTypeBits = new Map(); // type id -> TCU1 entry
   const pushTo = (groupId, desc) => {
     if (!byGroup.has(groupId)) byGroup.set(groupId, []);
     byGroup.get(groupId).push(desc);
@@ -268,6 +277,18 @@ export function buildCollectionsFromBitsets(parsed) {
     const cut = c.key.indexOf(":");
     const kind = cut > 0 ? c.key.slice(0, cut) : c.key;
     const rest = cut > 0 ? c.key.slice(cut + 1) : "";
+    if (kind === "paperfield") {
+      paperFieldBits.set(rest, c);
+      continue;
+    }
+    if (kind === "papersub") {
+      paperSubBits.set(rest, c);
+      continue;
+    }
+    if (kind === "papertype") {
+      paperTypeBits.set(rest, c);
+      continue;
+    }
     if (kind === "bookshelf") {
       const t = BOOKS_LOOKUP.get(rest);
       booksShelves.push({
@@ -310,15 +331,60 @@ export function buildCollectionsFromBitsets(parsed) {
     const collections = byGroup.get(g.id);
     if (collections && collections.length) groups.push({ id: g.id, collections });
   }
-  // Papers subject map: HELD (2026-11-15). The papers-subcategories
-  // design's membership runs on enrichment signals the catalog does
-  // not carry (Europe PMC MeSH/keywords, OpenAlex topics) and the
-  // design ships no counts/members file, so no reproduction gate can
-  // be satisfied in this run; the enrichment pass is a publish-cycle
-  // job and the publish cycle is paused. The panel's dormant Papers
-  // branch keys off these being empty; the lane keeps its current
-  // source-prefix subcategories until the redo ships.
-  return { total: parsed.total, groups, booksShelves, papersFields: [], papersTypes: [] };
+  // Papers subject map (shipped 2026-11-16): the papers-subcategories
+  // design's field/subfield taxonomy plus the publication-type axis,
+  // classified by the subject-enrichment pipeline (arXiv categories,
+  // Europe PMC MeSH/keywords/journal layers) and baked as TCU1
+  // paperfield:/papersub:/papertype: bitsets by
+  // scripts/build-papers-bitsets.mjs. The tables in
+  // tower-collections-data.js are the text and ordering authority;
+  // the bitsets carry membership (primary + cross-lists — counts
+  // overlap by design and do not sum to the Papers total). A field
+  // whose bitset is absent simply does not render; the lane falls
+  // back to its source-prefix subcategories only when NO papers
+  // entries exist at all (the hub fallback path returns null here).
+  const papersFields = [];
+  for (const f of PAPER_FIELDS) {
+    const fc = paperFieldBits.get(f.id);
+    if (!fc) continue;
+    const subs = [];
+    for (const s of f.subs) {
+      const sc = paperSubBits.get(`${f.id}:${s.id}`);
+      if (!sc) continue;
+      subs.push({
+        key: sc.key,
+        id: s.id,
+        label: s.label,
+        count: sc.count,
+        ids: null,
+        bits: sc.bits,
+      });
+    }
+    papersFields.push({
+      key: fc.key,
+      id: f.id,
+      label: f.label,
+      blurb: f.blurb || "",
+      count: fc.count,
+      ids: null,
+      bits: fc.bits,
+      subs,
+    });
+  }
+  const papersTypes = [];
+  for (const t of PAPER_TYPES) {
+    const tc = paperTypeBits.get(t.id);
+    if (!tc) continue;
+    papersTypes.push({
+      key: tc.key,
+      id: t.id,
+      label: t.label,
+      count: tc.count,
+      ids: null,
+      bits: tc.bits,
+    });
+  }
+  return { total: parsed.total, groups, booksShelves, papersFields, papersTypes };
 }
 
 // Labels for traditions (the hub index carries work lists, not

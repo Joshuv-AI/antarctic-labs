@@ -299,14 +299,18 @@ function buildCurated() {
     meta.push({ key: c.key, count: pop, hub_list_length: c.ids.length });
     console.log(`curated ${c.key}: ${pop} members (hub list ${c.ids.length})`);
   });
-  // Carry-over for the position-baked groups (law:*, med:*, eng:*):
-  // their member lists live in the design packages' runners, not in a
-  // committed id file, so a full dataset rebuild can only preserve
-  // them — and only when the catalog is byte-identical (same source
-  // fingerprint ⇒ same records in the same order ⇒ the bits still
-  // describe this catalog). On a changed catalog they are dropped
-  // with a loud warning: re-run the design runners and
-  // scripts/build-curated-bitsets.mjs before the dataset ships.
+  // Carry-over for the position-baked groups (law:*, med:*, eng:*)
+  // and the Papers subject map (paperfield:*, papersub:*,
+  // papertype:* — baked by scripts/build-papers-bitsets.mjs from the
+  // subject-enrichment artifacts, 2026-11-16): their member lists
+  // live in the design packages' runners / enrichment artifacts, not
+  // in a committed id file, so a full dataset rebuild can only
+  // preserve them — and only when the catalog is byte-identical
+  // (same source fingerprint ⇒ same records in the same order ⇒ the
+  // bits still describe this catalog). On a changed catalog they are
+  // dropped with a loud warning: re-run the design runners and
+  // scripts/build-curated-bitsets.mjs / build-papers-bitsets.mjs
+  // before the dataset ships.
   const prevBr = join(outDir, "curated.bin.br");
   const prevManifestFile = join(outDir, "manifest.json");
   if (existsSync(prevBr) && existsSync(prevManifestFile)) {
@@ -331,7 +335,7 @@ function buildCurated() {
         const entryStart = p - (1 + kl + 1 + ll + 4);
         const entryBytes = prevRaw.subarray(entryStart, p + prevBitsetBytes);
         p += prevBitsetBytes;
-        if (!/^(law|med|eng):/.test(key) || have.has(key)) continue;
+        if (!/^(law|med|eng|paperfield|papersub|papertype):/.test(key) || have.has(key)) continue;
         if (!sameCatalog) {
           console.warn(
             `curated ${key}: NOT carried over — catalog changed; regenerate via scripts/build-curated-bitsets.mjs`

@@ -14,10 +14,12 @@
 //                 The design's two optional curated pins are NOT
 //                 applied: they would break the exact design counts
 //                 (follow-on, logged in the run record).
-//   (Papers paperfield/papersub/papertype entries are HELD: the
-//   papers-subcategories design's membership needs enrichment data
-//   the catalog does not carry and ships no counts/members file, so
-//   no reproduction gate can be satisfied this run.)
+//   (Papers paperfield/papersub/papertype entries ship separately
+//   via scripts/build-papers-bitsets.mjs from the subject-enrichment
+//   artifacts — 2026-11-16. NOTE: this script rebuilds curated.bin
+//   from its own entry list only; re-running it after the Papers
+//   ship DROPS the papers entries. Re-run build-papers-bitsets.mjs
+//   afterwards, or use build-tcb1.mjs's carry-over path.)
 //   eng:*         members-engineering.json — record positions from
 //                 curated-engineering-20261114's rules_v3.py/engine3.py
 //   conspiracy:*  members-conspiracy-ship.json — record positions from
@@ -225,8 +227,9 @@ for (const e of BOOKS_SHELVES) {
     positions: positionsFromIds(bookMembers[e.id] || []),
   });
 }
-// Papers entries: HELD — see the header comment. No paperfield /
-// papersub / papertype bitsets ship in this package.
+// Papers entries ship via scripts/build-papers-bitsets.mjs (see the
+// header note): no paperfield / papersub / papertype bitsets are
+// emitted by THIS script.
 
 // ---------- expected counts gate --------------------------------------
 const expected = readJson(join(membersDir, "expected-counts.json"));

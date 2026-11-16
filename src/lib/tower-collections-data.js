@@ -241,3 +241,128 @@ export const BOOKS_SHELVES = [
   { id: "periodicals", label: "Periodicals, Magazines & Annuals", wing: "Forms & the Book World", blurb: "Punch, Harper's, Blackwood's, the reviews & annual registers — a real stratum of this lane" },
   { id: "reference-bibliography", label: "Reference, Bibliography & the Book World", wing: "Forms & the Book World", blurb: "Encyclopedias (Britannica excluded, §4.6), bibliographies, printing, libraries" },
 ];
+
+// Papers subject map (2026-11-16 ship of the 2026-11-14
+// papers-subcategories design): the Papers lane's two-level
+// field/subfield taxonomy plus the publication-type axis.
+// Labels are the design taxonomy's own (enrichment pipeline's
+// canonical taxonomy table); order is by classified membership,
+// largest first (the facet convention the design specifies).
+// Membership lives in the TCU1 bitsets (paperfield:/papersub:/
+// papertype: entries in tcb1-data/curated.bin, baked by
+// scripts/build-papers-bitsets.mjs from the enrichment
+// artifacts) — these tables carry presentation only. Counts
+// overlap by design (cross-listing; Joshua's waiver): they do
+// not sum to the Papers total, and no "Other" shelf exists —
+// the unclassified residue is a number in the ship record,
+// never a label. Marker subfields (law, linguistics) ship with
+// their honest small counts.
+export const PAPER_FIELDS = [
+  { id: "medicine", label: "Medicine & Clinical Science", blurb: "Clinical medicine and health research, shelf by shelf: oncology, cardiovascular and metabolic health, infectious diseases, surgery, public health, and the rest of the biomedical literature.", subs: [
+    { id: "health-services", label: "Health Services, Nursing & Medical Education" },
+    { id: "public-health-epidemiology", label: "Public Health & Epidemiology" },
+    { id: "diagnostics", label: "Diagnostics: Radiology, Pathology & Laboratory Medicine" },
+    { id: "oncology", label: "Oncology" },
+    { id: "infectious-diseases", label: "Infectious Diseases" },
+    { id: "cardiovascular", label: "Cardiovascular Health" },
+    { id: "pharmacology", label: "Pharmacology & Therapeutics" },
+    { id: "gastroenterology-hepatology", label: "Gastroenterology & Hepatology" },
+    { id: "endocrine-metabolic", label: "Endocrine & Metabolic Health" },
+    { id: "immunology-inflammation", label: "Immunology & Inflammation" },
+    { id: "nephrology-urology", label: "Nephrology & Urology" },
+    { id: "respiratory", label: "Respiratory Medicine" },
+    { id: "surgery", label: "Surgery & Procedures" },
+    { id: "hematology", label: "Hematology & Blood" },
+    { id: "rheumatology-musculoskeletal", label: "Rheumatology & Musculoskeletal" },
+    { id: "obstetrics-gynecology", label: "Obstetrics, Gynecology & Reproductive Health" },
+    { id: "pediatrics", label: "Pediatrics & Child Health" },
+    { id: "dermatology", label: "Dermatology & Skin" },
+    { id: "dentistry", label: "Dentistry & Oral Health" },
+    { id: "emergency-critical-care", label: "Emergency & Critical Care" },
+    { id: "ophthalmology", label: "Ophthalmology & Vision" },
+    { id: "aging-geriatrics", label: "Aging & Geriatrics" },
+    { id: "anesthesiology-pain", label: "Anesthesiology & Pain Medicine" },
+  ] },
+  { id: "cs", label: "Computer Science", blurb: "Computing in all its branches — machine learning, computer vision, language, theory, systems and security — anchored by the arXiv computer science corpus, with computational work from every other source cross-listed in.", subs: [
+    { id: "ai-ml", label: "Artificial Intelligence & Machine Learning" },
+    { id: "computer-vision", label: "Computer Vision & Pattern Recognition" },
+    { id: "info-systems", label: "Information Systems & Data Management" },
+    { id: "computation-language", label: "Computation & Language (NLP)" },
+    { id: "systems-networks-security", label: "Systems, Networks & Security" },
+    { id: "software-hci", label: "Software Engineering & HCI" },
+    { id: "theory", label: "Theory of Computation & Algorithms" },
+    { id: "hardware", label: "Hardware & Computer Architecture" },
+  ] },
+  { id: "biology", label: "Biology & Life Sciences", blurb: "The life sciences outside clinical medicine: genetics and genomics, cell and molecular biology, microbiology, ecology and evolution, plants and animal science.", subs: [
+    { id: "cell-molecular", label: "Cell & Molecular Biology" },
+    { id: "genetics-genomics", label: "Genetics & Genomics" },
+    { id: "animal-veterinary", label: "Animal & Veterinary Science" },
+    { id: "microbiology-virology", label: "Microbiology & Virology" },
+    { id: "plants-agriculture", label: "Plants & Agriculture" },
+    { id: "ecology-evolution", label: "Ecology, Evolution & Environment" },
+  ] },
+  { id: "physics", label: "Physics", blurb: "Particle and nuclear physics, astronomy and astrophysics, atomic and quantum physics, condensed matter and complex systems — anchored by the arXiv physics corpus and the NASA record.", subs: [
+    { id: "particle-nuclear-field", label: "Particle, Nuclear & Field Theory" },
+    { id: "astronomy-astrophysics", label: "Astronomy & Astrophysics" },
+    { id: "condensed-matter", label: "Condensed Matter & Materials Physics" },
+    { id: "amo-quantum", label: "Atomic, Molecular, Optics & Quantum Physics" },
+    { id: "statistical-nonlinear", label: "Statistical, Nonlinear & Complex Systems" },
+    { id: "geophysics-planetary", label: "Geophysics & Planetary Science" },
+  ] },
+  { id: "math", label: "Mathematics & Statistics", blurb: "Pure and applied mathematics with statistics: geometry and topology, algebra and number theory, combinatorics, probability, numerical analysis and mathematical physics.", subs: [
+    { id: "applied-mathematics", label: "Applied Mathematics" },
+    { id: "statistics-probability", label: "Statistics & Probability" },
+    { id: "geometry-topology", label: "Geometry & Topology" },
+    { id: "algebra-number-theory", label: "Algebra & Number Theory" },
+    { id: "discrete-combinatorics", label: "Discrete Mathematics & Combinatorics" },
+    { id: "numerical-analysis", label: "Numerical Analysis & Scientific Computing" },
+    { id: "mathematical-physics", label: "Mathematical Physics" },
+  ] },
+  { id: "engineering", label: "Engineering", blurb: "Electrical engineering and communications, control systems and robotics, aerospace, mechanical and biomedical engineering — plus the DOE and NASA technical-report literature.", subs: [
+    { id: "electrical-communications", label: "Electrical, Electronics & Communications" },
+    { id: "control-systems-robotics", label: "Control, Systems & Robotics" },
+    { id: "computational-mechanics", label: "Computational Mechanics & Engineering Methods" },
+    { id: "biomedical-engineering", label: "Biomedical Engineering" },
+    { id: "aerospace", label: "Aerospace Engineering" },
+    { id: "mechanical-automotive-civil", label: "Mechanical, Automotive & Civil Engineering" },
+  ] },
+  { id: "brain", label: "Brain, Mind & Psychology", blurb: "Neuroscience and neurology, psychiatry and mental health, cognition and psychology — the science of the brain and mind, clinical and basic.", subs: [
+    { id: "neuroscience-neurology", label: "Neuroscience & Neurology" },
+    { id: "cognition-psychology", label: "Cognition & Psychology" },
+    { id: "psychiatry-mental-health", label: "Psychiatry & Mental Health" },
+  ] },
+  { id: "chemistry", label: "Chemistry & Biochemistry", blurb: "Chemistry and biochemistry: medicinal and biological chemistry and molecular science, much of it riding inside the biomedical literature, where it is cross-listed rather than hidden.", subs: [
+  ] },
+  { id: "social", label: "Social Sciences, Education & Policy", blurb: "Social sciences, education and policy research as the library actually holds it — a small, honestly counted field. Legal studies and linguistics stand here as markers: real shelves naming real gaps.", subs: [
+    { id: "sociology-policy", label: "Sociology, Policy & Society" },
+    { id: "education-research", label: "Education Research" },
+    { id: "geography-regional", label: "Geography & Regional Studies" },
+    { id: "linguistics", label: "Linguistics", marker: true },
+    { id: "law", label: "Law & Legal Studies", marker: true },
+  ] },
+  { id: "econ", label: "Economics, Finance & Business", blurb: "Economics, quantitative finance and business research: econometrics, game theory, markets and decision science.", subs: [
+  ] },
+  { id: "earth-energy", label: "Earth, Energy & Environment", blurb: "Energy systems and policy, nuclear science, climate and earth science — the DOE OSTI reports joined by the same subjects from arXiv and Europe PMC that source-only shelves used to hide.", subs: [
+    { id: "energy-systems-policy", label: "Energy Systems & Policy" },
+    { id: "climate-earth-science", label: "Climate & Earth Science" },
+    { id: "nuclear", label: "Nuclear Science & Technology" },
+  ] },
+  { id: "hps", label: "History, Philosophy & Humanities of Science", blurb: "History, philosophy and classics of science — the historical papers themselves, from nineteenth-century scientific pamphlets to modern scholarship on science's past.", subs: [
+    { id: "history-of-science", label: "History of Science & Medicine" },
+    { id: "philosophy-of-science", label: "Philosophy of Science" },
+    { id: "classics-of-science", label: "Classics of Science" },
+  ] },
+];
+
+export const PAPER_TYPES = [
+  { id: "journal-articles", label: "Journal Articles" },
+  { id: "preprints", label: "Preprints" },
+  { id: "research-articles", label: "Research Articles" },
+  { id: "reviews", label: "Reviews" },
+  { id: "case-reports", label: "Case Reports" },
+  { id: "editorials-letters-commentary", label: "Editorials, Letters & Commentary" },
+  { id: "systematic-reviews-meta-analyses", label: "Systematic Reviews & Meta-Analyses" },
+  { id: "clinical-trials", label: "Clinical Trials" },
+  { id: "reports-technical-reports", label: "Reports & Technical Reports" },
+  { id: "data-papers-datasets", label: "Data Papers & Datasets" },
+];
