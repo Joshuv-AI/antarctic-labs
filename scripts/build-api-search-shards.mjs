@@ -42,10 +42,19 @@ function normText(s) {
 
 const SRC = "public/catalog-index-shards";
 const DST = "public/api-search-shards";
-// 40 MiB: 40% of GitHub's 100 MB per-file push limit, with the whole
-// budget consumed by at most one shard plus one record of slack in the
-// accounting below, so a shard can never approach the limit.
-const SHARD_BUDGET_BYTES = 40 * 1024 * 1024;
+// SHARD BUDGET — the binding limit is NOT GitHub's 100 MB push cap.
+// The handler JSON-parses a whole shard per cold isolate, and the
+// Workers isolate memory limit makes that parse the real constraint:
+// the ~17-20 MB shards of the original layout were already the cost
+// driver behind the 2026-10-24/27 search 1102s, the 27.8 MB shard of
+// the 556k snapshot produced intermittent 1102s under no particular
+// load (2026-11-11), and the first byte-budget regeneration at 40 MiB
+// (2026-11-16) platform-killed /api/v1/search outright (plain-text
+// 502s) while the serving handler parsed the new 42 MB shards. 16 MiB
+// keeps the parse at the original design norm; per-file size is then
+// capped at ~16% of the GitHub limit no matter how the catalog grows —
+// growth only adds shards, and the count travels in manifest.json.
+const SHARD_BUDGET_BYTES = 16 * 1024 * 1024;
 
 const srcFiles = readdirSync(SRC)
   .filter((f) => /^catalog-index-\d+\.json$/.test(f))
