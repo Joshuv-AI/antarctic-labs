@@ -79,7 +79,7 @@ export const COLLECTIONS = [
 // themselves would fail in the same conditions, so a stale count can
 // never silently serve wrong data — at worst a scan stops early and the
 // caller sees the upstream-unavailable path.
-export const FALLBACK_INDEX_SHARD_COUNT = 25;
+export const FALLBACK_INDEX_SHARD_COUNT = 56;
 const INDEX_RAW =
   "https://raw.githubusercontent.com/Joshuv-AI/antarctic-labs/main/public/api-search-shards";
 export const indexShardUrl = (i) =>
