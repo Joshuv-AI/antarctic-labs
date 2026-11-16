@@ -402,7 +402,17 @@ async function tcbLoadFile(t, name, meta, timeoutMs) {
   for (let attempt = 0; attempt < 2; attempt++) {
     let bytes = null;
     try {
-      bytes = await tcbFetchBytes(`/tcb1/${t.fp}/${name}`, meta.bytes, timeoutMs);
+      // Content-addressed URL (2026-11-15 panel fix): the manifest
+      // sha256 rides as ?v=, which the serving function folds into
+      // its cache key — every dataset file is fetched under a URL
+      // that names its exact bytes, so an edge copy stored under the
+      // bare URL (e.g. the double-brotli-encoded bodies the function
+      // served before the encoding fix) can never be served for it.
+      bytes = await tcbFetchBytes(
+        `/tcb1/${t.fp}/${name}?v=${meta.sha256}`,
+        meta.bytes,
+        timeoutMs
+      );
     } catch {
       bytes = null;
     }

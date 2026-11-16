@@ -17,6 +17,18 @@
 // The client verifies every file against the manifest's sha256
 // after inflation, so a wrong or truncated body can never reach
 // the decoder.
+//
+// ENCODING (2026-11-15 panel fix): the upstream subrequest MUST ask
+// for identity encoding. Without it, the .br asset arrives already
+// content-encoded once inside this fetch/respond path and the body
+// leaves double-brotli-encoded under a single "br" label — browsers
+// inflate one layer, receive the .br file itself, and every dataset
+// parse fails (the curated bitsets' "tcu1: bad magic" was the visible
+// symptom; the whole TCB1 stream silently fell back to JSON). With
+// identity, the stored .br bytes arrive raw and the single label
+// below describes them exactly. The Cache API key carries an "enc2"
+// scheme segment so the double-encoded entries stored under the old
+// scheme are orphaned, never served again.
 const REPO = "Joshuv-AI/antarctic-labs";
 const FILE_RE = /^(dict\.bin|curated\.bin|shard-\d{4}\.tcb)$/;
 const FP_RE = /^[0-9a-f]{64}$/;
@@ -46,7 +58,7 @@ export async function onRequest(context) {
   const versioned = v && /^[0-9a-f]{16,64}$/.test(v) ? `?v=${v}` : "";
   const cache = caches.default;
   const cacheKey = new Request(
-    new URL(`/tcb1/${fp}/${file}${versioned}`, request.url).toString(),
+    new URL(`/tcb1-enc2/${fp}/${file}${versioned}`, request.url).toString(),
     { method: "GET" }
   );
   if (request.method === "GET") {
@@ -57,6 +69,10 @@ export async function onRequest(context) {
   let upstream;
   try {
     upstream = await fetch(repoFileUrl(env, file), {
+      // Identity, per the ENCODING note above: the stored .br bytes
+      // must arrive raw so the one Content-Encoding: br label on the
+      // response is the only encoding layer.
+      headers: { "Accept-Encoding": "identity" },
       cf: { cacheTtl: 31536000, cacheEverything: true },
     });
   } catch {

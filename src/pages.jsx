@@ -2002,9 +2002,11 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // collGroup is a COLLECTION_GROUPS id (or "" for no group tab), and
   // collKey is the selected collection's key (or "" for none). The
   // collection's work ids come from the precomputed hub index, fetched
-  // lazily — the page paints and browses normally before it lands, and
-  // a failed fetch simply hides this UI (collFailed) instead of
-  // erroring the browse. The collection filter intersects with the
+  // lazily — the page paints and browses normally before it lands. A
+  // failed fetch never hides this UI (2026-11-15 fix: hiding it was
+  // the filmed panel collapse); the axis stays rendered with an
+  // honest loading / couldn't-load state instead of erroring the
+  // browse. The collection filter intersects with the
   // existing search + category filter + sort in the rank memo below;
   // it never renders a second list.
   const [collGroup, setCollGroup] = useState("");
@@ -2035,7 +2037,6 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // anywhere in the filter box now.
   const [collData, setCollData] = useState(null);
   const [collLoading, setCollLoading] = useState(false);
-  const [collFailed, setCollFailed] = useState(false);
   // Which source produced collData: the TCU1 bitsets are the full
   // taxonomy; the hub index fallback can only express traditions. A
   // late hub resolution must never clobber bitset data with the
@@ -2046,20 +2047,85 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   const laneSubsRef = useRef(null);
   const [filtersOpen, setFiltersOpen] = useState(true);
   const filterPanelRef = useRef(null);
+  // Curated-bitset load state (2026-11-15 panel fix): tracked
+  // separately from the hub load so the panel can tell the truth
+  // about each source. "failed" is a resting state, not a dead end —
+  // the next ensureCollections call starts a fresh attempt cycle
+  // (loadCuratedBitsets no longer caches a failure either).
+  const [collBitsState, setCollBitsState] = useState("idle");
+  const collBitsStateRef = useRef("idle");
+  const startBitsetsLoad = useCallback(() => {
+    const st = collBitsStateRef.current;
+    if (st === "loading" || st === "ready") return;
+    collBitsStateRef.current = "loading";
+    setCollBitsState("loading");
+    tcb1Meta()
+      .then((m) => {
+        const fp = m && m.source && m.source.fingerprint_sha256_concat;
+        if (!fp) return null;
+        const version =
+          m.curated && m.curated.sha256 ? m.curated.sha256 : null;
+        return loadCuratedBitsets(fp, version);
+      })
+      .then((data) => {
+        if (!data) {
+          collBitsStateRef.current = "failed";
+          setCollBitsState("failed");
+          return;
+        }
+        let bytes = 0;
+        for (const g of data.groups) {
+          for (const c of g.collections) {
+            if (c.bits) bytes += c.bits.byteLength;
+          }
+        }
+        for (const s of data.booksShelves || []) {
+          if (s.bits) bytes += s.bits.byteLength;
+        }
+        for (const f of data.papersFields || []) {
+          if (f.bits) bytes += f.bits.byteLength;
+          for (const s of f.subs || []) {
+            if (s.bits) bytes += s.bits.byteLength;
+          }
+        }
+        for (const t of data.papersTypes || []) {
+          if (t.bits) bytes += t.bits.byteLength;
+        }
+        noteExternalBytes("curated-bitsets", bytes);
+        collSourceRef.current = "bitsets";
+        collBitsStateRef.current = "ready";
+        setCollBitsState("ready");
+        setCollData(data);
+      })
+      .catch(() => {
+        collBitsStateRef.current = "failed";
+        setCollBitsState("failed");
+      });
+  }, []);
   const ensureCollections = useCallback(() => {
-    if (collData || collFailed || collLoading) return;
+    // The bitsets are the primary source for EVERY group (the hub
+    // index can only express traditions): any approach or group tap
+    // starts them, and restarts them after a failure. Before the
+    // 2026-11-15 fix this function started only the hub load, so a
+    // bitset failure at page open left the tapped group waiting on a
+    // 17.7 MB fallback that could never contain it — and when that
+    // fallback landed, its traditions-only data made the other
+    // groups' chips vanish from the panel.
+    startBitsetsLoad();
+    if (collData || collLoading) return;
     setCollLoading(true);
     loadHubsIndex().then((d) => {
       setCollLoading(false);
-      if (!d) {
-        setCollFailed(true);
-        return;
-      }
+      // A hub failure needs no state of its own: collData simply
+      // stays unset, the bitset load state carries the panel's
+      // loading / couldn't-load truth, and the axis renders either
+      // way (2026-11-15 fix — the old collFailed flag hid it).
+      if (!d) return;
       if (collSourceRef.current === "bitsets") return;
       collSourceRef.current = "hub";
       setCollData(buildCollections(d));
     });
-  }, [collData, collFailed, collLoading]);
+  }, [collData, collLoading, startBitsetsLoad]);
   // Approach trigger: start the hub-index fetch when the collections
   // block comes within ~800px of the viewport, so it is usually ready
   // before the visitor taps a group tab.
@@ -2109,6 +2175,24 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     if (!collData || !paperTypeKey || !collData.papersTypes) return null;
     return collData.papersTypes.find((t) => t.key === paperTypeKey) || null;
   }, [collData, paperTypeKey]);
+  // Panel truth-telling (2026-11-15 fix): what the selected curated
+  // group can actually render right now, and whether the panel is
+  // still waiting on a load. The chips and the subs slot derive from
+  // these — never from collData's group list alone — so a fallback
+  // dataset can no longer make groups vanish, and a group whose data
+  // failed to load says so plainly instead of rendering an empty
+  // slot (the four symptoms in Joshua's 2026-11-15 recording).
+  const collGroupCollections = useMemo(() => {
+    if (!collData || !collGroup) return [];
+    const g = collData.groups.find((x) => x.id === collGroup);
+    return g ? g.collections : [];
+  }, [collData, collGroup]);
+  const collAnyLoading = collLoading || collBitsState === "loading";
+  const collGroupUnavailable =
+    !!collGroup &&
+    collGroupCollections.length === 0 &&
+    !collAnyLoading &&
+    collBitsState === "failed";
   // The active collection's blurb renders INSIDE the fixed-height
   // subs slot (see the curated axis markup) so selecting a shelf
   // never resizes the panel; scroll the slot back to its top on a
@@ -2161,43 +2245,12 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // they ride the TCB1 dataset (a few MB on the wire, parsed in
   // milliseconds) instead of the 17.7 MB hub index, so the axis is
   // ready early. When they land they become the panel's data; the
-  // hub fetch remains the fallback for when no dataset exists.
+  // hub fetch remains the fallback for when no dataset exists. The
+  // load itself lives in startBitsetsLoad (above) so a group tap can
+  // restart it after a failure — the prime is just its first caller.
   useEffect(() => {
-    let dead = false;
-    tcb1Meta().then((m) => {
-      if (dead || !m) return;
-      const fp = m.source && m.source.fingerprint_sha256_concat;
-      if (!fp) return;
-      const version = m.curated && m.curated.sha256 ? m.curated.sha256 : null;
-      loadCuratedBitsets(fp, version).then((data) => {
-        if (dead || !data) return;
-        let bytes = 0;
-        for (const g of data.groups) {
-          for (const c of g.collections) {
-            if (c.bits) bytes += c.bits.byteLength;
-          }
-        }
-        for (const s of data.booksShelves || []) {
-          if (s.bits) bytes += s.bits.byteLength;
-        }
-        for (const f of data.papersFields || []) {
-          if (f.bits) bytes += f.bits.byteLength;
-          for (const s of f.subs || []) {
-            if (s.bits) bytes += s.bits.byteLength;
-          }
-        }
-        for (const t of data.papersTypes || []) {
-          if (t.bits) bytes += t.bits.byteLength;
-        }
-        noteExternalBytes("curated-bitsets", bytes);
-        collSourceRef.current = "bitsets";
-        setCollData(data);
-      });
-    });
-    return () => {
-      dead = true;
-    };
-  }, []);
+    startBitsetsLoad();
+  }, [startBitsetsLoad]);
   // Committed browse-filter result (filter engine, FILTER-REVAMP-
   // DESIGN.md §10): the exact match list (catalog indices in display
   // order) plus its count for ONE selection, produced by the chunked
@@ -5384,14 +5437,28 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                         </div>
                       ) : (
                         activeLane &&
-                        activeLane !== "BOOKS" &&
-                        activeLane !== "PAPERS" &&
                         activeSubs.length > 0 && (
                           <div
                             className="tf2-subs"
                             role="group"
                             aria-label={`${TOWER_TOP_LABELS[activeLane] || activeLane} subcategories`}
                           >
+                            {/* Static prefix subcategories (the
+                                taxonomy partition in tower-taxonomy.js).
+                                This branch is the fallback for BOOKS
+                                and PAPERS as well (2026-11-15 fix):
+                                the shelves branch above needs the
+                                curated bitsets and the Papers two-level
+                                branch needs collData.papersFields —
+                                which the bitset build returns empty
+                                (the subject-map redo is held) — so
+                                excluding the two lanes here left Books
+                                with no slot at all when bitsets were
+                                unavailable and Papers with none ever,
+                                orphaning its intact prefix subs (bio /
+                                cs / plos / energy / space / other).
+                                The bitset branches keep precedence
+                                whenever their data exists. */}
                             {activeSubs.map((s) => {
                               const key = `${activeLane}:${s.id}`;
                               const count = facetCounts
@@ -5441,10 +5508,16 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                       subcategory rows in the same visual language as
                       Axis 1. A collection filters the list below
                       (intersected with search + lane + era + sort); it
-                      never renders a second list. On a hub-index fetch
-                      failure this axis hides and the rest carries on —
-                      no error panel. */}
-                  {!collFailed && (
+                      never renders a second list. This axis ALWAYS
+                      renders (2026-11-15 fix): it used to hide on a
+                      hub-index failure, and the group chips used to be
+                      filtered by whichever dataset had landed — a
+                      traditions-only fallback landing made the other
+                      five groups vanish mid-session, the collapse in
+                      Joshua's 2026-11-15 recording. The chips are the
+                      static group table, unconditionally; a group
+                      whose data has not loaded shows an honest
+                      loading / couldn't-load state in its slot. */}
                     <div ref={collSectionRef} className="tf2-axis tf2-axis--deep">
                       <div className="tf2-axis-label" id="tf2-axis-curated">
                         Curated collections
@@ -5463,11 +5536,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                           >
                             All collections
                           </button>
-                          {COLLECTION_GROUPS.filter(
-                            (g) =>
-                              !collData ||
-                              collData.groups.some((dg) => dg.id === g.id)
-                          ).map((g) => (
+                          {COLLECTION_GROUPS.map((g) => (
                             <button
                               key={g.id}
                               type="button"
@@ -5479,12 +5548,13 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                             </button>
                           ))}
                         </div>
-                        {collLoading && (
-                          <p className="tf2-note" aria-live="polite">
-                            Loading collections…
-                          </p>
-                        )}
-                        {collData && collGroup && (
+                        {collAnyLoading &&
+                          collGroupCollections.length === 0 && (
+                            <p className="tf2-note" aria-live="polite">
+                              Loading collections…
+                            </p>
+                          )}
+                        {collGroup && (
                           <div
                             ref={collSubsRef}
                             className="tf2-subs"
@@ -5514,9 +5584,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                 </span>
                               </p>
                             )}
-                            {(collData.groups.find((g) => g.id === collGroup)
-                              ?.collections || []
-                            ).map((c) => (
+                            {collGroupCollections.map((c) => (
                                 <button
                                   key={c.key}
                                   type="button"
@@ -5535,11 +5603,28 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                   </span>
                                 </button>
                               ))}
+                            {/* Honest failure state (2026-11-15 fix):
+                                the group's data failed to load and
+                                no load is in flight — say so plainly
+                                and offer the retry in place, instead
+                                of the old behavior (an empty slot, or
+                                the group chip vanishing outright). */}
+                            {collGroupUnavailable && (
+                              <button
+                                type="button"
+                                className="tf2-sub"
+                                onClick={() => ensureCollections()}
+                              >
+                                <span className="tf2-sub-label">
+                                  These collections couldn’t load — tap to
+                                  try again
+                                </span>
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>
                     </div>
-                  )}
                   {/* Axis 3 — Era (2026-11-11): chronological period
                       chips with counts from phase 0's era derivation.
                       Position along the row is time. Records with no

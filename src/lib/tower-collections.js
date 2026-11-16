@@ -190,18 +190,55 @@ import { parseCuratedBitsets } from "./tcb1.js";
 
 let curatedPromise = null;
 
+// One load attempt. Any failure — network, HTTP status, or a parse
+// throw on bytes that are not the TCU1 payload (the 2026-11-15
+// double-brotli serving defect delivered the .br file itself, which
+// fails the magic check) — resolves null; the retry policy lives in
+// loadCuratedBitsets below.
+//
+// The URL carries &enc=2 alongside ?v=<curated sha256>: the marker
+// names the serving function's fixed encoding scheme, so edge copies
+// stored under the pre-fix URL (double-encoded, immutable one-year
+// TTL) are unreachable even where they linger.
+async function fetchCuratedBitsets(fp, version) {
+  const url = `/tcb1/${fp}/curated.bin${version ? `?v=${version}&enc=2` : "?enc=2"}`;
+  try {
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const buf = await r.arrayBuffer();
+    const parsed = parseCuratedBitsets(new Uint8Array(buf));
+    return buildCollectionsFromBitsets(parsed);
+  } catch {
+    return null;
+  }
+}
+
+const CURATED_RETRY_DELAYS_MS = [1500, 4000];
+
+// Loads the curated bitsets with bounded retries. A success is
+// cached for the session (the data is immutable per fingerprint +
+// version). A FAILURE IS NEVER CACHED: the 2026-11-15 defect had the
+// rejected promise pinned in this module forever, so one bad response
+// at page open disabled the curated axis for the whole session with
+// no recovery path. On final failure the in-flight promise is
+// dropped, so the next caller (e.g. the next group tap) starts a
+// fresh attempt cycle.
 export function loadCuratedBitsets(fp, version) {
   if (!fp) return Promise.resolve(null);
   if (!curatedPromise) {
-    const url = `/tcb1/${fp}/curated.bin${version ? `?v=${version}` : ""}`;
-    curatedPromise = fetch(url)
-      .then((r) => (r.ok ? r.arrayBuffer() : null))
-      .then((buf) => {
-        if (!buf) return null;
-        const parsed = parseCuratedBitsets(new Uint8Array(buf));
-        return buildCollectionsFromBitsets(parsed);
-      })
-      .catch(() => null);
+    curatedPromise = (async () => {
+      for (let attempt = 0; ; attempt++) {
+        const data = await fetchCuratedBitsets(fp, version);
+        if (data) return data;
+        if (attempt >= CURATED_RETRY_DELAYS_MS.length) {
+          curatedPromise = null;
+          return null;
+        }
+        await new Promise((res) =>
+          setTimeout(res, CURATED_RETRY_DELAYS_MS[attempt])
+        );
+      }
+    })();
   }
   return curatedPromise;
 }
