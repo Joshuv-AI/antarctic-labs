@@ -8238,6 +8238,116 @@ function EntryCite({ artifact }) {
   );
 }
 
+// Download formats (2026-11-17, INVENTORY 60): the download card is a
+// dropdown of Project Gutenberg's established format set — EPUB,
+// Kindle, HTML, and Plain Text UTF-8 — generated from the entry's
+// hosted TXT on request by /api/download (server-side, so a phone
+// never holds a huge text and its conversion in browser memory at
+// once). Plain Text is the hosted file itself, linked directly as
+// before. The generated formats ride a fetch so a failure surfaces as
+// an inline error in the card, never as a broken file or a navigation
+// away from the entry. Entries whose download_url is not a hosted
+// local text keep the original single plain-text link, unchanged.
+const GENERATED_FORMATS = [
+  { key: "epub", label: "EPUB — E-READERS" },
+  { key: "kindle", label: "KINDLE — MOBI" },
+  { key: "html", label: "HTML — WEB BROWSER" },
+];
+function EntryDownloads({ artifact }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const url = typeof artifact.download_url === "string" ? artifact.download_url : "";
+  const file = url.split("/").pop() || "";
+  const isLocalText = url.startsWith("/tower-of-babel/") && file.endsWith(".txt");
+  const size = towerFileSize(artifact.file_size);
+  const generate = async (format) => {
+    if (busy) return;
+    setBusy(format);
+    setError("");
+    try {
+      const qs = new URLSearchParams({
+        file,
+        format,
+        id: artifact.artifact_id || "",
+        title: artifact.title || "",
+        creator: artifact.creator || "",
+      });
+      const res = await fetch(`/api/download?${qs.toString()}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const cd = res.headers.get("content-disposition") || "";
+      const m = cd.match(/filename="([^"]+)"/);
+      const fallback = `${artifact.artifact_id || "tower-of-babel"}.${format === "kindle" ? "mobi" : format}`;
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = m ? m[1] : fallback;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(objUrl), 4000);
+    } catch {
+      setError("That format couldn't be prepared just now. The plain text download always works.");
+    } finally {
+      setBusy("");
+    }
+  };
+  return (
+    <div className="tower-download-card">
+      <span className="tower-download-label">DOWNLOAD FOR FREE</span>
+      <span className="tower-download-note">
+        For your e-reader or reading app — the complete full text.
+      </span>
+      {isLocalText ? (
+        <>
+          <button
+            type="button"
+            className="tower-download-btn"
+            aria-expanded={open}
+            onClick={() => setOpen((o) => !o)}
+          >
+            <span className="tower-download-fmt">CHOOSE A FORMAT</span>
+            <span className="tower-download-arrow" aria-hidden="true">{open ? "▴" : "▾"}</span>
+          </button>
+          {open && (
+            <div className="tower-download-menu">
+              <a className="tower-download-opt" href={artifact.download_url} download>
+                <span className="tower-download-fmt">TXT — PLAIN TEXT UTF-8</span>
+                {size ? <span className="tower-download-size">{size}</span> : null}
+                <span className="tower-download-arrow" aria-hidden="true">↓</span>
+              </a>
+              {GENERATED_FORMATS.map((f) => (
+                <button
+                  key={f.key}
+                  type="button"
+                  className="tower-download-opt"
+                  disabled={!!busy}
+                  onClick={() => generate(f.key)}
+                >
+                  <span className="tower-download-fmt">
+                    {busy === f.key ? "PREPARING…" : f.label}
+                  </span>
+                  <span className="tower-download-arrow" aria-hidden="true">↓</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {error && (
+            <p className="tower-download-error" role="alert">{error}</p>
+          )}
+        </>
+      ) : (
+        <a className="tower-download-btn" href={artifact.download_url} download>
+          <span className="tower-download-fmt">TXT — PLAIN TEXT</span>
+          {size ? <span className="tower-download-size">{size}</span> : null}
+          <span className="tower-download-arrow" aria-hidden="true">↓</span>
+        </a>
+      )}
+    </div>
+  );
+}
+
 // Render-safety normalization (2026-11-10): a full record whose fields
 // hold shapes the entry render does not expect — an object where a
 // string belongs, a string where the tag list belongs — throws inside
@@ -8534,19 +8644,7 @@ export function LibraryArtifact({ go, params, onReady }) {
           </ul>
         )}
         {status === "AVAILABLE" && artifact.download_url && (
-          <div className="tower-download-card">
-            <span className="tower-download-label">DOWNLOAD FOR FREE</span>
-            <span className="tower-download-note">
-              For your e-reader or reading app — the complete full text.
-            </span>
-            <a className="tower-download-btn" href={artifact.download_url} download>
-              <span className="tower-download-fmt">TXT — PLAIN TEXT</span>
-              {towerFileSize(artifact.file_size) ? (
-                <span className="tower-download-size">{towerFileSize(artifact.file_size)}</span>
-              ) : null}
-              <span className="tower-download-arrow" aria-hidden="true">↓</span>
-            </a>
-          </div>
+          <EntryDownloads artifact={artifact} />
         )}
         <EntryCite artifact={artifact} />
       </section>
