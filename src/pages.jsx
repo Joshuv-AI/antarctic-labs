@@ -7985,7 +7985,7 @@ function EntryShare({ artifact }) {
   );
 }
 
-function CiteRow({ label, text }) {
+function CiteRow({ label, text, parts }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
@@ -7999,7 +7999,13 @@ function CiteRow({ label, text }) {
   return (
     <div className="tower-cite-row">
       <span className="tower-cite-label">{label}</span>
-      <span className="tower-cite-text">{text}</span>
+      <span className="tower-cite-text">
+        {parts
+          ? parts.map((p, i) =>
+              p.em ? <em key={i}>{p.t}</em> : <span key={i}>{p.t}</span>
+            )
+          : text}
+      </span>
       <button type="button" className="tower-cite-copy" onClick={copy}>
         {copied ? "COPIED" : "COPY"}
       </button>
@@ -8020,20 +8026,150 @@ function bluebookCite(artifact) {
   return null;
 }
 
+// Citation helpers (INVENTORY 55, 2026-11-17): every element of a citation
+// traces to a field the catalog record itself carries — creator, title, the
+// year as cataloged, and a publisher ONLY on a record that carries one. The
+// catalog schema carries no publisher field today (field census of the live
+// shards, 2026-11-17: 159,338 records, no publisher key anywhere), so the
+// publisher segment simply never renders on live data; nothing is invented
+// to fill the gap, and nothing is parsed out of free-text fields to fake
+// one. A record with no creator starts its citation with the title (the
+// styles' no-author form) instead of borrowing the container's name.
+const ACCESS_MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+const ACCESS_MONTHS_BB = [
+  "Jan.", "Feb.", "Mar.", "Apr.", "May", "June",
+  "July", "Aug.", "Sept.", "Oct.", "Nov.", "Dec.",
+];
+function accessedDates() {
+  const d = new Date();
+  const day = d.getDate();
+  const yr = d.getFullYear();
+  const mo = d.getMonth();
+  return {
+    long: `${ACCESS_MONTHS[mo]} ${day}, ${yr}`,
+    bb: `${ACCESS_MONTHS_BB[mo]} ${day}, ${yr}`,
+    iso: `${yr}-${String(mo + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+  };
+}
+function citeStr(v) {
+  if (typeof v === "string") return v.trim() || null;
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  return null;
+}
+
+// Visible source line (INVENTORY 56, 2026-11-17): names the provenance the
+// record itself carries — its `source` string, linked to its `source_url`
+// when it has one. A record with no source string but a source URL shows
+// the URL's host (derived from the record's own URL, nothing invented); a
+// record with neither renders no line rather than a fabricated one.
+function EntrySourceLine({ artifact }) {
+  const label0 = citeStr(artifact.source);
+  let label = label0;
+  if (!label && artifact.source_url) {
+    try {
+      label = new URL(artifact.source_url).hostname.replace(/^www\./, "") || null;
+    } catch {
+      label = null;
+    }
+  }
+  if (!label) return null;
+  return (
+    <p className="tower-entry-source">
+      <span className="tower-entry-source-label">SOURCE</span>{" "}
+      {artifact.source_url ? (
+        <a href={artifact.source_url} target="_blank" rel="noopener noreferrer">
+          {label}
+        </a>
+      ) : (
+        <span>{label}</span>
+      )}
+    </p>
+  );
+}
+
 function EntryCite({ artifact }) {
   const url = towerEntryUrl(artifact);
-  const creator = artifact.creator || "Antarctic Labs";
-  const year = artifact.year || "n.d.";
+  const creator = citeStr(artifact.creator);
+  const yearCarried = citeStr(artifact.year);
+  const year = yearCarried || "n.d.";
+  const publisher = citeStr(artifact.publisher);
   const title = artifact.title;
+  const book = artifact.collection === "BOOKS";
+  const acc = accessedDates();
   const bibKey = `tower-${(artifact.artifact_id || "work").replace(/[^a-zA-Z0-9-]/g, "")}`;
-  const rows = [
-    ["CHICAGO", `${creator}. "${title}." Tower of Babel, Antarctic Labs, ${year}. ${url}.`],
-    ["MLA", `${creator}. "${title}." Tower of Babel, Antarctic Labs, ${year}, ${url}.`],
-    ["APA", `${creator}. (${year}). ${title}. Antarctic Labs. ${url}`],
-    ["BIBTEX", `@misc{${bibKey}, author = {${creator}}, title = {${title}}, year = {${year}}, url = {${url}}, note = {Tower of Babel, Antarctic Labs}}`],
-  ];
+  const head = creator ? `${creator}. ` : "";
+  // The edition segment (original publisher + the year the record carries)
+  // renders only when the record carries a publisher; otherwise the year
+  // rides with the container segment, as before.
+  const ed = publisher ? `${publisher}, ${year}` : null;
+  // "n.d." carries its own final period — never double it.
+  const yearDot = year === "n.d." ? "n.d." : `${year}.`;
+  const rows = [];
+  const push = (label, parts) =>
+    rows.push({ label, parts, text: parts.map((p) => p.t).join("") });
+  // CHICAGO — book titles as books (italic, unquoted); other works quoted.
+  if (book) {
+    push("CHICAGO", [
+      { t: head },
+      { t: title, em: true },
+      { t: `. ${ed ? `${ed}. ` : ""}Tower of Babel, Antarctic Labs${ed ? ". " : `, ${yearDot} `}${url}. Accessed ${acc.long}.` },
+    ]);
+  } else {
+    push("CHICAGO", [
+      { t: `${head}"${title}." Tower of Babel, Antarctic Labs, ${yearDot} ${url}. Accessed ${acc.long}.` },
+    ]);
+  }
+  // MLA
+  if (book) {
+    push("MLA", [
+      { t: head },
+      { t: title, em: true },
+      { t: `. ${ed ? `${ed}. ` : ""}Tower of Babel, Antarctic Labs${ed ? "" : `, ${year}`}, ${url}. Accessed ${acc.long}.` },
+    ]);
+  } else {
+    push("MLA", [
+      { t: `${head}"${title}." Tower of Babel, Antarctic Labs, ${year}, ${url}. Accessed ${acc.long}.` },
+    ]);
+  }
+  // APA — retrieval statement carries the accessed date (these are online
+  // texts whose served form can change); no period after the URL.
+  const apaPost = `. ${publisher || "Antarctic Labs"}. Retrieved ${acc.long}, from ${url}`;
+  if (book) {
+    push("APA", [
+      { t: creator ? `${creator}. (${year}). ` : "" },
+      { t: title, em: true },
+      { t: creator ? apaPost : `. (${year})${apaPost}` },
+    ]);
+  } else {
+    push("APA", [
+      { t: creator ? `${creator}. (${year}). ${title}${apaPost}` : `${title}. (${year})${apaPost}` },
+    ]);
+  }
+  // BLUEBOOK (LAW only, mechanically derived from the id — see bluebookCite)
   const bb = artifact.collection === "LAW" ? bluebookCite(artifact) : null;
-  if (bb) rows.splice(3, 0, ["BLUEBOOK", `${bb}, Tower of Babel, Antarctic Labs, ${url}.`]);
+  if (bb) {
+    push("BLUEBOOK", [
+      { t: `${bb}, Tower of Babel, Antarctic Labs, ${url} (last visited ${acc.bb}).` },
+    ]);
+  }
+  // BIBTEX — @book for books; author/year/publisher fields appear only when
+  // the record carries them.
+  const bibFields = [];
+  if (creator) bibFields.push(`author = {${creator}}`);
+  bibFields.push(`title = {${title}}`);
+  if (yearCarried) bibFields.push(`year = {${yearCarried}}`);
+  if (publisher) bibFields.push(`publisher = {${publisher}}`);
+  bibFields.push(
+    `url = {${url}}`,
+    `urldate = {${acc.iso}}`,
+    `note = {Tower of Babel, Antarctic Labs}`
+  );
+  push("BIBTEX", [
+    { t: `@${book ? "book" : "misc"}{${bibKey}, ${bibFields.join(", ")}}` },
+  ]);
   return (
     <details className="tower-desc tower-cite">
       <summary>
@@ -8041,8 +8177,8 @@ function EntryCite({ artifact }) {
         <span className="tower-about-chevron" aria-hidden="true">▾</span>
       </summary>
       <div className="tower-cite-body">
-        {rows.map(([label, text]) => (
-          <CiteRow key={label} label={label} text={text} />
+        {rows.map((r) => (
+          <CiteRow key={r.label} label={r.label} text={r.text} parts={r.parts} />
         ))}
       </div>
     </details>
@@ -8062,8 +8198,8 @@ function EntryCite({ artifact }) {
 // the same as a record that never carried it.
 const ARTIFACT_SCALAR_FIELDS = [
   "title", "creator", "collection", "year", "format", "file_size",
-  "version", "license", "checksum", "rights_status", "source_url",
-  "download_url", "download_status",
+  "version", "license", "checksum", "rights_status", "source", "publisher",
+  "source_url", "download_url", "download_status",
 ];
 function normalizeArtifact(rec) {
   if (!rec || typeof rec !== "object") return rec;
@@ -8280,6 +8416,7 @@ export function LibraryArtifact({ go, params, onReady }) {
                 {artifact.year || ""}
               </p>
             )}
+            <EntrySourceLine artifact={artifact} />
           </div>
           <EntryCover artifact={artifact} />
         </div>
