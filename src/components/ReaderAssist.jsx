@@ -2,11 +2,13 @@
 // Babel full-text reader.
 //
 // FOUNDATION (expandable): a draggable, edge-snapping floating orb that opens
-// a feature menu. Features register in FEATURES below; today there are four —
+// a feature menu. Features register in FEATURES below; today there are five —
 // "Search", a Ctrl+F-style find-in-page bar, "Contents", an Apple
 // Books-style table of contents, "Share", an Apple share-sheet style
-// panel with "Share from the Top" / "Share from Current Place" intents plus
-// an optional Apple Books-style passage highlight, and "Listen", a read-aloud
+// panel with "Share from the Top" / "Share from Current Place" intents,
+// "Highlight", the passage-highlight manager (capture pill + cycling HUD;
+// highlights persist per entry in localStorage and ride along in
+// "Share from Current Place" links), and "Listen", a read-aloud
 // mode with a persistent bottom player bar and karaoke word-follow. Adding a
 // feature later = one registry entry + one panel component (or, like Listen,
 // a mode with its own overlay).
@@ -96,6 +98,56 @@ function savePos(p) {
     localStorage.setItem(STORE_KEY, JSON.stringify(p));
   } catch {
     /* non-fatal */
+  }
+}
+
+// --- Saved-highlight persistence (INVENTORY 47) -----------------------------
+// Highlights live in localStorage, one key per entry (the entry page's
+// pathname), so they survive reloads and leaving/returning. The stored
+// array of {start, end} char ranges is the single source of truth: the
+// in-text paint, the cycling HUD, and (later) Summarize all read the same
+// set the parent holds in state, and every mutation flows back here.
+const HL_STORE_PREFIX = "tob-reader-hls-v1:";
+
+function hlStoreKey() {
+  try {
+    return HL_STORE_PREFIX + window.location.pathname;
+  } catch {
+    return null;
+  }
+}
+
+function loadHls() {
+  try {
+    const k = hlStoreKey();
+    if (!k) return [];
+    const raw = localStorage.getItem(k);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter(
+        (h) =>
+          h &&
+          Number.isFinite(h.start) &&
+          Number.isFinite(h.end) &&
+          h.end > h.start &&
+          h.start >= 0
+      )
+      .map((h) => ({ start: h.start, end: h.end }));
+  } catch {
+    return [];
+  }
+}
+
+function saveHls(list) {
+  try {
+    const k = hlStoreKey();
+    if (!k) return;
+    if (!list || list.length === 0) localStorage.removeItem(k);
+    else localStorage.setItem(k, JSON.stringify(list));
+  } catch {
+    /* private mode / quota — highlights still work in-page */
   }
 }
 
@@ -248,6 +300,7 @@ const FEATURES = [
   { id: "search", label: "Search", icon: MagnifierIcon },
   { id: "contents", label: "Contents", icon: ContentsIcon },
   { id: "share", label: "Share", icon: ShareIcon },
+  { id: "highlight", label: "Highlight", icon: HighlighterIcon },
   { id: "listen", label: "Listen", icon: ListenIcon },
 ];
 
@@ -896,11 +949,12 @@ function ContentsPanel({
 // current-section tracking), so the receiver lands exactly where the sharer
 // was reading.
 //
-// Optional highlight (Apple Books-style marker toggle): when ON, the
-// sharer's live text selection inside the reader is captured and embedded as
-// &hl=<start>-<end>; the receiver scrolls there and sees the passage
-// highlighted in Apple Books yellow. No selection = position-only share plus
-// a hint toast. Sharing goes through the OS share sheet (navigator.share)
+// Highlights (captured beforehand via the Highlight feature — INVENTORY
+// 45 moved capture out of this panel into its own menu item) ride along
+// in "Share from Current Place" as &hl=<start>-<end>[,<start>-<end>…];
+// the receiver scrolls there and sees the passages highlighted in Apple
+// Books yellow. This panel's share wiring is unchanged by the move.
+// Sharing goes through the OS share sheet (navigator.share)
 // with a minimal message; where the API is unavailable the link is copied
 // to the clipboard with a toast instead.
 // ---------------------------------------------------------------------------
@@ -1061,6 +1115,279 @@ function HighlightPill({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Highlight panel — the Highlight feature's home (INVENTORY 45/46): the
+// saved passages for this entry, one "current" passage at a time, with
+// cycle arrows that walk the set (scrolling each passage into view and
+// painting it orange, Find's current-match language, over the yellow
+// set) and a ✕ that removes the current passage from the stored set.
+//
+// The set itself is the parent's savedHls (persisted per entry —
+// INVENTORY 47); this panel only reads it and asks the parent to mutate.
+//
+// INVENTORY 53 (later lane): Summarize attaches to the .ra-hlp-current
+// block below, acting on savedHls[curIdx] — the passage this panel has
+// focused. Do not move that block's contract.
+// ---------------------------------------------------------------------------
+function HighlightPanel({
+  text,
+  chunkStarts,
+  shownChunks,
+  isMounted,
+  ensureChunk,
+  chunkElsRef,
+  anchorStyle,
+  savedHls,
+  onRemove,
+  onCaptureStart,
+  onClose,
+}) {
+  const [cur, setCur] = useState(0);
+  const [jump, setJump] = useState(null); // {start} — pending cycle scroll
+  const panelRef = useRef(null);
+  const reduced = useMemo(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    []
+  );
+
+  const count = savedHls.length;
+  const curIdx = count > 0 ? Math.min(cur, count - 1) : -1;
+  const current = curIdx >= 0 ? savedHls[curIdx] : null;
+
+  useEffect(() => {
+    if (panelRef.current) {
+      try {
+        panelRef.current.focus({ preventScroll: true });
+      } catch {
+        panelRef.current.focus();
+      }
+    }
+  }, []);
+
+  // Keep the cursor inside the set as passages are removed.
+  useEffect(() => {
+    if (cur > count - 1) setCur(Math.max(0, count - 1));
+  }, [count, cur]);
+
+  const chunkIndexOf = useCallback(
+    (off) => {
+      let lo = 0;
+      let hi = chunkStarts.length - 1;
+      let ans = 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (chunkStarts[mid] <= off) {
+          ans = mid;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      return ans;
+    },
+    [chunkStarts]
+  );
+
+  // DOM Range for a saved passage, or null when its chunk isn't rendered.
+  const rangeFor = useCallback(
+    (h) => {
+      const ci = chunkIndexOf(h.start);
+      if (!isMounted(ci)) return null;
+      const el = chunkElsRef.current && chunkElsRef.current[ci];
+      if (!el) return null;
+      const point = (local) => {
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        let acc = 0;
+        let n;
+        while ((n = walker.nextNode())) {
+          const len = n.textContent.length;
+          if (acc + len >= local) {
+            return { node: n, offset: Math.min(local - acc, len) };
+          }
+          acc += len;
+        }
+        return null;
+      };
+      const a = point(h.start - chunkStarts[ci]);
+      const b = point(h.end - chunkStarts[ci]);
+      if (!a || !b) return null;
+      try {
+        const r = new Range();
+        r.setStart(a.node, a.offset);
+        r.setEnd(b.node, b.offset);
+        return r.collapsed ? null : r;
+      } catch {
+        return null;
+      }
+    },
+    [chunkIndexOf, chunkStarts, chunkElsRef, isMounted]
+  );
+
+  // Paint the focused passage orange (ra-mine-cur) over the yellow set —
+  // the same all/current language Find uses. Cleared when the panel
+  // closes or the focus moves on.
+  useEffect(() => {
+    if (!SUPPORTS_HIGHLIGHTS) return undefined;
+    if (!current) {
+      CSS.highlights.delete("ra-mine-cur");
+      return undefined;
+    }
+    const r = rangeFor(current);
+    if (r) {
+      const hl = new Highlight();
+      hl.add(r);
+      CSS.highlights.set("ra-mine-cur", hl);
+    } else {
+      CSS.highlights.delete("ra-mine-cur");
+    }
+    return () => {
+      CSS.highlights.delete("ra-mine-cur");
+    };
+  }, [current, shownChunks, rangeFor]);
+
+  // Cycle scroll: force the passage's chunk to render if needed (effect
+  // re-runs once it does — the Contents/Find retry pattern), then scroll
+  // the passage to ~42% viewport height, Find's anchor.
+  useEffect(() => {
+    if (!jump) return;
+    const ci = chunkIndexOf(jump.start);
+    if (!isMounted(ci)) {
+      ensureChunk(ci);
+      return; // effect re-runs once the chunk renders
+    }
+    const r = rangeFor(jump);
+    setJump(null);
+    if (!r) return;
+    requestAnimationFrame(() => {
+      try {
+        const rect = r.getBoundingClientRect();
+        const top = rect.top + window.scrollY - window.innerHeight * 0.42;
+        window.scrollTo({
+          top: Math.max(0, top),
+          behavior:
+            reduced ||
+            Math.abs(top - window.scrollY) > window.innerHeight * 1.5
+              ? "auto"
+              : "smooth",
+        });
+      } catch {
+        /* stale range — the paint still shows the passage */
+      }
+    });
+  }, [jump, shownChunks, isMounted, ensureChunk, chunkIndexOf, rangeFor, savedHls, reduced]);
+
+  const cycle = (dir) => {
+    if (count === 0) return;
+    const next = (curIdx + dir + count) % count;
+    setCur(next);
+    setJump({ start: savedHls[next].start, end: savedHls[next].end });
+  };
+
+  const preview = current
+    ? text.slice(current.start, current.end).replace(/\s+/g, " ").trim()
+    : "";
+
+  return (
+    <div
+      ref={panelRef}
+      className="ra-hlp"
+      style={anchorStyle}
+      role="dialog"
+      aria-label="Your highlighted passages"
+      tabIndex={-1}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          onClose();
+        }
+      }}
+    >
+      <div className="ra-share-header">
+        <h2 className="ra-share-title">Highlights</h2>
+        <button
+          type="button"
+          className="ra-share-close"
+          aria-label="Close highlights"
+          onClick={onClose}
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+            <line x1="6" y1="6" x2="18" y2="18" />
+            <line x1="18" y1="6" x2="6" y2="18" />
+          </svg>
+        </button>
+      </div>
+      {count === 0 ? (
+        <p className="ra-hlp-empty">
+          No passages highlighted yet. Highlights are saved on this device
+          and ride along when you share from your current place.
+        </p>
+      ) : (
+        <div className="ra-hlp-current">
+          <p className="ra-hlp-passage">
+            {preview.length > 140 ? preview.slice(0, 140) + "…" : preview}
+          </p>
+          <div className="ra-hlp-controls">
+            <button
+              type="button"
+              className="ra-hlp-btn"
+              aria-label="Previous highlight"
+              onClick={() => cycle(-1)}
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="6 14 12 8 18 14" />
+              </svg>
+            </button>
+            <span
+              className="ra-hlp-count"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              {curIdx + 1} of {count}
+            </span>
+            <button
+              type="button"
+              className="ra-hlp-btn"
+              aria-label="Next highlight"
+              onClick={() => cycle(1)}
+            >
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="6 10 12 16 18 10" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className="ra-hlp-btn ra-hlp-remove"
+              aria-label="Remove this highlight"
+              onClick={() => onRemove(curIdx)}
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+                <line x1="6" y1="6" x2="18" y2="18" />
+                <line x1="18" y1="6" x2="6" y2="18" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
+      <button
+        type="button"
+        className="ra-share-row ra-hlp-add"
+        onClick={onCaptureStart}
+      >
+        <span className="ra-share-row-icon" aria-hidden="true">
+          {HighlighterIcon}
+        </span>
+        <span className="ra-share-row-text">
+          <span className="ra-share-row-title">Highlight a passage</span>
+          <span className="ra-share-row-sub">Select text, then tap Add</span>
+        </span>
+      </button>
+    </div>
+  );
+}
+
 function SharePanel({
   text,
   title,
@@ -1069,7 +1396,6 @@ function SharePanel({
   chunkElsRef,
   anchorStyle,
   savedHls,
-  onHighlightStart,
   onClearHl,
   onClose,
 }) {
@@ -1235,47 +1561,6 @@ function SharePanel({
           </span>
         </span>
       </button>
-      <div className="ra-share-row ra-share-hl">
-        <button
-          type="button"
-          className="ra-share-hl-main"
-          aria-label={
-            savedHls && savedHls.length > 0
-              ? "Add more highlighted passages"
-              : "Highlight a passage when sharing from your current place"
-          }
-          onClick={onHighlightStart}
-        >
-          <span className="ra-share-row-icon" aria-hidden="true">
-            {HighlighterIcon}
-          </span>
-          <span className="ra-share-row-text">
-            <span className="ra-share-row-title">
-              {savedHls && savedHls.length > 0
-                ? `${savedHls.length} passage${savedHls.length > 1 ? "s" : ""} highlighted ✓`
-                : "Highlight a passage"}
-            </span>
-            <span className="ra-share-row-sub">
-              {savedHls && savedHls.length > 0
-                ? "Tap to add more"
-                : "Optional — select text, then share"}
-            </span>
-          </span>
-        </button>
-        {savedHls && savedHls.length > 0 && (
-          <button
-            type="button"
-            className="ra-share-hl-clear"
-            aria-label="Remove the highlighted passage"
-            onClick={onClearHl}
-          >
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
-              <line x1="6" y1="6" x2="18" y2="18" />
-              <line x1="18" y1="6" x2="6" y2="18" />
-            </svg>
-          </button>
-        )}
-      </div>
       {toast && (
         <div className="ra-toast" role="status" aria-live="polite">
           {toast}
@@ -1314,11 +1599,13 @@ export default function ReaderAssist({
   const [idle, setIdle] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [panel, setPanel] = useState(null); // null | feature id
-  // Highlight-for-share: savedHl is the captured {start,end} passage (lives
-  // here so it survives the share panel unmounting during capture);
-  // hlMode shows the minimal capture pill instead of any panel.
-  // savedHls is an array of {start,end} — multiple highlights per share.
-  const [savedHls, setSavedHls] = useState([]);
+  // Highlights: savedHls is the array of captured {start,end} passages
+  // (lives here so it survives panels unmounting during capture). It is
+  // loaded from — and persisted back to — this entry's localStorage key
+  // (INVENTORY 47): the stored set is the single source of truth for the
+  // paint, the cycling HUD, and share links. hlMode shows the minimal
+  // capture pill instead of any panel.
+  const [savedHls, setSavedHls] = useState(loadHls);
   const [hlMode, setHlMode] = useState(false);
   const orbRef = useRef(null);
 
@@ -1414,11 +1701,17 @@ export default function ReaderAssist({
 
   // --- Read-aloud word-follow highlighting ---------------------------------
   // Two fixed-position overlays (no text DOM mutation): a soft highlight
-  // pill over the spoken word + a small "bouncy ball" dot that hops above it.
+  // pill over the spoken word + one persistent ball that travels word to
+  // word above the text, arcing as it goes (INVENTORY 58).
   // Positioned from the word's bounding rect each time the engine reports a
   // new word (global char offsets -> chunk -> text node -> Range).
   const speakHlRef = useRef(null);
   const speakBallRef = useRef(null);
+  // Traveling-ball state (INVENTORY 58): the ball's last applied position
+  // and its in-flight glide, if any. Refs only — the ball never re-renders.
+  const ballPosRef = useRef(null); // {x, y} | null (null = never placed)
+  const ballTweenRef = useRef(null); // {fx, fy, tx, ty, t0, dur, raf} | null
+  const speakRateRef = useRef(1); // mirror of the Listen rate for glide timing
   // Manual-scroll detection during Listen (2026-10-18; yield raised to 3s
   // and paired with the refocus glide on 2026-10-20).
   const userScrolledAt = useRef(0);
@@ -1432,9 +1725,81 @@ export default function ReaderAssist({
   const speakRafRef = useRef(0);
 
   const clearSpeakHl = useCallback(() => {
+    if (ballTweenRef.current) {
+      cancelAnimationFrame(ballTweenRef.current.raf);
+      ballTweenRef.current = null;
+    }
+    ballPosRef.current = null;
     if (speakHlRef.current) speakHlRef.current.style.opacity = "0";
     if (speakBallRef.current) speakBallRef.current.style.opacity = "0";
   }, []);
+
+  // --- Traveling ball (INVENTORY 58) --------------------------------------
+  // ONE ball lives for the whole Listen session: it never teleports and
+  // never vanishes mid-playback. Each new spoken word retargets a short
+  // rAF glide from the ball's current (possibly mid-glide) position to
+  // the new word, arcing ~7px at mid-glide — the old in-place hop,
+  // stretched across the journey. Glide duration tracks the word cadence
+  // of the timing engine (150 WPM × rate — the same baseline ReadAloud's
+  // timer fill uses), so at 1.25× and 2× the travel tightens with the
+  // words and the ball still lands on every word.
+  const SPEAK_WPM = 150;
+  const applyBall = (x, y, lift) => {
+    const ball = speakBallRef.current;
+    if (!ball) return;
+    ball.style.opacity = "1";
+    ball.style.transform = `translate(${x}px, ${y - lift}px)`;
+    ballPosRef.current = { x, y };
+  };
+  const cancelBallTween = () => {
+    if (ballTweenRef.current) {
+      cancelAnimationFrame(ballTweenRef.current.raf);
+      ballTweenRef.current = null;
+    }
+  };
+  const travelBallTo = (tx, ty) => {
+    const from = ballPosRef.current;
+    if (!from || reducedRef.current) {
+      cancelBallTween();
+      applyBall(tx, ty, 0);
+      return;
+    }
+    // Retarget from the live interpolated position if a glide is running
+    // (words can arrive faster than a glide completes at high rates).
+    const prev = ballTweenRef.current;
+    let fx = from.x;
+    let fy = from.y;
+    if (prev) {
+      const k = Math.min(1, (performance.now() - prev.t0) / prev.dur);
+      fx = prev.fx + (prev.tx - prev.fx) * k;
+      fy = prev.fy + (prev.ty - prev.fy) * k;
+      cancelAnimationFrame(prev.raf);
+      ballTweenRef.current = null;
+    }
+    const dur = clamp(
+      60000 / (SPEAK_WPM * (speakRateRef.current || 1)),
+      90,
+      500
+    );
+    const tw = { fx, fy, tx, ty, t0: performance.now(), dur, raf: 0 };
+    ballTweenRef.current = tw;
+    const step = (now) => {
+      if (ballTweenRef.current !== tw) return;
+      const k = Math.min(1, (now - tw.t0) / tw.dur);
+      applyBall(
+        tw.fx + (tw.tx - tw.fx) * k,
+        tw.fy + (tw.ty - tw.fy) * k,
+        Math.sin(Math.PI * k) * 7
+      );
+      if (k < 1) tw.raf = requestAnimationFrame(step);
+      else ballTweenRef.current = null;
+    };
+    tw.raf = requestAnimationFrame(step);
+  };
+  const snapBallTo = (tx, ty) => {
+    cancelBallTween();
+    applyBall(tx, ty, 0);
+  };
 
   // Live rect of a spoken word (global offsets -> chunk -> text node ->
   // Range). Null when the word isn't currently rendered.
@@ -1506,9 +1871,10 @@ export default function ReaderAssist({
     [chunkStarts, chunkElsRef]
   );
 
-  // Paint the pill + ball over a word rect. `hop` restarts the ball's
-  // bounce (a new word); scroll repositioning passes hop=false so the ball
-  // glides with the text instead of re-bouncing every frame.
+  // Paint the pill + ball over a word rect. For a new word (hop=true)
+  // the ball travels to it (see travelBallTo); scroll repositioning
+  // passes hop=false so the ball snaps with the text instead of lagging
+  // behind a glide while the page moves.
   const placeSpeakOverlays = useCallback((rect, hop) => {
     const hl = speakHlRef.current;
     if (hl) {
@@ -1521,14 +1887,8 @@ export default function ReaderAssist({
     if (ball) {
       const bx = rect.left + rect.width / 2 - 5;
       const by = rect.top - 16;
-      ball.style.opacity = "1";
-      ball.style.transform = `translate(${bx}px, ${by}px)`;
-      if (hop) {
-        // Restart the hop animation.
-        ball.classList.remove("ra-speak-hop");
-        void ball.offsetWidth;
-        ball.classList.add("ra-speak-hop");
-      }
+      if (hop) travelBallTo(bx, by);
+      else snapBallTo(bx, by);
     }
   }, []);
 
@@ -1546,7 +1906,9 @@ export default function ReaderAssist({
     if (!p) return;
     const rect = speakWordRect(p.s, p.e);
     if (!rect) {
-      clearSpeakHl();
+      // The word's chunk isn't rendered this frame (window shift): keep
+      // the pill + ball exactly where they are. During playback they
+      // never vanish (INVENTORY 58) — the next word re-anchors them.
       return;
     }
     placeSpeakOverlays(rect, true);
@@ -1598,14 +1960,23 @@ export default function ReaderAssist({
     if (!w) return;
     const rect = speakWordRect(w.s, w.e);
     if (!rect) {
-      clearSpeakHl();
+      // Chunk momentarily unmounted mid-scroll: keep the overlays where
+      // they are rather than blinking out (INVENTORY 58).
       return;
     }
     placeSpeakOverlays(rect, false);
   }, [speakWordRect, placeSpeakOverlays, clearSpeakHl]);
 
   const handleSpeakWord = useCallback(
-    (gStart, gEnd) => {
+    (gStart, gEnd, _wi, pausedFlag) => {
+      if (gStart == null && pausedFlag) {
+        // Pause (the engine signals it distinctly from stop/end): freeze
+        // the pill + ball on the word where reading stopped. They stay
+        // visible while the reader works — the scroll effect keeps them
+        // anchored — and the engine's next word repaints on resume.
+        cancelBallTween();
+        return;
+      }
       showSpeakWord(gStart, gEnd);
     },
     [showSpeakWord]
@@ -1707,6 +2078,12 @@ export default function ReaderAssist({
   });
   const listening = readAloud.status !== "idle";
 
+  // Mirror the playback rate for the ball's travel timing (the overlay
+  // callbacks above are defined before the hook returns).
+  useEffect(() => {
+    speakRateRef.current = readAloud.rate;
+  }, [readAloud.rate]);
+
   // Scroll behavior during Listen (2026-10-18, reworked 2026-10-20):
   // - Every scroll frame re-anchors the pill + ball to the spoken word, so
   //   the follow-along tracks the text while the reader scrolls.
@@ -1774,12 +2151,20 @@ export default function ReaderAssist({
     [readAloud.supported]
   );
 
-  // New text (entry navigation): the saved passage and capture mode belong
-  // to the previous entry — reset cleanly.
+  // New text (entry navigation): highlights are per entry — load the new
+  // entry's stored set (the URL has settled by the time its text lands),
+  // and close the previous entry's capture/panel state.
   useEffect(() => {
-    setSavedHls([]);
+    setSavedHls(loadHls());
     setHlMode(false);
+    setPanel((p) => (p === "highlight" ? null : p));
   }, [text]);
+
+  // Persist every mutation of the set (add, individual remove, the
+  // share flow's clear) back to this entry's localStorage key.
+  useEffect(() => {
+    saveHls(savedHls);
+  }, [savedHls]);
 
   // --- Motion internals: refs only. Nothing here re-renders. ---
   const vpRef = useRef(viewport); // cached viewport for clamp math (move path)
@@ -2079,6 +2464,7 @@ export default function ReaderAssist({
       if (dragRaf.current) cancelAnimationFrame(dragRaf.current);
       const tw = tweenRef.current;
       if (tw) cancelAnimationFrame(tw.raf);
+      if (ballTweenRef.current) cancelAnimationFrame(ballTweenRef.current.raf);
       window.clearTimeout(idleTimer.current);
     };
   }, []);
@@ -2110,7 +2496,7 @@ export default function ReaderAssist({
     for (let iter = 0; iter < 3; iter++) {
       tLo = Math.asin(clamp(-up / d, -1, 1));
       tHi = Math.asin(clamp(down / d, -1, 1));
-      const spacing = (tHi - tLo) / 3;
+      const spacing = (tHi - tLo) / Math.max(1, visibleFeatures.length - 1);
       if (2 * d * Math.sin(spacing / 2) >= 56 || d >= 150) break;
       d = Math.min(150, 28 / Math.sin(spacing / 2));
     }
@@ -2254,14 +2640,36 @@ export default function ReaderAssist({
           chunkElsRef={chunkElsRef}
           anchorStyle={panelStyle}
           savedHls={savedHls}
-          onHighlightStart={() => {
-            // Don't clear savedHls — the user can keep adding to the list
+          onClearHl={() => setSavedHls([])}
+          onClose={() => {
+            setPanel(null);
+            poke();
+            if (orbRef.current) orbRef.current.focus();
+          }}
+        />
+      )}
+
+      {panel === "highlight" && (
+        <HighlightPanel
+          text={text}
+          chunkStarts={chunkStarts}
+          shownChunks={shownChunks}
+          isMounted={isMounted}
+          ensureChunk={ensureChunk}
+          chunkElsRef={chunkElsRef}
+          anchorStyle={panelStyle}
+          savedHls={savedHls}
+          onRemove={(idx) => {
+            setSavedHls((prev) => prev.filter((_, i) => i !== idx));
+            poke();
+          }}
+          onCaptureStart={() => {
+            // Don't clear savedHls — the user can keep adding to the set
             // across multiple capture sessions.
             setPanel(null);
             setHlMode(true);
             poke();
           }}
-          onClearHl={() => setSavedHls([])}
           onClose={() => {
             setPanel(null);
             poke();
@@ -2283,7 +2691,7 @@ export default function ReaderAssist({
           }}
           onDone={() => {
             setHlMode(false);
-            setPanel("share");
+            setPanel("highlight");
             poke();
           }}
           onCancel={() => {
