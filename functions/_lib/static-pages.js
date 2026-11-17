@@ -50,19 +50,19 @@ const FOOT = `<footer>
 const API_FAQS = [
   {
     q: "Is there a free API for Project Gutenberg texts?",
-    a: "Project Gutenberg itself has no official API; that gap is why third-party services like Gutendex exist, and Gutendex serves metadata only. The Tower of Babel takes the other approach: a free, keyless catalog over 2,557,923 works that includes Gutenberg-sourced public domain works and serves the full text of each work whose text is present as a plain .txt file, not just metadata. Where a work's text is present, one GET returns the entire book. Confirm with a request before assuming text exists.",
+    a: "Project Gutenberg itself has no official API; that gap is why third-party services like Gutendex exist, and Gutendex serves metadata only. The Tower of Babel takes the other approach: a free, keyless catalog over 2,557,923 works — Gutenberg-sourced public domain works included — serving the full text of each work whose text is present as a plain .txt file, not just metadata. Confirm with a request before assuming text exists.",
   },
   {
     q: "How can my AI agent access public domain books?",
-    a: "Download https://antarctic-labs.com/catalog.json, filter the records by title, collection, creator, or rights_status, then GET the download_url of each work you want. The texts are plain UTF-8 .txt at predictable URLs shaped like /tower-of-babel/<artifact_id>.txt. No key, no sign-up, no published rate limit. Confirm each URL returns 200 before treating the text as present — download_status is not perfectly current, so the HTTP response is the reliable signal. Index the texts you need for retrieval, and re-fetch the catalog on a schedule to pick up new holdings.",
+    a: "Download https://antarctic-labs.com/catalog.json, filter the records by title, collection, creator, or rights_status, then GET the download_url of each work you want. The texts are plain UTF-8 .txt at predictable URLs shaped like /tower-of-babel/<artifact_id>.txt. No key, no sign-up, no published rate limit. Confirm each URL returns 200 before treating the text as present — download_status is not perfectly current, so the HTTP response is the reliable signal. Index what you need, and re-fetch the catalog on a schedule for new holdings.",
   },
   {
     q: "Does the API return full text or just metadata?",
-    a: "Full text, where present. The catalog record is metadata; the download_url on a record with a live text file points to the complete work as a plain text file. This is the deliberate difference from metadata-only book APIs, which tell you a book exists but make you find the text elsewhere. Availability varies per record, so confirm with the HTTP response before treating a text as present.",
+    a: "Full text, where present. The catalog record is metadata; the download_url on a record with a live text file points to the complete work as a plain text file — the deliberate difference from metadata-only book APIs, which tell you a book exists but make you find the text elsewhere. Availability varies per record, so confirm with the HTTP response.",
   },
   {
     q: "Do I need an API key? Are there rate limits?",
-    a: "Not for the catalog itself: no key, no account, no published rate limit on the static surface, which is static files on CDN-backed hosting and tolerates normal programmatic use well. The keyed API v1 (rolling out — see the tiers on this page) is separate: a free key by email at 200 requests/day, with paid tiers above that. Reasonable behavior still applies on the keyless surface: download the catalog once and cache it, fetch only the texts you need, and do not hammer the host with parallel thousands-wide crawls.",
+    a: "Not for the catalog itself: no key, no account, no published rate limit on the static surface — static files on CDN-backed hosting. The keyed API v1 is separate: a free key by email at 50 requests/day, Pro at 500/day, and Commercial at 5,000/day. Reasonable behavior still applies on the keyless surface: download the catalog once and cache it, fetch only the texts you need, and do not hammer the host with parallel thousands-wide crawls.",
   },
   {
     q: "Can I use these texts commercially, including for training data?",
@@ -70,11 +70,11 @@ const API_FAQS = [
   },
   {
     q: "Is there a search endpoint or an MCP server?",
-    a: "A search endpoint is rolling out as API v1 (see “API v1 — keys, search, and full text” on this page): keyed, with catalog search now and full-text search answering once the deep-search index is live. The keyless pattern — download catalog.json once, filter and search it locally, fetch texts by URL — remains the primary surface and is unchanged. There is no MCP server at this time; this page will be updated if one ships.",
+    a: "Both. Search is API v1's GET /api/v1/search: keyless cursor pagination over the catalog, or — with a free or paid key — ranked results that count against the key's daily limit. An MCP server is live at https://antarctic-labs.com/mcp with four read-only tools (search_works, get_work, list_collection, list_group) over the same catalog, no key required. The keyless pattern — download catalog.json once, filter and search it locally — remains the primary surface.",
   },
   {
     q: "How fresh is the catalog? How do I stay current?",
-    a: "The catalog grows daily as new holdings are added. There is no versioning scheme or changelog feed; the practical approach is to re-fetch catalog.json on a schedule (weekly is reasonable) and diff artifact_id values against your local copy. Artifact IDs are not reused for different works, so a text URL that returned 200 keeps returning the same text, and new records appear as additions.",
+    a: "The catalog grows daily as new holdings are added. There is no changelog feed; re-fetch catalog.json on a schedule (weekly is reasonable) and diff artifact_id values against your local copy. Artifact IDs are not reused, so a text URL that returned 200 keeps returning the same text, and new records appear as additions.",
   },
 ];
 
@@ -348,7 +348,7 @@ PAGES["/tower-of-babel/api"] = {
 <h2>Harvest with OAI-PMH</h2>
 <p>Libraries and harvesters can take the catalog through the OAI-PMH 2.0 endpoint at https://antarctic-labs.com/oai — it supports the standard verbs: Identify, ListMetadataFormats, ListSets, ListIdentifiers, ListRecords, and GetRecord, with metadata in oai_dc (Dublin Core). Sets are the catalog's collections, and identifiers take the form oai:antarctic-labs.com:&lt;artifact_id&gt;.</p>
 <h2>API v1 — keys, search, and full text</h2>
-<p>API v1 is the keyed companion to the static surface above, at https://antarctic-labs.com/api/v1. It exists for one reason: convenience at scale — server-side search, full-text delivery, and bulk snapshot packages, at published daily limits, with a commercial-use licence on the paid tiers. The texts themselves stay free on this site either way; a key buys the maintained pipe, the throughput, and someone standing behind it, never access. Daily limits: free key 200 requests/day, Pro 5,000, Commercial 25,000. Keys are delivered by email and shown only there; only a hash of each key is stored. See <a href="/tower-of-babel/library/research">API access</a> for the tiers and to request a free key. No uptime SLA is offered on any tier.</p>
+<p>API v1 is the keyed companion to the static surface above, at https://antarctic-labs.com/api/v1. It exists for one reason: convenience at scale — server-side search, full-text delivery, and bulk snapshot packages, at published daily limits, with a commercial-use licence on the paid tiers. The texts themselves stay free on this site either way; a key buys the maintained pipe, the throughput, and someone standing behind it, never access. Daily limits: free key 50 requests/day, Pro 500, Commercial 5,000. Keys are delivered by email and shown only there; only a hash of each key is stored. See <a href="/tower-of-babel/library/research">API access</a> for the tiers and to request a free key. No uptime SLA is offered on any tier.</p>
 ${faqSection(API_FAQS)}
 ${PREFERRED_SOURCE_LINE}`,
 };
@@ -364,11 +364,11 @@ PAGES["/tower-of-babel/library/research"] = {
 <h3>Keyless catalog — Free</h3>
 <p>No published limit. The static surface documented on the <a href="/tower-of-babel/api">API page</a>: the full catalog JSON, shards, and predictable .txt URLs. No key, no sign-up. Unchanged — this is the discovery layer and it stays open.</p>
 <h3>Free key — Free</h3>
-<p>200 requests/day. A key by email for API v1: catalog search and metadata for your own projects. Non-commercial use. The key is shown only in the email that delivers it.</p>
+<p>50 requests/day. A key by email for API v1: catalog search and metadata for your own projects. Non-commercial use. The key is shown only in the email that delivers it.</p>
 <h3>Pro — $19/mo ($190/yr)</h3>
-<p>5,000 requests/day. API v1 with full-text delivery and a commercial-use licence for a single project. For builders, researchers, and small products that need the pipe, not the scrape.</p>
+<p>500 requests/day. API v1 with full-text delivery and a commercial-use licence for a single project — the maintained pipe, not the scrape.</p>
 <h3>Commercial — $149/mo ($1,490/yr)</h3>
-<p>25,000 requests/day. Everything in Pro at commercial scale: bulk snapshot packages and a commercial-use licence covering multiple projects.</p>
+<p>5,000 requests/day. Everything in Pro at commercial scale: bulk snapshot packages and a licence covering multiple projects.</p>
 <h2>Get a free key</h2>
 <p>Enter your email on this page in the app and a free key is sent to it — shown only in that email, stored here only as a hash. Asking for a new key revokes the previous free key for that address.</p>
 <p>Billing is managed through Stripe — the receipt for any payment includes a manage-billing link. Refunds: cancel within 7 days of a charge and that charge is refunded in full — email us from the address on the subscription and we will process it; the API key stays active until the end of the paid period unless you ask us to revoke it sooner.</p>

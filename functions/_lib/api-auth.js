@@ -7,19 +7,38 @@
 // never stored and never returned by any endpoint. Losing a key means
 // minting a new one, which revokes the old.
 //
-// Plans and daily request limits:
-//   free       200/day   catalog search + metadata, non-commercial
-//   pro        5000/day  + full text, single-project commercial use
-//   commercial 25000/day + bulk snapshots, multi-project commercial use
+// Plans and daily request limits (Joshua's corrected ladder,
+// INVENTORY 61; enforced from 2026-11-17):
+//   free       50/day    catalog search + metadata, non-commercial
+//   pro        500/day   + full text, single-project commercial use
+//   commercial 500+/day  + bulk snapshots, multi-project commercial use
+//
+// The day is the UTC calendar day: usage_daily rows are keyed by UTC
+// date and X-RateLimit-Reset is the epoch of the next UTC midnight.
+// UTC is deliberate — the counters have been keyed that way since
+// launch, the reset header has always promised UTC midnight, and a
+// key's day must not depend on where the caller happens to be.
 //
 // Every /api/v1 response carries X-RateLimit-Limit / -Remaining /
-// -Reset headers once a key is authenticated. Limits are enforced from
-// the D1 usage_daily counter: consumption is a single atomic upsert
-// whose RETURNING count is the allow/deny decision (no check-then-act
-// race), and a counter read/write failure denies the request (429/500)
-// rather than letting it through uncounted.
+// -Reset headers once a key is authenticated (plus Retry-After on a
+// 429). Limits are enforced from the D1 usage_daily counter:
+// consumption is a single atomic upsert whose RETURNING count is the
+// allow/deny decision (no check-then-act race), and a counter
+// read/write failure denies the request (429/500) rather than letting
+// it through uncounted.
 
-export const PLAN_LIMITS = { free: 200, pro: 5000, commercial: 25000 };
+// Joshua's Commercial wording is "500 plus" — he has never pinned the
+// exact ceiling above 500. This constant is the working default and
+// the ONLY place the ceiling is set: change it here and enforcement,
+// the usage endpoint, the key emails, and the minted-key snapshots
+// all follow.
+export const COMMERCIAL_DAILY_LIMIT = 5000;
+
+export const PLAN_LIMITS = {
+  free: 50,
+  pro: 500,
+  commercial: COMMERCIAL_DAILY_LIMIT,
+};
 export const KEY_PREFIX = "twr_live_";
 
 const enc = new TextEncoder();
@@ -61,18 +80,33 @@ export function resetEpoch(d = new Date()) {
 
 export function rateHeaders(stats) {
   if (!stats) return {};
-  return {
+  const headers = {
     "X-RateLimit-Limit": String(stats.limit),
     "X-RateLimit-Remaining": String(Math.max(0, stats.remaining)),
     "X-RateLimit-Reset": String(stats.reset),
   };
+  // Over the limit the caller also gets Retry-After (seconds until
+  // the UTC-midnight reset). It appears exactly when remaining goes
+  // negative — i.e. on 429 responses — and nowhere else.
+  if (stats.remaining < 0) {
+    headers["Retry-After"] = String(
+      Math.max(0, stats.reset - Math.floor(Date.now() / 1000))
+    );
+  }
+  return headers;
 }
 
-// The key's daily limit (row value wins, plan table is the fallback).
+// The key's daily limit. The PLAN TABLE governs — not the row's
+// stored daily_limit, which is only the mint-time snapshot of the
+// plan default, kept on the row for the record. Every writer of that
+// column (mintKey, the Stripe webhook's provisioning) derives it from
+// PLAN_LIMITS, and a production audit on 2026-11-17 confirmed every
+// existing row's snapshot equals its plan's previous default: no
+// custom per-key limits exist. Plan-governed enforcement is what lets
+// a corrected ladder apply to keys already issued, and it makes this
+// table the single source the API page's stated limits derive from.
 export function keyLimit(keyRow) {
-  return typeof keyRow.daily_limit === "number"
-    ? keyRow.daily_limit
-    : PLAN_LIMITS[keyRow.plan] || PLAN_LIMITS.free;
+  return PLAN_LIMITS[keyRow.plan] || PLAN_LIMITS.free;
 }
 
 // Current usage for a key (no increment). Returns a stats object, or

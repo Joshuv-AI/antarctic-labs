@@ -9730,7 +9730,7 @@ export function TowerApiPage({ go }) {
   const paidTiers = api.tiers.filter((t) => t.priceMonthly);
   const selTier = paidTiers.find((t) => t.id === planSel) || paidTiers[0];
   return (
-    <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
+    <main className="page-shell inner-page tower-light tower-api" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">FOR AI AGENTS</div>
         <h1>{api.h1}</h1>
