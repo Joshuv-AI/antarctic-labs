@@ -100,6 +100,7 @@
 // page boot; motion waits for it).
 
 import * as THREE from "three";
+import { getTowerKernels } from "./tower-kernels.js";
 
 // ------------------------------------------------------------------ pages
 // Page ids: 0 = starter, 1..8 = segment pages 0..7, 9 = live page.
@@ -144,6 +145,7 @@ const GROUP_LITERAL_MAX = 100; // truth-allocated coils (curated
                                // groups + Books shelves) at/below
                                // this many entries render literally
                                // (coil-count truth, 2026-11-16)
+
 // Label anchor positions along each band (fraction of its theta
 // span), staggered at build time so the big labels rarely sweep the
 // front together (Amendment L collision rule).
@@ -225,6 +227,37 @@ const GAP_DTHETA = Math.PI * 2 * 0.65; // bare-wire advance between bands
 // (one pass suffices: flooring a band only raises the others'
 // shares). Stations are rounded from panels, so realized panel
 // counts track strict proportionality to within one station.
+// Rust/WASM allocation kernels (tower-kernels.js): the three
+// allocate* functions below are ported to Rust with bit-exact
+// parity (the parity harness compares station-for-station against
+// these JS originals, which stay as the fallback). A null kernel
+// result — module not loaded, instantiate failed, any fault —
+// runs the JS implementation exactly as before the port. (Placed
+// after ROWS: the consts read it, and module-level const order is
+// evaluation order.)
+const ALLOC_KERNEL_CONSTS = {
+  target: BAND_PANEL_TARGET,
+  minStations: MIN_STATIONS,
+  rows: ROWS,
+  literalMax: GROUP_LITERAL_MAX,
+};
+function allocStationsAuto(counts) {
+  const K = getTowerKernels();
+  if (K) {
+    const r = K.allocBands(
+      BAND_DEFS.map((d) => counts[d.name]),
+      ALLOC_KERNEL_CONSTS
+    );
+    if (r) {
+      const out = {};
+      BAND_DEFS.forEach((d, i) => {
+        out[d.name] = r[i];
+      });
+      return out;
+    }
+  }
+  return allocateStations(counts);
+}
 function allocateStations(counts) {
   const floored = new Set();
   let pool = BAND_DEFS.map((d) => d.name);
@@ -270,7 +303,7 @@ function allocateStations(counts) {
   return out;
 }
 function buildBands(counts) {
-  const stations = allocateStations(counts);
+  const stations = allocStationsAuto(counts);
   return BAND_DEFS.map((d, i) => ({
     name: d.name,
     count: counts[d.name] || 0,
@@ -679,10 +712,20 @@ export function createHelixScene(canvas, opts = {}) {
     const counts = defs.map((d) => Math.max(0, Math.round(d.count || 0)));
     // Curated-group and Books-shelf layouts allocate by the truth
     // rules (literal small coils); every other layout keeps the
-    // generic floor + largest-remainder apportionment.
-    const stationsArr = truthAlloc
-      ? allocateStationsGroup(counts)
-      : allocateStationsArr(counts);
+    // generic floor + largest-remainder apportionment. The WASM
+    // kernels compute the identical stations when available.
+    let stationsArr = null;
+    const K = getTowerKernels();
+    if (K) {
+      stationsArr = truthAlloc
+        ? K.allocGroup(counts, ALLOC_KERNEL_CONSTS)
+        : K.allocArr(counts, ALLOC_KERNEL_CONSTS);
+    }
+    if (!stationsArr) {
+      stationsArr = truthAlloc
+        ? allocateStationsGroup(counts)
+        : allocateStationsArr(counts);
+    }
     // Panel-count invariant: the budget is exact by construction
     // (floors are pre-subtracted from it); the all-floored residue
     // is the one theoretical exception — fold it into the largest

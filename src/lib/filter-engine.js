@@ -165,10 +165,45 @@ export function startFilterScan(opts) {
     }
   };
 
+  // Rust/WASM scan kernel (tower-kernels.js): when the caller
+  // passes a loaded kernels handle, position ranges are evaluated
+  // in WASM with the identical predicates (bucket mask, era code,
+  // member / memberBits). Any kernel fault drops back to the JS
+  // loop below mid-scan with no observable change — the committed
+  // array is the same either way. The staged inputs are this
+  // scan's own snapshot; the engine's latest-only contract keeps
+  // one scan in flight, so the staging slots never alias.
+  let scanCtx = null;
+  if (opts.kernels) {
+    try {
+      scanCtx = opts.kernels.beginScan({
+        order, bucketCodes, bucketMask, eraCodes, eraCode, member, memberBits,
+      });
+    } catch {
+      scanCtx = null;
+    }
+  }
+
   const step = () => {
     if (dead || !isCurrent()) { settle(); return; }
     const t0 = performance.now();
     while (pos < total) {
+      if (scanCtx) {
+        const budget = Math.min(8192, total - pos);
+        while (n + budget > out.length) {
+          const grown = new Uint32Array(out.length * 2);
+          grown.set(out);
+          out = grown;
+        }
+        const r = scanCtx.scanRange(order, pos, budget, out, n);
+        if (r && r.consumed > 0) {
+          pos += r.consumed;
+          n += r.written;
+          if (performance.now() - t0 >= sliceMs) break;
+          continue;
+        }
+        scanCtx = null;
+      }
       const i = order[pos++];
       if (bucketMask && !bucketMask[bucketCodes[i]]) continue;
       if (eraCode && (!eraCodes || eraCodes[i] !== eraCode)) continue;

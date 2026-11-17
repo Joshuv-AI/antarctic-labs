@@ -103,6 +103,7 @@ import {
   buildMembershipBitset,
   startFilterScan,
 } from "./lib/filter-engine.js";
+import { getTowerKernels } from "./lib/tower-kernels.js";
 import {
   coverCandidates,
   coverTone,
@@ -1712,25 +1713,66 @@ function* facetCountSteps(input) {
   const eraCodes = towerData.eraCodes;
   const N = bucketKeys.length;
   const W = Math.ceil(N / 32);
+  // Rust/WASM kernels (tower-kernels.js): when the module loaded,
+  // the bitset algebra below runs in WASM with exact parity (the
+  // parity harness compares every tally against this JS). Every
+  // kernel call fails soft to the JS implementation beside it, so
+  // a missing or failed module changes nothing observable. The
+  // job's two big indexed arrays are staged once; the bucket-code
+  // table is the browse engine's own (extended over the resident
+  // keys exactly as the scan path extends it).
+  const K = getTowerKernels();
+  const fctx = K ? K.beginFacet() : null;
+  const bucketCodeTable = input.bucketCodeTable || null;
+  let stagedEra = null;
+  let stagedCodes = null;
+  if (fctx) {
+    stagedEra = fctx.stage(eraCodes);
+    if (bucketCodeTable) {
+      extendBucketCodes(bucketCodeTable, bucketKeys);
+      stagedCodes = fctx.stage(bucketCodeTable.codes);
+    }
+  }
   const pop32 = (x) => {
     x -= (x >> 1) & 0x55555555;
     x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
     x = (x + (x >> 4)) & 0x0f0f0f0f;
     return (x * 0x01010101) >> 24;
   };
-  const andPop = (a, b) => {
+  const andPopJS = (a, b) => {
     let n = 0;
     const lim = Math.min(a.length, b.length, W);
     for (let w = 0; w < lim; w++) n += pop32(a[w] & b[w]);
     return n;
   };
-  const andWords = (a, b) => {
+  const andPop = (a, b) => {
+    if (fctx) {
+      const r = fctx.andPop(a, b, W);
+      if (r !== null) return r;
+    }
+    return andPopJS(a, b);
+  };
+  const andWordsJS = (a, b) => {
     if (!a) return b;
     if (!b) return a;
     const out = new Uint32Array(W);
     const lim = Math.min(a.length, b.length, W);
     for (let w = 0; w < lim; w++) out[w] = a[w] & b[w];
     return out;
+  };
+  const andWords = (a, b) => {
+    // The null shortcuts are semantic, not just fast paths: they
+    // return the OTHER operand itself, and the tally loops below
+    // read it through its own element size (the hub-Set fallback
+    // member is a byte-per-record array). The kernel preserves
+    // exactly that; it is only called with both operands present.
+    if (!a) return b;
+    if (!b) return a;
+    if (K) {
+      const r = K.andWords(a, b, W);
+      if (r) return r;
+    }
+    return andWordsJS(a, b);
   };
   // Bucket mask from the few distinct bucket keys the filter can
   // match (exact key, or the lane prefix for a lane selection).
@@ -1743,24 +1785,43 @@ function* facetCountSteps(input) {
         match.add(k);
     }
     if (!laneOnly) match.add(bucketFilter);
-    bucketWords = new Uint32Array(W);
-    for (let i = 0; i < N; i++) {
-      if (match.has(bucketKeys[i])) bucketWords[i >> 5] |= 1 << (i & 31);
-      if ((i & 65535) === 65535 && over()) {
-        yield;
-        resetClock();
+    let builtWords = null;
+    if (fctx && stagedCodes) {
+      const mask = new Uint8Array(bucketCodeTable.keys.length);
+      for (const k of match) {
+        const c = bucketCodeTable.dict.get(k);
+        if (c !== undefined) mask[c] = 1;
+      }
+      builtWords = fctx.buildMaskWords(stagedCodes, mask, N);
+    }
+    if (builtWords) {
+      bucketWords = builtWords;
+    } else {
+      bucketWords = new Uint32Array(W);
+      for (let i = 0; i < N; i++) {
+        if (match.has(bucketKeys[i])) bucketWords[i >> 5] |= 1 << (i & 31);
+        if ((i & 65535) === 65535 && over()) {
+          yield;
+          resetClock();
+        }
       }
     }
   }
   let eraWords = null;
   if (eraFilter) {
     const code = TOWER_ERAS.findIndex((e) => e.id === eraFilter) + 1;
-    eraWords = new Uint32Array(W);
-    for (let i = 0; i < N; i++) {
-      if (eraCodes[i] === code) eraWords[i >> 5] |= 1 << (i & 31);
-      if ((i & 65535) === 65535 && over()) {
-        yield;
-        resetClock();
+    let builtWords = null;
+    if (fctx && stagedEra) builtWords = fctx.buildEraWords(stagedEra, code);
+    if (builtWords) {
+      eraWords = builtWords;
+    } else {
+      eraWords = new Uint32Array(W);
+      for (let i = 0; i < N; i++) {
+        if (eraCodes[i] === code) eraWords[i >> 5] |= 1 << (i & 31);
+        if ((i & 65535) === 65535 && over()) {
+          yield;
+          resetClock();
+        }
       }
     }
   }
@@ -1776,19 +1837,38 @@ function* facetCountSteps(input) {
           : towerData.eraCounts[e.id] || 0;
     } else {
       for (const e of TOWER_ERAS) eraMap[e.id] = 0;
-      for (let w = 0; w < W; w++) {
-        let word = within[w];
-        while (word) {
-          const b = word & -word;
-          const i = (w << 5) + (31 - Math.clz32(b));
-          const ec = eraCodes[i];
-          if (ec) eraMap[TOWER_ERAS[ec - 1].id]++;
-          word ^= b;
+      // Chunked exactly like the JS loop's yield cadence (4096
+      // words): each chunk runs in the kernel when it can, else
+      // in JS below — a kernel chunk accumulates into eraArr and
+      // is merged at the end, a JS chunk writes eraMap directly,
+      // so a mid-section fallback stays exact.
+      const eraArr = new Uint32Array(TOWER_ERAS.length);
+      const withinStaged = fctx ? fctx.stage(within) : null;
+      for (let w0 = 0; w0 < W; w0 += 4096) {
+        const w1 = Math.min(W, w0 + 4096);
+        let ok = false;
+        if (fctx && withinStaged && stagedEra) {
+          ok = fctx.eraTally(withinStaged, stagedEra, w0, w1, eraArr);
         }
-        if ((w & 4095) === 4095 && over()) {
+        if (!ok) {
+          for (let w = w0; w < w1; w++) {
+            let word = within[w];
+            while (word) {
+              const b = word & -word;
+              const i = (w << 5) + (31 - Math.clz32(b));
+              const ec = eraCodes[i];
+              if (ec) eraMap[TOWER_ERAS[ec - 1].id]++;
+              word ^= b;
+            }
+          }
+        }
+        if (w1 < W && over()) {
           yield;
           resetClock();
         }
+      }
+      for (let e = 0; e < TOWER_ERAS.length; e++) {
+        if (eraArr[e]) eraMap[TOWER_ERAS[e].id] += eraArr[e];
       }
     }
   }
@@ -1810,21 +1890,51 @@ function* facetCountSteps(input) {
     }
   } else {
     const within = andWords(eraWords, member);
-    for (let w = 0; w < W; w++) {
-      let word = within[w];
-      while (word) {
-        const b = word & -word;
-        const i = (w << 5) + (31 - Math.clz32(b));
-        const bk = bucketKeys[i];
-        subMap[bk] = (subMap[bk] || 0) + 1;
-        const lane = bk.split(":")[0];
-        laneMap[lane] = (laneMap[lane] || 0) + 1;
-        word ^= b;
+    // Same chunked pattern as the era tally: kernel chunks count
+    // bucket CODES into codeCounts (merged through the code table
+    // at the end); JS chunks write the maps directly.
+    const codeCounts = new Uint32Array(
+      stagedCodes ? bucketCodeTable.keys.length : 0
+    );
+    const withinStaged = fctx ? fctx.stage(within) : null;
+    for (let w0 = 0; w0 < W; w0 += 4096) {
+      const w1 = Math.min(W, w0 + 4096);
+      let ok = false;
+      if (fctx && withinStaged && stagedCodes) {
+        ok = fctx.bucketTally(
+          withinStaged,
+          stagedCodes,
+          w0,
+          w1,
+          codeCounts,
+          N
+        );
       }
-      if ((w & 4095) === 4095 && over()) {
+      if (!ok) {
+        for (let w = w0; w < w1; w++) {
+          let word = within[w];
+          while (word) {
+            const b = word & -word;
+            const i = (w << 5) + (31 - Math.clz32(b));
+            const bk = bucketKeys[i];
+            subMap[bk] = (subMap[bk] || 0) + 1;
+            const lane = bk.split(":")[0];
+            laneMap[lane] = (laneMap[lane] || 0) + 1;
+            word ^= b;
+          }
+        }
+      }
+      if (w1 < W && over()) {
         yield;
         resetClock();
       }
+    }
+    for (let c = 0; c < codeCounts.length; c++) {
+      if (!codeCounts[c]) continue;
+      const bk = bucketCodeTable.keys[c];
+      subMap[bk] = (subMap[bk] || 0) + codeCounts[c];
+      const lane = bk.split(":")[0];
+      laneMap[lane] = (laneMap[lane] || 0) + codeCounts[c];
     }
   }
   // --- curated rows within bucket ∧ era ∧ shelf ------------------
@@ -3427,6 +3537,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     const input = {
       towerData,
       artifacts,
+      bucketCodeTable: browseFx.current ? browseFx.current.codes : null,
       bucketFilter,
       eraFilter,
       memberBitsSel,
@@ -3524,6 +3635,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       eraCode: eraCodeWanted,
       member,
       memberBits: sel.collBits || null,
+      kernels: getTowerKernels(),
       isCurrent: () => fx.gen === gen,
       onCommit: (indices, count) => commit(indices, count),
       onSettle: () => {
