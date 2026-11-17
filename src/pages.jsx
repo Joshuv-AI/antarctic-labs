@@ -5421,7 +5421,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                   type="search"
                   name="q"
                   className="tower-search tower-search-hero"
-                  placeholder="Search titles, creators, tags… — or words inside the texts"
+                  placeholder="Advanced Search"
                   disabled
                 />
                 <button type="submit" className="tower-search-submit" disabled>
@@ -5501,7 +5501,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                       type="search"
                       name="q"
                       className="tower-search tower-search-hero"
-                      placeholder="Search titles, creators, tags… — or words inside the texts"
+                      placeholder="Advanced Search"
                       value={query}
                       onChange={(e) => {
                         setQuery(e.target.value);
@@ -7294,12 +7294,10 @@ function highlightText(text, tokens) {
 // (auto for the first rows, on demand for the rest) and shows at most 2
 // passages, each ≤200 chars, each linking into the reader at the exact
 // passage (?at=<offset>&hl=<start>-<end> — the reader's share-link scheme).
-function SnippetBlock({ item, go, auto, onOpen }) {
+// The load is shared with the row headline (INVENTORY 41): one fetch of
+// the entry's text feeds both the headline preview and this block.
+function usePassageSnippets(item, wanted) {
   const [snips, setSnips] = useState(null);
-  const [wanted, setWanted] = useState(auto);
-  useEffect(() => {
-    if (auto) setWanted(true);
-  }, [auto]);
   useEffect(() => {
     if (!wanted || snips || !item.doc || !item.parsedQuery) return;
     let live = true;
@@ -7310,13 +7308,17 @@ function SnippetBlock({ item, go, auto, onOpen }) {
       live = false;
     };
   }, [wanted, snips, item]);
+  return snips;
+}
+
+function SnippetBlock({ item, go, onOpen, snips, wanted, onWant, skipFirst }) {
   if (!item.text) return null;
   if (!wanted) {
     return (
       <button
         type="button"
         className="text-link tower-snippets-more"
-        onClick={() => setWanted(true)}
+        onClick={onWant}
       >
         Show passages
       </button>
@@ -7326,7 +7328,13 @@ function SnippetBlock({ item, go, auto, onOpen }) {
     return <p className="tower-snippets-status">Finding passages…</p>;
   }
   if (!snips.snippets.length) return null;
-  const shown = snips.snippets.slice(0, 2);
+  // When the headline already carries the first passage (a body-text
+  // match under INVENTORY 41), the block offers the NEXT passages so
+  // the same text never appears twice in one row.
+  const shown = skipFirst
+    ? snips.snippets.slice(1, 3)
+    : snips.snippets.slice(0, 2);
+  if (!shown.length) return null;
   return (
     <div className="tower-snippets tower-snippets-inline">
       {shown.map((s, i) => (
@@ -7356,6 +7364,23 @@ function SnippetBlock({ item, go, auto, onOpen }) {
 const UnifiedRow = memo(function UnifiedRow({ item, rank, go, tokens, autoSnippets, onOpen }) {
   const a = item.artifact;
   const entryPath = `/tower-of-babel/library/${item.key}`;
+  // Passage loading, shared between the headline and the block below:
+  // auto for the first rows, on demand ("Show passages") for the rest —
+  // the same lazy policy the snippet block has always had.
+  const [passagesWanted, setPassagesWanted] = useState(autoSnippets);
+  useEffect(() => {
+    if (autoSnippets) setPassagesWanted(true);
+  }, [autoSnippets]);
+  const snips = usePassageSnippets(item, passagesWanted);
+  // INVENTORY 41 (Joshua's match-type rule): a BODY-TEXT match headlines
+  // the row with a preview of the matched passage INSTEAD of the title;
+  // a TITLE match keeps the title — and when both match, the title wins.
+  // The preview is the first passage cut from the entry's own text by
+  // getSnippets (never assembled from anything else); until it loads —
+  // or if the text yields no passage — the title stands, unchanged.
+  const bodyOnly = !!item.text && !(item.meta && item.meta.title);
+  const preview =
+    bodyOnly && snips && snips.snippets.length ? snips.snippets[0] : null;
   const badges = [];
   if (item.meta.title) badges.push("Title match");
   else if (item.meta.creator) badges.push("Author match");
@@ -7370,13 +7395,33 @@ const UnifiedRow = memo(function UnifiedRow({ item, rank, go, tokens, autoSnippe
         <TowerCover a={a} />
       </span>
       <span className="tower-row-main">
-        <button
-          type="button"
-          className="tower-row-title-btn"
-          onClick={(e) => (onOpen ? onOpen(a, entryPath, e) : go(entryPath))}
-        >
-          <span className="tower-row-title">{highlightText(a.title, tokens)}</span>
-        </button>
+        {preview ? (
+          <button
+            type="button"
+            className="tower-row-title-btn"
+            onClick={(e) => {
+              // The headline IS the passage here, so it rides the same
+              // passage deep link the snippet buttons use.
+              const to = `${entryPath}?at=${preview.markStart}&hl=${preview.markStart}-${preview.markEnd}`;
+              if (onOpen) onOpen(a, to, e);
+              else go(to);
+            }}
+            aria-label={`Read this passage in ${a.title}`}
+          >
+            <span
+              className="tower-row-title tower-row-preview"
+              dangerouslySetInnerHTML={{ __html: preview.html }}
+            />
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="tower-row-title-btn"
+            onClick={(e) => (onOpen ? onOpen(a, entryPath, e) : go(entryPath))}
+          >
+            <span className="tower-row-title">{highlightText(a.title, tokens)}</span>
+          </button>
+        )}
         {(a.creator || a.year) && (
           <span className="tower-row-creator">
             {highlightText(a.creator || "", tokens)}
@@ -7395,7 +7440,15 @@ const UnifiedRow = memo(function UnifiedRow({ item, rank, go, tokens, autoSnippe
           )}
         </span>
         {item.text ? (
-          <SnippetBlock item={item} go={go} auto={autoSnippets} onOpen={onOpen} />
+          <SnippetBlock
+            item={item}
+            go={go}
+            onOpen={onOpen}
+            snips={snips}
+            wanted={passagesWanted}
+            onWant={() => setPassagesWanted(true)}
+            skipFirst={!!preview}
+          />
         ) : a.description ? (
           <span className="tower-row-desc">{a.description}</span>
         ) : null}
