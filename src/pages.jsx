@@ -6840,7 +6840,16 @@ export function TowerApiAccess({ go }) {
 // (The tower-desk class stays on <main>: the stylesheet scopes the
 // API block's rules under it — renaming the scope is a separate,
 // purely cosmetic change.)
-export function TowerApiAccessPage({ go }) {
+export function TowerApiAccessPage({ go, onReady }) {
+  // Report ready on mount so the Tower boot loader dismisses on its
+  // normal beat instead of the failsafe — the same contract DonatePage
+  // and SuggestEntry use. This page is the one Tower destination that
+  // never reported: the boot's animation finished and then sat frozen
+  // over the painted page until the 4 s failsafe removed it
+  // (INVENTORY 64, diagnosed 2026-11-17).
+  useEffect(() => {
+    if (onReady) onReady();
+  }, [onReady]);
   return (
     <main className="page-shell inner-page tower-light tower-desk" id="main-content" tabIndex={-1}>
       <TowerApiAccess go={go} />

@@ -368,9 +368,11 @@ function App() {
     towerBootTimers.current.push(t);
   }, [dismissTowerBoot]);
   // Raise the Tower boot loader with its hard failsafe. The failsafe is
-  // catalog-aware: if the catalog chunk is still downloading at 4s, it
-  // re-arms once (8s absolute cap) instead of dismissing to a blank page.
-  // Either way the overlay can never trap the user.
+  // readiness-aware: if the catalog chunk is still downloading at 4s —
+  // or the library section is still in its loading branch — it
+  // re-checks on a 2s cadence (8s absolute cap) instead of dismissing
+  // to a blank or still-loading page. Either way the overlay can never
+  // trap the user.
   const raiseTowerBoot = useCallback(() => {
     clearTowerBootTimers();
     setTowerBoot(true);
@@ -383,14 +385,33 @@ function App() {
     // opens with the catalog already moving or resident.
     loadBootstrap().catch(() => {});
     warmCatalogBrowse();
-    const t = setTimeout(() => {
-      if (isCatalogPending()) {
-        const t2 = setTimeout(dismissTowerBoot, 4000);
-        towerBootTimers.current.push(t2);
+    // Readiness-aware failsafe (INVENTORY 65, diagnosed 2026-11-17):
+    // the boot's dismissal contract is the library section's first
+    // paint (its onReady), but the old failsafe consulted only the
+    // bootstrap fetch. On a dock return the bootstrap is long resident
+    // while the remounted section is still in its loading branch —
+    // its derivation over the resident catalog takes seconds — so the
+    // boot died at 4 s over a page that had not painted, every time,
+    // and the section's ready signal never got to dismiss it. The
+    // failsafe now also reads the section's loading branch (the same
+    // DOM signal the helix scene's load poll uses) and re-checks on a
+    // 2 s cadence inside the SAME 8 s absolute cap: the overlay can
+    // still never trap the user, it just cannot be dismissed out from
+    // under a page that is still loading. Routes whose pages report
+    // ready on mount (donate, suggest, research, entry pages) dismiss
+    // through onReady long before this ever runs, unchanged.
+    const failsafe = () => {
+      const elapsed = Date.now() - towerBootStarted.current;
+      const sectionLoading =
+        !!document.querySelector(".tower-index--loading");
+      if ((isCatalogPending() || sectionLoading) && elapsed < 8000) {
+        const t = setTimeout(failsafe, 2000);
+        towerBootTimers.current.push(t);
       } else {
         dismissTowerBoot();
       }
-    }, 4000);
+    };
+    const t = setTimeout(failsafe, 4000);
     towerBootTimers.current.push(t);
   }, [dismissTowerBoot]);
   // Antarctic Labs branded loader for dock navigation: the same mark +
@@ -708,7 +729,7 @@ function App() {
           <SuggestEntry go={go} onReady={handleTowerReady} />
         )}
         {path === "/tower-of-babel/library/research" && (
-          <TowerApiAccessPage go={go} />
+          <TowerApiAccessPage go={go} onReady={handleTowerReady} />
         )}
         {path === "/tower-of-babel/donate" && (
           <DonatePage go={go} onReady={handleTowerReady} />
