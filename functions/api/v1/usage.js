@@ -21,7 +21,8 @@ export async function onRequestGet({ request, env }) {
       today: {
         count: stats.count,
         limit: stats.limit,
-        remaining: Math.max(0, stats.remaining),
+        remaining:
+          stats.remaining == null ? null : Math.max(0, stats.remaining),
       },
       key_hint: a.key.last4 || null,
     },

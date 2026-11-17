@@ -6,7 +6,7 @@
 // Guardrails: never claim every record has full text, or an uptime
 // SLA. The daily limits stated here MUST match the enforced ladder in
 // functions/_lib/api-auth.js (PLAN_LIMITS: free 50, pro 500,
-// commercial COMMERCIAL_DAILY_LIMIT = 5,000) — if that table ever
+// commercial null = unlimited) — if that table ever
 // changes, this copy changes in the same push. An MCP server is live
 // at /mcp (keyless, read-only); v1 keyed search is live.
 
@@ -132,8 +132,9 @@ export const apiPage = {
         "GET /api/v1/text?id= (paid plans: a redirect to the " +
         "work's .txt, where text is present), GET /api/v1/bulk (snapshot package list), and " +
         "GET /api/v1/usage (your key's plan and today's count). Daily limits: free key 50 " +
-        "requests/day, Pro 500, Commercial 5,000. Every keyed response carries X-RateLimit-Limit, " +
-        "X-RateLimit-Remaining, and X-RateLimit-Reset headers; going over the daily limit " +
+        "requests/day, Pro 500, Commercial unlimited. Keyed responses carry X-RateLimit-Limit, " +
+        "X-RateLimit-Remaining, and X-RateLimit-Reset headers (an unlimited key carries only " +
+        "the reset — it has no limit or remainder to report); going over the daily limit " +
         "returns 429 with the reset time. Keyed errors are JSON: { ok: false, error }; the " +
         "keyless search keeps its own error shape, { error: { code, message } }. No uptime SLA is offered on " +
         "any tier. Versioning: v1 is stable — breaking changes ship as a new version, never " +
@@ -156,7 +157,7 @@ export const apiPage = {
     },
     {
       q: "Do I need an API key? Are there rate limits?",
-      a: "Not for the catalog itself: no key, no account, no published rate limit on the static surface — static files on CDN-backed hosting. The keyed API v1 is separate: a free key by email at 50 requests/day, Pro at 500/day, and Commercial at 5,000/day. Reasonable behavior still applies on the keyless surface: download the catalog once and cache it, fetch only the texts you need, and do not hammer the host with parallel thousands-wide crawls.",
+      a: "Not for the catalog itself: no key, no account, no published rate limit on the static surface — static files on CDN-backed hosting. The keyed API v1 is separate: a free key by email at 50 requests/day, Pro at 500/day, and Commercial unlimited. Reasonable behavior still applies on the keyless surface: download the catalog once and cache it, fetch only the texts you need, and do not hammer the host with parallel thousands-wide crawls.",
     },
     {
       q: "Can I use these texts commercially, including for training data?",
@@ -206,7 +207,7 @@ export const apiPage = {
       name: "Commercial",
       priceMonthly: "$149/mo",
       priceAnnual: "$1,490/yr",
-      limit: "5,000 requests/day",
+      limit: "Unlimited requests/day",
       blurb:
         "Everything in Pro at commercial scale: bulk snapshot packages and a licence covering multiple projects.",
     },

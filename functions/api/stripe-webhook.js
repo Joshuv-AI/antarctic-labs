@@ -158,7 +158,7 @@ async function handleEvent(env, event) {
     if (obj.mode !== "subscription") return;
     if (obj.metadata?.source !== "tower-api") return;
     const plan = obj.metadata?.plan;
-    if (!PLAN_LIMITS[plan] || plan === "free") return;
+    if (!(plan in PLAN_LIMITS) || plan === "free") return;
     // Provisioning gate: a completed session is not a completed
     // payment for delayed-notification methods. Unpaid waits for
     // invoice.paid / async_payment_succeeded.
@@ -180,7 +180,7 @@ async function handleEvent(env, event) {
       ? await findKeyRow(env, { customerId, email: null })
       : null;
     const deletedSub = !!existingRow && existingRow.sub_deleted === 1;
-    if (!deletedSub && PLAN_LIMITS[plan] && plan !== "free") {
+    if (!deletedSub && plan in PLAN_LIMITS && plan !== "free") {
       // Recurring payment (or the first payment after an unpaid
       // checkout): make sure the plan entitlement is in place.
       await provisionPaidKey(env, {

@@ -9,9 +9,11 @@
 //
 // Plans and daily request limits (Joshua's corrected ladder,
 // INVENTORY 61; enforced from 2026-11-17):
-//   free       50/day    catalog search + metadata, non-commercial
-//   pro        500/day   + full text, single-project commercial use
-//   commercial 500+/day  + bulk snapshots, multi-project commercial use
+//   free       50/day     catalog search + metadata, non-commercial
+//   pro        500/day    + full text, single-project commercial use
+//   commercial UNLIMITED  + bulk snapshots, multi-project commercial use
+// Commercial was made unlimited by Joshua's ruling of 2026-11-17,
+// superseding the earlier capped working default.
 //
 // The day is the UTC calendar day: usage_daily rows are keyed by UTC
 // date and X-RateLimit-Reset is the epoch of the next UTC midnight.
@@ -21,24 +23,30 @@
 //
 // Every /api/v1 response carries X-RateLimit-Limit / -Remaining /
 // -Reset headers once a key is authenticated (plus Retry-After on a
-// 429). Limits are enforced from the D1 usage_daily counter:
+// 429); an unlimited (Commercial) key carries only -Reset, since no
+// limit or remainder exists to report. Limits are enforced from the D1 usage_daily counter:
 // consumption is a single atomic upsert whose RETURNING count is the
 // allow/deny decision (no check-then-act race), and a counter
 // read/write failure denies the request (429/500) rather than letting
 // it through uncounted.
 
-// Joshua's Commercial wording is "500 plus" — he has never pinned the
-// exact ceiling above 500. This constant is the working default and
-// the ONLY place the ceiling is set: change it here and enforcement,
-// the usage endpoint, the key emails, and the minted-key snapshots
-// all follow.
-export const COMMERCIAL_DAILY_LIMIT = 5000;
-
+// PLAN_LIMITS is the ONLY place plan limits are set: change it here
+// and enforcement, the usage endpoint, the key emails, and the
+// minted-key snapshots all follow. A null limit means UNLIMITED —
+// the plan is never quota-denied, its usage endpoint reports
+// limit/remaining as null (never a fabricated cap or remainder), and
+// its rate headers carry no limit/remaining figures.
 export const PLAN_LIMITS = {
   free: 50,
   pro: 500,
-  commercial: COMMERCIAL_DAILY_LIMIT,
+  commercial: null, // unlimited — Joshua's ruling, 2026-11-17
 };
+
+export function planLimit(plan) {
+  return Object.prototype.hasOwnProperty.call(PLAN_LIMITS, plan)
+    ? PLAN_LIMITS[plan]
+    : PLAN_LIMITS.free;
+}
 export const KEY_PREFIX = "twr_live_";
 
 const enc = new TextEncoder();
@@ -80,6 +88,11 @@ export function resetEpoch(d = new Date()) {
 
 export function rateHeaders(stats) {
   if (!stats) return {};
+  // Unlimited plan: no cap exists, so no limit/remaining figures are
+  // emitted — only the reset of the UTC day its usage count describes.
+  if (stats.limit == null) {
+    return { "X-RateLimit-Reset": String(stats.reset) };
+  }
   const headers = {
     "X-RateLimit-Limit": String(stats.limit),
     "X-RateLimit-Remaining": String(Math.max(0, stats.remaining)),
@@ -106,7 +119,7 @@ export function rateHeaders(stats) {
 // a corrected ladder apply to keys already issued, and it makes this
 // table the single source the API page's stated limits derive from.
 export function keyLimit(keyRow) {
-  return PLAN_LIMITS[keyRow.plan] || PLAN_LIMITS.free;
+  return planLimit(keyRow && keyRow.plan);
 }
 
 // Current usage for a key (no increment). Returns a stats object, or
@@ -127,7 +140,12 @@ export async function usageStats(env, keyRow) {
   }
   const count = row && typeof row.count === "number" ? row.count : 0;
   const limit = keyLimit(keyRow);
-  return { count, limit, remaining: limit - count, reset: resetEpoch() };
+  return {
+    count,
+    limit,
+    remaining: limit == null ? null : limit - count,
+    reset: resetEpoch(),
+  };
 }
 
 // Consume one request against the key's daily quota. The increment is
@@ -160,10 +178,11 @@ export async function consumeQuota(env, keyRow) {
   const stats = {
     count: row.count,
     limit,
-    remaining: limit - row.count,
+    remaining: limit == null ? null : limit - row.count,
     reset: resetEpoch(),
   };
-  if (row.count > limit) return { ok: false, stats };
+  // Unlimited plans are counted (usage stays honest) but never denied.
+  if (limit != null && row.count > limit) return { ok: false, stats };
   return { ok: true, stats };
 }
 
@@ -241,7 +260,7 @@ export async function sendApiKeyEmail(env, { to, plaintext, plan, keyHash }) {
   const key = env.RESEND_API_KEY;
   if (!key) return { ok: false, notConfigured: true };
   const paid = plan && plan !== "free";
-  const limit = PLAN_LIMITS[plan] || PLAN_LIMITS.free;
+  const limit = planLimit(plan);
   const lines = [
     "Your Tower of Babel API key:",
     "",
@@ -251,7 +270,9 @@ export async function sendApiKeyEmail(env, { to, plaintext, plan, keyHash }) {
     "as a hash, so it can never be shown again. Keep it secret.",
     "",
     paid
-      ? `Plan: ${plan} — ${limit.toLocaleString()} requests per day.`
+      ? limit == null
+        ? `Plan: ${plan} — unlimited requests per day.`
+        : `Plan: ${plan} — ${limit.toLocaleString()} requests per day.`
       : `Plan: free — ${limit} requests per day, catalog search and metadata, non-commercial use.`,
     "",
     "Use it as a Bearer token:",
@@ -310,7 +331,7 @@ export async function mintKey(env, { email, plan, stripeCustomerId }) {
       normalizedEmail,
       stripeCustomerId || null,
       plan,
-      PLAN_LIMITS[plan] || PLAN_LIMITS.free,
+      planLimit(plan),
       now,
       now
     )

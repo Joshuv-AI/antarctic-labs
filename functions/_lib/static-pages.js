@@ -62,7 +62,7 @@ const API_FAQS = [
   },
   {
     q: "Do I need an API key? Are there rate limits?",
-    a: "Not for the catalog itself: no key, no account, no published rate limit on the static surface — static files on CDN-backed hosting. The keyed API v1 is separate: a free key by email at 50 requests/day, Pro at 500/day, and Commercial at 5,000/day. Reasonable behavior still applies on the keyless surface: download the catalog once and cache it, fetch only the texts you need, and do not hammer the host with parallel thousands-wide crawls.",
+    a: "Not for the catalog itself: no key, no account, no published rate limit on the static surface — static files on CDN-backed hosting. The keyed API v1 is separate: a free key by email at 50 requests/day, Pro at 500/day, and Commercial unlimited. Reasonable behavior still applies on the keyless surface: download the catalog once and cache it, fetch only the texts you need, and do not hammer the host with parallel thousands-wide crawls.",
   },
   {
     q: "Can I use these texts commercially, including for training data?",
@@ -348,7 +348,7 @@ PAGES["/tower-of-babel/api"] = {
 <h2>Harvest with OAI-PMH</h2>
 <p>Libraries and harvesters can take the catalog through the OAI-PMH 2.0 endpoint at https://antarctic-labs.com/oai — it supports the standard verbs: Identify, ListMetadataFormats, ListSets, ListIdentifiers, ListRecords, and GetRecord, with metadata in oai_dc (Dublin Core). Sets are the catalog's collections, and identifiers take the form oai:antarctic-labs.com:&lt;artifact_id&gt;.</p>
 <h2>API v1 — keys, search, and full text</h2>
-<p>API v1 is the keyed companion to the static surface above, at https://antarctic-labs.com/api/v1. It exists for one reason: convenience at scale — server-side search, full-text delivery, and bulk snapshot packages, at published daily limits, with a commercial-use licence on the paid tiers. The texts themselves stay free on this site either way; a key buys the maintained pipe, the throughput, and someone standing behind it, never access. Daily limits: free key 50 requests/day, Pro 500, Commercial 5,000. Keys are delivered by email and shown only there; only a hash of each key is stored. See <a href="/tower-of-babel/library/research">API access</a> for the tiers and to request a free key. No uptime SLA is offered on any tier.</p>
+<p>API v1 is the keyed companion to the static surface above, at https://antarctic-labs.com/api/v1. It exists for one reason: convenience at scale — server-side search, full-text delivery, and bulk snapshot packages, at published daily limits, with a commercial-use licence on the paid tiers. The texts themselves stay free on this site either way; a key buys the maintained pipe, the throughput, and someone standing behind it, never access. Daily limits: free key 50 requests/day, Pro 500, Commercial unlimited. Keys are delivered by email and shown only there; only a hash of each key is stored. See <a href="/tower-of-babel/library/research">API access</a> for the tiers and to request a free key. No uptime SLA is offered on any tier.</p>
 ${faqSection(API_FAQS)}
 ${PREFERRED_SOURCE_LINE}`,
 };
@@ -368,7 +368,7 @@ PAGES["/tower-of-babel/library/research"] = {
 <h3>Pro — $19/mo ($190/yr)</h3>
 <p>500 requests/day. API v1 with full-text delivery and a commercial-use licence for a single project — the maintained pipe, not the scrape.</p>
 <h3>Commercial — $149/mo ($1,490/yr)</h3>
-<p>5,000 requests/day. Everything in Pro at commercial scale: bulk snapshot packages and a licence covering multiple projects.</p>
+<p>Unlimited requests/day. Everything in Pro at commercial scale: bulk snapshot packages and a licence covering multiple projects.</p>
 <h2>Get a free key</h2>
 <p>Enter your email on this page in the app and a free key is sent to it — shown only in that email, stored here only as a hash. Asking for a new key revokes the previous free key for that address.</p>
 <p>Billing is managed through Stripe — the receipt for any payment includes a manage-billing link. Refunds: cancel within 7 days of a charge and that charge is refunded in full — email us from the address on the subscription and we will process it; the API key stays active until the end of the paid period unless you ask us to revoke it sooner.</p>
