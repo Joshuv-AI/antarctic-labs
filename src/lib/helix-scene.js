@@ -992,6 +992,7 @@ export function createHelixScene(canvas, opts = {}) {
     "uniform float uDissolve;",
     "uniform float uGridDiv;",
     "uniform float uProjFactor;",
+    "uniform float uTexFlip;",
     "uniform vec3 uTints[" + BAND_DEFS.length + "];",
     "varying vec2 vUv;",
     "varying vec2 vGrainUv;",
@@ -1002,6 +1003,13 @@ export function createHelixScene(canvas, opts = {}) {
     "  float col = mod(aCell, uGridDiv);",
     "  float row = floor(aCell / uGridDiv);",
     "  vUv = (vec2(col, row) + uv) / uGridDiv;",
+    // KTX2 pages only (uTexFlip = 1): compressed uploads cannot be
+    // flipped (UNPACK_FLIP_Y is ignored for them), so a transcoded
+    // page's texels sit in authored top-first order while the cell
+    // addressing above assumes the flipY'd bottom-first order the
+    // WebP path uploads. Mirroring V restores the exact WebP
+    // sampling — same cell, upright — for KTX2-backed pages.
+    "  if (uTexFlip > 0.5) vUv.y = 1.0 - vUv.y;",
     // Grain cell: band b occupies grain cells [b*8, b*8+8); the
     // per-instance variant comes from the phase hash.
     "  float gCell = (7.0 - aGroup) * 8.0 + floor(fract(aPhase * 7.317) * 8.0);",
@@ -1103,6 +1111,9 @@ export function createHelixScene(canvas, opts = {}) {
     rec.mat = new THREE.ShaderMaterial({
       uniforms: {
         uMap: { value: rec.tex },
+        uTexFlip: {
+          value: rec.tex && rec.tex.userData && rec.tex.userData.fromKtx2 ? 1 : 0,
+        },
         uGrain: uniforms.uGrain,
         uTime: uniforms.uTime,
         uFocusAmt: uniforms.uFocusAmt,
@@ -1268,6 +1279,7 @@ export function createHelixScene(canvas, opts = {}) {
         const tex = await ktx2Loader.loadAsync(segmentKtx2Url(s));
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        tex.userData.fromKtx2 = true;
         return tex;
       } catch (e) { /* fall through to the WebP page */ }
     }
@@ -1450,6 +1462,10 @@ export function createHelixScene(canvas, opts = {}) {
       rec.tex = tex;
       if (!rec.mesh) buildPageMesh(rec);
       rec.mat.uniforms.uMap.value = tex;
+      if (rec.mat.uniforms.uTexFlip) {
+        rec.mat.uniforms.uTexFlip.value =
+          tex.userData && tex.userData.fromKtx2 ? 1 : 0;
+      }
       stillDirty = true;
     });
   }
@@ -1458,6 +1474,11 @@ export function createHelixScene(canvas, opts = {}) {
   // never per-frame work.
   function segmentHousekeeping() {
     if (disposed || frozen || contextLost) return;
+    // Pause-when-hidden (INVENTORY 67): no stream work — no loads,
+    // activations or evictions — is initiated while the tab is
+    // hidden. In-flight loads may land; nothing new starts until
+    // the tab is visible again.
+    if (typeof document !== "undefined" && document.hidden) return;
     // Off the resting layout the segment lifecycle is frozen: the
     // baked pools belong to the resting canonical mapping, and a
     // re-coiled structure samples the starter page (its parent
@@ -2678,12 +2699,16 @@ export function createHelixScene(canvas, opts = {}) {
   // reshape the moment the stream clears, and advance the atlas page
   // lifecycle. Runs on the render tick's 250 ms cadence while the
   // loop is alive; a 1 s fallback interval (below) drives the same
-  // cycle when the loop is parked — the fps degrade park or a hidden
-  // tab — because page loads/activations are state progression, not
-  // rendering: without it, a device that parks during the catalog
-  // load would keep starter cells forever even though every legal
-  // activation moment (whole segment in the far tier, or a bundled
-  // commit) is still being honored by segmentHousekeeping itself.
+  // cycle when the loop is parked by the fps degrade while the tab
+  // stays VISIBLE — because page loads/activations are state
+  // progression, not rendering: without it, a device that parks
+  // during the catalog load would keep starter cells forever even
+  // though every legal activation moment (whole segment in the far
+  // tier, or a bundled commit) is still being honored by
+  // segmentHousekeeping itself. A HIDDEN tab is different
+  // (INVENTORY 67, pause-when-hidden): the fallback does not run
+  // there — stream work stops with the render loop and resumes on
+  // the first visible cycle, with pending states intact.
   function pollCycle(now) {
     loadPollAt = now;
     try {
@@ -2712,6 +2737,7 @@ export function createHelixScene(canvas, opts = {}) {
       clearInterval(pollTimer);
       return;
     }
+    if (typeof document !== "undefined" && document.hidden) return;
     const now = performance.now();
     if (now - loadPollAt > 900) pollCycle(now);
   }, 1000);
