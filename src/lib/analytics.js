@@ -155,9 +155,20 @@ function buildTag() {
   }
 }
 
+// Benign browser layout warnings, not exceptions (error-watch RESIZE-1,
+// 2026-11-17): Chrome/Firefox fire these from the ResizeObserver spec's
+// own loop guard; they carry no actionable failure. On 2026-11-16 they
+// were 133 of 133 client_error events, drowning any real error signal
+// and spending the per-load cap, so they are filtered before counting.
+const BENIGN_CLIENT_MESSAGES = [
+  "ResizeObserver loop completed with undelivered notifications",
+  "ResizeObserver loop limit exceeded",
+];
+
 function reportClientError(kind, message, stack) {
   try {
     const msg = String(message || "unknown error").slice(0, 300);
+    if (BENIGN_CLIENT_MESSAGES.some((b) => msg.includes(b))) return;
     const stk = stack ? String(stack).slice(0, 2000) : "";
     const key = `${kind}:${msg}:${stk.slice(0, 120)}`;
     if (clientErrorsSeen.has(key) || clientErrorsSent >= CLIENT_ERROR_CAP) {
