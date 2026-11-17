@@ -360,8 +360,10 @@ function allocateStationsArr(counts) {
   }
   return out;
 }
-// Truth-allocated layouts (2026-11-16, INVENTORY lines 98 + 99):
-// the curated-group re-coil and the Books shelves layout. The
+// Truth-allocated layouts (2026-11-16, INVENTORY lines 98 + 99;
+// lane-sub added 2026-11-17 on Joshua's approval): the
+// curated-group re-coil, the Books shelves layout and the
+// per-collection subcategory (lane-sub) layouts. The
 // generic floor in allocateStationsArr gives every coil at least
 // 72 panels, so a 6-entry subcategory (or a 22-entry Books shelf)
 // rendered as a full coil — the visual overstated where the
@@ -374,9 +376,8 @@ function allocateStationsArr(counts) {
 // one-station visibility minimum, so a mid-size shelf inside a
 // huge layout reads as a stub — never a full coil, and never
 // vanished. Zero-count coils keep zero stations (honest markers).
-// The resting bands and the lane-sub layouts keep the generic
-// allocation above — this function serves the group and shelf
-// layouts alone.
+// The resting bands keep the generic allocation above — this
+// function serves the group, shelf and lane-sub layouts alone.
 function allocateStationsGroup(counts) {
   const n = counts.length;
   const out = new Array(n).fill(0);
@@ -710,10 +711,11 @@ export function createHelixScene(canvas, opts = {}) {
   }
   function buildLayoutGeometry(defs, truthAlloc) {
     const counts = defs.map((d) => Math.max(0, Math.round(d.count || 0)));
-    // Curated-group and Books-shelf layouts allocate by the truth
-    // rules (literal small coils); every other layout keeps the
-    // generic floor + largest-remainder apportionment. The WASM
-    // kernels compute the identical stations when available.
+    // Curated-group, Books-shelf and lane-sub layouts allocate by
+    // the truth rules (literal small coils); every other layout
+    // keeps the generic floor + largest-remainder apportionment.
+    // The WASM kernels compute the identical stations when
+    // available.
     let stationsArr = null;
     const K = getTowerKernels();
     if (K) {
@@ -2856,11 +2858,14 @@ export function createHelixScene(canvas, opts = {}) {
       }
     }
     if (mirrorSet.size) clearMirror();
-    // Truth allocation serves the curated-group re-coil (line 98)
-    // and the Books shelves layout (line 99, Joshua's extension);
-    // lane-sub layouts and the resting rebuild keep the generic
-    // allocation.
-    buildLayoutGeometry(defs, spec.kind === "group" || spec.kind === "shelf");
+    // Truth allocation serves the curated-group re-coil (line 98),
+    // the Books shelves layout (line 99) and the lane-sub layouts
+    // (2026-11-17) — each Joshua's explicit extension; the resting
+    // rebuild keeps the generic allocation.
+    buildLayoutGeometry(
+      defs,
+      spec.kind === "group" || spec.kind === "shelf" || spec.kind === "sub"
+    );
     layoutKey = spec.key;
     segFrozen = layoutKey !== "rest";
     resetInstanceCells();
