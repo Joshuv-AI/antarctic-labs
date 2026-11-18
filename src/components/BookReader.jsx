@@ -2,15 +2,15 @@
 //
 // The entry text typeset as a book: two-page spread by default, one-page
 // and thumbnail modes on a single cycling View button, a floating left
-// Dock (tools + dash-column scrubber), and every reader tool re-homed
-// against CHARACTER OFFSETS — pages are a computed view over the
-// unchanged text (src/lib/book-paginate.js), so share links, highlights,
-// Listen, Find and Contents keep meaning exactly what they meant in the
-// scroll reader. Listen itself stays on the ReaderAssist orb (Joshua's
-// ruling: no audio in the Dock); ReaderAssist runs here in its
-// bookNav mode — Listen only, following by page turns.
+// Dock (its own additions only — back, entry info, theme, view — over a
+// dash-column scrubber), and every reader tool re-homed against
+// CHARACTER OFFSETS — pages are a computed view over the unchanged text
+// (src/lib/book-paginate.js), so share links, highlights, Listen, Find
+// and Contents keep meaning exactly what they meant in the scroll
+// reader. The tools themselves (Search, Contents, Share, Highlight,
+// Listen) live solely in the ReaderAssist orb (INVENTORY 112/118),
+// driving the book through the bookNav bridge below.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import {
   ChunkedReflower,
   BookPaginator,
@@ -335,7 +335,6 @@ export default function BookReader({
   const anchorRef = useRef(0);
   const [table, setTable] = useState({ starts: [0], exact: false });
   const tableRef = useRef(table);
-  const [panel, setPanel] = useState(null);
   const [toast, setToast] = useState(null);
   const [dockIdle, setDockIdle] = useState(false);
   const [phoneOpen, setPhoneOpen] = useState(false);
@@ -345,7 +344,6 @@ export default function BookReader({
   const [hlMode, setHlMode] = useState(false);
   const [pendingSel, setPendingSel] = useState(null); // {start,end,rect}
   const [curHlIdx, setCurHlIdx] = useState(0);
-  const [findState, setFindState] = useState({ matches: [], cur: -1 });
   // Page flip (INVENTORY 114): an adjacent-spread turn in flight —
   // {dir, from, to, frac, phase} where frac is the leaf's rotation
   // progress (0 = leaf flat on the right, 1 = flat on the left) and
@@ -853,14 +851,9 @@ export default function BookReader({
         ? [savedHls[curHlIdx]]
         : []
     );
-    paint("ra-all", findState.matches);
-    paint(
-      "ra-cur",
-      findState.cur >= 0 && findState.matches[findState.cur]
-        ? [findState.matches[findState.cur]]
-        : []
-    );
-  }, [savedHls, shareHls, curHlIdx, findState, text]);
+    // Find-match painting ("ra-all" / "ra-cur") is owned by the orb's
+    // Find, which paints through bookNav.rangeFor (INVENTORY 118).
+  }, [savedHls, shareHls, curHlIdx, text]);
 
   // Synchronous paint (the scroll reader paints in-effect too): an
   // rAF indirection here kept cancelling under render load, which
@@ -889,7 +882,7 @@ export default function BookReader({
   // full tool set drives the book through the same bridge: jumps go
   // through turnToOffset, ranges come from the block-anchored page
   // machinery, and highlights are owned by THIS component's state (the
-  // orb reads/mutates them through hls* so both panels paint one set).
+  // orb reads/mutates them through hls* — one set, one owner).
   const turnToOffsetRef = useRef(turnToOffset);
   turnToOffsetRef.current = turnToOffset;
   const savedHlsRef = useRef(savedHls);
@@ -925,7 +918,6 @@ export default function BookReader({
         turnToOffsetRef.current(h.start, { manual: false });
       },
       startHlCapture: () => {
-        setPanel(null);
         setHlMode(true);
       },
       speakState: (st) => {
@@ -981,14 +973,14 @@ export default function BookReader({
     idleTimerRef.current = window.setTimeout(() => setDockIdle(true), 2500);
   }, []);
   useEffect(() => {
-    if (panel || phoneOpen) {
+    if (phoneOpen) {
       window.clearTimeout(idleTimerRef.current);
       setDockIdle(false);
     } else {
       pokeDock();
     }
     return () => window.clearTimeout(idleTimerRef.current);
-  }, [panel, phoneOpen, pokeDock]);
+  }, [phoneOpen, pokeDock]);
 
   // Desktop magnification: transform-only, cosine falloff (§7.1).
   const magnify = useCallback((e) => {
@@ -1013,30 +1005,6 @@ export default function BookReader({
         btn.classList.remove("is-hot");
       });
   }, []);
-
-  const openPanel = useCallback(
-    (id) => {
-      setPanel((p) => (p === id ? null : id));
-      setPhoneOpen(false);
-      pokeDock();
-    },
-    [pokeDock]
-  );
-  const closePanel = useCallback(
-    (focusId) => {
-      setPanel(null);
-      pokeDock();
-      const btn = focusId && dockBtnRefs.current[focusId];
-      if (btn) {
-        try {
-          btn.focus({ preventScroll: true });
-        } catch {
-          /* noop */
-        }
-      }
-    },
-    [pokeDock]
-  );
 
   const cycleView = useCallback(() => {
     // A true rotation (two -> one -> thumbs -> two): every mode must
@@ -1089,7 +1057,7 @@ export default function BookReader({
   // -- Click-to-turn (§4.5): left/right thirds of the stage. A click --
   // -- that ends a text selection never turns (§7.9). ------------------
   const onStageClick = (e) => {
-    if (mode === "thumbs" || panel) return;
+    if (mode === "thumbs") return;
     // A drag turn (or a fan dismissal) just resolved on this same
     // gesture — the trailing click must not turn a second page.
     if (Date.now() - dragTurnAtRef.current < 400) return;
@@ -1117,7 +1085,7 @@ export default function BookReader({
   // -- Wheel: one spread per gesture, throttled (§4.5) ---------------------------
   const onWheel = useCallback(
     (e) => {
-      if (mode === "thumbs" || panel) return;
+      if (mode === "thumbs") return;
       if (
         e.target.closest &&
         e.target.closest(".bv-dock, .bv-strip, .bv-fan")
@@ -1129,7 +1097,7 @@ export default function BookReader({
       lastWheelRef.current = now;
       turnBy(e.deltaY > 0 ? 1 : -1);
     },
-    [mode, panel, turnBy]
+    [mode, turnBy]
   );
 
   // -- Drag turns (INVENTORY 114d) ------------------------------------------------
@@ -1156,7 +1124,7 @@ export default function BookReader({
       dragRef2.current = null;
       return;
     }
-    if (panel || mode === "thumbs" || hlMode) return;
+    if (mode === "thumbs" || hlMode) return;
     if (e.pointerType === "mouse") {
       if (e.button !== 0) return;
       if (e.target.closest && e.target.closest(".bv-page-text")) return;
@@ -1537,13 +1505,13 @@ export default function BookReader({
     );
   };
 
+  // The Dock carries only its own additions (INVENTORY 118): Contents,
+  // Find, Highlights, and Share live solely in the AssistiveTouch orb
+  // (ReaderAssist, driving the book through the bookNav bridge), so
+  // their Dock slots — and the panels behind them — are gone.
   const dockButtons = [
     { id: "exit", icon: I.exit, label: "Back to Library", onClick: () => onExit && onExit() },
     { id: "info", icon: I.info, label: "Entry info", onClick: () => { setPhoneOpen(false); if (onInfo) onInfo(); } },
-    { id: "contents", icon: I.contents, label: "Contents", onClick: () => openPanel("contents") },
-    { id: "find", icon: I.find, label: "Find in this text", onClick: () => openPanel("find") },
-    { id: "highlight", icon: I.highlight, label: "Highlights", onClick: () => openPanel("highlight") },
-    { id: "share", icon: I.share, label: "Share", onClick: () => openPanel("share") },
     {
       id: "theme",
       icon: I.theme,
@@ -1617,7 +1585,7 @@ export default function BookReader({
       {/* Dock — desktop: one floating assembly, icons over scrubber. */}
       {!layout.phone && (
         <div
-          className={`bv-dock${dockIdle && !panel ? " is-idle" : ""}`}
+          className={`bv-dock${dockIdle ? " is-idle" : ""}`}
           onPointerEnter={pokeDock}
           onPointerMove={pokeDock}
         >
@@ -1626,7 +1594,7 @@ export default function BookReader({
               <button
                 key={b.id}
                 type="button"
-                className={`bv-dock-btn${panel === b.id ? " is-active" : ""}`}
+                className="bv-dock-btn"
                 aria-label={b.label}
                 ref={(el) => {
                   dockBtnRefs.current[b.id] = el;
@@ -1758,56 +1726,6 @@ export default function BookReader({
         </div>
       )}
 
-      {/* Panels (§7.7) */}
-      {panel === "contents" && (
-        <ContentsSheet
-          sections={sections}
-          currentSection={curSection}
-          onJump={(off) => {
-            turnToOffset(off);
-            closePanel("contents");
-          }}
-          onClose={() => closePanel("contents")}
-        />
-      )}
-      {panel === "find" && (
-        <FindSheet
-          text={text}
-          onMatches={(matches, cur) => setFindState({ matches, cur })}
-          onJump={(off) => turnToOffset(off, { manual: false })}
-          onClose={() => closePanel("find")}
-        />
-      )}
-      {panel === "share" && (
-        <ShareSheet
-          title={title}
-          anchor={anchor}
-          textLength={text ? text.length : 0}
-          savedHls={savedHls}
-          onClearHls={() => setSavedHls([])}
-          onClose={() => closePanel("share")}
-        />
-      )}
-      {panel === "highlight" && (
-        <HighlightSheet
-          text={text}
-          savedHls={savedHls}
-          curIdx={Math.min(curHlIdx, Math.max(0, savedHls.length - 1))}
-          onCycle={(dir) => {
-            if (savedHls.length === 0) return;
-            const next = (Math.min(curHlIdx, savedHls.length - 1) + dir + savedHls.length) % savedHls.length;
-            setCurHlIdx(next);
-            turnToOffset(savedHls[next].start, { manual: false });
-          }}
-          onRemove={(idx) => setSavedHls((prev) => prev.filter((_, i) => i !== idx))}
-          onCaptureStart={() => {
-            setPanel(null);
-            setHlMode(true);
-          }}
-          onClose={() => closePanel("highlight")}
-        />
-      )}
-
       {/* Highlight capture pill, anchored to the selection (§7.9). */}
       {hlMode && (
         <div
@@ -1840,10 +1758,7 @@ export default function BookReader({
           <button
             type="button"
             className="bv-hl-done"
-            onClick={() => {
-              setHlMode(false);
-              setPanel("highlight");
-            }}
+            onClick={() => setHlMode(false)}
           >
             Done
           </button>
@@ -1858,7 +1773,8 @@ export default function BookReader({
         </div>
       )}
 
-      {/* Listen: the orb, unchanged in placement, Listen-only here. */}
+      {/* The orb: sole home of Search, Contents, Share, Highlight, and
+          Listen in book view (INVENTORY 112/118). */}
       {bootGone && text && (
         <ReaderAssist
           text={text}
@@ -2034,282 +1950,6 @@ function Scrubber({
         </div>
       )}
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Sheets (panels) — markup mirrors the scroll reader's ra-* panels so the
-// styling and contracts carry over; navigation is by page turn.
-// ---------------------------------------------------------------------------
-function SheetShell({ label, title, onClose, children, className }) {
-  const ref = useRef(null);
-  useEffect(() => {
-    if (ref.current) {
-      try {
-        ref.current.focus({ preventScroll: true });
-      } catch {
-        ref.current.focus();
-      }
-    }
-  }, []);
-  return createPortal(
-    <div
-      ref={ref}
-      className={`bv-sheet ${className || ""}`}
-      role="dialog"
-      aria-label={label}
-      tabIndex={-1}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          onClose();
-        }
-      }}
-    >
-      <div className="ra-share-header">
-        <h2 className="ra-share-title">{title}</h2>
-        <button
-          type="button"
-          className="ra-share-close"
-          aria-label={`Close ${label}`}
-          onClick={onClose}
-        >
-          {I.close}
-        </button>
-      </div>
-      {children}
-    </div>,
-    document.body
-  );
-}
-
-function ContentsSheet({ sections, currentSection, onJump, onClose }) {
-  return (
-    <SheetShell label="Contents" title="Contents" onClose={onClose} className="bv-sheet-contents">
-      <div className="bv-contents-list">
-        {sections.map((s, i) => (
-          <button
-            key={`${s.offset}-${i}`}
-            type="button"
-            className={`bv-contents-row${currentSection && s.offset === currentSection.offset ? " is-current" : ""}`}
-            onClick={() => onJump(s.offset)}
-          >
-            <span className="bv-contents-label">{s.label}</span>
-            <span className="bv-contents-pct">{Math.round(s.percent)}%</span>
-          </button>
-        ))}
-      </div>
-    </SheetShell>
-  );
-}
-
-function FindSheet({ text, onMatches, onJump, onClose }) {
-  const [query, setQuery] = useState("");
-  const [matches, setMatches] = useState([]);
-  const [cur, setCur] = useState(-1);
-  const inputRef = useRef(null);
-
-  useEffect(() => {
-    if (inputRef.current) inputRef.current.focus();
-  }, []);
-
-  useEffect(() => {
-    const q = query.trim();
-    if (!q || !text) {
-      setMatches([]);
-      setCur(-1);
-      onMatches([], -1);
-      return undefined;
-    }
-    const t = window.setTimeout(() => {
-      // Same normalization + exact-count discipline as the scroll
-      // reader's Find (NFC-normalized haystack and needle).
-      const hay = text.normalize("NFC");
-      const needle = q.normalize("NFC");
-      const out = [];
-      let i = hay.indexOf(needle);
-      while (i !== -1 && out.length < 20000) {
-        out.push({ start: i, end: i + needle.length });
-        i = hay.indexOf(needle, i + Math.max(1, needle.length));
-      }
-      setMatches(out);
-      const c = out.length > 0 ? 0 : -1;
-      setCur(c);
-      onMatches(out, c);
-      if (out.length > 0) onJump(out[0].start);
-    }, 250);
-    return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, text]);
-
-  const step = (dir) => {
-    if (matches.length === 0) return;
-    const next = (cur + dir + matches.length) % matches.length;
-    setCur(next);
-    onMatches(matches, next);
-    onJump(matches[next].start);
-  };
-
-  return (
-    <SheetShell label="Find in this text" title="Find" onClose={onClose} className="bv-sheet-find">
-      <div className="bv-find-row">
-        <input
-          ref={inputRef}
-          type="search"
-          className="ra-find-input bv-find-input"
-          placeholder="Find in this text…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              step(e.shiftKey ? -1 : 1);
-            }
-          }}
-          aria-label="Find in this text"
-        />
-        <span className="ra-find-count" role="status" aria-live="polite">
-          {query.trim()
-            ? matches.length > 0
-              ? `${cur + 1} of ${matches.length}`
-              : "No matches"
-            : ""}
-        </span>
-      </div>
-      <div className="bv-find-nav">
-        <button type="button" className="ra-find-btn" disabled={matches.length === 0} onClick={() => step(-1)} aria-label="Previous match">
-          ↑ Prev
-        </button>
-        <button type="button" className="ra-find-btn" disabled={matches.length === 0} onClick={() => step(1)} aria-label="Next match">
-          ↓ Next
-        </button>
-      </div>
-    </SheetShell>
-  );
-}
-
-function ShareSheet({ title, anchor, textLength, savedHls, onClearHls, onClose }) {
-  const [toast, setToast] = useState(null);
-  const toastTimer = useRef(0);
-  useEffect(() => () => window.clearTimeout(toastTimer.current), []);
-  const flash = (msg) => {
-    setToast(msg);
-    window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(null), 2800);
-  };
-  const pct = textLength > 0 ? Math.round((anchor / textLength) * 100) : 0;
-  const entryUrl = () => window.location.origin + window.location.pathname;
-  const doShare = async ({ url, message }) => {
-    const data = { title: title || "Tower of Babel", text: message, url };
-    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
-      onClose();
-      try {
-        await navigator.share(data);
-      } catch {
-        /* dismissed — silent */
-      }
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(`${message}\n${url}`);
-      flash("Link copied — paste it anywhere.");
-    } catch {
-      flash("Copy didn't work — long-press the address bar to copy the link.");
-    }
-  };
-  return (
-    <SheetShell label="Share" title="Share" onClose={onClose} className="bv-sheet-share">
-      <button
-        type="button"
-        className="ra-share-row"
-        onClick={() =>
-          doShare({ url: entryUrl(), message: `"${title}" — click to read the full text` })
-        }
-      >
-        <span className="ra-share-row-text">
-          <span className="ra-share-row-title">Share from the Top</span>
-          <span className="ra-share-row-sub">Start at the beginning</span>
-        </span>
-      </button>
-      <button
-        type="button"
-        className="ra-share-row"
-        onClick={() => {
-          const hlParam =
-            savedHls && savedHls.length > 0
-              ? `&hl=${savedHls.map((h) => `${h.start}-${h.end}`).join(",")}`
-              : "";
-          doShare({
-            url: `${entryUrl()}?at=${anchor}${hlParam}`,
-            message: `"${title}" — click to pick up where I left off`,
-          });
-          onClearHls();
-        }}
-      >
-        <span className="ra-share-row-text">
-          <span className="ra-share-row-title">Share from Current Place</span>
-          <span className="ra-share-row-sub">You&rsquo;re at {pct}% — jumps right here</span>
-        </span>
-      </button>
-      {toast && (
-        <div className="ra-toast" role="status" aria-live="polite">
-          {toast}
-        </div>
-      )}
-    </SheetShell>
-  );
-}
-
-function HighlightSheet({ text, savedHls, curIdx, onCycle, onRemove, onCaptureStart, onClose }) {
-  const count = savedHls.length;
-  const current = count > 0 ? savedHls[Math.min(curIdx, count - 1)] : null;
-  const preview = current
-    ? text.slice(current.start, current.end).replace(/\s+/g, " ").trim()
-    : "";
-  return (
-    <SheetShell label="Your highlighted passages" title="Highlights" onClose={onClose} className="bv-sheet-highlight">
-      {count === 0 ? (
-        <p className="ra-hlp-empty">
-          No passages highlighted yet. Highlights are saved on this device
-          and ride along when you share from your current place.
-        </p>
-      ) : (
-        <div className="ra-hlp-current">
-          <p className="ra-hlp-passage">
-            {preview.length > 140 ? preview.slice(0, 140) + "…" : preview}
-          </p>
-          <div className="ra-hlp-controls">
-            <button type="button" className="ra-hlp-btn" aria-label="Previous highlight" onClick={() => onCycle(-1)}>
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <polyline points="6 14 12 8 18 14" />
-              </svg>
-            </button>
-            <span className="ra-hlp-count" role="status" aria-live="polite" aria-atomic="true">
-              {Math.min(curIdx, count - 1) + 1} of {count}
-            </span>
-            <button type="button" className="ra-hlp-btn" aria-label="Next highlight" onClick={() => onCycle(1)}>
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <polyline points="6 10 12 16 18 10" />
-              </svg>
-            </button>
-            <button
-              type="button"
-              className="ra-hlp-btn ra-hlp-remove"
-              aria-label="Remove this highlight"
-              onClick={() => onRemove(Math.min(curIdx, count - 1))}
-            >
-              {I.close}
-            </button>
-          </div>
-        </div>
-      )}
-      <button type="button" className="ra-share-row ra-hlp-add" onClick={onCaptureStart}>
-        <span className="ra-share-row-text">
-          <span className="ra-share-row-title">+ New — highlight a passage</span>
-          <span className="ra-share-row-sub">Select text, then tap Add</span>
-        </span>
-      </button>
-    </SheetShell>
   );
 }
 
