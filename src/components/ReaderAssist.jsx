@@ -315,6 +315,7 @@ function FindPanel({
   ensureChunk,
   chunkElsRef,
   onActiveMark,
+  bookNav,
   anchorStyle,
   onClose,
 }) {
@@ -324,6 +325,7 @@ function FindPanel({
   const [capped, setCapped] = useState(false);
   const [active, setActive] = useState(-1);
   const [navTick, setNavTick] = useState(0);
+  const [paintTick, setPaintTick] = useState(0); // book: repaint after a turn
   const inputRef = useRef(null);
   // Memoize the normalized search haystack (2026-10-18): was re-created
   // (two full-string copies) on every debounced keystroke.
@@ -434,6 +436,30 @@ function FindPanel({
     // paint load on the same pipeline the crash report came from
     // (2026-10-21); navigation still walks every stored match.
     const paintAll = qlen >= 2 && matches.length <= 5000;
+    if (bookNav) {
+      // Book view: ranges come from the paginator's block-anchored
+      // page machinery — a page element's text is many blocks, not
+      // one text node, so the chunk walk below cannot address it.
+      // Only matches on mounted pages can paint; the navigation
+      // effect turns to the current match's page and paintTick
+      // re-runs this effect once that page has mounted.
+      const hlAllB = new Highlight();
+      const hlCurB = new Highlight();
+      let nB = 0;
+      for (let k = 0; k < matches.length && nB < MAX_RANGES; k++) {
+        if (!paintAll && k !== active) continue;
+        const r = bookNav.rangeFor(matches[k], matches[k] + qlen);
+        if (!r) continue;
+        (k === active ? hlCurB : hlAllB).add(r);
+        nB++;
+      }
+      CSS.highlights.set("ra-all", hlAllB);
+      CSS.highlights.set("ra-cur", hlCurB);
+      return () => {
+        CSS.highlights.delete("ra-all");
+        CSS.highlights.delete("ra-cur");
+      };
+    }
     let n = 0;
     for (let k = 0; k < matches.length && n < MAX_RANGES; k++) {
       if (!paintAll && k !== active) continue;
@@ -472,12 +498,26 @@ function FindPanel({
     chunkStarts,
     chunkElsRef,
     onActiveMark,
+    bookNav,
+    paintTick,
   ]);
 
   // Scroll the active match into view (forcing its chunk to render first).
   useEffect(() => {
     if (active < 0 || !matches || matches.length === 0) return;
     const off = matches[active];
+    if (bookNav) {
+      // Book view: turn to the match's page (the flip for an adjacent
+      // spread, a clean landing for a far one). The paint retries
+      // cover the turn's frames so the match paints once mounted.
+      bookNav.goToOffset(off);
+      const t1 = window.setTimeout(() => setPaintTick((t) => t + 1), 140);
+      const t2 = window.setTimeout(() => setPaintTick((t) => t + 1), 480);
+      return () => {
+        window.clearTimeout(t1);
+        window.clearTimeout(t2);
+      };
+    }
     const ci = chunkIndexOf(off);
     if (!isMounted(ci)) {
       ensureChunk(ci);
@@ -525,6 +565,7 @@ function FindPanel({
     ensureChunk,
     qlen,
     reduced,
+    bookNav,
   ]);
 
   const goTo = (dir) => {
@@ -640,6 +681,7 @@ function ContentsPanel({
   isMounted,
   ensureChunk,
   chunkElsRef,
+  bookNav,
   anchorStyle,
   onClose,
 }) {
@@ -708,6 +750,13 @@ function ContentsPanel({
   useEffect(() => {
     if (!jump) return;
     const off = jump.offset;
+    if (bookNav) {
+      // Book view: the jump is a page turn to the section's page.
+      bookNav.goToOffset(off);
+      setJump(null);
+      onClose();
+      return;
+    }
     const ci = chunkIndexOf(off);
     if (!isMounted(ci)) {
       ensureChunk(ci);
@@ -757,6 +806,7 @@ function ContentsPanel({
     ensureChunk,
     reduced,
     onClose,
+    bookNav,
   ]);
 
   // Current-section tracking: passive scroll listener, rAF-throttled. Chunk
@@ -768,6 +818,24 @@ function ContentsPanel({
   // rect — accurate highlight without layout thrash.
   useEffect(() => {
     if (sections.length === 0) return;
+    if (bookNav) {
+      // Book view: the current section derives from the book's anchor
+      // offset, not from window scroll (a book page never scrolls).
+      // Polled while the panel is open — cheap, and the anchor moves
+      // only via turns behind the panel.
+      const computeBook = () => {
+        const at = bookNav.getStartOffset();
+        let idx = 0;
+        for (let i = 0; i < sections.length; i++) {
+          if (sections[i].offset <= at) idx = i;
+          else break;
+        }
+        setCurrent(idx);
+      };
+      computeBook();
+      const iv = window.setInterval(computeBook, 700);
+      return () => window.clearInterval(iv);
+    }
     let raf = 0;
     let topsCache = null;
     const HEADROOM_FRAC = 0.12;
@@ -1136,6 +1204,7 @@ function HighlightPanel({
   isMounted,
   ensureChunk,
   chunkElsRef,
+  bookNav,
   anchorStyle,
   savedHls,
   onRemove,
@@ -1229,6 +1298,7 @@ function HighlightPanel({
   // the same all/current language Find uses. Cleared when the panel
   // closes or the focus moves on.
   useEffect(() => {
+    if (bookNav) return undefined; // BookReader paints ra-mine-cur from its cursor
     if (!SUPPORTS_HIGHLIGHTS) return undefined;
     if (!current) {
       CSS.highlights.delete("ra-mine-cur");
@@ -1252,6 +1322,12 @@ function HighlightPanel({
   // the passage to ~42% viewport height, Find's anchor.
   useEffect(() => {
     if (!jump) return;
+    if (bookNav) {
+      // Book view: cycling is driven by hlsFocus in cycle() itself
+      // (it moves BookReader's cursor and turns to the passage).
+      setJump(null);
+      return;
+    }
     const ci = chunkIndexOf(jump.start);
     if (!isMounted(ci)) {
       ensureChunk(ci);
@@ -1282,6 +1358,10 @@ function HighlightPanel({
     if (count === 0) return;
     const next = (curIdx + dir + count) % count;
     setCur(next);
+    if (bookNav) {
+      bookNav.hlsFocus(next);
+      return;
+    }
     setJump({ start: savedHls[next].start, end: savedHls[next].end });
   };
 
@@ -1394,6 +1474,7 @@ function SharePanel({
   chunkStarts,
   shownChunks,
   chunkElsRef,
+  bookNav,
   anchorStyle,
   savedHls,
   onClearHl,
@@ -1427,6 +1508,11 @@ function SharePanel({
   // Global char offset at the read probe (~12% viewport headroom). Rendered
   // chunks are always contiguous from 0, so pixel tops binary-search cleanly.
   const probeOffset = useCallback(() => {
+    if (bookNav) {
+      // Book view: "current place" is the book's anchor offset — the
+      // first character of the spread on screen.
+      return clamp(bookNav.getStartOffset(), 0, Math.max(0, text.length - 1));
+    }
     const probe = window.scrollY + window.innerHeight * 0.12;
     const els = chunkElsRef.current;
     let ci = 0;
@@ -1456,7 +1542,7 @@ function SharePanel({
     return Math.round(
       chunkStarts[ci] + frac * Math.max(0, chunkEnd - chunkStarts[ci])
     );
-  }, [chunkStarts, shownChunks, chunkElsRef, text]);
+  }, [chunkStarts, shownChunks, chunkElsRef, text, bookNav]);
 
   // The sharer's current position as a percentage, computed once while the
   // panel is open (shown under "Share from Current Place").
@@ -1613,8 +1699,29 @@ export default function ReaderAssist({
   // (INVENTORY 47): the stored set is the single source of truth for the
   // paint, the cycling HUD, and share links. hlMode shows the minimal
   // capture pill instead of any panel.
-  const [savedHls, setSavedHls] = useState(loadHls);
+  const [savedHlsState, setSavedHlsState] = useState(loadHls);
   const [hlMode, setHlMode] = useState(false);
+  // Book view (INVENTORY 112): BookReader owns the highlight set — it
+  // paints from it and persists it — so the orb's panels read and
+  // mutate THAT set through the bridge instead of keeping a second
+  // copy that would silently diverge. In the scroll reader the local
+  // state above is the set, exactly as before.
+  const bookHlsActive = !!(
+    bookNav && typeof bookNav.hlsList === "function"
+  );
+  const savedHls = bookHlsActive ? bookNav.hlsList() : savedHlsState;
+  const addHl = (hl) => {
+    if (bookHlsActive) bookNav.hlsAdd(hl);
+    else setSavedHlsState((prev) => [...prev, hl]);
+  };
+  const removeHl = (idx) => {
+    if (bookHlsActive) bookNav.hlsRemove(idx);
+    else setSavedHlsState((prev) => prev.filter((_, i) => i !== idx));
+  };
+  const clearHls = () => {
+    if (bookHlsActive) bookNav.hlsClear();
+    else setSavedHlsState([]);
+  };
   const orbRef = useRef(null);
 
   // Scroll gate (2026-10-20): the orb and its tools belong to the FULL TEXT
@@ -2111,6 +2218,14 @@ export default function ReaderAssist({
     speakRateRef.current = readAloud.rate;
   }, [readAloud.rate]);
 
+  // Tell the book when playback stops so its narration-page emphasis
+  // (INVENTORY 116) clears with the pill + ball.
+  useEffect(() => {
+    if (bookNav && typeof bookNav.speakState === "function") {
+      bookNav.speakState(readAloud.status);
+    }
+  }, [bookNav, readAloud.status]);
+
   // Scroll behavior during Listen (2026-10-18, reworked 2026-10-20):
   // - Every scroll frame re-anchors the pill + ball to the spoken word, so
   //   the follow-along tracks the text while the reader scrolls.
@@ -2184,31 +2299,33 @@ export default function ReaderAssist({
   }, [listening, repositionSpeakWord, speakWordRect]);
 
   // Hide the Listen icon when speech synthesis is unavailable.
+  // INVENTORY 112 (Joshua 2026-11-18): the orb carries its FULL tool
+  // set in book view too — the Listen-only reduction is removed; the
+  // tools were never supposed to move out of the orb. Each panel
+  // drives the paginated view through the bookNav bridge.
   const visibleFeatures = useMemo(
-    () => {
-      const base = readAloud.supported
+    () =>
+      readAloud.supported
         ? FEATURES
-        : FEATURES.filter((f) => f.id !== "listen");
-      // Book view: the orb is the accessibility/Listen control only.
-      return bookNav ? base.filter((f) => f.id === "listen") : base;
-    },
-    [readAloud.supported, bookNav]
+        : FEATURES.filter((f) => f.id !== "listen"),
+    [readAloud.supported]
   );
 
   // New text (entry navigation): highlights are per entry — load the new
   // entry's stored set (the URL has settled by the time its text lands),
   // and close the previous entry's capture/panel state.
   useEffect(() => {
-    setSavedHls(loadHls());
+    setSavedHlsState(loadHls());
     setHlMode(false);
     setPanel((p) => (p === "highlight" ? null : p));
   }, [text]);
 
   // Persist every mutation of the set (add, individual remove, the
-  // share flow's clear) back to this entry's localStorage key.
+  // share flow's clear) back to this entry's localStorage key. In book
+  // view BookReader owns persistence — this writer stands down.
   useEffect(() => {
-    saveHls(savedHls);
-  }, [savedHls]);
+    if (!bookHlsActive) saveHls(savedHlsState);
+  }, [savedHlsState, bookHlsActive]);
 
   // --- Motion internals: refs only. Nothing here re-renders. ---
   const vpRef = useRef(viewport); // cached viewport for clamp math (move path)
@@ -2647,6 +2764,7 @@ export default function ReaderAssist({
           ensureChunk={ensureChunk}
           chunkElsRef={chunkElsRef}
           onActiveMark={onActiveMark}
+          bookNav={bookNav}
           anchorStyle={panelStyle}
           onClose={() => {
             setPanel(null);
@@ -2666,6 +2784,7 @@ export default function ReaderAssist({
           isMounted={isMounted}
           ensureChunk={ensureChunk}
           chunkElsRef={chunkElsRef}
+          bookNav={bookNav}
           anchorStyle={panelStyle}
           onClose={() => {
             setPanel(null);
@@ -2682,9 +2801,10 @@ export default function ReaderAssist({
           chunkStarts={chunkStarts}
           shownChunks={shownChunks}
           chunkElsRef={chunkElsRef}
+          bookNav={bookNav}
           anchorStyle={panelStyle}
           savedHls={savedHls}
-          onClearHl={() => setSavedHls([])}
+          onClearHl={() => clearHls()}
           onClose={() => {
             setPanel(null);
             poke();
@@ -2701,17 +2821,25 @@ export default function ReaderAssist({
           isMounted={isMounted}
           ensureChunk={ensureChunk}
           chunkElsRef={chunkElsRef}
+          bookNav={bookNav}
           anchorStyle={panelStyle}
           savedHls={savedHls}
           onRemove={(idx) => {
-            setSavedHls((prev) => prev.filter((_, i) => i !== idx));
+            removeHl(idx);
             poke();
           }}
           onCaptureStart={() => {
             // Don't clear savedHls — the user can keep adding to the set
             // across multiple capture sessions.
             setPanel(null);
-            setHlMode(true);
+            if (bookHlsActive) {
+              // Book view captures through BookReader's own pill (its
+              // selection math is page-anchored); the orb's pill is a
+              // scroll-reader surface.
+              bookNav.startHlCapture();
+            } else {
+              setHlMode(true);
+            }
             poke();
           }}
           onClose={() => {
@@ -2730,7 +2858,7 @@ export default function ReaderAssist({
           anchorStyle={panelStyle}
           savedCount={savedHls.length}
           onAdd={(hl) => {
-            setSavedHls((prev) => [...prev, hl]);
+            addHl(hl);
             poke();
           }}
           onDone={() => {

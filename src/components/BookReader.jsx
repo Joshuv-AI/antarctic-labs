@@ -89,7 +89,17 @@ function computeLayout(stageW, stageH, mode) {
   const availH = Math.max(240, stageH - (phone ? 10 : 26));
   let pageW;
   let pageH;
-  if (mode === "two") {
+  if (mode === "two" && phone) {
+    // Narrow-screen spread (INVENTORY 113): at the desktop leaf aspect
+    // (1.45) a phone spread's leaves come out short and poster-like —
+    // ~8 lines in a full-height stage, the rest empty surround. Give
+    // the phone leaf a taller, paperback-like aspect (capped by the
+    // stage height) so a chosen spread reads as book pages. Phone
+    // ONE-page geometry (Joshua-verified as the reference) and the
+    // desktop spread are untouched by this branch.
+    pageW = availW / 2;
+    pageH = Math.min(availH, pageW * 1.78);
+  } else if (mode === "two") {
     pageH = Math.min(availH, (availW / 2) * 1.45);
     pageW = pageH / 1.45;
     if (pageW * 2 > availW) {
@@ -109,12 +119,15 @@ function computeLayout(stageW, stageH, mode) {
   }
   pageW = Math.floor(pageW);
   pageH = Math.floor(pageH);
-  const fontPx = phone ? (mode === "two" ? 16 : 18) : 19;
+  const phoneTwo = phone && mode === "two";
+  const fontPx = phone ? (mode === "two" ? 15 : 18) : 19;
   const lhMult = phone ? 1.64 : 1.66;
-  const padTop = Math.round(pageW * 0.1);
-  const padBottom = Math.round(pageW * 0.09);
-  const padOuter = Math.round(pageW * 0.09);
-  const padInner = Math.round(pageW * 0.11);
+  // Slimmer margins in the phone spread only: every point of column
+  // width is lines on the page at this size (INVENTORY 113).
+  const padTop = Math.round(pageW * (phoneTwo ? 0.075 : 0.1));
+  const padBottom = Math.round(pageW * (phoneTwo ? 0.065 : 0.09));
+  const padOuter = Math.round(pageW * (phoneTwo ? 0.07 : 0.09));
+  const padInner = Math.round(pageW * (phoneTwo ? 0.085 : 0.11));
   return {
     phone,
     pageW,
@@ -272,6 +285,16 @@ const I = {
       <line x1="5" y1="17" x2="19" y2="17" />
     </svg>
   ),
+  prevPage: (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="14.5 5 7.5 12 14.5 19" />
+    </svg>
+  ),
+  nextPage: (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <polyline points="9.5 5 16.5 12 9.5 19" />
+    </svg>
+  ),
   close: (
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
       <line x1="6" y1="6" x2="18" y2="18" />
@@ -299,8 +322,15 @@ export default function BookReader({
     w: typeof window !== "undefined" ? window.innerWidth : 1200,
     h: typeof window !== "undefined" ? window.innerHeight : 800,
   }));
-  const [mode, setMode] = useState("two"); // two | one | thumbs
-  const readModeRef = useRef("two"); // mode to return to from thumbnails
+  // First-open default per device (INVENTORY 113, Joshua 2026-11-18 —
+  // reversing DESIGN §12.3a's spread-on-phone default): a phone opens
+  // in ONE-page view, a desktop in the TWO-page spread. This is only
+  // the initial state — a mode the reader picks with the View button
+  // is theirs and is never overridden.
+  const [mode, setMode] = useState(() =>
+    typeof window !== "undefined" && window.innerWidth < 640 ? "one" : "two"
+  ); // two | one | thumbs
+  const readModeRef = useRef(mode); // mode to return to from thumbnails
   const [anchor, setAnchor] = useState(0);
   const anchorRef = useRef(0);
   const [table, setTable] = useState({ starts: [0], exact: false });
@@ -316,6 +346,19 @@ export default function BookReader({
   const [pendingSel, setPendingSel] = useState(null); // {start,end,rect}
   const [curHlIdx, setCurHlIdx] = useState(0);
   const [findState, setFindState] = useState({ matches: [], cur: -1 });
+  // Page flip (INVENTORY 114): an adjacent-spread turn in flight —
+  // {dir, from, to, frac, phase} where frac is the leaf's rotation
+  // progress (0 = leaf flat on the right, 1 = flat on the left) and
+  // phase runs "anim" (mounted at the start frac) -> "go" (transition
+  // to the end frac) for timed turns, or "drag"/"settle" for gestures.
+  const [flip, setFlip] = useState(null);
+  const flipTimerRef = useRef(0);
+  const dragRef2 = useRef(null); // active page-drag gesture
+  const dragTurnAtRef = useRef(0); // last drag-resolved turn (click guard)
+  // Listen page-flow (INVENTORY 116): the page the narration is on —
+  // set by the bookNav follow bridge, cleared when playback stops.
+  const [readingPage, setReadingPage] = useState(-1);
+  const readingPageRef = useRef(-1);
   const [fontEpoch, setFontEpoch] = useState(0);
   const [scrubPreview, setScrubPreview] = useState(null); // slice idx | null
 
@@ -350,6 +393,8 @@ export default function BookReader({
     () => computeLayout(stageSize.w, stageSize.h, mode === "one" ? "one" : "two"),
     [stageSize, mode]
   );
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
   const layoutKey = `${layout.contentW}x${layout.contentH}x${layout.fontPx}x${fontEpoch}`;
   const sections = useMemo(
     () => (text ? extractContents(text, title) : [{ label: title || "Beginning", offset: 0, percent: 0 }]),
@@ -649,14 +694,39 @@ export default function BookReader({
       if (targetOffset === anchorRef.current) return;
       if (manual) manualTurnRef.current = Date.now();
       if (instant || reducedMotion()) {
+        window.clearTimeout(flipTimerRef.current);
+        setFlip(null);
         setAnchor(targetOffset);
         return;
       }
-      // Slide+settle: render the incoming spread sliding over (the track
-      // commits the anchor immediately; the animation is transform-only
-      // on the incoming spread, 210ms).
+      const from = currentSpreadIdxRef.current;
+      const step = modeRef.current === "one" ? 1 : 2;
       setAnchor(targetOffset);
-      setTurnAnim({ dir: target > currentSpreadIdxRef.current ? 1 : -1, spreadIdx: target });
+      if (Math.abs(target - from) === step) {
+        // Adjacent spread: a real page flip (INVENTORY 114) — the
+        // outgoing leaf rotates around the spine over the incoming
+        // spread, which is already committed beneath it. The "anim"
+        // phase mounts the leaf at its start rotation; the effect
+        // below transitions it to the end rotation next frame.
+        window.clearTimeout(turnTimerRef.current);
+        setTurnAnim(null);
+        setFlip({
+          dir: target > from ? 1 : -1,
+          from,
+          to: target,
+          frac: target > from ? 0 : 1,
+          phase: "anim",
+        });
+        window.clearTimeout(flipTimerRef.current);
+        flipTimerRef.current = window.setTimeout(() => setFlip(null), 520);
+        return;
+      }
+      // Far jump: slide+settle, as before — long jumps are never forced
+      // through a flip (INVENTORY 114d). The track commits the anchor
+      // immediately; the animation is transform-only, 210ms.
+      window.clearTimeout(flipTimerRef.current);
+      setFlip(null);
+      setTurnAnim({ dir: target > from ? 1 : -1, spreadIdx: target });
       window.clearTimeout(turnTimerRef.current);
       turnTimerRef.current = window.setTimeout(() => setTurnAnim(null), 240);
     },
@@ -664,6 +734,8 @@ export default function BookReader({
   );
   const currentSpreadIdxRef = useRef(0);
   currentSpreadIdxRef.current = currentSpreadIdx;
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
 
   const turnToOffset = useCallback(
     (off, opts) => {
@@ -699,6 +771,27 @@ export default function BookReader({
     },
     [goToIdx, stepPages]
   );
+
+  // Advance a timed flip: the leaf mounts at its start rotation
+  // (phase "anim"); on the next frame it transitions to the end
+  // rotation (phase "go"). The clear timer in goToIdx retires it.
+  useEffect(() => {
+    if (!flip || flip.phase !== "anim") return undefined;
+    const raf = requestAnimationFrame(() => {
+      setFlip((f) =>
+        f && f.phase === "anim"
+          ? { ...f, frac: f.dir > 0 ? 1 : 0, phase: "go" }
+          : f
+      );
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [flip]);
+
+  // A new text starts with no narration page (INVENTORY 116).
+  useEffect(() => {
+    readingPageRef.current = -1;
+    setReadingPage(-1);
+  }, [text]);
 
   // Share landing (§5.5): once the complete text is in AND its reflow
   // has finished (so the paginator can window to any offset in it),
@@ -791,12 +884,56 @@ export default function BookReader({
     saveHls(savedHls);
   }, [savedHls]);
 
-  // -- Listen bridge (ReaderAssist bookNav) ------------------------------------
+  // -- Reader bridge (ReaderAssist bookNav) -----------------------------------
+  // Listen's page-follow lives here, and since INVENTORY 112 the orb's
+  // full tool set drives the book through the same bridge: jumps go
+  // through turnToOffset, ranges come from the block-anchored page
+  // machinery, and highlights are owned by THIS component's state (the
+  // orb reads/mutates them through hls* so both panels paint one set).
+  const turnToOffsetRef = useRef(turnToOffset);
+  turnToOffsetRef.current = turnToOffset;
+  const savedHlsRef = useRef(savedHls);
+  savedHlsRef.current = savedHls;
   const bookNavRef = useRef(null);
   if (!bookNavRef.current) {
     bookNavRef.current = {
       manualTurnRef,
       getStartOffset: () => anchorRef.current,
+      goToOffset: (off) => {
+        turnToOffsetRef.current(off, { manual: false });
+      },
+      rangeFor: (s, e) => {
+        const starts = tableRef.current.starts;
+        const idx = BookPaginator.pageOf(starts, s);
+        const el = pageElsRef.current[idx];
+        if (!el) return null;
+        const pageEnd = starts[idx + 1] !== undefined ? starts[idx + 1] : e;
+        return rangeOnPage(el, s, Math.min(e, pageEnd));
+      },
+      hlsList: () => savedHlsRef.current,
+      hlsAdd: (hl) =>
+        setSavedHls((prev) =>
+          [...prev, { start: hl.start, end: hl.end }].slice(0, MAX_HL_RANGES)
+        ),
+      hlsRemove: (idx) =>
+        setSavedHls((prev) => prev.filter((_, i) => i !== idx)),
+      hlsClear: () => setSavedHls([]),
+      hlsFocus: (idx) => {
+        const h = savedHlsRef.current[idx];
+        if (!h) return;
+        setCurHlIdx(idx);
+        turnToOffsetRef.current(h.start, { manual: false });
+      },
+      startHlCapture: () => {
+        setPanel(null);
+        setHlMode(true);
+      },
+      speakState: (st) => {
+        if (st === "idle") {
+          readingPageRef.current = -1;
+          setReadingPage(-1);
+        }
+      },
       wordRect: (gStart, gEnd) => {
         const starts = tableRef.current.starts;
         const idx = BookPaginator.pageOf(starts, gStart);
@@ -818,6 +955,13 @@ export default function BookReader({
       followWord: (gStart) => {
         const starts = tableRef.current.starts;
         const idx = BookPaginator.pageOf(starts, gStart);
+        // The narration's page (INVENTORY 116): tracked on every word
+        // so the active leaf is visually evident as the spoken word
+        // crosses the seam inside a spread, not only when it turns.
+        if (readingPageRef.current !== idx) {
+          readingPageRef.current = idx;
+          setReadingPage(idx);
+        }
         const spread = spreadStartIdxRef.current(idx);
         if (spread !== currentSpreadIdxRef.current) {
           goToIdxRef.current(idx, { manual: false });
@@ -895,10 +1039,16 @@ export default function BookReader({
   );
 
   const cycleView = useCallback(() => {
+    // A true rotation (two -> one -> thumbs -> two): every mode must
+    // stay reachable from every other. Returning from thumbnails via
+    // a thumbnail tap still lands on the pre-thumbnails mode
+    // (readModeRef, used by ThumbsGrid's onJump) — but the button
+    // itself can no longer strand a one-page-default phone out of
+    // the spread (INVENTORY 113).
     setMode((m) => {
       if (m === "two") return "one";
       if (m === "one") return "thumbs";
-      return readModeRef.current || "two";
+      return "two";
     });
     pokeDock();
   }, [pokeDock]);
@@ -940,6 +1090,15 @@ export default function BookReader({
   // -- that ends a text selection never turns (§7.9). ------------------
   const onStageClick = (e) => {
     if (mode === "thumbs" || panel) return;
+    // A drag turn (or a fan dismissal) just resolved on this same
+    // gesture — the trailing click must not turn a second page.
+    if (Date.now() - dragTurnAtRef.current < 400) return;
+    // Tapping outside the expanded phone fan collapses it (§7.8)
+    // instead of turning.
+    if (phoneOpen) {
+      setPhoneOpen(false);
+      return;
+    }
     if (
       e.target.closest &&
       e.target.closest(".bv-dock, .bv-strip, .bv-fan, .bv-hl-pill, .ra-root, button, a, input, textarea, select")
@@ -973,29 +1132,146 @@ export default function BookReader({
     [mode, panel, turnBy]
   );
 
-  // -- Touch swipe -----------------------------------------------------------------
-  const swipeRef = useRef(null);
+  // -- Drag turns (INVENTORY 114d) ------------------------------------------------
+  // A horizontal drag as if turning a page drives the flip leaf
+  // itself; release past the threshold completes the turn, short of
+  // it the leaf settles back. A drag that forms a text selection
+  // never turns: touch selection is long-press driven (and the
+  // release guard re-checks the selection), and a MOUSE drag only
+  // qualifies when it starts off the text block — page margins or
+  // surround — never on the words themselves. A fast flick that never
+  // engages the leaf keeps the original release-swipe behavior.
   const onPointerDownStage = (e) => {
-    if (e.pointerType === "mouse") return;
     if (
       e.target.closest &&
-      e.target.closest(".bv-dock, .bv-strip, .bv-fan, .bv-hl-pill, .ra-root")
+      e.target.closest(".bv-dock, .bv-strip, .bv-fan, .bv-hl-pill, .ra-root, button, a, input, textarea, select")
     )
       return;
-    swipeRef.current = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    // Dock fan dismissal (DESIGN §7.8 / INVENTORY 115): a touch that
+    // begins outside the fan collapses it, and the gesture is spent
+    // on the dismissal — it does not also turn the page.
+    if (phoneOpen) {
+      setPhoneOpen(false);
+      dragTurnAtRef.current = Date.now();
+      dragRef2.current = null;
+      return;
+    }
+    if (panel || mode === "thumbs" || hlMode) return;
+    if (e.pointerType === "mouse") {
+      if (e.button !== 0) return;
+      if (e.target.closest && e.target.closest(".bv-page-text")) return;
+    }
+    dragRef2.current = {
+      id: e.pointerId,
+      x: e.clientX,
+      y: e.clientY,
+      active: false,
+      dir: 0,
+      from: 0,
+      to: 0,
+    };
+  };
+  const onPointerMoveStage = (e) => {
+    const d = dragRef2.current;
+    if (!d || e.pointerId !== d.id) return;
+    const dx = e.clientX - d.x;
+    const dy = e.clientY - d.y;
+    if (!d.active) {
+      if (Math.abs(dx) < 30 || Math.abs(dy) > Math.abs(dx) * 0.6) return;
+      // A selection forming under the drag cancels the turn gesture.
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed) {
+        dragRef2.current = null;
+        return;
+      }
+      const dir = dx < 0 ? 1 : -1;
+      const from = currentSpreadIdxRef.current;
+      const step = modeRef.current === "one" ? 1 : 2;
+      const to = from + dir * step;
+      const starts = tableRef.current.starts;
+      if (to < 0 || to >= starts.length) {
+        dragRef2.current = null;
+        return;
+      }
+      d.active = true;
+      d.dir = dir;
+      d.from = from;
+      d.to = to;
+    } else if (
+      Math.sign(dx) !== (d.dir > 0 ? -1 : 1) &&
+      Math.abs(dx) > 30
+    ) {
+      // Dragged back across the start point the other way: disengage.
+      setFlip(null);
+      dragRef2.current = null;
+      return;
+    }
+    const frac = clamp(Math.abs(dx) / (layoutRef.current.pageW * 0.9), 0, 1);
+    setFlip({
+      dir: d.dir,
+      from: d.from,
+      to: d.to,
+      frac: d.dir > 0 ? frac : 1 - frac,
+      phase: "drag",
+    });
+  };
+  const settleFlip = (complete) => {
+    setFlip((f) =>
+      f
+        ? {
+            ...f,
+            frac: complete ? (f.dir > 0 ? 1 : 0) : f.dir > 0 ? 0 : 1,
+            phase: "settle",
+          }
+        : f
+    );
+    window.clearTimeout(flipTimerRef.current);
+    flipTimerRef.current = window.setTimeout(() => setFlip(null), 210);
   };
   const onPointerUpStage = (e) => {
-    const s = swipeRef.current;
-    swipeRef.current = null;
-    if (!s || e.pointerId !== s.id) return;
-    const dx = e.clientX - s.x;
-    const dy = e.clientY - s.y;
-    if (Math.abs(dx) >= 52 && Math.abs(dy) < Math.abs(dx) * 0.6) {
-      // A selection in progress disables swipe-turn (§4.5).
-      const sel = window.getSelection();
-      if (sel && !sel.isCollapsed) return;
-      turnBy(dx < 0 ? 1 : -1);
+    const d = dragRef2.current;
+    dragRef2.current = null;
+    if (!d || e.pointerId !== d.id) return;
+    const dx = e.clientX - d.x;
+    const dy = e.clientY - d.y;
+    if (!d.active) {
+      // Fast flick (the leaf never engaged): the original swipe —
+      // turn on release past the threshold, selection permitting.
+      if (Math.abs(dx) >= 52 && Math.abs(dy) < Math.abs(dx) * 0.6) {
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed) return;
+        dragTurnAtRef.current = Date.now();
+        turnBy(dx < 0 ? 1 : -1);
+      }
+      return;
     }
+    dragTurnAtRef.current = Date.now();
+    const sel = window.getSelection();
+    const fracNow = clamp(
+      Math.abs(dx) / (layoutRef.current.pageW * 0.9),
+      0,
+      1
+    );
+    if ((sel && !sel.isCollapsed) || fracNow < 0.35) {
+      settleFlip(false);
+      return;
+    }
+    // Complete the turn: commit the anchor instantly (the leaf is
+    // already most of the way around) and let it settle flat.
+    goToIdx(d.to, { instant: true });
+    setFlip({
+      dir: d.dir,
+      from: d.from,
+      to: d.to,
+      frac: d.dir > 0 ? 1 : 0,
+      phase: "settle",
+    });
+    window.clearTimeout(flipTimerRef.current);
+    flipTimerRef.current = window.setTimeout(() => setFlip(null), 210);
+  };
+  const onPointerCancelStage = () => {
+    if (dragRef2.current && dragRef2.current.active) settleFlip(false);
+    dragRef2.current = null;
   };
 
   // -- Highlight capture ---------------------------------------------------------
@@ -1142,7 +1418,7 @@ export default function BookReader({
     return (
       <div
         key={idx}
-        className={`bv-page bv-${side}`}
+        className={`bv-page bv-${side}${readingPage === idx ? " is-reading" : ""}`}
         style={{ width: layout.pageW, height: layout.pageH }}
         role="group"
         aria-label={`Page ${idx + 1}`}
@@ -1186,6 +1462,65 @@ export default function BookReader({
   };
 
   const spreadGutter = layout.phone ? { marginLeft: 44 } : undefined;
+
+  // The flip composition (INVENTORY 114): the incoming spread lies
+  // flat beneath, and the turning leaf — front and back faces —
+  // rotates around the spine (two-page) or the page's left edge
+  // (one-page, where the turned leaf's back is blank paper). frac is
+  // the rotation progress: 0 = leaf flat on the right showing its
+  // front, 1 = flat on the left showing its back; rotateY(-180*frac)
+  // serves both directions.
+  const renderFlip = () => {
+    const { dir, from, to, frac, phase } = flip;
+    const leafStyle = {
+      width: layout.pageW,
+      height: layout.pageH,
+      transform: `rotateY(${-180 * frac}deg)`,
+      transition:
+        phase === "go"
+          ? "transform 0.44s cubic-bezier(0.3, 0.55, 0.3, 1)"
+          : phase === "settle"
+            ? "transform 0.18s ease-out"
+            : "none",
+    };
+    const blankBack = (
+      <div
+        className="bv-page bv-leaf-blank"
+        style={{ width: layout.pageW, height: layout.pageH }}
+        aria-hidden="true"
+      />
+    );
+    if (mode === "one") {
+      leafStyle.left = 0;
+      return (
+        <div className="bv-spread bv-single bv-flipping" style={spreadGutter}>
+          {renderPage(dir > 0 ? to : from, "single")}
+          <div className="bv-leaf" style={leafStyle} aria-hidden="true">
+            <div className="bv-leaf-face bv-leaf-front">
+              {renderPage(dir > 0 ? from : to, "single")}
+            </div>
+            <div className="bv-leaf-face bv-leaf-back">{blankBack}</div>
+          </div>
+        </div>
+      );
+    }
+    leafStyle.left = layout.pageW;
+    return (
+      <div className="bv-spread bv-flipping" style={spreadGutter}>
+        {renderPage(dir > 0 ? from : to, "left")}
+        {renderPage(dir > 0 ? to + 1 : from + 1, "right")}
+        <div className="bv-leaf" style={leafStyle} aria-hidden="true">
+          <div className="bv-leaf-face bv-leaf-front">
+            {renderPage(dir > 0 ? from + 1 : to + 1, "right")}
+          </div>
+          <div className="bv-leaf-face bv-leaf-back">
+            {renderPage(dir > 0 ? to : from, "left")}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderSpread = (spreadIdx) => {
     if (mode === "one") {
       return (
@@ -1234,7 +1569,9 @@ export default function BookReader({
       onWheel={onWheel}
       onClick={onStageClick}
       onPointerDown={onPointerDownStage}
+      onPointerMove={onPointerMoveStage}
       onPointerUp={onPointerUpStage}
+      onPointerCancel={onPointerCancelStage}
     >
       {!textDone && text && (
         <div className="bv-stream-status" role="status">
@@ -1261,12 +1598,16 @@ export default function BookReader({
         />
       ) : (
         <div className="bv-stage">
-          <div
-            className={`bv-track${turnAnim ? (turnAnim.dir > 0 ? " is-turn-next" : " is-turn-prev") : ""}`}
-            key={currentSpreadIdx}
-          >
-            {renderSpread(currentSpreadIdx)}
-          </div>
+          {flip ? (
+            renderFlip()
+          ) : (
+            <div
+              className={`bv-track${turnAnim ? (turnAnim.dir > 0 ? " is-turn-next" : " is-turn-prev") : ""}`}
+              key={currentSpreadIdx}
+            >
+              {renderSpread(currentSpreadIdx)}
+            </div>
+          )}
           {/* Page turns by click are handled on the stage itself (see
               onStageClick): overlay zones would sit on the text and
               block selection across most of the page (§7.9). */}
@@ -1366,7 +1707,11 @@ export default function BookReader({
                   ref={(el) => {
                     dockBtnRefs.current[b.id] = el;
                   }}
-                  onClick={b.onClick}
+                  onClick={() => {
+                    b.onClick();
+                    // Choosing any tool collapses the fan (§7.8).
+                    setPhoneOpen(false);
+                  }}
                 >
                   {b.icon}
                   <span className="bv-fan-chip" aria-hidden="true">{b.label}</span>
@@ -1376,6 +1721,35 @@ export default function BookReader({
             </div>
           )}
         </>
+      )}
+
+      {/* Page-turn arrows (INVENTORY 114): two icon-only arrows at the
+          very bottom of the reading page — previous / next page of
+          THIS text, in both one-page and spread views. */}
+      {mode !== "thumbs" && (
+        <div className="bv-turnbar">
+          <button
+            type="button"
+            className="bv-turn-btn"
+            aria-label="Previous page"
+            disabled={currentSpreadIdx <= 0}
+            onClick={() => turnBy(-1)}
+          >
+            {I.prevPage}
+          </button>
+          <button
+            type="button"
+            className="bv-turn-btn"
+            aria-label="Next page"
+            disabled={
+              currentSpreadIdx >=
+              spreadStartIdx(Math.max(0, starts.length - 1))
+            }
+            onClick={() => turnBy(1)}
+          >
+            {I.nextPage}
+          </button>
+        </div>
       )}
 
       {toast && (

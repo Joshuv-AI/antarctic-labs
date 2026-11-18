@@ -8792,6 +8792,26 @@ export function LibraryArtifact({ go, params, onReady }) {
   useEffect(() => {
     if (fullSettled && towerServerMode()) startCatalogBrowse();
   }, [params.id, fullSettled]);
+  // VIEWS counter (INVENTORY 110, DESIGN §8.7 Option B): the stored
+  // count for this entry, or null while unknown — the record's VIEWS
+  // row renders only from a real number the server returns.
+  const [viewCount, setViewCount] = useState(null);
+  useEffect(() => {
+    setViewCount(null);
+  }, [params.id]);
+  // Same-session revisit: the open was already counted (below), so
+  // just read the stored number back.
+  useEffect(() => {
+    if (!trackedWorkViews.has(params.id)) return undefined;
+    let live = true;
+    fetch(`/api/views?id=${encodeURIComponent(params.id)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (live && d && Number.isFinite(d.views)) setViewCount(d.views);
+      })
+      .catch(() => { /* no counter reachable — no row */ });
+    return () => { live = false; };
+  }, [params.id]);
   // Analytics: one work_viewed per work per session, fired when any
   // usable record for the entry is in hand.
   useEffect(() => {
@@ -8808,6 +8828,19 @@ export function LibraryArtifact({ go, params, onReady }) {
       creator: rec.creator,
       year: rec.year,
     });
+    // The VIEWS increment rides the same once-per-session-per-work
+    // open. Fire-and-forget: the entry never waits on it, and the row
+    // appears only when the real stored count returns.
+    fetch("/api/views", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: rec.artifact_id }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d && Number.isFinite(d.views)) setViewCount(d.views);
+      })
+      .catch(() => { /* counter unreachable — no row, never an error */ });
   }, [params.id, fullArtifact, artifacts]);
   // Rewritten description from the sidecar (2026-10-18 revamp); falls back
   // to the catalog record's own description while loading or on failure.
@@ -8889,6 +8922,11 @@ export function LibraryArtifact({ go, params, onReady }) {
     ["RIGHTS", artifact.rights_status && artifact.rights_status.replace(/_/g, " ")],
     ["CHECKSUM", artifact.checksum],
   ].filter(([, v]) => v !== undefined && v !== null && v !== "");
+  // VIEWS (INVENTORY 110): only ever the real stored number, only
+  // once it has come back — no placeholder, no dressed-up zero.
+  if (viewCount !== null) {
+    record.splice(1, 0, ["VIEWS", viewCount.toLocaleString("en-US")]);
+  }
   const status = artifact.download_status;
   // The description override comes from a sidecar file; only a string
   // may reach the paragraph split below (see normalizeArtifact).
@@ -9033,7 +9071,6 @@ export function LibraryArtifact({ go, params, onReady }) {
               SCROLL VIEW
             </button>
           </div>
-          {entryNav}
         </EntryPopup>
       ) : (
         <>
