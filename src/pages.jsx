@@ -6431,13 +6431,13 @@ export function SuggestEntry({ go, onReady }) {
     );
   };
   return (
-    <main className="page-shell inner-page tower-suggest" id="main-content" tabIndex={-1}>
-      <section className="inner-hero section">
+    <main className="page-shell inner-page tower-suggest tower-lib" id="main-content" tabIndex={-1}>
+      <section className="tlib-hero">
         <div className="section-index">{s.sectionIndex}</div>
-        <h1>{s.heading}</h1>
-        <p className="display-copy">{s.intro}</p>
+        <h1 className="tlib-title">{s.heading}</h1>
+        <p className="tlib-lede">{s.intro}</p>
       </section>
-      <section className="section suggest-section">
+      <section className="tlib-panel tlib-form-panel">
         <div className="suggest-wrap">
           {!submitted ? (
             <form
@@ -6621,10 +6621,11 @@ export function TowerApiAccess({ go }) {
   const paidTiers = api.tiers.filter((t) => t.priceMonthly);
   const selTier = paidTiers.find((t) => t.id === planSel) || paidTiers[0];
   return (
-    <section className="section desk-section desk-api" aria-label="Tower API access">
-      <div className="suggest-wrap">
-        <div className="section-index">TOWER API — PROGRAMMATIC ACCESS</div>
-        <p className="body-copy desk-copy">
+    <section className="tlib" aria-label="Tower API access">
+      <div className="tlib-hero">
+        <div className="section-index">TOWER OF BABEL — PROGRAMMATIC ACCESS</div>
+        <h1 className="tlib-title">API access</h1>
+        <p className="tlib-lede">
           Prefer a machine to do the fetching? API v1 gives programs
           server-side search, full-text delivery, and bulk snapshots of
           this same library — a free key by email, paid tiers above it.
@@ -6632,40 +6633,29 @@ export function TowerApiAccess({ go }) {
           buys the maintained pipe, the throughput, and someone standing
           behind it.
         </p>
-        <ul className="desk-api-status" aria-label="Live API status">
+        <ul className="tlib-chips" aria-label="Live API status">
           {apiStatus === null ? (
-            <li>Live status — checking…</li>
+            <li className="tower-chip">Live status — checking…</li>
           ) : (
             <>
-              <li>Keys — {keysConfigured ? "available" : "not yet open"}</li>
-              <li>
+              <li className="tower-chip">
+                Keys — {keysConfigured ? "available" : "not yet open"}
+              </li>
+              <li className="tower-chip">
                 Subscriptions — {subscriptionsOpen ? "open" : "not yet open"}
               </li>
-              <li>
+              <li className="tower-chip">
                 Webhook — {webhookConfigured ? "configured" : "not configured"}
               </li>
             </>
           )}
         </ul>
-        <div className="section-index desk-block-title">API PLANS</div>
-        <div className="capability-list desk-api-tiers">
-          {api.tiers.map((t, i) => (
-            <div className="cap-row" key={t.id}>
-              <span>{String(i + 1).padStart(2, "0")}</span>
-              <h3>{t.name}</h3>
-              <p>
-                {(t.price ||
-                  (billing === "annual" ? t.priceAnnual : t.priceMonthly)) +
-                  " · " +
-                  t.limit +
-                  ". " +
-                  t.blurb}
-              </p>
-            </div>
-          ))}
-        </div>
-        {subscriptionsOpen ? (
-          <>
+      </div>
+
+      <div className="tlib-panel">
+        <div className="tlib-panel-head">
+          <span className="section-index">API PLANS</span>
+          {subscriptionsOpen && (
             <div className="api-toggle" role="group" aria-label="Billing period">
               <button
                 type="button"
@@ -6684,24 +6674,46 @@ export function TowerApiAccess({ go }) {
                 Annual — two months free
               </button>
             </div>
-            <div className="api-plans" role="group" aria-label="Choose a plan">
-              {paidTiers.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  className={planSel === t.id ? "is-on" : ""}
-                  aria-pressed={planSel === t.id}
-                  onClick={() => setPlanSel(t.id)}
-                >
-                  <span className="api-plan-name">{t.name}</span>
-                  <span className="api-plan-price">
-                    {billing === "annual" ? t.priceAnnual : t.priceMonthly}
-                  </span>
-                  <span className="api-plan-limit">{t.limit}</span>
-                </button>
-              ))}
-            </div>
-            <div className="desk-sample-actions">
+          )}
+        </div>
+        <div className="tlib-tiers">
+          {api.tiers.map((t) => {
+            const paid = !!t.priceMonthly;
+            const price =
+              t.price || (billing === "annual" ? t.priceAnnual : t.priceMonthly);
+            const selectable = paid && subscriptionsOpen;
+            const isOn = selectable && planSel === t.id;
+            const inner = (
+              <>
+                <span className="tlib-tier-top">
+                  <span className="tlib-tier-name">{t.name}</span>
+                  {isOn && <span className="tlib-tier-tag">Selected</span>}
+                </span>
+                <span className="tlib-tier-price">{price}</span>
+                <span className="tlib-tier-limit">{t.limit}</span>
+                <span className="tlib-tier-blurb">{t.blurb}</span>
+              </>
+            );
+            return selectable ? (
+              <button
+                type="button"
+                key={t.id}
+                className={`tlib-tier tlib-tier-btn${isOn ? " is-on" : ""}`}
+                aria-pressed={isOn}
+                onClick={() => setPlanSel(t.id)}
+              >
+                {inner}
+              </button>
+            ) : (
+              <div className="tlib-tier" key={t.id}>
+                {inner}
+              </div>
+            );
+          })}
+        </div>
+        {subscriptionsOpen ? (
+          <>
+            <div className="tlib-actions">
               <button
                 type="button"
                 className="tower-access-btn api-cta"
@@ -6725,9 +6737,9 @@ export function TowerApiAccess({ go }) {
             )}
           </>
         ) : (
-          <p className="body-copy desk-copy">{api.subscribePending}</p>
+          <p className="body-copy">{api.subscribePending}</p>
         )}
-        <div className="desk-sample-actions">
+        <div className="tlib-actions">
           {PORTAL_URL ? (
             <a className="api-quiet" href={PORTAL_URL}>
               MANAGE BILLING <span aria-hidden="true">↗</span>
@@ -6736,9 +6748,14 @@ export function TowerApiAccess({ go }) {
             <p className="body-copy">{api.billingNote}</p>
           )}
         </div>
-        <p className="body-copy desk-copy">{api.refundNote}</p>
-        <div className="section-index desk-block-title">{api.keyForm.heading}</div>
-        <p className="body-copy desk-copy">{api.keyForm.body}</p>
+        <p className="tlib-note">{api.refundNote}</p>
+      </div>
+
+      <div className="tlib-panel">
+        <div className="tlib-panel-head">
+          <span className="section-index">{api.keyForm.heading}</span>
+        </div>
+        <p className="body-copy">{api.keyForm.body}</p>
         {!keysConfigured ? (
           <p className="body-copy" role="status">
             {api.keyForm.pending}
@@ -6815,25 +6832,27 @@ export function TowerApiAccess({ go }) {
             </div>
           </form>
         )}
-        <div className="desk-sample-actions">
-          <button
-            type="button"
-            className="api-quiet"
-            onClick={() => go("/tower-of-babel/api")}
-          >
-            READ THE FULL API DOCUMENTATION{" "}
-            <span aria-hidden="true">↗</span>
-          </button>
-        </div>
-        <p className="desk-note">
-          Endpoints, request limits, versioning, licensing, and the keyless
-          catalog surface — everything a person or an agent needs to use
-          the API is documented on the API page.
-        </p>
       </div>
+
+      <div className="tlib-actions">
+        <button
+          type="button"
+          className="api-quiet"
+          onClick={() => go("/tower-of-babel/api")}
+        >
+          READ THE FULL API DOCUMENTATION{" "}
+          <span aria-hidden="true">↗</span>
+        </button>
+      </div>
+      <p className="tlib-note">
+        Endpoints, request limits, versioning, licensing, and the keyless
+        catalog surface — everything a person or an agent needs to use
+        the API is documented on the API page.
+      </p>
     </section>
   );
 }
+
 
 // ----- Tower of Babel / API access page ------------------------------
 // /tower-of-babel/library/research — the API block as a full page.
@@ -6851,7 +6870,7 @@ export function TowerApiAccessPage({ go, onReady }) {
     if (onReady) onReady();
   }, [onReady]);
   return (
-    <main className="page-shell inner-page tower-light tower-desk" id="main-content" tabIndex={-1}>
+    <main className="page-shell inner-page tower-light tower-desk tower-lib" id="main-content" tabIndex={-1}>
       <TowerApiAccess go={go} />
     </main>
   );
@@ -9739,76 +9758,74 @@ export function TowerApiPage({ go }) {
   const paidTiers = api.tiers.filter((t) => t.priceMonthly);
   const selTier = paidTiers.find((t) => t.id === planSel) || paidTiers[0];
   return (
-    <main className="page-shell inner-page tower-light tower-api" id="main-content" tabIndex={-1}>
-      <section className="inner-hero section">
+    <main className="page-shell inner-page tower-light tower-api tower-lib" id="main-content" tabIndex={-1}>
+      <section className="tlib-hero">
         <div className="section-index">FOR AI AGENTS</div>
-        <h1>{api.h1}</h1>
-        <p className="display-copy">{api.intro}</p>
+        <h1 className="tlib-title">{api.h1}</h1>
+        <p className="tlib-lede">{api.intro}</p>
+        <ul className="tlib-chips" aria-label="Live API status">
+          {apiStatus === null ? (
+            <li className="tower-chip">Live status — checking…</li>
+          ) : (
+            <>
+              <li className="tower-chip">
+                Keys — {keysConfigured ? "available" : "not yet open"}
+              </li>
+              <li className="tower-chip">
+                Subscriptions — {subscriptionsOpen ? "open" : "not yet open"}
+              </li>
+              <li className="tower-chip">
+                Webhook —{" "}
+                {apiStatus.webhook_configured ? "configured" : "not configured"}
+              </li>
+            </>
+          )}
+        </ul>
       </section>
 
       {subParam === "thanks" && (
-        <section className="section reveal">
-          <div className="suggest-wrap">
-            <p className="body-copy" role="status">
-              Subscription received — thank you. Your API key is on its way to
-              the email address you used at checkout; it is shown only in that
-              email, so keep it somewhere safe.
-            </p>
-          </div>
-        </section>
+        <div className="tlib-panel">
+          <p className="body-copy" role="status">
+            Subscription received — thank you. Your API key is on its way to
+            the email address you used at checkout; it is shown only in that
+            email, so keep it somewhere safe.
+          </p>
+        </div>
       )}
       {subParam === "canceled" && (
-        <section className="section reveal">
-          <div className="suggest-wrap">
-            <p className="body-copy" role="status">
-              Checkout was canceled — nothing was charged. You can subscribe
-              whenever you are ready.
-            </p>
-          </div>
-        </section>
+        <div className="tlib-panel">
+          <p className="body-copy" role="status">
+            Checkout was canceled — nothing was charged. You can subscribe
+            whenever you are ready.
+          </p>
+        </div>
       )}
 
-      <section className="copy-block section reveal">
-        <div className="section-index">THE SHAPE OF IT</div>
-        <div>
-          <p className="body-copy">{api.definition}</p>
+      <section className="tlib-panel">
+        <div className="tlib-panel-head">
+          <span className="section-index">THE SHAPE OF IT</span>
         </div>
+        <p className="body-copy">{api.definition}</p>
       </section>
 
       {api.sections.map((s) => (
-        <section className="copy-block section reveal" key={s.title}>
-          <div className="section-index">{s.title.toUpperCase()}</div>
-          <div>
-            <p className="body-copy">{s.body}</p>
-            {s.title === "How an agent uses it" && (
-              <pre className="code-block">
-                <code>{API_FETCH_EXAMPLE}</code>
-              </pre>
-            )}
+        <section className="tlib-panel" key={s.title}>
+          <div className="tlib-panel-head">
+            <span className="section-index">{s.title.toUpperCase()}</span>
           </div>
+          <p className="body-copy">{s.body}</p>
+          {s.title === "How an agent uses it" && (
+            <pre className="code-block">
+              <code>{API_FETCH_EXAMPLE}</code>
+            </pre>
+          )}
         </section>
       ))}
 
-      <section className="section reveal">
-        <div className="section-index">API PLANS</div>
-        <div className="capability-list">
-          {api.tiers.map((t, i) => (
-            <div className="cap-row" key={t.id}>
-              <span>{String(i + 1).padStart(2, "0")}</span>
-              <h3>{t.name}</h3>
-              <p>
-                {(t.price ||
-                  (billing === "annual" ? t.priceAnnual : t.priceMonthly)) +
-                  " · " +
-                  t.limit +
-                  ". " +
-                  t.blurb}
-              </p>
-            </div>
-          ))}
-        </div>
-        {subscriptionsOpen ? (
-          <div className="suggest-wrap api-buy">
+      <section className="tlib-panel">
+        <div className="tlib-panel-head">
+          <span className="section-index">API PLANS</span>
+          {subscriptionsOpen && (
             <div className="api-toggle" role="group" aria-label="Billing period">
               <button
                 type="button"
@@ -9827,24 +9844,46 @@ export function TowerApiPage({ go }) {
                 Annual — two months free
               </button>
             </div>
-            <div className="api-plans" role="group" aria-label="Choose a plan">
-              {paidTiers.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  className={planSel === t.id ? "is-on" : ""}
-                  aria-pressed={planSel === t.id}
-                  onClick={() => setPlanSel(t.id)}
-                >
-                  <span className="api-plan-name">{t.name}</span>
-                  <span className="api-plan-price">
-                    {billing === "annual" ? t.priceAnnual : t.priceMonthly}
-                  </span>
-                  <span className="api-plan-limit">{t.limit}</span>
-                </button>
-              ))}
-            </div>
-            <div className="desk-sample-actions">
+          )}
+        </div>
+        <div className="tlib-tiers">
+          {api.tiers.map((t) => {
+            const paid = !!t.priceMonthly;
+            const price =
+              t.price || (billing === "annual" ? t.priceAnnual : t.priceMonthly);
+            const selectable = paid && subscriptionsOpen;
+            const isOn = selectable && planSel === t.id;
+            const inner = (
+              <>
+                <span className="tlib-tier-top">
+                  <span className="tlib-tier-name">{t.name}</span>
+                  {isOn && <span className="tlib-tier-tag">Selected</span>}
+                </span>
+                <span className="tlib-tier-price">{price}</span>
+                <span className="tlib-tier-limit">{t.limit}</span>
+                <span className="tlib-tier-blurb">{t.blurb}</span>
+              </>
+            );
+            return selectable ? (
+              <button
+                type="button"
+                key={t.id}
+                className={`tlib-tier tlib-tier-btn${isOn ? " is-on" : ""}`}
+                aria-pressed={isOn}
+                onClick={() => setPlanSel(t.id)}
+              >
+                {inner}
+              </button>
+            ) : (
+              <div className="tlib-tier" key={t.id}>
+                {inner}
+              </div>
+            );
+          })}
+        </div>
+        {subscriptionsOpen ? (
+          <>
+            <div className="tlib-actions">
               <button
                 type="button"
                 className="tower-access-btn api-cta"
@@ -9866,13 +9905,11 @@ export function TowerApiPage({ go }) {
                 {subError}
               </p>
             )}
-          </div>
+          </>
         ) : (
-          <div className="suggest-wrap">
-            <p className="body-copy">{api.subscribePending}</p>
-          </div>
+          <p className="body-copy">{api.subscribePending}</p>
         )}
-        <div className="suggest-wrap">
+        <div className="tlib-actions">
           {PORTAL_URL ? (
             <a className="api-quiet" href={PORTAL_URL}>
               MANAGE BILLING <span aria-hidden="true">↗</span>
@@ -9880,101 +9917,107 @@ export function TowerApiPage({ go }) {
           ) : (
             <p className="body-copy">{api.billingNote}</p>
           )}
-          <p className="body-copy">{api.refundNote}</p>
         </div>
+        <p className="tlib-note">{api.refundNote}</p>
       </section>
 
-      <section className="section suggest-section">
-        <div className="suggest-wrap">
-          <div className="section-index">{api.keyForm.heading}</div>
-          <p className="body-copy">{api.keyForm.body}</p>
-          {!keysConfigured ? (
-            <p className="body-copy" role="status">
-              {api.keyForm.pending}
-            </p>
-          ) : keyState === "sent" ? (
-            <p className="body-copy" role="status">
-              {api.keyForm.sent}
-            </p>
-          ) : (
-            <form
-              className="suggest-form"
-              onSubmit={onKeySubmit}
-              aria-label="Get a free API key"
+      <section className="tlib-panel">
+        <div className="tlib-panel-head">
+          <span className="section-index">{api.keyForm.heading}</span>
+        </div>
+        <p className="body-copy">{api.keyForm.body}</p>
+        {!keysConfigured ? (
+          <p className="body-copy" role="status">
+            {api.keyForm.pending}
+          </p>
+        ) : keyState === "sent" ? (
+          <p className="body-copy" role="status">
+            {api.keyForm.sent}
+          </p>
+        ) : (
+          <form
+            className="suggest-form"
+            onSubmit={onKeySubmit}
+            aria-label="Get a free API key"
+          >
+            <div className="suggest-field">
+              <label htmlFor="api-key-email">
+                Email{" "}
+                <span className="req" aria-hidden="true">
+                  *
+                </span>
+              </label>
+              <input
+                id="api-key-email"
+                name="email"
+                type="email"
+                required
+                value={keyEmail}
+                onChange={(e) => setKeyEmail(e.target.value)}
+                autoComplete="email"
+                placeholder="you@example.org"
+              />
+            </div>
+            <div
+              aria-hidden="true"
+              style={{
+                position: "absolute",
+                left: "-9999px",
+                top: "auto",
+                width: "1px",
+                height: "1px",
+                overflow: "hidden",
+              }}
             >
-              <div className="suggest-field">
-                <label htmlFor="api-key-email">
-                  Email{" "}
-                  <span className="req" aria-hidden="true">
-                    *
-                  </span>
-                </label>
-                <input
-                  id="api-key-email"
-                  name="email"
-                  type="email"
-                  required
-                  value={keyEmail}
-                  onChange={(e) => setKeyEmail(e.target.value)}
-                  autoComplete="email"
-                  placeholder="you@example.org"
-                />
-              </div>
-              <div
-                aria-hidden="true"
-                style={{
-                  position: "absolute",
-                  left: "-9999px",
-                  top: "auto",
-                  width: "1px",
-                  height: "1px",
-                  overflow: "hidden",
-                }}
+              <label htmlFor="api-key-website">Website</label>
+              <input
+                id="api-key-website"
+                name="website"
+                type="text"
+                value={keyHoneypot}
+                onChange={(e) => setKeyHoneypot(e.target.value)}
+                tabIndex={-1}
+                autoComplete="off"
+              />
+            </div>
+            {keyState === "pending" && (
+              <p className="body-copy" role="status">
+                {api.keyForm.pending}
+              </p>
+            )}
+            {keyState === "error" && (
+              <p className="suggest-error" role="alert">
+                Something went wrong sending your key — please try again.
+              </p>
+            )}
+            <div className="suggest-actions">
+              <button
+                type="submit"
+                className="tower-access-btn api-cta suggest-submit"
+                disabled={keySending}
               >
-                <label htmlFor="api-key-website">Website</label>
-                <input
-                  id="api-key-website"
-                  name="website"
-                  type="text"
-                  value={keyHoneypot}
-                  onChange={(e) => setKeyHoneypot(e.target.value)}
-                  tabIndex={-1}
-                  autoComplete="off"
-                />
-              </div>
-              {keyState === "pending" && (
-                <p className="body-copy" role="status">
-                  {api.keyForm.pending}
-                </p>
-              )}
-              {keyState === "error" && (
-                <p className="suggest-error" role="alert">
-                  Something went wrong sending your key — please try again.
-                </p>
-              )}
-              <div className="suggest-actions">
-                <button
-                  type="submit"
-                  className="tower-access-btn api-cta suggest-submit"
-                  disabled={keySending}
-                >
-                  {keySending ? "SENDING…" : api.keyForm.button}{" "}
-                  <span aria-hidden="true">↗</span>
-                </button>
-              </div>
-            </form>
-          )}
-        </div>
+                {keySending ? "SENDING…" : api.keyForm.button}{" "}
+                <span aria-hidden="true">↗</span>
+              </button>
+            </div>
+          </form>
+        )}
       </section>
 
-      <FaqBlock index="QUESTIONS" faqs={api.faqs} />
+      <div className="tlib-panel tlib-faq-panel">
+        <FaqBlock index="QUESTIONS" faqs={api.faqs} />
+      </div>
 
-      <section className="section">
-        <button type="button" className="text-link" onClick={() => go("/tower-of-babel/library")}>
+      <div className="tlib-actions">
+        <button
+          type="button"
+          className="api-quiet"
+          onClick={() => go("/tower-of-babel/library")}
+        >
           ENTER THE LIBRARY <span aria-hidden="true">↗</span>
         </button>
-        <p className="svc-updated">Updated {api.updated}.</p>
-      </section>
+      </div>
+      <p className="tlib-note">Updated {api.updated}.</p>
     </main>
   );
 }
