@@ -1582,6 +1582,14 @@ export default function ReaderAssist({
   ensureChunk,
   chunkElsRef,
   onActiveMark,
+  // Book view (INVENTORY 101/102): when a bookNav bridge is supplied,
+  // the orb keeps ONLY its Listen role (Joshua's ruling — Contents /
+  // Find / Highlight / Share live in the book's Dock), the scroll gate
+  // is lifted (the book stage is always "in the text"), highlight
+  // painting is owned by BookReader, and Listen's follow turns pages
+  // through the bridge instead of scrolling the window. Absent bookNav,
+  // every behavior below is byte-identical to the scroll reader's.
+  bookNav,
 }) {
   // Windowed rendering (2026-10-21): chunks mount in [winStart,
   // shownChunks) only — panels must treat anything outside as unrendered.
@@ -1618,6 +1626,10 @@ export default function ReaderAssist({
   // from the text and must stay reachable wherever the reader scrolls.
   const [inText, setInText] = useState(false);
   useEffect(() => {
+    if (bookNav) {
+      setInText(true); // book stage: the orb's Listen role is always live
+      return undefined;
+    }
     const sec = document.querySelector("section.tower-fulltext");
     if (!sec || typeof IntersectionObserver === "undefined") {
       setInText(true); // fail open: never strand the tools
@@ -1674,6 +1686,7 @@ export default function ReaderAssist({
   // sees) and accumulates as more are added. CSS Custom Highlight API,
   // same as Find; browsers without it keep the panel count as before.
   useEffect(() => {
+    if (bookNav) return undefined; // BookReader owns highlight painting
     if (!SUPPORTS_HIGHLIGHTS) return undefined;
     if (!savedHls.length) {
       CSS.highlights.delete("ra-mine");
@@ -1817,6 +1830,7 @@ export default function ReaderAssist({
   // painted highlight can never exceed the current word.
   const speakWordRect = useCallback(
     (gStart, gEnd) => {
+      if (bookNav) return bookNav.wordRect(gStart, gEnd);
       // Chunk containing gStart (chunkStarts is sorted).
       let ci = 0;
       for (let i = 0; i < chunkStarts.length; i++) {
@@ -1904,6 +1918,16 @@ export default function ReaderAssist({
     speakPaintRafRef.current = 0;
     const p = speakPendingRef.current;
     if (!p) return;
+    if (bookNav) {
+      // Book view: the follow turns the page when the spoken word has
+      // left the mounted spread. Checked BEFORE the rect lookup — the
+      // word's page may not be mounted yet, which is exactly when the
+      // turn must happen. The manual-turn yield (~3s) replaces the
+      // manual-scroll yield, per DESIGN §5.6.
+      if (Date.now() - bookNav.manualTurnRef.current >= 3000) {
+        bookNav.followWord(p.s);
+      }
+    }
     const rect = speakWordRect(p.s, p.e);
     if (!rect) {
       // The word's chunk isn't rendered this frame (window shift): keep
@@ -1916,8 +1940,10 @@ export default function ReaderAssist({
     // Yields to manual scrolling — once the reader scrolls, the follow
     // waits until 3s after their last scroll (the refocus glide in the
     // scroll effect fires on the same beat) so it never fights them.
+    // (Book view: followWord above already handled the turn; a book
+    // page never window-scrolls.)
     const vh = window.innerHeight;
-    if (rect.top < vh * 0.22 || rect.bottom > vh * 0.78) {
+    if (!bookNav && (rect.top < vh * 0.22 || rect.bottom > vh * 0.78)) {
       if (Date.now() - userScrolledAt.current >= 3000) {
         try {
           const y = window.scrollY + rect.top - vh * 0.42;
@@ -1985,6 +2011,7 @@ export default function ReaderAssist({
   // Current reading position as a global char offset (probe at ~12% viewport
   // headroom — the same "where I was reading" the share feature uses).
   const speakStartOffset = useCallback(() => {
+    if (bookNav) return bookNav.getStartOffset();
     if (!text) return 0;
     // Use the browser's hit-testing to find the exact text under the
     // viewport's reading position (2026-10-18): far more reliable than
@@ -2091,6 +2118,20 @@ export default function ReaderAssist({
   //   scrolling, the view glides back to the spoken word on its own.
   useEffect(() => {
     if (!listening) return;
+    if (bookNav) {
+      // Book view: no window scroll to track. A light interval keeps
+      // the pill + ball anchored to the spoken word's live rect —
+      // across page turns (which remount the word's page) and resizes.
+      const iv = window.setInterval(() => {
+        repositionSpeakWord();
+      }, 400);
+      const onResize = () => repositionSpeakWord();
+      window.addEventListener("resize", onResize);
+      return () => {
+        window.clearInterval(iv);
+        window.removeEventListener("resize", onResize);
+      };
+    }
     const statusRef = readAloud.statusRef;
     const glideToWord = () => {
       if (statusRef.current !== "playing") return;
@@ -2144,11 +2185,14 @@ export default function ReaderAssist({
 
   // Hide the Listen icon when speech synthesis is unavailable.
   const visibleFeatures = useMemo(
-    () =>
-      readAloud.supported
+    () => {
+      const base = readAloud.supported
         ? FEATURES
-        : FEATURES.filter((f) => f.id !== "listen"),
-    [readAloud.supported]
+        : FEATURES.filter((f) => f.id !== "listen");
+      // Book view: the orb is the accessibility/Listen control only.
+      return bookNav ? base.filter((f) => f.id === "listen") : base;
+    },
+    [readAloud.supported, bookNav]
   );
 
   // New text (entry navigation): highlights are per entry — load the new

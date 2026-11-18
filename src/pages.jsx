@@ -235,6 +235,8 @@ function getTowerFiles() {
   return towerFilesPromise;
 }
 import ReaderAssist, { SUPPORTS_HIGHLIGHTS } from "./components/ReaderAssist.jsx";
+import BookReader from "./components/BookReader.jsx";
+import { createPortal } from "react-dom";
 // The Tower landing's dark hero band background (helix of covers,
 // Phase 2 2026-11-12). Self-contained and failure-proof: lazy scene,
 // shielded, ?bg=0 kill switch — see components/HelixCanvas.jsx.
@@ -8419,6 +8421,178 @@ function normalizeArtifact(rec) {
   return out;
 }
 
+// Reader depth milestones (25/50/75/100), once each per work per
+// session. Shared by the scroll reader (window-scroll driven) and the
+// book view (anchor-offset driven, DESIGN §5.4) so the two can never
+// double-fire for the same work.
+const readerProgressSeen = new Map();
+function fireReaderProgress(id, frac) {
+  let seen = readerProgressSeen.get(id);
+  if (!seen) {
+    seen = new Set();
+    readerProgressSeen.set(id, seen);
+  }
+  const pct = Math.round(frac * 100);
+  for (const m of [25, 50, 75, 100]) {
+    if (pct >= m && !seen.has(m)) {
+      seen.add(m);
+      track("reader_progress", { artifact_id: id, percent: m });
+    }
+  }
+}
+
+// The catalog pop-up (INVENTORY 102, DESIGN §8): the entry's whole
+// above-the-text block as a floating profile over the book. Opens on
+// every entry landing in book view; ✕ / Escape / surround click close
+// it; focus lands on the ✕ and Tab stays inside while it is open.
+function EntryPopup({ open, onClose, title, children }) {
+  const boxRef = useRef(null);
+  const closeBtnRef = useRef(null);
+  useEffect(() => {
+    if (open && closeBtnRef.current) {
+      try {
+        closeBtnRef.current.focus({ preventScroll: true });
+      } catch {
+        closeBtnRef.current.focus();
+      }
+    }
+  }, [open ]);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+  if (!open) return null;
+  const trapTab = (e) => {
+    if (e.key !== "Tab") return;
+    const box = boxRef.current;
+    if (!box) return;
+    const focusables = box.querySelectorAll(
+      'a[href], button:not([disabled]), summary, input, [tabindex]:not([tabindex="-1"])'
+    );
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+  return createPortal(
+    <div
+      className="bv-popup-backdrop"
+      onPointerDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="bv-popup"
+        role="dialog"
+        aria-label={title ? `About ${title}` : "Entry details"}
+        ref={boxRef}
+        onKeyDown={trapTab}
+      >
+        <button
+          type="button"
+          className="bv-popup-close"
+          ref={closeBtnRef}
+          onClick={onClose}
+          aria-label="Close entry details"
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true">
+            <line x1="6" y1="6" x2="18" y2="18" />
+            <line x1="18" y1="6" x2="6" y2="18" />
+          </svg>
+        </button>
+        <div className="bv-popup-scroll">{children}</div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+// FULL RECORD (DESIGN §8.9): the entry's complete catalog record under
+// its own names, in the design's fixed order — a row renders only when
+// this entry's record carries a non-empty value. WORDS / READ TIME are
+// the two derivable rows, shown only with a complete text (stats) and
+// labeled computed. No PAGES row, ever: our page counts are typeset
+// per device.
+function FullRecordBlock({ artifact, stats }) {
+  const entryUrl = towerEntryUrl(artifact);
+  const rows = [
+    ["IDENTIFIER", artifact.artifact_id],
+    ["TITLE", artifact.title],
+    ["CREATOR", artifact.creator],
+    ["YEAR", artifact.year],
+    ["COLLECTION", artifact.collection],
+    ["FORMAT", artifact.format],
+    ["FILE SIZE", artifact.file_size],
+    ["SOURCE", artifact.source],
+    ["SOURCE URL", artifact.source_url, artifact.source_url],
+    ["LICENSE", artifact.license],
+    [
+      "RIGHTS",
+      artifact.rights_status && artifact.rights_status.replace(/_/g, " "),
+    ],
+    ["ACCESS", artifact.download_status],
+    ["VERSION", artifact.version],
+    ["CHECKSUM", artifact.checksum],
+    [
+      "TAGS",
+      artifact.tags && artifact.tags.length > 0
+        ? artifact.tags.join(", ")
+        : "",
+    ],
+    ["DOWNLOAD", artifact.download_url, artifact.download_url],
+    ["ENTRY URL", entryUrl, entryUrl],
+  ].filter(([, v]) => v !== undefined && v !== null && v !== "");
+  return (
+    <details className="bv-fullrecord">
+      <summary>
+        <span className="section-index">FULL RECORD</span>
+        <span className="tower-about-chevron" aria-hidden="true">▾</span>
+      </summary>
+      <dl className="tower-record">
+        {rows.map(([label, value, href]) => (
+          <div key={label} className="tower-record-row">
+            <dt>{label}</dt>
+            <dd>
+              {href ? (
+                <a href={href} target="_blank" rel="noopener noreferrer">
+                  {value}
+                </a>
+              ) : (
+                value
+              )}
+            </dd>
+          </div>
+        ))}
+        {stats && (
+          <div className="tower-record-row">
+            <dt>WORDS</dt>
+            <dd>{stats.words.toLocaleString()} (computed)</dd>
+          </div>
+        )}
+        {stats && (
+          <div className="tower-record-row">
+            <dt>READ TIME</dt>
+            <dd>~{stats.minutes} MIN (computed)</dd>
+          </div>
+        )}
+      </dl>
+    </details>
+  );
+}
+
 export function LibraryArtifact({ go, params, onReady }) {
   const [artifacts, catalogError, , retryArtifacts] = useArtifacts();
   useEffect(() => {
@@ -8445,24 +8619,69 @@ export function LibraryArtifact({ go, params, onReady }) {
   }, [params.id]);
   // Analytics: reader scroll-depth milestones (25/50/75/100%), once each
   // per work per session. Passive listener, no layout reads beyond the
-  // standard scroll metrics, removed on navigation.
+  // standard scroll metrics, removed on navigation. The book view
+  // reports the same milestones from its anchor offset through
+  // fireReaderProgress (shared seen-set — no double-firing).
   useEffect(() => {
-    const seen = new Set();
     const onScroll = () => {
       const el = document.documentElement;
       const max = el.scrollHeight - el.clientHeight;
       if (max <= 0) return;
-      const pct = Math.min(100, Math.round((el.scrollTop / max) * 100));
-      for (const m of [25, 50, 75, 100]) {
-        if (pct >= m && !seen.has(m)) {
-          seen.add(m);
-          track("reader_progress", { artifact_id: params.id, percent: m });
-        }
-      }
+      fireReaderProgress(params.id, el.scrollTop / max);
     };
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, [params.id]);
+  // Book view (INVENTORY 101/102): the reading-view preference (§12.4 —
+  // book is the format; the scroll reader stays as a setting), the
+  // catalog pop-up's state (§8.4: opens on every entry landing, ~150ms
+  // after the book is visible), and the lifted text stats (the FULL
+  // RECORD block's derivable rows + the Dock readout consume them).
+  const [readerView, setReaderView] = useState(() => {
+    try {
+      return window.localStorage.getItem("tob-reader-view-v1") === "scroll"
+        ? "scroll"
+        : "book";
+    } catch {
+      return "book";
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("tob-reader-view-v1", readerView);
+    } catch {
+      /* ignore */
+    }
+  }, [readerView]);
+  const [popupOpen, setPopupOpen] = useState(false);
+  const [bookVisible, setBookVisible] = useState(false);
+  const [readerStats, setReaderStats] = useState(null);
+  useEffect(() => {
+    setPopupOpen(false);
+    setBookVisible(false);
+    setReaderStats(null);
+  }, [params.id]);
+  useEffect(() => {
+    if (readerView !== "book" || !bookVisible) return undefined;
+    const t = window.setTimeout(() => setPopupOpen(true), 150);
+    return () => window.clearTimeout(t);
+  }, [readerView, bookVisible, params.id]);
+  const handleBookProgress = useCallback(
+    (frac) => fireReaderProgress(params.id, frac),
+    [params.id]
+  );
+  const closePopup = useCallback(() => {
+    setPopupOpen(false);
+    // Focus returns to the book stage (§8.5).
+    const stage = document.querySelector(".bv-root");
+    if (stage) {
+      try {
+        stage.focus({ preventScroll: true });
+      } catch {
+        /* noop */
+      }
+    }
+  }, []);
   // Full record loads on demand (the index has list fields only).
   const [fullArtifact, setFullArtifact] = useState(null);
   const [fullSettled, setFullSettled] = useState(false);
@@ -8598,8 +8817,8 @@ export function LibraryArtifact({ go, params, onReady }) {
     typeof descOverride === "string" && descOverride
       ? descOverride
       : artifact.description;
-  return (
-    <main className="page-shell inner-page tower-light tower-entry" id="main-content" tabIndex={-1}>
+  const bookMode = readerView === "book";
+  const heroSection = (
       <section className="tower-entry-hero section">
         <div className="tower-entry-head">
           <div className="tower-entry-head-main">
@@ -8616,7 +8835,7 @@ export function LibraryArtifact({ go, params, onReady }) {
           </div>
           <EntryCover artifact={artifact} />
         </div>
-        <EntryShare artifact={artifact} />
+        {!bookMode && <EntryShare artifact={artifact} />}
         {descText && (
           <details className="tower-desc">
             <summary>
@@ -8657,6 +8876,8 @@ export function LibraryArtifact({ go, params, onReady }) {
           )}
         </div>
       </section>
+  );
+  const recordSection = (
       <section className="tower-entry-record section">
         <div className="section-index">CATALOG RECORD</div>
         <dl className="tower-record">
@@ -8681,8 +8902,8 @@ export function LibraryArtifact({ go, params, onReady }) {
         )}
         <EntryCite artifact={artifact} />
       </section>
-      <LibraryFullText artifact={artifact} />
-      {artifacts.length > 1 ? (
+  );
+  const entryNav = artifacts.length > 1 ? (
         <nav className="tower-entry-nav" aria-label="Browse entries">
           <button
             type="button"
@@ -8708,7 +8929,50 @@ export function LibraryArtifact({ go, params, onReady }) {
             BACK TO LIBRARY <span>↗</span>
           </button>
         </div>
+      );
+  return (
+    <main className="page-shell inner-page tower-light tower-entry" id="main-content" tabIndex={-1}>
+      {bookMode ? (
+        <EntryPopup open={popupOpen} onClose={closePopup} title={artifact.title}>
+          {heroSection}
+          {recordSection}
+          <section className="tower-entry-record section">
+            <FullRecordBlock artifact={artifact} stats={readerStats} />
+          </section>
+          <div className="bv-popup-footer">
+            <button type="button" className="tower-source-btn" onClick={() => window.print()}>
+              PRINT
+            </button>
+            <button
+              type="button"
+              className="tower-source-btn"
+              onClick={() => {
+                setReaderView("scroll");
+                setPopupOpen(false);
+              }}
+            >
+              SCROLL VIEW
+            </button>
+          </div>
+          {entryNav}
+        </EntryPopup>
+      ) : (
+        <>
+          {heroSection}
+          {recordSection}
+        </>
       )}
+      <LibraryFullText
+        artifact={artifact}
+        readerView={readerView}
+        onToggleView={() => setReaderView(bookMode ? "scroll" : "book")}
+        onInfo={() => setPopupOpen(true)}
+        onExit={() => go("/tower-of-babel/library")}
+        onProgress={handleBookProgress}
+        onStats={setReaderStats}
+        onBookVisible={() => setBookVisible(true)}
+      />
+      {!bookMode && entryNav}
     </main>
   );
 }
@@ -8763,7 +9027,16 @@ function countWords(t) {
 // 2026-10-18: the standalone reader route was merged into the entry page.
 // This renders the full-text section below the catalog record: download,
 // stats, chunked text body, and the ReaderAssist orb (unchanged).
-function LibraryFullText({ artifact }) {
+function LibraryFullText({
+  artifact,
+  readerView = "book",
+  onToggleView,
+  onInfo,
+  onExit,
+  onProgress,
+  onStats,
+  onBookVisible,
+}) {
   const artifactId = artifact.artifact_id;
   const status = artifact.download_status;
   const recordUrl = artifact.download_url;
@@ -8790,7 +9063,27 @@ function LibraryFullText({ artifact }) {
   const urlIsDerived = !recordUrl && !!url;
   // Text background mode: cycles transparent -> light -> dark (2026-10-18).
   // Only affects the .tower-fulltext section below the divider.
-  const [textMode, setTextMode] = useState("transparent");
+  // Book view (DESIGN §9): the reader's last mode is remembered across
+  // entries; the factory default is Paper ("light") in book view — a
+  // book that opens as paper reads as a book — while a first-ever
+  // scroll view keeps today's transparent default.
+  const [textMode, setTextMode] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem("tob-reader-theme-v1");
+      if (saved === "transparent" || saved === "light" || saved === "dark")
+        return saved;
+    } catch {
+      /* ignore */
+    }
+    return readerView === "book" ? "light" : "transparent";
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("tob-reader-theme-v1", textMode);
+    } catch {
+      /* ignore */
+    }
+  }, [textMode]);
   const cycleTextMode = () => {
     setTextMode((m) => (m === "transparent" ? "light" : m === "light" ? "dark" : "transparent"));
   };
@@ -9119,6 +9412,7 @@ function LibraryFullText({ artifact }) {
   // not an in-page navigation. The highlight paints after the scroll's rAF
   // so the Range rect is measured against the unmarked text node.
   useEffect(() => {
+    if (readerView === "book") return; // BookReader lands share links by page
     if (!text || !textDone || !shareLanding || shareLanding.done || chunkStarts.length === 0)
       return;
     const tlen = text.length;
@@ -9179,6 +9473,25 @@ function LibraryFullText({ artifact }) {
       minutes: Math.max(1, Math.round(words / 200)),
     };
   }, [text, textDone]);
+
+  // Lift the complete-text stats to the entry page (FULL RECORD
+  // derivable rows) — null until the text is complete, per §8.9 gating.
+  useEffect(() => {
+    if (onStats) onStats(stats);
+  }, [stats, onStats]);
+
+  // Book view: tell the entry page the book surface is on screen (any
+  // of: first text prefix, the no-text colophon, the error colophon) so
+  // the catalog pop-up can open over it (§8.2). Once per entry.
+  const bookVisibleFiredRef = useRef(null);
+  useEffect(() => {
+    if (readerView !== "book" || !onBookVisible) return;
+    if (bookVisibleFiredRef.current === artifactId) return;
+    if (text !== null || !canRead || textError) {
+      bookVisibleFiredRef.current = artifactId;
+      onBookVisible();
+    }
+  }, [readerView, text, canRead, textError, artifactId, onBookVisible]);
 
   // Chunk body renderer: the search fallback <mark> takes precedence; the
   // shared-passage highlight (Apple Books yellow) paints wherever the ?hl=
@@ -9318,6 +9631,70 @@ function LibraryFullText({ artifact }) {
     });
   };
 
+  if (readerView === "book") {
+    return (
+      <section className="tower-fulltext section bv-mode" aria-label="Full text" data-textmode={textMode}>
+        {textError && (
+          <div className="bv-colophon-wrap">
+            <div className="bv-colophon">
+              <p>
+                The full text couldn&rsquo;t be loaded right now. You can
+                still open the file directly:
+              </p>
+              <a className="tower-source-btn" href={url} target="_blank" rel="noopener noreferrer">
+                OPEN FILE <span aria-hidden="true">↗</span>
+              </a>
+            </div>
+            <button type="button" className="bv-colophon-info" onClick={onInfo}>
+              ⓘ Entry info
+            </button>
+          </div>
+        )}
+        {!textError && !canRead && (
+          <div className="bv-colophon-wrap">
+            <div className="bv-colophon">
+              <p>
+                {status === "RESTRICTED"
+                  ? "This entry is restricted — its text isn't available for distribution."
+                  : "The full text for this entry is still being prepared. Check back soon — it appears here automatically once it lands."}
+              </p>
+            </div>
+            <button type="button" className="bv-colophon-info" onClick={onInfo}>
+              ⓘ Entry info
+            </button>
+          </div>
+        )}
+        {!textError && canRead && text === null && (
+          <div className="bv-stage-shell">
+            <p className="bv-stage-status">Loading full text…</p>
+          </div>
+        )}
+        {text !== null && (
+          <>
+            <BookReader
+              text={text}
+              textDone={textDone}
+              title={artifact.title}
+              shareLanding={shareLanding}
+              theme={textMode}
+              onCycleTheme={cycleTextMode}
+              onInfo={onInfo}
+              onExit={onExit}
+              onProgress={onProgress}
+              stats={stats}
+              bootGone={bootGone}
+            />
+            {/* Print renders the full text as a continuous flow (§10.8):
+                screen-hidden, print-only. */}
+            <div className="bv-print-text" aria-hidden="true">
+              {text}
+            </div>
+          </>
+        )}
+      </section>
+    );
+  }
+
   return (
     <section className="tower-fulltext section" aria-label="Full text" data-textmode={textMode}>
       <div className="section-index">FULL TEXT</div>
@@ -9339,6 +9716,15 @@ function LibraryFullText({ artifact }) {
             <path d="M12 3v18" />
           </svg>
           <span className="tower-textmode-name">{textMode}</span>
+        </button>
+        <button
+          type="button"
+          className="tower-textmode-btn bv-view-toggle"
+          onClick={onToggleView}
+          aria-label="Switch to book view"
+          title="Read as a book"
+        >
+          <span className="tower-textmode-name">BOOK VIEW</span>
         </button>
       </div>
       {text === null && !textError && canRead && (
