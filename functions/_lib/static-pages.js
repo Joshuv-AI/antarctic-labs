@@ -365,12 +365,11 @@ PAGES["/tower-of-babel/library/research"] = {
 <p>No published limit. The static surface documented on the <a href="/tower-of-babel/api">API page</a>: the full catalog JSON, shards, and predictable .txt URLs. No key, no sign-up. Unchanged — this is the discovery layer and it stays open.</p>
 <h3>Free key — Free</h3>
 <p>50 requests/day. A key by email for API v1: catalog search and metadata for your own projects. Non-commercial use. The key is shown only in the email that delivers it.</p>
+<p>Enter your email on this page in the app and a free key is sent to it — shown only in that email, stored here only as a hash. Asking for a new key revokes the previous free key for that address.</p>
 <h3>Pro — $19/mo ($190/yr)</h3>
 <p>500 requests/day. API v1 with full-text delivery and a commercial-use licence for a single project — the maintained pipe, not the scrape.</p>
 <h3>Commercial — $149/mo ($1,490/yr)</h3>
 <p>Unlimited requests/day. Everything in Pro at commercial scale: bulk snapshot packages and a licence covering multiple projects.</p>
-<h2>Get a free key</h2>
-<p>Enter your email on this page in the app and a free key is sent to it — shown only in that email, stored here only as a hash. Asking for a new key revokes the previous free key for that address.</p>
 <p>Billing is managed through Stripe — the receipt for any payment includes a manage-billing link. Refunds: cancel within 7 days of a charge and that charge is refunded in full — email us from the address on the subscription and we will process it; the API key stays active until the end of the paid period unless you ask us to revoke it sooner.</p>
 ${PREFERRED_SOURCE_LINE}`,
 };

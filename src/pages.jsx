@@ -6767,7 +6767,8 @@ export function TowerApiAccess({ go }) {
             const paid = !!t.priceMonthly;
             const price =
               t.price || (billing === "annual" ? t.priceAnnual : t.priceMonthly);
-            const selectable = paid && subscriptionsOpen;
+            const selectable =
+              (paid && subscriptionsOpen) || t.id === "free";
             const isOn = selectable && planSel === t.id;
             const inner = (
               <>
@@ -6797,7 +6798,88 @@ export function TowerApiAccess({ go }) {
             );
           })}
         </div>
-        {subscriptionsOpen ? (
+        {planSel === "free" ? (
+          <div className="tlib-keyform">
+            <div className="section-index">{api.keyForm.heading}</div>
+            <p className="body-copy">{api.keyForm.body}</p>
+            {!keysConfigured ? (
+              <p className="body-copy" role="status">
+                {api.keyForm.pending}
+              </p>
+            ) : keyState === "sent" ? (
+              <p className="body-copy" role="status">
+                {api.keyForm.sent}
+              </p>
+            ) : (
+              <form
+                className="suggest-form"
+                onSubmit={onKeySubmit}
+                aria-label="Get a free API key"
+              >
+                <div className="suggest-field">
+                  <label htmlFor="api-key-email">
+                    Email{" "}
+                    <span className="req" aria-hidden="true">
+                      *
+                    </span>
+                  </label>
+                  <input
+                    id="api-key-email"
+                    name="email"
+                    type="email"
+                    required
+                    value={keyEmail}
+                    onChange={(e) => setKeyEmail(e.target.value)}
+                    autoComplete="email"
+                    placeholder="you@example.org"
+                  />
+                </div>
+                <div
+                  aria-hidden="true"
+                  style={{
+                    position: "absolute",
+                    left: "-9999px",
+                    top: "auto",
+                    width: "1px",
+                    height: "1px",
+                    overflow: "hidden",
+                  }}
+                >
+                  <label htmlFor="api-key-website">Website</label>
+                  <input
+                    id="api-key-website"
+                    name="website"
+                    type="text"
+                    value={keyHoneypot}
+                    onChange={(e) => setKeyHoneypot(e.target.value)}
+                    tabIndex={-1}
+                    autoComplete="off"
+                  />
+                </div>
+                {keyState === "pending" && (
+                  <p className="body-copy" role="status">
+                    {api.keyForm.pending}
+                  </p>
+                )}
+                {keyState === "error" && (
+                  <p className="suggest-error" role="alert">
+                    Something went wrong sending your key — please try again.
+                  </p>
+                )}
+                <div className="suggest-actions">
+                  <button
+                    type="submit"
+                    className="tower-access-btn api-cta suggest-submit"
+                    disabled={keySending}
+                  >
+                    {keySending ? "SENDING…" : api.keyForm.button}{" "}
+                    <span aria-hidden="true">↗</span>
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        ) : subscriptionsOpen ? (
           <>
             <div className="tlib-actions">
               <button
@@ -6835,89 +6917,6 @@ export function TowerApiAccess({ go }) {
           )}
         </div>
         <p className="tlib-note">{api.refundNote}</p>
-      </div>
-
-      <div className="tlib-panel">
-        <div className="tlib-panel-head">
-          <span className="section-index">{api.keyForm.heading}</span>
-        </div>
-        <p className="body-copy">{api.keyForm.body}</p>
-        {!keysConfigured ? (
-          <p className="body-copy" role="status">
-            {api.keyForm.pending}
-          </p>
-        ) : keyState === "sent" ? (
-          <p className="body-copy" role="status">
-            {api.keyForm.sent}
-          </p>
-        ) : (
-          <form
-            className="suggest-form"
-            onSubmit={onKeySubmit}
-            aria-label="Get a free API key"
-          >
-            <div className="suggest-field">
-              <label htmlFor="api-key-email">
-                Email{" "}
-                <span className="req" aria-hidden="true">
-                  *
-                </span>
-              </label>
-              <input
-                id="api-key-email"
-                name="email"
-                type="email"
-                required
-                value={keyEmail}
-                onChange={(e) => setKeyEmail(e.target.value)}
-                autoComplete="email"
-                placeholder="you@example.org"
-              />
-            </div>
-            <div
-              aria-hidden="true"
-              style={{
-                position: "absolute",
-                left: "-9999px",
-                top: "auto",
-                width: "1px",
-                height: "1px",
-                overflow: "hidden",
-              }}
-            >
-              <label htmlFor="api-key-website">Website</label>
-              <input
-                id="api-key-website"
-                name="website"
-                type="text"
-                value={keyHoneypot}
-                onChange={(e) => setKeyHoneypot(e.target.value)}
-                tabIndex={-1}
-                autoComplete="off"
-              />
-            </div>
-            {keyState === "pending" && (
-              <p className="body-copy" role="status">
-                {api.keyForm.pending}
-              </p>
-            )}
-            {keyState === "error" && (
-              <p className="suggest-error" role="alert">
-                Something went wrong sending your key — please try again.
-              </p>
-            )}
-            <div className="suggest-actions">
-              <button
-                type="submit"
-                className="tower-access-btn api-cta suggest-submit"
-                disabled={keySending}
-              >
-                {keySending ? "SENDING…" : api.keyForm.button}{" "}
-                <span aria-hidden="true">↗</span>
-              </button>
-            </div>
-          </form>
-        )}
       </div>
 
       <div className="tlib-actions">
@@ -10358,7 +10357,8 @@ export function TowerApiPage({ go }) {
             const paid = !!t.priceMonthly;
             const price =
               t.price || (billing === "annual" ? t.priceAnnual : t.priceMonthly);
-            const selectable = paid && subscriptionsOpen;
+            const selectable =
+              (paid && subscriptionsOpen) || t.id === "free";
             const isOn = selectable && planSel === t.id;
             const inner = (
               <>
@@ -10388,7 +10388,88 @@ export function TowerApiPage({ go }) {
             );
           })}
         </div>
-        {subscriptionsOpen ? (
+        {planSel === "free" ? (
+          <div className="tlib-keyform">
+            <div className="section-index">{api.keyForm.heading}</div>
+            <p className="body-copy">{api.keyForm.body}</p>
+            {!keysConfigured ? (
+              <p className="body-copy" role="status">
+                {api.keyForm.pending}
+              </p>
+            ) : keyState === "sent" ? (
+              <p className="body-copy" role="status">
+                {api.keyForm.sent}
+              </p>
+            ) : (
+              <form
+                className="suggest-form"
+                onSubmit={onKeySubmit}
+                aria-label="Get a free API key"
+              >
+                <div className="suggest-field">
+                  <label htmlFor="api-key-email">
+                    Email{" "}
+                    <span className="req" aria-hidden="true">
+                      *
+                    </span>
+                  </label>
+                  <input
+                    id="api-key-email"
+                    name="email"
+                    type="email"
+                    required
+                    value={keyEmail}
+                    onChange={(e) => setKeyEmail(e.target.value)}
+                    autoComplete="email"
+                    placeholder="you@example.org"
+                  />
+                </div>
+                <div
+                  aria-hidden="true"
+                  style={{
+                    position: "absolute",
+                    left: "-9999px",
+                    top: "auto",
+                    width: "1px",
+                    height: "1px",
+                    overflow: "hidden",
+                  }}
+                >
+                  <label htmlFor="api-key-website">Website</label>
+                  <input
+                    id="api-key-website"
+                    name="website"
+                    type="text"
+                    value={keyHoneypot}
+                    onChange={(e) => setKeyHoneypot(e.target.value)}
+                    tabIndex={-1}
+                    autoComplete="off"
+                  />
+                </div>
+                {keyState === "pending" && (
+                  <p className="body-copy" role="status">
+                    {api.keyForm.pending}
+                  </p>
+                )}
+                {keyState === "error" && (
+                  <p className="suggest-error" role="alert">
+                    Something went wrong sending your key — please try again.
+                  </p>
+                )}
+                <div className="suggest-actions">
+                  <button
+                    type="submit"
+                    className="tower-access-btn api-cta suggest-submit"
+                    disabled={keySending}
+                  >
+                    {keySending ? "SENDING…" : api.keyForm.button}{" "}
+                    <span aria-hidden="true">↗</span>
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        ) : subscriptionsOpen ? (
           <>
             <div className="tlib-actions">
               <button
@@ -10426,89 +10507,6 @@ export function TowerApiPage({ go }) {
           )}
         </div>
         <p className="tlib-note">{api.refundNote}</p>
-      </section>
-
-      <section className="tlib-panel">
-        <div className="tlib-panel-head">
-          <span className="section-index">{api.keyForm.heading}</span>
-        </div>
-        <p className="body-copy">{api.keyForm.body}</p>
-        {!keysConfigured ? (
-          <p className="body-copy" role="status">
-            {api.keyForm.pending}
-          </p>
-        ) : keyState === "sent" ? (
-          <p className="body-copy" role="status">
-            {api.keyForm.sent}
-          </p>
-        ) : (
-          <form
-            className="suggest-form"
-            onSubmit={onKeySubmit}
-            aria-label="Get a free API key"
-          >
-            <div className="suggest-field">
-              <label htmlFor="api-key-email">
-                Email{" "}
-                <span className="req" aria-hidden="true">
-                  *
-                </span>
-              </label>
-              <input
-                id="api-key-email"
-                name="email"
-                type="email"
-                required
-                value={keyEmail}
-                onChange={(e) => setKeyEmail(e.target.value)}
-                autoComplete="email"
-                placeholder="you@example.org"
-              />
-            </div>
-            <div
-              aria-hidden="true"
-              style={{
-                position: "absolute",
-                left: "-9999px",
-                top: "auto",
-                width: "1px",
-                height: "1px",
-                overflow: "hidden",
-              }}
-            >
-              <label htmlFor="api-key-website">Website</label>
-              <input
-                id="api-key-website"
-                name="website"
-                type="text"
-                value={keyHoneypot}
-                onChange={(e) => setKeyHoneypot(e.target.value)}
-                tabIndex={-1}
-                autoComplete="off"
-              />
-            </div>
-            {keyState === "pending" && (
-              <p className="body-copy" role="status">
-                {api.keyForm.pending}
-              </p>
-            )}
-            {keyState === "error" && (
-              <p className="suggest-error" role="alert">
-                Something went wrong sending your key — please try again.
-              </p>
-            )}
-            <div className="suggest-actions">
-              <button
-                type="submit"
-                className="tower-access-btn api-cta suggest-submit"
-                disabled={keySending}
-              >
-                {keySending ? "SENDING…" : api.keyForm.button}{" "}
-                <span aria-hidden="true">↗</span>
-              </button>
-            </div>
-          </form>
-        )}
       </section>
 
       <div className="tlib-panel tlib-faq-panel">
