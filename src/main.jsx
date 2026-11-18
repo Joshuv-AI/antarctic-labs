@@ -21,6 +21,9 @@ import {
   entryFlightFor,
   cancelEntryFlight,
   endEntryFlight,
+  ENTRY_FLIGHT_GLIDE_MS,
+  ENTRY_FLIGHT_RISE_MS,
+  ENTRY_FLIGHT_EXIT_MS,
 } from "./lib/entry-flight.js";
 // Silent recovery on chunk-load failure (2026-10-14, hardened 2026-10-17).
 // Deploys ship new hashed chunk filenames; a cached index.html (or an
@@ -873,30 +876,56 @@ function TowerBoot() {
     </div>
   );
 }
-// Entry-open flight overlay (2026-11-16, INVENTORY 37): renders the
-// clicked result's cover — cloned markup captured by pages.jsx at the
-// click — starting at the cover's exact rendered rect, gliding to the
-// viewport center over the dissolving page (the helix shows through
-// beneath), holding with a gentle breath while the text preload
-// finishes, then dissolving as the reader paints beneath it. Lives in
-// the shell so it survives the route swap that unmounts the library.
+// Entry-open flight overlay (2026-11-16, INVENTORY 37; motion revamp
+// 2026-11-17, INVENTORY 104): renders the clicked result's cover —
+// cloned markup captured by pages.jsx at the click — starting at the
+// cover's exact rendered rect. Three continuous beats, no stop and no
+// hold anywhere (Joshua's spec):
+//   glide — the cover moves to the center of the screen, as before;
+//   rise  — pushed inward (a slight recede) it keeps rising through
+//           the center of the coil, up and out of the frame, while
+//           the helix backdrop sinks below (see .entry-flying in
+//           styles.css) — the camera-pan feel. The rise is a CSS
+//           keyframe animation (entry-flight-rise in styles.css,
+//           per-flight geometry via CSS variables), not a JS phase:
+//           once the glide render commits, the compositor runs the
+//           rise on schedule even while the main thread is busy
+//           streaming the catalog. A timer-driven phase change was
+//           observed slipping past the navigation gate under load,
+//           compressing the rise into the exit. The navigation gate
+//           interrupts the rise, never the other way round, so a
+//           slow preload still never shows a frozen frame: the
+//           cover is always moving.
+//   exit  — the moment navigation fires (the flight's navigated flag,
+//           set by pages.jsx before go(); the mounted reader route is
+//           a fallback trigger), the cover keeps rising over the
+//           reader, fades, and the flight ends on a hard timer
+//           (ENTRY_FLIGHT_EXIT_MS). The old handoff waited on route
+//           state, held a beat, then faded — on desktop, where the
+//           reader paints fast, the cover visibly floated over the
+//           finished page for a second or more. That linger is what
+//           the flag-driven exit removes: the overlay's lifetime
+//           after navigation is bounded by the timer, not by paint
+//           timing.
+// Lives in the shell so it survives the route swap that unmounts the
+// library.
 function EntryFlightOverlay({ path }) {
   const [flight, setFlight] = useState(getEntryFlight);
-  const [glide, setGlide] = useState(false);
-  const [leaving, setLeaving] = useState(false);
+  const [phase, setPhase] = useState("start"); // start → glide → exit
   useEffect(() => subscribeEntryFlight(setFlight), []);
   // Commit the start rect for two frames before gliding, so the
   // transition has a painted start state (a same-frame transform
-  // change would jump straight to center with no motion).
+  // change would jump straight to center with no motion). The rise
+  // needs no timer: it is the keyframe animation applied with the
+  // glide render, delayed by exactly the glide's duration.
   useEffect(() => {
     if (!flight) {
-      setGlide(false);
-      setLeaving(false);
+      setPhase("start");
       return;
     }
     let raf2 = 0;
     const raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => setGlide(true));
+      raf2 = requestAnimationFrame(() => setPhase("glide"));
     });
     // Absolute safety: a stranded overlay must never outlive its
     // welcome, whatever the navigation did.
@@ -907,33 +936,68 @@ function EntryFlightOverlay({ path }) {
       clearTimeout(safety);
     };
   }, [flight]);
-  // The reader route has mounted: the entry page paints beneath the
-  // centered cover, which holds a beat and then dissolves — the
-  // handoff from flight to reader.
+  // Exit: navigation has fired (or the reader route is observed) —
+  // the cover leaves on the hard bound, still rising, never reversing
+  // and never holding.
+  const navigated = !!(flight && flight.navigated);
+  const pathHit = !!(flight && path === flight.toPath);
   useEffect(() => {
-    if (!flight || path !== flight.toPath) return;
-    const t1 = setTimeout(() => setLeaving(true), 200);
-    const t2 = setTimeout(endEntryFlight, 640);
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-    };
-  }, [flight, path]);
+    if (!flight || (!navigated && !pathHit)) return;
+    setPhase("exit");
+    const t = setTimeout(
+      endEntryFlight,
+      flight.reduced ? 200 : ENTRY_FLIGHT_EXIT_MS
+    );
+    return () => clearTimeout(t);
+  }, [flight, navigated, pathHit]);
   if (!flight) return null;
   const { rect } = flight;
+  // Rise travel: from the centered position up past the top of the
+  // frame (viewport height + the scaled cover), so the rise alone
+  // carries the cover fully out of view.
+  const risePx = window.innerHeight * 0.78 + rect.height * flight.scale;
+  let transform = "translate(0px, 0px) scale(1)";
+  let transitionDuration;
+  let transitionTimingFunction;
+  let animation;
+  if (phase === "glide" || phase === "exit") {
+    transform = `translate(${flight.dx}px, ${flight.dy}px) scale(${flight.scale})`;
+    if (!flight.reduced) {
+      // The rise: a compositor-run keyframe animation whose FROM is
+      // the centered transform and whose TO is risen fully out of
+      // the frame, receding slightly (0.93×) as it floats into the
+      // spiral's background — it never comes forward toward the
+      // viewer. It starts when the glide ends (the delay) and is
+      // left running through the exit: leaving only fades opacity,
+      // so the cover never stops rising while it leaves.
+      animation = `entry-flight-rise ${ENTRY_FLIGHT_RISE_MS}ms cubic-bezier(.45, .05, .7, .95) ${ENTRY_FLIGHT_GLIDE_MS}ms forwards`;
+      if (phase === "exit") {
+        transitionDuration = `${ENTRY_FLIGHT_EXIT_MS}ms, 460ms`;
+        transitionTimingFunction = "cubic-bezier(.5, 0, .9, .6), ease";
+      }
+    } else if (phase === "exit") {
+      // Reduced motion: no rise animation — a short hop up + fade.
+      transform = `translate(${flight.dx}px, ${flight.dy - risePx * 1.18}px) scale(${flight.scale * 0.93})`;
+    }
+  }
+  if (flight.reduced) transitionDuration = "120ms, 160ms";
   return (
     <div className="entry-flight" aria-hidden="true">
       <div
-        className={`entry-flight-cover${leaving ? " is-leaving" : ""}`}
+        className={`entry-flight-cover${phase === "exit" ? " is-leaving" : ""}`}
         style={{
           left: rect.left,
           top: rect.top,
           width: rect.width,
           height: rect.height,
-          transform: glide
-            ? `translate(${flight.dx}px, ${flight.dy}px) scale(${flight.scale})`
-            : "translate(0px, 0px) scale(1)",
-          transitionDuration: flight.reduced ? "120ms, 300ms" : undefined,
+          transform,
+          transitionDuration,
+          transitionTimingFunction,
+          animation,
+          "--fx": `${flight.dx}px`,
+          "--fy": `${flight.dy}px`,
+          "--fs": flight.scale,
+          "--frise": `${risePx}px`,
         }}
       >
         <div className="entry-flight-hold">

@@ -2441,12 +2441,17 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // clicked cover survives a dissolve of the browse UI, lifts from its
   // exact rendered rect and glides to center over the helix while the
   // entry's text preloads into the reader cache; navigation fires when
-  // the glide has read AND the preload has settled — hard-capped, so
+  // the motion has read AND the preload has settled — hard-capped, so
   // the reader opens already loaded and never waits on a frozen frame.
-  // The flight state lives in lib/entry-flight.js; the app shell
-  // renders the overlay and suppresses the boot loader + page curtain
-  // for this navigation. Any failure to measure a cover falls back to
-  // the plain go() the result used before.
+  // Motion revamp (2026-11-17, INVENTORY 104): past center the cover
+  // keeps rising continuously through the coil's center and out of
+  // the frame (the shell's overlay + the .entry-flying backdrop pan
+  // carry that), so the gate minimum now lands mid-rise — the rise,
+  // not a hold, is the waiting state. The flight state lives in
+  // lib/entry-flight.js; the app shell renders the overlay and
+  // suppresses the boot loader + page curtain for this navigation.
+  // Any failure to measure a cover falls back to the plain go() the
+  // result used before.
   const openEntry = useCallback(
     (a, to, ev) => {
       if (!a || getEntryFlight()) {
