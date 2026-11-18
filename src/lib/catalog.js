@@ -83,14 +83,44 @@ function loadWithRetry(url, getPending, setPending, getCache, setCache, onReady)
 }
 
 // Bootstrap: first 20,000 records, loads instantly.
+//
+// Retry discipline (2026-11-18, library load-failure fix): the generic
+// loadWithRetry fires its one retry IMMEDIATELY, so both attempts land
+// inside the same transient — the same edge reset window, the same
+// stalled connection — and a one-second hiccup on the 5.3 MB bootstrap
+// transfer took the whole library to its error screen (Joshua's
+// recording: ~20% of refreshes). The bootstrap is the page's front
+// door, so it gets spaced attempts instead: an immediate first try,
+// then retries after 600 ms and 1.8 s (three attempts total, each
+// still bounded by the 30 s abort). A transient that clears inside
+// ~2.5 s — the class a manual refresh was silently absorbing — now
+// heals inside the load, before any error state exists. Failures are
+// still never cached: after the final attempt the pending slot clears
+// and a later call starts fresh.
+const BOOTSTRAP_RETRY_DELAYS_MS = [600, 1800];
 export function loadBootstrap() {
-  return loadWithRetry(
-    "/catalog-bootstrap.json",
-    () => bootstrapPending,
-    (p) => { bootstrapPending = p; },
-    () => bootstrapCache,
-    (d) => { bootstrapCache = d; }
-  );
+  if (bootstrapCache) return Promise.resolve(bootstrapCache);
+  if (!bootstrapPending) {
+    const attempt = (n) =>
+      fetchJsonOnce("/catalog-bootstrap.json").catch((err) => {
+        if (n >= BOOTSTRAP_RETRY_DELAYS_MS.length) throw err;
+        return new Promise((resolve) =>
+          setTimeout(resolve, BOOTSTRAP_RETRY_DELAYS_MS[n])
+        ).then(() => attempt(n + 1));
+      });
+    bootstrapPending = attempt(0).then(
+      (data) => {
+        bootstrapCache = data;
+        bootstrapPending = null;
+        return data;
+      },
+      (err) => {
+        bootstrapPending = null;
+        throw err;
+      }
+    );
+  }
+  return bootstrapPending;
 }
 
 // Full index: every record (compact projection). Stage 2 (2026-10-23):

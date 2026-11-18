@@ -445,36 +445,79 @@ function useArtifacts() {
       if (t) clearTimeout(t);
     };
   }, [state.artifacts, state.error, retrySeq]);
-  // Automatic recovery (2026-11-13 load-window fix): a bootstrap
-  // fetch that fails transiently (a 504 burst, a stalled connection)
-  // used to leave the manual-retry error screen as the only way
-  // back — a session that hit it sat on that screen (or, before the
-  // watchdog, on the skeleton branch) until the visitor happened to
-  // reload. Retry on a bounded backoff while the error state
-  // persists; a success clears the error through the normal path.
+  // Automatic recovery (2026-11-13 load-window fix; self-heal gating
+  // 2026-11-18): a bootstrap fetch that fails transiently (a 504
+  // burst, a stalled connection) used to leave the manual-retry error
+  // screen as the only way back — a session that hit it sat on that
+  // screen (or, before the watchdog, on the skeleton branch) until
+  // the visitor happened to reload. Retry on a bounded backoff while
+  // the error state persists; a success clears the error through the
+  // normal path.
+  //
+  // 2026-11-18: the 2026-11-13 retry existed but the error SCREEN
+  // rendered the instant the first attempt failed — Joshua's
+  // recording shows the error page up within ~2 s of a refresh on a
+  // healthy 5G connection, with the recovery still pending behind
+  // it, so in practice the visitor's own refresh was the recovery.
+  // The hook now separates the failure SIGNAL from the failure UI:
+  // `error` (returned below) stays false while automatic recovery is
+  // still in budget, so the section holds its loading branch — the
+  // page shell at final geometry — and the catalog simply arrives
+  // late. The error UI surfaces only when the whole budget is spent
+  // (five retries over ~54 s plus their fetch time), i.e. a genuine
+  // persistent failure. A manual retry resets the budget.
+  const AUTO_RETRY_DELAYS_MS = [1500, 3500, 7000, 14000, 28000];
   const autoRetryRef = useRef(0);
+  const [recoveryExhausted, setRecoveryExhausted] = useState(false);
   useEffect(() => {
     if (state.artifacts) {
       autoRetryRef.current = 0;
+      setRecoveryExhausted(false);
       return;
     }
     if (!state.error && !watchdogError) return;
-    const delays = [4000, 10000, 20000, 40000];
-    if (autoRetryRef.current >= delays.length) return;
+    if (autoRetryRef.current >= AUTO_RETRY_DELAYS_MS.length) {
+      setRecoveryExhausted(true);
+      return;
+    }
     const t = setTimeout(() => {
       autoRetryRef.current += 1;
       retry();
-    }, delays[autoRetryRef.current]);
+    }, AUTO_RETRY_DELAYS_MS[autoRetryRef.current]);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.error, watchdogError, state.artifacts, retrySeq]);
+  // A connection that comes back on its own (radio handover, tunnel,
+  // captive portal release) fires `online` — spend a retry on it
+  // immediately instead of waiting out the backoff.
+  useEffect(() => {
+    if (!state.error && !watchdogError) return;
+    if (state.artifacts || recoveryExhausted) return;
+    const onOnline = () => {
+      autoRetryRef.current += 1;
+      retry();
+    };
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.error, watchdogError, state.artifacts, recoveryExhausted]);
   const retry = () => {
     setWatchdogError(false);
     // A late success may have populated the module cache since the failure.
     setState((s) => ({ ...s, artifacts: getCachedArtifacts(), error: false }));
     setRetrySeq((n) => n + 1);
   };
-  return [state.artifacts, state.error || watchdogError, state.fullIndexReady, retry];
+  const retryManual = () => {
+    autoRetryRef.current = 0;
+    setRecoveryExhausted(false);
+    retry();
+  };
+  return [
+    state.artifacts,
+    (state.error || watchdogError) && recoveryExhausted,
+    state.fullIndexReady,
+    retryManual,
+  ];
 }
 
 // Shared catalog-failed UI: the loader failsafe guarantees the overlay
@@ -482,13 +525,18 @@ function useArtifacts() {
 // on-brand, with a manual retry. The retry re-runs the fetch in place —
 // fetch failures are not cached anywhere, so this is a full fresh attempt
 // without a page reload (a late-arriving response resolves it instantly).
+// Since 2026-11-18 this renders ONLY after the automatic recovery
+// budget is spent (see useArtifacts): a transient failure heals behind
+// the loading branch and never reaches this screen. The copy no longer
+// blames the visitor's connection — the failures that land here after
+// ~a minute of retries are at least as likely to be ours.
 function TowerCatalogError({ onRetry }) {
   return (
     <main className="page-shell inner-page tower-light" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <h1>THE LIBRARY</h1>
         <p className="body-copy">
-          The catalog couldn't be loaded. Check your connection and try again.
+          The catalog couldn't be loaded. Try again.
         </p>
         <div className="tower-landing-actions">
           <button
@@ -2386,14 +2434,45 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       if (run) run.cancelled = true;
     };
   }, []);
+  // Derivation self-heal (2026-11-18): a derivation run that throws
+  // (a worker hiccup, a transient memory spike under load) used to
+  // land the visitor on the same error screen as a failed catalog
+  // fetch, with no automatic way back. Give it the same discipline
+  // as the fetch: bounded retries behind the loading branch, error
+  // UI only once the budget is spent. A deterministic derivation
+  // fault still surfaces — after three honest re-runs, not one.
+  const DERIVE_RETRY_DELAYS_MS = [2000, 5000, 10000];
+  const deriveRetryRef = useRef(0);
+  const [deriveExhausted, setDeriveExhausted] = useState(false);
+  useEffect(() => {
+    if (!deriveError) return;
+    if (deriveRetryRef.current >= DERIVE_RETRY_DELAYS_MS.length) {
+      setDeriveExhausted(true);
+      return;
+    }
+    const t = setTimeout(() => {
+      deriveRetryRef.current += 1;
+      setDeriveError(false);
+      setDeriveSeq((n) => n + 1);
+    }, DERIVE_RETRY_DELAYS_MS[deriveRetryRef.current]);
+    return () => clearTimeout(t);
+  }, [deriveError]);
+  useEffect(() => {
+    if (towerData) {
+      deriveRetryRef.current = 0;
+      setDeriveExhausted(false);
+    }
+  }, [towerData]);
+  const failed = catalogError || (deriveError && deriveExhausted);
   const retryCatalog = () => {
+    deriveRetryRef.current = 0;
+    setDeriveExhausted(false);
     setDeriveError(false);
     retryArtifacts();
     // Re-run the derivation too: the same artifacts identity would not
     // retrigger the effect on its own.
     setDeriveSeq((n) => n + 1);
   };
-  const failed = catalogError || deriveError;
   // True catalog total from the browse manifest (design §11.3): the
   // results header uses a truthful total as its denominator instead
   // of letting the resident prefix pose as the whole library. The
