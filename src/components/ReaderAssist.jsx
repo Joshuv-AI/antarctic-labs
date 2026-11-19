@@ -1676,6 +1676,11 @@ export default function ReaderAssist({
   // through the bridge instead of scrolling the window. Absent bookNav,
   // every behavior below is byte-identical to the scroll reader's.
   bookNav,
+  // INVENTORY 119 (Joshua 2026-11-18): while the entry-info pop-up is
+  // open, the orb must disappear. The root is display:none'd (see
+  // .ra-root.is-suppressed) but the component stays mounted, so the
+  // fan/panel/highlight/Listen state is exactly as it was on return.
+  hidden = false,
 }) {
   // Windowed rendering (2026-10-21): chunks mount in [winStart,
   // shownChunks) only — panels must treat anything outside as unrendered.
@@ -2694,7 +2699,10 @@ export default function ReaderAssist({
     (idle && !menuOpen && !panel && !hlMode ? " is-idle" : "");
 
   return createPortal(
-    <div className="ra-root" aria-hidden={false}>
+    <div
+      className={"ra-root" + (hidden ? " is-suppressed" : "")}
+      aria-hidden={hidden}
+    >
       <div
         ref={orbRef}
         id="ra-orb"

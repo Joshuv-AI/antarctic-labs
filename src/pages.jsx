@@ -8598,12 +8598,20 @@ function EntryPopup({ open, onClose, title, children }) {
   );
 }
 
-// FULL RECORD (DESIGN §8.9): the entry's complete catalog record under
-// its own names, in the design's fixed order — a row renders only when
-// this entry's record carries a non-empty value. WORDS / READ TIME are
+// FULL RECORD (DESIGN §8.9): the entry's catalog record under its own
+// names, in the design's fixed order — a row renders only when this
+// entry's record carries a non-empty value. WORDS / READ TIME are
 // the two derivable rows, shown only with a complete text (stats) and
 // labeled computed. No PAGES row, ever: our page counts are typeset
 // per device.
+// INVENTORY 121 (Joshua 2026-11-18): this block renders only inside
+// the entry-info pop-up, where the Catalog Record above it used to
+// repeat most of these rows. The split is now exclusive: FORMAT,
+// FILE SIZE, LICENSE and RIGHTS live in the Catalog Record alone,
+// and TAGS shows once, as the chips under the Catalog Record — none
+// of them appear here. Everything else (identity, provenance,
+// access, version, checksum, links, computed stats) lives here
+// alone. No field is shown twice; no field is dropped entirely.
 function FullRecordBlock({ artifact, stats }) {
   const entryUrl = towerEntryUrl(artifact);
   const rows = [
@@ -8612,24 +8620,11 @@ function FullRecordBlock({ artifact, stats }) {
     ["CREATOR", artifact.creator],
     ["YEAR", artifact.year],
     ["COLLECTION", artifact.collection],
-    ["FORMAT", artifact.format],
-    ["FILE SIZE", artifact.file_size],
     ["SOURCE", artifact.source],
     ["SOURCE URL", artifact.source_url, artifact.source_url],
-    ["LICENSE", artifact.license],
-    [
-      "RIGHTS",
-      artifact.rights_status && artifact.rights_status.replace(/_/g, " "),
-    ],
     ["ACCESS", artifact.download_status],
     ["VERSION", artifact.version],
     ["CHECKSUM", artifact.checksum],
-    [
-      "TAGS",
-      artifact.tags && artifact.tags.length > 0
-        ? artifact.tags.join(", ")
-        : "",
-    ],
     ["DOWNLOAD", artifact.download_url, artifact.download_url],
     ["ENTRY URL", entryUrl, entryUrl],
   ].filter(([, v]) => v !== undefined && v !== null && v !== "");
@@ -8934,6 +8929,21 @@ export function LibraryArtifact({ go, params, onReady }) {
       ? descOverride
       : artifact.description;
   const bookMode = readerView === "book";
+  // INVENTORY 121 (Joshua 2026-11-18): inside the pop-up, the Catalog
+  // Record and the Full Record repeated each other's fields. The
+  // Catalog Record now carries only the at-a-glance fields a reader
+  // checks first — views, format, file size, license, rights — and
+  // every other field lives in the Full Record alone (see
+  // FullRecordBlock, which drops the four it used to repeat plus its
+  // tags row: the tag chips under the Catalog Record are the one tags
+  // display). No field appears in both, and none is lost. Scroll
+  // view has no Full Record, so its Catalog Record keeps the
+  // complete set, unchanged.
+  const catalogRows = bookMode
+    ? record.filter(([label]) =>
+        ["VIEWS", "FORMAT", "FILE SIZE", "LICENSE", "RIGHTS"].includes(label)
+      )
+    : record;
   const heroSection = (
       <section className="tower-entry-hero section">
         <div className="tower-entry-head">
@@ -9016,7 +9026,7 @@ export function LibraryArtifact({ go, params, onReady }) {
       <section className="tower-entry-record section">
         <div className="section-index">CATALOG RECORD</div>
         <dl className="tower-record">
-          {record.map(([label, value]) => (
+          {catalogRows.map(([label, value]) => (
             <div key={label} className="tower-record-row">
               <dt>{label}</dt>
               <dd>{value}</dd>
@@ -9099,6 +9109,7 @@ export function LibraryArtifact({ go, params, onReady }) {
       <LibraryFullText
         artifact={artifact}
         readerView={readerView}
+        popupOpen={popupOpen}
         onToggleView={() => setReaderView(bookMode ? "scroll" : "book")}
         onInfo={() => setPopupOpen(true)}
         onExit={() => go("/tower-of-babel/library")}
@@ -9164,6 +9175,9 @@ function countWords(t) {
 function LibraryFullText({
   artifact,
   readerView = "book",
+  // INVENTORY 119: forwarded to BookReader → the orb, which hides
+  // while the entry-info pop-up is open.
+  popupOpen = false,
   onToggleView,
   onInfo,
   onExit,
@@ -9813,6 +9827,7 @@ function LibraryFullText({
               theme={textMode}
               onCycleTheme={cycleTextMode}
               onInfo={onInfo}
+              popupOpen={popupOpen}
               onExit={onExit}
               onProgress={onProgress}
               stats={stats}

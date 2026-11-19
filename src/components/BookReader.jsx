@@ -311,6 +311,9 @@ export default function BookReader({
   theme,
   onCycleTheme,
   onInfo,
+  // INVENTORY 119: the entry-info pop-up's open state, forwarded to
+  // the orb so it can disappear while the pop-up is up.
+  popupOpen = false,
   onExit,
   onProgress,
   onBookVisible,
@@ -1786,6 +1789,7 @@ export default function BookReader({
           chunkElsRef={pageElsRef}
           onActiveMark={() => {}}
           bookNav={bookNavRef.current}
+          hidden={popupOpen}
         />
       )}
     </div>
