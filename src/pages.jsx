@@ -8952,7 +8952,26 @@ export function LibraryArtifact({ go, params, onReady }) {
           <EntryCover artifact={artifact} />
         </div>
         {!bookMode && <EntryShare artifact={artifact} />}
-        {descText && (
+        {/* AdSense plan item 2 (2026-11-18): a revamp INTRODUCTION
+            (descOverride present) renders un-collapsed, as an open
+            section — the core set's introductions are the entry's
+            editorial content and must not sit behind a click. Plain
+            catalog descriptions keep the collapsed details exactly as
+            before. Same paragraphs, same tower-entry-lede styling. */}
+        {descText && (typeof descOverride === "string" && descOverride ? (
+          <section className="tower-desc tower-desc-open">
+            <span className="section-index">INTRODUCTION</span>
+            <div className="tower-desc-body">
+              {descText
+                .split(/\n\s*\n/)
+                .map((p) => p.trim())
+                .filter(Boolean)
+                .map((p, i) => (
+                  <p className="tower-entry-lede" key={i}>{p}</p>
+                ))}
+            </div>
+          </section>
+        ) : (
           <details className="tower-desc">
             <summary>
               <span className="section-index">DESCRIPTION</span>
@@ -8968,7 +8987,7 @@ export function LibraryArtifact({ go, params, onReady }) {
                 ))}
             </div>
           </details>
-        )}
+        ))}
         <div className="tower-entry-actions">
           {artifact.source_url && (
             <a
@@ -10118,6 +10137,151 @@ export function PrivacyPage({ go }) {
       </section>
 
       <FaqBlock index="QUESTIONS" faqs={privacyFaqs} />
+    </main>
+  );
+}
+// ----- Contact (revived 2026-11-18, INVENTORY 77/97) -------------------------
+// Joshua's spec: VERY minimal and simplified, low emphasis, NOT a
+// freelancing reach-out page — one address, two pointers, nothing
+// else. Background: the main homepage's Aurora (NewBackgroundVideo
+// rest) is mounted by the App render branch in main.jsx, the same as
+// About. Copy mirrors the server-rendered /contact in
+// functions/_lib/static-pages.js — keep the two in sync.
+export function ContactPage({ go }) {
+  return (
+    <main className="page-shell inner-page about-page contact-page" id="main-content" tabIndex={-1}>
+      <section className="inner-hero section">
+        <div className="section-index">CONTACT</div>
+        <h1>Contact</h1>
+        <p className="display-copy">One address reaches the lab.</p>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">EMAIL</span>
+        <div>
+          <p className="body-copy"><a className="contact-email" href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a></p>
+          <p className="body-copy">For a work you would like to see in the library, the <a href="#" onClick={(e) => { e.preventDefault(); go("/tower-of-babel/library/suggest"); }}>suggestion form</a> is faster. For API keys and tiers, see <a href="#" onClick={(e) => { e.preventDefault(); go("/tower-of-babel/library/research"); }}>API access</a>. Corrections to a catalog record and rights questions are covered in <a href="#" onClick={(e) => { e.preventDefault(); go("/rights-and-sources"); }}>Rights &amp; Sources</a> — email the address above with the work&apos;s title or link.</p>
+        </div>
+      </section>
+    </main>
+  );
+}
+// ----- Terms of Use (2026-11-18, AdSense trust layer) ------------------------
+// Copy mirrors the server-rendered /terms in
+// functions/_lib/static-pages.js — keep the two in sync.
+export function TermsPage({ go }) {
+  return (
+    <main className="page-shell inner-page about-page" id="main-content" tabIndex={-1}>
+      <section className="inner-hero section">
+        <div className="section-index">TERMS</div>
+        <h1>Terms of Use</h1>
+        <p className="display-copy">Last updated: November 18, 2026. These terms cover antarctic-labs.com, including the Tower of Babel library, operated by Antarctic Labs.</p>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">READING</span>
+        <div>
+          <p className="body-copy">The library is free to read. You do not need an account, a sign-in, or any personal information to read, search, listen to, or download the works whose texts are hosted here. We work to keep the site available and correct, but availability is not guaranteed and no uptime commitment is made on any part of the site, free or paid.</p>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">THE TEXTS AND THEIR RIGHTS</span>
+        <div>
+          <p className="body-copy">The works in the library are public-domain or openly licensed texts. Rights are stated per work: every catalog record carries its own rights status and license fields, and those fields — not this page — govern what you may do with a given work. Antarctic Labs claims no new copyright in the texts themselves. The catalog data, the site&apos;s own writing (descriptions, introductions, collection essays), and the site software are the lab&apos;s own work; ask before republishing them wholesale.</p>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">ACCEPTABLE USE</span>
+        <div>
+          <p className="body-copy">Use the site as a reader would. Do not disrupt the service, probe it for vulnerabilities, or misrepresent the library&apos;s contents as your own publication. Automated access is welcome through the documented surfaces — the catalog files, the API, and the OAI-PMH feed — within the limits published for each. Bulk scraping outside those surfaces, at rates that degrade the library for readers, is not.</p>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">API KEYS</span>
+        <div>
+          <p className="body-copy">API v1 keys are issued per email address under the limits published on the <a href="#" onClick={(e) => { e.preventDefault(); go("/tower-of-babel/library/research"); }}>API access</a> page (free 50 requests/day, Pro 500/day, Commercial unlimited). A key is for the holder&apos;s own projects; do not share or resell it. We may revoke a key that abuses the service. Paid plans are billed through Stripe; cancel within 7 days of a charge and that charge is refunded in full — the key stays active until the end of the paid period unless you ask us to revoke it sooner.</p>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">DONATIONS</span>
+        <div>
+          <p className="body-copy">Donations are voluntary contributions toward the library&apos;s servers, storage and preservation work. Antarctic Labs is not a registered charity, so contributions are not tax-deductible.</p>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">ADVERTISING</span>
+        <div>
+          <p className="body-copy">The library pages show advertising served by Google AdSense; the donation page shows none. How advertising cookies work, and how to opt out of personalized advertising, is covered in the <a href="#" onClick={(e) => { e.preventDefault(); go("/privacy"); }}>Privacy Policy</a>.</p>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">AS-IS</span>
+        <div>
+          <p className="body-copy">The site and the texts are provided as they are. Texts are verified against their sources and corrected when errors are found (see <a href="#" onClick={(e) => { e.preventDefault(); go("/rights-and-sources"); }}>Rights &amp; Sources</a>), but no warranty is made that any given text is complete or error-free. To the extent the law allows, the lab is not liable for losses arising from use of the site.</p>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">CHANGES AND CONTACT</span>
+        <div>
+          <p className="body-copy">These terms may be updated as the site changes; the date at the top will change with them. Questions: <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a>, or the <a href="#" onClick={(e) => { e.preventDefault(); go("/contact"); }}>Contact page</a>.</p>
+        </div>
+      </section>
+    </main>
+  );
+}
+// ----- Rights & Sources (2026-11-18, AdSense trust layer) --------------------
+// Copy mirrors the server-rendered /rights-and-sources in
+// functions/_lib/static-pages.js — keep the two in sync.
+export function RightsPage({ go }) {
+  return (
+    <main className="page-shell inner-page about-page" id="main-content" tabIndex={-1}>
+      <section className="inner-hero section">
+        <div className="section-index">RIGHTS &amp; SOURCES</div>
+        <h1>Rights &amp; Sources</h1>
+        <p className="display-copy">Last updated: November 18, 2026. How the Tower of Babel library decides what it may hold, where its texts come from, and what happens when something is wrong.</p>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">WHAT THE LIBRARY HOLDS</span>
+        <div>
+          <p className="body-copy">Only public-domain and openly licensed works. A work whose rights cannot be established does not enter the catalog. Rights are recorded per work, not per site: every catalog record carries a rights status and a license field, shown on the work&apos;s own page, and those two fields state what a reader may do with that work. Most readable works in the library are public domain.</p>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">WHERE THE TEXTS COME FROM</span>
+        <div>
+          <p className="body-copy">Texts are taken from the open sources that publish them for exactly this purpose, and each record names its source and links to it: Project Gutenberg and the open book collections for books and sacred texts; arXiv, PubMed Central, PLOS and other open journals for papers; the official publishers of United States law — the United States Code and the Federal Register — for the Law collection; the CIA&apos;s reading room, the Foreign Relations of the United States series, FBI releases and the National Security Archive for declassified documents; and the reference publishers whose dictionaries and encyclopedias have entered the public domain.</p>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">HOW A WORK GETS IN</span>
+        <div>
+          <p className="body-copy">Three gates, in order. First, rights: the work is public domain or openly licensed, and the basis is recorded on its record. Second, text: a clean, complete full text must be obtainable — a catalog entry is published only once its text is hosted, never as a metadata-only placeholder. Third, verification: the text is checked against its source, and the record is built from the work itself — title, creator, year, collection, and provenance.</p>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">CORRECTIONS</span>
+        <div>
+          <p className="body-copy">Errors survive any process at this scale, so corrections are a standing program, not an afterthought: the whole library has been through a reader&apos;s-eye legibility comb-through, and mislabelled, broken or wrongly attributed works are repaired or removed outright when found. To report one, use the <a href="#" onClick={(e) => { e.preventDefault(); go("/tower-of-babel/library/suggest"); }}>suggestion form</a> or email <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a> with the work&apos;s title or link and what is wrong; verified reports are corrected in the catalog and the record updated.</p>
+        </div>
+      </section>
+
+      <section className="copy-block section reveal">
+        <span className="section-index">TAKEDOWN</span>
+        <div>
+          <p className="body-copy">If you hold rights in a work the catalog lists as public domain or openly licensed, write to <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a> with the work and the basis of the claim. The work is taken down while the claim is reviewed, and removed for good if the claim holds.</p>
+        </div>
+      </section>
     </main>
   );
 }

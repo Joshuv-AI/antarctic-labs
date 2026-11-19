@@ -94,6 +94,41 @@ export function collectionBySlug(slug) {
   return COLLECTIONS.find((c) => c.slug === slug) || null;
 }
 
+// Original collection essays (2026-11-18, AdSense plan): what each
+// collection is for, how it is selected and how it is maintained —
+// the editorial layer a reader (or reviewer) meets on the doorway
+// pages. Written from the project's own record; keep factual.
+export const COLLECTION_ESSAYS = {
+  papers: [
+    "Papers is the library's research shelf: work published openly by its authors and journals, gathered from arXiv, PubMed Central, PLOS and other open sources, and preserved as plain text so it stays readable and searchable long after journal platforms change. Each paper keeps its own catalog record with citation metadata, and the full text is served as a plain text file where text is present.",
+    "The collection is organised, not dumped: papers are classified into 12 fields, 70 subfields and 10 publication types, with 97.5% carrying a primary field — so a reader can browse a discipline the way they would browse a journal's back catalogue. It is maintained by continuous harvest from the open sources and by the library's standing correction program; a paper whose text cannot be obtained is not listed.",
+  ],
+  law: [
+    "Law holds the public legal record of the United States: the United States Code, the Federal Register, and the historic legal texts preserved alongside them, taken from their official publishers and kept as searchable text. These are the documents that govern daily life, and they belong where anyone can read them without a subscription.",
+    "The collection is built for two readers at once: the citizen who wants the actual text of a statute, and the student working through a field — the library's For Law Students reading collection draws 875,510 works from this shelf into shelves by subject. Records span the modern corpus (1994–2026) and the historic material shelved with it; every record names its source.",
+  ],
+  books: [
+    "Books is the library's heart: the public-domain canon — classic literature, philosophy, history, and the foundational documents of politics and science — together with the sacred texts of the world's traditions, shelved side by side without favouritism. If a work shaped how people think, it belongs here, in a clean text a reader can actually read on a phone.",
+    "The shelf is drawn largely from Project Gutenberg and the open book collections, verified against its sources and corrected under the library's standing legibility program. Reading collections built from this shelf — by tradition, by period, by subject — sit on top of it in the library, and every book can be read in the browser, listened to, cited in five styles, or downloaded as plain text, EPUB or HTML.",
+  ],
+  reference: [
+    "Reference is the lookup shelf: the dictionaries, encyclopedias and lexicons a reader reaches for mid-sentence. Johnson's Dictionary of the English Language (1755), the Hastings Dictionary of the Bible, the Liddell–Scott Greek lexicon, gazetteers and encyclopedic works — the reference library of record for the centuries the rest of the collection covers.",
+    "These works earn their place by still being consulted: a definition from Johnson or a Greek lemma from Liddell–Scott answers questions modern summaries flatten. Each is preserved whole, as a searchable text with its own record, and the shelf grows as further reference works enter the public domain.",
+  ],
+  declassified: [
+    "Declassified holds government documents that have been released into the public record: CIA reading-room releases, the Foreign Relations of the United States series, FBI files and National Security Archive publications. Material a government has formally released belongs in a public library, findable by anyone — not only by the researchers who knew where the reading room was.",
+    "Every document here was declassified through its publisher's own process before it was shelved; the collection adds nothing that was not officially released, and each record names its releasing source. It is the library's primary-source shelf for modern history, shelved beside the papers and books that interpret it.",
+  ],
+  documents: [
+    "Documents is the smallest collection and the most deliberate: 363 founding and historic documents — the Declaration of Independence, the Constitution of the United States, and the primary documents a citizen is most likely to be quoted and least likely to have read whole.",
+    "Each is preserved as a catalog record with its complete text, so the words themselves — not summaries of them — are what a reader meets. The collection changes rarely and on purpose: a document joins it when it is foundational, not merely old.",
+  ],
+  podcasts: [
+    "Podcasts preserves long-form conversation as text: episodes from the interview and discussion shows whose transcripts are openly published, kept as catalog records so a spoken conversation can be searched, quoted and cited like anything else in the library.",
+    "Spoken language is part of the written record now — arguments, interviews and explanations that exist nowhere else first exist in conversation. This shelf keeps them readable: each episode carries its own record, and a predictable text URL where a transcript is present.",
+  ],
+};
+
 const fmt = (n) => Number(n || 0).toLocaleString("en-US");
 
 // --- Data ---------------------------------------------------------------
@@ -193,12 +228,13 @@ const NAV = `<header>
 <a href="/tower-of-babel">Tower of Babel</a> ·
 <a href="/tower-of-babel/library">Library</a> ·
 <a href="/about">About</a> ·
+<a href="/contact">Contact</a> ·
 <a href="/privacy">Privacy Policy</a>
 </nav>
 </header>`;
 
 const FOOT = `<footer>
-<p><a href="/">Antarctic Labs</a> · <a href="/tower-of-babel">Tower of Babel</a> · <a href="/tower-of-babel/library">Library</a> · <a href="/about">About</a> · <a href="/government-contracting">Government Contracting</a> · <a href="/tower-of-babel/donate">Donate</a> · <a href="/privacy">Privacy Policy</a></p>
+<p><a href="/">Antarctic Labs</a> · <a href="/tower-of-babel">Tower of Babel</a> · <a href="/tower-of-babel/library">Library</a> · <a href="/about">About</a> · <a href="/contact">Contact</a> · <a href="/government-contracting">Government Contracting</a> · <a href="/tower-of-babel/donate">Donate</a> · <a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms</a> · <a href="/rights-and-sources">Rights &amp; Sources</a></p>
 <p>Contact: <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a></p>
 <p><a href="https://www.google.com/preferences/source?q=antarctic-labs.com" target="_blank" rel="noopener">Add Antarctic Labs as a preferred source on Google</a></p>
 <p>© 2026 Antarctic Labs. All rights reserved.</p>
@@ -289,9 +325,13 @@ export async function renderCollectionPage(meta) {
         .join("\n")}\n</ul>`
     : "<p>No works are listed for this collection yet.</p>";
 
+  const essay = (COLLECTION_ESSAYS[meta.slug] || [])
+    .map((p) => `<p>${escapeHtml(p)}</p>`)
+    .join("\n");
   const body = `<h1>${escapeHtml(meta.name)}</h1>
 <p>${escapeHtml(meta.blurb)}</p>
 <p>This collection holds ${fmt(count)} of the library's ${fmt(counts.total)} catalog records. ${snapshotNote}</p>
+${essay}
 <h2>Works in this collection</h2>
 <p>A selection of real works from the ${escapeHtml(meta.name)} collection — the selection rotates daily. Every link opens that work's own catalog page; the full collection is searchable in the <a href="/tower-of-babel/library">library</a>.</p>
 ${list}

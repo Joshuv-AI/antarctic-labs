@@ -27,6 +27,9 @@ const PRIORITY = {
   "/tower-of-babel/api": "0.6",
   "/tower-of-babel/library": "0.6",
   "/tower-of-babel/library/suggest": "0.4",
+  "/contact": "0.5",
+  "/terms": "0.3",
+  "/rights-and-sources": "0.5",
 };
 const urls = [];
 

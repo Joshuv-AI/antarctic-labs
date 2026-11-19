@@ -29,9 +29,9 @@ const SITE_NAME = site.brand;
 // Titles stay near ~60 chars, descriptions near ~155, keyword up front.
 export const routeMeta = {
   "/": {
-    title: `Applied AI Lab & Tower of Babel Library | ${SITE_NAME}`,
+    title: `Tower of Babel — Free Online Library of 2,557,923 Works | ${SITE_NAME}`,
     description:
-      "Antarctic Labs is an independent lab building AI systems for hard problems. Home of the Tower of Babel, a free library of 2,557,923 works.",
+      "The Tower of Babel is a free online library of 2,557,923 works — books, sacred texts, law, papers, declassified documents and transcripts, preserved in clean, searchable text. No sign-up.",
   },
   "/tower-of-babel": {
     title: `Free Online Library | Tower of Babel`,
@@ -71,12 +71,27 @@ export const routeMeta = {
   "/about": {
     title: `The Firm | ${SITE_NAME}`,
     description:
-      "About Antarctic Labs: a proprietary trading and computing firm. Operations in the United States, infrastructure in the Philippines. No client work.",
+      "About Antarctic Labs: an independent laboratory for AI and computing, home of the Tower of Babel library. Operations in the United States, infrastructure in the Philippines.",
   },
   "/privacy": {
     title: `Privacy Policy | ${SITE_NAME}`,
     description:
       "Privacy Policy for antarctic-labs.com: what Antarctic Labs collects, how cookies and Google AdSense advertising work, and how to opt out of personalized advertising.",
+  },
+  "/contact": {
+    title: `Contact | ${SITE_NAME}`,
+    description:
+      "Contact Antarctic Labs: one email address for the lab, the Tower of Babel library, corrections and rights questions.",
+  },
+  "/terms": {
+    title: `Terms of Use | ${SITE_NAME}`,
+    description:
+      "Terms of use for antarctic-labs.com and the Tower of Babel library: reading, the texts' rights, API keys, donations, and acceptable use.",
+  },
+  "/rights-and-sources": {
+    title: `Rights & Sources | ${SITE_NAME}`,
+    description:
+      "How the Tower of Babel library clears rights and sources its texts: public-domain and openly licensed works only, per-record rights, corrections and takedown.",
   },
 };
 // Old routes kept for SEO/canonicalization purposes only.
@@ -132,6 +147,9 @@ export const routes = [
   "/government-contracting",
   "/about",
   "/privacy",
+  "/contact",
+  "/terms",
+  "/rights-and-sources",
   // Legacy patterns preserved for backward compatibility.
   "/systems",
   "/history",

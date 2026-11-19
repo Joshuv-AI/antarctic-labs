@@ -173,7 +173,61 @@ function scholarMetaTags(record, txt) {
   return tags.length ? tags.join("\n") + "\n" : "";
 }
 
-function renderEntryHtml(record, description) {
+// The opening of the work's full text, embedded in the initial HTML
+// (2026-11-18, AdSense plan item 1: the review-visible render must
+// contain the content, not a link to it). Bounded hard: a Range
+// request for the first ~40 KB straight from the texts repo (the same
+// origin functions/tower-of-babel/[file].js proxies), trimmed to
+// ~1,200 words. Fail-open — any error, non-200/206, or empty body
+// renders the page exactly as before, with the text link only. The
+// full text itself is never pulled into the isolate (the 2026-11-15
+// memory diagnosis is the standing warning against that).
+const TEXTS_ORIGIN =
+  "https://raw.githubusercontent.com/Joshuv-AI/antarctic-labs-texts/main/public/tower-of-babel/";
+
+async function bucketPrefix(file) {
+  const digest = await crypto.subtle.digest(
+    "SHA-1",
+    new TextEncoder().encode(file)
+  );
+  const hex = [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return file[0] + "/" + hex.slice(0, 2) + "/";
+}
+
+async function fetchTextOpening(record) {
+  const txt = textFileUrl(record);
+  if (!txt) return null;
+  const file = decodeURIComponent(txt.split("/").pop() || "");
+  if (!file || file.includes("/") || file.includes("..")) return null;
+  const range = { headers: { Range: "bytes=0-40959" } };
+  try {
+    let res = await fetch(TEXTS_ORIGIN + (await bucketPrefix(file)) + file, range);
+    if (!res.ok && res.status !== 206) {
+      res = await fetch(TEXTS_ORIGIN + file, range);
+    }
+    if (!res.ok && res.status !== 206) return null;
+    let text = await res.text();
+    if (!text || !text.trim()) return null;
+    text = text.replace(/^﻿/, "").replace(/\s+$/, "");
+    // Trim to the last complete line inside the byte budget, then to
+    // the word cap, so the excerpt never ends mid-word.
+    const lastNl = text.lastIndexOf("\n");
+    if (lastNl > 2000) text = text.slice(0, lastNl);
+    const words = text.split(/\s+/);
+    if (words.length > 1200) text = words.slice(0, 1200).join(" ");
+    return text;
+  } catch {
+    return null;
+  }
+}
+
+const ENTRY_FOOT = `<footer>
+<p><a href="/">Antarctic Labs</a> · <a href="/tower-of-babel">Tower of Babel</a> · <a href="/tower-of-babel/library">Library</a> · <a href="/about">About</a> · <a href="/contact">Contact</a> · <a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms</a> · <a href="/rights-and-sources">Rights &amp; Sources</a></p>
+</footer>`;
+
+function renderEntryHtml(record, description, opts = {}) {
   const canonical = entryUrl(record.artifact_id);
   const title = `${record.title} — Read Free | Tower of Babel`;
   const metaDesc = metaDescriptionFor(record, description);
@@ -247,7 +301,7 @@ ${byline ? `<p>${escapeHtml(byline)}</p>` : ""}
 ${
   descParas.length
     ? `<section>
-<h2>Description</h2>
+<h2>${opts.isIntroduction ? "Introduction" : "Description"}</h2>
 ${descParas.map((p) => `<p>${escapeHtml(p)}</p>`).join("\n")}
 </section>`
     : ""
@@ -273,7 +327,20 @@ ${
 }
 </section>
 <p><a href="/tower-of-babel/library">Browse the full library</a> · <a href="/tower-of-babel">About the Tower of Babel</a></p>
+${
+  opts.textOpening
+    ? `<section>
+<h2>Full text</h2>
+<p>The opening of the work, from the library's hosted text:</p>
+<pre style="white-space: pre-wrap; word-wrap: break-word; font-family: inherit;">${escapeHtml(
+        opts.textOpening
+      )}</pre>
+<p><a href="${escapeHtml(txt)}">Read the complete text</a></p>
+</section>`
+    : ""
+}
 </main>
+${ENTRY_FOOT}
 </body>
 </html>
 `;
@@ -353,7 +420,13 @@ export async function onRequest(context) {
 
   const override = await getDescriptionOverride(id);
   const description = override || found.record.description || "";
-  const res = new Response(renderEntryHtml(found.record, description), {
+  const textOpening = await fetchTextOpening(found.record);
+  const res = new Response(
+    renderEntryHtml(found.record, description, {
+      isIntroduction: !!override,
+      textOpening,
+    }),
+    {
     status: 200,
     headers: {
       "Content-Type": "text/html; charset=utf-8",

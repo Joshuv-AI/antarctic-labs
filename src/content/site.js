@@ -7,9 +7,9 @@ import { siteFaqs } from "./faq.js";
 export const site = {
   brand: "ANTARCTIC LABS",
   operator: "JOSHUA",
-  philosophy: "OUR CAPITAL. OUR HARDWARE. OUR CODE.",
+  philosophy: "OUR SYSTEMS. OUR INFRASTRUCTURE. OUR WORK.",
   description:
-    "Antarctic Labs is a proprietary trading and computing firm building its own data center in the Philippines. Our capital, our hardware, our systems. Not for hire.",
+    "Antarctic Labs is an independent laboratory for AI and computing, home of the Tower of Babel — a free library of 2,557,923 works preserved in clean, searchable text.",
   location: "SANFORD, FLORIDA / WORLDWIDE",
   footer: "BUILT FOR THE UNKNOWN.",
   email: "hello@antarctic-labs.com",
@@ -17,7 +17,7 @@ export const site = {
 
   // Home / arrival copy.
   hero: {
-    eyebrow: "PROPRIETARY TRADING & COMPUTING",
+    eyebrow: "AN INDEPENDENT LABORATORY",
     title: ["WE SOLVE", "HARD", "PROBLEMS."],
     sub: "An independent laboratory for AI and computing — judged by the work it puts into the world.",
     body: "We build AI and computing systems and point them at hard problems — in any field where they appear, and we stay with them until they are solved.",
@@ -39,12 +39,12 @@ export const site = {
       "Pipelines that collect, clean, and structure information by the million documents, turning scattered and fragile material into archives and datasets that hold up.",
     ],
     [
-      "TRADING SYSTEMS & CRYPTO",
-      "Algorithmic trading systems developed and run in-house, across traditional and crypto markets. Every strategy is tested on paper and with limited capital before it is trusted with more.",
-    ],
-    [
       "OWNED INFRASTRUCTURE",
       "Everything runs on hardware we own and operate — including a small data center of our own in the Philippines, with power, cooling, and backup designed in from the start.",
+    ],
+    [
+      "TRADING SYSTEMS & CRYPTO",
+      "Algorithmic trading systems developed and run in-house — background work, one capability among several.",
     ],
   ],
 

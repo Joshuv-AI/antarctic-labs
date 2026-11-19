@@ -1,30 +1,41 @@
-// Serves /sitemap-index.xml — a sitemap index covering the whole site:
+// Serves /sitemap-index.xml — the sitemap index for the site.
 //
-//   1. /sitemap.xml          the canonical routes (build-generated, ~14 URLs)
-//   2. /sitemap-entries/N.xml  one <urlset> per 45,000 library entries,
-//      streamed from the catalog shards by
-//      functions/sitemap-entries/[n].js
-//   (The Phase 2 /sitemap-hubs.xml entry was removed 2026-10-24 with
-//   the hub pages themselves: collections now live only as a filter on
-//   the main Tower page, and the deleted hub URLs are left to 404 —
-//   no redirects, no sitemap entry for them.)
+// Since 2026-11-18 (AdSense plan item 3 — shrink the presented corpus
+// to a strong core) the index advertises exactly two sitemaps:
 //
-// Why a function and not committed XML files: the catalog grows by tens of
-// thousands of entries via data-only pushes that skip the site build
-// ([CF-Pages-Skip]), so build-time sitemaps would silently go stale. This
-// index reads the same source as functions/catalog.json.js (the catalog
-// shards on main), so it is never older than the catalog the site itself
-// serves. The rendered index is edge-cached for 24h; the shard count is
-// recomputed from the shards' actual record counts, never hardcoded.
+//   1. /sitemap.xml       the canonical routes (build-generated):
+//                          homepage, curated collection and shelf
+//                          landings, site pages.
+//   2. /sitemap-core.xml  the 20,000-entry core set — the catalog's
+//                          bootstrap prefix, served by
+//                          functions/sitemap-core.xml.js.
 //
-// <lastmod> here is the date this index document was generated — the only
-// date we can state honestly at catalog scale. Entry urlsets carry no
-// <lastmod> at all (per-entry dates are not in the catalog, and a made-up
-// date is worse than none).
+// The per-shard entry sitemaps at /sitemap-entries/<n>.xml still
+// serve (their function is unchanged) and every entry remains
+// reachable and crawlable through the library itself — but the index
+// no longer presents the full 2.56M undifferentiated catalog as the
+// site's face to crawlers. robots.txt advertises this index alongside
+// /sitemap.xml itself, so crawlers reading either discover the same
+// curated set. The index is a fixed document now (the core function's
+// own data still follows the catalog), edge-cached for 24h.
+//
+// (History: this index previously listed one <sitemap> per catalog
+// shard — 168 shards × 45,000 entry URLs. The Phase 2 /sitemap-hubs.xml
+// entry was removed 2026-10-24 with the hub pages themselves.)
 
-import { SITE, getShardCount, escapeXml } from "./_lib/tower-catalog.js";
-
+const SITE = "https://antarctic-labs.com";
 const CACHE_TTL_SECONDS = 24 * 3600;
+
+const BODY =
+  `<?xml version="1.0" encoding="UTF-8"?>\n` +
+  `<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+  `  <sitemap>\n` +
+  `    <loc>${SITE}/sitemap.xml</loc>\n` +
+  `  </sitemap>\n` +
+  `  <sitemap>\n` +
+  `    <loc>${SITE}/sitemap-core.xml</loc>\n` +
+  `  </sitemap>\n` +
+  `</sitemapindex>\n`;
 
 export async function onRequest(context) {
   const cache = caches.default;
@@ -32,32 +43,7 @@ export async function onRequest(context) {
   const hit = await cache.match(cacheKey);
   if (hit) return hit;
 
-  // Entry sitemaps follow the catalog shards 1:1 (shard n serves
-  // /sitemap-entries/<n>.xml), so the index simply lists every shard.
-  // (Previously this derived a positional slice count from a record
-  // total; the per-shard scheme keeps each sitemap request to a single
-  // shard parse, inside the Workers CPU limit.)
-  const shardCount = await getShardCount();
-  const today = new Date().toISOString().slice(0, 10);
-
-  const lines = [
-    `<?xml version="1.0" encoding="UTF-8"?>`,
-    `<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`,
-    `  <sitemap>`,
-    `    <loc>${SITE}/sitemap.xml</loc>`,
-    `  </sitemap>`,
-  ];
-  for (let n = 0; n < shardCount; n++) {
-    lines.push(
-      `  <sitemap>`,
-      `    <loc>${SITE}/sitemap-entries/${n}.xml</loc>`,
-      `    <lastmod>${today}</lastmod>`,
-      `  </sitemap>`
-    );
-  }
-  lines.push(`</sitemapindex>`, ``);
-
-  const res = new Response(lines.join("\n"), {
+  const res = new Response(BODY, {
     status: 200,
     headers: {
       "Content-Type": "application/xml; charset=utf-8",

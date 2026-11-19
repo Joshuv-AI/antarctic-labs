@@ -17,6 +17,8 @@
 // src/pages.jsx) so a non-JS reader sees the same substance a visitor
 // gets. Keep the copy in sync when the sources change.
 
+import { curationStreamHtml } from "./curation.js";
+
 const SITE = "https://antarctic-labs.com";
 const ADS_SCRIPT =
   '<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9404729840269984" crossorigin="anonymous"></script>';
@@ -27,12 +29,13 @@ const NAV = `<header>
 <a href="/tower-of-babel">Tower of Babel</a> ·
 <a href="/tower-of-babel/library">Library</a> ·
 <a href="/about">About</a> ·
+<a href="/contact">Contact</a> ·
 <a href="/privacy">Privacy Policy</a>
 </nav>
 </header>`;
 
 const FOOT = `<footer>
-<p><a href="/">Antarctic Labs</a> · <a href="/tower-of-babel">Tower of Babel</a> · <a href="/tower-of-babel/library">Library</a> · <a href="/about">About</a> · <a href="/government-contracting">Government Contracting</a> · <a href="/tower-of-babel/donate">Donate</a> · <a href="/privacy">Privacy Policy</a></p>
+<p><a href="/">Antarctic Labs</a> · <a href="/tower-of-babel">Tower of Babel</a> · <a href="/tower-of-babel/library">Library</a> · <a href="/about">About</a> · <a href="/contact">Contact</a> · <a href="/government-contracting">Government Contracting</a> · <a href="/tower-of-babel/donate">Donate</a> · <a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms</a> · <a href="/rights-and-sources">Rights &amp; Sources</a></p>
 <p>Contact: <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a></p>
 <p>© 2026 Antarctic Labs. All rights reserved.</p>
 </footer>`;
@@ -180,29 +183,25 @@ ${FOOT}
 const PAGES = {
   "/": {
     path: "/",
-    title: "Applied AI Lab & Tower of Babel Library | ANTARCTIC LABS",
+    title: "Tower of Babel — Free Online Library of 2,557,923 Works | ANTARCTIC LABS",
     description:
-      "Antarctic Labs is an independent lab building AI systems for hard problems. Home of the Tower of Babel, a free library of 2,557,923 works.",
-    body: `<h1>We solve hard problems.</h1>
-<p>An independent laboratory for AI and computing — judged by the work it puts into the world.</p>
-<p>We build AI and computing systems and point them at hard problems — in any field where they appear, and we stay with them until they are solved.</p>
-<p>Our systems. Our infrastructure. Our work.</p>
-<h2>The Tower of Babel</h2>
-<p>Every work that matters, within everyone's reach. Tower of Babel began with a conviction: the written record of humanity should be preserved, not lost — deleted, quietly rewritten, or locked away. So the lab built a library that keeps it: sacred texts from every tradition, the classics, philosophy, science, and law, declassified government documents, folklore, and long-form conversations — each work verified against its source and preserved as clean, searchable text.</p>
-<p>It now holds 2,557,923 works, and it is free for anyone. Read in the browser, search the full text where present, listen to works read aloud, or build on the collection through a public API — free keys for anyone, with paid tiers for heavier use. No accounts, no paywalls: a working library for readers, students, researchers, and AI systems.</p>
-<p>Papers 1,130,210 · Law 1,277,197 · Books 81,631 · Reference 41,137 · Declassified 26,294 · Podcasts 1,091 · Documents 363.</p>
-<p><a href="/tower-of-babel">Enter the Tower</a> · <a href="/tower-of-babel/library">Browse the library</a></p>
-<h2>Applied AI systems</h2>
-<p>We build AI systems that do real work — research, analysis, and automation — and point them at hard problems in any field where they give the lab an opening.</p>
-<h2>Data at scale</h2>
-<p>Pipelines that collect, clean, and structure information by the million documents, turning scattered and fragile material into archives and datasets that hold up.</p>
-<h2>Trading systems &amp; crypto</h2>
-<p>Algorithmic trading systems developed and run in-house, across traditional and crypto markets. Every strategy is tested on paper and with limited capital before it is trusted with more.</p>
-<h2>Owned infrastructure</h2>
-<p>Everything runs on hardware we own and operate — including a small data center of our own in the Philippines, with power, cooling, and backup designed in from the start.</p>
+      "The Tower of Babel is a free online library of 2,557,923 works — books, sacred texts, law, papers, declassified documents and transcripts, preserved in clean, searchable text. No sign-up.",
+    body: `<h1>The Tower of Babel — a free library of 2,557,923 works</h1>
+<p>Every work that matters, within everyone's reach. The Tower of Babel is a free online library built and maintained by Antarctic Labs: 2,557,923 books, sacred texts, laws, scientific papers, declassified government documents, reference works and long-form conversations, each preserved as clean, searchable text and free for anyone to read. No accounts, no paywalls.</p>
+<p>The library began with a conviction: the written record of humanity should be preserved, not lost — deleted, quietly rewritten, or locked away. So the lab built a library that keeps it. Every work is verified against its source before it is shelved, every record carries its own rights status and license, and a work whose text cannot be obtained is not listed at all — the catalog holds no placeholders. How rights are checked, where texts come from, and how corrections and takedowns work are set out in <a href="/rights-and-sources">Rights &amp; Sources</a>.</p>
+<p>Read in the browser with a book-style reader, search the full text where present, listen to works read aloud, cite any work in five styles, or build on the collection through a public API and a standard scholarly feed — free keys for anyone, with paid tiers for heavier use.</p>
+<h2>The collections</h2>
+<p><strong>Law — 1,277,197 works.</strong> United States law and public legal records: the United States Code, the Federal Register, and historic legal texts preserved alongside them.</p>
+<p><strong>Papers — 1,130,210 works.</strong> Research papers and preprints from open scholarly sources — arXiv, PubMed Central, PLOS and other open journals — organised into 12 fields and 70 subfields.</p>
+<p><strong>Books — 81,631 works.</strong> Public-domain books: classic literature, philosophy, history and foundational documents, together with the sacred texts of the world's traditions.</p>
+<p><strong>Reference — 41,137 works.</strong> Dictionaries, encyclopedias and lexicons kept for lookup, from Johnson's Dictionary (1755) to the Liddell–Scott Greek lexicon.</p>
+<p><strong>Declassified — 26,294 works.</strong> Government documents released into the public record: CIA releases, the Foreign Relations of the United States series, FBI files and National Security Archive publications.</p>
+<p><strong>Podcasts — 1,091 works.</strong> Long-form conversation transcripts, preserved as searchable text.</p>
+<p><strong>Documents — 363 works.</strong> Founding and historic documents — the Declaration of Independence, the Constitution of the United States and other primary documents.</p>
+<p><a href="/tower-of-babel">Enter the Tower</a> · <a href="/tower-of-babel/library">Browse the library</a> · <a href="/tower-of-babel/collections">All collections</a></p>
+${curationStreamHtml(esc)}
 <h2>The lab</h2>
-<p>Small, private, and deliberate. Antarctic Labs takes on few things and finishes them properly. We would rather point to a working library of 2,557,923 works than a page of promises — the projects are the argument.</p>
-<p>If a problem is hard, important, and unsolved, it is the kind of problem this lab exists for.</p>`,
+<p>The Tower of Babel is a project of Antarctic Labs, an independent laboratory for AI and computing — small, private, and deliberate, judged by the work it puts into the world. Alongside the library the lab builds applied AI systems, data pipelines that structure information by the million documents, and the owned infrastructure everything runs on; it also develops and runs its own trading systems in-house. <a href="/about">About the lab</a> · <a href="/government-contracting">Government contracting</a></p>`,
   },
 
   "/about": {
@@ -286,6 +285,61 @@ PAGES["/privacy"] = {
 <p>This policy may be updated as the site changes; the date at the top of this page will change with it. Questions about this policy can be sent to <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a>, or through the suggestion form on the Tower of Babel library pages.</p>`,
 };
 
+PAGES["/contact"] = {
+  path: "/contact",
+  title: "Contact | ANTARCTIC LABS",
+  description:
+    "Contact Antarctic Labs: one email address for the lab, the Tower of Babel library, corrections and rights questions.",
+  body: `<h1>Contact</h1>
+<p>One address reaches the lab:</p>
+<p><a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a></p>
+<p>For a work you would like to see in the library, the <a href="/tower-of-babel/library/suggest">suggestion form</a> is faster. For API keys and tiers, see <a href="/tower-of-babel/library/research">API access</a>. Corrections to a catalog record and rights questions are covered in <a href="/rights-and-sources">Rights &amp; Sources</a> — email the address above with the work's title or link.</p>`,
+};
+
+PAGES["/terms"] = {
+  path: "/terms",
+  title: "Terms of Use | ANTARCTIC LABS",
+  description:
+    "Terms of use for antarctic-labs.com and the Tower of Babel library: reading, the texts' rights, API keys, donations, and acceptable use.",
+  body: `<h1>Terms of Use</h1>
+<p>Last updated: November 18, 2026. These terms cover antarctic-labs.com, including the Tower of Babel library, operated by Antarctic Labs.</p>
+<h2>Reading</h2>
+<p>The library is free to read. You do not need an account, a sign-in, or any personal information to read, search, listen to, or download the works whose texts are hosted here. We work to keep the site available and correct, but availability is not guaranteed and no uptime commitment is made on any part of the site, free or paid.</p>
+<h2>The texts and their rights</h2>
+<p>The works in the library are public-domain or openly licensed texts. Rights are stated per work: every catalog record carries its own rights status and license fields, and those fields — not this page — govern what you may do with a given work. Antarctic Labs claims no new copyright in the texts themselves. The catalog data, the site's own writing (descriptions, introductions, collection essays), and the site software are the lab's own work; ask before republishing them wholesale.</p>
+<h2>Acceptable use</h2>
+<p>Use the site as a reader would. Do not disrupt the service, probe it for vulnerabilities, or misrepresent the library's contents as your own publication. Automated access is welcome through the documented surfaces — the catalog files, the API, and the OAI-PMH feed — within the limits published for each. Bulk scraping outside those surfaces, at rates that degrade the library for readers, is not.</p>
+<h2>API keys</h2>
+<p>API v1 keys are issued per email address under the limits published on the <a href="/tower-of-babel/library/research">API access</a> page (free 50 requests/day, Pro 500/day, Commercial unlimited). A key is for the holder's own projects; do not share or resell it. We may revoke a key that abuses the service. Paid plans are billed through Stripe; cancel within 7 days of a charge and that charge is refunded in full — the key stays active until the end of the paid period unless you ask us to revoke it sooner.</p>
+<h2>Donations</h2>
+<p>Donations are voluntary contributions toward the library's servers, storage and preservation work. Antarctic Labs is not a registered charity, so contributions are not tax-deductible.</p>
+<h2>Advertising</h2>
+<p>The library pages show advertising served by Google AdSense; the donation page shows none. How advertising cookies work, and how to opt out of personalized advertising, is covered in the <a href="/privacy">Privacy Policy</a>.</p>
+<h2>As-is</h2>
+<p>The site and the texts are provided as they are. Texts are verified against their sources and corrected when errors are found (see <a href="/rights-and-sources">Rights &amp; Sources</a>), but no warranty is made that any given text is complete or error-free. To the extent the law allows, the lab is not liable for losses arising from use of the site.</p>
+<h2>Changes and contact</h2>
+<p>These terms may be updated as the site changes; the date at the top will change with them. Questions: <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a>, or the <a href="/contact">Contact page</a>.</p>`,
+};
+
+PAGES["/rights-and-sources"] = {
+  path: "/rights-and-sources",
+  title: "Rights & Sources | ANTARCTIC LABS",
+  description:
+    "How the Tower of Babel library clears rights and sources its texts: public-domain and openly licensed works only, per-record rights, corrections and takedown.",
+  body: `<h1>Rights &amp; Sources</h1>
+<p>Last updated: November 18, 2026. This page states how the Tower of Babel library decides what it may hold, where its texts come from, and what happens when something is wrong.</p>
+<h2>What the library holds</h2>
+<p>Only public-domain and openly licensed works. A work whose rights cannot be established does not enter the catalog. Rights are recorded per work, not per site: every catalog record carries a rights status and a license field, shown on the work's own page, and those two fields state what a reader may do with that work. Most readable works in the library are public domain.</p>
+<h2>Where the texts come from</h2>
+<p>Texts are taken from the open sources that publish them for exactly this purpose, and each record names its source and links to it: Project Gutenberg and the open book collections for books and sacred texts; arXiv, PubMed Central, PLOS and other open journals for papers; the official publishers of United States law — the United States Code and the Federal Register — for the Law collection; the CIA's reading room, the Foreign Relations of the United States series, FBI releases and the National Security Archive for declassified documents; and the reference publishers whose dictionaries and encyclopedias have entered the public domain.</p>
+<h2>How a work gets in</h2>
+<p>Three gates, in order. First, rights: the work is public domain or openly licensed, and the basis is recorded on its record. Second, text: a clean, complete full text must be obtainable — a catalog entry is published only once its text is hosted, never as a metadata-only placeholder. Third, verification: the text is checked against its source, and the record is built from the work itself — title, creator, year, collection, and provenance.</p>
+<h2>Corrections</h2>
+<p>Errors survive any process at this scale, so corrections are a standing program, not an afterthought: the whole library has been through a reader's-eye legibility comb-through, and mislabelled, broken or wrongly attributed works are repaired or removed outright when found. To report one, use the <a href="/tower-of-babel/library/suggest">suggestion form</a> or email <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a> with the work's title or link and what is wrong; verified reports are corrected in the catalog and the record updated.</p>
+<h2>Takedown</h2>
+<p>If you hold rights in a work the catalog lists as public domain or openly licensed, write to <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a> with the work and the basis of the claim. The work is taken down while the claim is reviewed, and removed for good if the claim holds.</p>`,
+};
+
 PAGES["/tower-of-babel"] = {
   path: "/tower-of-babel",
   title: "Free Online Library | Tower of Babel",
@@ -293,6 +347,9 @@ PAGES["/tower-of-babel"] = {
     "A free, searchable online library: 2,557,923 books, sacred texts, declassified documents, papers, and transcripts preserved in clean, readable text.",
   body: `<h1>Tower of Babel</h1>
 <p>Tower of Babel is a library and archival project from Antarctic Labs — 2,557,923 books, documents, transcripts, and texts in one organized, searchable collection. Individual resources appear here once finalized.</p>
+<h2>What the library is</h2>
+<p>The Tower of Babel preserves the written record of humanity and makes it free to read. Its holdings are public-domain and openly licensed works, gathered from the great open sources — Project Gutenberg, open scholarly journals, official legal publishers, and government declassification releases — verified against their sources, and preserved as clean, searchable plain text. A work enters the catalog only when its full text is in hand: the library publishes no metadata-only placeholders, and every record states its own rights status and license (see <a href="/rights-and-sources">Rights &amp; Sources</a>).</p>
+<p>The library is curated, not just accumulated. Works are organised into seven collections and hundreds of hand-built reading collections and shelves; classification and repair passes run continuously, and land as dated entries in the curation stream below. Readers get a book-style reader with listening, highlights and citations in five styles; researchers get a public API and a standard OAI-PMH scholarly feed.</p>
 <h2>The collections</h2>
 <ul>
 <li><a href="/tower-of-babel/collections/books">Books</a> — 81,631 works of classic literature, philosophy, and foundational documents</li>
@@ -306,6 +363,7 @@ PAGES["/tower-of-babel"] = {
 </ul>
 <p><a href="/tower-of-babel/collections">All collections</a></p>
 <p><a href="/tower-of-babel/library">Browse the library</a> · <a href="/tower-of-babel/library/suggest">Suggest an entry</a> · <a href="/tower-of-babel/api">API for agents</a> · <a href="/tower-of-babel/donate">Support the Tower</a></p>
+${curationStreamHtml(esc)}
 ${PREFERRED_SOURCE_LINE}`,
 };
 

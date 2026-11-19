@@ -3,18 +3,22 @@
 //
 // This file is the exact upstream component with the following documented
 // site adaptations (labels/actions wired to the real site navigation):
-//   1. MODERN_ITEMS carries one route — Tower of Babel —
+//   1. MODERN_ITEMS carries two routes — Tower of Babel and Contact —
 //      instead of the demo catalogue items. Tower of Babel
-//      (open book) is a new icon drawn in the same 16px stroke style.
-//      Gov Contracts was removed from the dock 2026-10-25 and About
-//      was removed from the dock 2026-10-25 (both pages stay live at
+//      (open book) and Contact (envelope) are new icons drawn in the
+//      same 16px stroke style. Contact returned to the dock
+//      2026-11-18 (INVENTORY 97, Joshua's order). Gov Contracts was
+//      removed from the dock 2026-10-25 and About was removed from
+//      the dock 2026-10-25 (both pages stay live at
 //      /government-contracting and /about, just not linked from the
 //      dock). There is no separate Home item: the
 //      brand is the home button (navigates to "/", active on "/").
 //   2. The brand wordmark reads "Antarctic Labs", navigates home, and
 //      shows the active pill (data-active) when the route is "/".
-//   3. The actions area keeps only the "Email me" mailto ghost button;
-//      the "Start a project" CTA was removed.
+//   3. The actions area is gone entirely: the "Email me" mailto ghost
+//      button was removed completely 2026-11-18 (INVENTORY 97) —
+//      contact lives on the Contact page now — and the "Start a
+//      project" CTA was removed earlier.
 //   4. The demo showcase stage (aria-hidden "Everything above the fold"
 //      headline) and the catalogue caption are not rendered; the bar is
 //      the component here.
@@ -100,6 +104,17 @@ const MODERN_ITEMS: readonly DockItem[] = [
       <>
         <path d="M3.2 2.6c1.6-.5 3.2-.5 4.8 0v10.8c-1.6-.5-3.2-.5-4.8 0z" />
         <path d="M12.8 2.6c-1.6-.5-3.2-.5-4.8 0v10.8c1.6-.5 3.2-.5 4.8 0z" />
+      </>
+    ),
+  },
+  {
+    id: "contact",
+    label: "Contact",
+    path: "/contact",
+    icon: (
+      <>
+        <rect x="2" y="4" width="12" height="8.5" rx="1.2" />
+        <path d="M2.8 5.4 8 9.2l5.2-3.8" />
       </>
     ),
   },
@@ -388,17 +403,6 @@ function ModernDock({ className, items, active, onSelect, options }: DockShellPr
             </button>
           ))}
         </nav>
-        <div className="atd-modern__actions">
-          <button
-            className="atd-modern__ghost"
-            type="button"
-            onClick={() => {
-              window.location.href = "mailto:hello@antarctic-labs.com";
-            }}
-          >
-            Email me
-          </button>
-        </div>
       </header>
     </div>
   );

@@ -13,6 +13,7 @@ import { ScrollTrigger } from "gsap/ScrollTrigger";
 import "./styles.css";
 import "./shaders/threeui.css";
 import NewBackgroundVideo from "./components/NewBackgroundVideo.jsx";
+import { curationStream } from "./content/curation.js";
 import StarfieldCanvas from "./components/StarfieldCanvas.jsx";
 import { initAnalytics, trackPageview } from "./lib/analytics.js";
 import {
@@ -268,6 +269,9 @@ const DonatePage = lazyPage("DonatePage");
 const Government = lazyPage("Government");
 const About = lazyPage("About");
 const PrivacyPage = lazyPage("PrivacyPage");
+const ContactPage = lazyPage("ContactPage");
+const TermsPage = lazyPage("TermsPage");
+const RightsPage = lazyPage("RightsPage");
 const TowerApiPage = lazyPage("TowerApiPage");
 // FaqBlock stays available from the shared lazy pages chunk for the
 // pages that still render one; the homepage no longer renders an FAQ.
@@ -317,6 +321,7 @@ function dockActiveId(path) {
     return "tower";
   if (path === "/government-contracting") return "gov";
   if (path === "/about") return "about";
+  if (path === "/contact") return "contact";
   return undefined;
 }
 // Warm the server browse stream ahead of the library (2026-11-10,
@@ -794,6 +799,11 @@ function App() {
             environment: the iceberg video parked at its final position,
             with no scroll choreography (that belongs to the homepage). */}
         {path === "/about" && <NewBackgroundVideo rest />}
+        {/* Contact (revived 2026-11-18, INVENTORY 77/97) shares the
+            homepage's Aurora resting environment, exactly as About
+            does — Joshua's spec: the main homepage's background, not
+            the library's. */}
+        {path === "/contact" && <NewBackgroundVideo rest />}
         {path === "/government-contracting" && (
           <Government go={go} />
         )}
@@ -803,24 +813,51 @@ function App() {
         {path === "/privacy" && (
           <PrivacyPage go={go} />
         )}
+        {path === "/contact" && (
+          <ContactPage go={go} />
+        )}
+        {path === "/terms" && (
+          <TermsPage go={go} />
+        )}
+        {path === "/rights-and-sources" && (
+          <RightsPage go={go} />
+        )}
         {(path === "/404" ||
           (matchedPattern === null &&
             path !== "/")) && <NotFound go={go} />}
       </Suspense>
       </RouteErrorBoundary>
-      {/* Minimal site footer (2026-10-25): a single quiet Privacy link, so
-          the privacy policy is one click from every page — required for
-          AdSense review. No CTA, no redirect block, no dock change. */}
+      {/* Site footer: the trust layer lives here (2026-11-18,
+          AdSense plan item 5) — Contact, Privacy Policy, Terms and
+          Rights & Sources, one click from every page. */}
       <footer className="site-footer">
         <span>ANTARCTIC LABS</span>
         <a href="mailto:hello@antarctic-labs.com">
           hello@antarctic-labs.com
         </a>
         <a
+          href="/contact"
+          onClick={(e) => { e.preventDefault(); go("/contact"); }}
+        >
+          Contact
+        </a>
+        <a
           href="/privacy"
           onClick={(e) => { e.preventDefault(); go("/privacy"); }}
         >
           Privacy Policy
+        </a>
+        <a
+          href="/terms"
+          onClick={(e) => { e.preventDefault(); go("/terms"); }}
+        >
+          Terms
+        </a>
+        <a
+          href="/rights-and-sources"
+          onClick={(e) => { e.preventDefault(); go("/rights-and-sources"); }}
+        >
+          Rights &amp; Sources
         </a>
       </footer>
     </>
@@ -1607,6 +1644,37 @@ function Home({ go }) {
                 ↗
               </span>
             </button>
+          </div>
+        </div>
+      </section>
+      {/* Curation stream (2026-11-18, AdSense plan item 4): the
+          library's dated maintenance record, on the homepage itself —
+          real dated events from src/content/curation.js (mirror:
+          functions/_lib/curation.js for the server renders). */}
+      <section id="curation" className="copy-block section reveal">
+        <span className="section-index">RECENTLY CURATED</span>
+        <div>
+          <p className="body-copy">
+            The library is maintained in the open: new collections, classification passes and repair programs land as dated entries in this stream.
+          </p>
+          <div className="curation-stream">
+            {curationStream.map((e) => (
+              <article className="curation-entry" key={e.date + e.title}>
+                <p className="curation-entry-head">
+                  <span className="curation-entry-title">{e.title}</span>
+                  <time className="curation-entry-date" dateTime={e.date}>{e.date}</time>
+                </p>
+                <p className="body-copy">{e.body}</p>
+                <button
+                  type="button"
+                  className="text-link"
+                  onClick={() => go(e.link)}
+                >
+                  {e.linkLabel.toUpperCase()}
+                  <span aria-hidden="true"> ↗</span>
+                </button>
+              </article>
+            ))}
           </div>
         </div>
       </section>
