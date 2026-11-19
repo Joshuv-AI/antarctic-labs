@@ -109,31 +109,50 @@ const PAGE_LIVE = 9;
 const PAGE_DIV = 16; // 2048² pages: 16×16 grid of 128px cells
 const LIVE_DIV = 8;  // live page: 8×8 grid of 128px cells on 1024²
 const MAX_RESIDENT_SEGMENTS = 3;
-// Starter cell pools per band (the 16×16 starter grid) — identical
-// to the pre-atlas-scale atlas pools.
+// Starter cell pools per band (the 16×16 starter grid).
+// TEXTURE REBALANCE (INVENTORY 108, 2026-11-18): LAW, PAPERS and
+// REFERENCE each hold exactly ONE cell — a single cover of their
+// own collection (for REFERENCE a verified photographic cover; for
+// LAW and PAPERS the library's own generated cover tile for one of
+// their entries — those collections hold no photographic covers),
+// repeated across the band (at spiral scale those bands already
+// read as one texture; the single cover is theirs, so purity
+// holds). The freed cells go to the four bands
+// whose covers stay legible: BOOKS, DECLASSIFIED, PODCASTS and
+// DOCUMENTS hold 253 of the 256 starter cells between them.
 const BAND_DEFS = [
-  { name: "LAW", cells: [0, 64] },
-  { name: "PAPERS", cells: [64, 128] },
-  { name: "BOOKS", cells: [128, 168] },
-  { name: "REFERENCE", cells: [168, 196] },
-  { name: "DECLASSIFIED", cells: [196, 220] },
-  { name: "PODCASTS", cells: [220, 240] },
-  { name: "DOCUMENTS", cells: [240, 256] },
+  { name: "LAW", cells: [0, 1] },
+  { name: "PAPERS", cells: [1, 2] },
+  { name: "BOOKS", cells: [2, 157] },
+  { name: "REFERENCE", cells: [157, 158] },
+  { name: "DECLASSIFIED", cells: [158, 208] },
+  { name: "PODCASTS", cells: [208, 236] },
+  { name: "DOCUMENTS", cells: [236, 256] },
 ];
 // Segment pools: SEG_POOLS[s] maps band index → [cellStart, cellEnd)
 // within segment page s (cells numbered row-major over the page's
 // 16×16 grid). Extracted from the bake's segments-manifest.json —
 // the gate-verified layout. A panel whose (segment, band) pool is
 // absent keeps its starter cell permanently.
+// REBALANCE (INVENTORY 108): a panel's canonical segment is a pure
+// function of its band's resting panel start, so BOOKS, REFERENCE,
+// DECLASSIFIED, PODCASTS and DOCUMENTS panels live entirely in
+// segment 7's slice and LAW/PAPERS panels never sample past their
+// starter cells once their segment pools are gone. Pages 0–6
+// therefore carry NO pools: the collapsed bands repeat their single
+// starter cover (above), and page 7 — the only segment the four
+// enriched bands can ever sample — is composed entirely of their
+// covers. Pages 0–6 are never loaded (housekeeping skips pool-less
+// segments); their files stay on the server unreferenced.
 const SEG_POOLS = [
-  { 0: [0, 256] },
-  { 0: [0, 256] },
-  { 0: [0, 256] },
-  { 0: [0, 240], 1: [240, 256] },
-  { 1: [0, 256] },
-  { 1: [0, 256] },
-  { 1: [0, 256] },
-  { 1: [0, 115], 2: [115, 177], 3: [177, 207], 4: [207, 224], 5: [224, 240], 6: [240, 256] },
+  {},
+  {},
+  {},
+  {},
+  {},
+  {},
+  {},
+  { 2: [0, 155], 4: [155, 210], 5: [210, 239], 6: [239, 256] },
 ];
 const SEED_COUNTS = {
   LAW: 1277197, PAPERS: 1130210, BOOKS: 81631, REFERENCE: 41137,
@@ -1515,6 +1534,9 @@ export function createHelixScene(canvas, opts = {}) {
     for (let s = 0; s < 8; s++) {
       if (segState[s].status !== "idle") continue;
       if (nowMs - segState[s].failAt < 30000) continue;
+      // Pool-less segment (INVENTORY 108): no panel can ever sample
+      // it, so never spend a load on it.
+      if (!SEG_POOLS[s] || !Object.keys(SEG_POOLS[s]).length) continue;
       candidates.push({ s, d: probeSegment(s).meanDist });
     }
     if (!candidates.length) return;
@@ -1929,9 +1951,12 @@ export function createHelixScene(canvas, opts = {}) {
   // ---- lift display (Amendments I/J): the reel's ending — result
   // works pulled OUT of the coil into a tiered pyramid above the
   // stack, tethered by thread lines to the coil below. Tiles are a
-  // pooled set of planes textured from a dynamic typeset canvas
-  // atlas (the results grid's covers are typeset plates; the tiles
-  // speak the same language). Every tile damps from its coil anchor
+  // pooled set of planes textured from a dynamic canvas atlas: a
+  // tile paints the work's OWN cover art wherever the library's
+  // cover chain found one (INVENTORY 107 — the same resolution the
+  // result cards use), over a typeset plate in the results grid's
+  // own idiom that serves as the loading/failure fallback. Every
+  // tile damps from its coil anchor
   // to its pyramid slot and back — same latest-wins rig rules as the
   // camera: setDisplay only changes targets.
   const LIFT_MAX = 50;
@@ -2041,6 +2066,73 @@ export function createHelixScene(canvas, opts = {}) {
     liftCtx.fillStyle = "rgba(244,240,230,0.75)";
     const creator = String(item.creator || "").toUpperCase().slice(0, 34);
     if (creator) liftCtx.fillText(creator, x0 + TILE_CELL / 2, py + ph - 18);
+    liftCtx.restore();
+    drawLiftArt(i, item);
+  }
+
+  // ---- lift cover art (INVENTORY 107) ------------------------------
+  // A lifted tile shows the work's OWN cover wherever the library's
+  // cover chain found one — pages.jsx resolves it with the same
+  // precedence as the result cards (acquired sidecar, deterministic
+  // candidates, Open Library), so a small selection's lift carries
+  // the selection's own art (a podcast selection shows its episodes'
+  // thumbnails, not typeset plates). The typeset plate drawn above
+  // stays as the fallback while the image loads and whenever it
+  // fails — a tile never shows a broken image. Art is drawn
+  // fit-inside the plate on the atlas's dark surround, so a
+  // landscape thumbnail keeps its whole frame. Loads are
+  // CORS-anonymous: an image that cannot be drawn into the canvas
+  // cleanly fails the load and the plate stands.
+  const liftArt = new Map(); // url -> { img, failed }
+  let liftItems = [];
+  function drawLiftArt(i, item) {
+    const url = item && item.cover;
+    if (!url) return;
+    let ent = liftArt.get(url);
+    if (!ent) {
+      ent = { img: null, failed: false };
+      liftArt.set(url, ent);
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        ent.img = img;
+        // Redraw whichever current lift cells carry this url (the
+        // lift may have moved on — the loop reads the live items,
+        // so a stale load simply finds nothing to do).
+        let dirty = false;
+        for (let j = 0; j < liftItems.length; j++) {
+          if (liftItems[j] && liftItems[j].cover === url) {
+            drawTileCell(j, liftItems[j]);
+            dirty = true;
+          }
+        }
+        if (dirty) liftTex.needsUpdate = true;
+      };
+      img.onerror = () => { ent.failed = true; };
+      img.src = url;
+    }
+    if (!ent.img) return;
+    const x0 = (i % 8) * TILE_CELL;
+    const y0 = Math.floor(i / 8) * TILE_CELL;
+    const pw = 168, ph = 232, px = x0 + (TILE_CELL - pw) / 2, py = y0 + (TILE_CELL - ph) / 2;
+    liftCtx.save();
+    liftCtx.beginPath();
+    liftCtx.rect(px, py, pw, ph);
+    liftCtx.clip();
+    liftCtx.fillStyle = "#18181c";
+    liftCtx.fillRect(px, py, pw, ph);
+    const iw = ent.img.naturalWidth || ent.img.width;
+    const ih = ent.img.naturalHeight || ent.img.height;
+    if (iw > 0 && ih > 0) {
+      const sc = Math.min(pw / iw, ph / ih);
+      const dw = iw * sc, dh = ih * sc;
+      liftCtx.drawImage(ent.img, px + (pw - dw) / 2, py + (ph - dh) / 2, dw, dh);
+    }
+    liftCtx.restore();
+    liftCtx.save();
+    liftCtx.strokeStyle = "rgba(255,255,255,0.35)";
+    liftCtx.lineWidth = 2;
+    liftCtx.strokeRect(px + 5, py + 5, pw - 10, ph - 10);
     liftCtx.restore();
   }
 
@@ -2999,9 +3091,10 @@ export function createHelixScene(canvas, opts = {}) {
       if (selLabel) selLabel.active = false;
       if (mirrorSet.size) { clearMirror(); rebuildPartition(); }
       const items = state.items.slice(0, LIFT_MAX);
-      const sig = items.map((i) => (i.title || "") + "|" + (i.creator || "")).join("§");
+      const sig = items.map((i) => (i.title || "") + "|" + (i.creator || "") + "|" + (i.cover || "")).join("§");
       if (sig !== liftSig) {
         liftSig = sig;
+        liftItems = items;
         liftCtx.clearRect(0, 0, 2048, 2048);
         items.forEach((item, i) => drawTileCell(i, item));
         liftTex.needsUpdate = true;

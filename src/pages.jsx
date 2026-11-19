@@ -4949,6 +4949,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       };
     };
     let state = null;
+    let liftSrcArtifacts = null;
     if (!searching && !anyFilter && !layout) {
       state = { kind: "idle" };
     } else {
@@ -5015,6 +5016,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       if (count === 0) {
         state = { kind: "idle" };
       } else if (count > 0 && count <= 50 && topArtifacts) {
+        liftSrcArtifacts = topArtifacts;
         state = {
           kind: "lift",
           items: topArtifacts.map((a) => ({
@@ -5022,6 +5024,12 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
             creator: a.creator || "",
             year: a.year || null,
             collection: a.collection || "",
+            // The work's own cover, resolved exactly as the result
+            // cards resolve it (INVENTORY 107): the deterministic
+            // candidate rides along synchronously; the enrichment
+            // pass below applies the full card precedence (acquired
+            // sidecar first, then candidates, then Open Library).
+            cover: coverCandidates(a)[0] || null,
           })),
         };
       } else if (count > 50) {
@@ -5391,6 +5399,52 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     try {
       api.setDisplay(state);
     } catch (e) { /* decorative layer — never disturb the page */ }
+    // Lift cover enrichment (INVENTORY 107): the lift emitted above
+    // already carries each work's deterministic cover candidate; the
+    // result cards resolve covers sidecar-first (getCover), then
+    // candidates, then Open Library for books. Resolve the same
+    // chain for the same records and re-emit, so a lifted tile shows
+    // exactly the cover its result card shows. Latest-wins: if the
+    // selection moved on while resolving (the page sig changed),
+    // the result is dropped.
+    if (state.kind === "lift" && liftSrcArtifacts && liftSrcArtifacts.length) {
+      const mySig = sig;
+      const srcItems = liftSrcArtifacts.slice(0, 50);
+      Promise.all(
+        srcItems.map(async (a) => {
+          try {
+            const side = await getCover(a.artifact_id);
+            if (side) return side;
+          } catch (e) { /* sidecar is best-effort — fall through */ }
+          const cands = coverCandidates(a);
+          if (cands.length) return cands[0];
+          if (a.collection === "BOOKS") {
+            try {
+              return await lookupOpenLibraryCover(a);
+            } catch (e) {
+              return null;
+            }
+          }
+          return null;
+        })
+      )
+        .then((covers) => {
+          if (helixSigRef.current !== mySig) return;
+          let changed = false;
+          const items = state.items.map((it, i2) => {
+            if (covers[i2] && covers[i2] !== it.cover) {
+              changed = true;
+              return { ...it, cover: covers[i2] };
+            }
+            return it;
+          });
+          if (!changed) return;
+          try {
+            api.setDisplay({ ...state, items });
+          } catch (e) { /* decorative layer — never disturb the page */ }
+        })
+        .catch(() => { /* decorative layer — never disturb the page */ });
+    }
   }, [q, bucketFilter, collKey, collGroup, shelfKey, paperKey, paperTypeKey, eraFilter, serverActive, serverModel, blendedModel, browseResult, artifacts, helixApiRef, countsFinal, activeFilterSummary, collData, facetCounts]);
   // Analytics: one search_performed per settled query (900ms debounce so
   // keystrokes don't flood it), with the result count the user saw.
