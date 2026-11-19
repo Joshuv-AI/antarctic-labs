@@ -445,6 +445,43 @@ export default function BookReader({
     };
   }, []);
 
+  // -- Full-screen lock (INVENTORY 127/128, mobile book view) ---------------
+  // The book is a paginated surface: the document itself must never
+  // scroll up/down behind it, and the view must open fully zoomed out
+  // and stay there — Joshua had to pinch out manually on his phone.
+  // While the book view is mounted: the document scroll is locked
+  // (html/body overflow hidden via .bv-scroll-lock) and iOS gesture
+  // zoom over the reader is suppressed. Both release on unmount (the
+  // scroll reader keeps its normal page scroll). The reader root is
+  // sized to the viewport (with the top-dock clearance of line 126),
+  // so at scale 1 everything on the page is exactly fitted.
+  useEffect(() => {
+    const rootEl = document.documentElement;
+    const bodyEl = document.body;
+    // overflow:hidden alone still leaves the document scrollable to
+    // any sub-pixel overflow (measured: 1px). The hard lock pins the
+    // body with position:fixed at the current scroll offset, so the
+    // document has no scroll range at all; the offset is restored on
+    // unmount.
+    const lockedY = window.scrollY || 0;
+    bodyEl.style.top = lockedY ? `-${lockedY}px` : "";
+    rootEl.classList.add("bv-scroll-lock");
+    bodyEl.classList.add("bv-scroll-lock");
+    const preventGesture = (e) => {
+      e.preventDefault();
+    };
+    document.addEventListener("gesturestart", preventGesture);
+    document.addEventListener("gesturechange", preventGesture);
+    return () => {
+      rootEl.classList.remove("bv-scroll-lock");
+      bodyEl.classList.remove("bv-scroll-lock");
+      bodyEl.style.top = "";
+      if (lockedY) window.scrollTo(0, lockedY);
+      document.removeEventListener("gesturestart", preventGesture);
+      document.removeEventListener("gesturechange", preventGesture);
+    };
+  }, []);
+
   // -- Font: preload EB Garamond on reader routes only; exactly one --------
   // -- repagination when it settles (§6.4) -----------------------------------
   useEffect(() => {
@@ -986,6 +1023,8 @@ export default function BookReader({
   }, [phoneOpen, pokeDock]);
 
   // Desktop magnification: transform-only, cosine falloff (§7.1).
+  // The pop amplitude was dialed back (INVENTORY 122, Joshua
+  // 2026-11-18: "a little too much") — 0.45 -> 0.28 at the peak.
   const magnify = useCallback((e) => {
     const zone = e.currentTarget;
     const buttons = zone.querySelectorAll(".bv-dock-btn");
@@ -995,7 +1034,7 @@ export default function BookReader({
       const d = Math.abs(y - (r.top + r.height / 2));
       const range = 132;
       const k = d >= range ? 0 : Math.cos((d / range) * (Math.PI / 2));
-      const scale = 1 + 0.45 * k * k;
+      const scale = 1 + 0.28 * k * k;
       btn.style.transform = `scale(${scale.toFixed(3)})`;
       btn.classList.toggle("is-hot", d < 30);
     });
@@ -1329,11 +1368,19 @@ export default function BookReader({
   const scrubInfo = useCallback(
     (clientY) => {
       const g = scrubGeomRef.current;
-      if (!g || !text) return null;
+      // The geometry ref is seeded with n: 0 before the dash count
+      // lands; dividing by it produced sliceStart = -Infinity and the
+      // tooltip's broken "-Infinity%" (INVENTORY 130). No geometry,
+      // no info — and every value below is clamped finite regardless.
+      if (!g || !text || !(g.n > 0) || !(text.length > 0)) return null;
       const frac = clamp((clientY - g.top) / Math.max(1, g.height), 0, 0.9999);
       const n = g.n;
-      const idx = Math.min(n - 1, Math.floor(frac * n));
-      const sliceStart = Math.floor((idx / n) * text.length);
+      const idx = clamp(Math.floor(frac * n), 0, n - 1);
+      const sliceStart = clamp(
+        Math.floor((idx / n) * text.length),
+        0,
+        Math.max(0, text.length - 1)
+      );
       const sliceEnd = Math.floor(((idx + 1) / n) * text.length);
       const sec = sectionAt(sliceStart);
       const t = tableRef.current;
@@ -1348,7 +1395,7 @@ export default function BookReader({
         idx,
         sliceStart,
         label: sec ? sec.label : title,
-        pct: Math.round((sliceStart / text.length) * 100),
+        pct: clamp(Math.round((sliceStart / text.length) * 100), 0, 100),
         pageRange,
       };
     },
@@ -1454,6 +1501,15 @@ export default function BookReader({
             ? "transform 0.18s ease-out"
             : "none",
     };
+    // Face selection is deterministic (INVENTORY 124/125): exactly
+    // one face is visible at any rotation — the one facing the
+    // reader. The build before this fix relied on backface-visibility
+    // alone, and on engines where the culling fails (Safari, where
+    // Joshua's videos were shot) the hidden face painted through as
+    // MIRRORED text sweeping over the page beneath. A face with
+    // visibility:hidden cannot paint at all, in any engine.
+    const frontFaceStyle = { visibility: frac < 0.5 ? "visible" : "hidden" };
+    const backFaceStyle = { visibility: frac >= 0.5 ? "visible" : "hidden" };
     const blankBack = (
       <div
         className="bv-page bv-leaf-blank"
@@ -1467,10 +1523,10 @@ export default function BookReader({
         <div className="bv-spread bv-single bv-flipping" style={spreadGutter}>
           {renderPage(dir > 0 ? to : from, "single")}
           <div className="bv-leaf" style={leafStyle} aria-hidden="true">
-            <div className="bv-leaf-face bv-leaf-front">
+            <div className="bv-leaf-face bv-leaf-front" style={frontFaceStyle}>
               {renderPage(dir > 0 ? from : to, "single")}
             </div>
-            <div className="bv-leaf-face bv-leaf-back">{blankBack}</div>
+            <div className="bv-leaf-face bv-leaf-back" style={backFaceStyle}>{blankBack}</div>
           </div>
         </div>
       );
@@ -1481,10 +1537,10 @@ export default function BookReader({
         {renderPage(dir > 0 ? from : to, "left")}
         {renderPage(dir > 0 ? to + 1 : from + 1, "right")}
         <div className="bv-leaf" style={leafStyle} aria-hidden="true">
-          <div className="bv-leaf-face bv-leaf-front">
+          <div className="bv-leaf-face bv-leaf-front" style={frontFaceStyle}>
             {renderPage(dir > 0 ? from + 1 : to + 1, "right")}
           </div>
-          <div className="bv-leaf-face bv-leaf-back">
+          <div className="bv-leaf-face bv-leaf-back" style={backFaceStyle}>
             {renderPage(dir > 0 ? to : from, "left")}
           </div>
         </div>
@@ -1604,7 +1660,7 @@ export default function BookReader({
                 }}
                 onClick={b.onClick}
                 onFocus={(e) => {
-                  e.currentTarget.style.transform = "scale(1.45)";
+                  e.currentTarget.style.transform = "scale(1.28)";
                   e.currentTarget.classList.add("is-hot");
                 }}
                 onBlur={(e) => {
@@ -1813,6 +1869,14 @@ function Scrubber({
   const colRef = useRef(null);
   const [height, setHeight] = useState(320);
   const draggingRef = useRef(false);
+  // Chapter magnifier (INVENTORY 130, phone): a long-press (or a
+  // press that turns into a drag) raises a pop-out bubble at the
+  // finger naming the section/chapter under it; lifting the finger
+  // jumps there (the same release-jump as every scrub). It replaces
+  // the old centered tooltip on the phone strip.
+  const pressRef = useRef(null); // {t, y} of the active press
+  const magTimerRef = useRef(0);
+  const [mag, setMag] = useState(false);
 
   useEffect(() => {
     const el = colRef.current;
@@ -1862,6 +1926,17 @@ function Scrubber({
     if (!info) return;
     draggingRef.current = true;
     setPreview(info.idx);
+    pressRef.current = { t: Date.now(), y: e.clientY };
+    if (phone) {
+      // Long-press engagement: the magnifier rises once the press
+      // matures (or as soon as the press becomes a drag, in
+      // handleMove) — a quick tap stays a plain press+release jump.
+      setMag(false);
+      window.clearTimeout(magTimerRef.current);
+      magTimerRef.current = window.setTimeout(() => {
+        if (draggingRef.current) setMag(true);
+      }, 200);
+    }
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
@@ -1874,10 +1949,23 @@ function Scrubber({
     const info = infoAt(e.clientY);
     if (!info) return;
     setPreview(info.idx);
+    const p = pressRef.current;
+    if (
+      phone &&
+      p &&
+      !mag &&
+      (Date.now() - p.t > 180 || Math.abs(e.clientY - p.y) > 12)
+    ) {
+      window.clearTimeout(magTimerRef.current);
+      setMag(true);
+    }
   };
   const handleUp = (e) => {
     if (!draggingRef.current) return;
     draggingRef.current = false;
+    window.clearTimeout(magTimerRef.current);
+    pressRef.current = null;
+    setMag(false);
     const info = infoAt(e.clientY);
     setPreview(null);
     if (info) onJump(info.sliceStart);
@@ -1910,7 +1998,11 @@ function Scrubber({
         onPointerMove={handleMove}
         onPointerUp={handleUp}
         onPointerLeave={() => {
-          if (!draggingRef.current) setPreview(null);
+          if (!draggingRef.current) {
+            setPreview(null);
+            pressRef.current = null;
+            setMag(false);
+          }
         }}
         onKeyDown={(e) => {
           if (!text) return;
@@ -1944,12 +2036,25 @@ function Scrubber({
           />
         ))}
       </div>
-      {previewInfo && (
+      {previewInfo && !phone && (
         <div className="bv-scrub-label" role="status">
           <span className="bv-scrub-label-title">{previewInfo.label}</span>
           <span className="bv-scrub-label-meta">
             {previewInfo.pct}%
             {previewInfo.pageRange ? ` · ${previewInfo.pageRange}` : ""}
+          </span>
+        </div>
+      )}
+      {previewInfo && phone && mag && (
+        <div
+          className="bv-scrub-mag"
+          role="status"
+          style={{ top: ((preview + 0.5) / n) * height }}
+        >
+          <span className="bv-scrub-mag-title">{previewInfo.label}</span>
+          <span className="bv-scrub-mag-meta">
+            {previewInfo.pageRange ? `${previewInfo.pageRange} · ` : ""}
+            {previewInfo.pct}%
           </span>
         </div>
       )}

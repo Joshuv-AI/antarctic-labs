@@ -829,37 +829,43 @@ function App() {
       </RouteErrorBoundary>
       {/* Site footer: the trust layer lives here (2026-11-18,
           AdSense plan item 5) — Contact, Privacy Policy, Terms and
-          Rights & Sources, one click from every page. */}
-      <footer className="site-footer">
-        <span>ANTARCTIC LABS</span>
-        <a href="mailto:hello@antarctic-labs.com">
-          hello@antarctic-labs.com
-        </a>
-        <a
-          href="/contact"
-          onClick={(e) => { e.preventDefault(); go("/contact"); }}
-        >
-          Contact
-        </a>
-        <a
-          href="/privacy"
-          onClick={(e) => { e.preventDefault(); go("/privacy"); }}
-        >
-          Privacy Policy
-        </a>
-        <a
-          href="/terms"
-          onClick={(e) => { e.preventDefault(); go("/terms"); }}
-        >
-          Terms
-        </a>
-        <a
-          href="/rights-and-sources"
-          onClick={(e) => { e.preventDefault(); go("/rights-and-sources"); }}
-        >
-          Rights &amp; Sources
-        </a>
-      </footer>
+          Rights & Sources, one click from every page.
+          INVENTORY 129 (Joshua 2026-11-18): on the text/book pages
+          (the library entry route) the footer line and everything
+          below it come off entirely — the reading page ends with the
+          book. Every other route keeps the footer untouched. */}
+      {matchedPattern !== "/tower-of-babel/library/:id" && (
+        <footer className="site-footer">
+          <span>ANTARCTIC LABS</span>
+          <a href="mailto:hello@antarctic-labs.com">
+            hello@antarctic-labs.com
+          </a>
+          <a
+            href="/contact"
+            onClick={(e) => { e.preventDefault(); go("/contact"); }}
+          >
+            Contact
+          </a>
+          <a
+            href="/privacy"
+            onClick={(e) => { e.preventDefault(); go("/privacy"); }}
+          >
+            Privacy Policy
+          </a>
+          <a
+            href="/terms"
+            onClick={(e) => { e.preventDefault(); go("/terms"); }}
+          >
+            Terms
+          </a>
+          <a
+            href="/rights-and-sources"
+            onClick={(e) => { e.preventDefault(); go("/rights-and-sources"); }}
+          >
+            Rights &amp; Sources
+          </a>
+        </footer>
+      )}
     </>
   );
 }
