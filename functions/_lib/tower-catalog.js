@@ -104,9 +104,9 @@ export const entryRecordUrl = (artifactId) =>
 // timer covers the body read, not just the headers.
 const FETCH_TIMEOUT_MS = 3000;
 
-async function fetchBounded(url, ttlSeconds, read) {
+async function fetchBounded(url, ttlSeconds, read, timeoutMs = FETCH_TIMEOUT_MS) {
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
     const r = await fetch(url, {
       cf: { cacheTtl: ttlSeconds, cacheEverything: true },
@@ -162,11 +162,16 @@ async function fetchBoundedStatus(url, ttlSeconds, read) {
 // fetch is retried by the next caller exactly as before.
 const inflightJson = new Map();
 
-export function fetchJsonCached(url, ttlSeconds) {
-  const key = `${ttlSeconds}:${url}`;
+export function fetchJsonCached(url, ttlSeconds, timeoutMs) {
+  // The timeout budget is part of the coalescing key: a caller that
+  // can wait (batch paths) must never share a promise with one that
+  // cannot (interactive paths), or the impatient caller's abort would
+  // fail them both. Omitting timeoutMs keeps the FETCH_TIMEOUT_MS
+  // default and the historical key shape for every existing caller.
+  const key = `${ttlSeconds}:${timeoutMs || FETCH_TIMEOUT_MS}:${url}`;
   const existing = inflightJson.get(key);
   if (existing) return existing;
-  const p = fetchBounded(url, ttlSeconds, (r) => r.json());
+  const p = fetchBounded(url, ttlSeconds, (r) => r.json(), timeoutMs);
   inflightJson.set(key, p);
   const done = () => {
     if (inflightJson.get(key) === p) inflightJson.delete(key);
@@ -466,9 +471,9 @@ let shardMemoIdx = -1;
 let shardMemoRecords = null;
 let shardMemoIndex = null;
 
-export async function getShardRecords(i) {
+export async function getShardRecords(i, timeoutMs) {
   if (shardMemoIdx === i && shardMemoRecords) return shardMemoRecords;
-  const data = await fetchJsonCached(shardUrl(i), 3600);
+  const data = await fetchJsonCached(shardUrl(i), 3600, timeoutMs);
   const records = Array.isArray(data) ? data : null;
   if (records) {
     shardMemoIdx = i;

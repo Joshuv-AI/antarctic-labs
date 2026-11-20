@@ -130,6 +130,20 @@ import {
 
 const BASE = `${SITE}/oai`;
 const PAGE = 100; // modest, as the old code used; one shard yields many pages
+// Shard-fetch budget for the list verbs (2026-11-19 fix). A list page
+// reads one whole catalog shard: ~18.8 MB fetched from
+// raw.githubusercontent and JSON.parsed inside fetchBounded's abort
+// window. The shared 3 s bound was calibrated for the small JSON of
+// the interactive crawler paths; on a cold or evicted edge cache the
+// shard fetch+parse exceeds it intermittently, the fetch aborts, and
+// the list verb reported that transient failure as noRecordsMatch —
+// a false "no data" that gets repositories rejected (or harvested as
+// empty) by CORE/BASE/OpenAlex validators. List verbs are batch
+// harvester traffic, where a slow page is normal; give the fetch a
+// budget sized to the payload. The interactive paths keep their 3 s
+// bound unchanged (the timeout is threaded per-call in
+// tower-catalog.js and defaults to the historical value).
+const OAI_SHARD_TIMEOUT_MS = 25000;
 // Snapshot date: the date of the catalog-shards snapshot this code
 // reads. Bump it in the SAME push as any catalog-shards refresh (the
 // same cadence lane A's meta.json and tower-hubs.js's
@@ -253,6 +267,30 @@ function okResponse(body) {
     status: 200,
     headers: { "Content-Type": "text/xml; charset=utf-8", "Cache-Control": "no-store" },
   });
+}
+
+// Transient upstream failure (the catalog shard could not be read).
+// The OAI-PMH implementation guidelines' flow-control answer is an
+// HTTP 503 with Retry-After: harvesters retry later. What this must
+// NEVER be is a 200 carrying noRecordsMatch or idDoesNotExist — those
+// assert facts about the data ("nothing matches", "no such record")
+// that a fetch failure does not establish, and a harvester acting on
+// them treats real records as absent.
+function unavailableResponse(requestAttrs = "") {
+  return new Response(
+    envelope(
+      requestAttrs,
+      `  <error code="serviceUnavailable">The catalog is temporarily unavailable; please retry.</error>`
+    ),
+    {
+      status: 503,
+      headers: {
+        "Content-Type": "text/xml; charset=utf-8",
+        "Cache-Control": "no-store",
+        "Retry-After": "300",
+      },
+    }
+  );
 }
 
 // --- resumption tokens v4 (per-shard, format-aware) ---
@@ -497,9 +535,9 @@ async function listResponse(params, verbAttrs, withMetadata) {
   // shard's records are filtered in memory (references only); the
   // filtered list is never re-fetched and no second shard is parsed,
   // even if this page comes back partial or empty.
-  const records = await getShardRecords(shardIdx);
+  const records = await getShardRecords(shardIdx, OAI_SHARD_TIMEOUT_MS);
   if (!records) {
-    return errorResponse("noRecordsMatch", "The catalog is temporarily unavailable.", verbAttrs);
+    return unavailableResponse(verbAttrs);
   }
   const filtered = setSpec
     ? records.filter((r) => r && String(r.collection || "").toLowerCase() === setSpec)
@@ -591,7 +629,7 @@ export async function onRequest(context) {
         if (!m || found.state === "missing")
           return errorResponse("idDoesNotExist", "The identifier does not resolve to a record in this repository.", verbAttr);
         if (found.state === "error")
-          return errorResponse("idDoesNotExist", "The catalog is temporarily unavailable.", verbAttr);
+          return unavailableResponse(verbAttr);
       }
       const lines = [`  <ListMetadataFormats>`];
       for (const [prefix, f] of Object.entries(FORMATS)) {
@@ -632,7 +670,7 @@ export async function onRequest(context) {
       if (found.state === "missing")
         return errorResponse("idDoesNotExist", "No record exists for that identifier.", verbAttr);
       if (found.state === "error")
-        return errorResponse("idDoesNotExist", "The catalog is temporarily unavailable.", verbAttr);
+        return unavailableResponse(verbAttr);
       const inner = [`  <GetRecord>`, recordXml(found.record, SNAPSHOT_DATE, prefix), `  </GetRecord>`].join("\n");
       return okResponse(envelope(verbAttr, inner));
     }
