@@ -9,6 +9,7 @@
 // _lib/catalog-search.js catalogHydrate. Deliberately separate from
 // the keyed /api/v1 product, like /api/catalog-search.
 import { catalogHydrate } from "../_lib/catalog-search.js";
+import { packResults } from "../_lib/packed-records.js";
 
 const json = (body, status = 200, cache = "no-store") =>
   new Response(JSON.stringify(body), {
@@ -42,6 +43,13 @@ export async function onRequestPost({ request, env }) {
     const out = await catalogHydrate(env, indices);
     if (out.notBuilt) {
       return json({ error: "catalog search index not built yet" }, 503);
+    }
+    // Packed page shape (2026-11-20 counts-speed fix): opt-in via
+    // { pack: 1 } in the request body; see catalog-search.js.
+    if (body.pack === 1 && Array.isArray(out.results)) {
+      const packed = { ...out, ...packResults(out.results) };
+      delete packed.results;
+      return json(packed);
     }
     return json(out);
   } catch {

@@ -4,6 +4,7 @@
 // this serves the library page. Dormant-safe: 503 until the metadata
 // products exist in R2.
 import { catalogSearch } from "../_lib/catalog-search.js";
+import { packResults } from "../_lib/packed-records.js";
 
 const json = (body, status = 200, cache = "public, max-age=300") =>
   new Response(JSON.stringify(body), {
@@ -46,6 +47,15 @@ export async function onRequestGet({ request, env }) {
     const out = await catalogSearch(env, { q, filters, cursor, pageSize });
     if (out.notBuilt) {
       return json({ error: "catalog search index not built yet" }, 503, "no-store");
+    }
+    // Packed page shape (2026-11-20 counts-speed fix): opt-in via
+    // pack=1, used by the library page's scope loader, which
+    // decodes it back to records on arrival. See
+    // _lib/packed-records.js for the format and the measurements.
+    if (url.searchParams.get("pack") === "1" && Array.isArray(out.results)) {
+      const body = { ...out, ...packResults(out.results) };
+      delete body.results;
+      return json(body);
     }
     return json(out);
   } catch (err) {

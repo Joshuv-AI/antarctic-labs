@@ -1931,6 +1931,49 @@ const SCOPE_PAGE = 5000;
 const SCOPE_PARALLEL = 4;
 const SCOPE_FETCH_DELAYS_MS = [600, 1800, 4000];
 
+// Packed page decode (2026-11-20 counts-speed fix): scope fetches
+// ask the catalog endpoints for the packed shape (field names
+// hoisted to a `fields` array, low-cardinality string fields
+// dictionary-encoded — see functions/_lib/packed-records.js) and
+// rebuild the classic record objects here, so every consumer
+// downstream of scopeFetchJson sees exactly the shape it always
+// has. A response without the pack marker passes through
+// untouched. A cell is a dictionary index only when its field has
+// a dict and the cell is a number; nulls stay nulls (the packer
+// also writes null for a key a record doesn't carry — consumers
+// read values, never key presence).
+function unpackScopeResponse(data) {
+  if (
+    !data ||
+    data.pack !== 1 ||
+    !Array.isArray(data.rows) ||
+    !Array.isArray(data.fields)
+  ) {
+    return data;
+  }
+  const fields = data.fields;
+  const dict = data.dict || {};
+  const rows = data.rows;
+  const results = new Array(rows.length);
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const rec = {};
+    for (let j = 0; j < fields.length; j++) {
+      const f = fields[j];
+      const cell = row[j];
+      const d = dict[f];
+      rec[f] = d && typeof cell === "number" ? d[cell] : cell;
+    }
+    results[i] = rec;
+  }
+  const out = { ...data, results };
+  delete out.rows;
+  delete out.fields;
+  delete out.dict;
+  delete out.pack;
+  return out;
+}
+
 // One JSON fetch (GET, or POST with a JSON body) under the boot
 // path's retry discipline: spaced attempts with growing backoff, a
 // per-attempt abort, and no failure caching — a scope that exhausts
@@ -1952,7 +1995,7 @@ async function scopeFetchJson(url, body) {
           : {}),
       });
       if (!r.ok) throw new Error(`scope fetch ${r.status}: ${url}`);
-      return await r.json();
+      return unpackScopeResponse(await r.json());
     } catch (e) {
       lastErr = e;
       if (a < SCOPE_FETCH_DELAYS_MS.length) {
@@ -1965,18 +2008,19 @@ async function scopeFetchJson(url, body) {
   throw lastErr || new Error(`scope fetch failed: ${url}`);
 }
 
-// One step of a facet scope: fetch ONE page at rec.cursor, append
-// it, publish it, and report whether the scope is exhausted. The
-// runner is resumable by construction (2026-11-20 correction): the
-// cursor lives on the scope record, so a scope that yields to a
-// newer selection — or restarts after a failure — resumes from the
-// page it stopped at instead of re-offering every page (dedupe made
-// the old restart-from-zero safe but not free).
+// Fetch one facet-scope page at an explicit cursor. The runner is
+// resumable by construction (2026-11-20 correction): the cursor
+// lives on the scope record, so a scope that yields to a newer
+// selection — or restarts after a failure — resumes from the page
+// it stopped at instead of re-offering every page (dedupe made
+// the old restart-from-zero safe but not free). Pages arrive in
+// the packed shape (pack=1) and are decoded by scopeFetchJson.
 async function fetchFacetScopePage(rec, cursor) {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(rec.filters || {})) if (v) params.set(k, v);
   params.set("cursor", String(cursor));
   params.set("pagesize", String(SCOPE_PAGE));
+  params.set("pack", "1");
   const out = await scopeFetchJson(`/api/catalog-search?${params.toString()}`);
   if (!out || !Array.isArray(out.results)) {
     throw new Error("facet scope page malformed");
@@ -2101,6 +2145,7 @@ async function stepIndicesScope(rec) {
     windows.map(([i, j]) =>
       scopeFetchJson("/api/catalog-hydrate", {
         indices: indices.slice(i, j),
+        pack: 1,
       }).then(
         (out) => {
           if (!out || !Array.isArray(out.results)) {
