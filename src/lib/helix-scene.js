@@ -699,6 +699,7 @@ export function createHelixScene(canvas, opts = {}) {
   const gapRanges = [];  // [theta0, theta1] bare-wire gaps between coils
   let COILS = [];
   let layoutKey = "rest";
+  let layoutTruth = false; // current layout is a truth (re-formed) layout
   let layoutMaxSqrt = 1;
   let segFrozen = false; // segment lifecycle pauses off the resting layout
   const coilFirst = [];
@@ -761,7 +762,19 @@ export function createHelixScene(canvas, opts = {}) {
       stationsArr[li] = Math.max(1, stationsArr[li] + (targetStations - tot));
     }
     const n = defs.length;
-    const gapTheta = GAP_DTHETA * Math.min(1, 7 / Math.max(1, n));
+    // Separation (2026-11-20, Joshua): in a re-formed (truth) layout
+    // each coil is its own sub-spiral and must READ as one — the
+    // bare-wire gap between coils keeps a floor of 0.22 turns
+    // instead of shrinking toward zero as the coil count grows (61
+    // Books shelves previously got ~0.07 turns, so the sub-spirals
+    // sat nearly touching on one continuous-looking coil). The
+    // resting layout keeps its shipped gap exactly.
+    const gapTheta =
+      GAP_DTHETA *
+      (truthAlloc
+        ? Math.max(0.22, Math.min(1, 7 / Math.max(1, n)))
+        : Math.min(1, 7 / Math.max(1, n)));
+    layoutTruth = !!truthAlloc;
     COILS = defs.map((d, i) => ({
       key: d.key,
       name: d.name,
@@ -1886,11 +1899,18 @@ export function createHelixScene(canvas, opts = {}) {
           prev = P;
         }
       }
-      const rndG = mulberry32(4000 + ((t0 * 100) | 0));
-      for (let k = 0; k < 12; k++) {
-        const a = surfacePoint(t0 - 0.4 - rndG() * 1.4, rndG() * Math.PI * 2, new THREE.Vector3());
-        const b = surfacePoint(t1 + 0.4 + rndG() * 1.4, rndG() * Math.PI * 2, new THREE.Vector3());
-        pushG(a, b);
+      // Cross-gap web strands stitch neighbouring coils together —
+      // part of the resting composition, but in a re-formed layout
+      // they fuse the sub-spirals into one connected-looking coil,
+      // so truth layouts leave their gaps clean (2026-11-20,
+      // Joshua: the sub-spirals must be clearly separated).
+      if (!layoutTruth) {
+        const rndG = mulberry32(4000 + ((t0 * 100) | 0));
+        for (let k = 0; k < 12; k++) {
+          const a = surfacePoint(t0 - 0.4 - rndG() * 1.4, rndG() * Math.PI * 2, new THREE.Vector3());
+          const b = surfacePoint(t1 + 0.4 + rndG() * 1.4, rndG() * Math.PI * 2, new THREE.Vector3());
+          pushG(a, b);
+        }
       }
     }
     {
@@ -2657,7 +2677,7 @@ export function createHelixScene(canvas, opts = {}) {
       const t = (now - layoutAnim.start) / 950;
       if (t >= 0.40 && !layoutAnim.swapped) {
         layoutAnim.swapped = true;
-        if (doLayoutSwap(layoutAnim.state)) applyDisplay(layoutAnim.state);
+        if (doLayoutSwap(layoutAnim.state)) applyDisplay(layoutAnim.state, true);
       }
       if (t < 0.40) dissolveCur = Math.max(0.22, 1 - (t / 0.40) * 0.78);
       else dissolveCur = Math.min(1, 0.22 + ((t - 0.40) / 0.60) * 0.78);
@@ -2823,6 +2843,24 @@ export function createHelixScene(canvas, opts = {}) {
       const s = pendingReshape;
       pendingReshape = null;
       setDisplay(s);
+    }
+    // Orphaned-swap recovery (2026-11-20): if a layout dissolve was
+    // in flight when the render loop parked (fps degrade) or
+    // stopped, its exchange point can never arrive — the animation
+    // clock only advances inside the tick. Complete the swap here,
+    // on the poll cadence that survives the park, with the stashed
+    // latest state. Runs at most once per orphaned animation: the
+    // anim is cleared as part of completing it.
+    if (layoutAnim && !layoutAnim.swapped && (degraded || !running || frozen)) {
+      const s = layoutAnim.state;
+      layoutAnim = null;
+      try {
+        if (doLayoutSwap(s)) applyDisplay(s, true);
+      } catch (e) {
+        /* a failed swap leaves the current layout untouched */
+      }
+      stillDirty = true;
+      renderStill();
     }
     segmentHousekeeping();
   }
@@ -2995,7 +3033,33 @@ export function createHelixScene(canvas, opts = {}) {
       typeof state.layout.key === "string" &&
       state.layout.key !== layoutKey
     ) {
+      // Layout swaps are SELECTION truth, not stream truth: the
+      // coils a state names exist the moment the visitor taps, so a
+      // swap is NEVER held for a running stream (2026-11-20 fix).
+      // The Phase-2b load stash was designed for the one-time boot
+      // stream; in the selection-driven architecture every tap
+      // starts a fresh scope stream, so the stash re-armed on every
+      // selection and held the re-form for the whole scope load —
+      // minutes for a collection, effectively forever for Law —
+      // while the visitor watched the resting spiral sit still
+      // (Joshua's 2026-11-20 recording). Facet lighting carried by
+      // the swap applies with it; later states keep refining it.
       if (layoutAnim && !layoutAnim.swapped) {
+        if (frozen || degraded || !running) {
+          // The dissolve's render loop is parked or stopped, so the
+          // in-flight animation can never reach its exchange point:
+          // complete the swap synchronously with the newest state
+          // instead of retargeting an animation that will never run.
+          // (The orphaned-anim trap: the fps park landing inside the
+          // 950 ms dissolve window left layoutAnim pending forever,
+          // and every later state — same key or new — was swallowed
+          // by this retarget branch, so the re-form never landed.)
+          layoutAnim = null;
+          if (doLayoutSwap(state)) applyDisplay(state, true);
+          stillDirty = true;
+          renderStill();
+          return;
+        }
         // A swap is already mid-dissolve: retarget it (a different
         // target restarts the clock; the same target just updates
         // the state that will apply at the bottom).
@@ -3006,13 +3070,9 @@ export function createHelixScene(canvas, opts = {}) {
         }
         return;
       }
-      if (running && loadActive) {
-        pendingLayoutState = state;
-        return;
-      }
       pendingLayoutState = null;
       if (frozen || degraded || !running) {
-        if (doLayoutSwap(state)) applyDisplay(state);
+        if (doLayoutSwap(state)) applyDisplay(state, true);
         stillDirty = true;
         renderStill();
         return;
@@ -3024,15 +3084,19 @@ export function createHelixScene(canvas, opts = {}) {
     applyDisplay(state);
   }
 
-  function applyDisplay(state) {
+  function applyDisplay(state, fromSwap) {
     if (!state || disposed) return;
     if (state.kind === "reshape") {
       // Phase 2b streaming safety: while the catalog stream is
       // running, the state is recorded latest-wins and the tick
       // applies it the moment the load markers clear — the
       // re-organization never competes with the stream. (pages.jsx
-      // also gates its own emission on the settled load.)
-      if (running && loadActive) {
+      // also gates its own emission on the settled load.) A state
+      // applied as part of a layout swap (fromSwap) is exempt: it
+      // rode in with the re-form itself, its facets are the layout's
+      // own published/one-hot shares, and stashing it would leave
+      // the new coils standing unlit until the stream ended.
+      if (running && loadActive && !fromSwap) {
         pendingReshape = state;
         return;
       }

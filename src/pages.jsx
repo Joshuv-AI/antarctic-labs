@@ -5473,7 +5473,15 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           coils: subs.map((s) => ({
             key: lane + ":" + s.id,
             name: s.label,
-            count: towerData.subCounts[lane + ":" + s.id] || 0,
+            // Coil sizes are the PUBLISHED tallies when the tallies
+            // file has landed (true from the first second, stable
+            // fingerprint — one re-form per tap); the resident
+            // subCounts remain the fallback before it lands.
+            count:
+              staticTallies && staticTallies.buckets &&
+              typeof staticTallies.buckets[lane + ":" + s.id] === "number"
+                ? staticTallies.buckets[lane + ":" + s.id]
+                : towerData.subCounts[lane + ":" + s.id] || 0,
             band: HELIX_BAND_OF[lane],
           })),
           picked: subs.findIndex((s) => lane + ":" + s.id === bucketFilter),
@@ -5486,10 +5494,11 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           // parent band is refined when the full derivation lands
           // (early emissions can precede the bucket keys the sampler
           // reads), or a lane-sub layout was first sized from
-          // prefix counts mid-stream, the key changes and the scene
-          // re-forms with the corrected coils instead of keeping
-          // the fallback. Mid-stream re-forms coalesce through the
-          // scene's load stash — one swap lands at settle.
+          // resident prefix counts before the published tallies
+          // landed, the key changes and the scene re-forms with the
+          // corrected coils instead of keeping the fallback. The
+          // scene applies a layout swap the moment it arrives (a
+          // swap is selection truth, never held for a stream).
           key:
             layout.key +
             "#" +
@@ -6024,7 +6033,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         })
         .catch(() => { /* decorative layer — never disturb the page */ });
     }
-  }, [q, bucketFilter, collKey, collGroup, shelfKey, paperKey, paperTypeKey, eraFilter, serverActive, serverModel, blendedModel, browseResult, artifacts, helixApiRef, countsFinal, activeFilterSummary, collData, facetCountsShown]);
+  }, [q, bucketFilter, collKey, collGroup, shelfKey, paperKey, paperTypeKey, eraFilter, serverActive, serverModel, blendedModel, browseResult, artifacts, helixApiRef, countsFinal, activeFilterSummary, collData, facetCountsShown, staticTallies]);
   // Analytics: one search_performed per settled query (900ms debounce so
   // keystrokes don't flood it), with the result count the user saw.
   useEffect(() => {
