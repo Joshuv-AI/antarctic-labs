@@ -452,6 +452,12 @@ export function createColumnStore(expectedTotal = 0) {
     expectedTotal: expectedTotal || 0,
     chunks: [], // {start, idBytes, idOff, titleBytes, titleOff}
     chunkIdx: makeCol(Uint16Array),
+    // Catalog ordinal per resident record (2026-11-20 selection-driven
+    // loading): in stream mode residents are the catalog prefix, so
+    // ordinal == resident index; in scope mode residents are an
+    // arbitrary subset and every catalog-index space consumer
+    // (curated bitsets, facet tallies) translates through this column.
+    ordCode: makeCol(Uint32Array),
     creatorCode: makeCol(Uint32Array),
     yearCode: makeCol(Uint32Array),
     collCode: makeCol(Uint8Array),
@@ -547,12 +553,13 @@ function ensureStoreIndex(store) {
 // through a catalog view) into the columns as a single chunk. The
 // dedupe contract is the old streamer's: first occurrence of an
 // artifact_id wins, records without an id are skipped.
-export function appendRecordsToStore(store, records) {
+export function appendRecordsToStore(store, records, ordinals) {
   const total = records ? records.length : 0;
   if (!total) return;
   const index = ensureStoreIndex(store);
   const seenLocal = new Set();
   const accepted = [];
+  const acceptedOrd = [];
   for (let j = 0; j < total; j++) {
     const r = records[j];
     if (!r || !r.artifact_id) continue;
@@ -561,6 +568,18 @@ export function appendRecordsToStore(store, records) {
     if (index.get(id) !== undefined) continue;
     seenLocal.add(id);
     accepted.push(r);
+    // Ordinal resolution order: the explicit parallel array, the
+    // record's own _idx (server-paged / hydrated records carry it),
+    // else the resident position — correct for the catalog-prefix
+    // appends every legacy caller makes (bootstrap base, streams).
+    const o = ordinals ? ordinals[j] : undefined;
+    acceptedOrd.push(
+      typeof o === "number"
+        ? o
+        : typeof r._idx === "number"
+          ? r._idx
+          : store.count + accepted.length - 1
+    );
   }
   if (!accepted.length) return;
   const n = accepted.length;
@@ -595,10 +614,11 @@ export function appendRecordsToStore(store, records) {
   // columns (Uint16 chunk index; Uint32 creator/year; 4 × Uint8).
   storeBytes(store).chunks +=
     idBytes.byteLength + idOff.byteLength +
-    titleBytes.byteLength + titleOff.byteLength + n * 14;
+    titleBytes.byteLength + titleOff.byteLength + n * 18;
   for (let j = 0; j < n; j++) {
     const r = accepted[j];
     colPush(store.chunkIdx, chunkIndex);
+    colPush(store.ordCode, acceptedOrd[j]);
     colPush(store.creatorCode, dictCode(store, "creatorMap", "creatorDict", r.creator));
     colPush(store.yearCode, dictCode(store, "yearMap", "yearDict", r.year));
     colPush(store.collCode, dictCode(store, "collMap", "collDict", r.collection));
@@ -692,6 +712,14 @@ export function createCatalogView(store, length) {
             // record's taxonomy id prefix from its stored bytes, so
             // classifying a record never decodes its whole id.
             return (i) => store.idPrefixAt(i);
+          case "__columnOrdinalAt":
+            // Internal hook for pages.jsx's bitset translation
+            // (2026-11-20 selection-driven loading): the record's
+            // catalog ordinal, so catalog-index bitsets (curated
+            // membership) can be re-based onto the resident set,
+            // whose positions no longer equal catalog positions
+            // once scopes load out of order.
+            return (i) => store.ordCode.a[i];
           case "map":
             return (cb, thisArg) => {
               const out = new Array(length);
@@ -1024,6 +1052,10 @@ export function onBrowseOrdersSettled(cb) {
   return () => browseOrdersSettleCbs.delete(cb);
 }
 export function getBrowseOrders() {
+  // Scope mode: the baked orders are full-catalog ordinals — invalid
+  // over a resident subset. Derivations build orders on-device over
+  // the resident set instead (the pre-baked path, unchanged).
+  if (scopeMode) return null;
   if (browseOrdersStatus !== "ready" || !browseOrders) return null;
   if (!browseState || browseState.fp !== browseOrders.fp) return null;
   return browseOrders.order;
@@ -1107,6 +1139,7 @@ function armBrowseOrders(fp, total) {
   if (browseOrdersWanted) ensureBrowseOrders();
 }
 export function ensureBrowseOrders() {
+  if (scopeMode) return;
   browseOrdersWanted = true;
   if (!browseOrdersDeferred || browseOrdersFetchStarted) return;
   browseOrdersFetchStarted = true;
@@ -1246,6 +1279,12 @@ export function commitTransposedChunk(store, remap, payload) {
     for (let j = 0; j < n; j++) out[from + j] = rm[codes[j]];
     col.n += n;
   }
+  // Ordinal column: transposed chunks arrive in catalog order (the
+  // stream consumes the catalog front to back), so a committed
+  // record's ordinal is its resident position at commit time.
+  colEnsure(store.ordCode, n);
+  for (let j = 0; j < n; j++) store.ordCode.a[store.ordCode.n + j] = start + j;
+  store.ordCode.n += n;
   store.count += n;
 }
 
@@ -1720,11 +1759,301 @@ function withStartBudget(promise, ms) {
   ]);
 }
 
+// ---------------------------------------------------------------------
+// Selection-driven loading (2026-11-20, Joshua's directive).
+//
+// The library page no longer streams the whole catalog in the
+// background. Boot = the bootstrap prefix (the first 20,000 records,
+// the verified head of the catalog) in a column store, plus the
+// navigation layer (hub counts, facet tallies, curated bitsets —
+// all server- or bitset-derived, none of it record data). Selecting
+// a filter scope loads THAT scope's records, completely, through
+// the server, and appends them to the same store:
+//
+//   - collection / bucket / era scopes page /api/catalog-search
+//     with the matching facet filter (era scopes use the facet
+//     file's coarse bands, which contain the client era — the
+//     client-side era derivation still defines the results);
+//   - curated / Books-shelf / Papers-axis scopes resolve their
+//     catalog-index bitset to member ordinals on the client and
+//     hydrate exactly those records via /api/catalog-hydrate,
+//     block-packed so each request stays inside the function's
+//     subrequest budget;
+//   - the unfiltered list pages the same search endpoint by cursor
+//     ("browse" scope) as the visitor asks for more rows.
+//
+// Loaded scopes ACCUMULATE: appends dedupe by artifact_id, nothing
+// is ever evicted, and deselecting a filter never unloads. Every
+// appended record carries its catalog ordinal (_idx from the
+// server, stored in the store's ordCode column), so the curated
+// bitsets and facet tallies — which live in catalog-index space —
+// stay exact over the resident subset via pages.jsx's translation.
+//
+// Loads are serialized through one queue (never a parallel storm),
+// each page fetch carries the boot path's retry discipline, and
+// views publish through the same publishIndex contract the stream
+// used: complete=false while any scope is in flight, complete=true
+// when the queue drains — the settled signal derivations key off.
+let scopeMode = false;
+let scopeStore = null;
+const scopeMap = new Map(); // key -> { status, total, loaded }
+let scopeQueue = Promise.resolve();
+let scopeActive = 0; // scopes queued or running
+let scopeTotalHint = 0;
+let browseScopeCursor = 0; // unfiltered-browse ordinal frontier
+let browseScopeDone = false;
+let browseRowsWanted = 0;
+
+export function isScopeMode() {
+  return scopeMode;
+}
+
+// Enter scope mode over the bootstrap base. Idempotent; called by
+// the library section once the bootstrap array is in hand (server
+// mode only — the ?server=0 client pipeline never calls it).
+export function initScopeMode(baseRecords) {
+  if (scopeMode || indexComplete || indexPending) return;
+  scopeMode = true;
+  scopeStore = createColumnStore(0);
+  const n = baseRecords ? baseRecords.length : 0;
+  if (n) appendRecordsToStore(scopeStore, baseRecords);
+  browseScopeCursor = scopeStore.count;
+  scopePublish(true);
+  browseMeta()
+    .then((m) => {
+      if (m && m.total) scopeTotalHint = m.total;
+    })
+    .catch(() => {});
+}
+
+function scopePublish(complete) {
+  if (!scopeStore) return;
+  // Stand down if the legacy client index has taken the cache (the
+  // hub-fallback path for curated selections whose bitsets failed):
+  // the two publishers must never interleave views.
+  if (indexComplete || indexPending) return;
+  publishIndex(createCatalogView(scopeStore, scopeStore.count), complete);
+}
+
+const SCOPE_PAGE = 2000;
+const SCOPE_FETCH_DELAYS_MS = [600, 1800, 4000];
+
+// One JSON fetch (GET, or POST with a JSON body) under the boot
+// path's retry discipline: spaced attempts with growing backoff, a
+// per-attempt abort, and no failure caching — a scope that exhausts
+// its attempts is marked failed and a later ensure retries it whole.
+async function scopeFetchJson(url, body) {
+  let lastErr = null;
+  for (let a = 0; a <= SCOPE_FETCH_DELAYS_MS.length; a++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 30000);
+    try {
+      const r = await fetch(url, {
+        signal: ctrl.signal,
+        ...(body
+          ? {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(body),
+            }
+          : {}),
+      });
+      if (!r.ok) throw new Error(`scope fetch ${r.status}: ${url}`);
+      return await r.json();
+    } catch (e) {
+      lastErr = e;
+      if (a < SCOPE_FETCH_DELAYS_MS.length) {
+        await new Promise((res) => setTimeout(res, SCOPE_FETCH_DELAYS_MS[a]));
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr || new Error(`scope fetch failed: ${url}`);
+}
+
+async function runFacetScope(rec, filters) {
+  let cursor = 0;
+  for (;;) {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(filters)) if (v) params.set(k, v);
+    params.set("cursor", String(cursor));
+    params.set("pagesize", String(SCOPE_PAGE));
+    const out = await scopeFetchJson(`/api/catalog-search?${params.toString()}`);
+    if (!out || !Array.isArray(out.results)) {
+      throw new Error("facet scope page malformed");
+    }
+    if (typeof out.total === "number") rec.total = out.total;
+    appendRecordsToStore(scopeStore, out.results);
+    if (out.next_cursor == null || out.next_cursor <= cursor) {
+      // A non-advancing cursor is treated as exhaustion: the scope
+      // queue is serialized, so a looping scope would starve every
+      // later selection.
+      rec.loaded = rec.total || cursor + out.results.length;
+      return;
+    }
+    cursor = out.next_cursor;
+    rec.loaded = cursor;
+    scopePublish(false);
+  }
+}
+
+// Hydrate one bitset scope: member ordinals ascending, packed into
+// POSTs of at most 1500 indices spanning at most 40 record blocks —
+// the packing is what keeps every invocation inside the function's
+// subrequest budget while guaranteeing every requested ordinal is
+// hydratable in that same invocation (no partial-page retries).
+const HYDRATE_MAX_INDICES = 1500;
+const HYDRATE_MAX_BLOCKS = 40;
+async function runIndicesScope(rec, indices) {
+  rec.total = indices.length;
+  let i = 0;
+  while (i < indices.length) {
+    let j = i;
+    let blocks = 0;
+    let lastBlock = -1;
+    while (j < indices.length && j - i < HYDRATE_MAX_INDICES) {
+      const b = Math.floor(indices[j] / 1000);
+      if (b !== lastBlock) {
+        if (blocks >= HYDRATE_MAX_BLOCKS) break;
+        blocks++;
+        lastBlock = b;
+      }
+      j++;
+    }
+    const out = await scopeFetchJson("/api/catalog-hydrate", {
+      indices: indices.slice(i, j),
+    });
+    if (!out || !Array.isArray(out.results)) {
+      throw new Error("hydrate scope page malformed");
+    }
+    appendRecordsToStore(scopeStore, out.results);
+    rec.loaded = j;
+    i = j;
+    if (i < indices.length) scopePublish(false);
+  }
+}
+
+async function runBrowseScope(rec) {
+  while (!browseScopeDone && browseScopeCursor < browseRowsWanted) {
+    const out = await scopeFetchJson(
+      `/api/catalog-search?cursor=${browseScopeCursor}&pagesize=${SCOPE_PAGE}`
+    );
+    if (!out || !Array.isArray(out.results)) {
+      throw new Error("browse scope page malformed");
+    }
+    if (typeof out.total === "number") rec.total = out.total;
+    appendRecordsToStore(scopeStore, out.results);
+    if (out.next_cursor == null || out.next_cursor <= browseScopeCursor) {
+      browseScopeDone = true;
+      browseScopeCursor = rec.total || browseScopeCursor + out.results.length;
+    } else {
+      browseScopeCursor = out.next_cursor;
+    }
+    rec.loaded = browseScopeCursor;
+    if (!browseScopeDone && browseScopeCursor < browseRowsWanted) {
+      scopePublish(false);
+    }
+  }
+}
+
+function enqueueScope(key, runner, rerun = false) {
+  const existing = scopeMap.get(key);
+  if (existing && existing.status !== "failed" && !(rerun && existing.status === "ready")) {
+    return existing;
+  }
+  const rec = existing || { status: "loading", total: 0, loaded: 0 };
+  rec.status = "loading";
+  scopeMap.set(key, rec);
+  scopeActive++;
+  scopeQueue = scopeQueue.then(async () => {
+    try {
+      await runner(rec);
+      rec.status = "ready";
+    } catch {
+      rec.status = "failed";
+    } finally {
+      scopeActive--;
+      scopePublish(scopeActive === 0);
+    }
+  });
+  return rec;
+}
+
+// Load (or resume loading) one facet scope — a collection, a bucket,
+// or an era band — keyed by the caller so repeat selections are free.
+export function ensureFacetScope(key, filters) {
+  if (!scopeMode) return null;
+  return enqueueScope(key, (rec) => runFacetScope(rec, filters));
+}
+
+// Load one bitset scope (curated collection, Books shelf, Papers
+// field/subfield/type) from its member ordinals.
+export function ensureIndicesScope(key, indices) {
+  if (!scopeMode) return null;
+  if (!indices || !indices.length) {
+    const rec = { status: "ready", total: 0, loaded: 0 };
+    scopeMap.set(key, rec);
+    return rec;
+  }
+  return enqueueScope(key, (rec) => runIndicesScope(rec, indices));
+}
+
+// Grow the unfiltered browse residency to at least n rows (the
+// list's Load-more path). Pages in catalog order from the bootstrap
+// frontier; already-resident scope records dedupe against it.
+export function ensureBrowseRows(n) {
+  if (!scopeMode || browseScopeDone) return;
+  if (n > browseRowsWanted) browseRowsWanted = n;
+  if (browseScopeCursor >= browseRowsWanted) return;
+  enqueueScope("browse", runBrowseScope, true);
+}
+
+export function getScopeStatus(key) {
+  const rec = scopeMap.get(key);
+  return rec ? rec.status : "idle";
+}
+
+// Keys of scopes whose last load exhausted its retries — the
+// section's recovery effect re-ensures the ones its current
+// selection needs.
+export function getFailedScopeKeys() {
+  const out = [];
+  for (const [k, r] of scopeMap) if (r.status === "failed") out.push(k);
+  return out;
+}
+
+export function scopeAnyLoading() {
+  return scopeActive > 0;
+}
+
+// Member ordinals of a catalog-index bitset (Uint32Array of packed
+// bits over catalog positions), ascending — the input an indices
+// scope hydrates.
+export function ordinalsFromBitset(bits) {
+  const out = [];
+  if (!bits) return out;
+  for (let w = 0; w < bits.length; w++) {
+    let word = bits[w];
+    while (word) {
+      const b = word & -word;
+      out.push((w << 5) + (31 - Math.clz32(b)));
+      word ^= b;
+    }
+  }
+  return out;
+}
+
 // Start (or restart a stopped) automatic browse stream. Idempotent;
 // a no-op while the client index owns the cache (non-server mode or
 // the search-failure fallback), so the two loaders never fight.
 let browseBeginPending = false;
 export function startCatalogBrowse() {
+  // Scope mode (2026-11-20): the automatic full-catalog stream is
+  // gone — selections load their own scopes via ensureFacetScope /
+  // ensureIndicesScope / ensureBrowseRows. Any legacy trigger that
+  // still fires lands here and does nothing.
+  if (scopeMode) return;
   if (indexComplete || indexPending) return;
   if (browseState && !browseState.stopped) return;
   const begin = () => {
@@ -1835,6 +2164,7 @@ export function startCatalogBrowse() {
 // Resume a stream that stopped early (on failure) and run it to the
 // end of the catalog — wired to Load more in server mode.
 export function resumeCatalogBrowse() {
+  if (scopeMode) return;
   if (indexComplete || indexPending) return;
   if (!browseState) { startCatalogBrowse(); return; }
   const st = browseState;
@@ -1876,6 +2206,7 @@ export function resumeCatalogBrowse() {
 // reads "streaming" to isBrowseStreaming(), which is why the
 // pages.jsx watchdog needs this second signal.
 export function getBrowseStallAgeMs() {
+  if (scopeMode) return 0;
   const st = browseState;
   if (!st || st.stopped || isBrowseComplete()) return 0;
   return Date.now() - (st.progAt || 0);
@@ -1888,6 +2219,7 @@ export function getBrowseStallAgeMs() {
 // append frontier; the main-thread pipeline relaunches). Returns
 // false when there is no stalled stream to restart.
 export function restartStalledBrowse() {
+  if (scopeMode) return false;
   const st = browseState;
   if (!st || st.stopped || isBrowseComplete()) return false;
   browseStop(st, false);
@@ -1898,6 +2230,7 @@ export function restartStalledBrowse() {
 // True while the browse stream is actively bringing the catalog in
 // (the library status line keys off this alongside isIndexInFlight).
 export function isBrowseStreaming() {
+  if (scopeMode) return scopeActive > 0;
   return !!(browseState && !browseState.stopped);
 }
 
@@ -1916,6 +2249,10 @@ export function isBrowseStreaming() {
 // bootstrap prefix's counts as the library's finals whenever the
 // manifest endpoints were slow — Joshua's 17:01 phone recording.
 export function isBrowseComplete() {
+  // Scope mode: "complete" means no scope load is queued or running —
+  // the resident set (bootstrap + the scopes loaded so far) is the
+  // settled input derivations should treat as final for now.
+  if (scopeMode) return scopeActive === 0;
   if (indexComplete) return true;
   const st = browseState;
   return !!(st && st.stopped && st.total != null && st.cursor >= st.total);
@@ -1926,6 +2263,7 @@ export function isBrowseComplete() {
 // phase-0 id index to its final size in one allocation instead of
 // rehashing at every doubling (2026-11-11 smoothness).
 export function getBrowseTotalHint() {
+  if (scopeMode) return scopeTotalHint;
   return browseState && browseState.total ? browseState.total : 0;
 }
 
@@ -1949,8 +2287,11 @@ export function onIndexReady(cb) {
     // Something is already cached (partial or complete) — call
     // immediately (async to keep consistent), then keep listening for
     // further publishes unless the index is already complete.
+    // Scope mode is the exception: its publishes keep arriving after
+    // any settled (complete=true) publish, so listeners stay
+    // registered for the life of the subscription.
     Promise.resolve().then(() => cb(indexCache, indexComplete));
-    if (indexComplete) return () => {};
+    if (indexComplete && !scopeMode) return () => {};
   }
   indexReadyListeners.add(cb);
   return () => { indexReadyListeners.delete(cb); };

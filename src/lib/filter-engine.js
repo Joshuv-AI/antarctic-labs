@@ -117,6 +117,49 @@ export function buildMembershipBitset(idIndex, collSet, length) {
 }
 
 // ---------------------------------------------------------------
+// Resident re-basing of catalog-index bitsets (2026-11-20,
+// selection-driven loading). The TCU1 bitsets are packed over
+// CATALOG positions; the scan and the facet tallies test them at
+// RESIDENT positions. While residency was always the catalog prefix
+// the two positions coincided; scope residency (an arbitrary subset,
+// appended in selection order) breaks the identity, so consumers
+// re-base each bitset through the resident records' catalog
+// ordinals: resident bit i = catalog bit at ordinalAt(i).
+//
+// The re-base is incremental, mirroring phase 0's derivation: the
+// cache remembers how many resident records each bitset has covered
+// and extends over just the new tail when the resident set grows
+// (the store is append-only, so covered positions never change).
+// Cost over a whole scope load is O(final resident count) per
+// bitset actually consumed, spread across the load's publishes —
+// never a full re-scan per publish.
+export function createBitsetRebaser() {
+  return { entries: new Map() }; // catalogBits -> { out, covered }
+}
+
+export function rebaseBitset(cache, catalogBits, ordinalAt, length) {
+  if (!catalogBits || !ordinalAt || !cache) return catalogBits;
+  let e = cache.entries.get(catalogBits);
+  if (!e) {
+    e = { out: new Uint32Array(Math.ceil(length / 32)), covered: 0 };
+    cache.entries.set(catalogBits, e);
+  }
+  const need = Math.ceil(length / 32);
+  if (e.out.length < need) {
+    const next = new Uint32Array(need);
+    next.set(e.out);
+    e.out = next;
+  }
+  const out = e.out;
+  for (let i = e.covered; i < length; i++) {
+    const o = ordinalAt(i);
+    if (catalogBits[o >> 5] & (1 << (o & 31))) out[i >> 5] |= 1 << (i & 31);
+  }
+  if (length > e.covered) e.covered = length;
+  return out;
+}
+
+// ---------------------------------------------------------------
 // The scan itself. Chunked: works in slices of at most sliceMs,
 // yielding to a macrotask between them, and checks isCurrent() at
 // every slice boundary — a superseded job abandons silently and

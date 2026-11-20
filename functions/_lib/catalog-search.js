@@ -124,6 +124,52 @@ export async function catalogManifest(env) {
   return lastManifestOut;
 }
 
+// Hydrate an explicit list of catalog ordinals (2026-11-20,
+// selection-driven loading): the library page resolves curated /
+// shelf / paper-axis selections — which exist client-side only as
+// catalog-index bitsets — into the member ordinals, then asks for
+// exactly those records in block-packed batches (the caller keeps
+// each request within ~40 record blocks so the invocation stays
+// inside the same 46-fetch budget catalogSearch enforces). Returns
+// records in request order, each carrying its ordinal as _idx;
+// unhydrated slots are dropped.
+export async function catalogHydrate(env, indices) {
+  const { root, fp } = await resolveBase(env);
+  if (!fp) return { notBuilt: true };
+  const base = `${root}/meta/${fp}`;
+  let fetchesLeft = 46;
+  const get = (path) => {
+    const key = `${base}/${path}`;
+    if (!fileCache.has(key)) {
+      if (fetchesLeft <= 0) return Promise.resolve(null);
+      fetchesLeft -= 1;
+      fileCache.set(
+        key,
+        fetch(key)
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null)
+      );
+    }
+    return fileCache.get(key);
+  };
+  const byBlock = new Map();
+  indices.forEach((id, i) => {
+    const b = Math.floor(id / 1000);
+    if (!byBlock.has(b)) byBlock.set(b, []);
+    byBlock.get(b).push([id, i]);
+  });
+  const out = new Array(indices.length);
+  await Promise.all([...byBlock.entries()].map(async ([b, entries]) => {
+    const block = await get(`records/records-${String(b).padStart(5, "0")}.json`);
+    for (const [id, i] of entries) out[i] = block ? block[id % 1000] : null;
+  }));
+  const results = [];
+  for (let i = 0; i < indices.length; i++) {
+    if (out[i]) results.push({ ...out[i], _idx: indices[i] });
+  }
+  return { results, fingerprint: fp };
+}
+
 export async function catalogSearch(env, { q = "", filters = {}, cursor = 0, pageSize = 25 } = {}) {
   const { root, fp } = await resolveBase(env);
   if (!fp) return { notBuilt: true };
@@ -191,7 +237,17 @@ export async function catalogSearch(env, { q = "", filters = {}, cursor = 0, pag
     const pageIds = ranked.slice(cursor, cursor + pageSize);
     // Drop unhydrated entries (record block unreachable or beyond the
     // subrequest budget) rather than returning nulls to the client.
-    const results = (await hydrate(pageIds)).filter(Boolean);
+    // Each surviving record carries its catalog ordinal as _idx
+    // (2026-11-20 selection-driven loading): the library page now
+    // holds arbitrary scopes of the catalog resident, so a record's
+    // position in the resident set no longer equals its catalog
+    // position — consumers that test catalog-index bitsets (curated
+    // membership, facet tallies) translate through this ordinal.
+    const hydrated = await hydrate(pageIds);
+    const results = [];
+    for (let i = 0; i < pageIds.length; i++) {
+      if (hydrated[i]) results.push({ ...hydrated[i], _idx: pageIds[i] });
+    }
     return {
       total,
       results,
@@ -296,9 +352,14 @@ export async function catalogSearch(env, { q = "", filters = {}, cursor = 0, pag
   }
   const pageIds = [];
   for (let id = cursor; id < Math.min(cursor + pageSize, N); id++) pageIds.push(id);
+  const hydratedBrowse = await hydrate(pageIds);
+  const browseResults = [];
+  for (let i = 0; i < pageIds.length; i++) {
+    if (hydratedBrowse[i]) browseResults.push({ ...hydratedBrowse[i], _idx: pageIds[i] });
+  }
   return {
     total: N,
-    results: (await hydrate(pageIds)).filter(Boolean),
+    results: browseResults,
     next_cursor: cursor + pageIds.length < N ? cursor + pageIds.length : null,
     fingerprint: fp,
   };

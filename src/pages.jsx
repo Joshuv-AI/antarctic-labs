@@ -68,6 +68,13 @@ import {
   CatalogIdIndex,
   tcb1Meta,
   noteExternalBytes,
+  initScopeMode,
+  isScopeMode,
+  ensureFacetScope,
+  ensureIndicesScope,
+  ensureBrowseRows,
+  getScopeStatus,
+  ordinalsFromBitset,
 } from "./lib/catalog.js";
 // Two-level browse taxonomy for the library filter (revamp 2026-10-17):
 // top-level lanes + subcategories derived from the artifact_id prefix.
@@ -102,6 +109,8 @@ import {
   bucketMaskFor,
   buildMembershipBitset,
   startFilterScan,
+  createBitsetRebaser,
+  rebaseBitset,
 } from "./lib/filter-engine.js";
 import { getTowerKernels } from "./lib/tower-kernels.js";
 import {
@@ -400,11 +409,14 @@ function useArtifacts() {
           if (live) setState({ artifacts: null, error: true, fullIndexReady: false });
         }
       );
-    } else if (state.artifacts && !state.fullIndexReady) {
+    } else if (state.artifacts && (!state.fullIndexReady || isScopeMode())) {
       // Bootstrap is showing; upgrade as the index arrives (whenever an
       // intent trigger or the idle schedule starts it). Stage 2 publishes
       // progressively: artifacts grows chunk by chunk, and fullIndexReady
-      // flips only on the final (complete) publish.
+      // flips only on the final (complete) publish. Scope mode
+      // (2026-11-20) keeps the subscription for the component's life:
+      // its settled (complete) publishes are per-scope-load, and later
+      // scope appends must keep reaching the section after any of them.
       const unsub = onIndexReady((full, complete) => {
         if (live)
           setState((s) => ({
@@ -2136,6 +2148,28 @@ function startFacetJob(input, onCommit) {
   return job;
 }
 
+// Era load scopes (2026-11-20, selection-driven loading): the
+// server facet file's era bands are the generator's coarse bands
+// (scripts/build-catalog-meta.mjs eraBand: pre-1800 / 1800s /
+// 1900-1949 / 1950-1999 / 2000+), while the panel's eras are finer.
+// Each client era loads the band(s) that CONTAIN it; the loaded
+// records are a superset of the era, and the era's exact membership
+// is still defined by the client-side era derivation over the
+// resident records (eraCodes), exactly as before — the band is a
+// load scope, never a result definition.
+const ERA_LOAD_BANDS = {
+  "before-1500": ["pre-1800"],
+  "1500s": ["pre-1800"],
+  "1600s": ["pre-1800"],
+  "1700s": ["pre-1800"],
+  "1800s": ["1800s"],
+  "1900-1945": ["1900-1949"],
+  "1946-1989": ["1900-1949", "1950-1999"],
+  "1990-2009": ["1950-1999", "2000+"],
+  "2010s": ["2000+"],
+  "2020s": ["2000+"],
+};
+
 function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // Stability (2026-10-27): the +6s shard-manifest warm that used to live
   // here is REMOVED — it parsed a ~16MB manifest on every landing-page
@@ -2472,6 +2506,10 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     // Re-run the derivation too: the same artifacts identity would not
     // retrigger the effect on its own.
     setDeriveSeq((n) => n + 1);
+    // Scope mode (2026-11-20): also re-ensure the current selection's
+    // scopes — a scope that exhausted its own retries is the other
+    // way this screen's retry gets exercised now.
+    setScopeRetrySeq((n) => n + 1);
   };
   // True catalog total from the browse manifest (design §11.3): the
   // results header uses a truthful total as its denominator instead
@@ -2943,12 +2981,36 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     activePaperSel && activePaperSel.bits ? activePaperSel.bits : null;
   const paperTypeBits =
     activePaperType && activePaperType.bits ? activePaperType.bits : null;
+  // Selection-driven loading (2026-11-20): in scope mode the
+  // resident set is an arbitrary subset of the catalog, so the TCU1
+  // bitsets — packed over CATALOG positions — are re-based onto
+  // resident positions through the records' catalog ordinals
+  // before the engine or the tallies test them. The re-base is
+  // incremental over the append-only resident set (filter-engine).
+  // Outside scope mode residency is the catalog prefix, positions
+  // coincide, and the bitsets pass through untouched.
+  const scopeModeOn = isScopeMode();
+  const rebaserRef = useRef(null);
+  if (!rebaserRef.current) rebaserRef.current = createBitsetRebaser();
+  const ordinalAt = (i) =>
+    artifacts && artifacts.__columnOrdinalAt
+      ? artifacts.__columnOrdinalAt(i)
+      : i;
+  const rebase = (bits) =>
+    scopeModeOn && bits && artifacts
+      ? rebaseBitset(rebaserRef.current, bits, ordinalAt, artifacts.length)
+      : bits;
+  const collBitsSelT = rebase(collBitsSel);
+  const shelfBitsT = rebase(shelfBits);
+  const paperBitsT = rebase(paperBits);
+  const paperTypeBitsT = rebase(paperTypeBits);
   // The single membership bitset the engine and the rank memo test:
   // a curated selection, a Books shelf selection, a Papers
   // field/subfield selection and a Papers type selection AND
-  // together (all are catalog-index bitsets of identical length).
+  // together (resident-space bitsets of identical length in scope
+  // mode; catalog-index bitsets outside it, where the spaces agree).
   const memberBitsSel = useMemo(() => {
-    const sets = [collBitsSel, shelfBits, paperBits, paperTypeBits].filter(
+    const sets = [collBitsSelT, shelfBitsT, paperBitsT, paperTypeBitsT].filter(
       Boolean
     );
     if (!sets.length) return null;
@@ -2958,7 +3020,52 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     for (let s = 1; s < sets.length; s++)
       for (let i = 0; i < out.length; i++) out[i] &= sets[s][i];
     return out;
-  }, [collBitsSel, shelfBits, paperBits, paperTypeBits]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collBitsSelT, shelfBitsT, paperBitsT, paperTypeBitsT, artifacts]);
+  // The facet tally reads collData's bitsets directly (per-row
+  // counts within the other axes), so in scope mode it receives a
+  // translated copy: same descriptors, bits re-based. Only the
+  // bitsets the tally can reach are translated — the open curated
+  // group's collections, the Books shelves when the Books lane is
+  // in play, the Papers axes when the Papers lane is in play (the
+  // tally's own gates, mirrored).
+  const collDataT = useMemo(() => {
+    if (!scopeModeOn || !collData || !artifacts) return collData;
+    const rb = (c) => (c && c.bits ? { ...c, bits: rebase(c.bits) } : c);
+    const out = {
+      ...collData,
+      groups: collData.groups.map((g) =>
+        g.id === collGroup ? { ...g, collections: g.collections.map(rb) } : g
+      ),
+    };
+    if (
+      collData.booksShelves &&
+      (bucketFilter.split(":")[0] === "BOOKS" || shelfKey)
+    ) {
+      out.booksShelves = collData.booksShelves.map(rb);
+    }
+    if (
+      collData.papersFields &&
+      (bucketFilter.split(":")[0] === "PAPERS" || paperKey || paperTypeKey)
+    ) {
+      out.papersFields = collData.papersFields.map((f) => ({
+        ...rb(f),
+        subs: (f.subs || []).map(rb),
+      }));
+      out.papersTypes = (collData.papersTypes || []).map(rb);
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    scopeModeOn,
+    collData,
+    collGroup,
+    bucketFilter,
+    shelfKey,
+    paperKey,
+    paperTypeKey,
+    artifacts,
+  ]);
   // Prime the curated axis from the bitsets at mount (design §12):
   // they ride the TCB1 dataset (a few MB on the wire, parsed in
   // milliseconds) instead of the 17.7 MB hub index, so the axis is
@@ -3254,6 +3361,10 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // is never mounted at once — the DOM stays small so style recalc and
   // paint stay cheap, and the loader releases after the first 50 paint.
   const [rowBudget, setRowBudget] = useState(TOWER_ROWS_PER_PAGE);
+  // Bumped by the catalog error UI's retry in server mode: re-runs
+  // the selection-scope effect so the current selection's scopes
+  // re-ensure immediately (2026-11-20).
+  const [scopeRetrySeq, setScopeRetrySeq] = useState(0);
   // (The shelfActive state went with the discovery zone — removed
   // 2026-11-12, Ship 2 minimal page: no stacks/featured/shelves.)
   // Cutover (2026-10-29): opening a stack shelf is browse intent — the
@@ -3302,13 +3413,13 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       return;
     // Server mode (2026-11-09): every other browse control is answered
     // by the server too — queries by server search, lanes/filters/sorts
-    // over the progressively streamed resident catalog — so none of
-    // them may pull the client index (the phone crash). A Load more
-    // past the resident set resumes the browse stream on demand. The
-    // client pipeline still owns hub filters (collSet) and the strict
-    // path, exactly the boundaries serverActive observes.
+    // over the resident catalog — so none of them may pull the client
+    // index (the phone crash). A Load more past the resident set grows
+    // the browse scope on demand (the selection-scope effect below
+    // owns rowBudget now). The client pipeline still owns hub filters
+    // (collSet) and the strict path, exactly the boundaries
+    // serverActive observes.
     if (serverFlag && !clientFiltersActive && strictQuery !== query) {
-      if (prev && prev.rowBudget !== rowBudget) resumeCatalogBrowse();
       return;
     }
     requestCatalogIndex();
@@ -3331,54 +3442,19 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // from 20,000 to the full catalog instead of sitting on a wrong
   // number with no sign anything is loading.
   useEffect(() => {
-    // Server mode (2026-11-09, Joshua's server-backed call): the
-    // catalog DOES auto-load — as server browse pages streamed in by
-    // startCatalogBrowse(), on the same single one-shot triggers as
-    // the client path below (first scroll, or a short visible-tab
-    // delay). The client index itself is never auto-started here: at
-    // 2.56M records it is ~880 MB and kills phone tabs. The stream is
-    // memory-capped and progressive, so the header count climbs from
-    // the bootstrap's 20,000 on its own, with no visitor interaction.
-    // ?server=0 restores the client behavior below unchanged.
+    // Server mode (2026-11-20, Joshua's selection-driven directive —
+    // supersedes the 2026-10-28 / 2026-11-11 auto-load orders): the
+    // catalog does NOT auto-load at all. Boot carries the bootstrap
+    // prefix and the navigation layer only; each filter selection
+    // loads its own scope (the selection-scope effect below), and
+    // loaded scopes accumulate. The full-catalog stream behind the
+    // old triggers was the weight that stalled the boot fetch into
+    // "The catalog couldn't be loaded" and jetsam-killed phone tabs
+    // when visitors tapped filters mid-stream (his 2026-11-19
+    // recordings). ?server=0 restores the client behavior below
+    // unchanged.
     if (serverFlag) {
-      // Landing auto-start (2026-11-11, Joshua's explicit reversal
-      // of the 2026-11-10 landing-lazy gate): this section also
-      // renders on the combined Tower landing (/tower-of-babel),
-      // and the landing now starts the stream at open exactly like
-      // the library page — the same single one-shot triggers below,
-      // no approach gate, no route special case. Joshua's call after
-      // watching his phone recording sit at 20,000: the top of the
-      // landing should not be load-free; loading starts the second
-      // the page opens. The columnar store and the smoothness fixes
-      // are what make this safe now — the 2026-11-10 gate was
-      // protecting against the pre-columnar resident set and the
-      // decode-per-probe wedge, both since removed.
-      let doneS = false;
-      let timerS = null;
-      const startS = () => {
-        if (doneS) return;
-        doneS = true;
-        window.removeEventListener("scroll", onScrollS);
-        if (timerS) clearTimeout(timerS);
-        startCatalogBrowse();
-      };
-      const onScrollS = () => {
-        if (window.scrollY > 240) startS();
-      };
-      const armTimerS = () => {
-        if (timerS) clearTimeout(timerS);
-        timerS = setTimeout(() => {
-          if (document.visibilityState === "visible") startS();
-          else armTimerS();
-        }, 2500);
-      };
-      window.addEventListener("scroll", onScrollS, { passive: true });
-      armTimerS();
-      return () => {
-        doneS = true;
-        window.removeEventListener("scroll", onScrollS);
-        if (timerS) clearTimeout(timerS);
-      };
+      return;
     }
     let done = false;
     let timer = null;
@@ -3420,6 +3496,105 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // automatic start above (2026-10-28): one bounded trigger, library
   // page and (2026-11-11) the Tower landing. Do not re-add the
   // approach/idle stack.
+  // Selection-driven loading (2026-11-20, Joshua's directive): the
+  // boot hands the bootstrap array to the scope store, and every
+  // active filter selection ensures its own scope is loaded —
+  // collection/bucket/era selections page the matching server facet,
+  // curated/shelf/Papers selections hydrate their bitset's member
+  // ordinals, and the unfiltered list grows by browse pages as its
+  // row budget grows. Scopes accumulate in the store (catalog.js);
+  // deselecting never unloads. A scope whose load exhausted its
+  // retries is re-ensured on a bounded backoff while it belongs to
+  // the current selection, and the error UI's retry bumps
+  // scopeRetrySeq to re-run this effect immediately.
+  const scopeLoadersRef = useRef(new Map());
+  const scopeOrdCacheRef = useRef(new Map());
+  const scopeRetryRef = useRef(new Map());
+  useEffect(() => {
+    if (!serverFlag) return;
+    if (artifacts && Array.isArray(artifacts)) initScopeMode(artifacts);
+    if (!isScopeMode()) return;
+    const loaders = new Map();
+    if (bucketFilter) {
+      const key = bucketFilter.includes(":")
+        ? `facet:bucket:${bucketFilter}`
+        : `facet:collection:${bucketFilter}`;
+      const filters = bucketFilter.includes(":")
+        ? { bucket: bucketFilter }
+        : { collection: bucketFilter };
+      loaders.set(key, () => ensureFacetScope(key, filters));
+    }
+    if (eraFilter) {
+      for (const band of ERA_LOAD_BANDS[eraFilter] || []) {
+        const key = `facet:era:${band}`;
+        loaders.set(key, () => ensureFacetScope(key, { era: band }));
+      }
+    }
+    const bitsScope = (desc) => {
+      if (!desc || !desc.bits || !desc.key) return;
+      const key = `bits:${desc.key}`;
+      loaders.set(key, () => {
+        let ords = scopeOrdCacheRef.current.get(desc.bits);
+        if (!ords) {
+          ords = ordinalsFromBitset(desc.bits);
+          scopeOrdCacheRef.current.set(desc.bits, ords);
+        }
+        ensureIndicesScope(key, ords);
+      });
+    };
+    bitsScope(activeCollection);
+    bitsScope(activeShelf);
+    bitsScope(activePaperSel);
+    bitsScope(activePaperType);
+    if (
+      !bucketFilter &&
+      !eraFilter &&
+      !collKey &&
+      !shelfKey &&
+      !paperKey &&
+      !paperTypeKey &&
+      !query
+    ) {
+      loaders.set("browse", () => ensureBrowseRows(rowBudget));
+    }
+    scopeLoadersRef.current = loaders;
+    for (const fn of loaders.values()) fn();
+    const failed = [...loaders.keys()].filter(
+      (k) => getScopeStatus(k) === "failed"
+    );
+    if (!failed.length) return;
+    const attempts = Math.max(
+      ...failed.map((k) => scopeRetryRef.current.get(k) || 0)
+    );
+    if (attempts >= 5) return;
+    const delay = [5000, 10000, 20000, 40000, 60000][
+      Math.min(attempts, 4)
+    ];
+    const t = setTimeout(() => {
+      for (const k of failed) {
+        scopeRetryRef.current.set(k, (scopeRetryRef.current.get(k) || 0) + 1);
+        const fn = scopeLoadersRef.current.get(k);
+        if (fn) fn();
+      }
+    }, delay);
+    return () => clearTimeout(t);
+  }, [
+    serverFlag,
+    artifacts,
+    bucketFilter,
+    eraFilter,
+    collKey,
+    shelfKey,
+    paperKey,
+    paperTypeKey,
+    activeCollection,
+    activeShelf,
+    activePaperSel,
+    activePaperType,
+    rowBudget,
+    query,
+    scopeRetrySeq,
+  ]);
   // The input stays bound to the raw query so typing never waits on work;
   // the expensive filter/sort and the deep index search run on the deferred
   // value at background priority, which removes the keystroke lag.
@@ -3610,7 +3785,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       (!bucketFilter &&
         !eraFilter &&
         !memberBitsSel &&
-        !collBitsSel &&
+        !collBitsSelT &&
         !collSet)
     ) {
       if (facetJobRef.current) {
@@ -3627,12 +3802,12 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       bucketFilter,
       eraFilter,
       memberBitsSel,
-      collBitsSel,
-      shelfBits,
-      paperBits,
-      paperTypeBits,
+      collBitsSel: collBitsSelT,
+      shelfBits: shelfBitsT,
+      paperBits: paperBitsT,
+      paperTypeBits: paperTypeBitsT,
       collSet,
-      collData,
+      collData: collDataT,
       collGroup,
       shelfKey,
       paperKey,
@@ -3656,12 +3831,12 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     bucketFilter,
     eraFilter,
     memberBitsSel,
-    collBitsSel,
-    shelfBits,
-    paperBits,
-    paperTypeBits,
+    collBitsSelT,
+    shelfBitsT,
+    paperBitsT,
+    paperTypeBitsT,
     collSet,
-    collData,
+    collDataT,
     collGroup,
     shelfKey,
     paperKey,
@@ -5653,10 +5828,11 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                       }}
                       onFocus={() => {
                         // Search focus is explicit intent on every
-                        // route — on the lazy landing it is also what
-                        // starts the browse stream in server mode.
-                        if (serverFlag) startCatalogBrowse();
-                        else requestCatalogIndex();
+                        // route. Server mode (2026-11-20): queries are
+                        // answered by server search and selections load
+                        // their own scopes — focus starts nothing.
+                        // Client mode still pulls the client index.
+                        if (!serverFlag) requestCatalogIndex();
                       }}
                       onKeyDown={onSearchKeyDown}
                       onCompositionStart={() => { composingRef.current = true; }}

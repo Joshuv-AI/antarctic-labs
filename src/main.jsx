@@ -231,7 +231,7 @@ import { matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
 // Lazy Tower catalog (see ./lib/catalog.js): prefetched on Tower navigation
 // so the chunk usually arrives before the route needs it.
-import { loadBootstrap, isCatalogPending, startCatalogBrowse } from "./lib/catalog.js";
+import { loadBootstrap, isCatalogPending } from "./lib/catalog.js";
 // Route-level code-splitting (2026-10-14): every destination page lives in
 // ./pages.jsx, which also pulls the 256KB tower-files manifest, the deep
 // search libs, and the reader UI. Importing it eagerly put all of that in
@@ -324,25 +324,15 @@ function dockActiveId(path) {
   if (path === "/contact") return "contact";
   return undefined;
 }
-// Warm the server browse stream ahead of the library (2026-11-10,
-// Joshua's head-start call): the stream is the light server-mode
-// loader (idempotent, deduped, a no-op when the client index owns
-// the cache), so starting it while the visitor is still on a Tower
-// page — or watching the Tower boot animation — means the catalog
-// is part or all resident by the time the library itself opens.
+// Warm the library's boot ahead of the section (2026-11-20,
+// Joshua's selection-driven directive — replaces the 2026-11-10
+// stream head start): nothing about the catalog streams in the
+// background anymore. The only warm is the bootstrap prefetch —
+// the one boot-critical file, whose promise the section awaits —
+// so the bandwidth of the boot window belongs to the boot itself
+// and to whatever scope the visitor actually selects.
 function warmCatalogBrowse() {
-  // Entry pages are the exception (2026-11-10): they start the stream
-  // themselves once their record settles, and warming it here made the
-  // entry's own bucket/shard/text fetches compete with ~675 MB of
-  // browse pages — on phones the text lost that fight and never
-  // loaded.
-  if (/^\/tower-of-babel\/library\/.+/.test(window.location.pathname)) return;
-  // The Tower landing is NOT an exception (2026-11-11, Joshua's
-  // explicit reversal of the 2026-11-10 landing-lazy gate): the
-  // landing warms the stream at open, from the top of the page,
-  // exactly like the library route — his call after watching the
-  // landing sit at the 20,000-record bootstrap on his phone.
-  startCatalogBrowse();
+  loadBootstrap().catch(() => {});
 }
 
 function App() {
@@ -387,10 +377,9 @@ function App() {
     towerBootStarted.current = Date.now();
     // Prefetch the bootstrap chunk now (43KB, instant) — the route awaits
     // the same cached promise, so this head start is usually the whole fetch.
-    // The old client index is still NOT started here (Stage 1 ungating,
-    // 2026-10-23) — but the light server browse stream is (2026-11-10
-    // head start): it streams in behind this animation, so the library
-    // opens with the catalog already moving or resident.
+    // Nothing else starts here (2026-11-20): no client index, no browse
+    // stream — the library's scopes load on selection, so the boot
+    // window's bandwidth belongs to the bootstrap alone.
     loadBootstrap().catch(() => {});
     warmCatalogBrowse();
     // Readiness-aware failsafe (INVENTORY 65, diagnosed 2026-11-17):
@@ -462,19 +451,11 @@ function App() {
   // Tower-route warm-up: any Tower page (landing, entry, library)
   // starts the browse stream shortly after mount, behind whatever
   // the visitor is reading — the library then opens warm. The delay
-  // keeps first paint uncontested; entry pages and the library start
-  // the stream themselves too (all starts dedupe to one stream).
-  // Exception (2026-11-11 smoothness): on the standalone library the
-  // stream IS the page's content and the section auto-starts it
-  // anyway — the 900 ms was pure dead air on a refresh (Joshua's
-  // "stayed at 20,000 for five or six seconds" report). Effects run
-  // after first paint and the index.html boot prefetch already holds
-  // the network head start, so the library route warms at mount.
-  // Entry routes keep the 900 ms guard. The landing joins the
-  // library at delay 0 (2026-11-11, Joshua's landing-lazy reversal):
-  // the landing loads the library from the top of the page, the
-  // second it opens — the warm-up is the head start behind the boot
-  // animation on both routes now.
+  // keeps first paint uncontested. Since 2026-11-20 the warm is only
+  // the bootstrap prefetch (see warmCatalogBrowse): the delays below
+  // now pace nothing heavier than that one file — library and landing
+  // routes warm at mount, entry routes keep the 900 ms guard so an
+  // entry's own record/text fetches own their first second.
   useEffect(() => {
     if (!path.startsWith("/tower-of-babel")) return;
     const delay =

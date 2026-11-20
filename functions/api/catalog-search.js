@@ -20,6 +20,13 @@ export async function onRequestGet({ request, env }) {
     collection: url.searchParams.get("collection") || "",
     bucket: url.searchParams.get("bucket") || "",
     format: url.searchParams.get("format") || "",
+    // Era (2026-11-20, selection-driven loading): the facet file's
+    // bands are the generator's eraBand() keys (pre-1800 / 1800s /
+    // 1900-1949 / 1950-1999 / 2000+). The library page maps each of
+    // its finer client eras to the band(s) that contain it and
+    // filters exactly on the client — the band is a load scope, not
+    // a result definition.
+    era: url.searchParams.get("era") || "",
   };
   // Page size: search keeps the long-standing 25. Browse streaming
   // (2026-11-09) passes pagesize to pull the catalog in big pages —
