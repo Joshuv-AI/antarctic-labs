@@ -74,6 +74,9 @@ import {
   ensureIndicesScope,
   ensureBrowseRows,
   getScopeStatus,
+  onScopeChange,
+  getScopeSnapshot,
+  bumpScopePriority,
   ordinalsFromBitset,
 } from "./lib/catalog.js";
 // Two-level browse taxonomy for the library filter (revamp 2026-10-17):
@@ -2170,6 +2173,37 @@ const ERA_LOAD_BANDS = {
   "2020s": ["2000+"],
 };
 
+// Published tallies (2026-11-20 correction — Joshua's rule: counts
+// are navigation data, always exact, never load-dependent). Two
+// published sources, both fetched with the navigation layer:
+//   - /tower-tallies.json: the static tallies file baked from the
+//     catalog's own metadata products (total, collections, buckets,
+//     FINE eras, and the bucket×era / collection×era cubes), guarded
+//     at generation time against the server's counts file.
+//   - /api/catalog-counts: the server's facet tallies (global, or
+//     faceted within the current facet-axis selection), computed
+//     from the facet postings — the source for counts inside a
+//     collection/era selection while its records are still loading.
+// Neither is derived from resident records; resident-derived tallies
+// (facetCounts) are only ever shown in scope mode once every scope
+// the current selection needs has fully landed, at which point they
+// are exact for that selection (see facetCountsShown below).
+let talliesPromise = null;
+function loadTallies() {
+  if (!talliesPromise) {
+    talliesPromise = fetch("/tower-tallies.json")
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+  }
+  return talliesPromise;
+}
+async function fetchServerTallies(params) {
+  const qs = new URLSearchParams(params).toString();
+  const r = await fetch(`/api/catalog-counts${qs ? `?${qs}` : ""}`);
+  if (!r.ok) return null;
+  return r.json();
+}
+
 function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // Stability (2026-10-27): the +6s shard-manifest warm that used to live
   // here is REMOVED — it parsed a ~16MB manifest on every landing-page
@@ -2421,7 +2455,23 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         }
       },
       {
-        browseOnly: !fullIndexReady,
+        // Scope mode (2026-11-20 correction): while any scope is in
+        // flight, derivations run phase-0-only. fullIndexReady flips
+        // true at scope init (the init publish is "complete"), so
+        // without this every page publish restarted a FULL
+        // derivation — on-device sort orders over the whole resident
+        // set — and the current array's phase-0 data (the engine's
+        // and tallies' input) only surfaced after the PREVIOUS
+        // array's orders finished: landed pages did not become
+        // results or counts for many seconds while pages kept
+        // arriving (Joshua's recording: 8,000 Law records resident,
+        // results still "0 / No entries match"). Phase 0 is
+        // incremental over appends, so per-page phase-0 publishes
+        // are cheap; the full derivation (orders + deferred search
+        // layer) runs once the queue drains, exactly as the
+        // streaming path's completion derivation did.
+        browseOnly:
+          !fullIndexReady || (isScopeMode() && !isBrowseComplete()),
         // Server mode defers the local search layer until a hub
         // filter or strict query actually needs it (see
         // deriveTowerData's crash-fix note and the trigger effect
@@ -3510,10 +3560,61 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   const scopeLoadersRef = useRef(new Map());
   const scopeOrdCacheRef = useRef(new Map());
   const scopeRetryRef = useRef(new Map());
+  // Scope state as React state (2026-11-20 correction): the panel
+  // and the results header read scope status/totals from here —
+  // which scopes the current selection needs, each one's true total
+  // and landed count — instead of inferring "final" counts from the
+  // resident prefix. Updated by catalog.js's scope notifications.
+  const [scopeSnap, setScopeSnap] = useState(() => getScopeSnapshot());
+  const [selScopeKeys, setSelScopeKeys] = useState([]);
+  useEffect(() => onScopeChange((snap) => setScopeSnap(snap)), []);
+  // Published tallies state (see loadTallies above): the static
+  // file loads once with the navigation layer; the server tallies
+  // refetch when the facet-axis selection changes (collection /
+  // bucket / era), keyed by that selection's signature.
+  const [staticTallies, setStaticTallies] = useState(null);
+  useEffect(() => {
+    let live = true;
+    loadTallies().then((t) => {
+      if (live && t) setStaticTallies(t);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  const [serverTallies, setServerTallies] = useState(null);
+  useEffect(() => {
+    if (!serverFlag) return;
+    const params = {};
+    if (bucketFilter) {
+      if (bucketFilter.includes(":")) params.bucket = bucketFilter;
+      else params.collection = bucketFilter;
+    }
+    if (eraFilter) {
+      const bands = ERA_LOAD_BANDS[eraFilter] || [];
+      if (bands.length === 1) params.era = bands[0];
+    }
+    let live = true;
+    fetchServerTallies(params)
+      .then((t) => {
+        if (live && t) setServerTallies({ sig: JSON.stringify(params), data: t });
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+    // serverFlag read inside the callback only (TDZ convention).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bucketFilter, eraFilter]);
   useEffect(() => {
     if (!serverFlag) return;
     if (artifacts && Array.isArray(artifacts)) initScopeMode(artifacts);
     if (!isScopeMode()) return;
+    // Priority (2026-11-20 correction): every selection change
+    // takes a new tier and its scopes enqueue at that tier, so the
+    // visitor's current selection loads ahead of anything queued
+    // for an older one (the queue yields between pages).
+    const prio = bumpScopePriority();
     const loaders = new Map();
     if (bucketFilter) {
       const key = bucketFilter.includes(":")
@@ -3522,12 +3623,12 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       const filters = bucketFilter.includes(":")
         ? { bucket: bucketFilter }
         : { collection: bucketFilter };
-      loaders.set(key, () => ensureFacetScope(key, filters));
+      loaders.set(key, () => ensureFacetScope(key, filters, prio));
     }
     if (eraFilter) {
       for (const band of ERA_LOAD_BANDS[eraFilter] || []) {
         const key = `facet:era:${band}`;
-        loaders.set(key, () => ensureFacetScope(key, { era: band }));
+        loaders.set(key, () => ensureFacetScope(key, { era: band }, prio));
       }
     }
     const bitsScope = (desc) => {
@@ -3539,7 +3640,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           ords = ordinalsFromBitset(desc.bits);
           scopeOrdCacheRef.current.set(desc.bits, ords);
         }
-        ensureIndicesScope(key, ords);
+        ensureIndicesScope(key, ords, prio);
       });
     };
     bitsScope(activeCollection);
@@ -3555,9 +3656,10 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       !paperTypeKey &&
       !query
     ) {
-      loaders.set("browse", () => ensureBrowseRows(rowBudget));
+      loaders.set("browse", () => ensureBrowseRows(rowBudget, prio));
     }
     scopeLoadersRef.current = loaders;
+    setSelScopeKeys([...loaders.keys()]);
     for (const fn of loaders.values()) fn();
     const failed = [...loaders.keys()].filter(
       (k) => getScopeStatus(k) === "failed"
@@ -3778,6 +3880,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // the curated rows are already showing while the job re-runs.
   const [facetCounts, setFacetCounts] = useState(null);
   const facetJobRef = useRef(null);
+  const facetCommitRef = useRef(null);
   useEffect(() => {
     // countsReady, not its countsFinal alias: the alias is declared
     // further down the component (TDZ — referencing it here crashed
@@ -3821,6 +3924,15 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     const job = startFacetJob(input, (result) => {
       if (facetJobRef.current === job) {
         facetJobRef.current = null;
+        // Commit provenance (2026-11-20 correction): which resident
+        // length + selection these tallies describe. In scope mode
+        // the panel shows them only while that provenance matches
+        // the current artifacts/selection AND the selection's
+        // scopes have fully landed (facetCountsShown, below).
+        facetCommitRef.current = {
+          len: (artifacts || []).length,
+          sel: [bucketFilter, eraFilter, collKey, shelfKey, paperKey, paperTypeKey].join("|"),
+        };
         setFacetCounts(result);
       }
     });
@@ -3847,6 +3959,96 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     paperKey,
     paperTypeKey,
   ]);
+  // ---- Scope-mode truthfulness (2026-11-20 correction) ----------
+  // In scope mode the resident set is the bootstrap prefix plus the
+  // scopes loaded so far — a PARTIAL set by design. Three things
+  // the first scope build got wrong, all from treating that partial
+  // set as final (Joshua's 2026-11-20 phone recording):
+  //   1. isBrowseComplete() flips true whenever the scope queue
+  //      drains — including at boot over the 20,000-record prefix —
+  //      so countsReady/countsFinal dressed prefix counts as the
+  //      library's finals (Law 0, era counts of the prefix).
+  //   2. The resident facet tallies therefore committed over the
+  //      prefix the moment any selection was tapped, collapsing
+  //      every panel count to prefix numbers.
+  //   3. The results header divided by the resident length, so a
+  //      selection read "… OF 20000 ENTRIES" no matter its size.
+  // The fixes: resident tallies (facetCounts) are shown in scope
+  // mode ONLY when every scope the current selection needs has
+  // fully landed and the tally's commit provenance matches the
+  // current resident set + selection (facetCountsShown); until
+  // then the panel reads published tallies (static file + server
+  // facet tallies) and descriptor counts, which are exact from
+  // boot. The header divides by the selection's true total (the
+  // tightest published/server/scope bound), never the prefix.
+  const selScopeList = selScopeKeys.map((k) => ({
+    key: k,
+    ...(scopeSnap[k] || { status: "idle", total: 0, loaded: 0 }),
+  }));
+  const selScopesLoading = selScopeList.some(
+    (s) => s.status === "loading" || s.status === "idle"
+  );
+  const selScopesReady =
+    selScopeKeys.length > 0 && selScopeList.every((s) => s.status === "ready");
+  const selSigNow = [bucketFilter, eraFilter, collKey, shelfKey, paperKey, paperTypeKey].join("|");
+  const facetCountsShown =
+    facetCounts &&
+    (!scopeModeOn ||
+      (selScopesReady &&
+        facetCommitRef.current &&
+        facetCommitRef.current.len === (artifacts || []).length &&
+        facetCommitRef.current.sel === selSigNow))
+      ? facetCounts
+      : null;
+  const serverTalliesCurrent =
+    serverTallies &&
+    serverTallies.sig ===
+      JSON.stringify(
+        bucketFilter
+          ? eraFilter && (ERA_LOAD_BANDS[eraFilter] || []).length === 1
+            ? bucketFilter.includes(":")
+              ? { bucket: bucketFilter, era: ERA_LOAD_BANDS[eraFilter][0] }
+              : { collection: bucketFilter, era: ERA_LOAD_BANDS[eraFilter][0] }
+            : bucketFilter.includes(":")
+              ? { bucket: bucketFilter }
+              : { collection: bucketFilter }
+          : eraFilter && (ERA_LOAD_BANDS[eraFilter] || []).length === 1
+            ? { era: ERA_LOAD_BANDS[eraFilter][0] }
+            : {}
+      )
+      ? serverTallies.data
+      : null;
+  // The selection's true total as a header bound: the tightest
+  // exact-or-upper published number available — the server tallies'
+  // faceted total for a facet-axis selection, the static file's
+  // fine-era total for an era selection, each selected bitset
+  // scope's member count, each facet scope's server total. When
+  // every scope is ready the resident match count IS the total and
+  // the header uses it directly (see LibraryResults props below).
+  const selTotalBound = (() => {
+    if (!scopeModeOn) return 0;
+    let bound = 0;
+    const consider = (n) => {
+      if (n && n > 0) bound = bound ? Math.min(bound, n) : n;
+    };
+    if ((bucketFilter || eraFilter) && serverTalliesCurrent) {
+      consider(serverTalliesCurrent.total);
+    }
+    if (eraFilter && staticTallies && staticTallies.eras) {
+      consider(staticTallies.eras[eraFilter]);
+    }
+    for (const s of selScopeList) {
+      if (s.key.startsWith("bits:")) consider(s.total);
+      else if (s.key.startsWith("facet:") && !eraFilter) consider(s.total);
+    }
+    if (!bucketFilter && !eraFilter && !collKey && !shelfKey && !paperKey && !paperTypeKey) {
+      consider(worksTotalHintSafe());
+    }
+    return bound;
+  })();
+  function worksTotalHintSafe() {
+    return serverTotal != null ? serverTotal : getBrowseTotalHint() || 0;
+  }
   // Browse filter engine job (2026-11-11, design §10): computes the
   // committed match list for the current selection ONCE per
   // (selection, sort order, catalog length) — chunked into ~7ms
@@ -4666,6 +4868,96 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // result counts come from the scan, subcategory counts from
   // towerData.subCounts — neither is overlaid.
   const countsFinal = countsReady;
+  // Panel count resolvers (2026-11-20 correction): every number
+  // the filter panel shows comes from the FIRST source in its
+  // chain that is truthful for the current selection — resident
+  // tallies only once the selection's scopes are fully resident
+  // (facetCountsShown), then published tallies (server facet
+  // tallies within the selection; the static tallies file's global
+  // + cube counts), then — outside scope mode only — the resident
+  // derivation exactly as before. A resolver returns null when no
+  // truthful source exists yet, and the panel shows no number
+  // rather than a partial one (the 2026-11-13 rule, restored for
+  // scope mode: prefix counts are never dressed as finals).
+  const facetSelActive = !!(bucketFilter || eraFilter);
+  const memberSelActive = !!(collKey || shelfKey || paperKey || paperTypeKey || collSet);
+  const panelCountsFinal = scopeModeOn
+    ? !selScopesLoading || !!staticTallies || !!serverTalliesCurrent
+    : countsFinal;
+  const laneCountFor = (c) => {
+    if (facetCountsShown) return facetCountsShown.laneMap[c] || 0;
+    if (scopeModeOn) {
+      if (eraFilter && !bucketFilter && serverTalliesCurrent) {
+        return serverTalliesCurrent.collection[c] ?? null;
+      }
+      if (!eraFilter) {
+        if (bucketFilter && staticTallies && staticTallies.buckets) {
+          // A bucket lives inside exactly one collection: within a
+          // bucket selection, that collection's lane count is the
+          // bucket's own total and every other lane is truly 0.
+          return c === bucketFilter.split(":")[0]
+            ? staticTallies.buckets[bucketFilter] ?? null
+            : 0;
+        }
+        if (staticTallies && staticTallies.collections) {
+          return staticTallies.collections[c] ?? null;
+        }
+        return serverCounts ? serverCounts[c] ?? null : null;
+      }
+      return null;
+    }
+    return (discoveryData || towerData).counts[c] || 0;
+  };
+  const subCountFor = (key) => {
+    if (facetCountsShown) return facetCountsShown.subMap[key] || 0;
+    if (scopeModeOn) {
+      if (facetSelActive && serverTalliesCurrent) {
+        return serverTalliesCurrent.bucket[key] ?? null;
+      }
+      if (!facetSelActive && staticTallies && staticTallies.buckets) {
+        return staticTallies.buckets[key] ?? null;
+      }
+      return null;
+    }
+    return towerData.subCounts[key] || 0;
+  };
+  const eraCountFor = (e) => {
+    if (facetCountsShown) return facetCountsShown.eraMap[e.id] || 0;
+    if (scopeModeOn) {
+      if (!facetSelActive && !memberSelActive && staticTallies && staticTallies.eras) {
+        return staticTallies.eras[e.id] ?? null;
+      }
+      if (
+        bucketFilter &&
+        !eraFilter &&
+        !memberSelActive &&
+        staticTallies &&
+        staticTallies.cubeBucketEra
+      ) {
+        // The cubes enumerate nonzero cells only: a missing cell
+        // is a true zero (e.g. LAW x 1800s), not an unknown.
+        return staticTallies.cubeBucketEra[bucketFilter]?.[e.id] ?? 0;
+      }
+      if (
+        collKey &&
+        !eraFilter &&
+        !memberSelActive &&
+        staticTallies &&
+        staticTallies.cubeCollectionEra
+      ) {
+        return staticTallies.cubeCollectionEra[collKey]?.[e.id] ?? 0;
+      }
+      if (e.id === "1800s" && facetSelActive && serverTalliesCurrent) {
+        return serverTalliesCurrent.era["1800s"] ?? null;
+      }
+      return null;
+    }
+    return countsFinal
+      ? towerData.eraCounts
+        ? towerData.eraCounts[e.id] || 0
+        : 0
+      : null;
+  };
   const discoveryData = useMemo(() => {
     if (!towerData || !serverCounts) return towerData;
     const counts = { ...towerData.counts, ...serverCounts };
@@ -4715,9 +5007,20 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // entries the moment they arrive. Once counts are final a zero is
   // a true zero and the plain empty message returns.
   const awaitingArrival = (() => {
-    if (!bucketFilter || eraFilter || collSet || memberBitsSel) return false;
+    if (matchCount !== 0 || !towerData) return false;
     if (q && q.trim().length >= 2) return false;
-    if (countsFinal || matchCount !== 0 || !towerData) return false;
+    // Scope mode (2026-11-20 correction): a selection whose scopes
+    // are still loading and whose true total is known positive is
+    // ARRIVING, not empty — whatever axes compose it. The first
+    // scope build never entered this state for Law because
+    // countsFinal (its gate below) flips true in scope mode the
+    // moment the queue drains at boot, so the tap read "No entries
+    // match" over a 1,277,197-work collection.
+    if (scopeModeOn) {
+      return selScopesLoading && selTotalBound > 0;
+    }
+    if (!bucketFilter || eraFilter || collSet || memberBitsSel) return false;
+    if (countsFinal) return false;
     if (bucketFilter.indexOf(":") > -1) {
       const lane = bucketFilter.split(":")[0];
       return (TOWER_SUBS[lane] || []).some(
@@ -5303,7 +5606,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                     items: [],
                   }
                 : { kind: "idle" };
-          } else if (layout.kind === "group" && facetCounts && facetCounts.curatedMap) {
+          } else if (layout.kind === "group" && facetCountsShown && facetCountsShown.curatedMap) {
             // Combinations: each coil's share of the selection
             // formed by the OTHER axes — the panel's own dynamic
             // facet counts, so panel, results and scene cannot
@@ -5311,7 +5614,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
             const facets = {};
             let total = 0;
             layout.coils.forEach((c, i) => {
-              const v = facetCounts.curatedMap[c.key] || 0;
+              const v = facetCountsShown.curatedMap[c.key] || 0;
               if (v > 0) {
                 facets[i] = v;
                 total += v;
@@ -5625,7 +5928,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         })
         .catch(() => { /* decorative layer — never disturb the page */ });
     }
-  }, [q, bucketFilter, collKey, collGroup, shelfKey, paperKey, paperTypeKey, eraFilter, serverActive, serverModel, blendedModel, browseResult, artifacts, helixApiRef, countsFinal, activeFilterSummary, collData, facetCounts]);
+  }, [q, bucketFilter, collKey, collGroup, shelfKey, paperKey, paperTypeKey, eraFilter, serverActive, serverModel, blendedModel, browseResult, artifacts, helixApiRef, countsFinal, activeFilterSummary, collData, facetCountsShown]);
   // Analytics: one search_performed per settled query (900ms debounce so
   // keystrokes don't flood it), with the result count the user saw.
   useEffect(() => {
@@ -6052,7 +6355,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                       Visibility is exactly the old note's: shown only
                       while the counts are not final, gone the moment
                       they are. */}
-                  {!countsFinal && (
+                  {!panelCountsFinal && (
                     <p
                       className="tf2-note tf2-note--cataloging"
                       aria-live="polite"
@@ -6107,13 +6410,10 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                               aria-pressed={laneActive}
                             >
                               {TOWER_TOP_LABELS[c] || c}
-                              {(countsFinal || serverCounts) && (
+                              {(countsFinal || serverCounts || laneCountFor(c) != null) &&
+                                laneCountFor(c) != null && (
                                 <span className="tf2-count">
-                                  {(
-                                    facetCounts
-                                      ? facetCounts.laneMap[c] || 0
-                                      : (discoveryData || towerData).counts[c] || 0
-                                  ).toLocaleString()}
+                                  {laneCountFor(c).toLocaleString()}
                                 </span>
                               )}
                             </button>
@@ -6153,8 +6453,8 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                             </p>
                           )}
                           {collData.booksShelves.map((s, idx) => {
-                            const count = facetCounts
-                              ? facetCounts.shelfMap[s.key] || 0
+                            const count = facetCountsShown
+                              ? facetCountsShown.shelfMap[s.key] || 0
                               : s.count;
                             const shelfActive = shelfKey === s.key;
                             const wingHead =
@@ -6218,8 +6518,8 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                           )}
                           {collData.papersFields.map((f) => {
                             const fcount =
-                              facetCounts && facetCounts.paperMap
-                                ? facetCounts.paperMap[f.key] || 0
+                              facetCountsShown && facetCountsShown.paperMap
+                                ? facetCountsShown.paperMap[f.key] || 0
                                 : f.count;
                             const expanded =
                               activePaperField && activePaperField.id === f.id;
@@ -6240,8 +6540,8 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                 {expanded &&
                                   f.subs.map((s) => {
                                     const scount =
-                                      facetCounts && facetCounts.paperMap
-                                        ? facetCounts.paperMap[s.key] || 0
+                                      facetCountsShown && facetCountsShown.paperMap
+                                        ? facetCountsShown.paperMap[s.key] || 0
                                         : s.count;
                                     const subActive = paperKey === s.key;
                                     return (
@@ -6272,8 +6572,8 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                 </div>
                                 {collData.papersTypes.map((t) => {
                                   const tcount =
-                                    facetCounts && facetCounts.paperTypeMap
-                                      ? facetCounts.paperTypeMap[t.key] || 0
+                                    facetCountsShown && facetCountsShown.paperTypeMap
+                                      ? facetCountsShown.paperTypeMap[t.key] || 0
                                       : t.count;
                                   const typeActive = paperTypeKey === t.key;
                                   return (
@@ -6322,9 +6622,15 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                 whenever their data exists. */}
                             {activeSubs.map((s) => {
                               const key = `${activeLane}:${s.id}`;
-                              const count = facetCounts
-                                ? facetCounts.subMap[key] || 0
-                                : towerData.subCounts[key] || 0;
+                              // Count from the truthful-source
+                              // resolver (2026-11-20 correction):
+                              // published tallies from boot, server
+                              // tallies within a facet selection,
+                              // resident tallies only once the
+                              // selection's scopes are fully in.
+                              // Null = no truthful number yet; the
+                              // row shows without one.
+                              const count = subCountFor(key);
                               // While streaming, a zero here only means
                               // "not arrived yet" — hiding the row would
                               // silently vanish real subcategories
@@ -6335,7 +6641,11 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                               // counts active the rows stay: a zero is
                               // the truthful count within the current
                               // cross-selection.
-                              if (countsFinal && count === 0 && !facetCounts)
+                              if (
+                                count === 0 &&
+                                !facetCountsShown &&
+                                (countsFinal || (scopeModeOn && !!staticTallies))
+                              )
                                 return null;
                               const subActive = bucketFilter === key;
                               return (
@@ -6349,7 +6659,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                   aria-pressed={subActive}
                                 >
                                   <span className="tf2-sub-label">{s.label}</span>
-                                  {countsFinal && (
+                                  {count != null && (
                                     <span className="tf2-count">
                                       {count.toLocaleString()}
                                     </span>
@@ -6457,8 +6767,8 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                     {c.label}
                                   </span>
                                   <span className="tf2-count">
-                                    {(facetCounts
-                                      ? facetCounts.curatedMap[c.key] || 0
+                                    {(facetCountsShown
+                                      ? facetCountsShown.curatedMap[c.key] || 0
                                       : c.count
                                     ).toLocaleString()}
                                   </span>
@@ -6503,11 +6813,15 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                         aria-labelledby="tf2-axis-era"
                       >
                         {TOWER_ERAS.map((e) => {
-                          const count = facetCounts
-                            ? facetCounts.eraMap[e.id] || 0
-                            : towerData.eraCounts
-                              ? towerData.eraCounts[e.id] || 0
-                              : 0;
+                          // Truthful-source resolver (2026-11-20
+                          // correction): published fine-era tallies
+                          // from boot, the bucket×era cube within a
+                          // collection selection, resident tallies
+                          // once the selection's scopes are fully
+                          // in; null = no truthful number yet, and
+                          // the chip carries none rather than a
+                          // prefix count (2026-11-13 rule).
+                          const count = eraCountFor(e);
                           const on = eraFilter === e.id;
                           return (
                             <button
@@ -6518,13 +6832,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                               aria-pressed={on}
                             >
                               {e.label}
-                              {/* Era counts have no precomputed
-                                  source — while the catalog streams
-                                  they would be prefix counts, so the
-                                  chips carry no number until the
-                                  derivation is final (2026-11-13
-                                  load-state fix). */}
-                              {countsFinal && (
+                              {count != null && (
                                 <span className="tf2-count">
                                   {count.toLocaleString()}
                                 </span>
@@ -6565,8 +6873,27 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
               headingRef={resultsHeadingRef}
               provisional={!fullIndexReady}
               totalHint={worksTotal || catalogTotalHint}
+              scopeTotal={scopeModeOn ? selTotalBound : 0}
+              scopeLoading={scopeModeOn && selScopesLoading}
+              scopeReady={scopeModeOn && selScopesReady}
+              scopeFiltered={
+                !!(
+                  bucketFilter ||
+                  eraFilter ||
+                  collKey ||
+                  shelfKey ||
+                  paperKey ||
+                  paperTypeKey
+                )
+              }
               awaitingArrival={awaitingArrival}
-              awaitingLabel={activeBucketLabel}
+              awaitingLabel={
+                bucketFilter
+                  ? activeBucketLabel
+                  : activeFilterSummary !== "All entries"
+                    ? activeFilterSummary
+                    : activeBucketLabel
+              }
               q={q}
               rawQuery={query}
               go={go}
@@ -7830,6 +8157,10 @@ const LibraryResults = memo(function LibraryResults({
   headingRef,
   provisional,
   totalHint,
+  scopeTotal,
+  scopeLoading,
+  scopeReady,
+  scopeFiltered,
   awaitingArrival,
   awaitingLabel,
   q,
@@ -8127,10 +8458,23 @@ const LibraryResults = memo(function LibraryResults({
     <>
       <p className="tower-result-count" aria-live="polite">
         {matchCount} of{" "}
-        {provisional && totalHint > artifacts.length
-          ? totalHint
-          : artifacts.length}{" "}
+        {/* Scope mode (2026-11-20 correction): the denominator is
+            the SELECTION's true total — from the server tallies /
+            published tallies / scope totals — never the resident
+            prefix length, which read "… OF 20000 ENTRIES" for every
+            selection in Joshua's recording no matter its size. Once
+            the selection's scopes are fully resident the match
+            count IS the total. Outside scope mode the denominator
+            keeps its previous truthful-total rule. */}
+        {scopeTotal > 0
+          ? scopeReady && scopeFiltered
+            ? matchCount
+            : scopeTotal
+          : provisional && totalHint > artifacts.length
+            ? totalHint
+            : artifacts.length}{" "}
         {artifacts.length === 1 ? "entry" : "entries"}
+        {scopeLoading ? " — loading…" : ""}
         {/* "matching" is claimed only when a real search for this
             exact query produced the list being counted (the blended
             model carries its query) — never for a typed-but-not-yet-
@@ -8144,11 +8488,13 @@ const LibraryResults = memo(function LibraryResults({
         <p className="tower-empty-results">
           {awaitingArrival
             ? `No ${awaitingLabel} entries have loaded yet — this part of the catalog is still arriving${
-                totalHint > artifacts.length
-                  ? ` (${artifacts.length.toLocaleString(
-                      "en-US"
-                    )} of ${totalHint.toLocaleString("en-US")} loaded so far)`
-                  : ""
+                scopeTotal > 0
+                  ? ` (0 of ${scopeTotal.toLocaleString("en-US")} in this selection)`
+                  : totalHint > artifacts.length
+                    ? ` (${artifacts.length.toLocaleString(
+                        "en-US"
+                      )} of ${totalHint.toLocaleString("en-US")} loaded so far)`
+                    : ""
               }. Entries appear here on their own as the load continues.`
             : "No entries match. Clear the search or choose a different collection."}
         </p>

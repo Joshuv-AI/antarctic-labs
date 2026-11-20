@@ -29,9 +29,75 @@ const FIELD_WEIGHTS = [
   ["creator", "stem", 2.5],
 ];
 
+// Facet postings cache (2026-11-20 correction): facet files are
+// immutable per fingerprint, but the first version of the facet
+// browse path re-ran undelta + a 1.27M-entry Set construction + a
+// full sort of the posting list on EVERY page request — seconds of
+// CPU per page on the mega-collections, which is why a selected
+// collection's first entries took so long to reach the phone that
+// the selection read as empty. Delta-decoded postings are already
+// in ascending catalog order, so the decoded array is cached per
+// isolate and reused as-is: no Set, no sort, paging is a slice.
+const facetCache = new Map(); // `${fp}|${kind}|${key}` -> number[] (ascending)
+async function facetPostings(base, fp, get, kind, key) {
+  const ck = `${fp}|${kind}|${key}`;
+  if (facetCache.has(ck)) return facetCache.get(ck);
+  const f = await get(`facets/${kind}.json`);
+  const d = f && f[key];
+  const ids = d ? undelta(d) : [];
+  facetCache.set(ck, ids);
+  return ids;
+}
+
+// Intersect two ascending id arrays (two-pointer merge — the
+// posting lists' natural order makes this linear, no Sets).
+function intersectAsc(a, b) {
+  const out = [];
+  let i = 0, j = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { out.push(a[i]); i++; j++; }
+    else if (a[i] < b[j]) i++;
+    else j++;
+  }
+  return out;
+}
+
+// The selection defined by a filter set, as an ascending id array:
+// the intersection of every active facet's postings, or null when
+// no facet filter is active (the whole catalog).
+async function facetSelection(base, fp, get, filters) {
+  let acc = null;
+  for (const [kind, key] of Object.entries(filters)) {
+    if (!key) continue;
+    const ids = await facetPostings(base, fp, get, kind, key);
+    acc = acc === null ? ids : intersectAsc(acc, ids);
+    if (acc.length === 0) break;
+  }
+  return acc;
+}
+
 // Per-isolate caches, keyed by base root: the fingerprint pointer is
 // re-read at most once a minute; product files are immutable per
 // fingerprint, cached for the isolate's life.
+// Fetch a product file through the isolate cache — but only
+// successful results stay cached. The first version cached the
+// null from a failed fetch for the isolate's life, so one
+// timed-out manifest/facet fetch turned every later request in
+// that isolate into a 503 until it recycled (the 503 clusters in
+// the 2026-11-20 scope trace, which burned whole scopes' retry
+// budgets). Failures now evict themselves; the next request
+// retries the fetch.
+function cachedProductFetch(key) {
+  const p = fetch(key)
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+  fileCache.set(key, p);
+  p.then((v) => {
+    if (v === null && fileCache.get(key) === p) fileCache.delete(key);
+  });
+  return p;
+}
+
 const pointers = new Map(); // root -> { fp, at }
 const fileCache = new Map(); // `${base}/${path}` -> Promise<json|null>
 
@@ -143,12 +209,7 @@ export async function catalogHydrate(env, indices) {
     if (!fileCache.has(key)) {
       if (fetchesLeft <= 0) return Promise.resolve(null);
       fetchesLeft -= 1;
-      fileCache.set(
-        key,
-        fetch(key)
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null)
-      );
+      return cachedProductFetch(key);
     }
     return fileCache.get(key);
   };
@@ -168,6 +229,83 @@ export async function catalogHydrate(env, indices) {
     if (out[i]) results.push({ ...out[i], _idx: indices[i] });
   }
   return { results, fingerprint: fp };
+}
+
+// Published facet tallies (2026-11-20 correction — counts are
+// navigation data, decoupled from record loading): the counts file
+// the metadata build already publishes (exact global totals per
+// collection / bucket / era band), plus — when facet filters are
+// given — the same tallies computed WITHIN the selection those
+// filters define, by intersecting the cached posting lists. No
+// records are hydrated; a filtered tally costs only the posting
+// intersections, and results are memoized per isolate by filter
+// signature (the underlying products are immutable per
+// fingerprint). Era tallies are the facet file's coarse bands —
+// the client maps them onto its finer era chips only where a band
+// is exactly one chip (1800s), and otherwise relies on its
+// published tallies file for fine-era globals; band numbers are
+// never dressed as fine-era numbers.
+const countsMemo = new Map(); // `${fp}|${sig}` -> tallies object
+export async function catalogCounts(env, filters = {}) {
+  const { root, fp } = await resolveBase(env);
+  if (!fp) return { notBuilt: true };
+  const base = `${root}/meta/${fp}`;
+  let fetchesLeft = 46;
+  const get = (path) => {
+    const key = `${base}/${path}`;
+    if (!fileCache.has(key)) {
+      if (fetchesLeft <= 0) return Promise.resolve(null);
+      fetchesLeft -= 1;
+      return cachedProductFetch(key);
+    }
+    return fileCache.get(key);
+  };
+  const active = Object.entries(filters).filter(([, v]) => v);
+  const sig = active.map(([k, v]) => `${k}=${v}`).sort().join("&");
+  const memoKey = `${fp}|${sig}`;
+  if (countsMemo.has(memoKey)) return countsMemo.get(memoKey);
+  const counts = await get("counts.json");
+  if (!counts) return { notBuilt: true };
+  let out;
+  if (!active.length) {
+    out = {
+      total: counts.total,
+      collection: counts.collection || {},
+      bucket: counts.bucket || {},
+      era: counts.era || {},
+      fingerprint: fp,
+    };
+  } else {
+    const allFilters = Object.fromEntries(active);
+    const sel = await facetSelection(base, fp, get, allFilters);
+    // Facet rule (Joshua, standing): a group's counts are computed
+    // over the selection defined by the OTHER groups — its own
+    // filter never zeroes itself. Each kind's tally therefore
+    // intersects against the selection with its own kind removed.
+    const tally = async (kind) => {
+      const others = { ...allFilters };
+      delete others[kind];
+      const selOther = await facetSelection(base, fp, get, others);
+      const f = await get(`facets/${kind}.json`);
+      const map = {};
+      if (f) {
+        for (const key of Object.keys(f)) {
+          const ids = await facetPostings(base, fp, get, kind, key);
+          map[key] = selOther === null ? ids.length : intersectAsc(selOther, ids).length;
+        }
+      }
+      return map;
+    };
+    out = {
+      total: sel ? sel.length : counts.total,
+      collection: await tally("collection"),
+      bucket: await tally("bucket"),
+      era: await tally("era"),
+      fingerprint: fp,
+    };
+  }
+  countsMemo.set(memoKey, out);
+  return out;
 }
 
 export async function catalogSearch(env, { q = "", filters = {}, cursor = 0, pageSize = 25 } = {}) {
@@ -192,12 +330,7 @@ export async function catalogSearch(env, { q = "", filters = {}, cursor = 0, pag
     if (!fileCache.has(key)) {
       if (fetchesLeft <= 0) return Promise.resolve(null);
       fetchesLeft -= 1;
-      fileCache.set(
-        key,
-        fetch(key)
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null)
-      );
+      return cachedProductFetch(key);
     }
     return fileCache.get(key);
   };
@@ -205,19 +338,12 @@ export async function catalogSearch(env, { q = "", filters = {}, cursor = 0, pag
   if (!manifest) return { notBuilt: true };
   const N = manifest.total;
 
-  const facetIds = async (kind, key) => {
-    const f = await get(`facets/${kind}.json`);
-    const d = f && f[key];
-    return d ? undelta(d) : [];
-  };
   const applyFilters = async (set) => {
-    let out = set;
-    for (const [kind, key] of Object.entries(filters)) {
-      if (!key) continue;
-      const posting = new Set(await facetIds(kind, key));
-      out = out ? new Set([...out].filter((id) => posting.has(id))) : posting;
-    }
-    return out ?? new Set();
+    const sel = await facetSelection(base, fp, get, filters);
+    if (sel === null) return set ?? new Set();
+    if (!set) return new Set(sel);
+    const sorted = [...set].sort((a, b) => a - b);
+    return new Set(intersectAsc(sorted, sel));
   };
   const hydrate = async (ids) => {
     const byBlock = new Map();
@@ -346,8 +472,11 @@ export async function catalogSearch(env, { q = "", filters = {}, cursor = 0, pag
   }
 
   if (Object.values(filters).some(Boolean)) {
-    const set = await applyFilters(null);
-    const ranked = [...set].sort((a, b) => a - b);
+    // Facet browse (the library page's scope loads): the selection
+    // is the cached ascending posting intersection — paging slices
+    // it directly. No per-request Set/sort over the whole posting
+    // (2026-11-20 correction; see facetPostings above).
+    const ranked = (await facetSelection(base, fp, get, filters)) || [];
     return page(ranked, ranked.length);
   }
   const pageIds = [];

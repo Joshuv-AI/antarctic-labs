@@ -67,10 +67,78 @@ async function fetchTO(url, signal) {
   }
 }
 
+// Deep-search device gate + manifest size cap (2026-11-20
+// correction, search-crash lane findings): the search index's
+// manifest.json has grown to ~192 MB (600k doc entries). Downloading
+// and JSON-parsing it on a phone — beside the resident catalog store
+// and the WebGL scene — jetsam-kills the tab, and because a ?q= URL
+// refires the search on every reload, the crash loops (Joshua's
+// 2026-11-20 recording: three renderer deaths in 31 s on
+// /tower-of-babel?q=bible). The server search model is complete
+// without the deep layer (the same query returns its full ranked
+// results from /api/catalog-search), and callers already treat
+// { state: "unavailable" } as "server results only". So:
+//   - phone-class / constrained clients NEVER pull the manifest:
+//     iOS/Android-mobile user agents, deviceMemory <= 4 GB, or
+//     save-data connections are gated off entirely;
+//   - every other client gets a hard decoded-size cap: the body is
+//     stream-read with a byte counter and aborted past the cap, and
+//     an over-cap Content-Length is refused up front. (The old 8 s
+//     timeout covered only response headers; the .json() parse of
+//     an unbounded body was the actual kill path.)
+// The durable fix — a paginated docs product / server-side deep
+// search — is a build-product change; until it lands, deep search
+// simply stays off where it cannot run safely.
+const MAX_MANIFEST_BYTES = 64 * 1024 * 1024;
+function deepSearchGated() {
+  try {
+    const ua = navigator.userAgent || "";
+    if (/iPhone|iPad|iPod/.test(ua)) return true;
+    if (/Android/.test(ua) && /Mobile/.test(ua)) return true;
+    if (typeof navigator.deviceMemory === "number" && navigator.deviceMemory <= 4) {
+      return true;
+    }
+    const conn = navigator.connection;
+    if (conn && conn.saveData) return true;
+  } catch {
+    // A gate that cannot read its signals must not block search.
+  }
+  return false;
+}
+
 async function getManifest(signal) {
+  if (deepSearchGated()) return null;
   if (!manifestPromise) {
     manifestPromise = fetchTO("/search-index/manifest.json", signal)
-      .then((r) => (r.ok ? r.json() : null))
+      .then(async (r) => {
+        if (!r.ok) return null;
+        const declared = Number(r.headers.get("content-length") || 0);
+        if (declared && declared > MAX_MANIFEST_BYTES) return null;
+        if (!r.body || typeof r.body.getReader !== "function") {
+          // No stream to count: fall back to the header check only.
+          return r.json();
+        }
+        const reader = r.body.getReader();
+        const chunks = [];
+        let bytes = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          bytes += value.byteLength;
+          if (bytes > MAX_MANIFEST_BYTES) {
+            try { reader.cancel(); } catch {}
+            return null;
+          }
+          chunks.push(value);
+        }
+        const buf = new Uint8Array(bytes);
+        let off = 0;
+        for (const c of chunks) {
+          buf.set(c, off);
+          off += c.byteLength;
+        }
+        return JSON.parse(new TextDecoder().decode(buf));
+      })
       .then((m) => (m && Array.isArray(m.docs) && m.docs.length ? m : null))
       .catch((e) => {
         if (e && e.name === "AbortError") throw e;
@@ -143,6 +211,10 @@ function findPhraseMatches(stems, phrase) {
 // is NOT a failure: it returns { state: "aborted" } so the caller can keep
 // showing the previous results.
 export async function searchDeep(rawQuery, { maxWorks = 250, signal = null } = {}) {
+  // Device gate (2026-11-20): on phone-class/constrained clients the
+  // deep layer never runs — see getManifest's note. The server
+  // search model carries the results on those devices.
+  if (deepSearchGated()) return { state: "unavailable" };
   const q = parseQueryV2(rawQuery);
   if (q.unsearchable) return { state: "empty" };
   let manifest;

@@ -1796,13 +1796,55 @@ function withStartBudget(promise, ms) {
 // when the queue drains — the settled signal derivations key off.
 let scopeMode = false;
 let scopeStore = null;
-const scopeMap = new Map(); // key -> { status, total, loaded }
-let scopeQueue = Promise.resolve();
+const scopeMap = new Map(); // key -> { status, total, loaded, kind, filters, indices }
+// Priority scope queue (2026-11-20 correction): the first version
+// chained every scope onto one promise, so a mega-scope (LAW = 639
+// pages) starved every later selection behind its full run, and a
+// scope's total only became known when its first page landed —
+// minutes in, if the queue ahead was long. The queue is now a
+// priority list drained by one worker: enqueueing a scope for the
+// CURRENT selection bumps every not-yet-started scope of that
+// selection to the front, and the running scope yields between
+// pages to a bumped scope (its runner re-queues itself at the
+// front and resumes from its saved cursor). One fetch in flight at
+// a time still — serialized, never a parallel storm — but the
+// visitor's latest tap always loads next.
+let scopeQueue = []; // [{ key, rec, runner, seq }]
+let scopeSeq = 0;
+let scopeWorkerRunning = false;
 let scopeActive = 0; // scopes queued or running
 let scopeTotalHint = 0;
 let browseScopeCursor = 0; // unfiltered-browse ordinal frontier
 let browseScopeDone = false;
 let browseRowsWanted = 0;
+// Scope-state subscribers (2026-11-20 correction): the filter panel
+// needs scope status/total/loaded as STATE — which scopes are
+// loading, each selected scope's TRUE server total (known from its
+// first page, and for bitset scopes from the bitset itself before
+// any fetch), and how much has landed — so it can show true totals
+// with an honest loading state instead of deriving "final" counts
+// from the resident prefix. Version bumps on every scope-state
+// change; getScopeSnapshot() returns a plain map for React state.
+const scopeListeners = new Set();
+let scopeVersion = 0;
+function scopeNotify() {
+  scopeVersion++;
+  const snap = getScopeSnapshot();
+  scopeListeners.forEach((cb) => {
+    try { cb(snap, scopeVersion); } catch {}
+  });
+}
+export function onScopeChange(cb) {
+  scopeListeners.add(cb);
+  return () => { scopeListeners.delete(cb); };
+}
+export function getScopeSnapshot() {
+  const out = {};
+  for (const [k, r] of scopeMap) {
+    out[k] = { status: r.status, total: r.total || 0, loaded: r.loaded || 0, kind: r.kind || "" };
+  }
+  return out;
+}
 
 export function isScopeMode() {
   return scopeMode;
@@ -1872,30 +1914,39 @@ async function scopeFetchJson(url, body) {
   throw lastErr || new Error(`scope fetch failed: ${url}`);
 }
 
-async function runFacetScope(rec, filters) {
-  let cursor = 0;
-  for (;;) {
-    const params = new URLSearchParams();
-    for (const [k, v] of Object.entries(filters)) if (v) params.set(k, v);
-    params.set("cursor", String(cursor));
-    params.set("pagesize", String(SCOPE_PAGE));
-    const out = await scopeFetchJson(`/api/catalog-search?${params.toString()}`);
-    if (!out || !Array.isArray(out.results)) {
-      throw new Error("facet scope page malformed");
-    }
-    if (typeof out.total === "number") rec.total = out.total;
-    appendRecordsToStore(scopeStore, out.results);
-    if (out.next_cursor == null || out.next_cursor <= cursor) {
-      // A non-advancing cursor is treated as exhaustion: the scope
-      // queue is serialized, so a looping scope would starve every
-      // later selection.
-      rec.loaded = rec.total || cursor + out.results.length;
-      return;
-    }
-    cursor = out.next_cursor;
-    rec.loaded = cursor;
-    scopePublish(false);
+// One step of a facet scope: fetch ONE page at rec.cursor, append
+// it, publish it, and report whether the scope is exhausted. The
+// runner is resumable by construction (2026-11-20 correction): the
+// cursor lives on the scope record, so a scope that yields to a
+// newer selection — or restarts after a failure — resumes from the
+// page it stopped at instead of re-offering every page (dedupe made
+// the old restart-from-zero safe but not free).
+async function stepFacetScope(rec) {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(rec.filters || {})) if (v) params.set(k, v);
+  params.set("cursor", String(rec.cursor || 0));
+  params.set("pagesize", String(SCOPE_PAGE));
+  const out = await scopeFetchJson(`/api/catalog-search?${params.toString()}`);
+  if (!out || !Array.isArray(out.results)) {
+    throw new Error("facet scope page malformed");
   }
+  if (typeof out.total === "number" && out.total !== rec.total) {
+    rec.total = out.total;
+  }
+  appendRecordsToStore(scopeStore, out.results);
+  const cursor = rec.cursor || 0;
+  if (out.next_cursor == null || out.next_cursor <= cursor) {
+    // A non-advancing cursor is treated as exhaustion: the scope
+    // queue is serialized, so a looping scope would starve every
+    // later selection.
+    rec.loaded = rec.total || cursor + out.results.length;
+    return true;
+  }
+  rec.cursor = out.next_cursor;
+  rec.loaded = rec.cursor;
+  scopePublish(false);
+  scopeNotify();
+  return false;
 }
 
 // Hydrate one bitset scope: member ordinals ascending, packed into
@@ -1905,113 +1956,213 @@ async function runFacetScope(rec, filters) {
 // hydratable in that same invocation (no partial-page retries).
 const HYDRATE_MAX_INDICES = 1500;
 const HYDRATE_MAX_BLOCKS = 40;
-async function runIndicesScope(rec, indices) {
-  rec.total = indices.length;
-  let i = 0;
-  while (i < indices.length) {
-    let j = i;
-    let blocks = 0;
-    let lastBlock = -1;
-    while (j < indices.length && j - i < HYDRATE_MAX_INDICES) {
-      const b = Math.floor(indices[j] / 1000);
-      if (b !== lastBlock) {
-        if (blocks >= HYDRATE_MAX_BLOCKS) break;
-        blocks++;
-        lastBlock = b;
+// One step of a hydrate scope: POST one block-packed batch at
+// rec.pos (same packing discipline as before — at most 1500 indices
+// spanning at most 40 record blocks per request, inside the
+// function's subrequest budget). Resumable like the facet runner.
+async function stepIndicesScope(rec) {
+  const indices = rec.indices || [];
+  let i = rec.pos || 0;
+  let j = i;
+  let blocks = 0;
+  let lastBlock = -1;
+  while (j < indices.length && j - i < HYDRATE_MAX_INDICES) {
+    const b = Math.floor(indices[j] / 1000);
+    if (b !== lastBlock) {
+      if (blocks >= HYDRATE_MAX_BLOCKS) break;
+      blocks++;
+      lastBlock = b;
+    }
+    j++;
+  }
+  const out = await scopeFetchJson("/api/catalog-hydrate", {
+    indices: indices.slice(i, j),
+  });
+  if (!out || !Array.isArray(out.results)) {
+    throw new Error("hydrate scope page malformed");
+  }
+  appendRecordsToStore(scopeStore, out.results);
+  rec.loaded = j;
+  rec.pos = j;
+  if (j < indices.length) {
+    scopePublish(false);
+    scopeNotify();
+    return false;
+  }
+  return true;
+}
+
+// One step of the unfiltered-browse scope: one page toward the
+// current row budget. The budget can grow while the scope is
+// queued (Load more), so "done" is judged against the live budget
+// each step; ensureBrowseRows re-enqueues when it grows.
+async function stepBrowseScope(rec) {
+  if (browseScopeDone || browseScopeCursor >= browseRowsWanted) return true;
+  const out = await scopeFetchJson(
+    `/api/catalog-search?cursor=${browseScopeCursor}&pagesize=${SCOPE_PAGE}`
+  );
+  if (!out || !Array.isArray(out.results)) {
+    throw new Error("browse scope page malformed");
+  }
+  if (typeof out.total === "number") rec.total = out.total;
+  appendRecordsToStore(scopeStore, out.results);
+  if (out.next_cursor == null || out.next_cursor <= browseScopeCursor) {
+    browseScopeDone = true;
+    browseScopeCursor = rec.total || browseScopeCursor + out.results.length;
+  } else {
+    browseScopeCursor = out.next_cursor;
+  }
+  rec.loaded = browseScopeCursor;
+  if (!browseScopeDone && browseScopeCursor < browseRowsWanted) {
+    scopePublish(false);
+    scopeNotify();
+    return false;
+  }
+  return true;
+}
+
+// The priority worker: drains scopeQueue one step at a time. A
+// queued entry whose key was bumped after it was enqueued runs
+// first (stable within a bump round); a running scope re-queues
+// itself at the FRONT of its own priority tier after each step,
+// and yields entirely when a bumped (newer-selection) scope is
+// waiting — it re-enters BEHIND the bumped tier, resumable from
+// its saved cursor/pos. scopeActive counts scopes with status
+// "loading" (queued or running) exactly as before, so the settled
+// signal (isBrowseComplete) keeps its meaning: no selected scope
+// in flight.
+function scopeDrain() {
+  if (scopeWorkerRunning) return;
+  scopeWorkerRunning = true;
+  (async () => {
+    try {
+      for (;;) {
+        // Highest bump tier first; FIFO inside a tier.
+        let best = -1;
+        for (let i = 0; i < scopeQueue.length; i++) {
+          if (best < 0 || scopeQueue[i].prio > scopeQueue[best].prio) best = i;
+        }
+        if (best < 0) break;
+        const item = scopeQueue.splice(best, 1)[0];
+        const rec = item.rec;
+        let done = false;
+        try {
+          done = await item.step(rec);
+        } catch {
+          rec.status = "failed";
+          scopeActive--;
+          scopeNotify();
+          scopePublish(scopeActive === 0);
+          continue;
+        }
+        if (done) {
+          rec.status = "ready";
+          scopeActive--;
+          scopeNotify();
+          scopePublish(scopeActive === 0);
+        } else {
+          // More pages: re-queue at this scope's tier front —
+          // unless a bumped scope waits, in which case this scope
+          // re-enters behind the bumped tier (prio of the newest
+          // bump minus epsilon is expressed by tier numbers: the
+          // yield drops the scope to tier 0 if it was bumped-tier).
+          const bumpedWaiting = scopeQueue.some((q) => q.prio > item.prio);
+          if (bumpedWaiting && item.prio > 0) item.prio = 0;
+          scopeQueue.unshift(item);
+        }
       }
-      j++;
+    } finally {
+      scopeWorkerRunning = false;
+      if (scopeQueue.length) scopeDrain();
     }
-    const out = await scopeFetchJson("/api/catalog-hydrate", {
-      indices: indices.slice(i, j),
-    });
-    if (!out || !Array.isArray(out.results)) {
-      throw new Error("hydrate scope page malformed");
-    }
-    appendRecordsToStore(scopeStore, out.results);
-    rec.loaded = j;
-    i = j;
-    if (i < indices.length) scopePublish(false);
-  }
+  })();
 }
 
-async function runBrowseScope(rec) {
-  while (!browseScopeDone && browseScopeCursor < browseRowsWanted) {
-    const out = await scopeFetchJson(
-      `/api/catalog-search?cursor=${browseScopeCursor}&pagesize=${SCOPE_PAGE}`
-    );
-    if (!out || !Array.isArray(out.results)) {
-      throw new Error("browse scope page malformed");
-    }
-    if (typeof out.total === "number") rec.total = out.total;
-    appendRecordsToStore(scopeStore, out.results);
-    if (out.next_cursor == null || out.next_cursor <= browseScopeCursor) {
-      browseScopeDone = true;
-      browseScopeCursor = rec.total || browseScopeCursor + out.results.length;
-    } else {
-      browseScopeCursor = out.next_cursor;
-    }
-    rec.loaded = browseScopeCursor;
-    if (!browseScopeDone && browseScopeCursor < browseRowsWanted) {
-      scopePublish(false);
-    }
-  }
-}
-
-function enqueueScope(key, runner, rerun = false) {
+function enqueueScope(key, step, opts = {}) {
   const existing = scopeMap.get(key);
-  if (existing && existing.status !== "failed" && !(rerun && existing.status === "ready")) {
+  if (existing && existing.status === "loading") {
+    // Already queued or running: a re-ensure with priority bumps
+    // its queued entry (the running entry is re-tiered when it
+    // re-queues after its current step).
+    if (opts.prio) {
+      for (const q of scopeQueue) if (q.key === key) q.prio = opts.prio;
+      if (existing.queuedItem) existing.queuedItem.prio = opts.prio;
+    }
     return existing;
   }
-  const rec = existing || { status: "loading", total: 0, loaded: 0 };
+  if (existing && existing.status === "ready" && !opts.rerun) return existing;
+  const rec = existing || {
+    status: "loading", total: 0, loaded: 0, cursor: 0, pos: 0,
+    kind: opts.kind || "", filters: opts.filters || null, indices: opts.indices || null,
+  };
   rec.status = "loading";
+  if (opts.kind) rec.kind = opts.kind;
+  if (opts.filters) rec.filters = opts.filters;
+  if (opts.indices) rec.indices = opts.indices;
+  if (opts.totalHint && !rec.total) rec.total = opts.totalHint;
   scopeMap.set(key, rec);
   scopeActive++;
-  scopeQueue = scopeQueue.then(async () => {
-    try {
-      await runner(rec);
-      rec.status = "ready";
-    } catch {
-      rec.status = "failed";
-    } finally {
-      scopeActive--;
-      scopePublish(scopeActive === 0);
-    }
-  });
+  const item = { key, rec, step, prio: opts.prio || 0, seq: scopeSeq++ };
+  rec.queuedItem = item;
+  scopeQueue.push(item);
+  scopeNotify();
+  scopeDrain();
   return rec;
+}
+
+// Priority tiers: each new selection bumps its scopes above
+// everything queued for older selections. The tier is a monotone
+// counter handed out by pages.jsx per selection change
+// (bumpScopePriority returns the tier to pass to the ensures).
+let scopePrioCounter = 0;
+export function bumpScopePriority() {
+  return ++scopePrioCounter;
 }
 
 // Load (or resume loading) one facet scope — a collection, a bucket,
 // or an era band — keyed by the caller so repeat selections are free.
-export function ensureFacetScope(key, filters) {
+export function ensureFacetScope(key, filters, prio = 0) {
   if (!scopeMode) return null;
-  return enqueueScope(key, (rec) => runFacetScope(rec, filters));
+  return enqueueScope(key, stepFacetScope, { kind: "facet", filters, prio });
 }
 
 // Load one bitset scope (curated collection, Books shelf, Papers
-// field/subfield/type) from its member ordinals.
-export function ensureIndicesScope(key, indices) {
+// field/subfield/type) from its member ordinals. The scope's total
+// is the bitset's member count — known before any fetch, so the
+// panel can state it from the tap itself.
+export function ensureIndicesScope(key, indices, prio = 0) {
   if (!scopeMode) return null;
   if (!indices || !indices.length) {
-    const rec = { status: "ready", total: 0, loaded: 0 };
+    const rec = { status: "ready", total: 0, loaded: 0, kind: "bits" };
     scopeMap.set(key, rec);
+    scopeNotify();
     return rec;
   }
-  return enqueueScope(key, (rec) => runIndicesScope(rec, indices));
+  return enqueueScope(key, stepIndicesScope, {
+    kind: "bits", indices, totalHint: indices.length, prio,
+  });
 }
 
 // Grow the unfiltered browse residency to at least n rows (the
 // list's Load-more path). Pages in catalog order from the bootstrap
 // frontier; already-resident scope records dedupe against it.
-export function ensureBrowseRows(n) {
+export function ensureBrowseRows(n, prio = 0) {
   if (!scopeMode || browseScopeDone) return;
   if (n > browseRowsWanted) browseRowsWanted = n;
   if (browseScopeCursor >= browseRowsWanted) return;
-  enqueueScope("browse", runBrowseScope, true);
+  enqueueScope("browse", stepBrowseScope, { kind: "browse", rerun: true, prio });
 }
 
 export function getScopeStatus(key) {
   const rec = scopeMap.get(key);
   return rec ? rec.status : "idle";
+}
+
+// True while ANY scope (selected or still draining) is in flight —
+// the header/panel loading signal. (isBrowseComplete keeps the
+// narrower settled meaning derivations key off.)
+export function scopeSettled() {
+  return scopeActive === 0;
 }
 
 // Keys of scopes whose last load exhausted its retries — the
