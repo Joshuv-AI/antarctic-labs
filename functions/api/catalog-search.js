@@ -34,9 +34,13 @@ export async function onRequestGet({ request, env }) {
   // costs the function no extra subrequests. Raised 500 -> 2000 on
   // 2026-11-10 (load-speed fix): the pipelined streamer pulls
   // 2000-record pages, 4x fewer requests to stream the catalog.
+  // Raised 2000 -> 5000 on 2026-11-20 (counts-speed fix): the
+  // selection scope loader fetches 5000-record pages, 4 in flight —
+  // hydration is still only ~5 record blocks per page, far inside
+  // the subrequest budget.
   const pageSizeRaw = Number.parseInt(url.searchParams.get("pagesize") || "25", 10);
   const pageSize = Number.isFinite(pageSizeRaw)
-    ? Math.min(2000, Math.max(25, pageSizeRaw))
+    ? Math.min(5000, Math.max(25, pageSizeRaw))
     : 25;
   try {
     const out = await catalogSearch(env, { q, filters, cursor, pageSize });

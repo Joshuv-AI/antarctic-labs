@@ -3613,7 +3613,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     // Priority (2026-11-20 correction): every selection change
     // takes a new tier and its scopes enqueue at that tier, so the
     // visitor's current selection loads ahead of anything queued
-    // for an older one (the queue yields between pages).
+    // for an older one (the queue yields between steps).
     const prio = bumpScopePriority();
     const loaders = new Map();
     if (bucketFilter) {
@@ -3623,7 +3623,16 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       const filters = bucketFilter.includes(":")
         ? { bucket: bucketFilter }
         : { collection: bucketFilter };
-      loaders.set(key, () => ensureFacetScope(key, filters, prio));
+      // Published total as the scope's totalHint (2026-11-20
+      // counts-speed fix): the parallel stepper bounds its first
+      // batch by the known total instead of speculatively paging
+      // past the end of small scopes (Documents: 363 records, one
+      // page). Absent the tallies file the hint is 0 = unknown and
+      // the first page's response teaches the total, as before.
+      const hint = bucketFilter.includes(":")
+        ? staticTallies?.buckets?.[bucketFilter]
+        : staticTallies?.collections?.[bucketFilter];
+      loaders.set(key, () => ensureFacetScope(key, filters, prio, hint || 0));
     }
     if (eraFilter) {
       for (const band of ERA_LOAD_BANDS[eraFilter] || []) {
@@ -4879,16 +4888,53 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // truthful source exists yet, and the panel shows no number
   // rather than a partial one (the 2026-11-13 rule, restored for
   // scope mode: prefix counts are never dressed as finals).
+  // Facet-axes-only selections (2026-11-20 counts-speed fix) take
+  // a published-tallies path AHEAD of the resident tallies in all
+  // three resolvers below: when the selection touches only the
+  // lane / bucket / era axes, the static tallies file and its
+  // cubes state every axis's faceted counts exactly, so the panel
+  // shows the same numbers during a selection's load as after it
+  // — resident tallies can only describe what has landed, which
+  // for an unloaded lane is the bootstrap prefix, not the truth.
   const facetSelActive = !!(bucketFilter || eraFilter);
   const memberSelActive = !!(collKey || shelfKey || paperKey || paperTypeKey || collSet);
   const panelCountsFinal = scopeModeOn
     ? !selScopesLoading || !!staticTallies || !!serverTalliesCurrent
     : countsFinal;
   const laneCountFor = (c) => {
+    if (scopeModeOn && !memberSelActive) {
+      // Facet axes only (lane / bucket / era selected, no member
+      // axis): published truth in EVERY state — during load and
+      // after load identically, never resident-derived. The lane
+      // axis is one group with its buckets, so its counts ignore
+      // the lane/bucket selection itself (2026-11-14 faceted
+      // rule): the global published totals, or — when an era is
+      // also selected — the era column of the published
+      // collection x era cube. The resident tallies this path
+      // replaces read the bootstrap prefix for every lane whose
+      // scope never loaded (Papers 1,784 after a Reference load —
+      // Joshua's 2026-11-20 16:27 recording), and the branch it
+      // bypasses below mistook a bare lane key ("REFERENCE") for
+      // a bucket key, zeroing every other lane and leaving the
+      // selected chip numberless for the whole load.
+      if (eraFilter) {
+        if (staticTallies && staticTallies.cubeCollectionEra) {
+          return staticTallies.cubeCollectionEra[c]?.[eraFilter] ?? 0;
+        }
+        if (!bucketFilter && serverTalliesCurrent) {
+          return serverTalliesCurrent.collection[c] ?? 0;
+        }
+        return null;
+      }
+      if (staticTallies && staticTallies.collections) {
+        return staticTallies.collections[c] ?? null;
+      }
+      return serverCounts ? serverCounts[c] ?? null : null;
+    }
     if (facetCountsShown) return facetCountsShown.laneMap[c] || 0;
     if (scopeModeOn) {
       if (eraFilter && !bucketFilter && serverTalliesCurrent) {
-        return serverTalliesCurrent.collection[c] ?? null;
+        return serverTalliesCurrent.collection[c] ?? 0;
       }
       if (!eraFilter) {
         if (bucketFilter && staticTallies && staticTallies.buckets) {
@@ -4909,19 +4955,69 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     return (discoveryData || towerData).counts[c] || 0;
   };
   const subCountFor = (key) => {
+    if (scopeModeOn && !memberSelActive) {
+      // Facet axes only: published truth in every state (see
+      // laneCountFor). A bucket belongs to exactly one lane, so
+      // its published total IS its within-lane count; with an era
+      // also selected, the bucket x era cube states the exact
+      // within-era count (the server facet tallies condition only
+      // on the coarse facet bands, never the fine client eras).
+      if (eraFilter) {
+        if (staticTallies && staticTallies.cubeBucketEra) {
+          return staticTallies.cubeBucketEra[key]?.[eraFilter] ?? 0;
+        }
+        if (serverTalliesCurrent) {
+          return serverTalliesCurrent.bucket[key] ?? 0;
+        }
+        return null;
+      }
+      // The published buckets map enumerates every nonzero bucket:
+      // a taxonomy bucket missing from it is a TRUE zero, shown as
+      // 0 like every other true zero (era chips included) — never
+      // a silently blank row ("Other Law", Joshua's 2026-11-20
+      // 16:39 recording). The same holds for the server facet
+      // map, which is complete for its selection.
+      if (staticTallies && staticTallies.buckets) {
+        return staticTallies.buckets[key] ?? 0;
+      }
+      if (facetSelActive && serverTalliesCurrent) {
+        return serverTalliesCurrent.bucket[key] ?? 0;
+      }
+      return null;
+    }
     if (facetCountsShown) return facetCountsShown.subMap[key] || 0;
     if (scopeModeOn) {
       if (facetSelActive && serverTalliesCurrent) {
-        return serverTalliesCurrent.bucket[key] ?? null;
+        return serverTalliesCurrent.bucket[key] ?? 0;
       }
       if (!facetSelActive && staticTallies && staticTallies.buckets) {
-        return staticTallies.buckets[key] ?? null;
+        return staticTallies.buckets[key] ?? 0;
       }
       return null;
     }
     return towerData.subCounts[key] || 0;
   };
   const eraCountFor = (e) => {
+    if (scopeModeOn && !memberSelActive) {
+      // Facet axes only: published truth in every state (see
+      // laneCountFor). The era axis ignores its own selection:
+      // within a lane/bucket selection the published cubes state
+      // the era distribution exactly (nonzero cells only — a
+      // missing cell is a true zero); with no lane/bucket
+      // selection the global fine-era tallies hold, whether or
+      // not an era is selected. The branch this replaces keyed
+      // the bucket cube on a bare lane key ("REFERENCE"), which
+      // is not a bucket key — every era read 0 for the whole
+      // load (Joshua's 2026-11-20 16:27 recording).
+      if (!staticTallies) return null;
+      if (bucketFilter) {
+        const cube = bucketFilter.includes(":")
+          ? staticTallies.cubeBucketEra
+          : staticTallies.cubeCollectionEra;
+        return cube ? cube[bucketFilter]?.[e.id] ?? 0 : null;
+      }
+      return staticTallies.eras ? staticTallies.eras[e.id] ?? null : null;
+    }
     if (facetCountsShown) return facetCountsShown.eraMap[e.id] || 0;
     if (scopeModeOn) {
       if (!facetSelActive && !memberSelActive && staticTallies && staticTallies.eras) {
@@ -6644,7 +6740,8 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                               if (
                                 count === 0 &&
                                 !facetCountsShown &&
-                                (countsFinal || (scopeModeOn && !!staticTallies))
+                                !scopeModeOn &&
+                                countsFinal
                               )
                                 return null;
                               const subActive = bucketFilter === key;

@@ -1819,10 +1819,13 @@ const scopeMap = new Map(); // key -> { status, total, loaded, kind, filters, in
 // priority list drained by one worker: enqueueing a scope for the
 // CURRENT selection bumps every not-yet-started scope of that
 // selection to the front, and the running scope yields between
-// pages to a bumped scope (its runner re-queues itself at the
-// front and resumes from its saved cursor). One fetch in flight at
-// a time still — serialized, never a parallel storm — but the
-// visitor's latest tap always loads next.
+// steps to a bumped scope (its runner re-queues itself at the
+// front and resumes from its saved cursor). One SCOPE at a time
+// still — but a step fetches a bounded batch of its own pages
+// concurrently (SCOPE_PARALLEL) and appends them in order, so
+// the serialization that protects priority and yield semantics
+// lives between steps, not between pages — and the visitor's
+// latest tap always loads next.
 let scopeQueue = []; // [{ key, rec, runner, seq }]
 let scopeSeq = 0;
 let scopeWorkerRunning = false;
@@ -1911,7 +1914,21 @@ function scopePublish(complete) {
   publishIndex(createCatalogView(scopeStore, scopeStore.count), complete);
 }
 
-const SCOPE_PAGE = 2000;
+const SCOPE_PAGE = 5000;
+// Pages in flight per scope step (2026-11-20 counts-speed fix): a
+// facet scope's pages are pure offset slices of one posting list
+// — every cursor is computable in advance — so a step fetches
+// SCOPE_PARALLEL pages concurrently and appends them strictly in
+// cursor order, publishing once per batch. The serialized
+// one-page-at-a-time drain cost ~0.7–1 s per 2,000-record page:
+// Reference (41,137) took 15–20 s of pure stepping and Law
+// (1,277,197, 639 pages) could never finish in a session
+// (Joshua's 2026-11-20 16:27 recording). The worker still runs
+// ONE scope at a time — priority tiers and the yield between
+// steps are unchanged, so a bumped selection still preempts
+// between batches — the parallelism lives inside the step,
+// bounded at SCOPE_PARALLEL pages of SCOPE_PAGE records.
+const SCOPE_PARALLEL = 4;
 const SCOPE_FETCH_DELAYS_MS = [600, 1800, 4000];
 
 // One JSON fetch (GET, or POST with a JSON body) under the boot
@@ -1955,48 +1972,97 @@ async function scopeFetchJson(url, body) {
 // newer selection — or restarts after a failure — resumes from the
 // page it stopped at instead of re-offering every page (dedupe made
 // the old restart-from-zero safe but not free).
-async function stepFacetScope(rec) {
+async function fetchFacetScopePage(rec, cursor) {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(rec.filters || {})) if (v) params.set(k, v);
-  params.set("cursor", String(rec.cursor || 0));
+  params.set("cursor", String(cursor));
   params.set("pagesize", String(SCOPE_PAGE));
   const out = await scopeFetchJson(`/api/catalog-search?${params.toString()}`);
   if (!out || !Array.isArray(out.results)) {
     throw new Error("facet scope page malformed");
   }
-  if (typeof out.total === "number" && out.total !== rec.total) {
-    rec.total = out.total;
+  return out;
+}
+
+// One step of a facet scope: fetch a batch of pages concurrently,
+// append strictly in cursor order (2026-11-20 counts-speed fix —
+// see SCOPE_PARALLEL). A page that fails mid-batch stops the
+// walk: the successful prefix stays appended, rec.cursor points
+// at the failed page, and the step reports progress (not done),
+// so the next step resumes exactly there — appended pages are
+// never refetched and the scope never restarts at page 0. Only a
+// failure of the batch's FIRST page throws (the drain's existing
+// failure path: the scope is marked failed and a later ensure
+// resumes it from rec.cursor).
+async function stepFacetScope(rec) {
+  const start = rec.cursor || 0;
+  let nPages = SCOPE_PARALLEL;
+  // rec.total starts at 0 meaning "unknown" (enqueueScope's
+  // initial value; the first page's response sets it) — only a
+  // positive total bounds the batch. A scope whose true total is
+  // 0 still pages once and exhausts on the empty first page.
+  if (typeof rec.total === "number" && rec.total > 0) {
+    if (rec.total <= start) return true;
+    nPages = Math.min(
+      SCOPE_PARALLEL,
+      Math.ceil((rec.total - start) / SCOPE_PAGE),
+    );
   }
-  appendRecordsToStore(scopeStore, out.results);
-  const cursor = rec.cursor || 0;
-  if (out.next_cursor == null || out.next_cursor <= cursor) {
-    // A non-advancing cursor is treated as exhaustion: the scope
-    // queue is serialized, so a looping scope would starve every
-    // later selection.
-    rec.loaded = rec.total || cursor + out.results.length;
-    return true;
+  const cursors = [];
+  for (let k = 0; k < nPages; k++) cursors.push(start + k * SCOPE_PAGE);
+  const pages = await Promise.all(
+    cursors.map((cursor) =>
+      fetchFacetScopePage(rec, cursor).then(
+        (out) => ({ cursor, out }),
+        (err) => ({ cursor, err }),
+      ),
+    ),
+  );
+  pages.sort((a, b) => a.cursor - b.cursor);
+  let expected = start;
+  let appended = false;
+  for (const page of pages) {
+    if (page.err || page.cursor !== expected) {
+      if (!appended) {
+        throw page.err || new Error("facet scope page gap");
+      }
+      break;
+    }
+    const out = page.out;
+    if (typeof out.total === "number" && out.total !== rec.total) {
+      rec.total = out.total;
+    }
+    appendRecordsToStore(scopeStore, out.results);
+    appended = true;
+    if (out.next_cursor == null || out.next_cursor <= page.cursor) {
+      // A non-advancing cursor is treated as exhaustion: the scope
+      // queue runs one scope at a time, so a looping scope would
+      // starve every later selection.
+      rec.loaded = rec.total || page.cursor + out.results.length;
+      return true;
+    }
+    expected = out.next_cursor;
   }
-  rec.cursor = out.next_cursor;
-  rec.loaded = rec.cursor;
+  rec.cursor = expected;
+  rec.loaded = expected;
   scopePublish(false);
   scopeNotify();
   return false;
 }
 
-// Hydrate one bitset scope: member ordinals ascending, packed into
-// POSTs of at most 1500 indices spanning at most 40 record blocks —
-// the packing is what keeps every invocation inside the function's
-// subrequest budget while guaranteeing every requested ordinal is
-// hydratable in that same invocation (no partial-page retries).
+// Hydrate packing discipline: each POST carries at most 1500
+// indices spanning at most 40 record blocks — the packing is what
+// keeps every invocation inside the function's subrequest budget
+// while guaranteeing every requested ordinal is hydratable in
+// that same invocation (no partial-page retries).
 const HYDRATE_MAX_INDICES = 1500;
 const HYDRATE_MAX_BLOCKS = 40;
-// One step of a hydrate scope: POST one block-packed batch at
-// rec.pos (same packing discipline as before — at most 1500 indices
-// spanning at most 40 record blocks per request, inside the
-// function's subrequest budget). Resumable like the facet runner.
-async function stepIndicesScope(rec) {
-  const indices = rec.indices || [];
-  let i = rec.pos || 0;
+// The hydrate window starting at i: the maximal run bounded by
+// HYDRATE_MAX_INDICES indices and HYDRATE_MAX_BLOCKS distinct
+// record blocks. Pure function of (indices, i) — windows are
+// computable in advance, which is what lets a step fetch several
+// of them concurrently and append in order.
+function hydrateWindowEnd(indices, i) {
   let j = i;
   let blocks = 0;
   let lastBlock = -1;
@@ -2009,21 +2075,58 @@ async function stepIndicesScope(rec) {
     }
     j++;
   }
-  const out = await scopeFetchJson("/api/catalog-hydrate", {
-    indices: indices.slice(i, j),
-  });
-  if (!out || !Array.isArray(out.results)) {
-    throw new Error("hydrate scope page malformed");
+  return j;
+}
+
+// One step of an indices (bits) scope: fetch up to SCOPE_PARALLEL
+// hydrate windows concurrently, append strictly in window order,
+// publish once (2026-11-20 counts-speed fix — a member selection
+// like Anatomy & Physiology, 7,323 members, previously hydrated
+// one ≤1,500-index window per serialized step). Failure semantics
+// mirror stepFacetScope: a mid-batch failure keeps the appended
+// prefix and resumes at the failed window; a first-window failure
+// throws into the drain's failure path.
+async function stepIndicesScope(rec) {
+  const indices = rec.indices || [];
+  const windows = [];
+  let pos = rec.pos || 0;
+  while (windows.length < SCOPE_PARALLEL && pos < indices.length) {
+    const end = hydrateWindowEnd(indices, pos);
+    if (end <= pos) break;
+    windows.push([pos, end]);
+    pos = end;
   }
-  appendRecordsToStore(scopeStore, out.results);
-  rec.loaded = j;
-  rec.pos = j;
-  if (j < indices.length) {
-    scopePublish(false);
-    scopeNotify();
-    return false;
+  if (!windows.length) return true;
+  const pages = await Promise.all(
+    windows.map(([i, j]) =>
+      scopeFetchJson("/api/catalog-hydrate", {
+        indices: indices.slice(i, j),
+      }).then(
+        (out) => {
+          if (!out || !Array.isArray(out.results)) {
+            return { i, j, err: new Error("hydrate scope page malformed") };
+          }
+          return { i, j, out };
+        },
+        (err) => ({ i, j, err }),
+      ),
+    ),
+  );
+  let appended = false;
+  for (const page of pages) {
+    if (page.err) {
+      if (!appended) throw page.err;
+      break;
+    }
+    appendRecordsToStore(scopeStore, page.out.results);
+    rec.loaded = page.j;
+    rec.pos = page.j;
+    appended = true;
   }
-  return true;
+  if (rec.pos >= indices.length) return true;
+  scopePublish(false);
+  scopeNotify();
+  return false;
 }
 
 // One step of the unfiltered-browse scope: one page toward the
@@ -2158,9 +2261,11 @@ export function bumpScopePriority() {
 
 // Load (or resume loading) one facet scope — a collection, a bucket,
 // or an era band — keyed by the caller so repeat selections are free.
-export function ensureFacetScope(key, filters, prio = 0) {
+export function ensureFacetScope(key, filters, prio = 0, totalHint = 0) {
   if (!scopeMode) return null;
-  return enqueueScope(key, stepFacetScope, { kind: "facet", filters, prio });
+  return enqueueScope(key, stepFacetScope, {
+    kind: "facet", filters, prio, totalHint,
+  });
 }
 
 // Load one bitset scope (curated collection, Books shelf, Papers
