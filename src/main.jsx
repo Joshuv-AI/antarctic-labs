@@ -571,6 +571,18 @@ function App() {
     } else {
       dismissTowerBoot();
     }
+    // Trust + Contact pages (Joshua 2026-11-20): navigation to Privacy,
+    // Terms, Rights & Sources or Contact — from the footer, a page body,
+    // anywhere in the app — raises the SAME branded loader the top dock
+    // raises for the homepage (the real BrandLoader via raiseBrandBoot,
+    // exactly as goDock does), never just the bare curtain. Their old
+    // treatment (curtain only) was the odd one out.
+    const isTrustDest =
+      canonical === "/privacy" ||
+      canonical === "/terms" ||
+      canonical === "/rights-and-sources" ||
+      canonical === "/contact";
+    if (isTrustDest && !enteringTower) raiseBrandBoot();
     setTransitioning(!flight);
     // Tower routes get a shorter swap delay: the Tower boot overlay is
     // already covering the screen, so the full 520ms curtain beat is pure
@@ -819,9 +831,6 @@ function App() {
         <footer className="site-footer">
           <div className="site-footer-row">
             <span className="site-footer-brand">ANTARCTIC LABS</span>
-            <a href="mailto:hello@antarctic-labs.com">
-              hello@antarctic-labs.com
-            </a>
             <a
               href="/contact"
               onClick={(e) => { e.preventDefault(); go("/contact"); }}

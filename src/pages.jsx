@@ -10792,21 +10792,21 @@ export function About({ go }) {
 // site's advertising and data practices are described as they are now.
 export function PrivacyPage({ go }) {
   return (
-    <main className="page-shell inner-page about-page" id="main-content" tabIndex={-1}>
+    <main className="page-shell inner-page about-page trust-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">PRIVACY</div>
         <h1>Privacy Policy</h1>
-        <p className="display-copy">Last updated: October 26, 2026. Antarctic Labs operates antarctic-labs.com, including the Tower of Babel free library.</p>
+        <p className="trust-lede">Last updated: November 20, 2026. Antarctic Labs operates antarctic-labs.com, including the Tower of Babel free library.</p>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
         <span className="section-index">READING WITHOUT AN ACCOUNT</span>
         <div>
           <p className="body-copy">You do not need an account, a sign-in, or any personal information to read the Tower of Babel library. The texts in the library are public-domain and openly licensed works, hosted on this site in plain text.</p>
         </div>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
         <span className="section-index">INFORMATION WE COLLECT</span>
         <div>
           <p className="body-copy">We collect as little as possible. Anonymous analytics: we use PostHog to count page views, library browsing, reading progress, and text downloads. PostHog is configured for anonymous visitors only — no user profiles are created, session recording is disabled, and automatic event capture is off. Only events we deliberately record are sent, tied to an anonymous visitor identifier, not to a name or email address.</p>
@@ -10815,22 +10815,57 @@ export function PrivacyPage({ go }) {
         </div>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
         <span className="section-index">COOKIES AND ADVERTISING</span>
         <div>
           <p className="body-copy">We use Google AdSense to show advertising on the Tower of Babel library pages. No advertising is shown on the donation page. Third-party vendors, including Google, use cookies to serve ads based on a user&apos;s prior visits to this website or other websites. Google&apos;s use of advertising cookies enables it and its partners to serve ads to users based on their visit to this site and other sites on the internet.</p>
-          <p className="body-copy">You may opt out of personalized advertising by visiting <a href="https://adssettings.google.com/" target="_blank" rel="noreferrer">Google Ads Settings</a> and <a href="https://optout.aboutads.info/" target="_blank" rel="noreferrer">aboutads.info</a>. You can also set your browser to refuse cookies, though some site features may work less well without them. PostHog also uses cookies and local storage to keep its anonymous visitor identifier between visits.</p>
+          <p className="body-copy">You may opt out of personalized advertising by visiting <a href="https://adssettings.google.com/" target="_blank" rel="noreferrer">Google Ads Settings</a> and <a href="https://optout.aboutads.info/" target="_blank" rel="noreferrer">aboutads.info</a>. Other third-party vendors and ad networks may also serve ads on the library pages, and many of them can be opted out of on the same aboutads.info page. How Google uses information from sites and apps that use its services is explained on <a href="https://policies.google.com/technologies/partner-sites" target="_blank" rel="noreferrer">Google&apos;s partner-sites page</a>. You can also set your browser to refuse cookies, though some site features may work less well without them. PostHog also uses cookies and local storage to keep its anonymous visitor identifier between visits.</p>
         </div>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
+        <span className="section-index">SERVICE PROVIDERS</span>
+        <div>
+          <p className="body-copy">The site runs on a small set of service providers, each processing only what its job requires. Cloudflare hosts the site and holds the API-key database. PostHog provides the anonymous analytics described above. Stripe processes donations and API-plan payments; we never receive or store your card number. Resend delivers the email that carries a new API key. Google serves the advertising described above. We do not sell personal information, and we share it with no one else except as required by law.</p>
+        </div>
+      </section>
+
+      <section className="trust-block section reveal">
         <span className="section-index">HOW INFORMATION IS USED AND SHARED</span>
         <div>
           <p className="body-copy">Information is used to operate the site and the library, to understand which works readers use, to process donations, and to show advertising. It is shared only with the service providers needed for those purposes — analytics, payment processing, and advertising — and as required by law. We do not publish or display information you provide through donation or suggestion forms.</p>
         </div>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
+        <span className="section-index">DATA RETENTION</span>
+        <div>
+          <p className="body-copy">Anonymous analytics are never tied to a name or an email address, and are kept only in aggregate. If you hold an API key, we keep your email address and the cryptographic hash of the key for as long as the key is active; ask us to delete them and the record is removed and the key revoked. Donation records are kept for as long as accounting and legal obligations require. A work suggestion is kept with the catalog work it concerns.</p>
+        </div>
+      </section>
+
+      <section className="trust-block section reveal">
+        <span className="section-index">SECURITY</span>
+        <div>
+          <p className="body-copy">The site is served over HTTPS. API keys are stored only as cryptographic hashes, and card payments never touch our systems — Stripe handles them end to end. No system is perfectly secure, but the information here to protect is deliberately small: no accounts, no passwords, no card numbers.</p>
+        </div>
+      </section>
+
+      <section className="trust-block section reveal">
+        <span className="section-index">YOUR CHOICES</span>
+        <div>
+          <p className="body-copy">You can refuse or delete cookies in your browser at any time, and opt out of personalized advertising at the links above. If we hold personal information about you — in practice, the email address attached to an API key or a donation — you may ask what it is, ask for a copy, or ask for it to be deleted, by writing to the address below. Anonymous analytics identifiers cannot be looked up or deleted per person, because they are not tied to anyone&apos;s identity.</p>
+        </div>
+      </section>
+
+      <section className="trust-block section reveal">
+        <span className="section-index">CHILDREN</span>
+        <div>
+          <p className="body-copy">The library is a general-audience collection of books and documents. The site is not directed at children under 13, and we do not knowingly collect personal information from children — reading asks for no information from anyone, of any age.</p>
+        </div>
+      </section>
+
+      <section className="trust-block section reveal">
         <span className="section-index">CHANGES AND CONTACT</span>
         <div>
           <p className="body-copy">This policy may be updated as the site changes; the date at the top of this page will change with it. Questions about this policy can be sent to hello@antarctic-labs.com, or through the suggestion form on the Tower of Babel library pages.</p>
@@ -10851,14 +10886,14 @@ export function PrivacyPage({ go }) {
 // functions/_lib/static-pages.js — keep the two in sync.
 export function ContactPage({ go }) {
   return (
-    <main className="page-shell inner-page about-page contact-page" id="main-content" tabIndex={-1}>
+    <main className="page-shell inner-page about-page contact-page trust-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">CONTACT</div>
         <h1>Contact</h1>
-        <p className="display-copy">One address reaches the lab.</p>
+        <p className="trust-lede">One address reaches the lab.</p>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
         <span className="section-index">EMAIL</span>
         <div>
           <p className="body-copy"><a className="contact-email" href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a></p>
@@ -10873,63 +10908,91 @@ export function ContactPage({ go }) {
 // functions/_lib/static-pages.js — keep the two in sync.
 export function TermsPage({ go }) {
   return (
-    <main className="page-shell inner-page about-page" id="main-content" tabIndex={-1}>
+    <main className="page-shell inner-page about-page trust-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">TERMS</div>
         <h1>Terms of Use</h1>
-        <p className="display-copy">Last updated: November 18, 2026. These terms cover antarctic-labs.com, including the Tower of Babel library, operated by Antarctic Labs.</p>
+        <p className="trust-lede">Last updated: November 20, 2026. These terms cover antarctic-labs.com, including the Tower of Babel library, operated by Antarctic Labs.</p>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
+        <span className="section-index">ACCEPTANCE</span>
+        <div>
+          <p className="body-copy">Using this site — reading, searching, listening, downloading, holding an API key, or donating — means you accept these terms and the <a href="#" onClick={(e) => { e.preventDefault(); go("/privacy"); }}>Privacy Policy</a>. If you do not agree with them, please do not use the site.</p>
+        </div>
+      </section>
+
+      <section className="trust-block section reveal">
         <span className="section-index">READING</span>
         <div>
           <p className="body-copy">The library is free to read. You do not need an account, a sign-in, or any personal information to read, search, listen to, or download the works whose texts are hosted here. We work to keep the site available and correct, but availability is not guaranteed and no uptime commitment is made on any part of the site, free or paid.</p>
         </div>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
         <span className="section-index">THE TEXTS AND THEIR RIGHTS</span>
         <div>
           <p className="body-copy">The works in the library are public-domain or openly licensed texts. Rights are stated per work: every catalog record carries its own rights status and license fields, and those fields — not this page — govern what you may do with a given work. Antarctic Labs claims no new copyright in the texts themselves. The catalog data, the site&apos;s own writing (descriptions, introductions, collection essays), and the site software are the lab&apos;s own work; ask before republishing them wholesale.</p>
         </div>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
+        <span className="section-index">YOUR SUBMISSIONS</span>
+        <div>
+          <p className="body-copy">The suggestion form exists so readers can propose works for the library. By sending a suggestion, you confirm that you have the right to share what you send, and you give Antarctic Labs permission to use it — the title, source, and any notes — in building and maintaining the catalog. Sending a suggestion does not oblige the lab to acquire the work.</p>
+        </div>
+      </section>
+
+      <section className="trust-block section reveal">
         <span className="section-index">ACCEPTABLE USE</span>
         <div>
           <p className="body-copy">Use the site as a reader would. Do not disrupt the service, probe it for vulnerabilities, or misrepresent the library&apos;s contents as your own publication. Automated access is welcome through the documented surfaces — the catalog files, the API, and the OAI-PMH feed — within the limits published for each. Bulk scraping outside those surfaces, at rates that degrade the library for readers, is not.</p>
         </div>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
         <span className="section-index">API KEYS</span>
         <div>
           <p className="body-copy">API v1 keys are issued per email address under the limits published on the <a href="#" onClick={(e) => { e.preventDefault(); go("/tower-of-babel/library/research"); }}>API access</a> page (free 50 requests/day, Pro 500/day, Commercial unlimited). A key is for the holder&apos;s own projects; do not share or resell it. We may revoke a key that abuses the service. Paid plans are billed through Stripe; cancel within 7 days of a charge and that charge is refunded in full — the key stays active until the end of the paid period unless you ask us to revoke it sooner.</p>
         </div>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
         <span className="section-index">DONATIONS</span>
         <div>
           <p className="body-copy">Donations are voluntary contributions toward the library&apos;s servers, storage and preservation work. Antarctic Labs is not a registered charity, so contributions are not tax-deductible.</p>
         </div>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
+        <span className="section-index">THIRD-PARTY LINKS</span>
+        <div>
+          <p className="body-copy">Catalog records name and link to the sources their texts came from, and pages on this site may link to other outside sites. Those sites are not under our control, and we are not responsible for their content or their practices. The third parties that operate on this site itself are described in the <a href="#" onClick={(e) => { e.preventDefault(); go("/privacy"); }}>Privacy Policy</a>.</p>
+        </div>
+      </section>
+
+      <section className="trust-block section reveal">
         <span className="section-index">ADVERTISING</span>
         <div>
           <p className="body-copy">The library pages show advertising served by Google AdSense; the donation page shows none. How advertising cookies work, and how to opt out of personalized advertising, is covered in the <a href="#" onClick={(e) => { e.preventDefault(); go("/privacy"); }}>Privacy Policy</a>.</p>
         </div>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
         <span className="section-index">AS-IS</span>
         <div>
           <p className="body-copy">The site and the texts are provided as they are. Texts are verified against their sources and corrected when errors are found (see <a href="#" onClick={(e) => { e.preventDefault(); go("/rights-and-sources"); }}>Rights &amp; Sources</a>), but no warranty is made that any given text is complete or error-free. To the extent the law allows, the lab is not liable for losses arising from use of the site.</p>
         </div>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
+        <span className="section-index">GOVERNING LAW</span>
+        <div>
+          <p className="body-copy">These terms are governed by the laws of the State of Florida, in the United States, where Antarctic Labs operates.</p>
+        </div>
+      </section>
+
+      <section className="trust-block section reveal">
         <span className="section-index">CHANGES AND CONTACT</span>
         <div>
           <p className="body-copy">These terms may be updated as the site changes; the date at the top will change with them. Questions: <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a>, or the <a href="#" onClick={(e) => { e.preventDefault(); go("/contact"); }}>Contact page</a>.</p>
@@ -10943,42 +11006,42 @@ export function TermsPage({ go }) {
 // functions/_lib/static-pages.js — keep the two in sync.
 export function RightsPage({ go }) {
   return (
-    <main className="page-shell inner-page about-page" id="main-content" tabIndex={-1}>
+    <main className="page-shell inner-page about-page trust-page" id="main-content" tabIndex={-1}>
       <section className="inner-hero section">
         <div className="section-index">RIGHTS &amp; SOURCES</div>
         <h1>Rights &amp; Sources</h1>
-        <p className="display-copy">Last updated: November 18, 2026. How the Tower of Babel library decides what it may hold, where its texts come from, and what happens when something is wrong.</p>
+        <p className="trust-lede">Last updated: November 18, 2026. How the Tower of Babel library decides what it may hold, where its texts come from, and what happens when something is wrong.</p>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
         <span className="section-index">WHAT THE LIBRARY HOLDS</span>
         <div>
           <p className="body-copy">Only public-domain and openly licensed works. A work whose rights cannot be established does not enter the catalog. Rights are recorded per work, not per site: every catalog record carries a rights status and a license field, shown on the work&apos;s own page, and those two fields state what a reader may do with that work. Most readable works in the library are public domain.</p>
         </div>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
         <span className="section-index">WHERE THE TEXTS COME FROM</span>
         <div>
           <p className="body-copy">Texts are taken from the open sources that publish them for exactly this purpose, and each record names its source and links to it: Project Gutenberg and the open book collections for books and sacred texts; arXiv, PubMed Central, PLOS and other open journals for papers; the official publishers of United States law — the United States Code and the Federal Register — for the Law collection; the CIA&apos;s reading room, the Foreign Relations of the United States series, FBI releases and the National Security Archive for declassified documents; and the reference publishers whose dictionaries and encyclopedias have entered the public domain.</p>
         </div>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
         <span className="section-index">HOW A WORK GETS IN</span>
         <div>
           <p className="body-copy">Three gates, in order. First, rights: the work is public domain or openly licensed, and the basis is recorded on its record. Second, text: a clean, complete full text must be obtainable — a catalog entry is published only once its text is hosted, never as a metadata-only placeholder. Third, verification: the text is checked against its source, and the record is built from the work itself — title, creator, year, collection, and provenance.</p>
         </div>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
         <span className="section-index">CORRECTIONS</span>
         <div>
           <p className="body-copy">Errors survive any process at this scale, so corrections are a standing program, not an afterthought: the whole library has been through a reader&apos;s-eye legibility comb-through, and mislabelled, broken or wrongly attributed works are repaired or removed outright when found. To report one, use the <a href="#" onClick={(e) => { e.preventDefault(); go("/tower-of-babel/library/suggest"); }}>suggestion form</a> or email <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a> with the work&apos;s title or link and what is wrong; verified reports are corrected in the catalog and the record updated.</p>
         </div>
       </section>
 
-      <section className="copy-block section reveal">
+      <section className="trust-block section reveal">
         <span className="section-index">TAKEDOWN</span>
         <div>
           <p className="body-copy">If you hold rights in a work the catalog lists as public domain or openly licensed, write to <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a> with the work and the basis of the claim. The work is taken down while the claim is reviewed, and removed for good if the claim holds.</p>

@@ -36,7 +36,6 @@ const NAV = `<header>
 
 const FOOT = `<footer>
 <p><a href="/">Antarctic Labs</a> · <a href="/tower-of-babel">Tower of Babel</a> · <a href="/tower-of-babel/library">Library</a> · <a href="/about">About</a> · <a href="/contact">Contact</a> · <a href="/government-contracting">Government Contracting</a> · <a href="/tower-of-babel/donate">Donate</a> · <a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms</a> · <a href="/rights-and-sources">Rights &amp; Sources</a></p>
-<p>Contact: <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a></p>
 <p>© 2026 Antarctic Labs. All rights reserved.</p>
 </footer>`;
 
@@ -268,7 +267,7 @@ PAGES["/privacy"] = {
   description:
     "Privacy Policy for antarctic-labs.com: what Antarctic Labs collects, how cookies and Google AdSense advertising work, and how to opt out of personalized advertising.",
   body: `<h1>Privacy Policy</h1>
-<p>Last updated: October 26, 2026. Antarctic Labs operates antarctic-labs.com, including the Tower of Babel free library.</p>
+<p>Last updated: November 20, 2026. Antarctic Labs operates antarctic-labs.com, including the Tower of Babel free library.</p>
 <h2>Reading without an account</h2>
 <p>You do not need an account, a sign-in, or any personal information to read the Tower of Babel library. The texts in the library are public-domain and openly licensed works, hosted on this site in plain text.</p>
 <h2>Information we collect</h2>
@@ -276,11 +275,20 @@ PAGES["/privacy"] = {
 <p>Information you choose to give us: if you donate, Stripe collects your email address at checkout to create a checkout session and, if enabled in Stripe, to send a receipt. We do not receive or store your card number. If you suggest a work for the library, you provide the title, creator, source link, and any notes you choose to add. Our hosting provider may process basic technical information needed to deliver pages securely, such as IP address and browser type, in its normal server logs.</p>
 <p>API keys: if you request a Tower of Babel API key, we store the email address you give and a cryptographic hash of the key — never the key itself — in a Cloudflare database, so the API can authenticate your requests and count your daily usage. Payments for API plans are processed by Stripe, and we do not receive or store your card number. The email that delivers your key is sent through Resend.</p>
 <h2>Cookies and advertising</h2>
-<p>We use Google AdSense to show advertising on the Tower of Babel library pages. No advertising is shown on the donation page.</p>
-<p>Third-party vendors, including Google, use cookies to serve ads based on a user's prior visits to this website or other websites. Google's use of advertising cookies enables it and its partners to serve ads to users based on their visit to this site and other sites on the internet.</p>
-<p>You may opt out of personalized advertising by visiting <a href="https://adssettings.google.com">Google Ads Settings</a> and <a href="https://www.aboutads.info">aboutads.info</a>. You can also set your browser to refuse cookies, though some site features may work less well without them. PostHog also uses cookies and local storage to keep its anonymous visitor identifier between visits.</p>
+<p>We use Google AdSense to show advertising on the Tower of Babel library pages. No advertising is shown on the donation page. Third-party vendors, including Google, use cookies to serve ads based on a user's prior visits to this website or other websites. Google's use of advertising cookies enables it and its partners to serve ads to users based on their visit to this site and other sites on the internet.</p>
+<p>You may opt out of personalized advertising by visiting <a href="https://adssettings.google.com">Google Ads Settings</a> and <a href="https://www.aboutads.info">aboutads.info</a>. Other third-party vendors and ad networks may also serve ads on the library pages, and many of them can be opted out of on the same aboutads.info page. How Google uses information from sites and apps that use its services is explained on <a href="https://policies.google.com/technologies/partner-sites">Google's partner-sites page</a>. You can also set your browser to refuse cookies, though some site features may work less well without them. PostHog also uses cookies and local storage to keep its anonymous visitor identifier between visits.</p>
+<h2>Service providers</h2>
+<p>The site runs on a small set of service providers, each processing only what its job requires. Cloudflare hosts the site and holds the API-key database. PostHog provides the anonymous analytics described above. Stripe processes donations and API-plan payments; we never receive or store your card number. Resend delivers the email that carries a new API key. Google serves the advertising described above. We do not sell personal information, and we share it with no one else except as required by law.</p>
 <h2>How information is used and shared</h2>
 <p>Information is used to operate the site and the library, to understand which works readers use, to process donations, and to show advertising. It is shared only with the service providers needed for those purposes — analytics, payment processing, and advertising — and as required by law. We do not publish or display information you provide through donation or suggestion forms.</p>
+<h2>Data retention</h2>
+<p>Anonymous analytics are never tied to a name or an email address, and are kept only in aggregate. If you hold an API key, we keep your email address and the cryptographic hash of the key for as long as the key is active; ask us to delete them and the record is removed and the key revoked. Donation records are kept for as long as accounting and legal obligations require. A work suggestion is kept with the catalog work it concerns.</p>
+<h2>Security</h2>
+<p>The site is served over HTTPS. API keys are stored only as cryptographic hashes, and card payments never touch our systems — Stripe handles them end to end. No system is perfectly secure, but the information here to protect is deliberately small: no accounts, no passwords, no card numbers.</p>
+<h2>Your choices</h2>
+<p>You can refuse or delete cookies in your browser at any time, and opt out of personalized advertising at the links above. If we hold personal information about you — in practice, the email address attached to an API key or a donation — you may ask what it is, ask for a copy, or ask for it to be deleted, by writing to the address below. Anonymous analytics identifiers cannot be looked up or deleted per person, because they are not tied to anyone's identity.</p>
+<h2>Children</h2>
+<p>The library is a general-audience collection of books and documents. The site is not directed at children under 13, and we do not knowingly collect personal information from children — reading asks for no information from anyone, of any age.</p>
 <h2>Changes and contact</h2>
 <p>This policy may be updated as the site changes; the date at the top of this page will change with it. Questions about this policy can be sent to <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a>, or through the suggestion form on the Tower of Babel library pages.</p>`,
 };
@@ -302,21 +310,29 @@ PAGES["/terms"] = {
   description:
     "Terms of use for antarctic-labs.com and the Tower of Babel library: reading, the texts' rights, API keys, donations, and acceptable use.",
   body: `<h1>Terms of Use</h1>
-<p>Last updated: November 18, 2026. These terms cover antarctic-labs.com, including the Tower of Babel library, operated by Antarctic Labs.</p>
+<p>Last updated: November 20, 2026. These terms cover antarctic-labs.com, including the Tower of Babel library, operated by Antarctic Labs.</p>
+<h2>Acceptance</h2>
+<p>Using this site — reading, searching, listening, downloading, holding an API key, or donating — means you accept these terms and the <a href="/privacy">Privacy Policy</a>. If you do not agree with them, please do not use the site.</p>
 <h2>Reading</h2>
 <p>The library is free to read. You do not need an account, a sign-in, or any personal information to read, search, listen to, or download the works whose texts are hosted here. We work to keep the site available and correct, but availability is not guaranteed and no uptime commitment is made on any part of the site, free or paid.</p>
 <h2>The texts and their rights</h2>
 <p>The works in the library are public-domain or openly licensed texts. Rights are stated per work: every catalog record carries its own rights status and license fields, and those fields — not this page — govern what you may do with a given work. Antarctic Labs claims no new copyright in the texts themselves. The catalog data, the site's own writing (descriptions, introductions, collection essays), and the site software are the lab's own work; ask before republishing them wholesale.</p>
+<h2>Your submissions</h2>
+<p>The suggestion form exists so readers can propose works for the library. By sending a suggestion, you confirm that you have the right to share what you send, and you give Antarctic Labs permission to use it — the title, source, and any notes — in building and maintaining the catalog. Sending a suggestion does not oblige the lab to acquire the work.</p>
 <h2>Acceptable use</h2>
 <p>Use the site as a reader would. Do not disrupt the service, probe it for vulnerabilities, or misrepresent the library's contents as your own publication. Automated access is welcome through the documented surfaces — the catalog files, the API, and the OAI-PMH feed — within the limits published for each. Bulk scraping outside those surfaces, at rates that degrade the library for readers, is not.</p>
 <h2>API keys</h2>
 <p>API v1 keys are issued per email address under the limits published on the <a href="/tower-of-babel/library/research">API access</a> page (free 50 requests/day, Pro 500/day, Commercial unlimited). A key is for the holder's own projects; do not share or resell it. We may revoke a key that abuses the service. Paid plans are billed through Stripe; cancel within 7 days of a charge and that charge is refunded in full — the key stays active until the end of the paid period unless you ask us to revoke it sooner.</p>
 <h2>Donations</h2>
 <p>Donations are voluntary contributions toward the library's servers, storage and preservation work. Antarctic Labs is not a registered charity, so contributions are not tax-deductible.</p>
+<h2>Third-party links</h2>
+<p>Catalog records name and link to the sources their texts came from, and pages on this site may link to other outside sites. Those sites are not under our control, and we are not responsible for their content or their practices. The third parties that operate on this site itself are described in the <a href="/privacy">Privacy Policy</a>.</p>
 <h2>Advertising</h2>
 <p>The library pages show advertising served by Google AdSense; the donation page shows none. How advertising cookies work, and how to opt out of personalized advertising, is covered in the <a href="/privacy">Privacy Policy</a>.</p>
 <h2>As-is</h2>
 <p>The site and the texts are provided as they are. Texts are verified against their sources and corrected when errors are found (see <a href="/rights-and-sources">Rights &amp; Sources</a>), but no warranty is made that any given text is complete or error-free. To the extent the law allows, the lab is not liable for losses arising from use of the site.</p>
+<h2>Governing law</h2>
+<p>These terms are governed by the laws of the State of Florida, in the United States, where Antarctic Labs operates.</p>
 <h2>Changes and contact</h2>
 <p>These terms may be updated as the site changes; the date at the top will change with them. Questions: <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a>, or the <a href="/contact">Contact page</a>.</p>`,
 };
