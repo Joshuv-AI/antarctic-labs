@@ -3578,8 +3578,13 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       }
     }, delay);
     return () => clearTimeout(t);
+    // serverFlag is read inside the callback only (post-render),
+    // never in the deps array: it is declared further down the
+    // component, so naming it here would evaluate the binding
+    // before initialization (the same convention the intent effect
+    // above follows).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    serverFlag,
     artifacts,
     bucketFilter,
     eraFilter,
