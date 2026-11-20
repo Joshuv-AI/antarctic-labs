@@ -3999,6 +3999,32 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   );
   const selScopesReady =
     selScopeKeys.length > 0 && selScopeList.every((s) => s.status === "ready");
+  // Header-bound settle gate (2026-11-20 counts-speed fix): the
+  // results header swaps its denominator to the resident match
+  // count once the selection's scopes are ready (LibraryResults),
+  // but the filter scan producing that count commits
+  // asynchronously and lags the final publish — so the
+  // denominator transiently DROPPED to the lagging count at the
+  // tail of a load (Law 1,277,197 -> 1,260,000 in the verification
+  // harness; Joshua's 16:27 recording: 41,137 -> 40,037). The swap
+  // is truthful only once the committed scan covers the current
+  // resident set AND the current selection; until then the
+  // published bound stands. (Same commit-coverage discipline as
+  // facetCountsShown below.)
+  const scopeScanSettled =
+    !!browseResult &&
+    !!browseResult.sel &&
+    browseResult.sel.len === (artifacts || []).length &&
+    browseResult.sel.keysLen ===
+      (towerData && towerData.bucketKeys ? towerData.bucketKeys.length : 0) &&
+    browseResult.sel.bucketFilter === bucketFilter &&
+    browseResult.sel.eraFilter === eraFilter &&
+    browseResult.sel.collKey === collKey &&
+    browseResult.sel.shelfKey === shelfKey &&
+    browseResult.sel.paperKey === paperKey &&
+    browseResult.sel.paperTypeKey === paperTypeKey &&
+    browseResult.sel.collSet === collSet &&
+    browseResult.sel.collBits === memberBitsSel;
   const selSigNow = [bucketFilter, eraFilter, collKey, shelfKey, paperKey, paperTypeKey].join("|");
   const facetCountsShown =
     facetCounts &&
@@ -6981,7 +7007,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
               totalHint={worksTotal || catalogTotalHint}
               scopeTotal={scopeModeOn ? selTotalBound : 0}
               scopeLoading={scopeModeOn && selScopesLoading}
-              scopeReady={scopeModeOn && selScopesReady}
+              scopeReady={scopeModeOn && selScopesReady && scopeScanSettled}
               scopeFiltered={
                 !!(
                   bucketFilter ||
