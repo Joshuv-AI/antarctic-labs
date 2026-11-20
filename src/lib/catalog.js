@@ -1813,6 +1813,21 @@ let scopeQueue = []; // [{ key, rec, runner, seq }]
 let scopeSeq = 0;
 let scopeWorkerRunning = false;
 let scopeActive = 0; // scopes queued or running
+// Scope completeness gate (2026-11-20 correction, second pass):
+// at scope init the queue drains vacuously — the one-step browse
+// scope completes instantly, before any CONTENT scope (facet /
+// bits) has ever run. Derivations keyed on "queue empty" alone
+// read that instant as "the resident set is final" and paid the
+// full-derivation tail (on-device sort orders + search layer over
+// proxy records — minutes under phone-class load) over the bare
+// bootstrap prefix; while that one run ground on, growth could
+// not cancel it and every trailing phase-0 run queued behind it,
+// so landed scope pages never became results (Law sat at 0 for
+// the whole session — the exact failure this lane exists to fix).
+// "Complete" in scope mode therefore requires at least one
+// content scope to have run to completion; until then the queue
+// being empty means "nothing has loaded yet", not "settled".
+let scopeContentDone = false;
 let scopeTotalHint = 0;
 let browseScopeCursor = 0; // unfiltered-browse ordinal frontier
 let browseScopeDone = false;
@@ -2057,6 +2072,9 @@ function scopeDrain() {
         }
         if (done) {
           rec.status = "ready";
+          if (rec.kind === "facet" || rec.kind === "bits") {
+            scopeContentDone = true;
+          }
           scopeActive--;
           scopeNotify();
           scopePublish(scopeActive === 0);
@@ -2135,6 +2153,7 @@ export function ensureIndicesScope(key, indices, prio = 0) {
   if (!indices || !indices.length) {
     const rec = { status: "ready", total: 0, loaded: 0, kind: "bits" };
     scopeMap.set(key, rec);
+    scopeContentDone = true;
     scopeNotify();
     return rec;
   }
@@ -2400,10 +2419,16 @@ export function isBrowseStreaming() {
 // bootstrap prefix's counts as the library's finals whenever the
 // manifest endpoints were slow — Joshua's 17:01 phone recording.
 export function isBrowseComplete() {
-  // Scope mode: "complete" means no scope load is queued or running —
-  // the resident set (bootstrap + the scopes loaded so far) is the
-  // settled input derivations should treat as final for now.
-  if (scopeMode) return scopeActive === 0;
+  // Scope mode: "complete" means no scope load is queued or
+  // running AND at least one content scope has completed — the
+  // resident set (bootstrap + the scopes loaded so far) is the
+  // settled input derivations should treat as final for now. The
+  // content requirement closes the vacuous drain at scope init
+  // (see scopeContentDone above): queue-empty alone flipped this
+  // true before anything had loaded and sent the first derivation
+  // down its full, minutes-long tail over the bare prefix,
+  // wedging every incremental publish behind it.
+  if (scopeMode) return scopeActive === 0 && scopeContentDone;
   if (indexComplete) return true;
   const st = browseState;
   return !!(st && st.stopped && st.total != null && st.cursor >= st.total);
