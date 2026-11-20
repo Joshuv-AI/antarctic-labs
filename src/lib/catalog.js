@@ -132,6 +132,15 @@ export function loadBootstrap() {
 // before any chunk lands), the loader falls back to the legacy
 // single-file /catalog-index.json fetch.
 let indexComplete = false;
+// Set ONLY by the legacy full-index publishers (publishLegacyIndex
+// below). Scope mode's stand-down guard keys off this flag — never
+// off indexComplete: publishIndex latches indexComplete for ANY
+// complete publish, including scope mode's own init publish, so
+// the old guard read scope mode's first publish as a legacy
+// takeover and swallowed every scope publish for the rest of the
+// session (the store grew; the published view never did — the
+// 2026-11-20 "selected scope reads empty" failure).
+let legacyPublishActive = false;
 
 function publishIndex(data, complete) {
   indexCache = data;
@@ -139,6 +148,11 @@ function publishIndex(data, complete) {
   indexReadyListeners.forEach((cb) => {
     try { cb(data, complete); } catch {}
   });
+}
+
+function publishLegacyIndex(data, complete) {
+  legacyPublishActive = true;
+  publishIndex(data, complete);
 }
 
 function fetchJsonWithRetry(url) {
@@ -149,7 +163,7 @@ function fetchJsonWithRetry(url) {
 
 function loadLegacyIndex() {
   return fetchJsonWithRetry("/catalog-index.json").then((data) => {
-    publishIndex(data, true);
+    publishLegacyIndex(data, true);
     return data;
   });
 }
@@ -217,7 +231,7 @@ async function loadIndexV2() {
   let pubTimer = null;
   const publishNow = (complete) => {
     lastPubAt = Date.now();
-    publishIndex(acc, complete);
+    publishLegacyIndex(acc, complete);
   };
   const publishContiguous = () => {
     let grew = false;
@@ -242,7 +256,7 @@ async function loadIndexV2() {
       pubTimer = setTimeout(() => {
         pubTimer = null;
         lastPubAt = Date.now();
-        publishIndex(acc, published === chunks);
+        publishLegacyIndex(acc, published === chunks);
       }, wait);
     }
   };
@@ -262,7 +276,7 @@ async function loadIndexV2() {
       publishContiguous();
     }
   }
-  if (!indexComplete) publishIndex(acc, true);
+  if (!indexComplete) publishLegacyIndex(acc, true);
   return acc;
 }
 
@@ -1302,7 +1316,7 @@ function browsePublishNow(complete) {
   // Publish a view snapshot: the page's derivations key off identity,
   // and the columns keep growing between publishes — the view pins
   // the length it was published with, like the old array slice did.
-  publishIndex(createCatalogView(st.store, st.store.count), complete);
+  publishLegacyIndex(createCatalogView(st.store, st.store.count), complete);
   // Byte-ledger pressure check on the publish cadence (design §12).
   checkMemoryPressure();
 }
@@ -1887,8 +1901,13 @@ function scopePublish(complete) {
   if (!scopeStore) return;
   // Stand down if the legacy client index has taken the cache (the
   // hub-fallback path for curated selections whose bitsets failed):
-  // the two publishers must never interleave views.
-  if (indexComplete || indexPending) return;
+  // the two publishers must never interleave views. Keyed on
+  // legacyPublishActive — set only by actual legacy publishes —
+  // plus a legacy load in flight; NOT on indexComplete, which
+  // scope mode's own complete publishes also latch (that inference
+  // froze the published view at the bootstrap snapshot for entire
+  // sessions while the scope store grew underneath it).
+  if (legacyPublishActive || indexPending) return;
   publishIndex(createCatalogView(scopeStore, scopeStore.count), complete);
 }
 
