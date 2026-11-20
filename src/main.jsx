@@ -817,34 +817,38 @@ function App() {
           book. Every other route keeps the footer untouched. */}
       {matchedPattern !== "/tower-of-babel/library/:id" && (
         <footer className="site-footer">
-          <span>ANTARCTIC LABS</span>
-          <a href="mailto:hello@antarctic-labs.com">
-            hello@antarctic-labs.com
-          </a>
-          <a
-            href="/contact"
-            onClick={(e) => { e.preventDefault(); go("/contact"); }}
-          >
-            Contact
-          </a>
-          <a
-            href="/privacy"
-            onClick={(e) => { e.preventDefault(); go("/privacy"); }}
-          >
-            Privacy Policy
-          </a>
-          <a
-            href="/terms"
-            onClick={(e) => { e.preventDefault(); go("/terms"); }}
-          >
-            Terms
-          </a>
-          <a
-            href="/rights-and-sources"
-            onClick={(e) => { e.preventDefault(); go("/rights-and-sources"); }}
-          >
-            Rights &amp; Sources
-          </a>
+          <div className="site-footer-row">
+            <span className="site-footer-brand">ANTARCTIC LABS</span>
+            <a href="mailto:hello@antarctic-labs.com">
+              hello@antarctic-labs.com
+            </a>
+            <a
+              href="/contact"
+              onClick={(e) => { e.preventDefault(); go("/contact"); }}
+            >
+              Contact
+            </a>
+          </div>
+          <div className="site-footer-row">
+            <a
+              href="/privacy"
+              onClick={(e) => { e.preventDefault(); go("/privacy"); }}
+            >
+              Privacy Policy
+            </a>
+            <a
+              href="/terms"
+              onClick={(e) => { e.preventDefault(); go("/terms"); }}
+            >
+              Terms
+            </a>
+            <a
+              href="/rights-and-sources"
+              onClick={(e) => { e.preventDefault(); go("/rights-and-sources"); }}
+            >
+              Rights &amp; Sources
+            </a>
+          </div>
         </footer>
       )}
     </>
