@@ -4952,17 +4952,32 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   const memberSelActive = !!(collKey || shelfKey || paperKey || paperTypeKey || collSet);
   // Single member-axis selection (2026-11-21, line 137): exactly
   // one member axis (curated / shelf / Papers field / type) is
-  // active and no lane/bucket selection rides along — the state
-  // the published member cubes (cubeMemberEra / cubeMemberBucket
-  // in the tallies file) describe exactly, so the resolvers below
+  // active, with no OTHER selection riding along — the state the
+  // published member cubes (cubeMemberEra / cubeMemberBucket in
+  // the tallies file) describe exactly, so the resolvers below
   // take a published path for it just as facet-axes-only selections
-  // do. Combined member states (two member axes at once, or a
-  // member axis plus a bucket) keep the resident-tally path: no
-  // published product states those intersections, and a blank
-  // beats a wrong number.
+  // do. A shelf / Papers selection always travels with its bare
+  // containing lane (selectShelf / selectPaper set it, selectLane
+  // retires the member key when the lane leaves) — that pairing is
+  // still the member alone, because every member of a shelf /
+  // field / type lives inside its lane (verified over the full
+  // catalog when the cubes were generated), so lane ∧ member is
+  // the member. Anything else combined — two member axes at once,
+  // a curated collection plus a lane, a member plus a bucket —
+  // keeps the resident-tally path: no published product states
+  // those intersections, and a blank beats a wrong number.
   const memberKeysActive = [collKey, shelfKey, paperKey, paperTypeKey].filter(Boolean);
-  const singleMemberKey =
-    memberKeysActive.length === 1 && !bucketFilter ? memberKeysActive[0] : "";
+  let singleMemberKey = "";
+  if (memberKeysActive.length === 1) {
+    if (collKey && !bucketFilter) singleMemberKey = collKey;
+    else if (shelfKey && (!bucketFilter || bucketFilter === "BOOKS"))
+      singleMemberKey = shelfKey;
+    else if (
+      (paperKey || paperTypeKey) &&
+      (!bucketFilter || bucketFilter === "PAPERS")
+    )
+      singleMemberKey = paperKey || paperTypeKey;
+  }
   const panelCountsFinal = scopeModeOn
     ? !selScopesLoading || !!staticTallies || !!serverTalliesCurrent
     : countsFinal;
