@@ -3454,11 +3454,12 @@ export function createHelixScene(canvas, opts = {}) {
   // structure: its axis and its full vertical span. Returns null
   // when no layout exists yet.
   function coilCenterViewport() {
-    if (!layoutCoils || !layoutCoils.length || !camera) return null;
+    if (!COILS || !COILS.length || !camera) return null;
     let lo = Infinity, hi = -Infinity;
-    for (const c of layoutCoils) {
-      if (c.y0 < lo) lo = c.y0;
-      if (c.y1 > hi) hi = c.y1;
+    for (const c of COILS) {
+      const h = ((c.thetaEnd - c.thetaStart) * RISE) / 2;
+      if (c.yMid - h < lo) lo = c.yMid - h;
+      if (c.yMid + h > hi) hi = c.yMid + h;
     }
     if (!isFinite(lo) || !isFinite(hi)) return null;
     const midY = (lo + hi) / 2;
@@ -3479,7 +3480,12 @@ export function createHelixScene(canvas, opts = {}) {
     );
     cam.lookAt(0, tgtY, 0);
     cam.updateMatrixWorld();
-    const v = new THREE.Vector3(0, midY, 0).project(cam);
+    const pt = new THREE.Vector3(0, midY, 0);
+    if (structure) {
+      structure.updateMatrixWorld();
+      pt.applyMatrix4(structure.matrixWorld);
+    }
+    const v = pt.project(cam);
     if (!isFinite(v.x) || !isFinite(v.y)) return null;
     return {
       x: (v.x * 0.5 + 0.5) * viewW,
