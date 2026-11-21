@@ -260,6 +260,14 @@ const ALLOC_KERNEL_CONSTS = {
   rows: ROWS,
   literalMax: GROUP_LITERAL_MAX,
 };
+// Curated-group layouts allocate proportionally with a one-station
+// floor (INVENTORY 136 — see buildLayoutGeometry).
+const GROUP_ALLOC_CONSTS = {
+  target: BAND_PANEL_TARGET,
+  minStations: 1,
+  rows: ROWS,
+  literalMax: GROUP_LITERAL_MAX,
+};
 function allocStationsAuto(counts) {
   const K = getTowerKernels();
   if (K) {
@@ -337,7 +345,11 @@ function buildBands(counts) {
 // layouts, 2026-11-15 re-coiling): identical floor + largest-
 // remainder rules; a zero-count coil gets zero stations (it still
 // occupies its gap slot and carries its label — an honest marker).
-function allocateStationsArr(counts) {
+// minStations is a parameter because the curated-group layouts
+// call this with a one-station floor (see buildLayoutGeometry):
+// the generic 12-station floor would hand a 3-entry subcategory
+// 72 panels, overstating where the visitor stands.
+function allocateStationsArr(counts, minStations = MIN_STATIONS) {
   const n = counts.length;
   const out = new Array(n).fill(0);
   const floored = new Set();
@@ -345,17 +357,17 @@ function allocateStationsArr(counts) {
   for (let i = 0; i < n; i++) if ((counts[i] || 0) > 0) pool.push(i);
   for (;;) {
     const poolCount = pool.reduce((s, i) => s + (counts[i] || 0), 0);
-    const budget = BAND_PANEL_TARGET - floored.size * MIN_STATIONS * ROWS;
+    const budget = BAND_PANEL_TARGET - floored.size * minStations * ROWS;
     const tiny = pool.filter(
-      (i) => ((counts[i] || 0) * budget) / Math.max(1, poolCount) < MIN_STATIONS * ROWS
+      (i) => ((counts[i] || 0) * budget) / Math.max(1, poolCount) < minStations * ROWS
     );
     if (!tiny.length || !pool.length) break;
     tiny.forEach((i) => floored.add(i));
     pool = pool.filter((i) => !floored.has(i));
   }
   const poolCount = pool.reduce((s, i) => s + (counts[i] || 0), 0);
-  const budget = BAND_PANEL_TARGET - floored.size * MIN_STATIONS * ROWS;
-  for (const i of floored) out[i] = MIN_STATIONS;
+  const budget = BAND_PANEL_TARGET - floored.size * minStations * ROWS;
+  for (const i of floored) out[i] = minStations;
   if (pool.length) {
     const target = Math.round(budget / ROWS);
     const raw = pool.map((i) => ({
@@ -380,9 +392,11 @@ function allocateStationsArr(counts) {
   return out;
 }
 // Truth-allocated layouts (2026-11-16, INVENTORY lines 98 + 99;
-// lane-sub added 2026-11-17 on Joshua's approval): the
-// curated-group re-coil, the Books shelves layout and the
-// per-collection subcategory (lane-sub) layouts. The
+// lane-sub added 2026-11-17 on Joshua's approval): the Books
+// shelves layout and the per-collection subcategory (lane-sub)
+// layouts. (The curated-group re-coil originally allocated here
+// too; since the INVENTORY 136 fix it allocates proportionally —
+// see buildLayoutGeometry for why.) The
 // generic floor in allocateStationsArr gives every coil at least
 // 72 panels, so a 6-entry subcategory (or a 22-entry Books shelf)
 // rendered as a full coil — the visual overstated where the
@@ -737,21 +751,47 @@ export function createHelixScene(canvas, opts = {}) {
       anchorFrac: ANCHOR_FRAC[i],
     }));
   }
-  function buildLayoutGeometry(defs, truthAlloc) {
+  function buildLayoutGeometry(defs, allocKind) {
     const counts = defs.map((d) => Math.max(0, Math.round(d.count || 0)));
-    // Curated-group, Books-shelf and lane-sub layouts allocate by
-    // the truth rules (literal small coils); every other layout
-    // keeps the generic floor + largest-remainder apportionment.
-    // The WASM kernels compute the identical stations when
-    // available.
+    const truthAlloc =
+      allocKind === "group" || allocKind === "shelf" || allocKind === "sub";
+    // Books-shelf and lane-sub layouts allocate by the truth rules
+    // (literal small coils); every other layout keeps the generic
+    // floor + largest-remainder apportionment. The WASM kernels
+    // compute the identical stations when available.
+    //
+    // Curated-group layouts (2026-11-21 fix, INVENTORY 136) are
+    // the exception: they allocate PROPORTIONALLY — the generic
+    // apportionment above with the floor lowered to one station.
+    // The literal/pool allocator overstated curated subcategories
+    // wherever a group's counts straddled the literal cap: coils
+    // just above the cap split the whole remaining panel budget
+    // between themselves while coils just below it rendered
+    // literally, so in the Conspiracy group (1,013 works) a
+    // 225-work subcategory took 6,426 panels (43% of the spiral)
+    // against 78 panels for an 80-work one — and the same cliff,
+    // smaller, sat at the cap boundary of every group (92 works →
+    // 90 panels vs 109 works → 288 in Sacred traditions). A single
+    // proportional rate per group makes every subcategory's cover
+    // population correspond to its published count, the way the
+    // collections' own coils already read; a nonzero subcategory
+    // keeps a one-station visibility minimum and a zero-count one
+    // keeps zero stations (an honest marker).
     let stationsArr = null;
     const K = getTowerKernels();
-    if (K) {
+    if (allocKind === "group") {
+      if (K) {
+        stationsArr = K.allocArr(counts, GROUP_ALLOC_CONSTS);
+      }
+      if (!stationsArr) {
+        stationsArr = allocateStationsArr(counts, 1);
+      }
+    } else if (K) {
       stationsArr = truthAlloc
         ? K.allocGroup(counts, ALLOC_KERNEL_CONSTS)
         : K.allocArr(counts, ALLOC_KERNEL_CONSTS);
     }
-    if (!stationsArr) {
+    if (!stationsArr && allocKind !== "group") {
       stationsArr = truthAlloc
         ? allocateStationsGroup(counts)
         : allocateStationsArr(counts);
@@ -3096,11 +3136,10 @@ export function createHelixScene(canvas, opts = {}) {
     // Truth allocation serves the curated-group re-coil (line 98),
     // the Books shelves layout (line 99) and the lane-sub layouts
     // (2026-11-17) — each Joshua's explicit extension; the resting
-    // rebuild keeps the generic allocation.
-    buildLayoutGeometry(
-      defs,
-      spec.kind === "group" || spec.kind === "shelf" || spec.kind === "sub"
-    );
+    // rebuild keeps the generic allocation. The layout kind itself
+    // rides along because curated groups allocate proportionally
+    // since the INVENTORY 136 fix (see buildLayoutGeometry).
+    buildLayoutGeometry(defs, spec.kind);
     layoutKey = spec.key;
     segFrozen = layoutKey !== "rest";
     resetInstanceCells();
