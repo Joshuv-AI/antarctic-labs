@@ -3490,8 +3490,13 @@ export function createHelixScene(canvas, opts = {}) {
   // the opened cover into the center of the coil's own geometry —
   // not the page's center — before the rise. For a re-formed
   // (multi-coil) layout the "overall coil" is the whole re-formed
-  // structure: its axis and its full vertical span. Returns null
-  // when no layout exists yet.
+  // structure: its axis and its full vertical span. One refinement:
+  // when a tight framing (picked subcategory, focused band, era
+  // hold) leaves that midpoint off-screen, the axis point at the
+  // FRAMED coil's height is returned instead — the bore of the
+  // spiral in front of the visitor — so the zip lands inside the
+  // coil in view rather than throwing the cover out of the frame.
+  // Returns null when no layout exists yet.
   function coilCenterViewport() {
     if (!COILS || !COILS.length || !camera) return null;
     let lo = Infinity, hi = -Infinity;
@@ -3519,17 +3524,41 @@ export function createHelixScene(canvas, opts = {}) {
     );
     cam.lookAt(0, tgtY, 0);
     cam.updateMatrixWorld();
-    const pt = new THREE.Vector3(0, midY, 0);
-    if (structure) {
-      structure.updateMatrixWorld();
-      pt.applyMatrix4(structure.matrixWorld);
-    }
-    const v = pt.project(cam);
-    if (!isFinite(v.x) || !isFinite(v.y)) return null;
-    return {
-      x: (v.x * 0.5 + 0.5) * viewW,
-      y: (-v.y * 0.5 + 0.5) * viewH,
+    if (structure) structure.updateMatrixWorld();
+    const projectY = (wy) => {
+      const pt = new THREE.Vector3(0, wy, 0);
+      if (structure) pt.applyMatrix4(structure.matrixWorld);
+      const v = pt.project(cam);
+      if (!isFinite(v.x) || !isFinite(v.y)) return null;
+      return {
+        x: (v.x * 0.5 + 0.5) * viewW,
+        y: (-v.y * 0.5 + 0.5) * viewH,
+        ndcX: v.x,
+        ndcY: v.y,
+      };
     };
+    const whole = projectY(midY);
+    if (!whole) return null;
+    // In a tightly framed state (a picked subcategory's reshape
+    // focus, a focused band, an era hold) the OVERALL structure's
+    // midpoint can project far off-screen — the stack is tall and
+    // the camera is close on one coil. Zipping the cover there
+    // would throw it out of the frame instead of into the coil
+    // the visitor is looking into. In that case the target is
+    // the same axis at the FRAMED coil's height: the bore of the
+    // spiral in front of the visitor. When the overall midpoint
+    // is in frame (resting, wide group framings) it stays the
+    // target, exactly as ordered.
+    const inFrame =
+      Math.abs(whole.ndcX) <= 1.02 && Math.abs(whole.ndcY) <= 1.02;
+    if (!inFrame && (mode === "focus" || reshapeFocusCoil >= 0 || eraHold)) {
+      const fy = eraHold ? eraHold.y : focusY;
+      if (isFinite(fy)) {
+        const framed = projectY(fy);
+        if (framed) return { x: framed.x, y: framed.y };
+      }
+    }
+    return { x: whole.x, y: whole.y };
   }
 
   const controller = {
