@@ -4978,6 +4978,16 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     )
       singleMemberKey = paperKey || paperTypeKey;
   }
+  // The lone member key regardless of the lane/bucket axis
+  // (2026-11-21, line 137): the lane axis's own counts ignore the
+  // lane/bucket selection entirely (the 2026-11-14 faceted rule —
+  // a group's counts are computed over the OTHER groups), so for
+  // lane and bucket counts a lone member selection is described by
+  // its cube row even when a lane or bucket rides along. Era
+  // counts are NOT covered by this key: within a lane/bucket the
+  // era distribution is a true intersection (singleMemberKey's
+  // stricter rule above).
+  const memberOnlyKey = memberKeysActive.length === 1 ? memberKeysActive[0] : "";
   const panelCountsFinal = scopeModeOn
     ? !selScopesLoading || !!staticTallies || !!serverTalliesCurrent
     : countsFinal;
@@ -5022,12 +5032,12 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     // intersection no published product states; that state keeps
     // the resident path.
     if (
-      singleMemberKey &&
+      memberOnlyKey &&
       !eraFilter &&
       staticTallies &&
       staticTallies.cubeMemberBucket
     ) {
-      const row = staticTallies.cubeMemberBucket[singleMemberKey];
+      const row = staticTallies.cubeMemberBucket[memberOnlyKey];
       if (!row) return 0;
       let n = 0;
       for (const k of Object.keys(row)) {
@@ -5037,10 +5047,16 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     }
     if (facetCountsShown) return facetCountsShown.laneMap[c] || 0;
     if (scopeModeOn) {
-      if (eraFilter && !bucketFilter && serverTalliesCurrent) {
+      // The published fallbacks in this block are keyed on the
+      // facet axes only — with a member selection active they
+      // would state member-blind numbers (2026-11-21, line 137:
+      // a curated + era state read whole-era lane totals here).
+      // Member states are answered by the member-cube path above
+      // or the resident tallies; anything else is blank.
+      if (eraFilter && !bucketFilter && !memberSelActive && serverTalliesCurrent) {
         return serverTalliesCurrent.collection[c] ?? 0;
       }
-      if (!eraFilter) {
+      if (!eraFilter && !memberSelActive) {
         if (bucketFilter && staticTallies && staticTallies.buckets) {
           // A bucket lives inside exactly one collection: within a
           // bucket selection, that collection's lane count is the
@@ -5096,19 +5112,21 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
     // selected the count is a three-way intersection no published
     // product states; that state keeps the resident path.
     if (
-      singleMemberKey &&
+      memberOnlyKey &&
       !eraFilter &&
       staticTallies &&
       staticTallies.cubeMemberBucket
     ) {
-      return staticTallies.cubeMemberBucket[singleMemberKey]?.[key] ?? 0;
+      return staticTallies.cubeMemberBucket[memberOnlyKey]?.[key] ?? 0;
     }
     if (facetCountsShown) return facetCountsShown.subMap[key] || 0;
     if (scopeModeOn) {
-      if (facetSelActive && serverTalliesCurrent) {
+      // Member-blind fallbacks gated as in laneCountFor
+      // (2026-11-21, line 137).
+      if (facetSelActive && !memberSelActive && serverTalliesCurrent) {
         return serverTalliesCurrent.bucket[key] ?? 0;
       }
-      if (!facetSelActive && staticTallies && staticTallies.buckets) {
+      if (!facetSelActive && !memberSelActive && staticTallies && staticTallies.buckets) {
         return staticTallies.buckets[key] ?? 0;
       }
       return null;
@@ -5171,7 +5189,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       // it false; and wrong besides, since the collection cube has
       // no curated keys. The member x era cube path above is its
       // working successor.)
-      if (e.id === "1800s" && facetSelActive && serverTalliesCurrent) {
+      if (e.id === "1800s" && facetSelActive && !memberSelActive && serverTalliesCurrent) {
         return serverTalliesCurrent.era["1800s"] ?? null;
       }
       return null;
