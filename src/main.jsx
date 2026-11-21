@@ -1035,8 +1035,12 @@ function EntryFlightOverlay({ path }) {
         transitionTimingFunction = "cubic-bezier(.5, 0, .9, .6), ease";
       }
     } else if (phase === "exit") {
-      // Reduced motion: no rise animation — a short hop up + fade.
-      transform = `translate(${flight.dx}px, ${flight.dy - risePx * 1.18}px) scale(${flight.scale * 0.93})`;
+      // Reduced motion: no rise animation — a short hop up + fade,
+      // from the coil center (beat 2's endpoint) like the full
+      // motion's rise.
+      const cdx = flight.cdx || 0;
+      const cdy = flight.cdy || 0;
+      transform = `translate(${flight.dx + cdx}px, ${flight.dy + cdy - risePx * 1.18}px) scale(${flight.scale * 0.93})`;
     }
   }
   if (flight.reduced) transitionDuration = "120ms, 160ms";
@@ -1055,6 +1059,8 @@ function EntryFlightOverlay({ path }) {
           animation,
           "--fx": `${flight.dx}px`,
           "--fy": `${flight.dy}px`,
+          "--cdx": `${flight.cdx || 0}px`,
+          "--cdy": `${flight.cdy || 0}px`,
           "--fs": flight.scale,
           "--frise": `${risePx}px`,
         }}

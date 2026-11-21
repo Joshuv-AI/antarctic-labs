@@ -1593,6 +1593,21 @@ export function createHelixScene(canvas, opts = {}) {
     const pw = 84, ph = 116, px = x0 + (CELL - pw) / 2, py = y0 + (CELL - ph) / 2;
     liveCtx.fillStyle = plate;
     liveCtx.fillRect(px, py, pw, ph);
+    // Book treatment (2026-11-20): the typeset plate wears the
+    // same design language as the site's generated covers — a
+    // spine hinge down the left edge and a cloth light fall — so a
+    // generated fill and a real cover read as the same kind of
+    // object on the coil.
+    const grad = liveCtx.createLinearGradient(px, py, px + pw, py + ph);
+    grad.addColorStop(0, "rgba(255,255,255,0.13)");
+    grad.addColorStop(0.45, "rgba(255,255,255,0)");
+    grad.addColorStop(1, "rgba(0,0,0,0.25)");
+    liveCtx.fillStyle = grad;
+    liveCtx.fillRect(px, py, pw, ph);
+    liveCtx.fillStyle = "rgba(0,0,0,0.35)";
+    liveCtx.fillRect(px, py, 7, ph);
+    liveCtx.fillStyle = "rgba(255,255,255,0.14)";
+    liveCtx.fillRect(px + 7, py, 1, ph);
     liveCtx.strokeStyle = "rgba(255,255,255,0.35)";
     liveCtx.lineWidth = 1;
     liveCtx.strokeRect(px + 3, py + 3, pw - 6, ph - 6);
@@ -1623,6 +1638,7 @@ export function createHelixScene(canvas, opts = {}) {
     liveCtx.restore();
   }
   function clearMirror() {
+    mirrorGen++;
     if (!mirrorSet.size) return;
     for (const i of mirrorSet.keys()) {
       instPage[i] = homePageOf(i);
@@ -1630,13 +1646,61 @@ export function createHelixScene(canvas, opts = {}) {
     }
     mirrorSet.clear();
   }
+  // Real-cover mirror cells (2026-11-20, Books covers fix): when a
+  // mirrored work has a real harvested cover (the library's own
+  // cover rules resolved one), draw THE COVER into the cell —
+  // top-anchored, cropped to the book rect, with the spine/page
+  // treatment — instead of the typeset plate. The plate is drawn
+  // first and stays as the fallback: a cover that cannot load
+  // (offline, no CORS) simply never replaces it. Loads are
+  // generation-guarded so a stale selection's covers can never
+  // paint into a newer mirror.
+  let mirrorGen = 0;
+  function drawMirrorCover(k, item, gen) {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      if (gen !== mirrorGen || !img.naturalWidth) return;
+      const CELL = 128;
+      const x0 = (k % LIVE_DIV) * CELL;
+      const y0 = ((k / LIVE_DIV) | 0) * CELL;
+      const pw = 84, ph = 116, px = x0 + (CELL - pw) / 2, py = y0 + (CELL - ph) / 2;
+      liveCtx.save();
+      liveCtx.beginPath();
+      liveCtx.rect(x0, y0, CELL, CELL);
+      liveCtx.clip();
+      liveCtx.fillStyle = "#0a0a09";
+      liveCtx.fillRect(x0, y0, CELL, CELL);
+      const scale = Math.max(pw / img.naturalWidth, ph / img.naturalHeight);
+      const dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
+      liveCtx.drawImage(img, px + (pw - dw) / 2, py, dw, dh);
+      const grad = liveCtx.createLinearGradient(px, py, px + 12, py);
+      grad.addColorStop(0, "rgba(0,0,0,0.38)");
+      grad.addColorStop(0.6, "rgba(0,0,0,0.10)");
+      grad.addColorStop(1, "rgba(0,0,0,0)");
+      liveCtx.fillStyle = grad;
+      liveCtx.fillRect(px, py, 12, ph);
+      liveCtx.strokeStyle = "rgba(255,255,255,0.30)";
+      liveCtx.lineWidth = 1;
+      liveCtx.strokeRect(px + 0.5, py + 0.5, pw - 1, ph - 1);
+      liveCtx.restore();
+      liveTex.needsUpdate = true;
+    };
+    img.onerror = () => { /* the typeset plate stays */ };
+    img.src = item.cover;
+  }
+
   function bindMirror(items, domCoil, litRange, anchorFrac) {
     clearMirror();
     if (!items || !items.length) return;
+    const gen = ++mirrorGen;
     const n = Math.min(items.length, LIVE_DIV * LIVE_DIV);
     liveCtx.clearRect(0, 0, 1024, 1024);
     for (let k = 0; k < n; k++) drawMirrorCell(k, items[k]);
     liveTex.needsUpdate = true;
+    for (let k = 0; k < n; k++) {
+      if (items[k] && items[k].cover) drawMirrorCover(k, items[k], gen);
+    }
     const rec = pageRec(PAGE_LIVE);
     rec.tex = liveTex;
     if (!rec.mesh) buildPageMesh(rec);
@@ -2399,8 +2463,20 @@ export function createHelixScene(canvas, opts = {}) {
       if (s.behind || L.sx < -80 || L.sx > W + 80 || L.sy < -60 || L.sy > H + 60) op = 0;
       if (!L.w) { L.w = L.el.offsetWidth; L.h = L.el.offsetHeight; }
       // Hero text avoidance: a label whose center sits under the
-      // title/total block hides (converted to layer coords).
-      if (op > 0 && avoidRects.length) {
+      // title/total block hides (converted to layer coords). The
+      // camera-held coil's label is EXEMPT (2026-11-20): it is the
+      // selection's proof of target — the picked subcategory in a
+      // reshape focus, the focused band in focus mode, the era coil
+      // under an era hold — and hiding it when its anchor happens
+      // to land under the hero block made correct pans read as
+      // misses on the phone (U.S. Code, Catholic Encyclopedia,
+      // Laws & Founding Documents all framed dead-center with the
+      // label suppressed). Other labels keep avoiding as before.
+      const heldCoil =
+        (mode === "focus" && focusGroups.indexOf(L.group) !== -1) ||
+        (mode === "reshape" && reshapeFocusCoil === L.group) ||
+        (eraHold && eraHold.coil === L.group);
+      if (op > 0 && avoidRects.length && !heldCoil) {
         for (const a of avoidRects) {
           const ax = a.x - labelDocX, ay = a.y - labelDocY;
           if (L.sx > ax - 4 && L.sx < ax + a.w + 4 && L.sy > ay - 4 && L.sy < ay + a.h + 4) {
@@ -3134,8 +3210,27 @@ export function createHelixScene(canvas, opts = {}) {
     focusY = ys.reduce((a, b) => a + b, 0) / ys.length;
     const span = Math.max(...ys) - Math.min(...ys);
     focusDistMul = Math.min(0.64, Math.max(0.50, 0.48 + span / 130));
-    const anchor = COILS[groups[0]] && COILS[groups[0]].anchorLocal;
+    const anchorCoil = COILS[groups[0]];
+    const anchor = anchorCoil && anchorCoil.anchorLocal;
     if (anchor) {
+      // Anchor-in-frame clamp: a coil's label anchor sits at a
+      // staggered fraction of its span, so on a very large coil the
+      // anchor can lie far above/below the coil's mid-height — far
+      // enough that at the focus distance it projects out of the
+      // frame (live case, 2026-11-20: Federal Register, 79% of its
+      // layout, anchor at 0.2 of the span, label pinned under the
+      // top dock). Shift the focus height toward the anchor just
+      // enough to keep the anchor inside the middle of the frame;
+      // a no-op whenever the anchor already sits comfortably, so
+      // accepted framings do not move.
+      const halfH =
+        Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) *
+        idleDist * focusDistMul * 0.72;
+      const maxOff = halfH * 0.45;
+      const dY = anchorCoil.anchorY - focusY;
+      if (Math.abs(dY) > maxOff) {
+        focusY = anchorCoil.anchorY - Math.sign(dY) * maxOff;
+      }
       const aA = Math.atan2(anchor.z, anchor.x);
       const aC = Math.atan2(Math.cos(CAM_AZ), Math.sin(CAM_AZ));
       const base = aA - aC;
@@ -3347,11 +3442,57 @@ export function createHelixScene(canvas, opts = {}) {
 
   if (frozen) renderStill();
 
+  // The overall structure's center in viewport coordinates
+  // (2026-11-20, entry-flight beat 2): the point on the helix AXIS
+  // at the live layout's vertical midpoint, projected through the
+  // camera's current TARGET framing (modeTarget + the scroll-scrub
+  // poster blend, exactly as applyRig composes them). The entry
+  // flight asks for this at click time so its second beat can carry
+  // the opened cover into the center of the coil's own geometry —
+  // not the page's center — before the rise. For a re-formed
+  // (multi-coil) layout the "overall coil" is the whole re-formed
+  // structure: its axis and its full vertical span. Returns null
+  // when no layout exists yet.
+  function coilCenterViewport() {
+    if (!layoutCoils || !layoutCoils.length || !camera) return null;
+    let lo = Infinity, hi = -Infinity;
+    for (const c of layoutCoils) {
+      if (c.y0 < lo) lo = c.y0;
+      if (c.y1 > hi) hi = c.y1;
+    }
+    if (!isFinite(lo) || !isFinite(hi)) return null;
+    const midY = (lo + hi) / 2;
+    const tgt = modeTarget(sceneTime);
+    const span = Math.max(1, labelH || viewH);
+    const p = clamp01(lastScrollY / span);
+    const w = p * p * (3 - 2 * p);
+    const posterElev = viewW / Math.max(1, viewH) < 0.85 ? 1.28 : 1.04;
+    const elev = posterElev + (tgt.elev - posterElev) * w;
+    const dist = idleDist * 1.18 + (tgt.dist - idleDist * 1.18) * w;
+    const tgtY = 20 + (tgt.tgtY - 20) * w;
+    const cam = camera.clone();
+    const ce = Math.cos(elev);
+    cam.position.set(
+      Math.sin(CAM_AZ) * ce * dist,
+      tgtY + Math.sin(elev) * dist,
+      Math.cos(CAM_AZ) * ce * dist
+    );
+    cam.lookAt(0, tgtY, 0);
+    cam.updateMatrixWorld();
+    const v = new THREE.Vector3(0, midY, 0).project(cam);
+    if (!isFinite(v.x) || !isFinite(v.y)) return null;
+    return {
+      x: (v.x * 0.5 + 0.5) * viewW,
+      y: (-v.y * 0.5 + 0.5) * viewH,
+    };
+  }
+
   const controller = {
     start,
     stop,
     renderStill,
     isDegraded: () => degraded,
+    coilCenterViewport,
     setSettled,
     setDisplay,
     // Read-only inspection for gates + the error-watch lane:

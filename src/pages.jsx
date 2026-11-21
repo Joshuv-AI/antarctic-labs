@@ -2657,6 +2657,27 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       if (rect.height * scale > vh * 0.62) scale *= (vh * 0.62) / (rect.height * scale);
       const dx = vw / 2 - (rect.left + rect.width / 2);
       const dy = vh * 0.46 - (rect.top + rect.height / 2);
+      // Beat 2 (2026-11-20, Joshua's correction): after the
+      // page-center presentation, the cover zips INTO THE COIL —
+      // the overall spiral's own center, from the scene's live
+      // layout geometry — and rises from there. cdx/cdy are the
+      // extra translate from the beat-1 center to the coil center;
+      // zero when the scene cannot answer (flight falls back to
+      // the pre-correction single-center rise).
+      let cdx = 0;
+      let cdy = 0;
+      try {
+        const cc =
+          helixApiRef && helixApiRef.current && helixApiRef.current.coilCenter
+            ? helixApiRef.current.coilCenter()
+            : null;
+        if (cc && isFinite(cc.x) && isFinite(cc.y)) {
+          cdx = cc.x - vw / 2;
+          cdy = cc.y - vh * 0.46;
+        }
+      } catch (e) {
+        /* the coil center is an enhancement, never a blocker */
+      }
       const reduced = !!(
         window.matchMedia &&
         window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -2674,6 +2695,8 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         },
         dx,
         dy,
+        cdx,
+        cdy,
         scale,
         reduced,
       });
@@ -5482,6 +5505,61 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         };
       }
     }
+    // Papers axes (2026-11-20 fix, Joshua's phone recording —
+    // gap G-1): a field, a field's sub-shelf, or a publication
+    // type is a subcategory-level selection and re-forms like
+    // every other one — one coil per field (or per sub-shelf of
+    // the picked field, or per type), sizes from the collections
+    // package's own published counts (the same numbers the panel
+    // rows show), the tapped one picked so the generic picked
+    // branch below reshapes one-hot and flies the camera onto it.
+    // Before this branch existed these taps fell through to the
+    // resting-layout focus and the background never re-formed.
+    if (!layout && paperKey && collData && collData.papersFields) {
+      const parts = paperKey.split(":");
+      const field = collData.papersFields.find((f) => f.id === parts[1]);
+      if (parts[0] === "papersub" && field && field.subs && field.subs.length) {
+        layout = {
+          key: "papersub:" + field.id,
+          kind: "papersub",
+          groupLabel: field.label,
+          coils: field.subs.map((s) => ({
+            key: s.key,
+            name: s.label,
+            count: s.count,
+            band: 1,
+          })),
+          picked: field.subs.findIndex((s) => s.key === paperKey),
+        };
+      } else if (parts[0] === "paperfield" && field) {
+        layout = {
+          key: "paperfields",
+          kind: "paperfield",
+          groupLabel: "Papers",
+          coils: collData.papersFields.map((f) => ({
+            key: f.key,
+            name: f.label,
+            count: f.count,
+            band: 1,
+          })),
+          picked: collData.papersFields.findIndex((f) => f.key === paperKey),
+        };
+      }
+    }
+    if (!layout && paperTypeKey && collData && collData.papersTypes) {
+      layout = {
+        key: "papertypes",
+        kind: "papertype",
+        groupLabel: "Papers",
+        coils: collData.papersTypes.map((t) => ({
+          key: t.key,
+          name: t.label,
+          count: t.count,
+          band: 1,
+        })),
+        picked: collData.papersTypes.findIndex((t) => t.key === paperTypeKey),
+      };
+    }
     if (
       !layout &&
       bucketFilter &&
@@ -5663,6 +5741,13 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
               creator: a.creator || "",
               year: a.year || null,
               collection: a.collection || "",
+              // The work's own real cover when the library's cover
+              // rules resolve one deterministically (2026-11-20,
+              // Books covers fix): the scene's mirror draws it into
+              // the cell as the book's cover, falling back to the
+              // typeset plate when there is none or it cannot load.
+              // Same candidate the result cards try first.
+              cover: coverCandidates(a)[0] || null,
             }));
           const layoutName = () => {
             const summary =

@@ -197,6 +197,9 @@ function HelixLayer({ apiRef }) {
         pendingSettled = true;
         if (scene) scene.setSettled();
       },
+      // Entry-flight beat 2 (2026-11-20): the live layout's coil
+      // center in viewport coords, or null before the scene exists.
+      coilCenter: () => (scene ? scene.coilCenterViewport() : null),
     };
     if (apiRef) apiRef.current = bridge;
 
