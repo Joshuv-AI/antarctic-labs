@@ -4945,8 +4945,24 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // shows the same numbers during a selection's load as after it
   // — resident tallies can only describe what has landed, which
   // for an unloaded lane is the bootstrap prefix, not the truth.
+  // Single member-axis selections (curated / shelf / Papers) take
+  // the same kind of published path via the member cubes
+  // (2026-11-21, line 137 — see singleMemberKey below).
   const facetSelActive = !!(bucketFilter || eraFilter);
   const memberSelActive = !!(collKey || shelfKey || paperKey || paperTypeKey || collSet);
+  // Single member-axis selection (2026-11-21, line 137): exactly
+  // one member axis (curated / shelf / Papers field / type) is
+  // active and no lane/bucket selection rides along — the state
+  // the published member cubes (cubeMemberEra / cubeMemberBucket
+  // in the tallies file) describe exactly, so the resolvers below
+  // take a published path for it just as facet-axes-only selections
+  // do. Combined member states (two member axes at once, or a
+  // member axis plus a bucket) keep the resident-tally path: no
+  // published product states those intersections, and a blank
+  // beats a wrong number.
+  const memberKeysActive = [collKey, shelfKey, paperKey, paperTypeKey].filter(Boolean);
+  const singleMemberKey =
+    memberKeysActive.length === 1 && !bucketFilter ? memberKeysActive[0] : "";
   const panelCountsFinal = scopeModeOn
     ? !selScopesLoading || !!staticTallies || !!serverTalliesCurrent
     : countsFinal;
@@ -4979,6 +4995,30 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         return staticTallies.collections[c] ?? null;
       }
       return serverCounts ? serverCounts[c] ?? null : null;
+    }
+    // Member selection (2026-11-21, line 137): the selected
+    // collection's lane distribution is the lane sums of its
+    // published member x bucket cube row — exact in every state.
+    // (The scope-mode fallback below this chain reads the GLOBAL
+    // published lane totals whenever no era is selected, member
+    // selection or not, so without this path a curated selection
+    // left every lane chip at its whole-library number.) With an
+    // era also selected the distribution is a three-way
+    // intersection no published product states; that state keeps
+    // the resident path.
+    if (
+      singleMemberKey &&
+      !eraFilter &&
+      staticTallies &&
+      staticTallies.cubeMemberBucket
+    ) {
+      const row = staticTallies.cubeMemberBucket[singleMemberKey];
+      if (!row) return 0;
+      let n = 0;
+      for (const k of Object.keys(row)) {
+        if (k.startsWith(c + ":")) n += row[k];
+      }
+      return n;
     }
     if (facetCountsShown) return facetCountsShown.laneMap[c] || 0;
     if (scopeModeOn) {
@@ -5034,6 +5074,20 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       }
       return null;
     }
+    // Member selection (2026-11-21, line 137): the published
+    // member x bucket cube states the bucket's count within the
+    // selected collection exactly; a bucket missing from the
+    // member's row is a true zero within it. With an era also
+    // selected the count is a three-way intersection no published
+    // product states; that state keeps the resident path.
+    if (
+      singleMemberKey &&
+      !eraFilter &&
+      staticTallies &&
+      staticTallies.cubeMemberBucket
+    ) {
+      return staticTallies.cubeMemberBucket[singleMemberKey]?.[key] ?? 0;
+    }
     if (facetCountsShown) return facetCountsShown.subMap[key] || 0;
     if (scopeModeOn) {
       if (facetSelActive && serverTalliesCurrent) {
@@ -5067,6 +5121,19 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       }
       return staticTallies.eras ? staticTallies.eras[e.id] ?? null : null;
     }
+    // Member selection (2026-11-21, line 137): the published
+    // member x era cube states the selected collection's own era
+    // distribution exactly, in every state — the era axis ignores
+    // its own selection, so the cube row holds whether or not an
+    // era is also selected. Before this path existed, a curated
+    // selection left the era chips numberless during the load AND
+    // at settle (a fully resident 6-work collection included):
+    // the resident tallies were the only member source and are
+    // gated on the selection's scopes, and the scope-mode
+    // fallbacks below have no member branch for eras at all.
+    if (singleMemberKey && staticTallies && staticTallies.cubeMemberEra) {
+      return staticTallies.cubeMemberEra[singleMemberKey]?.[e.id] ?? 0;
+    }
     if (facetCountsShown) return facetCountsShown.eraMap[e.id] || 0;
     if (scopeModeOn) {
       if (!facetSelActive && !memberSelActive && staticTallies && staticTallies.eras) {
@@ -5083,15 +5150,12 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         // is a true zero (e.g. LAW x 1800s), not an unknown.
         return staticTallies.cubeBucketEra[bucketFilter]?.[e.id] ?? 0;
       }
-      if (
-        collKey &&
-        !eraFilter &&
-        !memberSelActive &&
-        staticTallies &&
-        staticTallies.cubeCollectionEra
-      ) {
-        return staticTallies.cubeCollectionEra[collKey]?.[e.id] ?? 0;
-      }
+      // (Removed 2026-11-21, line 137: a branch here keyed the
+      // COLLECTION x era cube on collKey — unreachable, since
+      // collKey makes memberSelActive true and the branch required
+      // it false; and wrong besides, since the collection cube has
+      // no curated keys. The member x era cube path above is its
+      // working successor.)
       if (e.id === "1800s" && facetSelActive && serverTalliesCurrent) {
         return serverTalliesCurrent.era["1800s"] ?? null;
       }
