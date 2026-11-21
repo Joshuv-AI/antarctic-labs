@@ -1096,32 +1096,25 @@ export default function BookReader({
     return () => window.removeEventListener("keydown", onKey);
   }, [turnBy, mode]);
 
-  // -- Click-to-turn (§4.5): left/right thirds of the stage. A click --
-  // -- that ends a text selection never turns (§7.9). ------------------
+  // -- Page taps (Joshua's rule, 2026-11-20): a tap on the page NEVER --
+  // -- turns the page — not the edges, not the center. Tap-to-turn is --
+  // -- the bottom arrows only; swipe/drag turns (below) are unchanged. -
   const onStageClick = (e) => {
     if (mode === "thumbs") return;
     // A drag turn (or a fan dismissal) just resolved on this same
-    // gesture — the trailing click must not turn a second page.
+    // gesture — the trailing click is part of that gesture, not a tap.
     if (Date.now() - dragTurnAtRef.current < 400) return;
-    // Tapping outside the expanded phone fan collapses it (§7.8)
-    // instead of turning.
-    if (phoneOpen) {
-      setPhoneOpen(false);
-      return;
-    }
     if (
       e.target.closest &&
       e.target.closest(".bv-dock, .bv-strip, .bv-fan, .bv-hl-pill, .ra-root, button, a, input, textarea, select")
     )
       return;
-    const sel = window.getSelection();
-    if (sel && !sel.isCollapsed) return;
-    const stage = stageRef.current;
-    if (!stage) return;
-    const r = stage.getBoundingClientRect();
-    const x = (e.clientX - r.left) / Math.max(1, r.width);
-    if (x > 0.66) turnBy(1);
-    else if (x < 0.34) turnBy(-1);
+    // Tapping outside the expanded phone fan collapses it (§7.8).
+    // That is the ONLY thing a page tap does now.
+    if (phoneOpen) {
+      setPhoneOpen(false);
+      return;
+    }
   };
 
   // -- Wheel: one spread per gesture, throttled (§4.5) ---------------------------
@@ -1364,18 +1357,19 @@ export default function BookReader({
   }, [pendingSel]);
 
   // -- Scrubber ---------------------------------------------------------------------
-  const scrubGeomRef = useRef(null);
-  const scrubInfo = useCallback(
-    (clientY) => {
-      const g = scrubGeomRef.current;
-      // The geometry ref is seeded with n: 0 before the dash count
-      // lands; dividing by it produced sliceStart = -Infinity and the
-      // tooltip's broken "-Infinity%" (INVENTORY 130). No geometry,
-      // no info — and every value below is clamped finite regardless.
-      if (!g || !text || !(g.n > 0) || !(text.length > 0)) return null;
-      const frac = clamp((clientY - g.top) / Math.max(1, g.height), 0, 0.9999);
-      const n = g.n;
-      const idx = clamp(Math.floor(frac * n), 0, n - 1);
+  // Info for one dash of the scrubber, by dash index. The caller (the
+  // Scrubber) owns the dash count and derives the index from the LIVE
+  // element rect on every pointer event, so a gesture never depends on
+  // cached geometry: the old geometry ref was seeded with n: 0 (the
+  // "-Infinity%" tooltip, INVENTORY 130) and a ResizeObserver reset
+  // could re-poison it mid-drag — iOS Safari resizes the strip when
+  // its URL bar shows/hides, which froze real-phone drags while the
+  // desktop harness (fixed viewport) never saw it. Every value below
+  // is clamped finite regardless.
+  const scrubInfoIdx = useCallback(
+    (idxRaw, n) => {
+      if (!text || !(text.length > 0) || !(n > 0)) return null;
+      const idx = clamp(Math.floor(idxRaw), 0, n - 1);
       const sliceStart = clamp(
         Math.floor((idx / n) * text.length),
         0,
@@ -1567,9 +1561,11 @@ export default function BookReader({
   // The Dock carries only its own additions (INVENTORY 118): Contents,
   // Find, Highlights, and Share live solely in the AssistiveTouch orb
   // (ReaderAssist, driving the book through the bookNav bridge), so
-  // their Dock slots — and the panels behind them — are gone.
+  // their Dock slots — and the panels behind them — are gone. The Back
+  // button is gone too (Joshua's order, 2026-11-20): the top dock is
+  // the way back to the library, so a second back control here was
+  // redundant. What remains: Entry info, Theme, View.
   const dockButtons = [
-    { id: "exit", icon: I.exit, label: "Back to Library", onClick: () => onExit && onExit() },
     { id: "info", icon: I.info, label: "Entry info", onClick: () => { setPhoneOpen(false); if (onInfo) onInfo(); } },
     {
       id: "theme",
@@ -1635,9 +1631,11 @@ export default function BookReader({
               {renderSpread(currentSpreadIdx)}
             </div>
           )}
-          {/* Page turns by click are handled on the stage itself (see
-              onStageClick): overlay zones would sit on the text and
-              block selection across most of the page (§7.9). */}
+          {/* A tap on the stage never turns the page (Joshua's rule,
+              2026-11-20 — see onStageClick): turns come from the
+              bottom arrows or a swipe/drag only. Overlay tap zones
+              would sit on the text and block selection across most
+              of the page (§7.9). */}
         </div>
       )}
 
@@ -1679,8 +1677,7 @@ export default function BookReader({
             sections={sections}
             anchor={anchor}
             currentIdx={currentIdx}
-            scrubInfo={scrubInfo}
-            scrubGeomRef={scrubGeomRef}
+            scrubInfoIdx={scrubInfoIdx}
             preview={scrubPreview}
             setPreview={setScrubPreview}
             onJump={(off) => turnToOffset(off)}
@@ -1714,8 +1711,7 @@ export default function BookReader({
               sections={sections}
               anchor={anchor}
               currentIdx={currentIdx}
-              scrubInfo={scrubInfo}
-              scrubGeomRef={scrubGeomRef}
+              scrubInfoIdx={scrubInfoIdx}
               preview={scrubPreview}
               setPreview={setScrubPreview}
               onJump={(off) => turnToOffset(off)}
@@ -1859,8 +1855,7 @@ function Scrubber({
   text,
   sections,
   anchor,
-  scrubInfo,
-  scrubGeomRef,
+  scrubInfoIdx,
   preview,
   setPreview,
   onJump,
@@ -1868,13 +1863,16 @@ function Scrubber({
 }) {
   const colRef = useRef(null);
   const [height, setHeight] = useState(320);
-  const draggingRef = useRef(false);
-  // Chapter magnifier (INVENTORY 130, phone): a long-press (or a
-  // press that turns into a drag) raises a pop-out bubble at the
-  // finger naming the section/chapter under it; lifting the finger
-  // jumps there (the same release-jump as every scrub). It replaces
-  // the old centered tooltip on the phone strip.
-  const pressRef = useRef(null); // {t, y} of the active press
+  // Gesture state (INVENTORY 130 reliability revamp, 2026-11-20): the
+  // shipped version keyed everything off a cached geometry ref and a
+  // 200 ms long-press, and had no pointercancel path at all — on a
+  // real iPhone the drag registered only intermittently (Joshua's
+  // verdict). Now: position comes from the LIVE element rect on every
+  // event, the loupe engages on first movement (or a short 130 ms
+  // hold), and EVERY way a gesture can end — release, pointercancel
+  // (iOS claiming the gesture), lost capture — resolves through one
+  // finish path that lands the jump at the finger's last position.
+  const gestureRef = useRef(null); // {id, startY, idx} of the active press
   const magTimerRef = useRef(0);
   const [mag, setMag] = useState(false);
 
@@ -1882,21 +1880,13 @@ function Scrubber({
     const el = colRef.current;
     if (!el) return undefined;
     const ro = new ResizeObserver(() => {
-      const r = el.getBoundingClientRect();
-      setHeight(r.height);
-      scrubGeomRef.current = { top: r.top, height: r.height, n: 0 };
+      setHeight(el.getBoundingClientRect().height);
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [scrubGeomRef]);
+  }, []);
 
   const n = clamp(Math.floor(height / 5), 24, 160);
-  useEffect(() => {
-    const el = colRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    scrubGeomRef.current = { top: r.top, height: r.height, n };
-  }, [n, scrubGeomRef]);
 
   const sectionDash = useMemo(() => {
     const set = new Set();
@@ -1911,72 +1901,106 @@ function Scrubber({
     text && text.length > 0
       ? Math.min(n - 1, Math.floor((anchor / text.length) * n))
       : 0;
-  const previewInfo = preview !== null ? scrubInfo(previewY(preview)) : null;
+  const previewInfo = preview !== null ? scrubInfoIdx(preview, n) : null;
 
-  function previewY(idx) {
-    const g = scrubGeomRef.current;
-    if (!g) return 0;
-    return g.top + ((idx + 0.5) / n) * g.height;
-  }
+  // Position from the live rect — never from cached geometry (see the
+  // gesture note above). A rect read per pointer event is cheap here:
+  // nothing in the drag dirties the column's own layout.
+  const infoAt = (clientY) => {
+    const el = colRef.current;
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    if (!(r.height > 0)) return null;
+    const frac = clamp((clientY - r.top) / r.height, 0, 0.9999);
+    return scrubInfoIdx(Math.floor(frac * n), n);
+  };
 
-  const infoAt = (clientY) => scrubInfo(clientY);
+  const raiseMagSoon = () => {
+    window.clearTimeout(magTimerRef.current);
+    magTimerRef.current = window.setTimeout(() => {
+      if (gestureRef.current) setMag(true);
+    }, 130);
+  };
 
-  const handleDown = (e) => {
+  const beginGesture = (e) => {
     const info = infoAt(e.clientY);
-    if (!info) return;
-    draggingRef.current = true;
+    if (!info) return false;
+    gestureRef.current = { id: e.pointerId, startY: e.clientY, idx: info.idx };
     setPreview(info.idx);
-    pressRef.current = { t: Date.now(), y: e.clientY };
-    if (phone) {
-      // Long-press engagement: the magnifier rises once the press
-      // matures (or as soon as the press becomes a drag, in
-      // handleMove) — a quick tap stays a plain press+release jump.
-      setMag(false);
-      window.clearTimeout(magTimerRef.current);
-      magTimerRef.current = window.setTimeout(() => {
-        if (draggingRef.current) setMag(true);
-      }, 200);
-    }
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
       /* noop */
     }
+    if (phone) {
+      setMag(false);
+      raiseMagSoon();
+    }
+    return true;
+  };
+
+  const handleDown = (e) => {
+    if (gestureRef.current) return; // one active pointer at a time
+    beginGesture(e);
     // Click and drag share one rule (§7.4): the press previews, the
     // release jumps — a plain click is just a press+release in place.
   };
   const handleMove = (e) => {
+    const g = gestureRef.current;
+    if (!g) {
+      if (e.pointerType === "mouse" && e.buttons === 0) {
+        // Desktop hover preview.
+        const info = infoAt(e.clientY);
+        setPreview(info ? info.idx : null);
+        return;
+      }
+      if (e.buttons > 0) {
+        // A drag whose pointerdown we somehow missed (self-heal):
+        // adopt it rather than ignoring the whole gesture.
+        beginGesture(e);
+      }
+      return;
+    }
+    if (e.pointerId !== g.id) return;
     const info = infoAt(e.clientY);
     if (!info) return;
+    g.idx = info.idx;
     setPreview(info.idx);
-    const p = pressRef.current;
-    if (
-      phone &&
-      p &&
-      !mag &&
-      (Date.now() - p.t > 180 || Math.abs(e.clientY - p.y) > 12)
-    ) {
+    if (phone && !mag && Math.abs(e.clientY - g.startY) > 6) {
       window.clearTimeout(magTimerRef.current);
       setMag(true);
     }
   };
-  const handleUp = (e) => {
-    if (!draggingRef.current) return;
-    draggingRef.current = false;
+  // One finish path for pointerup, pointercancel, and lost capture:
+  // the reader lands where the finger last was — a cancelled gesture
+  // (iOS selection/callout takeover, system gesture) must never die
+  // silently or leave the loupe/preview stuck on screen.
+  const finishGesture = (e) => {
+    const g = gestureRef.current;
+    if (!g) return;
+    if (e && e.pointerId !== undefined && e.pointerId !== g.id) return;
+    gestureRef.current = null;
     window.clearTimeout(magTimerRef.current);
-    pressRef.current = null;
     setMag(false);
-    const info = infoAt(e.clientY);
     setPreview(null);
+    let idx = g.idx;
+    if (e && typeof e.clientY === "number") {
+      const info = infoAt(e.clientY);
+      if (info) idx = info.idx;
+    }
+    const info = scrubInfoIdx(idx, n);
     if (info) onJump(info.sliceStart);
   };
+  const handleUp = (e) => finishGesture(e);
+  const handleCancel = (e) => finishGesture(e);
 
-  const curInfo = scrubInfo(
-    scrubGeomRef.current
-      ? scrubGeomRef.current.top +
-          ((curDash + 0.5) / n) * scrubGeomRef.current.height
-      : 0
-  );
+  const curInfo = scrubInfoIdx(curDash, n);
+  // The loupe rides at the finger's height, clamped so its full
+  // circle stays inside the column at the rail's ends.
+  const magTop =
+    preview !== null
+      ? clamp(((preview + 0.5) / n) * height, 62, Math.max(62, height - 62))
+      : 0;
 
   return (
     <div className={`bv-scrub-wrap${phone ? " bv-scrub-phone" : ""}`}>
@@ -1997,10 +2021,11 @@ function Scrubber({
         onPointerDown={handleDown}
         onPointerMove={handleMove}
         onPointerUp={handleUp}
+        onPointerCancel={handleCancel}
+        onLostPointerCapture={handleCancel}
         onPointerLeave={() => {
-          if (!draggingRef.current) {
+          if (!gestureRef.current) {
             setPreview(null);
-            pressRef.current = null;
             setMag(false);
           }
         }}
@@ -2049,7 +2074,7 @@ function Scrubber({
         <div
           className="bv-scrub-mag"
           role="status"
-          style={{ top: ((preview + 0.5) / n) * height }}
+          style={{ top: magTop }}
         >
           <span className="bv-scrub-mag-title">{previewInfo.label}</span>
           <span className="bv-scrub-mag-meta">
