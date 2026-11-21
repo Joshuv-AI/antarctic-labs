@@ -10836,15 +10836,15 @@ export function PrivacyPage({ go }) {
         <span className="section-index">INFORMATION WE COLLECT</span>
         <div>
           <p className="body-copy">We collect as little as possible. Anonymous analytics: we use PostHog to count page views, library browsing, reading progress, and text downloads. PostHog is configured for anonymous visitors only — no user profiles are created, session recording is disabled, and automatic event capture is off. Only events we deliberately record are sent, tied to an anonymous visitor identifier, not to a name or email address.</p>
-          <p className="body-copy">Information you choose to give us: if you donate, Stripe collects your email address at checkout to create a checkout session and, if enabled in Stripe, to send a receipt. We do not receive or store your card number. If you suggest a work for the library, you provide the title, creator, source link, and any notes you choose to add. Our hosting provider may process basic technical information needed to deliver pages securely, such as IP address and browser type, in its normal server logs.</p>
-          <p className="body-copy">API keys: if you request a Tower of Babel API key, we store the email address you give and a cryptographic hash of the key — never the key itself — in a Cloudflare database, so the API can authenticate your requests and count your daily usage. Payments for API plans are processed by Stripe, and we do not receive or store your card number. The email that delivers your key is sent through Resend.</p>
+          <p className="body-copy">Information you choose to give us: if you donate, Stripe collects your email address at checkout to create a checkout session and, if enabled in Stripe, to send a receipt. If you suggest a work for the library, you provide the title, creator, source link, and any notes you choose to add. Our hosting provider may process basic technical information needed to deliver pages securely, such as IP address and browser type, in its normal server logs.</p>
+          <p className="body-copy">API keys: if you request a Tower of Babel API key, we store the email address you give and a cryptographic hash of the key in a Cloudflare database, so the API can authenticate your requests and count your daily usage. Payments for API plans are processed by Stripe. The email that delivers your key is sent through Resend.</p>
         </div>
       </section>
 
       <section className="trust-block section reveal">
         <span className="section-index">COOKIES AND ADVERTISING</span>
         <div>
-          <p className="body-copy">We use Google AdSense to show advertising on the Tower of Babel library pages. No advertising is shown on the donation page. Third-party vendors, including Google, use cookies to serve ads based on a user&apos;s prior visits to this website or other websites. Google&apos;s use of advertising cookies enables it and its partners to serve ads to users based on their visit to this site and other sites on the internet.</p>
+          <p className="body-copy">We use Google AdSense to show advertising on the Tower of Babel library pages. Third-party vendors, including Google, use cookies to serve ads based on a user&apos;s prior visits to this website or other websites. Google&apos;s use of advertising cookies enables it and its partners to serve ads to users based on their visit to this site and other sites on the internet.</p>
           <p className="body-copy">You may opt out of personalized advertising by visiting <a href="https://adssettings.google.com/" target="_blank" rel="noreferrer">Google Ads Settings</a> and <a href="https://optout.aboutads.info/" target="_blank" rel="noreferrer">aboutads.info</a>. Other third-party vendors and ad networks may also serve ads on the library pages, and many of them can be opted out of on the same aboutads.info page. How Google uses information from sites and apps that use its services is explained on <a href="https://policies.google.com/technologies/partner-sites" target="_blank" rel="noreferrer">Google&apos;s partner-sites page</a>. You can also set your browser to refuse cookies, though some site features may work less well without them. PostHog also uses cookies and local storage to keep its anonymous visitor identifier between visits.</p>
         </div>
       </section>
@@ -10859,7 +10859,7 @@ export function PrivacyPage({ go }) {
       <section className="trust-block section reveal">
         <span className="section-index">HOW INFORMATION IS USED AND SHARED</span>
         <div>
-          <p className="body-copy">Information is used to operate the site and the library, to understand which works readers use, to process donations, and to show advertising. It is shared only with the service providers needed for those purposes — analytics, payment processing, and advertising — and as required by law. We do not publish or display information you provide through donation or suggestion forms.</p>
+          <p className="body-copy">Information is used to operate the site and the library, to understand which works readers use, to process donations, and to show advertising. It is shared only as described under Service Providers above. We do not publish or display information you provide through donation or suggestion forms.</p>
         </div>
       </section>
 
@@ -10873,28 +10873,28 @@ export function PrivacyPage({ go }) {
       <section className="trust-block section reveal">
         <span className="section-index">SECURITY</span>
         <div>
-          <p className="body-copy">The site is served over HTTPS. API keys are stored only as cryptographic hashes, and card payments never touch our systems — Stripe handles them end to end. No system is perfectly secure, but the information here to protect is deliberately small: no accounts, no passwords, no card numbers.</p>
+          <p className="body-copy">The site is served over HTTPS. API keys are stored only as cryptographic hashes. No system is perfectly secure, but the information here to protect is deliberately small: no accounts and no passwords.</p>
         </div>
       </section>
 
       <section className="trust-block section reveal">
         <span className="section-index">YOUR CHOICES</span>
         <div>
-          <p className="body-copy">You can refuse or delete cookies in your browser at any time, and opt out of personalized advertising at the links above. If we hold personal information about you — in practice, the email address attached to an API key or a donation — you may ask what it is, ask for a copy, or ask for it to be deleted, by writing to the address below. Anonymous analytics identifiers cannot be looked up or deleted per person, because they are not tied to anyone&apos;s identity.</p>
+          <p className="body-copy">You can refuse or delete cookies in your browser at any time, and opt out of personalized advertising at the links above. If we hold personal information about you — in practice, the email address attached to an API key or a donation — you may ask what it is, ask for a copy, or ask for it to be deleted, through the <a href="#" onClick={(e) => { e.preventDefault(); go("/contact"); }}>Contact page</a>. Anonymous analytics identifiers cannot be looked up or deleted per person, because they are not tied to anyone&apos;s identity.</p>
         </div>
       </section>
 
       <section className="trust-block section reveal">
         <span className="section-index">CHILDREN</span>
         <div>
-          <p className="body-copy">The library is a general-audience collection of books and documents. The site is not directed at children under 13, and we do not knowingly collect personal information from children — reading asks for no information from anyone, of any age.</p>
+          <p className="body-copy">The library is a general-audience collection of books and documents. The site is not directed at children under 13, and we do not knowingly collect personal information from children.</p>
         </div>
       </section>
 
       <section className="trust-block section reveal">
         <span className="section-index">CHANGES AND CONTACT</span>
         <div>
-          <p className="body-copy">This policy may be updated as the site changes; the date at the top of this page will change with it. Questions about this policy can be sent to hello@antarctic-labs.com, or through the suggestion form on the Tower of Babel library pages.</p>
+          <p className="body-copy">This policy may be updated as the site changes; the date at the top of this page will change with it. Questions about this policy can be sent through the <a href="#" onClick={(e) => { e.preventDefault(); go("/contact"); }}>Contact page</a>.</p>
           <p className="body-copy"><a href="#" onClick={(e) => { e.preventDefault(); go("/about"); }}>About Antarctic Labs</a> · <a href="#" onClick={(e) => { e.preventDefault(); go("/tower-of-babel"); }}>Tower of Babel</a></p>
         </div>
       </section>
@@ -10951,14 +10951,14 @@ export function TermsPage({ go }) {
       <section className="trust-block section reveal">
         <span className="section-index">READING</span>
         <div>
-          <p className="body-copy">The library is free to read. You do not need an account, a sign-in, or any personal information to read, search, listen to, or download the works whose texts are hosted here. We work to keep the site available and correct, but availability is not guaranteed and no uptime commitment is made on any part of the site, free or paid.</p>
+          <p className="body-copy">The library is free to read. No account, sign-in, or personal information is needed to read, search, listen to, or download the works whose texts are hosted here — the <a href="#" onClick={(e) => { e.preventDefault(); go("/privacy"); }}>Privacy Policy</a> covers what that means in practice. We work to keep the site available and correct, but availability is not guaranteed and no uptime commitment is made on any part of the site, free or paid.</p>
         </div>
       </section>
 
       <section className="trust-block section reveal">
         <span className="section-index">THE TEXTS AND THEIR RIGHTS</span>
         <div>
-          <p className="body-copy">The works in the library are public-domain or openly licensed texts. Rights are stated per work: every catalog record carries its own rights status and license fields, and those fields — not this page — govern what you may do with a given work. Antarctic Labs claims no new copyright in the texts themselves. The catalog data, the site&apos;s own writing (descriptions, introductions, collection essays), and the site software are the lab&apos;s own work; ask before republishing them wholesale.</p>
+          <p className="body-copy">The works in the library are public-domain or openly licensed texts. Rights are stated per work in each catalog record — <a href="#" onClick={(e) => { e.preventDefault(); go("/rights-and-sources"); }}>Rights &amp; Sources</a> explains how they are decided and recorded. Antarctic Labs claims no new copyright in the texts themselves. The catalog data, the site&apos;s own writing (descriptions, introductions, collection essays), and the site software are the lab&apos;s own work; ask before republishing them wholesale.</p>
         </div>
       </section>
 
@@ -11021,7 +11021,7 @@ export function TermsPage({ go }) {
       <section className="trust-block section reveal">
         <span className="section-index">CHANGES AND CONTACT</span>
         <div>
-          <p className="body-copy">These terms may be updated as the site changes; the date at the top will change with them. Questions: <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a>, or the <a href="#" onClick={(e) => { e.preventDefault(); go("/contact"); }}>Contact page</a>.</p>
+          <p className="body-copy">These terms may be updated as the site changes; the date at the top will change with them. Questions: the <a href="#" onClick={(e) => { e.preventDefault(); go("/contact"); }}>Contact page</a>.</p>
         </div>
       </section>
     </main>
@@ -11063,14 +11063,14 @@ export function RightsPage({ go }) {
       <section className="trust-block section reveal">
         <span className="section-index">CORRECTIONS</span>
         <div>
-          <p className="body-copy">Errors survive any process at this scale, so corrections are a standing program, not an afterthought: the whole library has been through a reader&apos;s-eye legibility comb-through, and mislabelled, broken or wrongly attributed works are repaired or removed outright when found. To report one, use the <a href="#" onClick={(e) => { e.preventDefault(); go("/tower-of-babel/library/suggest"); }}>suggestion form</a> or email <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a> with the work&apos;s title or link and what is wrong; verified reports are corrected in the catalog and the record updated.</p>
+          <p className="body-copy">Errors survive any process at this scale, so corrections are a standing program, not an afterthought: the whole library has been through a reader&apos;s-eye legibility comb-through, and mislabelled, broken or wrongly attributed works are repaired or removed outright when found. To report one, use the <a href="#" onClick={(e) => { e.preventDefault(); go("/tower-of-babel/library/suggest"); }}>suggestion form</a> or the <a href="#" onClick={(e) => { e.preventDefault(); go("/contact"); }}>Contact page</a>, with the work&apos;s title or link and what is wrong; verified reports are corrected in the catalog and the record updated.</p>
         </div>
       </section>
 
       <section className="trust-block section reveal">
         <span className="section-index">TAKEDOWN</span>
         <div>
-          <p className="body-copy">If you hold rights in a work the catalog lists as public domain or openly licensed, write to <a href="mailto:hello@antarctic-labs.com">hello@antarctic-labs.com</a> with the work and the basis of the claim. The work is taken down while the claim is reviewed, and removed for good if the claim holds.</p>
+          <p className="body-copy">If you hold rights in a work the catalog lists as public domain or openly licensed, write through the <a href="#" onClick={(e) => { e.preventDefault(); go("/contact"); }}>Contact page</a> with the work and the basis of the claim. The work is taken down while the claim is reviewed, and removed for good if the claim holds.</p>
         </div>
       </section>
     </main>

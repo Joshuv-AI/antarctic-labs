@@ -797,6 +797,16 @@ function App() {
             does — Joshua's spec: the main homepage's background, not
             the library's. */}
         {path === "/contact" && <NewBackgroundVideo rest />}
+        {/* Trust pages (restored 2026-11-20 on Joshua's order): Privacy,
+            Terms and Rights & Sources carry the same resting Aurora
+            background as About and Contact — the inner-page background
+            for the trust layer. The four-page revamp left the three of
+            them on the bare base and he found all four pages blank on
+            his phone; this mount is the About/Contact treatment,
+            restored exactly, not a new background. */}
+        {(path === "/privacy" ||
+          path === "/terms" ||
+          path === "/rights-and-sources") && <NewBackgroundVideo rest />}
         {path === "/government-contracting" && (
           <Government go={go} />
         )}
