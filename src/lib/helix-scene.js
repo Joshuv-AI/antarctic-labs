@@ -596,6 +596,14 @@ export function createHelixScene(canvas, opts = {}) {
   let focusGroups = [];
   let focusY = 0;
   let focusDistMul = 0.5;
+  // Picked-subcategory camera focus (2026-11-20, Joshua): while a
+  // reshape carrying focusCoil is the committed state — a visitor
+  // picked one subcategory inside a re-formed layout — the camera
+  // flies onto THAT coil (focusY / focusDistMul / focusRotTarget
+  // computed by focusCameraOn) even though the mode stays
+  // "reshape" for the lighting. -1 = no picked coil: reshapes keep
+  // the wide group framing.
+  let reshapeFocusCoil = -1;
   // Focus tracking (2026-11-14): in focus mode the structure's
   // rotation damps to this angle — the one where the focused band's
   // label anchor faces the camera — and holds there, so the section
@@ -619,7 +627,7 @@ export function createHelixScene(canvas, opts = {}) {
     let tgt;
     if (!booted) {
       tgt = { dist: idleDist * 1.15, elev: 1.02, tgtY: 8 };
-    } else if (mode === "focus") {
+    } else if (mode === "focus" || (mode === "reshape" && reshapeFocusCoil >= 0)) {
       tgt = { dist: idleDist * focusDistMul, elev: 0.10, tgtY: focusY };
     } else if (mode === "display") {
       tgt = { dist: idleDist * 0.82, elev: 0.30, tgtY: displayY };
@@ -2639,12 +2647,18 @@ export function createHelixScene(canvas, opts = {}) {
       const rk = 1 - Math.exp(-Math.max(dt, 0.001) / 0.9);
       rotCur += (eraHold.rotTarget - rotCur) * rk;
       if (Math.abs(eraHold.rotTarget - rotCur) < 0.0005) rotCur = eraHold.rotTarget;
-    } else if (mode === "focus" && focusRotTarget != null) {
+    } else if (
+      (mode === "focus" || (mode === "reshape" && reshapeFocusCoil >= 0)) &&
+      focusRotTarget != null
+    ) {
       // Focus tracking (2026-11-14): damp the rotation to the held
       // angle and stop there. Before this fix the structure kept
       // turning at 0.45x through the whole focus, so the lit section
       // swept away from the fixed camera within seconds — the flight
-      // arrived, then lost the section it arrived at.
+      // arrived, then lost the section it arrived at. The
+      // picked-subcategory reshape focus (2026-11-20) holds the
+      // same way: the flight ends framed on the picked coil with
+      // its label anchor facing the camera, and stays there.
       const rk = 1 - Math.exp(-Math.max(dt, 0.001) / 0.9);
       rotCur += (focusRotTarget - rotCur) * rk;
       if (Math.abs(focusRotTarget - rotCur) < 0.0005) rotCur = focusRotTarget;
@@ -2893,6 +2907,21 @@ export function createHelixScene(canvas, opts = {}) {
   function renderStill() {
     if (disposed || contextLost) return;
     uniforms.uTime.value = sceneTime;
+    // Rotation holds land with the still: the frame loop damps
+    // rotCur onto the era/focus hold, so a state committed while
+    // the loop is parked snaps to the same held angle the settled
+    // animation would show. Without this, a parked commit frames
+    // the right height at whatever phase the rotation happened to
+    // stop — the held coil's label anchor can face away from the
+    // camera and its tethered label (the proof of target) fades.
+    if (eraHold && (mode === "focus" || mode === "reshape")) {
+      rotCur = eraHold.rotTarget;
+    } else if (
+      (mode === "focus" || (mode === "reshape" && reshapeFocusCoil >= 0)) &&
+      focusRotTarget != null
+    ) {
+      rotCur = focusRotTarget;
+    }
     structure.rotation.y = rotCur;
     structure.position.y = Math.sin(sceneTime * 0.07) * 0.9;
     applyRig(10); // snap to target (poster framing incl. scroll scrub)
@@ -3015,6 +3044,7 @@ export function createHelixScene(canvas, opts = {}) {
     rebuildCoilLabels();
     focusGroups = [];
     focusRotTarget = null;
+    reshapeFocusCoil = -1;
     eraHold = null;
     lastReshape = null;
     if (selLabel) selLabel.active = false;
@@ -3084,6 +3114,38 @@ export function createHelixScene(canvas, opts = {}) {
     applyDisplay(state);
   }
 
+  // Focus camera treatment, shared by focus mode and the
+  // picked-subcategory reshape focus: frame the given coils of the
+  // CURRENT layout at their mean height with the reel-fidelity
+  // push-in (2026-11-14, Joshua 18:05 — the flight ends framed ON
+  // the chosen coil: the section fills the frame's middle, its
+  // label large beside it, neighbours above and below; at
+  // 0.50–0.64× the coil's turns span the frame height on the phone
+  // profile while the near rope stays ~25 units out — rope-sized,
+  // not a wall), and set the rotation hold so the first coil's
+  // label anchor faces the camera. The camera sits at azimuth
+  // atan2(cos, sin) of CAM_AZ (its position is (sin, cos) * dist
+  // in x/z), and a point at local azimuth a sits at world azimuth
+  // a - rotCur under rotation.y, so the anchor faces the camera
+  // when rotCur = aAnchor - aCamera (mod 2pi) — the equivalent
+  // nearest the current angle, so the flight swings the short way.
+  function focusCameraOn(groups) {
+    const ys = groups.map((i) => COILS[i].yMid);
+    focusY = ys.reduce((a, b) => a + b, 0) / ys.length;
+    const span = Math.max(...ys) - Math.min(...ys);
+    focusDistMul = Math.min(0.64, Math.max(0.50, 0.48 + span / 130));
+    const anchor = COILS[groups[0]] && COILS[groups[0]].anchorLocal;
+    if (anchor) {
+      const aA = Math.atan2(anchor.z, anchor.x);
+      const aC = Math.atan2(Math.cos(CAM_AZ), Math.sin(CAM_AZ));
+      const base = aA - aC;
+      const twoPi = Math.PI * 2;
+      focusRotTarget = base + twoPi * Math.round((rotCur - base) / twoPi);
+    } else {
+      focusRotTarget = null;
+    }
+  }
+
   function applyDisplay(state, fromSwap) {
     if (!state || disposed) return;
     if (state.kind === "reshape") {
@@ -3105,52 +3167,49 @@ export function createHelixScene(canvas, opts = {}) {
       try { ok = applyReshape(state); } catch (e) { ok = false; }
       if (!ok) return; // malformed state: previous state untouched
       eraHold = state.eraHold ? computeEraHold(state.eraHold) : null;
+      // Picked-subcategory camera focus (2026-11-20, Joshua): a
+      // reshape carrying focusCoil — a subcategory picked inside a
+      // re-formed layout — also flies the camera onto that coil
+      // and ends framed on it, exactly like a focus flight, while
+      // the one-hot lighting stands. The marker is explicit (not
+      // inferred from the facets): combinations that merely happen
+      // to land in one coil keep the wide framing. Any reshape
+      // without the marker clears the focus — deselecting the
+      // subcategory returns the camera to the group framing.
+      // applyReshape has just nulled focusRotTarget; focusCameraOn
+      // sets the hold for the picked coil. When the state also
+      // carries an eraHold, the era treatment keeps precedence in
+      // the rig (modeTarget / renderFrame), framing the era's
+      // stretch of this same coil.
+      if (
+        typeof state.focusCoil === "number" &&
+        Number.isInteger(state.focusCoil) &&
+        state.focusCoil >= 0 &&
+        state.focusCoil < COILS.length
+      ) {
+        reshapeFocusCoil = state.focusCoil;
+        focusCameraOn([reshapeFocusCoil]);
+      } else {
+        reshapeFocusCoil = -1;
+      }
     } else if (state.kind === "focus" && Array.isArray(state.groups) && state.groups.length) {
       pendingReshape = null;
       lastReshape = null;
       if (selLabel) selLabel.active = false;
       if (mirrorSet.size) { clearMirror(); rebuildPartition(); }
       mode = "focus";
+      reshapeFocusCoil = -1;
       focusGroups = state.groups.slice();
       setFocusWeights(focusGroups);
-      const ys = focusGroups.map((i) => COILS[i].yMid);
-      focusY = ys.reduce((a, b) => a + b, 0) / ys.length;
-      const span = Math.max(...ys) - Math.min(...ys);
-      // Reel-fidelity push-in (2026-11-14, Joshua 18:05): the
-      // flight ends framed ON the chosen band — the section fills
-      // the frame's middle, its label large beside it, neighbours
-      // above and below. This supersedes the 2026-11-13
-      // containment floor (0.66): at 0.50–0.64× the band's turns
-      // span the frame height on the phone profile while the near
-      // rope stays ~25 units out — rope-sized, not a wall.
-      focusDistMul = Math.min(0.64, Math.max(0.50, 0.48 + span / 130));
+      focusCameraOn(focusGroups);
       focusAmtTgt = 1;
       liftTarget = 0;
-      // Focus tracking target: the rotation angle — the equivalent
-      // nearest the current angle, so the flight swings the short
-      // way — at which the focused band's label anchor faces the
-      // camera azimuth. The camera sits at azimuth atan2(cos, sin)
-      // of CAM_AZ (its position is (sin, cos) * dist in x/z), and a
-      // point at local azimuth a sits at world azimuth a - rotCur
-      // under rotation.y, so the anchor faces the camera when
-      // rotCur = aAnchor - aCamera (mod 2pi).
-      {
-        const anchor = COILS[focusGroups[0]] && COILS[focusGroups[0]].anchorLocal;
-        if (anchor) {
-          const aA = Math.atan2(anchor.z, anchor.x);
-          const aC = Math.atan2(Math.cos(CAM_AZ), Math.sin(CAM_AZ));
-          const base = aA - aC;
-          const twoPi = Math.PI * 2;
-          focusRotTarget = base + twoPi * Math.round((rotCur - base) / twoPi);
-        } else {
-          focusRotTarget = null;
-        }
-      }
       eraHold = state.eraHold ? computeEraHold(state.eraHold) : null;
     } else if (state.kind === "lift" && Array.isArray(state.items)) {
       pendingReshape = null;
       lastReshape = null;
       focusRotTarget = null;
+      reshapeFocusCoil = -1;
       eraHold = null;
       if (selLabel) selLabel.active = false;
       if (mirrorSet.size) { clearMirror(); rebuildPartition(); }
@@ -3176,6 +3235,7 @@ export function createHelixScene(canvas, opts = {}) {
       if (selLabel) selLabel.active = false;
       if (mirrorSet.size) { clearMirror(); rebuildPartition(); }
       mode = "idle";
+      reshapeFocusCoil = -1;
       focusGroups = [];
       focusAmtTgt = 0;
       liftTarget = 0;

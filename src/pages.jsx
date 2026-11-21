@@ -5686,7 +5686,12 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
           } else if (layout.picked >= 0) {
             // A picked subcategory / shelf / lane-sub: the result
             // set lives entirely in that coil — one-hot facets with
-            // the committed count.
+            // the committed count. focusCoil (2026-11-20, Joshua)
+            // also flies the camera onto that coil and ends framed
+            // on it — the scene applies its focus flight treatment
+            // to the marked coil while the one-hot lighting stands.
+            // The marker is what distinguishes a picked subcategory
+            // from a combination that merely lands in one coil.
             const facets = {};
             facets[layout.picked] = count;
             layoutState = {
@@ -5695,6 +5700,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
               total: count,
               name: layoutName(),
               items: mirrorItems(),
+              focusCoil: layout.picked,
             };
             if (eraFilter) {
               let eh = null;
@@ -5990,6 +5996,8 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
       (state.eraHold
         ? "eh" + state.eraHold.coil + "@" + state.eraHold.f0.toFixed(3) + "-" + state.eraHold.f1.toFixed(3)
         : "") +
+      "|" +
+      (typeof state.focusCoil === "number" ? "fc" + state.focusCoil : "") +
       "|" +
       (state.kind === "reshape"
         ? state.name +
