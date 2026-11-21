@@ -839,34 +839,46 @@ function App() {
           book. Every other route keeps the footer untouched. */}
       {matchedPattern !== "/tower-of-babel/library/:id" && (
         <footer className="site-footer">
+          {/* Footer self-link rule (Joshua 2026-11-20): the footer never
+              links to the page you are already on — on each trust page its
+              own entry is omitted and the other three remain. The
+              ANTARCTIC LABS brand is not a page link and always stays. */}
           <div className="site-footer-row">
             <span className="site-footer-brand">ANTARCTIC LABS</span>
-            <a
-              href="/contact"
-              onClick={(e) => { e.preventDefault(); go("/contact"); }}
-            >
-              Contact
-            </a>
+            {path !== "/contact" && (
+              <a
+                href="/contact"
+                onClick={(e) => { e.preventDefault(); go("/contact"); }}
+              >
+                Contact
+              </a>
+            )}
           </div>
           <div className="site-footer-row">
-            <a
-              href="/privacy"
-              onClick={(e) => { e.preventDefault(); go("/privacy"); }}
-            >
-              Privacy Policy
-            </a>
-            <a
-              href="/terms"
-              onClick={(e) => { e.preventDefault(); go("/terms"); }}
-            >
-              Terms
-            </a>
-            <a
-              href="/rights-and-sources"
-              onClick={(e) => { e.preventDefault(); go("/rights-and-sources"); }}
-            >
-              Rights &amp; Sources
-            </a>
+            {path !== "/privacy" && (
+              <a
+                href="/privacy"
+                onClick={(e) => { e.preventDefault(); go("/privacy"); }}
+              >
+                Privacy Policy
+              </a>
+            )}
+            {path !== "/terms" && (
+              <a
+                href="/terms"
+                onClick={(e) => { e.preventDefault(); go("/terms"); }}
+              >
+                Terms
+              </a>
+            )}
+            {path !== "/rights-and-sources" && (
+              <a
+                href="/rights-and-sources"
+                onClick={(e) => { e.preventDefault(); go("/rights-and-sources"); }}
+              >
+                Rights &amp; Sources
+              </a>
+            )}
           </div>
         </footer>
       )}

@@ -39,6 +39,24 @@ const FOOT = `<footer>
 <p>© 2026 Antarctic Labs. All rights reserved.</p>
 </footer>`;
 
+// Footer self-link rule (Joshua 2026-11-20): the footer never links to
+// the page you are already on. On the four trust pages the static footer
+// omits the current page's own trust link and keeps the other three;
+// every other page keeps the full FOOT above, unchanged. (The 404 page
+// uses FOOT directly: its path is never one of the four.)
+const TRUST_PATHS = ["/contact", "/privacy", "/terms", "/rights-and-sources"];
+const TRUST_LABELS = {
+  "/contact": "Contact",
+  "/privacy": "Privacy Policy",
+  "/terms": "Terms",
+  "/rights-and-sources": "Rights &amp; Sources",
+};
+function footFor(path) {
+  if (!TRUST_PATHS.includes(path)) return FOOT;
+  const anchor = `<a href="${path}">${TRUST_LABELS[path]}</a>`;
+  return FOOT.replace(` · ${anchor}`, "").replace(`${anchor} · `, "");
+}
+
 // FAQ JSON-LD parity (2026-11-11 discoverability fix): the app's API
 // page emits a FAQPage node (src/seo.js faqsForPath) and renders the
 // questions visibly, but this static render historically carried no
@@ -173,7 +191,7 @@ ${NAV}
 <main>
 ${body}
 </main>
-${FOOT}
+${footFor(path)}
 </body>
 </html>
 `;
