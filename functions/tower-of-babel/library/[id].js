@@ -36,18 +36,132 @@ import {
   textFileUrl,
   entryUrl,
 } from "../../_lib/tower-catalog.js";
+import { ID_ALIASES } from "../../_lib/id-aliases.js";
 
 const CACHE_TTL_SECONDS = 7 * 24 * 3600;
 
-function metaDescriptionFor(record, description) {
+// Truncate at a word boundary (the pre-2026-11-21 code sliced at a fixed
+// offset, cutting descriptions mid-word — VERIFY-REPORT §2/§8).
+function truncateBlurb(blurb, max) {
+  if (blurb.length <= max) return blurb;
+  const cut = blurb.slice(0, max - 3);
+  const at = cut.lastIndexOf(" ");
+  return (at > 40 ? cut.slice(0, at) : cut).trimEnd() + "...";
+}
+
+function metaDescriptionFor(record, description, hasOverride = false) {
   // Mirrors metaFor() in src/content/routes.js for the entry route.
   const suffix = " — free in the Tower of Babel online library.";
   const maxBlurb = 160 - suffix.length;
-  let blurb = description || "Preserved in clean, searchable text.";
-  if (blurb.length > maxBlurb) {
-    blurb = blurb.slice(0, maxBlurb - 3).trimEnd() + "...";
+  // Federal Register entries get a templated meta (below) instead of
+  // their record description, which is register body text. An editorial
+  // description override, when one exists, always wins.
+  const blurb =
+    !hasOverride && isFederalRegister(record)
+      ? federalRegisterBlurb(record)
+      : description || "Preserved in clean, searchable text.";
+  return truncateBlurb(blurb, maxBlurb) + suffix;
+}
+
+// Federal Register entries (LAW): the record description is the register
+// text itself — a one-line generated head followed by the document body
+// with its page markers and rule lines — so as a meta description it
+// reads as raw register text cut off mid-string (VERIFY-REPORT §4,
+// uslaw-fr-2023-24990). This class gets a templated meta built from the
+// record's own fields instead: document type, publication date (read
+// from the record description's generated head, falling back to the
+// record year), the entry title, and the publishing agency.
+function isFederalRegister(record) {
+  return (
+    !!record &&
+    (record.source === "Federal Register" ||
+      /^uslaw-fr-/.test(String(record.artifact_id || "")))
+  );
+}
+
+function federalRegisterBlurb(record) {
+  const m = String(record.description || "").match(
+    /published in the Federal Register on (\d{4}-\d{2}-\d{2})/
+  );
+  const when = m ? m[1] : record.year ? String(record.year) : "";
+  const agency = cleanCreator(record.creator);
+  let s = "Federal Register document";
+  if (when) s += ` published ${when}`;
+  s += `: ${record.title}`;
+  if (agency) s += ` (${agency})`;
+  return s + ".";
+}
+
+// --- Creator hygiene (2026-11-21, growth program) -----------------------
+// Catalog creator strings are harvested source metadata: author lists
+// arrive as one comma-joined string, and harvesting preserved credential
+// fragments as if they were authors — the sampled record for
+// arxiv-2511-11026 carries "Adel Bechihi, Member, IEEE, Aristotelis
+// Kapnopoulos" (VERIFY-REPORT §4). The render layer drops segments that
+// are purely a credential or honorific; names themselves are never
+// altered, added to, or reordered, separators are preserved, and the
+// catalog data itself is untouched.
+const CREDENTIAL_SEGMENT =
+  /^(member|senior member|fellow|life member|life fellow|student member|ieee|acm|siam|aaas|ph\.?d\.?|m\.?d\.?|d\.?sc\.?|sc\.?d\.?|dr\.?|prof\.?)$/i;
+
+function cleanCreator(raw) {
+  if (Array.isArray(raw)) {
+    const parts = raw.map((v) => cleanCreator(v)).filter(Boolean);
+    return parts.length ? parts.join(", ") : raw.join(", ");
   }
-  return blurb + suffix;
+  if (raw === undefined || raw === null || raw === "") return raw;
+  const s = String(raw);
+  const parts = s.split(/(\s*[,;]\s*)/);
+  let out = "";
+  for (let i = 0; i < parts.length; i += 2) {
+    const seg = (parts[i] || "").trim();
+    if (seg && CREDENTIAL_SEGMENT.test(seg)) continue;
+    out += parts[i] + (parts[i + 1] || "");
+  }
+  out = out.replace(/^[\s,;]+/, "").replace(/[\s,;]+$/, "").trim();
+  return out || s;
+}
+
+// One citation_author value per author for PAPERS records: Scholar's
+// inclusion guidelines ask for one tag per author, and the PAPERS
+// catalog stores arXiv-style "First Last, First Last" lists (verified
+// against the arXiv API in the verification lane), so the cleaned string
+// splits on its own list separators. Other collections keep a single tag
+// carrying the cleaned creator string — agency and editor lists there
+// are not reliably one person per segment, and a wrong split is worse
+// than one combined tag.
+function scholarAuthors(record) {
+  const cleaned = cleanCreator(record.creator);
+  if (!cleaned) return [];
+  if (record.collection !== "PAPERS") return [cleaned];
+  return String(cleaned)
+    .split(/\s*;\s*|\s*,\s*/)
+    .map((seg) => seg.replace(/^and\s+/i, "").trim())
+    .filter(
+      (seg) =>
+        seg && !/^et\.?\s?al\.?$/i.test(seg) && !CREDENTIAL_SEGMENT.test(seg)
+    );
+}
+
+// Very long titles (the sampled worst case is 158 chars) push the
+// rendered <title> to ~185 chars with the template suffix, truncating
+// mid-word on every surface that shows it (VERIFY-REPORT §4/§8). Cap the
+// title text at a word boundary for the <title> and the H1; the full
+// title stays on the page — the intro paragraph and the Book JSON-LD
+// both carry it uncapped. When a title is capped, the " — Read Free"
+// suffix is dropped (it was invisible past truncation anyway); the
+// brand suffix stays.
+const TITLE_TEXT_CAP = 120;
+
+function cappedTitle(title) {
+  const t = String(title ?? "");
+  if (t.length <= TITLE_TEXT_CAP) return { text: t, capped: false };
+  const cut = t.slice(0, TITLE_TEXT_CAP - 1);
+  const at = cut.lastIndexOf(" ");
+  return {
+    text: (at > 40 ? cut.slice(0, at) : cut).trimEnd() + "…",
+    capped: true,
+  };
 }
 
 function bookJsonLd(record, description, canonical) {
@@ -84,7 +198,7 @@ function bookJsonLd(record, description, canonical) {
     url: canonical,
   };
   if (record.creator) {
-    book.author = { "@type": "Person", name: record.creator };
+    book.author = { "@type": "Person", name: cleanCreator(record.creator) };
   }
   if (record.year) book.datePublished = String(record.year);
   if (description) book.description = description;
@@ -107,16 +221,25 @@ function bookJsonLd(record, description, canonical) {
 // the record's own metadata — a tag is omitted when the record carries
 // no such field, and nothing is derived or invented:
 // - citation_title: the record title.
-// - citation_author: the record's creator field as-is. The catalog stores
-//   creators as one string (often several names comma-joined); it is
-//   emitted once, unsplit — author lists are never fabricated. Only a
-//   creator that is genuinely an array yields one tag per element.
+// - citation_author: one tag per author for PAPERS records (Scholar's
+//   inclusion guidelines ask for one tag per author; the 2026-11-21
+//   verification lane flagged the previous single comma-joined tag as a
+//   spec deviation). The catalog stores creators as one comma-joined
+//   string; for PAPERS those lists are arXiv-style "First Last" names,
+//   so the cleaned string (see cleanCreator/scholarAuthors) splits on
+//   its own list separators — names are never fabricated, only
+//   separated. Other collections emit one tag with the cleaned creator
+//   string; a genuinely array-valued creator yields one tag per element.
 // - citation_publication_date: Scholar format — "YYYY" for a year-only
 //   record, "YYYY/MM/DD" when the record carries a full date. Emitted
 //   only when a plausible 4-digit year can be read from the record.
-// - citation_pdf_url: the record's full-text URL (textFileUrl) where the
-//   record carries one. The tag name is Scholar's; our full text is a
-//   .txt file, which is the correct ingestion pointer regardless.
+// - citation_pdf_url: NOT emitted (removed 2026-11-21). Scholar's
+//   guidelines define this tag as the URL of the paper's PDF; the site
+//   serves epub/kindle/html/txt downloads (functions/api/download.js)
+//   and has no PDF rendition, so the previous value — the .txt full-text
+//   URL — mislabeled the format it pointed at. The tag returns if a
+//   real PDF rendition ships; until then the full text stays linked
+//   from the page body and the Book JSON-LD ReadAction.
 // - Journal/volume/issue/page/DOI/ISSN tags only when the record
 //   genuinely carries those fields (none do in the current catalog
 //   schema; the mapping exists so a future field lands without a
@@ -147,7 +270,7 @@ function scholarDate(record) {
   return null;
 }
 
-function scholarMetaTags(record, txt) {
+function scholarMetaTags(record) {
   const tags = [];
   const add = (name, value) => {
     if (value === undefined || value === null || value === "") return;
@@ -156,13 +279,8 @@ function scholarMetaTags(record, txt) {
     );
   };
   add("citation_title", record.title);
-  if (Array.isArray(record.creator)) {
-    for (const a of record.creator) add("citation_author", a);
-  } else {
-    add("citation_author", record.creator);
-  }
+  for (const a of scholarAuthors(record)) add("citation_author", a);
   add("citation_publication_date", scholarDate(record));
-  add("citation_pdf_url", txt);
   add("citation_journal_title", record.journal_title ?? record.journal);
   add("citation_volume", record.volume);
   add("citation_issue", record.issue);
@@ -229,15 +347,19 @@ const ENTRY_FOOT = `<footer>
 
 function renderEntryHtml(record, description, opts = {}) {
   const canonical = entryUrl(record.artifact_id);
-  const title = `${record.title} — Read Free | Tower of Babel`;
-  const metaDesc = metaDescriptionFor(record, description);
+  const cap = cappedTitle(record.title);
+  const title = cap.capped
+    ? `${cap.text} | Tower of Babel`
+    : `${record.title} — Read Free | Tower of Babel`;
+  const metaDesc = metaDescriptionFor(record, description, !!opts.isIntroduction);
   const txt = textFileUrl(record);
-  const byline = [record.creator, record.year]
+  const creator = cleanCreator(record.creator);
+  const byline = [creator, record.year]
     .filter((v) => v !== undefined && v !== null && v !== "")
     .join(" · ");
 
   const rows = [
-    ["CREATOR", record.creator],
+    ["CREATOR", creator],
     ["YEAR", record.year],
     ["COLLECTION", record.collection],
     ["FORMAT", record.format],
@@ -273,7 +395,7 @@ function renderEntryHtml(record, description, opts = {}) {
 <meta property="og:url" content="${escapeHtml(canonical)}" />
 <meta name="twitter:title" content="${escapeHtml(title)}" />
 <meta name="twitter:description" content="${escapeHtml(metaDesc)}" />
-${scholarMetaTags(record, txt)}<script type="application/ld+json">${JSON.stringify(jsonLd).replace(
+${scholarMetaTags(record)}<script type="application/ld+json">${JSON.stringify(jsonLd).replace(
     /</g,
     "\\u003c"
   )}</script>
@@ -285,10 +407,10 @@ ${scholarMetaTags(record, txt)}<script type="application/ld+json">${JSON.stringi
 <a href="/tower-of-babel/library">Library</a>
 </nav>
 <main>
-<h1>${escapeHtml(record.title)}</h1>
+<h1>${escapeHtml(cap.text)}</h1>
 ${byline ? `<p>${escapeHtml(byline)}</p>` : ""}
 <p>Read <em>${escapeHtml(record.title)}</em>${
-    record.creator ? ` by ${escapeHtml(record.creator)}` : ""
+    creator ? ` by ${escapeHtml(creator)}` : ""
   }${
     record.year ? ` (${escapeHtml(record.year)})` : ""
   } in the Tower of Babel, a free online library of public-domain works preserved in clean, searchable text. No sign-up.${
@@ -366,6 +488,50 @@ function notFoundHtml(id) {
 `;
 }
 
+// --- Re-keyed id aliases (2026-11-21, growth program) -------------------
+// Catalog rebuilds have re-keyed entries, stranding URLs Google already
+// ranked: the CIA document Google recorded as cia-rdp04t00367... was
+// re-keyed to cia-crest-cia-rdp04t00367... and the old URL 404'd
+// (VERIFY-REPORT §4). When an id resolves to nothing, try the confirmed
+// alias table (functions/_lib/id-aliases.js, from the 2026-11-21 churn
+// audit) and the systematic re-key patterns the audit found. A candidate
+// is used only after getRecordById verifies the record exists under it,
+// and a data error never produces a redirect — the caller falls back to
+// the plain 404 exactly as before.
+function aliasCandidates(id) {
+  const out = [];
+  if (ID_ALIASES[id]) out.push(ID_ALIASES[id]);
+  // CREST re-key: CIA reading-room ids gained a "cia-crest-" prefix in
+  // front of the full old id (the whole cia-rdp* class; zero non-CREST
+  // cia-rdp* ids remain in the catalog).
+  if (id.startsWith("cia-") && !id.startsWith("cia-crest-")) {
+    out.push(`cia-crest-${id}`);
+  }
+  // Gutenberg pg-suffix re-key: early book slugs carried the Gutenberg
+  // number as a "-pg<N>" suffix; the rebuild moved it to an "<N>-"
+  // prefix (46 confirmed pairs in the churn audit).
+  const pg = id.match(/^(.+)-pg(\d+)$/);
+  if (pg) out.push(`${pg[2]}-${pg[1]}`);
+  return [...new Set(out)].filter((c) => c !== id);
+}
+
+async function aliasRedirect(id) {
+  for (const cand of aliasCandidates(id)) {
+    const found = await getRecordById(cand);
+    if (found.state === "error") return null;
+    if (found.state === "ok") {
+      return new Response(null, {
+        status: 301,
+        headers: {
+          Location: entryUrl(cand),
+          "Cache-Control": "public, max-age=86400",
+        },
+      });
+    }
+  }
+  return null;
+}
+
 export async function onRequest(context) {
   const { request, params, next } = context;
   const id = params && params.id ? String(params.id) : "";
@@ -378,6 +544,8 @@ export async function onRequest(context) {
   if (!isCrawler(request)) {
     const foundHuman = await getRecordById(id);
     if (foundHuman.state === "missing") {
+      const redir = await aliasRedirect(id);
+      if (redir) return redir;
       return new Response(notFoundHtml(id), {
         status: 404,
         headers: {
@@ -409,6 +577,8 @@ export async function onRequest(context) {
     return next();
   }
   if (found.state === "missing") {
+    const redir = await aliasRedirect(id);
+    if (redir) return redir;
     return new Response(notFoundHtml(id), {
       status: 404,
       headers: {
