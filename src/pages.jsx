@@ -9848,6 +9848,18 @@ export function LibraryArtifact({ go, params, onReady }) {
             ))}
           </ul>
         )}
+        {/* INVENTORY 138 (Joshua 2026-11-21): the Full Record
+            dropdown lives HERE, directly under the Catalog Record
+            rows, so the record and its full expansion read as one
+            unit — it used to render in its own section after the
+            Download box and Cite row, stranded at the bottom of the
+            pop-up. Book mode only: scroll view has no Full Record.
+            Contents and behavior unchanged; only the position moved,
+            so the pop-up order is now Catalog Record → Full Record →
+            Download → Cite. */}
+        {bookMode && (
+          <FullRecordBlock artifact={artifact} stats={readerStats} />
+        )}
         {status === "AVAILABLE" && artifact.download_url && (
           <EntryDownloads artifact={artifact} />
         )}
@@ -9887,9 +9899,6 @@ export function LibraryArtifact({ go, params, onReady }) {
         <EntryPopup open={popupOpen} onClose={closePopup} title={artifact.title}>
           {heroSection}
           {recordSection}
-          <section className="tower-entry-record section">
-            <FullRecordBlock artifact={artifact} stats={readerStats} />
-          </section>
           <div className="bv-popup-footer">
             <button type="button" className="tower-source-btn" onClick={() => window.print()}>
               PRINT
