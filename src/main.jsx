@@ -984,7 +984,15 @@ function EntryFlightOverlay({ path }) {
     }
     let raf2 = 0;
     const raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => setPhase("glide"));
+      // Phase moves FORWARD only (2026-11-21, queue item 12a): this
+      // effect re-runs when markEntryFlightNavigated replaces the
+      // flight object, and an unconditional setPhase("glide") here
+      // used to resurrect the cover mid-exit — the exit fade
+      // reversed, the cover came back at full opacity over the
+      // reader, and only a later timer removed it.
+      raf2 = requestAnimationFrame(() =>
+        setPhase((p) => (p === "start" ? "glide" : p))
+      );
     });
     // Absolute safety: a stranded overlay must never outlive its
     // welcome, whatever the navigation did.
@@ -1000,16 +1008,27 @@ function EntryFlightOverlay({ path }) {
   // and never holding.
   const navigated = !!(flight && flight.navigated);
   const pathHit = !!(flight && path === flight.toPath);
+  // Hard removal latch (2026-11-21, queue item 12a): once the exit
+  // bound elapses the overlay renders nothing, whatever any other
+  // state does — the presentation cover can never linger over the
+  // opened page.
+  const [gone, setGone] = useState(false);
+  useEffect(() => {
+    setGone(false);
+  }, [flight]);
   useEffect(() => {
     if (!flight || (!navigated && !pathHit)) return;
     setPhase("exit");
     const t = setTimeout(
-      endEntryFlight,
+      () => {
+        setGone(true);
+        endEntryFlight();
+      },
       flight.reduced ? 200 : ENTRY_FLIGHT_EXIT_MS
     );
     return () => clearTimeout(t);
   }, [flight, navigated, pathHit]);
-  if (!flight) return null;
+  if (!flight || gone) return null;
   const { rect } = flight;
   // Rise travel: from the centered position up past the top of the
   // frame (viewport height + the scaled cover), so the rise alone
@@ -1066,11 +1085,22 @@ function EntryFlightOverlay({ path }) {
         }}
       >
         <div className="entry-flight-hold">
-          <div
-            className={`${flight.cls} entry-flight-clone`}
-            style={{ width: "100%", height: "100%" }}
-            dangerouslySetInnerHTML={{ __html: flight.html }}
-          />
+          {/* A physical book, not a flat card (2026-11-21, queue
+              item 12c): front cover, spine, page block and back
+              board as real faces in 3D (styles.css .entry-flight-*),
+              so the presented object has a book's thickness and
+              hard edges as it comes forward. */}
+          <div className="entry-flight-book">
+            <div className="entry-flight-back" aria-hidden="true" />
+            <div className="entry-flight-spine" aria-hidden="true" />
+            <div className="entry-flight-pages" aria-hidden="true" />
+            <div className="entry-flight-pagetop" aria-hidden="true" />
+            <div
+              className={`${flight.cls} entry-flight-clone entry-flight-front`}
+              style={{ width: "100%", height: "100%" }}
+              dangerouslySetInnerHTML={{ __html: flight.html }}
+            />
+          </div>
         </div>
       </div>
     </div>

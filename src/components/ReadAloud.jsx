@@ -580,6 +580,14 @@ export function ReadAloudBar({
   onRate,
   notice,
 }) {
+  // While the bar is on screen, the book view shrinks its stage by
+  // the bar's footprint (the body class drives the .bv-root inset
+  // in styles.css), so no page text can sit under the bar at any
+  // scroll position (queue item 13, 2026-11-21).
+  useEffect(() => {
+    document.body.classList.add("ra-bar-active");
+    return () => document.body.classList.remove("ra-bar-active");
+  }, []);
   const playing = status === "playing";
   const pct =
     wordCount > 0 ? Math.round((wordIdx / wordCount) * 100) : 0;

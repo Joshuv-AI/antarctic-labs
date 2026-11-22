@@ -2682,11 +2682,44 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
         window.matchMedia &&
         window.matchMedia("(prefers-reduced-motion: reduce)").matches
       );
+      // Presentation cover (2026-11-21, queue item 12b): the clone
+      // must be the entry's ACTUAL cover — a loaded real cover
+      // image when the list cover has one; otherwise the entry's
+      // designed plate, the same cover its entry page renders
+      // (collection header, title, rule, creator, brand). The
+      // list's fallback tile (a title-only placeholder shown while
+      // no cover image exists) is a browsing placeholder, never
+      // the presentation cover.
+      let flightHtml = coverEl.innerHTML;
+      let flightCls = coverEl.className;
+      const coverImg = coverEl.querySelector("img.tower-cover-img");
+      if (!(coverImg && coverImg.naturalWidth > 0)) {
+        const esc = (s) =>
+          String(s == null ? "" : s)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+        flightHtml =
+          '<div class="tower-cover-plate" aria-hidden="true">' +
+          '<span class="tower-cover-coll">' +
+          esc(a.collection || "") +
+          "</span>" +
+          '<span class="tower-cover-title">' +
+          esc(a.title || "") +
+          "</span>" +
+          '<span class="tower-cover-rule"></span>' +
+          (a.creator
+            ? '<span class="tower-cover-creator">' + esc(a.creator) + "</span>"
+            : "") +
+          '<span class="tower-cover-brand">TOWER OF BABEL</span></div>';
+        flightCls = "tower-cover";
+      }
       const flight = beginEntryFlight({
         to,
         toPath: to.split("?")[0],
-        html: coverEl.innerHTML,
-        cls: coverEl.className,
+        html: flightHtml,
+        cls: flightCls,
         rect: {
           left: rect.left,
           top: rect.top,
