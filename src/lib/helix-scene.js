@@ -728,6 +728,8 @@ export function createHelixScene(canvas, opts = {}) {
   const coilLast = [];
   const stationOf = new Int32Array(BAND_PANEL_TARGET);
   const bandRank = new Int32Array(BAND_PANEL_TARGET); // ordinal within parent band
+  const coilRank = new Int32Array(BAND_PANEL_TARGET); // ordinal within own coil
+  const coilDealBase = []; // per-coil starter-deal offset units (golden hash)
   const segSliceRank = new Int32Array(BAND_PANEL_TARGET);
   const instSeg = new Uint8Array(BAND_PANEL_TARGET);
   const segPanels = Array.from({ length: 8 }, () => []);
@@ -920,6 +922,15 @@ export function createHelixScene(canvas, opts = {}) {
     });
     for (let i = 0; i < placements.length; i++) {
       stationOf[i] = ((i - coilFirst[placements[i].group]) / ROWS) | 0;
+      coilRank[i] = i - coilFirst[placements[i].group];
+    }
+    // Per-coil starter-deal offsets: a golden-ratio hash of the
+    // coil index spreads neighboring coils' deck starts across
+    // their band pool, so adjacent sub-spirals never open on the
+    // same cover sequence (queue item 11 fix, 2026-11-21).
+    coilDealBase.length = 0;
+    for (let c = 0; c < n; c++) {
+      coilDealBase.push(Math.floor(((c * 0.6180339887498949) % 1) * 4096));
     }
     const seenBand = new Array(BAND_DEFS.length).fill(0);
     for (let i = 0; i < placements.length; i++) bandRank[i] = seenBand[placements[i].band]++;
@@ -1018,15 +1029,29 @@ export function createHelixScene(canvas, opts = {}) {
   }
   const bandEpoch = new Array(BANDS.length).fill(0);
   function rankOnPage(i, page) {
-    return page === PAGE_STARTER ? bandRank[i] : segSliceRank[i];
+    return page === PAGE_STARTER ? coilRank[i] : segSliceRank[i];
   }
-  function cellFor(page, band, rank) {
+  function cellFor(page, band, rank, coil) {
     const o = orderFor(page, band);
     if (!o) return -1;
     const rot = bandEpoch[band] % Math.max(1, Math.min(16, o.length >> 3));
     let idx;
     if (page !== PAGE_STARTER && bandSegCount[band] > 1) {
       idx = rank % o.length;
+    } else if (page === PAGE_STARTER && coil != null && COILS[coil]) {
+      // Per-coil starter deal (2026-11-21, queue item 11): each
+      // coil deals its OWN deck from its parent band's pool,
+      // starting at a coil-specific offset — the deal restarts at
+      // every coil boundary. The previous band-wide stretch deal
+      // flowed one continuous cover sequence across all coils of a
+      // band (same cell on both sides of a boundary, ~97-panel
+      // identical runs), so sub-spirals were texturally
+      // indistinguishable and read as merged sections of arbitrary
+      // size on the phone even though the geometry was true.
+      // Sequential within the coil (the segment pages' deck form):
+      // no repeats until the pool cycles; purity unchanged (the
+      // pool is still the coil's own parent band's).
+      idx = (rank + (coilDealBase[coil] || 0)) % o.length;
     } else {
       const space = page === PAGE_STARTER
         ? bandRankSpace[band]
@@ -1042,7 +1067,7 @@ export function createHelixScene(canvas, opts = {}) {
   // only through the resting layout's lifecycle).
   function resetInstanceCells() {
     for (let i = 0; i < panelCount; i++) {
-      const c = cellFor(PAGE_STARTER, placements[i].band, bandRank[i]);
+      const c = cellFor(PAGE_STARTER, placements[i].band, coilRank[i], placements[i].group);
       instPage[i] = PAGE_STARTER;
       instCell[i] = c;
       instBaseCell[i] = c;
@@ -1419,7 +1444,7 @@ export function createHelixScene(canvas, opts = {}) {
   function homeCellOf(i) {
     const hp = homePageOf(i);
     instHomePage[i] = hp;
-    const c = cellFor(hp, placements[i].band, rankOnPage(i, hp));
+    const c = cellFor(hp, placements[i].band, rankOnPage(i, hp), hp === PAGE_STARTER ? placements[i].group : undefined);
     instHomeCell[i] = c >= 0 ? c : instBaseCell[i];
     return instHomeCell[i];
   }
@@ -1485,7 +1510,7 @@ export function createHelixScene(canvas, opts = {}) {
         // Homes return to the starter page's current-epoch cell
         // (the pure-function value), for visible and mirrored
         // instances of this segment alike.
-        const home = cellFor(PAGE_STARTER, placements[i].band, bandRank[i]);
+        const home = cellFor(PAGE_STARTER, placements[i].band, coilRank[i], placements[i].group);
         if (instPage[i] === page) {
           instPage[i] = PAGE_STARTER;
           instCell[i] = home;
@@ -1891,12 +1916,12 @@ export function createHelixScene(canvas, opts = {}) {
       const band = placements[i].band;
       if (stationOf[i] >= litRange[g][0] && stationOf[i] < litRange[g][1]) {
         scratchFocus[i] = 1.16;
-        instCell[i] = cellFor(instPage[i], band, rankOnPage(i, instPage[i]));
+        instCell[i] = cellFor(instPage[i], band, rankOnPage(i, instPage[i]), instPage[i] === PAGE_STARTER ? placements[i].group : undefined);
         instHomeCell[i] = instCell[i];
         instHomePage[i] = instPage[i];
       } else if (facets[g] > 0) {
         scratchFocus[i] = 0.30;
-        instCell[i] = cellFor(instPage[i], band, rankOnPage(i, instPage[i]));
+        instCell[i] = cellFor(instPage[i], band, rankOnPage(i, instPage[i]), instPage[i] === PAGE_STARTER ? placements[i].group : undefined);
         instHomeCell[i] = instCell[i];
         instHomePage[i] = instPage[i];
       } else {
@@ -1919,7 +1944,7 @@ export function createHelixScene(canvas, opts = {}) {
           // the home record to the sampled page, exactly as those
           // branches do. When home page and sampled page agree the
           // homeCellOf() path above is byte-identical to this deal.
-          const c = cellFor(instPage[i], band, rankOnPage(i, instPage[i]));
+          const c = cellFor(instPage[i], band, rankOnPage(i, instPage[i]), instPage[i] === PAGE_STARTER ? placements[i].group : undefined);
           instCell[i] = c >= 0 ? c : instBaseCell[i];
           instHomeCell[i] = instCell[i];
           instHomePage[i] = instPage[i];
@@ -2516,6 +2541,7 @@ export function createHelixScene(canvas, opts = {}) {
         (mode === "focus" && focusGroups.indexOf(L.group) !== -1) ||
         (mode === "reshape" && reshapeFocusCoil === L.group) ||
         (eraHold && eraHold.coil === L.group);
+      L.held = heldCoil;
       if (op > 0 && avoidRects.length && !heldCoil) {
         for (const a of avoidRects) {
           const ax = a.x - labelDocX, ay = a.y - labelDocY;
@@ -2532,40 +2558,58 @@ export function createHelixScene(canvas, opts = {}) {
       }
       L.op = op;
     }
-    // Pass 2: large-label collisions — when two large labels overlap
-    // substantially on the front sweep, the larger collection wins
-    // and the smaller fades (Amendment L; no jitter, transform-only).
-    const larges = coilLabels.filter((l) => l.large && l.op > 0.35);
-    for (let i = 0; i < larges.length; i++) {
-      for (let j = i + 1; j < larges.length; j++) {
-        const a = larges[i], b = larges[j];
-        const iw = Math.min(a.sx + a.w / 2, b.sx + b.w / 2) - Math.max(a.sx - a.w / 2, b.sx - b.w / 2);
-        const ih = Math.min(a.sy + a.h / 2, b.sy + b.h / 2) - Math.max(a.sy - a.h / 2, b.sy + b.h / 2);
-        if (iw > 0 && ih > 0 && iw * ih > 0.20 * Math.min(a.w * a.h, b.w * b.h)) {
-          if (a.count >= b.count) b.op *= 0.10;
-          else a.op *= 0.10;
-        }
-      }
-    }
-    // Pass 3: write transforms + opacity.
+    // Pass 2: label collisions — when two labels overlap
+    // substantially, the larger collection wins and the smaller
+    // fades (Amendment L; no jitter, transform-only). Amendment L
+    // originally covered large labels only; extended to tag labels
+    // 2026-11-21 (queue item 11): in settled curated group layouts
+    // the small subcategories' tags printed on top of each other
+    // (e.g. "9/11, False Flags…" over "The Deep State…"), so a
+    // count read as attached to the wrong section. The
+    // camera-held coil's label is never the one faded — it is the
+    // selection's proof of target.
+    // Pass 2a: drawn positions FIRST (2026-11-21, queue item 11).
+    // The collision test must run on the boxes as drawn: labelPos
+    // pushes each label 24-54px radially out from its anchor, so
+    // the old anchor-space test passed pairs whose drawn labels
+    // still printed on top of each other.
     for (const L of coilLabels) {
-      L.el.style.opacity = String(0.96 * L.op);
       L.px = null;
       L.py = null;
+      L.tf = null;
       if (L.op > 0.01) {
         labelPos(L, _lp);
         clampLabelPos(L, W, H, offX, offY);
         L.px = Math.round(_lp.x);
         L.py = Math.round(_lp.y);
-        L.el.style.transform =
-          "translate3d(" + _lp.x.toFixed(1) + "px," + _lp.y.toFixed(1) + "px,0) translate(-50%,-50%)";
+        L.tf = "translate3d(" + _lp.x.toFixed(1) + "px," + _lp.y.toFixed(1) + "px,0) translate(-50%,-50%)";
       }
     }
-    // Selection label: same facing + hero-avoidance treatment as a
-    // band label, but never focus-dimmed (it is the selection's own
-    // voice) and outside the large-label collision pass.
+    const larges = coilLabels.filter((l) => l.op > 0.35 && l.px !== null);
+    for (let i = 0; i < larges.length; i++) {
+      for (let j = i + 1; j < larges.length; j++) {
+        const a = larges[i], b = larges[j];
+        const iw = Math.min(a.px + a.w / 2, b.px + b.w / 2) - Math.max(a.px - a.w / 2, b.px - b.w / 2);
+        const ih = Math.min(a.py + a.h / 2, b.py + b.h / 2) - Math.max(a.py - a.h / 2, b.py - b.h / 2);
+        if (iw > 0 && ih > 0 && iw * ih > 0.20 * Math.min(a.w * a.h, b.w * b.h)) {
+          const loser = a.count >= b.count ? b : a;
+          const winner = loser === a ? b : a;
+          if (!loser.held) loser.op *= 0.10;
+          else if (!winner.held) winner.op *= 0.10;
+        }
+      }
+    }
+    // Selection label: compute its opacity + drawn position BEFORE
+    // the write pass (2026-11-21, queue item 11) so it can act as
+    // an obstacle in the collision rule: a coil label that would
+    // print over the selection label fades (the selection label
+    // itself never fades -- it is the selection's own voice). Its
+    // facing + hero-avoidance treatment is unchanged.
+    let selOp = 0;
     if (selLabel) {
-      let op = 0;
+      selLabel.px = null;
+      selLabel.py = null;
+      selLabel.tf = null;
       if (selLabel.active && mode === "reshape" && selLabel.anchorLocal) {
         const world = structure.localToWorld(_v1.copy(selLabel.anchorLocal));
         const axisW = structure.localToWorld(_v2.set(0, selLabel.anchorY, 0));
@@ -2577,37 +2621,52 @@ export function createHelixScene(canvas, opts = {}) {
         const vz = camera.position.z - world.z;
         const vl = Math.hypot(vx, vy, vz) || 1;
         const facing = (rx / rl) * (vx / vl) + (rz / rl) * (vz / vl);
-        op = smoothstep(-0.30, 0.30, facing);
-        if (topMix > 0) op = op * (1 - topMix) + topMix * 0.97;
+        selOp = smoothstep(-0.30, 0.30, facing);
+        if (topMix > 0) selOp = selOp * (1 - topMix) + topMix * 0.97;
         const s = projectToScreen(world, _scr);
         selLabel.sx = s.x + offX;
         selLabel.sy = s.y + offY;
         const as = projectToScreen(axisW, _asc);
         selLabel.ax = as.x + offX;
         selLabel.ay = as.y + offY;
-        if (s.behind || selLabel.sx < -80 || selLabel.sx > W + 80 || selLabel.sy < -60 || selLabel.sy > H + 60) op = 0;
+        if (s.behind || selLabel.sx < -80 || selLabel.sx > W + 80 || selLabel.sy < -60 || selLabel.sy > H + 60) selOp = 0;
         if (!selLabel.w) { selLabel.w = selLabel.el.offsetWidth; selLabel.h = selLabel.el.offsetHeight; }
-        if (op > 0 && avoidRects.length) {
+        if (selOp > 0 && avoidRects.length) {
           for (const a of avoidRects) {
             const ax = a.x - labelDocX, ay = a.y - labelDocY;
             if (selLabel.sx > ax - 4 && selLabel.sx < ax + a.w + 4 && selLabel.sy > ay - 4 && selLabel.sy < ay + a.h + 4) {
-              op = 0;
+              selOp = 0;
               break;
             }
           }
         }
+        if (selOp > 0.01) {
+          labelPos(selLabel, _lp);
+          clampLabelPos(selLabel, W, H, offX, offY);
+          selLabel.px = Math.round(_lp.x);
+          selLabel.py = Math.round(_lp.y);
+          selLabel.tf = "translate3d(" + _lp.x.toFixed(1) + "px," + _lp.y.toFixed(1) + "px,0) translate(-50%,-50%)";
+        }
       }
-      selLabel.el.style.opacity = String(0.96 * op);
-      selLabel.px = null;
-      selLabel.py = null;
-      if (op > 0.01) {
-        labelPos(selLabel, _lp);
-        clampLabelPos(selLabel, W, H, offX, offY);
-        selLabel.px = Math.round(_lp.x);
-        selLabel.py = Math.round(_lp.y);
-        selLabel.el.style.transform =
-          "translate3d(" + _lp.x.toFixed(1) + "px," + _lp.y.toFixed(1) + "px,0) translate(-50%,-50%)";
+      if (selOp > 0.35 && selLabel.px !== null) {
+        for (const L of coilLabels) {
+          if (L.op <= 0.35 || L.px === null || L.held) continue;
+          const iw = Math.min(L.px + L.w / 2, selLabel.px + selLabel.w / 2) - Math.max(L.px - L.w / 2, selLabel.px - selLabel.w / 2);
+          const ih = Math.min(L.py + L.h / 2, selLabel.py + selLabel.h / 2) - Math.max(L.py - L.h / 2, selLabel.py - selLabel.h / 2);
+          if (iw > 0 && ih > 0 && iw * ih > 0.20 * Math.min(L.w * L.h, selLabel.w * selLabel.h)) L.op *= 0.10;
+        }
       }
+    }
+    // Pass 3: write transforms + opacity.
+    for (const L of coilLabels) {
+      L.el.style.opacity = String(0.96 * L.op);
+      if (L.tf) L.el.style.transform = L.tf;
+    }
+    // Selection label write (opacity, position and the collision
+    // obstacle pass are computed above, before the coil writes).
+    if (selLabel) {
+      selLabel.el.style.opacity = String(0.96 * selOp);
+      if (selLabel.tf) selLabel.el.style.transform = selLabel.tf;
     }
   }
 
