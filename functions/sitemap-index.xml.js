@@ -9,6 +9,10 @@
 //   2. /sitemap-core.xml  the 20,000-entry core set — the catalog's
 //                          bootstrap prefix, served by
 //                          functions/sitemap-core.xml.js.
+//   3. /sitemap-priority.xml  the demand-pages set (2026-11-21):
+//                          author pages, study guides and the Wave 1
+//                          entry URLs, served by
+//                          functions/sitemap-priority.xml.js.
 //
 // The per-shard entry sitemaps at /sitemap-entries/<n>.xml still
 // serve (their function is unchanged) and every entry remains
@@ -34,6 +38,9 @@ const BODY =
   `  </sitemap>\n` +
   `  <sitemap>\n` +
   `    <loc>${SITE}/sitemap-core.xml</loc>\n` +
+  `  </sitemap>\n` +
+  `  <sitemap>\n` +
+  `    <loc>${SITE}/sitemap-priority.xml</loc>\n` +
   `  </sitemap>\n` +
   `</sitemapindex>\n`;
 

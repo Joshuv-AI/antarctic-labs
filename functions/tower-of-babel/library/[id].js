@@ -37,6 +37,7 @@ import {
   entryUrl,
 } from "../../_lib/tower-catalog.js";
 import { ID_ALIASES } from "../../_lib/id-aliases.js";
+import { relatedLinksHtml } from "../../_lib/demand-pages.js";
 
 const CACHE_TTL_SECONDS = 7 * 24 * 3600;
 
@@ -428,7 +429,7 @@ ${descParas.map((p) => `<p>${escapeHtml(p)}</p>`).join("\n")}
 </section>`
     : ""
 }
-<section>
+${relatedLinksHtml(record.artifact_id)}<section>
 <h2>Catalog record</h2>
 <table>
 ${rows
