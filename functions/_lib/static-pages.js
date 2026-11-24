@@ -63,10 +63,14 @@ function footFor(path) {
 // FAQPage node at all — and did not even carry the questions. The Q&A
 // below is copied VERBATIM from src/content/tower-api.js (apiPage.faqs);
 // keep the copy in sync when the source changes.
-// No other static page gets an FAQ: the app has no FAQ for them either.
 // (The library page's QUESTIONS section was removed 2026-11-12 on
 // Joshua's order — that Q&A lives on the Privacy Policy page now — so
 // the library static render carries no FAQ and no FAQPage node.)
+// Homepage FAQ added 2026-11-24 (homepage explanation revamp): the
+// app homepage renders the 57-question reader FAQ (homeFaqs in
+// src/content/faq.js) and emits its FAQPage node, so this static
+// homepage carries HOME_FAQS below, copied verbatim from the same
+// source — keep in sync.
 const API_FAQS = [
   {
     q: "Is there a free API for Project Gutenberg texts?",
@@ -95,6 +99,241 @@ const API_FAQS = [
   {
     q: "How fresh is the catalog? How do I stay current?",
     a: "The catalog grows daily as new holdings are added. There is no changelog feed; re-fetch catalog.json on a schedule (weekly is reasonable) and diff artifact_id values against your local copy. Artifact IDs are not reused, so a text URL that returned 200 keeps returning the same text, and new records appear as additions.",
+  },
+];
+
+// Homepage FAQ (2026-11-24 homepage explanation revamp): copied
+// VERBATIM from src/content/faq.js (homeFaqs) — the 57 reader
+// questions the app homepage renders in its dropdown and emits as
+// FAQPage JSON-LD. Keep in sync with that source.
+const HOME_FAQS = [
+  {
+    q: "What is the Tower of Babel?",
+    a: "The Tower of Babel is a free online library. It holds 2,557,924 works — books, research papers, laws, reference works, declassified government documents, and long-form conversations kept as transcripts — each one in full text that you can read, search, and download on this site. It is run by Antarctic Labs, and it exists to keep the world's important texts safe and open to anyone, anywhere.",
+  },
+  {
+    q: "What can I do here?",
+    a: "Read any work in the library right in your browser, search the full text to find the passage you need, listen to works read aloud, or download a copy to keep. You can browse by collection, by subject, and by era, follow reading collections gathered for particular readers, and see a featured work every day in Text of the Day. Everything is free, and none of it needs an account.",
+  },
+  {
+    q: "What is Antarctic Labs, and how does it relate to the Tower?",
+    a: "Antarctic Labs is the small independent lab that built the Tower of Babel and keeps it running. The library is its work: the lab gathers the texts, checks them, shelves them, and maintains this site. When you use the library, Antarctic Labs is who runs it.",
+  },
+  {
+    q: "Is this a data broker?",
+    a: "No. A data broker collects information about people and sells it. This is a library: it holds published texts — books, papers, laws, and documents that are free to share — and gives them away to readers. Nothing is sold here, and no data about readers is sold to anyone. The library is free to read because that is what it is for.",
+  },
+  {
+    q: "Is this a real library if there are no physical books?",
+    a: "There are no shelves and no building to visit — everything here is digital. What makes it a library is what it does: it collects works, checks them, organises them into collections, keeps them permanently, and lends them to anyone who asks — except here, reading a work never takes it away from anyone else, and nothing is ever due back.",
+  },
+  {
+    q: "How is this different from Project Gutenberg?",
+    a: "Project Gutenberg is a respected source for classic books, and the Tower covers much of the same public-domain ground. The difference is scope. Alongside the classics, the Tower holds the law of many countries, more than a million research papers, declassified government documents, reference works, and transcripts — 2,557,924 works in all — in one library you can search across at once.",
+  },
+  {
+    q: "How is this different from the Internet Archive?",
+    a: "The Internet Archive preserves everything — web pages, software, audio, video, and scanned books, many of them lent one reader at a time under its borrowing rules. The Tower is narrower and deeper in one direction: written works, held as clean, searchable full text you read here in full — no borrowing, no waiting, no copies checked out.",
+  },
+  {
+    q: "Is it really free?",
+    a: "Yes. Reading, searching, listening, and downloading are all free. There is no paywall, no trial period, and no premium tier for readers. The only paid plans anywhere on the site belong to the developer API, for heavy programmatic use — they are never required to read the library.",
+  },
+  {
+    q: "Do I need an account or sign-up?",
+    a: "No. There is no account to create and nothing to sign. Open a work and start reading. An email address is only ever asked for if you choose to request an API key or send a message — never to read.",
+  },
+  {
+    q: "Is there a catch — ads, tracking, a paywall later?",
+    a: "There is no catch for readers. The library is free because keeping these texts open is the point of it, not a promotion for something else. Reading will stay free, no account will be required to read, and data about readers is not sold. Paid API plans for developers are the only charges on the site, and they do not affect reading.",
+  },
+  {
+    q: "Why is it free, and how is the library kept running?",
+    a: "The texts themselves are free to share — public-domain works and openly published research — so the library's costs are the keeping of it: servers, storage, and the work of gathering and checking texts. Antarctic Labs carries those costs, and readers who can afford to help can contribute on the support page. Free is not a temporary offer; a library that charged for these texts would be working against its own purpose.",
+  },
+  {
+    q: "Can I support the library? Is support tax-deductible?",
+    a: "Yes — one-time and monthly contributions are accepted on the support page, and they go to the servers, storage, and preservation work that keep the library online. One honest note: Antarctic Labs is not a registered charity, so contributions are not tax-deductible.",
+  },
+  {
+    q: "What is actually in the catalog, and how much is there?",
+    a: "The catalog holds 2,557,924 works across seven collections: Law 1,277,197; Papers 1,130,210; Books 81,631; Reference 41,138; Declassified 26,294; Podcasts 1,091; and Documents 363. Every record names its title, creator, year, and collection, and where a work's text is present it can be read and downloaded on this site.",
+  },
+  {
+    q: "What are the seven collections?",
+    a: "Law — statutes, court decisions, and legal texts from around the world. Papers — research papers across every field of study. Books — whole books worth keeping: the classics, histories, philosophy, and foundational works. Reference — encyclopedias, dictionaries, and handbooks. Declassified — government documents once kept secret, now released. Podcasts — long-form conversations kept as written transcripts. Documents — standalone records and primary documents that belong to no single collection.",
+  },
+  {
+    q: "What are the curated collections (For Law Students, For Med Students…)?",
+    a: "Reading collections gathered by hand from across the seven collections, built for particular readers. For Law Students gathers what a law student actually reads; For Med Students does the same for medicine; others cover engineering, mathematics and the sciences, and more. They are shelves, not separate holdings — every work in them also lives in its home collection.",
+  },
+  {
+    q: "Is there fiction and classic literature, or only study and reference material?",
+    a: "Both kinds are here, but the library's weight is on useful texts. The Books collection holds classic literature, histories, and philosophy — including the classic novels — while the library as a whole is built around works people study and work from: law, research, reference. It is a working library first, not a leisure reading room.",
+  },
+  {
+    q: "Why don't you have a modern book I am looking for?",
+    a: "Because of copyright. The library holds works that are free to share — public-domain works whose copyright has expired, and works their authors or publishers have released openly. A recent book by a living author is almost never free to share, so it cannot be shelved here, however much it belongs in a library. When a work's copyright expires or it is released openly, it becomes eligible.",
+  },
+  {
+    q: "Why is there more on some topics and languages than others?",
+    a: "Because the library is built from what the world's open sources actually hold. Some fields publish openly and some do not; some countries release their law and some do not; older texts survive unevenly. The gaps in the library are mostly the gaps in what is free to share. Works are added as sources allow, and suggestions for missing works are welcome.",
+  },
+  {
+    q: "What languages are the texts in?",
+    a: "Mostly English, and far from only English. The law collection alone spans many countries, sacred texts and classics appear in their original languages and in translation, and research arrives in the languages it was published in. Texts are kept in the language they were gathered in.",
+  },
+  {
+    q: "What time periods does the library cover?",
+    a: "Centuries, in most collections: the Books, Papers, and Reference collections run from ancient texts to this year, and you can browse by era. One exception to know: the Law collection covers 1994 to today — the years for which the world's legal texts are openly published in usable form.",
+  },
+  {
+    q: "Are the research papers peer-reviewed?",
+    a: "Some are and some are not, and the library does not pretend otherwise. Papers come from open scholarly sources: journals that peer-review, and preprint servers that do not. The record for each paper names where it came from, so you can judge its standing the way you would anywhere else. The library preserves and presents research; it does not review it.",
+  },
+  {
+    q: "What is Text of the Day?",
+    a: "One work from the library, featured every day on the Text of the Day page — a way to meet something you would not have gone looking for. You can also follow it by RSS or Atom feed, so the day's pick arrives in your reader.",
+  },
+  {
+    q: "Is anything here unique, or is it all copies from arXiv, Gutenberg, and the Internet Archive?",
+    a: "Many works here also exist at their original sources — that is where openly published texts live, and gathering them is the point. What the Tower adds is the gathering itself: one library, in clean text you can search across all of it at once, organised into collections — including the law of many countries at this scale, the declassified documents, and the podcast transcripts — that exist in this combined form nowhere else. Some works are also held here in fuller or cleaner text than the scattered copies elsewhere. A copy kept in one more place is also, plainly, a work less likely to be lost.",
+  },
+  {
+    q: "Where do the texts come from?",
+    a: "From public sources where they are free to share: public-domain collections, open scholarly repositories, government releases, and openly licensed publications. Each work is gathered from the source that publishes it, checked against that source, and shelved with its rights status recorded on its record.",
+  },
+  {
+    q: "Who runs the Tower of Babel?",
+    a: "Antarctic Labs, a small independent lab. It is not part of a university, a government, or a large company. The lab built the library, gathers and checks its texts, and maintains this site — and it answers for all of it at the contact address below.",
+  },
+  {
+    q: "How are works chosen for the library?",
+    a: "By a simple test: is it a work worth keeping, and is it free to share? The library favours works of lasting use — the law, research, the foundational books of each field, reference works, primary documents — over the merely popular. Rights come first: a work that is not public domain or openly licensed is not shelved, whatever its importance.",
+  },
+  {
+    q: "Are the texts checked against their original sources?",
+    a: "Yes. Each work is compared against the source it was gathered from before it is shelved, and the library runs continuing repair programs that re-check texts the way a reader meets them — fixing broken files, correcting mislabelled works, and removing works whose text cannot be obtained rather than leaving placeholders. If you find an error that slipped through, the report route below reaches the people who fix it.",
+  },
+  {
+    q: "Is the text here the complete, unaltered work?",
+    a: "That is the standard the library keeps to: the work itself, in full — not a summary, not an excerpt, and not a link sending you somewhere else. Texts are presented as clean, readable text; the words are the author's. Where a work survives only in part, its record says so rather than dressing a fragment as the whole.",
+  },
+  {
+    q: "How often is the catalog updated?",
+    a: "Continuously. New works are shelved as they are gathered and checked, collections are re-organised as they grow, and repair passes run alongside. The homepage's New in the Library stream records the dated additions and finished improvements.",
+  },
+  {
+    q: "How do I start reading?",
+    a: "Enter the library, and either search for the work you want or browse a collection until something catches. Open any work and it reads right here, in your browser — no account, no download required, nothing to install. If you do not know where to begin, Text of the Day is one good work, chosen daily.",
+  },
+  {
+    q: "How do I search?",
+    a: "From inside the library, the search box searches the full text of the works, not just their titles — so you can search for a phrase, a name, or an idea and go straight to the works that contain it. Results can be narrowed by collection, subject, and era.",
+  },
+  {
+    q: "How do I browse by collection, subject, or era?",
+    a: "The library is organised three ways at once. Collections divide it by kind of text — law, papers, books, and the rest. Inside them, subjects and shelves divide by topic, and eras divide by time, from the ancient world to this year. Selecting any of them loads that selection; selections you have opened stay open as you keep browsing, so you can build up the corner of the library you are working in.",
+  },
+  {
+    q: "Can I download a work, or only read it in the browser?",
+    a: "Both. Where a work's text is present, you can read it in the browser reader and download the same text as a plain text file to keep. Plain text is the library's standard format: the files are small, open on any device, and will still open in fifty years.",
+  },
+  {
+    q: "Why does a work's page show its details but no full text?",
+    a: "A record can be catalogued before its text is ready to shelve. Sometimes the text is still being prepared and checked; sometimes a work is known and worth recording, but a copy free to share has not been obtained. The record shows what is known about the work either way. Where text is present, the page says so and the work can be read and downloaded; the library does not dress a record up as a book it does not hold.",
+  },
+  {
+    q: "Can I listen to works instead of reading them?",
+    a: "Yes. Works in the reader can be read aloud — open a work and use the listening control to hear it. It is the same full text, spoken, for readers who prefer to listen or who read better by ear.",
+  },
+  {
+    q: "Does it work on my phone? Is there an app?",
+    a: "It works on your phone, in the browser — the library is built phone-first, and reading, searching, and listening all work there. There is no app to install; the site is the app. Anything with a modern browser, phone, tablet, or computer, can use it.",
+  },
+  {
+    q: "Is the library accessible if I use a screen reader or have low vision?",
+    a: "The library's texts are plain text in the browser, which is the most accessible form a book can take: screen readers can read every work, browser text size and zoom apply throughout, and the read-aloud feature speaks works directly. If some part of the site blocks you, contact us — accessibility faults are faults, and they get fixed.",
+  },
+  {
+    q: "Can I follow new picks by RSS or feed?",
+    a: "Yes. Text of the Day is published as an RSS feed and an Atom feed, so each day's featured work can arrive in your feed reader. The feeds are linked from the Text of the Day page and from this site's pages.",
+  },
+  {
+    q: "I can't find a work I'm looking for — what can I do?",
+    a: "Try searching a distinctive phrase from inside the work, not just its title, and check the collection it belongs to — law, papers, and books are shelved separately. If it still is not here, it may not be free to share yet, or it may simply not have been gathered. Either way, you can suggest it on the suggestion form; suggestions are reviewed, and accepted works are shelved.",
+  },
+  {
+    q: "A page or download isn't working — what should I do?",
+    a: "Try reloading the page first — an interrupted connection is the usual cause. If it keeps failing, note the work's title or link and report it through the contact page or by email. Broken pages and downloads are treated as defects in the library, not as your problem.",
+  },
+  {
+    q: "Is it legal to read these works for free?",
+    a: "Yes. The works here are public-domain or openly licensed, which is exactly why they can be hosted and read for free. Every record carries its own rights status, so the basis on which a work is in the library is stated on the work itself.",
+  },
+  {
+    q: "Can I use a text in my own work, teaching, or publication?",
+    a: "Usually yes. Public-domain works can be quoted, taught, and republished freely, and openly licensed works can be used on the terms of their licence. Check the rights status on the work's record — it states which basis applies to that work — and credit the work as you would any source.",
+  },
+  {
+    q: "Can I use these texts commercially?",
+    a: "For public-domain works, yes — public domain means anyone may use them, commercially or otherwise. For openly licensed works, it depends on the licence recorded on the work's record; some licences allow commercial use and some do not. The library states each work's status but gives no blanket grant beyond it, and no legal advice.",
+  },
+  {
+    q: "Can I use these texts to train an AI?",
+    a: "The same rule as any other use: it follows each work's rights. Most readable works here are public domain, which permits training use; openly licensed works follow their licences. Check the rights status on each record you use. The library also offers an API and a machine-readable catalog for programmatic access, described below.",
+  },
+  {
+    q: "How do I check the rights status of a specific work?",
+    a: "Every record carries its own rights status and licence, shown on the work's page and in its catalog record. That status — public domain, or the specific open licence — is the basis on which the work is shelved and the terms on which you can reuse it. The Rights & Sources page explains how rights are cleared across the library.",
+  },
+  {
+    q: "Do I need to credit the source? How do I cite a work from here?",
+    a: "For public-domain works, credit is not legally required — but cite as you would any source, because your readers will want the trail. The reader provides citations in five styles for any work, ready to paste into your own writing. For openly licensed works, follow the attribution terms of the licence on the record.",
+  },
+  {
+    q: "I hold the rights to a work that appears here. What can I do?",
+    a: "Contact us. Write to hello@antarctic-labs.com with the work and your claim, and it will be reviewed. The library shelves only works it believes are free to share; if a work is here in error, the correction and takedown process on the Rights & Sources page applies, and errors are put right.",
+  },
+  {
+    q: "How do I suggest a work the library should add?",
+    a: "Use the Suggest an Entry form on the library pages. Tell us the work — title, author, and where it can be found, if you know. Every suggestion is reviewed; a work is shelved when it fits the library and is free to share.",
+  },
+  {
+    q: "How do I report an error in a text or a wrong record?",
+    a: "Email hello@antarctic-labs.com with the work's title or link and what is wrong — a garbled passage, a wrong date, a mislabelled record. Error reports go into the library's repair work; fixing them is part of the keeping of the library, not a favour.",
+  },
+  {
+    q: "How do I contact Antarctic Labs?",
+    a: "By email at hello@antarctic-labs.com, or through the Contact page. The same address reaches the lab for library questions, corrections, rights questions, and everything else.",
+  },
+  {
+    q: "Can I volunteer or help?",
+    a: "There is no volunteer program to join, but help lands in three ways that genuinely matter: suggest works the library is missing, report errors you find in texts, and — if you can — support the library on the support page. Reading and sharing the library helps too; a preserved work nobody can find is only half kept.",
+  },
+  {
+    q: "Is there an API? What are the limits?",
+    a: "Yes. The catalog itself is open without a key, with no published limit. The keyed API offers more: a free key allows 50 requests a day, Pro allows 500 a day, and Commercial is unlimited. Full details, keys, and documentation are on the API page. Reading the library never requires any of this.",
+  },
+  {
+    q: "Does the API give full text or just metadata?",
+    a: "Full text, where present. The catalog record is metadata — title, creator, year, collection, rights. The work itself is served separately, as the complete text. That difference is deliberate: this is a library that holds books, not an index that points at them.",
+  },
+  {
+    q: "Is there an MCP server for AI agents?",
+    a: "Yes. An MCP server is live at /mcp with four read-only tools for searching and reading the catalog, and it needs no key. Agents can also work from the downloadable catalog file and fetch each work's text directly. The API page documents both routes.",
+  },
+  {
+    q: "Can libraries and archives harvest the catalog (OAI-PMH)?",
+    a: "Yes. The catalog is exposed through a standard OAI-PMH endpoint, with one set per collection, so libraries and archives can ingest the records the way they ingest any scholarly feed. A copy of the catalog is also deposited with Zenodo, described below.",
+  },
+  {
+    q: "Can I download the whole catalog as data?",
+    a: "Yes. The full catalog is downloadable as a data file from this site. A preserved copy is deposited at Zenodo (DOI 10.5281/zenodo.24486020), and the catalog is also published as a dataset on Hugging Face. Individual works are fetched by their own text links; the catalog file carries every record.",
+  },
+  {
+    q: "Will Common Crawl or a search engine archive the whole site?",
+    a: "No — and that is normal, not a defect. Crawlers sample the web rather than archiving any site entire: Common Crawl itself says it collects a randomly selected subset, and search engines index what they choose to visit. The library publishes full sitemaps so crawlers can find everything; what each one keeps is its own sampling decision.",
   },
 ];
 
@@ -202,25 +441,35 @@ ${footFor(path)}
 const PAGES = {
   "/": {
     path: "/",
-    title: "Tower of Babel — Free Online Library of 2,557,923 Works | ANTARCTIC LABS",
+    title: "Tower of Babel — A Free Online Library | ANTARCTIC LABS",
     description:
-      "The Tower of Babel is a free online library of 2,557,923 works — books, sacred texts, law, papers, declassified documents and transcripts, preserved in clean, searchable text. No sign-up.",
-    body: `<h1>The Tower of Babel — a free library of 2,557,923 works</h1>
-<p>Every work that matters, within everyone's reach. The Tower of Babel is a free online library built and maintained by Antarctic Labs: 2,557,923 books, sacred texts, laws, scientific papers, declassified government documents, reference works and long-form conversations, each preserved as clean, searchable text and free for anyone to read. No accounts, no paywalls.</p>
-<p>The library began with a conviction: the written record of humanity should be preserved, not lost — deleted, quietly rewritten, or locked away. So the lab built a library that keeps it. Every work is verified against its source before it is shelved, every record carries its own rights status and license, and a work whose text cannot be obtained is not listed at all — the catalog holds no placeholders. How rights are checked, where texts come from, and how corrections and takedowns work are set out in <a href="/rights-and-sources">Rights &amp; Sources</a>.</p>
-<p>Read in the browser with a book-style reader, search the full text where present, listen to works read aloud, cite any work in five styles, or build on the collection through a public API and a standard scholarly feed — free keys for anyone, with paid tiers for heavier use.</p>
-<h2>The collections</h2>
-<p><strong>Law — 1,277,197 works.</strong> United States law and public legal records: the United States Code, the Federal Register, and historic legal texts preserved alongside them.</p>
-<p><strong>Papers — 1,130,210 works.</strong> Research papers and preprints from open scholarly sources — arXiv, PubMed Central, PLOS and other open journals — organised into 12 fields and 70 subfields.</p>
-<p><strong>Books — 81,631 works.</strong> Public-domain books: classic literature, philosophy, history and foundational documents, together with the sacred texts of the world's traditions.</p>
-<p><strong>Reference — 41,137 works.</strong> Dictionaries, encyclopedias and lexicons kept for lookup, from Johnson's Dictionary (1755) to the Liddell–Scott Greek lexicon.</p>
-<p><strong>Declassified — 26,294 works.</strong> Government documents released into the public record: CIA releases, the Foreign Relations of the United States series, FBI files and National Security Archive publications.</p>
-<p><strong>Podcasts — 1,091 works.</strong> Long-form conversation transcripts, preserved as searchable text.</p>
-<p><strong>Documents — 363 works.</strong> Founding and historic documents — the Declaration of Independence, the Constitution of the United States and other primary documents.</p>
-<p><a href="/tower-of-babel">Enter the Tower</a> · <a href="/tower-of-babel/library">Browse the library</a> · <a href="/tower-of-babel/collections">All collections</a></p>
+      "The Tower of Babel is a free online library of 2,557,924 works — books, papers, law, reference works, and declassified documents, kept in full text. Everything is free to read, with no account and no sign-up.",
+    faq: HOME_FAQS,
+    body: `<h1>A free library of the texts that matter</h1>
+<p>The Tower of Babel is a free online library holding the world's important books, papers, laws, and documents — kept safe in full text and open to anyone, anywhere, to read free, with no account and no sign-up.</p>
+<p>Some of the most useful writing in the world is fragile — printed once, stored in one place, easy to lose. This library exists to keep it: the papers researchers work from, the laws that govern daily life, the books that shaped their fields, held in one place where anyone can read them. It is a working library, not a reading room for leisure — built for professionals and the students preparing to join them, for researchers and journalists, and for anyone, anywhere, who needs a text they can trust. And if the originals are ever lost, what is kept here remains.</p>
+<p>What this page is, what is inside, and who keeps it — then the door to the library, at the end.</p>
+<h2>The library</h2>
+<p>Everything in the library is here to be used. Read any work right in your browser, search the full text to find the passage you need, listen to works read aloud, or download a copy to keep. There is nothing to pay and nothing to sign — open a work and start reading.</p>
+<p>The library is organised into seven collections, so you can go straight to the kind of text you need — the law of a country, the research in a field, a reference work to settle a question. Alongside them sit reading collections gathered by hand for particular readers, starting with students.</p>
+<p><strong>Law — 1,277,197.</strong> Statutes, court decisions, and legal texts from around the world, from 1994 to today.</p>
+<p><strong>Papers — 1,130,210.</strong> Research papers across every field of study, from medicine and physics to economics and history.</p>
+<p><strong>Books — 81,631.</strong> Whole books worth keeping: the classics, histories, philosophy, and the foundational works of each field.</p>
+<p><strong>Reference — 41,138.</strong> Encyclopedias, dictionaries, and handbooks — the works you open to settle a fact.</p>
+<p><strong>Declassified — 26,294.</strong> Government documents once kept secret, now released and free for anyone to read.</p>
+<p><strong>Podcasts — 1,091.</strong> Long-form conversations and interviews, kept as full written transcripts you can read and search.</p>
+<p><strong>Documents — 363.</strong> Standalone records and primary documents that belong to no single collection.</p>
+<p><strong>Reading collections, gathered by hand</strong> — shelves built for particular readers, including For Law Students and For Med Students, drawn from across the seven collections.</p>
+<p><a href="/tower-of-babel">Enter the Library</a> · <a href="/tower-of-babel/library">Browse the collections</a></p>
 ${curationStreamHtml(esc)}
-<h2>The lab</h2>
-<p>The Tower of Babel is a project of Antarctic Labs, an independent laboratory for AI and computing — small, private, and deliberate, judged by the work it puts into the world. Alongside the library the lab builds applied AI systems, data pipelines that structure information by the million documents, and the owned infrastructure everything runs on; it also develops and runs its own trading systems in-house. <a href="/about">About the lab</a> · <a href="/government-contracting">Government contracting</a></p>`,
+<h2>Who runs this library</h2>
+<p>Antarctic Labs built it, and keeps it. The Tower of Babel is run by Antarctic Labs, a small independent lab. The texts come from public sources where they are free to share — public-domain works and openly published research — and each one is checked against its original before it is shelved here. What you read on this site is the work itself, in full: not a summary, and not a link sending you somewhere else.</p>
+<p>Many of these texts exist scattered across the internet, a piece here and a piece there. Here they are gathered into one library, in clean text you can search across all of it at once — including collections, like the law and the declassified documents, that exist in this form nowhere else. One place, open to everyone, kept up to date.</p>
+<p>For developers: the library can also be searched by computer programs through a public API.</p>
+${faqSection(HOME_FAQS)}
+<h2>Enter the Library</h2>
+<p>Everything described on this page is inside — 2,557,924 works, free to read.</p>
+<p><a href="/tower-of-babel">Enter the Library</a></p>`,
   },
 
   "/about": {

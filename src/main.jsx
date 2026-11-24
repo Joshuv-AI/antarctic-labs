@@ -227,6 +227,7 @@ const OrbitalSphereBackground = lazy(() =>
     .catch(() => ({ default: () => null }))
 );
 import { site as content } from "./content/site.js";
+import { homeFaqs } from "./content/faq.js";
 import { matchRoute, legacyRedirect } from "./content/routes.js";
 import { applyMeta } from "./seo.js";
 // Lazy Tower catalog (see ./lib/catalog.js): prefetched on Tower navigation
@@ -1325,16 +1326,15 @@ function HomeStats() {
     io.observe(el);
     return () => io.disconnect();
   }, []);
-  // Static figures, led by the Tower of Babel — the lab's featured
-  // project: 2,557,923 works preserved across seven collections.
-  // (2026-11-11 homepage revamp: the stats describe the work, led by
-  // the library. The stats describe what the lab does, not who is in
-  // it — see the 2026-10-22 note that removed the partner figure.
-  // The 0 PAYWALLS stat was removed later the same day, Joshua's
-  // call — the strip is exactly the two Tower figures.)
+  // Static figures from the single catalog source (2026-11-24
+  // homepage explanation revamp): 2,557,924 works across seven
+  // collections. The labels carry the revamp's wording — works kept
+  // in full text, and the collections named rather than merely
+  // counted. ("Free — no account" is not a stat here: it lives in
+  // the hero definition sentence, Joshua's ruling 4.)
   const stats = [
-    [2557923, "WORKS PRESERVED"],
-    [7, "COLLECTIONS"],
+    [2557924, "WORKS, KEPT IN FULL TEXT"],
+    [7, "COLLECTIONS — LAW, PAPERS, BOOKS, AND MORE"],
   ];
   return (
     <section
@@ -1654,6 +1654,23 @@ function Home({ go }) {
           </h1>
           <div className="hero-bottom">
             <p>{content.hero.sub}</p>
+            {/* Quiet top entry (2026-11-24 homepage explanation
+                revamp, §E): the way in for returning visitors who
+                already know the library — a small designed element,
+                subordinate to the hero, labelled with the same words
+                as the end-of-scroll door (§K) so the two entrances
+                can never be confused for different places. It
+                replaces the Tower of Babel dock item, which came out
+                the same day so first-time visitors read the
+                explanation first. */}
+            <button
+              type="button"
+              className="home-quiet-entry"
+              onClick={() => go("/tower-of-babel")}
+            >
+              Enter the Library
+              <span aria-hidden="true">→</span>
+            </button>
           </div>
         </div>
       </section>
@@ -1668,27 +1685,65 @@ function Home({ go }) {
         </div>
       </section>
       <HomeStats />
+      {/* The library section (2026-11-24 homepage explanation
+          revamp, §F): the center of the page — what a visitor can do
+          here, and what is inside, by collections. The seven
+          collection descriptions replace the old single-line
+          name-and-count strip: the section grows downward inside its
+          own slot to hold them (Joshua's ruling 5 — tighten words,
+          never drop a collection); the section's position, the
+          background, and the scroll structure are unchanged. */}
       <section id="tower" className="copy-block section reveal">
-        <span className="section-index">FEATURED PROJECT</span>
+        <span className="section-index">THE LIBRARY</span>
         <div>
           <p className="display-copy">
-            Every work that matters, within everyone's reach.
+            Read it here. All of it.
           </p>
           <p className="body-copy">
-            Tower of Babel began with a conviction: the written record of humanity should be preserved, not lost — deleted, quietly rewritten, or locked away. So the lab built a library that keeps it: sacred texts from every tradition, the classics, philosophy, science, and law, declassified government documents, folklore, and long-form conversations — each work verified against its source and preserved as clean, searchable text.
+            Everything in the library is here to be used. Read any work right in your browser, search the full text to find the passage you need, listen to works read aloud, or download a copy to keep. There is nothing to pay and nothing to sign — open a work and start reading.
           </p>
           <p className="body-copy">
-            It now holds 2,557,923 works, and it is free for anyone. Read in the browser, search the full text where present, listen to works read aloud, or build on the collection through a public API — free keys for anyone, with paid tiers for heavier use. No accounts, no paywalls: a working library for readers, students, researchers, and AI systems.
+            The library is organised into seven collections, so you can go straight to the kind of text you need — the law of a country, the research in a field, a reference work to settle a question. Alongside them sit reading collections gathered by hand for particular readers, starting with students.
           </p>
-          <p className="home-tower-collections">
-            PAPERS 1,130,210 · LAW 1,277,197 · BOOKS 81,631 · REFERENCE 41,137 · DECLASSIFIED 26,294 · PODCASTS 1,091 · DOCUMENTS 363
+          <ul className="home-collections">
+            <li className="home-collection">
+              <span className="home-collection-head">LAW — 1,277,197</span>
+              <span className="home-collection-desc">Statutes, court decisions, and legal texts from around the world, from 1994 to today.</span>
+            </li>
+            <li className="home-collection">
+              <span className="home-collection-head">PAPERS — 1,130,210</span>
+              <span className="home-collection-desc">Research papers across every field of study, from medicine and physics to economics and history.</span>
+            </li>
+            <li className="home-collection">
+              <span className="home-collection-head">BOOKS — 81,631</span>
+              <span className="home-collection-desc">Whole books worth keeping: the classics, histories, philosophy, and the foundational works of each field.</span>
+            </li>
+            <li className="home-collection">
+              <span className="home-collection-head">REFERENCE — 41,138</span>
+              <span className="home-collection-desc">Encyclopedias, dictionaries, and handbooks — the works you open to settle a fact.</span>
+            </li>
+            <li className="home-collection">
+              <span className="home-collection-head">DECLASSIFIED — 26,294</span>
+              <span className="home-collection-desc">Government documents once kept secret, now released and free for anyone to read.</span>
+            </li>
+            <li className="home-collection">
+              <span className="home-collection-head">PODCASTS — 1,091</span>
+              <span className="home-collection-desc">Long-form conversations and interviews, kept as full written transcripts you can read and search.</span>
+            </li>
+            <li className="home-collection">
+              <span className="home-collection-head">DOCUMENTS — 363</span>
+              <span className="home-collection-desc">Standalone records and primary documents that belong to no single collection.</span>
+            </li>
+          </ul>
+          <p className="body-copy">
+            <strong>Reading collections, gathered by hand</strong> — shelves built for particular readers, including For Law Students and For Med Students, drawn from across the seven collections.
           </p>
           <div className="home-tower-ctas">
             <button type="button"
               className="text-link"
               onClick={() => go("/tower-of-babel")}
             >
-              ENTER THE TOWER
+              ENTER THE LIBRARY
               <span aria-hidden="true">
                 ↗
               </span>
@@ -1697,7 +1752,7 @@ function Home({ go }) {
               className="text-link"
               onClick={() => go("/tower-of-babel/library")}
             >
-              BROWSE THE LIBRARY
+              BROWSE THE COLLECTIONS
               <span aria-hidden="true">
                 ↗
               </span>
@@ -1710,10 +1765,10 @@ function Home({ go }) {
           real dated events from src/content/curation.js (mirror:
           functions/_lib/curation.js for the server renders). */}
       <section id="curation" className="copy-block section reveal">
-        <span className="section-index">RECENTLY CURATED</span>
+        <span className="section-index">NEW IN THE LIBRARY</span>
         <div>
           <p className="body-copy">
-            The library is maintained in the open: new collections, classification passes and repair programs land as dated entries in this stream.
+            The library keeps growing — new collections are shelved and existing ones improved. Here is what has been added and finished lately.
           </p>
           <div className="curation-stream">
             {curationStream.map((e) => (
@@ -1736,47 +1791,81 @@ function Home({ go }) {
           </div>
         </div>
       </section>
-      <section id="territory" className="territory section reveal">
-        <div className="territory-list">
-          {content.territory.map(([title, desc, link]) => (
-            link ? (
-              <a
-                className="cap-row territory-row territory-link"
-                key={title}
-                href={link}
-                onClick={(e) => {
-                  e.preventDefault();
-                  go(link);
-                }}
-              >
-                <h3>{title} <span className="t-arrow" aria-hidden="true">↗</span></h3>
-                <p>{desc}</p>
-              </a>
-            ) : (
-              <div
-                className="cap-row territory-row"
-                key={title}
-              >
-                <h3>{title}</h3>
-                <p>{desc}</p>
+      {/* Territory / capabilities block REMOVED whole (2026-11-24
+          homepage explanation revamp, §H, Joshua's ruling 1): all
+          four rows came off the homepage — they explained the lab's
+          capabilities, not the library, and fed the "data broker"
+          misreading. The data left with it (site.territory in
+          src/content/site.js). */}
+      {/* Provenance (2026-11-24 revamp, §G): the former Lab section
+          is now the trust block — who runs this library and where
+          the texts come from, naming Antarctic Labs only. It ends
+          with the page's single quiet API line (ruling 3): smallest
+          type, last in the section, the only one on the page. */}
+      <section id="lab" className="copy-block section reveal">
+        <span className="section-index">WHO RUNS THIS LIBRARY</span>
+        <div>
+          <p className="display-copy">
+            Antarctic Labs built it, and keeps it.
+          </p>
+          <p className="body-copy">
+            The Tower of Babel is run by Antarctic Labs, a small independent lab. The texts come from public sources where they are free to share — public-domain works and openly published research — and each one is checked against its original before it is shelved here. What you read on this site is the work itself, in full: not a summary, and not a link sending you somewhere else.
+          </p>
+          <p className="body-copy">
+            Many of these texts exist scattered across the internet, a piece here and a piece there. Here they are gathered into one library, in clean text you can search across all of it at once — including collections, like the law and the declassified documents, that exist in this form nowhere else. One place, open to everyone, kept up to date.
+          </p>
+          <p className="home-api-line">
+            For developers: the library can also be searched by computer programs through a public API.
+          </p>
+        </div>
+      </section>
+      {/* FAQ (2026-11-24 revamp, §I, Joshua's ruling 9): the
+          extensive dropdown, bottom half, after provenance, before
+          the door. All 57 questions from FAQ-RESEARCH.md §5 with
+          answers drafted for the revamp (homeFaqs in
+          src/content/faq.js; canonical text in
+          ~/workspace/homepage-overhaul/FAQ-FINAL.md). Rendered inline
+          with the shared FaqBlock classes rather than the lazy
+          FaqBlock component, so the homepage's first paint never
+          waits on the pages chunk; the same Q&A feeds the FAQPage
+          JSON-LD via src/seo.js faqsForPath("/"). */}
+      <section id="faq" className="section reveal faq-section home-faq" aria-label="Questions, answered">
+        <div className="section-index">QUESTIONS, ANSWERED</div>
+        <p className="body-copy home-faq-intro">
+          What the library is, what it costs, where the texts come from, and how to use them — the questions people ask us, answered plainly.
+        </p>
+        <div className="faq-list">
+          {homeFaqs.map((f, i) => (
+            <details className="faq-row" key={i} name="home-faq">
+              <summary>
+                <span className="faq-num" aria-hidden="true">{String(i + 1).padStart(2, "0")}</span>
+                <span className="faq-q">{f.q}</span>
+                <span className="faq-plus" aria-hidden="true">+</span>
+              </summary>
+              <div className="faq-answer">
+                {(Array.isArray(f.a) ? f.a : [f.a]).map((p, j) => (
+                  <p className="body-copy" key={j}>{p}</p>
+                ))}
               </div>
-            )
+            </details>
           ))}
         </div>
       </section>
-      <section id="lab" className="copy-block section reveal">
-        <span className="section-index">THE LAB</span>
-        <div>
-          <p className="display-copy">
-            Small, private, and deliberate.
-          </p>
-          <p className="body-copy">
-            Antarctic Labs takes on few things and finishes them properly. We would rather point to a working library of 2,557,923 works than a page of promises — the projects are the argument.
-          </p>
-          <p className="body-copy">
-            If a problem is hard, important, and unsolved, it is the kind of problem this lab exists for.
-          </p>
-        </div>
+      {/* The door (2026-11-24 revamp, §K): the payoff at the end of
+          the scroll — after the explanation, the entrance itself.
+          A moment, not a button row: one line, one grand entry. */}
+      <section id="enter" className="home-door section reveal">
+        <p className="home-door-line">
+          Everything described on this page is inside — 2,557,924 works, free to read.
+        </p>
+        <button
+          type="button"
+          className="home-door-link"
+          onClick={() => go("/tower-of-babel")}
+        >
+          Enter the Library
+          <span aria-hidden="true">→</span>
+        </button>
       </section>
     </main>
   );

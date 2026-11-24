@@ -9,44 +9,25 @@ export const site = {
   operator: "JOSHUA",
   philosophy: "OUR SYSTEMS. OUR INFRASTRUCTURE. OUR WORK.",
   description:
-    "Antarctic Labs is an independent laboratory for AI and computing, home of the Tower of Babel — a free library of 2,557,923 works preserved in clean, searchable text.",
+    "The Tower of Babel is a free online library of 2,557,924 works — books, papers, law, reference works, and declassified documents, kept in full text. Everything is free to read, with no account and no sign-up.",
   location: "SANFORD, FLORIDA / WORLDWIDE",
   footer: "BUILT FOR THE UNKNOWN.",
   email: "hello@antarctic-labs.com",
   url: "https://antarctic-labs.com",
 
-  // Home / arrival copy.
+  // Home / arrival copy. (2026-11-24 homepage explanation revamp,
+  // Joshua-approved copy: the homepage explains the library — hero
+  // definition sentence with "free — no account" folded in, manifesto
+  // as mission + journey signpost. The territory/capabilities block
+  // that used to render below the library section was removed whole
+  // the same day, all four rows.)
   hero: {
-    eyebrow: "AN INDEPENDENT LABORATORY",
-    title: ["WE SOLVE", "HARD", "PROBLEMS."],
-    sub: "An independent laboratory for AI and computing — judged by the work it puts into the world.",
-    body: "We build AI and computing systems and point them at hard problems — in any field where they appear, and we stay with them until they are solved.",
-    method: "Our systems. Our infrastructure. Our work.",
+    eyebrow: "A FREE ONLINE LIBRARY",
+    title: ["A FREE LIBRARY", "OF THE TEXTS", "THAT MATTER"],
+    sub: "The Tower of Babel is a free online library holding the world's important books, papers, laws, and documents — kept safe in full text and open to anyone, anywhere, to read free, with no account and no sign-up.",
+    body: "Some of the most useful writing in the world is fragile — printed once, stored in one place, easy to lose. This library exists to keep it: the papers researchers work from, the laws that govern daily life, the books that shaped their fields, held in one place where anyone can read them. It is a working library, not a reading room for leisure — built for professionals and the students preparing to join them, for researchers and journalists, and for anyone, anywhere, who needs a text they can trust. And if the originals are ever lost, what is kept here remains.",
+    method: "What this page is, what is inside, and who keeps it — then the door to the library, at the end.",
   },
-
-  // Capability list rendered on the homepage below the featured
-  // project — what the lab does, as background. No services, no
-  // client links. (2026-11-11 revamp: the homepage leads with the
-  // lab and the Tower of Babel; trading is background experience,
-  // one capability among several.)
-  territory: [
-    [
-      "APPLIED AI SYSTEMS",
-      "We build AI systems that do real work — research, analysis, and automation — and point them at hard problems in any field where they give the lab an opening.",
-    ],
-    [
-      "DATA AT SCALE",
-      "Pipelines that collect, clean, and structure information by the million documents, turning scattered and fragile material into archives and datasets that hold up.",
-    ],
-    [
-      "OWNED INFRASTRUCTURE",
-      "Everything runs on hardware we own and operate — including a small data center of our own in the Philippines, with power, cooling, and backup designed in from the start.",
-    ],
-    [
-      "TRADING SYSTEMS & CRYPTO",
-      "Algorithmic trading systems developed and run in-house — background work, one capability among several.",
-    ],
-  ],
 
   // Firm FAQ — kept in sync with the firm's current positioning
   // (proprietary trading and computing; no client work).

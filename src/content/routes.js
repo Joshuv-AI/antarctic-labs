@@ -29,9 +29,9 @@ const SITE_NAME = site.brand;
 // Titles stay near ~60 chars, descriptions near ~155, keyword up front.
 export const routeMeta = {
   "/": {
-    title: `Tower of Babel — Free Online Library of 2,557,923 Works | ${SITE_NAME}`,
+    title: `Tower of Babel — A Free Online Library | ${SITE_NAME}`,
     description:
-      "The Tower of Babel is a free online library of 2,557,923 works — books, sacred texts, law, papers, declassified documents and transcripts, preserved in clean, searchable text. No sign-up.",
+      "The Tower of Babel is a free online library of 2,557,924 works — books, papers, law, reference works, and declassified documents, kept in full text. Everything is free to read, with no account and no sign-up.",
   },
   "/tower-of-babel": {
     title: `Free Online Library | Tower of Babel`,

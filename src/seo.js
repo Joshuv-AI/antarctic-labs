@@ -14,7 +14,7 @@ import { site } from "./content/site.js";
 import { operator } from "./content/operator.js";
 import { government } from "./content/government.js";
 import { towerOfBabel } from "./content/tower-of-babel.js";
-import { privacyFaqs } from "./content/faq.js";
+import { privacyFaqs, homeFaqs } from "./content/faq.js";
 // Entry JSON-LD uses the cached catalog when available (see
 // ./lib/catalog.js); falls back to a generic entry node until it arrives.
 import { getCachedArtifacts } from "./lib/catalog.js";
@@ -126,6 +126,7 @@ const ORG_NAME = site.brand;
 // Optional chaining throughout — content lands in phases, and a missing
 // array must never break meta application.
 function faqsForPath(path) {
+  if (path === "/") return homeFaqs;
   if (path === "/government-contracting") return government.faqs;
   if (path === "/tower-of-babel/api") return towerOfBabel.agentFaqs;
   if (path === "/privacy") return privacyFaqs;
@@ -227,7 +228,7 @@ function homeJsonLd(url) {
       {
         ...organizationJsonLd(url),
         description:
-          "Antarctic Labs is an independent lab building AI systems for hard problems. Home of the Tower of Babel, a free library of 2,557,923 works.",
+          "The Tower of Babel is a free online library of 2,557,924 works — books, papers, law, reference works, and declassified documents, kept in full text. Everything is free to read, with no account and no sign-up.",
       },
       {
         "@type": "WebSite",

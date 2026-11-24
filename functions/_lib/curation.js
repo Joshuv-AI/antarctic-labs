@@ -54,7 +54,7 @@ export function curationStreamHtml(escapeHtml) {
 <p><a href="${esc(e.link)}">${esc(e.linkLabel)}</a></p>
 </article>`
   ).join("\n");
-  return `<h2>Recently curated</h2>
-<p>The library is maintained in the open: new collections, classification passes and repair programs land as dated entries in this stream.</p>
+  return `<h2>New in the Library</h2>
+<p>The library keeps growing — new collections are shelved and existing ones improved. Here is what has been added and finished lately.</p>
 ${items}`;
 }

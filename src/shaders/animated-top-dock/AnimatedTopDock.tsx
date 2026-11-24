@@ -3,11 +3,15 @@
 //
 // This file is the exact upstream component with the following documented
 // site adaptations (labels/actions wired to the real site navigation):
-//   1. MODERN_ITEMS carries two routes — Tower of Babel and Contact —
-//      instead of the demo catalogue items. Tower of Babel
-//      (open book) and Contact (envelope) are new icons drawn in the
+//   1. MODERN_ITEMS carries the Contact route instead of the demo
+//      catalogue items. Contact (envelope) is a new icon drawn in the
 //      same 16px stroke style. Contact returned to the dock
-//      2026-11-18 (INVENTORY 97, Joshua's order). Gov Contracts was
+//      2026-11-18 (INVENTORY 97, Joshua's order). Tower of Babel was
+//      removed from the dock 2026-11-24 (homepage explanation revamp,
+//      Joshua's order): the dock shortcut let visitors skip the
+//      homepage's explanation of the library, so the library is now
+//      entered through the homepage itself (the quiet top entry and
+//      the end-of-scroll door). Gov Contracts was
 //      removed from the dock 2026-10-25 and About was removed from
 //      the dock 2026-10-25 (both pages stay live at
 //      /government-contracting and /about, just not linked from the
@@ -96,17 +100,6 @@ const BRAND_MARK = (
 );
 
 const MODERN_ITEMS: readonly DockItem[] = [
-  {
-    id: "tower",
-    label: "Tower of Babel",
-    path: "/tower-of-babel",
-    icon: (
-      <>
-        <path d="M3.2 2.6c1.6-.5 3.2-.5 4.8 0v10.8c-1.6-.5-3.2-.5-4.8 0z" />
-        <path d="M12.8 2.6c-1.6-.5-3.2-.5-4.8 0v10.8c1.6-.5 3.2-.5 4.8 0z" />
-      </>
-    ),
-  },
   {
     id: "contact",
     label: "Contact",
