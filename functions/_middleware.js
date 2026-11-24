@@ -46,6 +46,10 @@ const PASS_PREFIXES = [
 const PASS_EXACT = new Set([
   "/oai",
   "/mcp",
+  // Text of the Day (2026-11-23, Return-Visit Option A): an
+  // extensionless function surface (functions/text-of-the-day.js) —
+  // without the exemption the 404 rule below answers instead.
+  "/text-of-the-day",
   // Google Search Console verification file: Pages 308-redirects the
   // .html form to this extensionless path, which must reach the asset —
   // without the exemption the 404 rule below answers instead and file

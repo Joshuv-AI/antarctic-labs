@@ -169,6 +169,8 @@ function doc({ path, title, description, body, faq }) {
 <meta name="description" content="${description}" />
 <meta name="robots" content="index, follow, max-image-preview:large" />
 <link rel="canonical" href="${canonical}" />
+<link rel="alternate" type="application/rss+xml" title="Tower of Babel — From the Stacks" href="/feed.xml" />
+<link rel="alternate" type="application/atom+xml" title="Tower of Babel — From the Stacks" href="/atom.xml" />
 <meta property="og:type" content="website" />
 <meta property="og:title" content="${title}" />
 <meta property="og:description" content="${description}" />
