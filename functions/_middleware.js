@@ -55,6 +55,10 @@ const PASS_EXACT = new Set([
   // without the exemption the 404 rule below answers instead and file
   // verification fails (found 2026-11-10).
   "/googled4282c0396493fc7",
+  // Yandex Webmaster verification file: same 308-to-extensionless
+  // trap as the Google file above — the extensionless path must
+  // reach the asset or Yandex verification fails (2026-11-23).
+  "/yandex_b71887a3617869ad",
   "/robots.txt",
   "/ads.txt",
   "/llms.txt",
