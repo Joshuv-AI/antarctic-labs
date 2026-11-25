@@ -70,6 +70,7 @@ import {
   noteExternalBytes,
   initScopeMode,
   isScopeMode,
+  isScopeResidencyComplete,
   ensureFacetScope,
   ensureIndicesScope,
   ensureBrowseRows,
@@ -5021,8 +5022,18 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
   // era distribution is a true intersection (singleMemberKey's
   // stricter rule above).
   const memberOnlyKey = memberKeysActive.length === 1 ? memberKeysActive[0] : "";
+  // Scope-mode finality (2026-11-24 loader fix): counts are final
+  // only when the LOAD is final — no selection scope in flight AND
+  // the resident set is the whole catalog. The published tallies
+  // landing used to flip this true within the first second, which
+  // dismissed the panel's provisional marker while residency sat
+  // at the 20,000-record bootstrap (0.8% of the library) and the
+  // totals read as settled fact over a prefix. The chip NUMBERS
+  // stay the published totals in every state (2026-11-14
+  // single-truth rule, unchanged); only the finality claim — and
+  // the provisional marker it controls — waits for the load.
   const panelCountsFinal = scopeModeOn
-    ? !selScopesLoading || !!staticTallies || !!serverTalliesCurrent
+    ? !selScopesLoading && isScopeResidencyComplete()
     : countsFinal;
   const laneCountFor = (c) => {
     if (scopeModeOn && !memberSelActive) {
@@ -6716,6 +6727,20 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                     >
                       <span className="tf2-spin" aria-hidden="true" />
                       Currently cataloging library
+                      {/* Provisional labeling (2026-11-24 loader
+                          fix): while residency is incomplete the
+                          line states it plainly — records loaded
+                          so far against the library total — so the
+                          published chip totals beside it are never
+                          mistaken for what has actually arrived.
+                          Same single line, same spinner. */}
+                      {scopeModeOn && !isScopeResidencyComplete() && worksTotal
+                        ? ` — ${displayCount.toLocaleString(
+                            "en-US"
+                          )} of ${worksTotal.toLocaleString(
+                            "en-US"
+                          )} loaded`
+                        : ""}
                     </p>
                   )}
                   {/* Axis 1 — Collections: the catalog lanes (filter

@@ -448,7 +448,20 @@ function colPush(col, v) {
   col.a[col.n++] = v;
 }
 function dictCode(store, mapKey, dictKey, v) {
-  const map = store[mapKey];
+  let map = store[mapKey];
+  if (!map) {
+    // The scope store releases its dictionary lookup maps when
+    // residency completes (releaseScopeDictMaps below) — at that
+    // point appends can no longer introduce new values, so the maps
+    // are dead weight (the creator map alone runs to hundreds of
+    // thousands of entries at full residency). A genuinely new
+    // record appended afterward rebuilds the one map it needs,
+    // once, from the dictionary it indexes.
+    map = new Map();
+    const dict = store[dictKey];
+    for (let i = 0; i < dict.length; i++) map.set(dict[i], i);
+    store[mapKey] = map;
+  }
   let code = map.get(v);
   if (code === undefined) {
     code = store[dictKey].length;
@@ -994,15 +1007,27 @@ function accountDictGrowth(store) {
 }
 
 export function getCatalogMemoryLedger() {
-  const st = browseState;
-  const sb = st && st.store ? storeBytes(st.store) : { chunks: 0, dicts: 0 };
+  // Both stores are accounted (2026-11-24 loader fix): the ledger
+  // originally read only the browse-stream store, so in scope mode
+  // — the production mode — it read ~0 and the pressure ladder
+  // never engaged while the scope store grew to full residency.
   const parts = {
-    columns: sb.chunks,
-    dictionaries: sb.dicts,
-    idIndex: st && st.store && st.store.idIndex ? st.store.idIndex.table.byteLength : 0,
+    columns: 0,
+    dictionaries: 0,
+    idIndex: 0,
     orders: browseOrdersBytes,
     external: 0,
   };
+  const streamStore = browseState && browseState.store;
+  const stores = [];
+  if (streamStore) stores.push(streamStore);
+  if (scopeStore && scopeStore !== streamStore) stores.push(scopeStore);
+  for (const store of stores) {
+    const sb = storeBytes(store);
+    parts.columns += sb.chunks;
+    parts.dictionaries += sb.dicts;
+    if (store.idIndex) parts.idIndex += store.idIndex.table.byteLength;
+  }
   for (const v of ledgerExternal.values()) parts.external += v;
   return {
     total: parts.columns + parts.dictionaries + parts.idIndex + parts.orders + parts.external,
@@ -1014,6 +1039,9 @@ export function getCatalogMemoryLedger() {
 function checkMemoryPressure() {
   const st = browseState;
   if (st && st.store) accountDictGrowth(st.store);
+  if (scopeStore && scopeStore !== (st && st.store)) {
+    accountDictGrowth(scopeStore);
+  }
   const led = getCatalogMemoryLedger();
   if (typeof window !== "undefined") window.__towerLedger = led;
   if (ledgerRung === 0 && led.total >= LEDGER_RUNG1_BYTES) {
@@ -1022,6 +1050,12 @@ function checkMemoryPressure() {
   } else if (ledgerRung === 1 && led.total >= LEDGER_RUNG2_BYTES) {
     ledgerRung = 2;
     browsePipelineWidth = 3;
+    // Scope mode's discretionary weight growth is the background
+    // residency fill — halt it at the severe rung. Residency
+    // itself is never shed (2026-11-10 uncap order); the filter
+    // panel's provisional labeling stays up while residency is
+    // partial, which is the honest state.
+    scopeFillHalted = true;
     if (st && st.tcb1 && st.worker) {
       try { st.worker.postMessage({ type: "window", size: 1 }); } catch {}
     }
@@ -1895,9 +1929,35 @@ export function initScopeMode(baseRecords) {
   scopePublish(true);
   browseMeta()
     .then((m) => {
-      if (m && m.total) scopeTotalHint = m.total;
+      if (m && m.total) {
+        scopeTotalHint = m.total;
+        presizeScopeIndex(m.total);
+      }
     })
     .catch(() => {});
+  armScopeFill();
+}
+
+// Pre-size the scope store's dedupe index once the catalog total
+// is known, while residency is still at bootstrap scale: the store
+// is created with expectedTotal 0, so the index otherwise starts
+// at 1,024 slots and rehashes repeatedly as residency grows toward
+// millions of entries, re-probing every resident on each grow.
+// Rebuilding at bootstrap scale costs milliseconds; the index is
+// an internal dedupe structure (keyed lookups only), so the swap
+// is invisible to consumers. Past ~40k residents the rebuild would
+// cost more than the remaining rehashes — leave the index alone.
+function presizeScopeIndex(total) {
+  if (!scopeStore || !scopeStore.idIndex) return;
+  const ix = scopeStore.idIndex;
+  if (ix.cap >= total * 2 || scopeStore.count > 40000) return;
+  const fresh = new CatalogIdIndex(
+    (i) => scopeStore.idAt(i),
+    total,
+    (i) => scopeStore.idBytesAt(i)
+  );
+  fresh.syncToBytes(scopeStore.count);
+  scopeStore.idIndex = fresh;
 }
 
 function scopePublish(complete) {
@@ -1911,7 +1971,13 @@ function scopePublish(complete) {
   // froze the published view at the bootstrap snapshot for entire
   // sessions while the scope store grew underneath it).
   if (legacyPublishActive || indexPending) return;
+  // The scope publish cadence is scope mode's memory-accounting
+  // beat (the stream path runs the same check in browsePublishNow):
+  // the ledger now includes this store, so the pressure ladder can
+  // finally see — and brake — scope-mode growth.
+  checkMemoryPressure();
   publishIndex(createCatalogView(scopeStore, scopeStore.count), complete);
+  releaseScopeDictMaps();
 }
 
 const SCOPE_PAGE = 5000;
@@ -2178,6 +2244,17 @@ async function stepIndicesScope(rec) {
 // current row budget. The budget can grow while the scope is
 // queued (Load more), so "done" is judged against the live budget
 // each step; ensureBrowseRows re-enqueues when it grows.
+// Browse-scope publish coalescing (2026-11-24 loader fix): the
+// background fill steps every ~5,000 records, and every publish
+// swaps the view identity, restarting the page's catalog
+// derivations. The browse stream learned this in 2026-10 (its
+// partial publishes throttle to one per 2.5 s); the fill inherits
+// the lesson at 1 s — records land in the store on every step
+// regardless; only the view swap is coalesced. The step that
+// reaches the wanted frontier always publishes (the drain's own
+// completion publish follows in scopeDrain).
+let lastBrowsePublishAt = 0;
+
 async function stepBrowseScope(rec) {
   if (browseScopeDone || browseScopeCursor >= browseRowsWanted) return true;
   const out = await scopeFetchJson(
@@ -2196,8 +2273,12 @@ async function stepBrowseScope(rec) {
   }
   rec.loaded = browseScopeCursor;
   if (!browseScopeDone && browseScopeCursor < browseRowsWanted) {
-    scopePublish(false);
-    scopeNotify();
+    const now = Date.now();
+    if (now - lastBrowsePublishAt >= 1000) {
+      lastBrowsePublishAt = now;
+      scopePublish(false);
+      scopeNotify();
+    }
     return false;
   }
   return true;
@@ -2339,6 +2420,90 @@ export function ensureBrowseRows(n, prio = 0) {
   if (n > browseRowsWanted) browseRowsWanted = n;
   if (browseScopeCursor >= browseRowsWanted) return;
   enqueueScope("browse", stepBrowseScope, { kind: "browse", rerun: true, prio });
+}
+
+// ---- Background residency fill (2026-11-24 loader fix) ---------
+// The defect: boot residency is the 20,000-record bootstrap plus
+// one browse step toward the list's row budget (50), and
+// browseRowsWanted was only ever raised by that budget — which
+// grows only via the Load-more button. The resident set therefore
+// parked at ~20,050 records until the user tapped something (a
+// filter chip enqueues that selection's scope; Load more adds 50
+// rows) — Joshua's Nov 13 report and Nov 22 recording, queue
+// item 15. Within the selection-driven design (navigation and
+// counts up front from published tallies; selections load on
+// demand and stay loaded), the missing piece is a background
+// driver for the unfiltered residency itself: this pacer raises
+// the browse frontier in bounded windows at priority tier 0 —
+// strictly below every user-driven ensure (bump tiers start at
+// 1) — so a selection tap preempts the fill between steps
+// through the existing priority drain, and the fill never
+// competes with what the user actually asked for. It pauses
+// while the tab is hidden, slows at memory-ledger rung 1, halts
+// at rung 2 (checkMemoryPressure), and stops for good when the
+// browse scope exhausts the catalog.
+const SCOPE_FILL_WINDOW = 200000;
+const SCOPE_FILL_TICK_MS = 2000;
+let scopeFillTimer = null;
+let scopeFillTarget = 0;
+let scopeFillTicks = 0;
+let scopeFillHalted = false;
+
+function armScopeFill() {
+  if (scopeFillTimer != null || typeof setInterval === "undefined") return;
+  scopeFillTimer = setInterval(scopeFillTick, SCOPE_FILL_TICK_MS);
+}
+
+function stopScopeFill() {
+  if (scopeFillTimer != null) {
+    clearInterval(scopeFillTimer);
+    scopeFillTimer = null;
+  }
+}
+
+function scopeFillTick() {
+  if (!scopeMode || !scopeStore) return stopScopeFill();
+  if (browseScopeDone) return stopScopeFill();
+  // A legacy client-index takeover ends scope mode's publishing;
+  // the fill must not keep growing a store nobody reads.
+  if (legacyPublishActive || indexPending) return stopScopeFill();
+  if (scopeFillHalted) return stopScopeFill();
+  if (typeof document !== "undefined" && document.hidden) return;
+  scopeFillTicks++;
+  // Rung 1 (elevated ledger): halve the fill's raise rate.
+  if (ledgerRung >= 1 && scopeFillTicks % 2 === 0) return;
+  const total = scopeTotalHint || 0;
+  const base = Math.max(browseRowsWanted, browseScopeCursor, scopeStore.count);
+  if (total && base >= total) return;
+  scopeFillTarget = Math.max(scopeFillTarget, base) + SCOPE_FILL_WINDOW;
+  ensureBrowseRows(scopeFillTarget, 0);
+}
+
+// Residency completeness for the filter panel's finality rule:
+// the resident set IS the whole catalog when the browse scope has
+// paged to exhaustion, or when selections have already brought
+// every record in (store count reaches the known total).
+export function isScopeResidencyComplete() {
+  if (!scopeMode || !scopeStore) return false;
+  if (browseScopeDone) return true;
+  return scopeTotalHint > 0 && scopeStore.count >= scopeTotalHint;
+}
+
+// Release the scope store's dictionary lookup maps once residency
+// is complete (see dictCode): the dictionaries themselves stay —
+// every record read goes through them — but the value->code maps
+// exist only to append, and at full residency appends introduce
+// nothing new. Idempotent; called on the scope publish cadence.
+function releaseScopeDictMaps() {
+  if (!scopeStore || scopeStore.__mapsReleased) return;
+  if (!isScopeResidencyComplete()) return;
+  scopeStore.__mapsReleased = true;
+  scopeStore.creatorMap = null;
+  scopeStore.yearMap = null;
+  scopeStore.collMap = null;
+  scopeStore.fmtMap = null;
+  scopeStore.rightsMap = null;
+  scopeStore.dlMap = null;
 }
 
 export function getScopeStatus(key) {
