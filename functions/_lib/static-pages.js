@@ -422,6 +422,7 @@ ${jsonLd}
 ${ADS_SCRIPT}
 <style>
 body { font-family: Georgia, "Times New Roman", serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.65; color: #191919; }
+.home-faq-static > summary { font-size: 1.3rem; font-weight: 700; cursor: pointer; padding: .5rem 0; }
 h1 { line-height: 1.15; } h2 { margin-top: 2rem; }
 nav a, footer a { color: #0f5d75; }
 table { border-collapse: collapse; } th, td { text-align: left; padding: .3rem .8rem .3rem 0; vertical-align: top; }
@@ -466,7 +467,7 @@ ${curationStreamHtml(esc)}
 <p>Antarctic Labs built it, and keeps it. The Tower of Babel is run by Antarctic Labs, a small independent lab. The texts come from public sources where they are free to share — public-domain works and openly published research — and each one is checked against its original before it is shelved here. What you read on this site is the work itself, in full: not a summary, and not a link sending you somewhere else.</p>
 <p>Many of these texts exist scattered across the internet, a piece here and a piece there. Here they are gathered into one library, in clean text you can search across all of it at once — including collections, like the law and the declassified documents, that exist in this form nowhere else. One place, open to everyone, kept up to date.</p>
 <p>For developers: the library can also be searched by computer programs through a public API.</p>
-<details>
+<details class="home-faq-static">
 <summary>Questions, answered</summary>
 ${faqSection(HOME_FAQS)}
 </details>`,
