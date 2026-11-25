@@ -57,8 +57,8 @@ const TOOLS = [
       type: "object",
       properties: {
         query: { type: "string", description: "Search text, matched as words against title and/or creator." },
-        field: { type: "string", enum: ["title", "author", "any"], default: "any" },
-        limit: { type: "integer", minimum: 1, maximum: 50, default: 20 },
+        field: { type: "string", enum: ["title", "author", "any"], default: "any", description: "Which field the search text is matched against: title only, author (creator) only, or any (both). Defaults to any." },
+        limit: { type: "integer", minimum: 1, maximum: 50, default: 20, description: "Maximum number of works to return in this page (1-50). Defaults to 20." },
         cursor: { type: "string", description: "Opaque continuation cursor from a previous call." },
       },
       required: ["query"],
@@ -109,8 +109,8 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        collection: { type: "string", enum: COLLECTIONS },
-        limit: { type: "integer", minimum: 1, maximum: 50, default: 20 },
+        collection: { type: "string", enum: COLLECTIONS, description: "The collection to list: PAPERS, DECLASSIFIED, LAW, BOOKS, REFERENCE, DOCUMENTS, or PODCASTS." },
+        limit: { type: "integer", minimum: 1, maximum: 50, default: 20, description: "Maximum number of works to return in this page (1-50). Defaults to 20." },
         cursor: { type: "string", description: "Opaque continuation cursor from a previous call." },
       },
       required: ["collection"],
@@ -136,10 +136,10 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        group: { type: "string", enum: ["traditions", "programmes", "authors", "course"] },
+        group: { type: "string", enum: ["traditions", "programmes", "authors", "course"], description: "The kind of group to list: traditions (sacred traditions), programmes (declassified programmes), authors (top authors), or course (course groups)." },
         key: { type: "string", description: "Tradition/programme key, author slug, or course-group slug." },
-        limit: { type: "integer", minimum: 1, maximum: 50, default: 20 },
-        offset: { type: "integer", minimum: 0, default: 0 },
+        limit: { type: "integer", minimum: 1, maximum: 50, default: 20, description: "Maximum number of works to return in this page (1-50). Defaults to 20." },
+        offset: { type: "integer", minimum: 0, default: 0, description: "Number of works to skip before returning results, for paging through a group. Defaults to 0." },
       },
       required: ["group", "key"],
       additionalProperties: false,
