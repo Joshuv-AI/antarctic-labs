@@ -25,7 +25,7 @@ export const site = {
     eyebrow: "A FREE ONLINE LIBRARY",
     title: ["A FREE LIBRARY", "OF THE TEXTS", "THAT MATTER"],
     sub: "The Tower of Babel is a free online library holding the world's important books, papers, laws, and documents — kept safe in full text and open to anyone, anywhere, to read free, with no account and no sign-up.",
-    body: "Some of the most useful writing in the world is fragile — printed once, stored in one place, easy to lose. This library exists to keep it: the papers researchers work from, the laws that govern daily life, the books that shaped their fields, held in one place where anyone can read them. It is a working library, not a reading room for leisure — built for professionals and the students preparing to join them, for researchers and journalists, and for anyone, anywhere, who needs a text they can trust. And if the originals are ever lost, what is kept here remains.",
+    body: "Much of the world's most useful writing is fragile — printed once, stored in one place, easy to lose. This library holds it in one place, open to anyone: the papers, the laws, the books that shaped their fields. A working library, not a leisure one: professionals, students preparing to join them, researchers, journalists, and anyone, anywhere, who needs a text they can trust. If the originals are ever lost, what is kept here remains.",
     method: "What this page is, what is inside, and who keeps it — then the door to the library, at the end.",
   },
 

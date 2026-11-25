@@ -1698,10 +1698,10 @@ function Home({ go }) {
             Read it here. All of it.
           </p>
           <p className="body-copy">
-            Everything in the library is here to be used. Read any work right in your browser, search the full text to find the passage you need, listen to works read aloud, or download a copy to keep. There is nothing to pay and nothing to sign — open a work and start reading.
+            Everything here is here to be used. Read any work in your browser, search the full text, listen to it read aloud, or download a copy to keep. There is nothing to pay and nothing to sign.
           </p>
           <p className="body-copy">
-            The library is organised into seven collections, so you can go straight to the kind of text you need — the law of a country, the research in a field, a reference work to settle a question. Alongside them sit reading collections gathered by hand for particular readers, starting with students.
+            The library is organised into seven collections, so you can go straight to the kind of text you need. Alongside them sit reading collections gathered by hand for particular readers, starting with students.
           </p>
           <ul className="home-collections">
             <li className="home-collection">
@@ -1788,10 +1788,10 @@ function Home({ go }) {
             Antarctic Labs built it, and keeps it.
           </p>
           <p className="body-copy">
-            The Tower of Babel is run by Antarctic Labs, a small independent lab. The texts come from public sources where they are free to share — public-domain works and openly published research — and each one is checked against its original before it is shelved here. What you read on this site is the work itself, in full: not a summary, and not a link sending you somewhere else.
+            The Tower of Babel is run by Antarctic Labs, a small independent lab. The texts come from public sources where they are free to share, and each is checked against its original. What you read is the work itself, in full — not a summary, not a link elsewhere.
           </p>
           <p className="body-copy">
-            Many of these texts exist scattered across the internet, a piece here and a piece there. Here they are gathered into one library, in clean text you can search across all of it at once — including collections, like the law and the declassified documents, that exist in this form nowhere else. One place, open to everyone, kept up to date.
+            These texts lie scattered across the internet; here they are gathered into one library, searchable all at once — including collections like the law and the declassified documents, which exist in this form nowhere else. One place, open to everyone, kept up to date.
           </p>
           <p className="home-api-line">
             For developers: the library can also be searched by computer programs through a public API.

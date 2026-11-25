@@ -449,11 +449,11 @@ const PAGES = {
     body: `<h1>A free library of the texts that matter</h1>
 <p>The Tower of Babel is a free online library holding the world's important books, papers, laws, and documents — kept safe in full text and open to anyone, anywhere, to read free, with no account and no sign-up.</p>
 <p><a href="/tower-of-babel">Enter the Library</a></p>
-<p>Some of the most useful writing in the world is fragile — printed once, stored in one place, easy to lose. This library exists to keep it: the papers researchers work from, the laws that govern daily life, the books that shaped their fields, held in one place where anyone can read them. It is a working library, not a reading room for leisure — built for professionals and the students preparing to join them, for researchers and journalists, and for anyone, anywhere, who needs a text they can trust. And if the originals are ever lost, what is kept here remains.</p>
+<p>Much of the world's most useful writing is fragile — printed once, stored in one place, easy to lose. This library holds it in one place, open to anyone: the papers, the laws, the books that shaped their fields. A working library, not a leisure one: professionals, students preparing to join them, researchers, journalists, and anyone, anywhere, who needs a text they can trust. If the originals are ever lost, what is kept here remains.</p>
 <p>What this page is, what is inside, and who keeps it.</p>
 <h2>The library</h2>
-<p>Everything in the library is here to be used. Read any work right in your browser, search the full text to find the passage you need, listen to works read aloud, or download a copy to keep. There is nothing to pay and nothing to sign — open a work and start reading.</p>
-<p>The library is organised into seven collections, so you can go straight to the kind of text you need — the law of a country, the research in a field, a reference work to settle a question. Alongside them sit reading collections gathered by hand for particular readers, starting with students.</p>
+<p>Everything here is here to be used. Read any work in your browser, search the full text, listen to it read aloud, or download a copy to keep. There is nothing to pay and nothing to sign.</p>
+<p>The library is organised into seven collections, so you can go straight to the kind of text you need. Alongside them sit reading collections gathered by hand for particular readers, starting with students.</p>
 <p><strong>Law — 1,277,197.</strong> Statutes, court decisions, and legal texts from around the world, from 1994 to today.</p>
 <p><strong>Papers — 1,130,210.</strong> Research papers across every field of study, from medicine and physics to economics and history.</p>
 <p><strong>Books — 81,631.</strong> Whole books worth keeping: the classics, histories, philosophy, and the foundational works of each field.</p>
@@ -464,8 +464,8 @@ const PAGES = {
 <p><strong>Reading collections, gathered by hand</strong> — shelves built for particular readers, including For Law Students and For Med Students, drawn from across the seven collections.</p>
 ${curationStreamHtml(esc)}
 <h2>Who runs this library</h2>
-<p>Antarctic Labs built it, and keeps it. The Tower of Babel is run by Antarctic Labs, a small independent lab. The texts come from public sources where they are free to share — public-domain works and openly published research — and each one is checked against its original before it is shelved here. What you read on this site is the work itself, in full: not a summary, and not a link sending you somewhere else.</p>
-<p>Many of these texts exist scattered across the internet, a piece here and a piece there. Here they are gathered into one library, in clean text you can search across all of it at once — including collections, like the law and the declassified documents, that exist in this form nowhere else. One place, open to everyone, kept up to date.</p>
+<p>Antarctic Labs built it, and keeps it. The Tower of Babel is run by Antarctic Labs, a small independent lab. The texts come from public sources where they are free to share, and each is checked against its original. What you read is the work itself, in full — not a summary, not a link elsewhere.</p>
+<p>These texts lie scattered across the internet; here they are gathered into one library, searchable all at once — including collections like the law and the declassified documents, which exist in this form nowhere else. One place, open to everyone, kept up to date.</p>
 <p>For developers: the library can also be searched by computer programs through a public API.</p>
 <details class="home-faq-static">
 <summary>Questions, answered</summary>
