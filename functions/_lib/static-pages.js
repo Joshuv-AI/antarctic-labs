@@ -447,8 +447,9 @@ const PAGES = {
     faq: HOME_FAQS,
     body: `<h1>A free library of the texts that matter</h1>
 <p>The Tower of Babel is a free online library holding the world's important books, papers, laws, and documents — kept safe in full text and open to anyone, anywhere, to read free, with no account and no sign-up.</p>
+<p><a href="/tower-of-babel">Enter the Library</a></p>
 <p>Some of the most useful writing in the world is fragile — printed once, stored in one place, easy to lose. This library exists to keep it: the papers researchers work from, the laws that govern daily life, the books that shaped their fields, held in one place where anyone can read them. It is a working library, not a reading room for leisure — built for professionals and the students preparing to join them, for researchers and journalists, and for anyone, anywhere, who needs a text they can trust. And if the originals are ever lost, what is kept here remains.</p>
-<p>What this page is, what is inside, and who keeps it — then the door to the library, at the end.</p>
+<p>What this page is, what is inside, and who keeps it.</p>
 <h2>The library</h2>
 <p>Everything in the library is here to be used. Read any work right in your browser, search the full text to find the passage you need, listen to works read aloud, or download a copy to keep. There is nothing to pay and nothing to sign — open a work and start reading.</p>
 <p>The library is organised into seven collections, so you can go straight to the kind of text you need — the law of a country, the research in a field, a reference work to settle a question. Alongside them sit reading collections gathered by hand for particular readers, starting with students.</p>
@@ -460,16 +461,15 @@ const PAGES = {
 <p><strong>Podcasts — 1,091.</strong> Long-form conversations and interviews, kept as full written transcripts you can read and search.</p>
 <p><strong>Documents — 363.</strong> Standalone records and primary documents that belong to no single collection.</p>
 <p><strong>Reading collections, gathered by hand</strong> — shelves built for particular readers, including For Law Students and For Med Students, drawn from across the seven collections.</p>
-<p><a href="/tower-of-babel">Enter the Library</a> · <a href="/tower-of-babel/library">Browse the collections</a></p>
 ${curationStreamHtml(esc)}
 <h2>Who runs this library</h2>
 <p>Antarctic Labs built it, and keeps it. The Tower of Babel is run by Antarctic Labs, a small independent lab. The texts come from public sources where they are free to share — public-domain works and openly published research — and each one is checked against its original before it is shelved here. What you read on this site is the work itself, in full: not a summary, and not a link sending you somewhere else.</p>
 <p>Many of these texts exist scattered across the internet, a piece here and a piece there. Here they are gathered into one library, in clean text you can search across all of it at once — including collections, like the law and the declassified documents, that exist in this form nowhere else. One place, open to everyone, kept up to date.</p>
 <p>For developers: the library can also be searched by computer programs through a public API.</p>
+<details>
+<summary>Questions, answered</summary>
 ${faqSection(HOME_FAQS)}
-<h2>Enter the Library</h2>
-<p>Everything described on this page is inside — 2,557,924 works, free to read.</p>
-<p><a href="/tower-of-babel">Enter the Library</a></p>`,
+</details>`,
   },
 
   "/about": {

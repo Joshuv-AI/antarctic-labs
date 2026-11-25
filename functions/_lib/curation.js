@@ -51,7 +51,6 @@ export function curationStreamHtml(escapeHtml) {
     (e) => `<article>
 <h3>${esc(e.title)} — ${esc(e.date)}</h3>
 <p>${esc(e.body)}</p>
-<p><a href="${esc(e.link)}">${esc(e.linkLabel)}</a></p>
 </article>`
   ).join("\n");
   return `<h2>New in the Library</h2>

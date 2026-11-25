@@ -1654,18 +1654,16 @@ function Home({ go }) {
           </h1>
           <div className="hero-bottom">
             <p>{content.hero.sub}</p>
-            {/* Quiet top entry (2026-11-24 homepage explanation
-                revamp, §E): the way in for returning visitors who
-                already know the library — a small designed element,
-                subordinate to the hero, labelled with the same words
-                as the end-of-scroll door (§K) so the two entrances
-                can never be confused for different places. It
-                replaces the Tower of Babel dock item, which came out
-                the same day so first-time visitors read the
-                explanation first. */}
+            {/* The page's ONE entrance (2026-11-24, Joshua's phone
+                verdict, corrected same evening): the entry sits at
+                the TOP in the grand door treatment — big, bold,
+                impossible to miss. The original quiet pill read as
+                too easy to overlook, and the end-of-scroll door was
+                removed whole, so this is the only redirect on the
+                page. */}
             <button
               type="button"
-              className="home-quiet-entry"
+              className="home-door-link home-top-entry"
               onClick={() => go("/tower-of-babel")}
             >
               Enter the Library
@@ -1738,26 +1736,11 @@ function Home({ go }) {
           <p className="body-copy">
             <strong>Reading collections, gathered by hand</strong> — shelves built for particular readers, including For Law Students and For Med Students, drawn from across the seven collections.
           </p>
-          <div className="home-tower-ctas">
-            <button type="button"
-              className="text-link"
-              onClick={() => go("/tower-of-babel")}
-            >
-              ENTER THE LIBRARY
-              <span aria-hidden="true">
-                ↗
-              </span>
-            </button>
-            <button type="button"
-              className="text-link"
-              onClick={() => go("/tower-of-babel/library")}
-            >
-              BROWSE THE COLLECTIONS
-              <span aria-hidden="true">
-                ↗
-              </span>
-            </button>
-          </div>
+          {/* Mid-page entry buttons REMOVED (2026-11-24, Joshua's
+              phone verdict): the ENTER THE LIBRARY / BROWSE THE
+              COLLECTIONS pair and every other small redirect link
+              on the homepage came out — the bold hero entry is the
+              page's only entrance. */}
         </div>
       </section>
       {/* Curation stream (2026-11-18, AdSense plan item 4): the
@@ -1778,14 +1761,10 @@ function Home({ go }) {
                   <time className="curation-entry-date" dateTime={e.date}>{e.date}</time>
                 </p>
                 <p className="body-copy">{e.body}</p>
-                <button
-                  type="button"
-                  className="text-link"
-                  onClick={() => go(e.link)}
-                >
-                  {e.linkLabel.toUpperCase()}
-                  <span aria-hidden="true"> ↗</span>
-                </button>
+                {/* Per-entry redirect link REMOVED (2026-11-24,
+                    Joshua's phone verdict): entries keep their
+                    title, date, and body as plain text; the bold
+                    hero entry is the page's only entrance. */}
               </article>
             ))}
           </div>
@@ -1820,8 +1799,8 @@ function Home({ go }) {
         </div>
       </section>
       {/* FAQ (2026-11-24 revamp, §I, Joshua's ruling 9): the
-          extensive dropdown, bottom half, after provenance, before
-          the door. All 57 questions from FAQ-RESEARCH.md §5 with
+          extensive dropdown, bottom half, after provenance, at the
+          end of the page. All 57 questions from FAQ-RESEARCH.md §5 with
           answers drafted for the revamp (homeFaqs in
           src/content/faq.js; canonical text in
           ~/workspace/homepage-overhaul/FAQ-FINAL.md). Rendered inline
@@ -1830,11 +1809,20 @@ function Home({ go }) {
           waits on the pages chunk; the same Q&A feeds the FAQPage
           JSON-LD via src/seo.js faqsForPath("/"). */}
       <section id="faq" className="section reveal faq-section home-faq" aria-label="Questions, answered">
-        <div className="section-index">QUESTIONS, ANSWERED</div>
-        <p className="body-copy home-faq-intro">
-          What the library is, what it costs, where the texts come from, and how to use them — the questions people ask us, answered plainly.
-        </p>
-        <div className="faq-list">
+        {/* Whole-block dropdown (2026-11-24, Joshua's phone
+            verdict): the entire FAQ section sits behind ONE
+            dropdown, collapsed by default on load, so the page no
+            longer sprawls through all 57 questions. The
+            per-question expanders live inside it, unchanged. */}
+        <details className="home-faq-dropdown">
+          <summary className="home-faq-summary">
+            <span className="section-index">QUESTIONS, ANSWERED</span>
+            <span className="faq-plus" aria-hidden="true">+</span>
+          </summary>
+          <p className="body-copy home-faq-intro">
+            What the library is, what it costs, where the texts come from, and how to use them — the questions people ask us, answered plainly.
+          </p>
+          <div className="faq-list">
           {homeFaqs.map((f, i) => (
             <details className="faq-row" key={i} name="home-faq">
               <summary>
@@ -1849,24 +1837,15 @@ function Home({ go }) {
               </div>
             </details>
           ))}
-        </div>
+          </div>
+        </details>
       </section>
-      {/* The door (2026-11-24 revamp, §K): the payoff at the end of
-          the scroll — after the explanation, the entrance itself.
-          A moment, not a button row: one line, one grand entry. */}
-      <section id="enter" className="home-door section reveal">
-        <p className="home-door-line">
-          Everything described on this page is inside — 2,557,924 works, free to read.
-        </p>
-        <button
-          type="button"
-          className="home-door-link"
-          onClick={() => go("/tower-of-babel")}
-        >
-          Enter the Library
-          <span aria-hidden="true">→</span>
-        </button>
-      </section>
+      {/* The end-of-scroll door was REMOVED whole (2026-11-24,
+          Joshua's corrected phone verdict): its lead-in line and
+          the grand button both came out — there is no redirect at
+          the bottom of the page. The page's single entrance is the
+          bold Enter the Library in the hero, in this same door
+          treatment. */}
     </main>
   );
 }
