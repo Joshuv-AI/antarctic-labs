@@ -6769,7 +6769,10 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                         >
                           All entries
                           {(countsFinal || worksTotal != null) && (
-                            <span className="tf2-count">
+                            <span
+                              key={allEntriesCount}
+                              className="tf2-count"
+                            >
                               {allEntriesCount.toLocaleString()}
                             </span>
                           )}
@@ -6791,7 +6794,10 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                               {TOWER_TOP_LABELS[c] || c}
                               {(countsFinal || serverCounts || laneCountFor(c) != null) &&
                                 laneCountFor(c) != null && (
-                                <span className="tf2-count">
+                                <span
+                                  key={laneCountFor(c)}
+                                  className="tf2-count"
+                                >
                                   {laneCountFor(c).toLocaleString()}
                                 </span>
                               )}
@@ -6854,7 +6860,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                   aria-pressed={shelfActive}
                                 >
                                   <span className="tf2-sub-label">{s.label}</span>
-                                  <span className="tf2-count">
+                                  <span key={count} className="tf2-count">
                                     {count.toLocaleString()}
                                   </span>
                                 </button>
@@ -6912,7 +6918,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                   aria-pressed={fieldActive}
                                 >
                                   <span className="tf2-sub-label">{f.label}</span>
-                                  <span className="tf2-count">
+                                  <span key={fcount} className="tf2-count">
                                     {fcount.toLocaleString()}
                                   </span>
                                 </button>
@@ -6934,7 +6940,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                         <span className="tf2-sub-label">
                                           {s.label}
                                         </span>
-                                        <span className="tf2-count">
+                                        <span key={scount} className="tf2-count">
                                           {scount.toLocaleString()}
                                         </span>
                                       </button>
@@ -6966,7 +6972,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                       <span className="tf2-sub-label">
                                         {t.label}
                                       </span>
-                                      <span className="tf2-count">
+                                      <span key={tcount} className="tf2-count">
                                         {tcount.toLocaleString()}
                                       </span>
                                     </button>
@@ -7040,7 +7046,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                 >
                                   <span className="tf2-sub-label">{s.label}</span>
                                   {count != null && (
-                                    <span className="tf2-count">
+                                    <span key={count} className="tf2-count">
                                       {count.toLocaleString()}
                                     </span>
                                   )}
@@ -7146,7 +7152,26 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                                   <span className="tf2-sub-label">
                                     {c.label}
                                   </span>
-                                  <span className="tf2-count">
+                                  {/* Count spans across the panel are
+                                      keyed by their displayed value
+                                      (2026-11-24 facet-transition
+                                      collision fix): a changed count
+                                      replaces the element wholesale —
+                                      the same pattern as the keyed
+                                      blurb above — instead of mutating
+                                      its text node inside a tile that
+                                      is mid-composite. With the panel's
+                                      single-layer paint (styles.css),
+                                      old and new count text can never
+                                      be presented stacked. */}
+                                  <span
+                                    key={
+                                      facetCountsShown
+                                        ? facetCountsShown.curatedMap[c.key] || 0
+                                        : c.count
+                                    }
+                                    className="tf2-count"
+                                  >
                                     {(facetCountsShown
                                       ? facetCountsShown.curatedMap[c.key] || 0
                                       : c.count
@@ -7213,7 +7238,7 @@ function TowerLibrarySection({ go, onReady, helixApiRef }) {
                             >
                               {e.label}
                               {count != null && (
-                                <span className="tf2-count">
+                                <span key={count} className="tf2-count">
                                   {count.toLocaleString()}
                                 </span>
                               )}
